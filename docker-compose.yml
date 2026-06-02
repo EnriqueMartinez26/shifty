@@ -1,0 +1,132 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: shifty_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-shifty_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shifty_password}
+      POSTGRES_DB: ${POSTGRES_DB:-shifty_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine
+    container_name: shifty_redis
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shifty_backend
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-32768}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-240}
+      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-12}
+      RATE_LIMIT_PUBLIC_READ_PER_MINUTE: ${RATE_LIMIT_PUBLIC_READ_PER_MINUTE:-120}
+      RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE: ${RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE:-20}
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+      - ./docs:/docs
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - db
+      - redis
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uv run celery -A core.celery_app worker --loglevel=info
+    container_name: shifty_celery
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    depends_on:
+      - db
+      - redis
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: shifty_frontend
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: shifty_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+networks:
+  shifty_network:
+    driver: bridge
+
+volumes:
+  postgres_data:

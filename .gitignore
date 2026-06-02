@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+*.log
+*.db
+shifty_dev.db
+
+# Node
+node_modules/
+dist/
+build/
+.npm
+.eslintcache
+
+# Tests & Tools
+pytest_output.txt
+validation_results_raw.json
+sentinel_*.json
+test_api_debug.py
+test_sentinel.py
+validation_complete.py
+run_validation.py
+.worktrees/
+
+# OS
+.DS_Store
+Thumbs.db

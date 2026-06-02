@@ -1,0 +1,76 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
+import {
+  publicBookingService,
+  type AvailabilitySlot,
+  type BookingConfirmation,
+  type OtpRequestPayload,
+  type OtpRequestResponse,
+  type OtpVerifyPayload,
+  type OtpVerifyResponse,
+  type PublicBookingPayload,
+  type PublicService,
+  type PublicStaff,
+  type PublicStore,
+} from "@application/services/PublicBookingService";
+
+export type {
+  AvailabilitySlot,
+  BookingConfirmation,
+  OtpRequestPayload,
+  OtpRequestResponse,
+  OtpVerifyPayload,
+  OtpVerifyResponse,
+  PublicBookingPayload,
+  PublicService,
+  PublicStaff,
+  PublicStore,
+};
+
+export const usePublicStore = (slug: string) =>
+  useQuery<PublicStore>({
+    queryKey: ["public-store", slug],
+    queryFn: () => publicBookingService.getStore(slug),
+    retry: false,
+  });
+
+export const usePublicServices = (storePublicId: string | undefined) =>
+  useQuery<PublicService[]>({
+    queryKey: ["public-services", storePublicId],
+    queryFn: () => publicBookingService.getServices(storePublicId as string),
+    enabled: !!storePublicId,
+  });
+
+export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
+  useQuery<PublicStaff[]>({
+    queryKey: ["public-staff", storePublicId, serviceId],
+    queryFn: () => publicBookingService.getStaff(storePublicId as string, serviceId),
+    enabled: !!storePublicId,
+  });
+
+export const usePublicAvailability = (
+  storePublicId: string | undefined,
+  serviceId: string | undefined,
+  date: string | undefined,
+  forceAll = false
+) =>
+  useQuery<AvailabilitySlot[]>({
+    queryKey: ["public-availability", storePublicId, serviceId, date, forceAll],
+    queryFn: () => publicBookingService.getAvailability(storePublicId as string, serviceId as string, date as string, forceAll),
+    enabled: !!storePublicId && !!serviceId && !!date,
+    staleTime: 1000 * 30,
+  });
+
+export const useCreatePublicBooking = () =>
+  useMutation<BookingConfirmation, Error, PublicBookingPayload>({
+    mutationFn: (payload) => publicBookingService.createBooking(payload),
+  });
+
+export const useRequestPublicOtp = () =>
+  useMutation<OtpRequestResponse, Error, OtpRequestPayload>({
+    mutationFn: (payload) => publicBookingService.requestOtp(payload),
+  });
+
+export const useVerifyPublicOtp = () =>
+  useMutation<OtpVerifyResponse, Error, OtpVerifyPayload>({
+    mutationFn: (payload) => publicBookingService.verifyOtp(payload),
+  });
