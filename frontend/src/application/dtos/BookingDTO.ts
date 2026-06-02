@@ -13,10 +13,10 @@ export interface AppointmentResponseDTO {
 export interface CreateBookingRequestDTO {
   store_public_id?: string;
   service_id: string;
-  staff_id: string;
+  staff_id?: string;
   starts_at: string;
   client_name: string;
-  client_email: string;
+  client_email?: string;
   client_phone: string;
   notes?: string;
   idempotency_key?: string;

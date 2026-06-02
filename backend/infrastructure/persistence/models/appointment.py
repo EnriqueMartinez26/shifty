@@ -42,11 +42,13 @@ class AppointmentModel(Base):
         attempted = new_status.value if hasattr(new_status, "value") else str(new_status)
         current = self.status
         allowed_transitions = {
-            "pending": {"confirmed", "cancelled"},
+            "pending": {"confirmed", "cancelled", "pending_payment"},
+            "pending_payment": {"confirmed", "cancelled", "expired"},
             "confirmed": {"completed", "cancelled", "absent"},
             "cancelled": set(),
             "completed": set(),
             "absent": set(),
+            "expired": set(),
         }
 
         if attempted == current:
@@ -65,7 +67,7 @@ class AppointmentModel(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('pending', 'confirmed', 'absent', 'completed', 'cancelled')",
+            "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",
             name="check_appointment_status_v3"
         ),
     )

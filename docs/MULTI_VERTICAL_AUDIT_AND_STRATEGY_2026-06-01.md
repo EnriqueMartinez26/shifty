@@ -386,10 +386,57 @@ Fase posterior:
 
 - servicios visuales
 - redes/WhatsApp mas visibles
-- promociones
+- promociones por tienda
 - enfoque fuerte en marca
 
+## Ajuste de prioridad al 2026-06-02
+
+La prioridad real para el producto no es sumar modulos perifericos. La prioridad real es cerrar bien el nucleo operativo y comercial.
+
+### Lo que no es prioridad inmediata
+
+- waiting list
+- soporte
+
+Eso puede existir mas adelante si un negocio concreto lo pide, pero hoy no define el cierre del producto.
+
+### Promociones: lo que deberia existir vs lo que existe hoy
+
+Si Shifty va a servir para comercios reales, deberia existir una capa de promociones por tienda:
+
+- Dia de la Madre
+- Dia del Amigo
+- promo de verano
+- descuentos o senas promocionales por servicio/campana
+
+Eso no es lo mismo que los cupones actuales del sistema. Hoy lo implementado apunta a cupones comerciales SaaS/globales, no a promociones operativas creadas por cada tienda para vender sus propios servicios.
+
+### Pendiente real para cerrar el producto
+
+1. cerrar `/reports/professionals` y habilitar que cada profesional vea sus propios reportes
+2. sacar la obligatoriedad de email en la reserva publica
+3. permitir reservar con "cualquier profesional", no solo con uno explicitamente elegido
+4. mover las senas a nivel `Service`
+5. integrar reserva + pago + webhook para que el turno quede confirmado recien cuando el cobro este aprobado
+6. alinear la confirmacion manual con esa misma logica de negocio
+7. agregar vistas lista/semana/mes en calendario
+8. ordenar mejor ausencias y bloqueos en la experiencia de agenda
+
+### Multi-rubro: despues del cierre del core
+
+La apertura multi-rubro sigue siendo correcta, pero viene despues de cerrar reportes, pagos, calendario y friccion del booking.
+
+El orden razonable es:
+
+1. intake configurable por `business_type`
+2. campos extra opcionales
+3. textos y presets por vertical
+4. promociones por tienda
+5. waiting list y soporte, solo si el negocio realmente lo necesita
+
 ## Roadmap recomendado para pasar a multi-rubro
+
+Este roadmap asume primero el cierre del core operativo/comercial listado arriba. No conviene encarar la expansion multi-rubro sobre un booking con fricciones ni sobre pagos/reportes incompletos.
 
 ## Fase 1. Desacople comercial y visual
 
@@ -423,10 +470,23 @@ Cambios:
 - intake fields configurables
 - campos extras en reserva publica
 - render dinamico de formulario
+- email opcional cuando el negocio no lo requiera
 
 Resultado:
 
 - el mismo booking sirve tanto para "corte de cabello" como para "consulta de control"
+
+## Fase 3.1. Menos friccion en booking publico
+
+Cambios:
+
+- permitir "cualquier profesional"
+- desacoplar la eleccion de profesional de servicios que no lo requieran
+- revisar confirmacion publica contra pagos/senas
+
+Resultado:
+
+- el booking deja de forzar decisiones innecesarias y se adapta mejor a cada negocio
 
 ## Fase 4. Perfil extendido de cliente
 
@@ -468,6 +528,7 @@ Resultado:
 2. notificaciones distintas por vertical
 3. seed multi-rubro
 4. documentacion comercial neutra
+5. promociones por tienda
 
 ### Prioridad posterior
 

@@ -13,9 +13,15 @@ from core.crypto import encrypt_secret
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
-from modules.appointments.model import Appointment
+from modules.appointments.model import Appointment, AppointmentStatus
 from modules.auth.dependencies import get_current_user
 from modules.payments.model import OutboxMessage, Payment, PaymentGatewayConfig, PaymentStatus, WebhookInbox
+from modules.payments.service import (
+    calculate_service_payment_amount,
+    ensure_payment_preference,
+    stamp_payment_from_status,
+    sync_appointment_with_payment,
+)
 from modules.payments.schemas import (
     GatewayConfigResponse,
     GatewayConfigUpsert,
@@ -151,6 +157,80 @@ async def _validate_mercadopago_signature(
     return resolved_store_id
 
 
+async def _get_appointment_with_service(db: AsyncSession, appointment_id: str, store_id: str) -> tuple[Appointment, Service]:
+    result = await db.execute(
+        select(Appointment, Service)
+        .join(Service, Appointment.service_id == Service.id)
+        .where(Appointment.id == appointment_id, Appointment.store_id == store_id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Turno no encontrado")
+    return row
+
+
+def _resolve_payment_status(payload: dict[str, Any]) -> str | None:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    candidate = (
+        data.get("status")
+        or payload.get("status")
+        or payload.get("action")
+        or payload.get("topic")
+    )
+    if not candidate:
+        return None
+    normalized = str(candidate).lower()
+    if normalized == "payment.updated" and data.get("status"):
+        normalized = str(data.get("status")).lower()
+    mapping = {
+        "approved": PaymentStatus.APPROVED.value,
+        "accredited": PaymentStatus.APPROVED.value,
+        "rejected": PaymentStatus.REJECTED.value,
+        "cancelled": PaymentStatus.REJECTED.value,
+        "refunded": PaymentStatus.REFUNDED.value,
+        "expired": PaymentStatus.EXPIRED.value,
+    }
+    return mapping.get(normalized) or (normalized if normalized in {status.value for status in PaymentStatus} else None)
+
+
+async def _find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dict[str, Any]) -> Payment | None:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+
+    appointment_id = (
+        metadata.get("appointment_id")
+        or payload.get("appointment_id")
+        or payload.get("external_reference")
+        or data.get("external_reference")
+    )
+    preference_id = data.get("preference_id") or payload.get("preference_id")
+    external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip() or None
+
+    if external_payment_id:
+        result = await db.execute(
+            select(Payment).where(Payment.store_id == store_id, Payment.external_payment_id == external_payment_id)
+        )
+        payment = result.scalar_one_or_none()
+        if payment:
+            return payment
+
+    if preference_id:
+        result = await db.execute(
+            select(Payment).where(Payment.store_id == store_id, Payment.preference_id == str(preference_id))
+        )
+        payment = result.scalar_one_or_none()
+        if payment:
+            return payment
+
+    if appointment_id:
+        result = await db.execute(
+            select(Payment).where(Payment.store_id == store_id, Payment.appointment_id == str(appointment_id))
+        )
+        return result.scalar_one_or_none()
+
+    return None
+
+
 @router.get("/gateway-config", response_model=GatewayConfigResponse)
 async def get_gateway_config(
     user: User = Depends(get_current_user),
@@ -219,43 +299,16 @@ async def create_payment_preference(
 ):
     _require_payment_manager(user)
     await _ensure_payments_feature_enabled(db, user)
-
-    result = await db.execute(
-        select(Appointment, Service)
-        .join(Service, Appointment.service_id == Service.id)
-        .where(Appointment.id == appointment_id, Appointment.store_id == user.store_id)
+    appointment, service = await _get_appointment_with_service(db, appointment_id, user.store_id)
+    payment = await ensure_payment_preference(
+        db,
+        appointment=appointment,
+        service=service,
+        store_id=user.store_id,
+        amount_override=calculate_service_payment_amount(service) or Decimal(str(service.price)),
     )
-    row = result.first()
-    if not row:
-        raise HTTPException(status_code=404, detail="Turno no encontrado")
-    appointment, service = row
-
-    payment_result = await db.execute(
-        select(Payment).where(Payment.appointment_id == appointment.id, Payment.store_id == user.store_id)
-    )
-    payment = payment_result.scalar_one_or_none()
-    if not payment:
-        amount = Decimal(str(service.price))
-        payment = Payment(
-            store_id=user.store_id,
-            appointment_id=appointment.id,
-            amount=amount,
-            currency="ARS",
-            status=PaymentStatus.PENDING.value,
-            preference_id=f"pref_{appointment.id}",
-            payment_link=f"https://payments.shifty.local/pay/{appointment.id}",
-        )
-        db.add(payment)
-        await db.flush()
-        db.add(
-            OutboxMessage(
-                store_id=user.store_id,
-                event_type="payment.preference.created",
-                payload={"appointment_id": appointment.id, "payment_id": payment.id},
-            )
-        )
-        await db.commit()
-        await db.refresh(payment)
+    await db.commit()
+    await db.refresh(payment)
 
     return PaymentPreferenceResponse(
         payment_public_id=payment.id,
@@ -277,37 +330,21 @@ async def manual_confirm_payment(
 ):
     _require_payment_manager(user)
     await _ensure_payments_feature_enabled(db, user)
-    payment_result = await db.execute(
-        select(Payment).where(Payment.appointment_id == appointment_id, Payment.store_id == user.store_id)
+    appointment, service = await _get_appointment_with_service(db, appointment_id, user.store_id)
+    amount = data.amount if data.amount is not None else calculate_service_payment_amount(service) or Decimal(str(service.price))
+    payment = await ensure_payment_preference(
+        db,
+        appointment=appointment,
+        service=service,
+        store_id=user.store_id,
+        amount_override=amount,
     )
-    payment = payment_result.scalar_one_or_none()
-    if not payment:
-        appointment_result = await db.execute(
-            select(Appointment, Service)
-            .join(Service, Appointment.service_id == Service.id)
-            .where(Appointment.id == appointment_id, Appointment.store_id == user.store_id)
-        )
-        row = appointment_result.first()
-        if not row:
-            raise HTTPException(status_code=404, detail="Turno no encontrado")
-        _, service = row
-        payment = Payment(
-            store_id=user.store_id,
-            appointment_id=appointment_id,
-            amount=data.amount if data.amount is not None else Decimal(str(service.price)),
-            currency="ARS",
-            status=PaymentStatus.MANUAL_CONFIRMED.value,
-            paid_at=datetime.now(timezone.utc),
-            raw_payload={"notes": data.notes} if data.notes else None,
-        )
-        db.add(payment)
-        await db.flush()
-    else:
-        if data.amount is not None:
-            payment.amount = data.amount
-        payment.status = PaymentStatus.MANUAL_CONFIRMED.value
-        payment.paid_at = datetime.now(timezone.utc)
-        payment.raw_payload = {"notes": data.notes} if data.notes else payment.raw_payload
+    stamp_payment_from_status(
+        payment,
+        PaymentStatus.MANUAL_CONFIRMED.value,
+        payload={"notes": data.notes} if data.notes else None,
+    )
+    sync_appointment_with_payment(appointment, payment.status)
 
     db.add(
         OutboxMessage(
@@ -340,8 +377,13 @@ async def refund_payment(
     payment = await _get_payment_by_id(db, payment_id, user.store_id)
     if data.amount is not None:
         payment.amount = data.amount
-    payment.status = PaymentStatus.REFUNDED.value
-    payment.raw_payload = {"reason": data.reason, "manual": data.manual}
+    stamp_payment_from_status(payment, PaymentStatus.REFUNDED.value, payload={"reason": data.reason, "manual": data.manual})
+    appointment_result = await db.execute(
+        select(Appointment).where(Appointment.id == payment.appointment_id, Appointment.store_id == user.store_id)
+    )
+    appointment = appointment_result.scalar_one_or_none()
+    if appointment:
+        sync_appointment_with_payment(appointment, payment.status)
     db.add(
         OutboxMessage(
             store_id=user.store_id,
@@ -394,7 +436,23 @@ async def mercadopago_webhook(
                 payload=payload,
             )
             db.add(inbox)
-            await db.commit()
+        payment = await _find_payment_for_webhook(db, resolved_store_id, payload)
+        payment_status = _resolve_payment_status(payload)
+        if payment and payment_status:
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+            if external_payment_id:
+                payment.external_payment_id = external_payment_id
+            stamp_payment_from_status(payment, payment_status, payload=payload)
+            appointment_result = await db.execute(
+                select(Appointment).where(Appointment.id == payment.appointment_id, Appointment.store_id == resolved_store_id)
+            )
+            appointment = appointment_result.scalar_one_or_none()
+            if appointment:
+                sync_appointment_with_payment(appointment, payment.status)
+        if inbox:
+            inbox.mark_processed()
+        await db.commit()
         return {"success": True}
     finally:
         set_tenant_context(None, False)

@@ -22,6 +22,7 @@ from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
+from modules.payments.service import ensure_payment_preference, service_requires_payment
 from modules.public.repository import PublicRepository
 from modules.public.schemas import (
     ClientAppointmentItem,
@@ -47,7 +48,7 @@ SlugPath = Annotated[str, Path(min_length=2, max_length=100, pattern=SLUG_PATTER
 
 def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
     raw_key = "|".join(
-        [data.service_id, data.staff_id, data.starts_at.isoformat(), data.client_phone]
+        [data.service_id, data.staff_id or "any", data.starts_at.isoformat(), data.client_phone]
     )
     return "public-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
@@ -94,7 +95,21 @@ async def get_public_services(
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
             raise HTTPException(status_code=404, detail="Negocio no encontrado")
-        return await repo.get_services(store.id)
+        services = await repo.get_services(store.id)
+        return [
+            PublicServiceResponse(
+                public_id=service.public_id,
+                name=service.name,
+                description=service.description,
+                duration_minutes=service.duration_minutes,
+                price=float(service.price),
+                deposit_mode=getattr(service, "deposit_mode", "none") or "none",
+                deposit_type=getattr(service, "deposit_type", "percent") or "percent",
+                deposit_amount=float(service.deposit_amount) if getattr(service, "deposit_amount", None) is not None else None,
+                color=service.color,
+            )
+            for service in services
+        ]
     finally:
         set_tenant_context(None, False)
 
@@ -270,10 +285,16 @@ async def create_public_booking(
                     detail="Se requiere validar OTP antes de reservar",
                 )
 
-        staff_members = await repo.get_staff(store_id, service_public_id=data.service_id)
-        if not any(member.public_id == data.staff_id for member in staff_members):
-            raise HTTPException(status_code=404, detail="Profesional no encontrado para este servicio")
+        payment_required = is_store_feature_enabled(store.feature_flags, "payments") and service_requires_payment(service)
+        initial_status = (
+            AppointmentStatus.PENDING_PAYMENT.value
+            if payment_required
+            else AppointmentStatus.CONFIRMED.value
+            if is_store_feature_enabled(store.feature_flags, "otp_booking")
+            else AppointmentStatus.PENDING.value
+        )
 
+        payment = None
         try:
             async with db.begin_nested():
                 client = await repo.get_or_create_client(
@@ -290,9 +311,15 @@ async def create_public_booking(
                     client=client,
                     notes=data.notes,
                     idempotency_key=idempotency_key,
+                    initial_status=initial_status,
                 )
-                if is_store_feature_enabled(store.feature_flags, "otp_booking"):
-                    appointment.apply_status_transition(AppointmentStatus.CONFIRMED)
+                if payment_required:
+                    payment = await ensure_payment_preference(
+                        db,
+                        appointment=appointment,
+                        service=service,
+                        store_id=store_id,
+                    )
         except ValueError as exc:
             await idempotency_release(idempotency_key, redis)
             raise HTTPException(status_code=409, detail=str(exc))
@@ -310,6 +337,11 @@ async def create_public_booking(
             client_name=data.client_name,
             client_phone=data.client_phone,
             notes=data.notes,
+            payment_required=payment_required,
+            payment_status=payment.status if payment else None,
+            payment_link=payment.payment_link if payment else None,
+            payment_public_id=payment.id if payment else None,
+            payment_amount=float(payment.amount) if payment else None,
         )
         await idempotency_save(idempotency_key, response.model_dump(mode="json"), redis)
         return response
@@ -357,7 +389,7 @@ async def get_client_appointments(
             is_upcoming = appt.starts_at > now
             hours_until = (appt.starts_at - now).total_seconds() / 3600
             can_cancel = (
-                current_status in (AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED)
+                current_status in (AppointmentStatus.PENDING, AppointmentStatus.PENDING_PAYMENT, AppointmentStatus.CONFIRMED)
                 and is_upcoming
                 and hours_until >= cancellation_cutoff_hours
             )
@@ -496,7 +528,13 @@ async def client_reschedule_appointment(
                     select(Appointment)
                     .where(
                         Appointment.staff_id == staff.id,
-                        Appointment.status != AppointmentStatus.CANCELLED.value,
+                        Appointment.status.in_(
+                            [
+                                AppointmentStatus.PENDING.value,
+                                AppointmentStatus.PENDING_PAYMENT.value,
+                                AppointmentStatus.CONFIRMED.value,
+                            ]
+                        ),
                         Appointment.id != original.id,
                         Appointment.starts_at < new_ends_at,
                         Appointment.ends_at > data.new_starts_at,

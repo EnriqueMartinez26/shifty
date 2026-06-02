@@ -21,8 +21,8 @@ interface BookingWizardContainerProps {
 export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ store }) => {
   const requiresOtp = Boolean(store.feature_flags?.otp_booking);
   const steps = useMemo(
-    () => (requiresOtp ? ["Servicio", "Profesional", "Horario", "Datos", "OTP", "Confirmación"] : ["Servicio", "Profesional", "Horario", "Datos", "Confirmación"]),
-    [requiresOtp]
+    () => (requiresOtp ? ["Servicio", "Profesional", "Horario", "Datos", "OTP", "Confirmacion"] : ["Servicio", "Profesional", "Horario", "Datos", "Confirmacion"]),
+    [requiresOtp],
   );
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -37,7 +37,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
   });
   const [bookingState, setBookingState] = useState({
     serviceId: null as string | null,
-    staffId: null as string | null,
+    requestedStaffId: null as string | null,
+    assignedStaffId: null as string | null,
     date: null as string | null,
     startTime: null as string | null,
     client: {
@@ -121,14 +122,24 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
   const renderOtpStep = () => (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
       <div className="flex items-center gap-4">
-        <button onClick={prevStep} type="button" className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border" style={{ background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`, borderColor: colors2000s.border.default, boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`, color: colors2000s.text.primary }}>
+        <button
+          onClick={prevStep}
+          type="button"
+          className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
+          style={{
+            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+            borderColor: colors2000s.border.default,
+            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+            color: colors2000s.text.primary,
+          }}
+        >
           <ChevronLeft size={20} className="stroke-[3px]" />
         </button>
         <div>
           <h2 className="text-2xl font-black uppercase tracking-tight" style={{ color: colors2000s.orange.accent }}>
-            Validación OTP
+            Validacion OTP
           </h2>
-          <p className="text-sm font-bold text-gray-500">Verificamos tu teléfono antes de confirmar la reserva.</p>
+          <p className="text-sm font-bold text-gray-500">Verificamos tu telefono antes de confirmar la reserva.</p>
         </div>
       </div>
 
@@ -164,13 +175,13 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                   error: "",
                 }));
               } catch (error: any) {
-                setOtpState((prev) => ({ ...prev, error: error.response?.data?.detail || "No se pudo enviar el código" }));
+                setOtpState((prev) => ({ ...prev, error: error.response?.data?.detail || "No se pudo enviar el codigo" }));
               }
             }}
             className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest"
             style={buttonStyles2000s.default}
           >
-            {requestOtp.isPending ? "Enviando..." : "Enviar código"}
+            {requestOtp.isPending ? "Enviando..." : "Enviar codigo"}
           </button>
         </div>
 
@@ -180,12 +191,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             onChange={(e) => setOtpState((prev) => ({ ...prev, code: e.target.value, error: "" }))}
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
             style={{ background: "white", border: `1px solid ${colors2000s.border.default}`, boxShadow: colors2000s.shadows.insetDark, color: colors2000s.text.primary }}
-            placeholder="Ingresá el código OTP"
+            placeholder="Ingresa el codigo OTP"
           />
 
           {otpState.debugCode && (
             <div className="rounded-2xl p-3 text-xs font-black uppercase tracking-widest" style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8" }}>
-              Código debug: {otpState.debugCode}
+              Codigo debug: {otpState.debugCode}
             </div>
           )}
 
@@ -199,7 +210,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           {otpState.verified ? (
             <div className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2" style={{ background: "#ecfdf5", border: "1px solid #bbf7d0", color: "#15803d" }}>
               <ShieldCheck className="w-4 h-4" />
-              Teléfono validado correctamente
+              Telefono validado correctamente
             </div>
           ) : (
             <button
@@ -219,13 +230,13 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                     error: "",
                   }));
                 } catch (error: any) {
-                  setOtpState((prev) => ({ ...prev, error: error.response?.data?.detail || "Código inválido" }));
+                  setOtpState((prev) => ({ ...prev, error: error.response?.data?.detail || "Codigo invalido" }));
                 }
               }}
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
-              {verifyOtp.isPending ? "Verificando..." : "Verificar código"}
+              {verifyOtp.isPending ? "Verificando..." : "Verificar codigo"}
             </button>
           )}
 
@@ -265,7 +276,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             storePublicId={store.public_id}
             selectedId={bookingState.serviceId}
             onSelect={(id) => {
-              updateState({ serviceId: id, staffId: null, date: null, startTime: null });
+              updateState({ serviceId: id, requestedStaffId: null, assignedStaffId: null, date: null, startTime: null });
               nextStep();
             }}
           />
@@ -275,10 +286,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           <BookingStepStaff
             storePublicId={store.public_id}
             serviceId={bookingState.serviceId!}
-            selectedId={bookingState.staffId}
+            selectedId={bookingState.requestedStaffId}
             onBack={prevStep}
             onSelect={(id) => {
-              updateState({ staffId: id, date: null, startTime: null });
+              updateState({ requestedStaffId: id, assignedStaffId: null, date: null, startTime: null });
               nextStep();
             }}
           />
@@ -288,12 +299,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           <BookingStepDateTime
             storePublicId={store.public_id}
             serviceId={bookingState.serviceId!}
-            staffId={bookingState.staffId!}
+            staffId={bookingState.requestedStaffId}
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
             onBack={prevStep}
-            onSelect={(date, time) => {
-              updateState({ date, startTime: time });
+            onSelect={(date, time, assignedStaffId) => {
+              updateState({ date, startTime: time, assignedStaffId });
               nextStep();
             }}
           />
@@ -325,22 +336,21 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           <BookingStepConfirmation
             bookingState={bookingState}
             onBack={prevStep}
-            onConfirm={async () => {
+            onConfirm={async () =>
               await createBooking.mutateAsync({
                 store_public_id: store.public_id,
                 service_id: bookingState.serviceId!,
-                staff_id: bookingState.staffId!,
+                staff_id: bookingState.assignedStaffId || bookingState.requestedStaffId || undefined,
                 starts_at: `${bookingState.date}T${bookingState.startTime}:00Z`,
                 client_name: bookingState.client.name,
-                client_email: bookingState.client.email,
+                client_email: bookingState.client.email || undefined,
                 client_phone: bookingState.client.phone,
                 notes: bookingState.client.notes,
                 idempotency_key: bookingState.idempotencyKey,
-              });
-            }}
+              })
+            }
           />
         )}
-
       </div>
     </div>
   );

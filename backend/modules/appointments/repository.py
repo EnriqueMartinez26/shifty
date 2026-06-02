@@ -14,6 +14,7 @@ from sqlalchemy import and_, or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.appointments.schemas import AppointmentFilterParams
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
@@ -95,7 +96,7 @@ class AppointmentRepository:
         # Filtro base: mismo staff y no cancelado
         conditions = [
             Appointment.staff_id == staff_id,
-            Appointment.status != AppointmentStatus.CANCELLED.value,
+            Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
         ]
 
         # Fórmula de solapamiento (Sentinel 2.2):
@@ -257,6 +258,7 @@ class AppointmentRepository:
                 Appointment.starts_at < starts_before,
                 Appointment.status.in_([
                     AppointmentStatus.PENDING.value,
+                    AppointmentStatus.PENDING_PAYMENT.value,
                     AppointmentStatus.CONFIRMED.value,
                 ]),
             )

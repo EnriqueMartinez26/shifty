@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
 from modules.staff.model import Staff, Schedule, StaffBlock
 from modules.stores.model import Store
@@ -102,7 +103,7 @@ class AvailabilityService:
                 select(Appointment).options(joinedload(Appointment.service)).where(
                     and_(
                         Appointment.staff_id == staff.id,
-                        Appointment.status != AppointmentStatus.CANCELLED.value,
+                        Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
                         Appointment.starts_at >= day_start,
                         Appointment.starts_at < day_end,
                     )

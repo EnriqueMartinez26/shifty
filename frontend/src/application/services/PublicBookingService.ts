@@ -30,6 +30,9 @@ export interface PublicService {
   description: string | null;
   duration_minutes: number;
   price: number;
+  deposit_mode: "none" | "optional" | "required";
+  deposit_type: "percent" | "fixed" | "full";
+  deposit_amount: number | null;
   color: string | null;
 }
 
@@ -55,7 +58,7 @@ export interface AvailabilitySlot {
 export interface PublicBookingPayload {
   store_public_id: string;
   service_id: string;
-  staff_id: string;
+  staff_id?: string;
   starts_at: string;
   notes?: string;
   idempotency_key: string;
@@ -66,12 +69,21 @@ export interface PublicBookingPayload {
 
 export interface BookingConfirmation {
   public_id: string;
+  service_id: string;
   service_name: string;
+  staff_id: string;
   staff_name: string;
   starts_at: string;
   ends_at: string;
   status: string;
   client_name: string;
+  client_phone: string;
+  notes?: string | null;
+  payment_required: boolean;
+  payment_status?: string | null;
+  payment_link?: string | null;
+  payment_public_id?: string | null;
+  payment_amount?: number | null;
 }
 
 export interface OtpRequestPayload {

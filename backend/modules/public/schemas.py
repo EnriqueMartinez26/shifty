@@ -31,6 +31,9 @@ class PublicServiceResponse(BaseModel):
     description: Optional[str] = None
     duration_minutes: int
     price: float
+    deposit_mode: str = "none"
+    deposit_type: str = "percent"
+    deposit_amount: float | None = None
     color: Optional[str] = None
 
     class Config:
@@ -60,7 +63,7 @@ class AvailabilitySlot(BaseModel):
 class PublicBookingCreate(BaseModel):
     store_public_id: Optional[str] = Field(None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
-    staff_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    staff_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     starts_at: datetime
     notes: Optional[str] = Field(None, max_length=500)
     idempotency_key: Optional[str] = Field(default=None, min_length=10, max_length=128)
@@ -73,9 +76,9 @@ class PublicBookingCreate(BaseModel):
     def phone_must_be_numeric(cls, value: str) -> str:
         cleaned = re.sub(r"[\s\-\(\)\+]", "", value)
         if not cleaned.isdigit():
-            raise ValueError("El teléfono solo puede contener dígitos, espacios o los caracteres: + - ( )")
+            raise ValueError("El telefono solo puede contener digitos, espacios o los caracteres: + - ( )")
         if len(cleaned) < 6:
-            raise ValueError("El teléfono debe tener al menos 6 dígitos")
+            raise ValueError("El telefono debe tener al menos 6 digitos")
         return cleaned
 
     @field_validator("starts_at")
@@ -99,6 +102,11 @@ class PublicBookingResponse(BaseModel):
     client_name: str
     client_phone: str
     notes: Optional[str] = None
+    payment_required: bool = False
+    payment_status: str | None = None
+    payment_link: str | None = None
+    payment_public_id: str | None = None
+    payment_amount: float | None = None
 
     class Config:
         from_attributes = True

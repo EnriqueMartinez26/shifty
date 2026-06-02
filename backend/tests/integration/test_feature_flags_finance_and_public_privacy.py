@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from core.config import settings
 from core.database import get_db
 from core.models import Base
+from core.security import hash_password
 from main import app
 import modules.appointments.model
 import modules.audit.model
@@ -23,7 +24,8 @@ import modules.services.model
 import modules.staff.model
 import modules.stores.model
 import modules.users.model
-from modules.payments.model import OutboxMessage, WebhookInbox
+from modules.payments.model import OutboxMessage, Payment, WebhookInbox
+from modules.users.model import User
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -105,7 +107,14 @@ def webhook_signature_headers(*, secret: str, data_id: str, request_id: str, ts:
     }
 
 
-async def create_service(client: AsyncClient, token: str) -> str:
+async def create_service(
+    client: AsyncClient,
+    token: str,
+    *,
+    deposit_mode: str = "none",
+    deposit_type: str = "percent",
+    deposit_amount: int | None = None,
+) -> str:
     res = await client.post(
         "/services/",
         headers=auth_headers(token),
@@ -113,8 +122,9 @@ async def create_service(client: AsyncClient, token: str) -> str:
             "name": "Consulta",
             "duration_minutes": 30,
             "price": 10000,
-            "deposit_mode": "none",
-            "deposit_type": "percent",
+            "deposit_mode": deposit_mode,
+            "deposit_type": deposit_type,
+            "deposit_amount": deposit_amount,
         },
     )
     assert res.status_code == 201, res.text
@@ -135,6 +145,19 @@ async def create_staff(client: AsyncClient, token: str, service_public_id: str) 
     )
     assert res.status_code == 201, res.text
     return res.json()["public_id"]
+
+
+async def add_staff_schedule(client: AsyncClient, token: str, staff_public_id: str, *, target_date: datetime) -> None:
+    res = await client.post(
+        f"/staff/{staff_public_id}/schedules",
+        headers=auth_headers(token),
+        json={
+            "day_of_week": target_date.weekday(),
+            "start_time": "09:00:00",
+            "end_time": "18:00:00",
+        },
+    )
+    assert res.status_code == 200, res.text
 
 
 @pytest.mark.asyncio
@@ -389,13 +412,13 @@ async def test_public_booking_requires_otp_when_feature_enabled(client: AsyncCli
 
     service_public_id = await create_service(client, token)
     staff_public_id = await create_staff(client, token, service_public_id)
-
-    starts_at = (datetime.now(timezone.utc) + timedelta(days=4)).isoformat()
+    starts_at = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
     booking_payload = {
         "store_public_id": store_public_id,
         "service_id": service_public_id,
         "staff_id": staff_public_id,
-        "starts_at": starts_at,
+        "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
         "client_name": "Cliente OTP",
         "client_phone": "+5491123456789",
         "idempotency_key": "otp-booking-test-001",
@@ -431,6 +454,31 @@ async def test_public_booking_requires_otp_when_feature_enabled(client: AsyncCli
 
 
 @pytest.mark.asyncio
+async def test_public_booking_allows_missing_email_and_any_professional(client: AsyncClient):
+    store_public_id, token = await register_and_login(client, slug="tienda-any-staff", email="any-staff@test.com")
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=3)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Any",
+            "client_phone": "+5491166667777",
+            "idempotency_key": "any-professional-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    body = booking.json()
+    assert body["staff_id"] == staff_public_id
+    assert body["client_phone"] == "5491166667777"
+
+
+@pytest.mark.asyncio
 async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
     store_public_id, token = await register_and_login(
         client, slug="tienda-refund", email="refund@test.com"
@@ -446,14 +494,15 @@ async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
 
     service_public_id = await create_service(client, token)
     staff_public_id = await create_staff(client, token, service_public_id)
-    starts_at = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat()
+    starts_at = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
 
     booking = await client.post(
         "/public/appointments",
         json={
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at,
+            "starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
             "client_name": "Cliente Refund",
             "client_phone": "+5491188877766",
             "idempotency_key": "refund-booking-001",
@@ -486,3 +535,188 @@ async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
     assert reconciliation.status_code == 200, reconciliation.text
     body = reconciliation.json()
     assert body["refunded_payments"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(client: AsyncClient):
+    store_public_id, token = await register_and_login(client, slug="tienda-manual-confirm", email="manual-confirm@test.com")
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="percent",
+        deposit_amount=30,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Manual",
+            "client_phone": "+5491133344455",
+            "idempotency_key": "manual-confirm-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    assert booking.json()["status"] == "pending_payment"
+
+    manual_confirm = await client.post(
+        f"/payments/{booking.json()['public_id']}/manual-confirm",
+        headers=auth_headers(token),
+        json={"amount": "3000.00"},
+    )
+    assert manual_confirm.status_code == 200, manual_confirm.text
+    assert manual_confirm.json()["status"] == "manual_confirmed"
+
+    appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    assert appointment_search.status_code == 200, appointment_search.text
+    refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking.json()["public_id"])
+    assert refreshed["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client: AsyncClient, test_session):
+    store_public_id, token = await register_and_login(client, slug="tienda-webhook-booking", email="webhook-booking@test.com")
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    upsert = await client.put(
+        "/payments/gateway-config",
+        headers=auth_headers(token),
+        json={
+            "access_token": "TEST-ACCESS-TOKEN-1234567890",
+            "public_key": "TEST-PUBLIC-KEY",
+            "webhook_secret": "secret-demo",
+        },
+    )
+    assert upsert.status_code == 200, upsert.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="fixed",
+        deposit_amount=2500,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=6)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=12, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Webhook",
+            "client_phone": "+5491122200011",
+            "idempotency_key": "webhook-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    assert booking.json()["status"] == "pending_payment"
+
+    payment_result = await test_session.execute(
+        select(Payment).where(Payment.appointment_id == booking.json()["public_id"])
+    )
+    payment = payment_result.scalar_one()
+
+    payload = {
+        "id": "evt-booking-123",
+        "type": "payment",
+        "data": {
+            "id": "mp-pay-123",
+            "status": "approved",
+            "preference_id": payment.preference_id,
+            "metadata": {"appointment_id": booking.json()["public_id"]},
+        },
+    }
+    signature_headers = webhook_signature_headers(
+        secret="secret-demo",
+        data_id="mp-pay-123",
+        request_id="req-booking-123",
+        ts="1710000001",
+    )
+    webhook = await client.post(
+        f"/payments/webhooks/mercadopago?store_id={store_public_id}",
+        json=payload,
+        headers=signature_headers,
+    )
+    assert webhook.status_code == 200, webhook.text
+
+    appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking.json()["public_id"])
+    assert refreshed["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_professional_can_access_own_reports_only(client: AsyncClient, test_session):
+    store_public_id, token = await register_and_login(client, slug="tienda-reports-pro", email="reports-pro@test.com")
+    assert store_public_id
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    user_result = await test_session.execute(select(User).where(User.id == staff_public_id))
+    professional_user = user_result.scalar_one()
+    professional_user.hashed_password = hash_password("StaffPass123!")
+    await test_session.commit()
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=15, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Reportes",
+            "client_phone": "+5491199988877",
+            "idempotency_key": "professional-reports-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+
+    login = await client.post(
+        "/auth/login",
+        json={"email": "pro-demo@test.com", "password": "StaffPass123!"},
+    )
+    assert login.status_code == 200, login.text
+    professional_token = login.json()["access_token"]
+
+    from_date = starts_at.date().isoformat()
+    to_date = starts_at.date().isoformat()
+
+    summary = await client.get(
+        f"/reports/summary?from_date={from_date}&to_date={to_date}",
+        headers=auth_headers(professional_token),
+    )
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["stats"]["total_appointments"] == 1
+
+    professionals = await client.get(
+        f"/reports/professionals?from_date={from_date}&to_date={to_date}",
+        headers=auth_headers(professional_token),
+    )
+    assert professionals.status_code == 200, professionals.text
+    body = professionals.json()
+    assert len(body["professionals"]) == 1
+    assert body["professionals"][0]["staff_id"] == staff_public_id

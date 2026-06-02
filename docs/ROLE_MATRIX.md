@@ -37,3 +37,14 @@ Compatibilidad legacy:
 - Reportes:
   - lectura (`/reports/summary`, `/reports/professionals`): `super_admin`, `store_admin`, `professional`
   - export (`/reports/export`, `/reports/store`): `super_admin`, `store_admin`
+
+## Nota de estado actual
+
+La matriz de arriba describe el objetivo de producto/permiso.
+
+En el estado actual del codigo al `2026-06-02`:
+
+- `/reports/professionals` no esta cerrado en backend
+- `/reports/summary` y `/reports/export` hoy usan dependencia de admin de tienda, no acceso propio de profesional
+
+O sea: el permiso objetivo para `professional` esta definido, pero su implementacion todavia no esta completa.
