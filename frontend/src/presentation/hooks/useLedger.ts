@@ -4,7 +4,14 @@ import {
   type CustomerLedger,
   type LedgerMovement,
   type LedgerMovementPayload,
+  type LedgerSummary,
 } from "@application/services/LedgerService";
+
+export const useLedgerSummary = () =>
+  useQuery<LedgerSummary>({
+    queryKey: ["ledger-summary"],
+    queryFn: () => ledgerService.getSummary(),
+  });
 
 export const useCustomerLedger = (clientId: string | null) =>
   useQuery<CustomerLedger>({
@@ -18,6 +25,7 @@ export const useAddLedgerMovement = () => {
   return useMutation<LedgerMovement, Error, { clientId: string; payload: LedgerMovementPayload }>({
     mutationFn: ({ clientId, payload }) => ledgerService.addMovement(clientId, payload),
     onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["ledger-summary"] });
       queryClient.invalidateQueries({ queryKey: ["customer-ledger", variables.clientId] });
     },
   });

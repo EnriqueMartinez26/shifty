@@ -12,6 +12,42 @@ export interface ReportSummaryStats {
   average_ticket: number;
 }
 
+export interface ReportClientStats {
+  total_clients: number;
+  new_clients: number;
+  returning_clients: number;
+  inactive_clients: number;
+}
+
+export interface ReportTopServiceItem {
+  service_id: string;
+  service_name: string;
+  appointments: number;
+  completed_appointments: number;
+  revenue: number;
+}
+
+export interface ReportTopClientItem {
+  client_id: string;
+  client_name: string;
+  appointments: number;
+  completed_appointments: number;
+  revenue: number;
+}
+
+export interface ReportDebtClientItem {
+  client_id: string;
+  client_name: string;
+  balance: number;
+}
+
+export interface ReportDebtSummary {
+  outstanding_balance: number;
+  debtors_count: number;
+  average_debt: number;
+  top_debtors: ReportDebtClientItem[];
+}
+
 export interface ReportAppointmentItem {
   public_id: string;
   starts_at: string;
@@ -27,6 +63,10 @@ export interface ReportSummary {
   from_date: string;
   to_date: string;
   stats: ReportSummaryStats;
+  client_stats: ReportClientStats;
+  top_services: ReportTopServiceItem[];
+  top_clients: ReportTopClientItem[];
+  debt_summary: ReportDebtSummary;
   appointments: ReportAppointmentItem[];
 }
 

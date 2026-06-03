@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from infrastructure.persistence.models.base import Base
 import ulid
@@ -22,6 +22,7 @@ class AppointmentModel(Base):
     status: Mapped[str] = mapped_column(String(50), default="pending")
     notes: Mapped[Optional[str]] = mapped_column(Text)
     notes_staff: Mapped[Optional[str]] = mapped_column(Text)
+    intake_answers: Mapped[dict | None] = mapped_column(JSON, default=dict)
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Service } from "@domain/entities/Service";
-import { X, Loader2, Briefcase, Clock, Eye, Video, DollarSign, CheckCircle2 } from "lucide-react";
+import { X, Loader2, Briefcase, Clock, Eye, Video, DollarSign, CheckCircle2, Image as ImageIcon } from "lucide-react";
 import { colors2000s, buttonStyles2000s } from "../../../theme/colors";
 
 interface ServiceFormModalProps {
@@ -23,6 +23,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({ isOpen, onCl
     durationMinutes: 30,
     price: 0,
     color: "#3b82f6",
+    imageUrl: "",
     youtubeTrailerUrl: "",
   });
 
@@ -35,6 +36,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({ isOpen, onCl
         durationMinutes: p.duration_minutes,
         price: p.price,
         color: p.color || "#3b82f6",
+        imageUrl: p.image_url || "",
         youtubeTrailerUrl: p.youtube_trailer_url || "",
       });
     } else {
@@ -44,6 +46,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({ isOpen, onCl
         durationMinutes: 30,
         price: 0,
         color: "#3b82f6",
+        imageUrl: "",
         youtubeTrailerUrl: "",
       });
     }
@@ -155,6 +158,19 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({ isOpen, onCl
 
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">
+                <ImageIcon size={14} /> Imagen del servicio
+              </label>
+              <input
+                value={formData.imageUrl}
+                onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
+                className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
+                style={inputStyle}
+                placeholder="https://.../servicio.jpg"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">
                 <Video size={14} /> Video Trailer (YouTube)
               </label>
               <input
@@ -259,14 +275,18 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({ isOpen, onCl
               {/* Header Section: Avatar initials + Titles */}
               <div className="flex items-center gap-4">
                 <div 
-                  className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0 shadow-md"
+                  className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
                   style={{ 
                     background: `linear-gradient(180deg, ${formData.color} 0%, ${formData.color}dd 100%)`, 
                     border: `1px solid ${formData.color}`,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                   }}
                 >
-                  <Briefcase size={22} className="text-white" />
+                  {formData.imageUrl ? (
+                    <img src={formData.imageUrl} alt={formData.name || "Servicio"} className="w-full h-full object-cover" />
+                  ) : (
+                    <Briefcase size={22} className="text-white" />
+                  )}
                 </div>
                 <div className="min-w-0 flex-1">
                   <h3 className="font-black text-gray-800 text-sm uppercase tracking-tight truncate leading-tight">

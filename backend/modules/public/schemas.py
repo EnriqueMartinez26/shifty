@@ -5,6 +5,7 @@ import re
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from core.validation import PUBLIC_ID_PATTERN
+from modules.stores.schemas import StoreCustomField
 
 
 class PublicStoreResponse(BaseModel):
@@ -19,6 +20,7 @@ class PublicStoreResponse(BaseModel):
     cover_url: Optional[str] = None
     whatsapp_number: Optional[str] = None
     website_url: Optional[str] = None
+    custom_client_fields: list[StoreCustomField] = Field(default_factory=list)
     feature_flags: dict[str, bool] = Field(default_factory=dict)
 
     class Config:
@@ -35,6 +37,7 @@ class PublicServiceResponse(BaseModel):
     deposit_type: str = "percent"
     deposit_amount: float | None = None
     color: Optional[str] = None
+    image_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -70,6 +73,7 @@ class PublicBookingCreate(BaseModel):
     client_name: str = Field(..., min_length=1, max_length=100)
     client_phone: str = Field(..., min_length=6, max_length=30)
     client_email: Optional[EmailStr] = Field(default=None, max_length=255)
+    custom_fields: dict[str, str] = Field(default_factory=dict, max_length=12)
 
     @field_validator("client_phone")
     @classmethod
@@ -102,6 +106,7 @@ class PublicBookingResponse(BaseModel):
     client_name: str
     client_phone: str
     notes: Optional[str] = None
+    custom_fields: dict[str, str] = Field(default_factory=dict)
     payment_required: bool = False
     payment_status: str | None = None
     payment_link: str | None = None
@@ -120,6 +125,7 @@ class ClientAppointmentItem(BaseModel):
     ends_at: datetime
     status: str
     notes: Optional[str] = None
+    custom_fields: dict[str, str] = Field(default_factory=dict)
     can_cancel: bool
     can_reschedule: bool
 

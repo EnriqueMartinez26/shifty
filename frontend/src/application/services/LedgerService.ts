@@ -16,6 +16,21 @@ export interface CustomerLedger {
   movements: LedgerMovement[];
 }
 
+export interface LedgerSummaryClientItem {
+  client_id: string;
+  client_name: string;
+  balance: number;
+  last_movement_at: string;
+}
+
+export interface LedgerSummary {
+  total_balance: number;
+  debtors_count: number;
+  average_balance: number;
+  total_movements: number;
+  top_debtors: LedgerSummaryClientItem[];
+}
+
 export interface LedgerMovementPayload {
   movement_type: "charge" | "payment" | "adjustment" | "refund";
   amount: number;
@@ -26,6 +41,11 @@ export interface LedgerMovementPayload {
 export class LedgerService {
   async getCustomerLedger(clientId: string): Promise<CustomerLedger> {
     const { data } = await apiClient.get<CustomerLedger>(`/ledger/customers/${clientId}`);
+    return data;
+  }
+
+  async getSummary(): Promise<LedgerSummary> {
+    const { data } = await apiClient.get<LedgerSummary>("/ledger/summary");
     return data;
   }
 

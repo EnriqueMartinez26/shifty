@@ -23,6 +23,7 @@ class Service(BaseEntity):
     deposit_type: Mapped[str] = mapped_column(String(20), default="percent")
     deposit_amount: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     color: Mapped[str | None] = mapped_column(String(20))
+    image_url: Mapped[str | None] = mapped_column(String(500))
     youtube_trailer_url: Mapped[str | None] = mapped_column(String(500))
 
     __table_args__ = (

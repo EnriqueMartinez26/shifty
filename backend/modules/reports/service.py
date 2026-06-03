@@ -2,20 +2,28 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.ledger.model import CustomerLedger
 from modules.reports.schemas import (
+    ReportClientStats,
+    ReportDebtClientItem,
+    ReportDebtSummary,
     ProfessionalReportItem,
     ProfessionalReportsResponse,
     ReportAppointmentItem,
+    ReportTopClientItem,
+    ReportTopServiceItem,
     ReportSummaryResponse,
     ReportSummaryStats,
 )
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock
+from modules.users.model import User
 
 
 class ReportService:
@@ -36,6 +44,71 @@ class ReportService:
         start_dt = datetime.combine(from_date, time.min)
         end_dt = datetime.combine(to_date + timedelta(days=1), time.min)
         return start_dt, end_dt
+
+    def _empty_debt_summary(self) -> ReportDebtSummary:
+        return ReportDebtSummary(
+            outstanding_balance=0.0,
+            debtors_count=0,
+            average_debt=0.0,
+            top_debtors=[],
+        )
+
+    def _user_display_name(self, user: User | None, *, fallback: str | None = None, client_id: str | None = None) -> str:
+        if user:
+            full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+            if full_name:
+                return full_name
+            if user.email:
+                return user.email
+            if user.phone:
+                return user.phone
+        if fallback:
+            return fallback
+        return client_id or "Cliente"
+
+    async def _build_debt_summary(self) -> ReportDebtSummary:
+        result = await self.db.execute(
+            select(CustomerLedger).order_by(CustomerLedger.client_id.asc(), CustomerLedger.created_at.asc())
+        )
+        latest_by_client: dict[str, CustomerLedger] = {}
+        for movement in result.scalars().all():
+            latest_by_client[movement.client_id] = movement
+
+        debt_rows = [
+            movement
+            for movement in latest_by_client.values()
+            if Decimal(str(movement.balance_after or 0)) > 0
+        ]
+        if not debt_rows:
+            return self._empty_debt_summary()
+
+        client_ids = [movement.client_id for movement in debt_rows]
+        users_result = await self.db.execute(select(User).where(User.id.in_(client_ids)))
+        users_by_id = {user.id: user for user in users_result.scalars().all()}
+
+        total_balance = sum((Decimal(str(item.balance_after or 0)) for item in debt_rows), Decimal("0.00"))
+        top_debtors = sorted(
+            debt_rows,
+            key=lambda item: (Decimal(str(item.balance_after or 0)), item.created_at),
+            reverse=True,
+        )[:5]
+
+        return ReportDebtSummary(
+            outstanding_balance=round(float(total_balance), 2),
+            debtors_count=len(debt_rows),
+            average_debt=round(float(total_balance / len(debt_rows)), 2),
+            top_debtors=[
+                ReportDebtClientItem(
+                    client_id=item.client_id,
+                    client_name=self._user_display_name(
+                        users_by_id.get(item.client_id),
+                        client_id=item.client_id,
+                    ),
+                    balance=round(float(Decimal(str(item.balance_after or 0))), 2),
+                )
+                for item in top_debtors
+            ],
+        )
 
     async def _fetch_rows(
         self,
@@ -65,7 +138,21 @@ class ReportService:
         staff_id: str | None = None,
     ) -> ReportSummaryResponse:
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
+        start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
         rows = await self._fetch_rows(from_date=resolved_from, to_date=resolved_to, staff_id=staff_id)
+        historical_clients_query = select(
+            Appointment.client_id,
+            Appointment.client_name,
+            Appointment.starts_at,
+        ).where(
+            Appointment.client_id.is_not(None),
+            Appointment.starts_at < end_dt,
+        )
+        if staff_id:
+            historical_clients_query = historical_clients_query.where(Appointment.staff_id == staff_id)
+        historical_clients_result = await self.db.execute(
+            historical_clients_query.order_by(Appointment.starts_at.asc())
+        )
 
         items: list[ReportAppointmentItem] = []
         total_revenue = 0.0
@@ -73,11 +160,47 @@ class ReportService:
         cancelled = 0
         pending = 0
         confirmed = 0
+        clients_in_range: set[str] = set()
+        clients_seen_before_range: set[str] = set()
+        first_seen_by_client: dict[str, datetime] = {}
+        known_client_names: dict[str, str] = {}
+        service_metrics: dict[str, dict] = defaultdict(
+            lambda: {
+                "service_id": "",
+                "service_name": "",
+                "appointments": 0,
+                "completed_appointments": 0,
+                "revenue": 0.0,
+            }
+        )
+        client_metrics: dict[str, dict] = defaultdict(
+            lambda: {
+                "client_id": "",
+                "client_name": "",
+                "appointments": 0,
+                "completed_appointments": 0,
+                "revenue": 0.0,
+            }
+        )
+
+        for client_id, client_name, starts_at in historical_clients_result.all():
+            if not client_id:
+                continue
+            first_seen_by_client.setdefault(client_id, starts_at)
+            if starts_at < start_dt:
+                clients_seen_before_range.add(client_id)
+            if client_name and client_name.strip():
+                known_client_names.setdefault(client_id, client_name.strip())
 
         for appointment, service, staff in rows:
             status = appointment.status
             price = float(service.price)
             status_upper = status.upper() if status else ""
+            client_id = appointment.client_id
+            if client_id:
+                clients_in_range.add(client_id)
+                if appointment.client_name:
+                    known_client_names[client_id] = appointment.client_name
 
             if status_upper == "COMPLETED":
                 completed += 1
@@ -89,6 +212,26 @@ class ReportService:
             elif status_upper == "CONFIRMED":
                 confirmed += 1
                 total_revenue += price
+
+            if status not in {AppointmentStatus.CANCELLED.value, AppointmentStatus.EXPIRED.value}:
+                service_bucket = service_metrics[service.public_id]
+                service_bucket["service_id"] = service.public_id
+                service_bucket["service_name"] = service.name
+                service_bucket["appointments"] += 1
+                if status == AppointmentStatus.COMPLETED.value:
+                    service_bucket["completed_appointments"] += 1
+                if status in {AppointmentStatus.COMPLETED.value, AppointmentStatus.CONFIRMED.value}:
+                    service_bucket["revenue"] += price
+
+                if client_id:
+                    client_bucket = client_metrics[client_id]
+                    client_bucket["client_id"] = client_id
+                    client_bucket["client_name"] = known_client_names.get(client_id) or appointment.client_name or client_id
+                    client_bucket["appointments"] += 1
+                    if status == AppointmentStatus.COMPLETED.value:
+                        client_bucket["completed_appointments"] += 1
+                    if status in {AppointmentStatus.COMPLETED.value, AppointmentStatus.CONFIRMED.value}:
+                        client_bucket["revenue"] += price
 
             items.append(
                 ReportAppointmentItem(
@@ -105,6 +248,21 @@ class ReportService:
 
         total = len(items)
         average_ticket = (total_revenue / total) if total else 0.0
+        new_clients = sum(
+            1
+            for client_id in clients_in_range
+            if start_dt <= first_seen_by_client.get(client_id, start_dt) < end_dt
+        )
+        top_services = sorted(
+            service_metrics.values(),
+            key=lambda item: (item["appointments"], item["revenue"]),
+            reverse=True,
+        )[:5]
+        top_clients = sorted(
+            client_metrics.values(),
+            key=lambda item: (item["appointments"], item["revenue"]),
+            reverse=True,
+        )[:5]
 
         stats = ReportSummaryStats(
             total_appointments=total,
@@ -115,11 +273,40 @@ class ReportService:
             total_revenue=round(total_revenue, 2),
             average_ticket=round(average_ticket, 2),
         )
+        client_stats = ReportClientStats(
+            total_clients=len(clients_in_range),
+            new_clients=new_clients,
+            returning_clients=max(len(clients_in_range) - new_clients, 0),
+            inactive_clients=len(clients_seen_before_range - clients_in_range),
+        )
+        debt_summary = self._empty_debt_summary() if staff_id else await self._build_debt_summary()
 
         return ReportSummaryResponse(
             from_date=resolved_from,
             to_date=resolved_to,
             stats=stats,
+            client_stats=client_stats,
+            top_services=[
+                ReportTopServiceItem(
+                    service_id=item["service_id"],
+                    service_name=item["service_name"],
+                    appointments=item["appointments"],
+                    completed_appointments=item["completed_appointments"],
+                    revenue=round(item["revenue"], 2),
+                )
+                for item in top_services
+            ],
+            top_clients=[
+                ReportTopClientItem(
+                    client_id=item["client_id"],
+                    client_name=item["client_name"],
+                    appointments=item["appointments"],
+                    completed_appointments=item["completed_appointments"],
+                    revenue=round(item["revenue"], 2),
+                )
+                for item in top_clients
+            ],
+            debt_summary=debt_summary,
             appointments=items,
         )
 

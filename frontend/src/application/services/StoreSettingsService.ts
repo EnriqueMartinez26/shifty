@@ -6,6 +6,23 @@ export interface BusinessHourPeriod {
   close: string;
 }
 
+export type StoreCustomFieldType = "text" | "textarea" | "tel" | "email" | "date" | "select";
+
+export interface StoreCustomFieldOption {
+  label: string;
+  value: string;
+}
+
+export interface StoreCustomField {
+  key: string;
+  label: string;
+  type: StoreCustomFieldType;
+  required: boolean;
+  placeholder?: string | null;
+  help_text?: string | null;
+  options: StoreCustomFieldOption[];
+}
+
 export interface StoreFeatureFlags {
   payments: boolean;
   ledger: boolean;
@@ -27,6 +44,7 @@ export interface StoreSettings {
   instagram_url?: string | null;
   facebook_url?: string | null;
   website_url?: string | null;
+  custom_client_fields: StoreCustomField[];
   cancellation_hours: number;
   buffer_minutes: number;
   business_hours: Record<string, BusinessHourPeriod[]>;
@@ -47,6 +65,7 @@ export interface StoreUpdatePayload {
   instagram_url?: string | null;
   facebook_url?: string | null;
   website_url?: string | null;
+  custom_client_fields?: StoreCustomField[];
   cancellation_hours?: number;
   buffer_minutes?: number;
   business_hours?: Record<string, BusinessHourPeriod[]>;

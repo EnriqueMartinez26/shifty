@@ -61,7 +61,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({ storePub
 
               {/* Glossy avatar */}
               <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border ml-1"
+                className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border ml-1 overflow-hidden"
                 style={{ 
                   background: isSelected 
                     ? 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.15) 100%)' 
@@ -71,7 +71,11 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({ storePub
                   color: isSelected ? '#ffffff' : serviceColor
                 }}
               >
-                <Briefcase className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
+                {svc.image_url ? (
+                  <img src={svc.image_url} alt={svc.name} className="w-full h-full object-cover" />
+                ) : (
+                  <Briefcase className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
+                )}
               </div>
               
               <div className="flex-1 min-w-0">

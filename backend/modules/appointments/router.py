@@ -68,6 +68,7 @@ def _to_appointment_response(appointment) -> AppointmentResponse:
         status=appointment.status,
         notes=appointment.notes,
         notes_staff=appointment.notes_staff,
+        intake_answers=appointment.intake_answers or {},
         cancelled_at=appointment.cancelled_at,
         completed_at=appointment.completed_at,
     )
@@ -98,6 +99,7 @@ async def list_appointments_by_date(
             ends_at=appointment.ends_at,
             status=appointment.status,
             notes=appointment.notes,
+            intake_answers=appointment.intake_answers or {},
         )
         for appointment, service, staff, client in rows
     ]
@@ -173,6 +175,9 @@ async def book_appointment(
         starts_at=appointment.starts_at,
         ends_at=appointment.ends_at,
         status=appointment.status,
+        notes=appointment.notes,
+        notes_staff=appointment.notes_staff,
+        intake_answers=appointment.intake_answers or {},
     )
     await idempotency_save(data.idempotency_key, payload.model_dump(mode="json"), redis)
     return payload
@@ -275,6 +280,7 @@ async def reschedule_appointment(
         status=new_appointment.status,
         notes=new_appointment.notes,
         notes_staff=new_appointment.notes_staff,
+        intake_answers=new_appointment.intake_answers or {},
     )
     await idempotency_save(data.idempotency_key, payload.model_dump(mode="json"), redis)
     return payload
@@ -341,6 +347,8 @@ async def search_appointments(
             ends_at=appointment.ends_at,
             status=appointment.status,
             notes=appointment.notes,
+            notes_staff=appointment.notes_staff,
+            intake_answers=appointment.intake_answers or {},
             service_name=service.name,
             service_id=service.public_id,
             staff_name=staff.display_name,

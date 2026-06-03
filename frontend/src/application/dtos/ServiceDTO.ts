@@ -5,6 +5,7 @@ export interface ServiceResponseDTO {
   duration_minutes: number;
   price: number;
   color: string | null;
+  image_url: string | null;
   youtube_trailer_url: string | null;
   is_active: boolean;
 }
@@ -15,5 +16,6 @@ export interface CreateServiceRequestDTO {
   duration_minutes: number;
   price: number;
   color?: string;
+  image_url?: string;
   youtube_trailer_url?: string;
 }

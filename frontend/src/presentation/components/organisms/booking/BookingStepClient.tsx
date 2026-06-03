@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ChevronLeft, FileText, Mail, Phone, User } from "lucide-react";
 
+import type { StoreCustomField } from "@application/services/StoreSettingsService";
 import { colors2000s } from "../../../../theme/colors";
 
 interface BookingStepClientProps {
@@ -9,13 +10,19 @@ interface BookingStepClientProps {
     email: string;
     phone: string;
     notes: string;
+    customFields: Record<string, string>;
   };
+  customFields: StoreCustomField[];
   onBack: () => void;
   onSubmit: (data: any) => void;
 }
 
-export const BookingStepClient: React.FC<BookingStepClientProps> = ({ clientData, onBack, onSubmit }) => {
+export const BookingStepClient: React.FC<BookingStepClientProps> = ({ clientData, customFields, onBack, onSubmit }) => {
   const [formData, setFormData] = useState(clientData);
+
+  useEffect(() => {
+    setFormData(clientData);
+  }, [clientData]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,6 +38,59 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({ clientData
     fontFamily: "inherit",
     outline: "none",
     transition: "all 0.15s",
+  };
+
+  const updateCustomField = (key: string, value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      customFields: {
+        ...prev.customFields,
+        [key]: value,
+      },
+    }));
+  };
+
+  const renderCustomField = (field: StoreCustomField) => {
+    const commonProps = {
+      required: field.required,
+      value: formData.customFields[field.key] || "",
+      onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+        updateCustomField(field.key, event.target.value),
+      style: inputStyle,
+    };
+
+    if (field.type === "textarea") {
+      return (
+        <textarea
+          {...commonProps}
+          className="w-full px-4 py-3.5 font-bold min-h-[100px] resize-none"
+          placeholder={field.placeholder || ""}
+        />
+      );
+    }
+
+    if (field.type === "select") {
+      return (
+        <select {...commonProps} className="w-full px-4 py-3.5 font-bold">
+          <option value="">Seleccionar...</option>
+          {field.options.map((option) => (
+            <option key={`${field.key}-${option.value}`} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
+    const inputType = field.type === "date" || field.type === "email" || field.type === "tel" ? field.type : "text";
+    return (
+      <input
+        {...commonProps}
+        type={inputType}
+        className="w-full px-4 py-3.5 font-bold"
+        placeholder={field.placeholder || ""}
+      />
+    );
   };
 
   return (
@@ -106,6 +166,27 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({ clientData
             </div>
           </div>
         </div>
+
+        {customFields.length > 0 && (
+          <div className="space-y-4 rounded-2xl p-4" style={{ background: "rgba(255,255,255,0.55)", border: `1px solid ${colors2000s.border.light}` }}>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Datos extra del turno</p>
+              <p className="text-xs font-bold text-gray-500 mt-1">Completalos para que el negocio prepare mejor tu atencion.</p>
+            </div>
+            {customFields.map((field) => (
+              <div key={field.key} className="space-y-1.5">
+                <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block">
+                  {field.label}
+                  {field.required ? " *" : ""}
+                </label>
+                {renderCustomField(field)}
+                {field.help_text && (
+                  <p className="text-[11px] font-bold text-gray-400 ml-1">{field.help_text}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="relative">
           <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1">Notas Adicionales (Opcional)</label>

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, WalletCards } from "lucide-react";
 
-import { useCustomerLedger, useAddLedgerMovement } from "../hooks/useLedger";
+import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from "../hooks/useLedger";
 import { useManagedUsers } from "../hooks/useManagedUsers";
 import { buttonStyles2000s, colors2000s } from "../../theme/colors";
 
@@ -13,6 +13,7 @@ const currencyFmt = new Intl.NumberFormat("es-AR", {
 
 const LedgerPage: React.FC = () => {
   const usersQuery = useManagedUsers(true);
+  const summaryQuery = useLedgerSummary();
   const addMovement = useAddLedgerMovement();
   const clients = useMemo(
     () => (usersQuery.data || []).filter((user) => user.role === "client" && user.is_active),
@@ -77,7 +78,7 @@ const LedgerPage: React.FC = () => {
             Cargos, pagos, ajustes y devoluciones por cliente.
           </p>
         </div>
-        {(usersQuery.isLoading || ledgerQuery.isLoading) && (
+        {(usersQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading) && (
           <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>
             <Loader2 className="w-4 h-4 animate-spin" />
             Cargando ledger...
@@ -92,7 +93,34 @@ const LedgerPage: React.FC = () => {
         </div>
       )}
 
-      <div className="grid xl:grid-cols-[320px_1fr] gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+        <div className="p-5 rounded-2xl" style={cardStyle}>
+          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Saldo total</p>
+          <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
+            {currencyFmt.format(Number(summaryQuery.data?.total_balance ?? 0))}
+          </p>
+        </div>
+        <div className="p-5 rounded-2xl" style={cardStyle}>
+          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Clientes con deuda</p>
+          <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
+            {summaryQuery.data?.debtors_count ?? 0}
+          </p>
+        </div>
+        <div className="p-5 rounded-2xl" style={cardStyle}>
+          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Deuda promedio</p>
+          <p className="text-2xl font-black mt-1" style={{ color: colors2000s.orange.accent }}>
+            {currencyFmt.format(Number(summaryQuery.data?.average_balance ?? 0))}
+          </p>
+        </div>
+        <div className="p-5 rounded-2xl" style={cardStyle}>
+          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Movimientos</p>
+          <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
+            {summaryQuery.data?.total_movements ?? 0}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid xl:grid-cols-[320px_1fr_320px] gap-6">
         <div className="p-6 rounded-3xl space-y-4" style={cardStyle}>
           <div className="flex items-center gap-3">
             <WalletCards className="w-5 h-5" style={{ color: colors2000s.orange.accent }} />
@@ -191,7 +219,36 @@ const LedgerPage: React.FC = () => {
             ))}
             {!ledgerQuery.data?.movements.length && !ledgerQuery.isLoading && (
               <div className="rounded-2xl p-6 bg-white text-sm font-bold" style={{ border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.insetDark, color: colors2000s.text.secondary }}>
-                Este cliente todavía no tiene movimientos en el ledger.
+                Este cliente todavia no tiene movimientos en el ledger.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="p-6 rounded-3xl space-y-4" style={cardStyle}>
+          <div>
+            <h3 className="text-lg font-black uppercase tracking-tight" style={{ color: colors2000s.text.primary }}>
+              Top deudores
+            </h3>
+            <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+              Clientes con mayor saldo pendiente.
+            </p>
+          </div>
+          <div className="space-y-3">
+            {(summaryQuery.data?.top_debtors || []).map((debtor) => (
+              <div key={debtor.client_id} className="rounded-2xl p-4 bg-white" style={{ border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.insetDark }}>
+                <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>{debtor.client_name}</p>
+                <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.secondary }}>
+                  Ultimo movimiento: {new Date(debtor.last_movement_at).toLocaleDateString("es-AR")}
+                </p>
+                <p className="text-sm font-black mt-2" style={{ color: colors2000s.orange.accent }}>
+                  {currencyFmt.format(Number(debtor.balance))}
+                </p>
+              </div>
+            ))}
+            {(summaryQuery.data?.top_debtors.length ?? 0) === 0 && !summaryQuery.isLoading && (
+              <div className="rounded-2xl p-4 bg-white text-sm font-bold" style={{ border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.insetDark, color: colors2000s.text.secondary }}>
+                No hay clientes con deuda registrada.
               </div>
             )}
           </div>

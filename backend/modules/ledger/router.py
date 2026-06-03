@@ -14,6 +14,8 @@ from modules.ledger.schemas import (
     CustomerLedgerResponse,
     LedgerMovementCreate,
     LedgerMovementResponse,
+    LedgerSummaryClientItem,
+    LedgerSummaryResponse,
 )
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -43,6 +45,71 @@ def _signed_amount(movement_type: str, amount: Decimal) -> Decimal:
     if movement_type in {LedgerMovementType.PAYMENT.value, LedgerMovementType.REFUND.value}:
         return -amount
     return amount
+
+
+def _client_display_name(user: User | None, *, fallback_id: str) -> str:
+    if user:
+        full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
+        if full_name:
+            return full_name
+        if user.email:
+            return user.email
+        if user.phone:
+            return user.phone
+    return fallback_id
+
+
+@router.get("/summary", response_model=LedgerSummaryResponse)
+async def get_ledger_summary(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    _require_financial_access(user)
+    await _ensure_ledger_feature_enabled(db, user)
+    result = await db.execute(
+        select(CustomerLedger)
+        .where(CustomerLedger.store_id == user.store_id)
+        .order_by(CustomerLedger.client_id.asc(), CustomerLedger.created_at.asc())
+    )
+    movements = list(result.scalars().all())
+    latest_by_client: dict[str, CustomerLedger] = {}
+    for movement in movements:
+        latest_by_client[movement.client_id] = movement
+
+    debt_rows = [
+        movement
+        for movement in latest_by_client.values()
+        if Decimal(str(movement.balance_after or 0)) > 0
+    ]
+    client_ids = [movement.client_id for movement in debt_rows]
+    users_by_id: dict[str, User] = {}
+    if client_ids:
+        users_result = await db.execute(select(User).where(User.id.in_(client_ids)))
+        users_by_id = {customer.id: customer for customer in users_result.scalars().all()}
+
+    total_balance = sum((Decimal(str(item.balance_after or 0)) for item in debt_rows), Decimal("0.00"))
+    average_balance = (total_balance / len(debt_rows)) if debt_rows else Decimal("0.00")
+    top_debtors = sorted(
+        debt_rows,
+        key=lambda item: (Decimal(str(item.balance_after or 0)), item.created_at),
+        reverse=True,
+    )[:5]
+
+    return LedgerSummaryResponse(
+        total_balance=total_balance,
+        debtors_count=len(debt_rows),
+        average_balance=average_balance.quantize(Decimal("0.01")),
+        total_movements=len(movements),
+        top_debtors=[
+            LedgerSummaryClientItem(
+                client_id=item.client_id,
+                client_name=_client_display_name(users_by_id.get(item.client_id), fallback_id=item.client_id),
+                balance=Decimal(str(item.balance_after or 0)).quantize(Decimal("0.01")),
+                last_movement_at=item.created_at,
+            )
+            for item in top_debtors
+        ],
+    )
 
 
 @router.get("/customers/{client_id}", response_model=CustomerLedgerResponse)

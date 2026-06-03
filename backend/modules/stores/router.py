@@ -33,6 +33,7 @@ def _serialize_store(store: Store) -> StoreResponse:
         instagram_url=store.instagram_url,
         facebook_url=store.facebook_url,
         website_url=store.website_url,
+        custom_client_fields=store.custom_client_fields,
         cancellation_hours=store.cancellation_hours,
         buffer_minutes=store.buffer_minutes,
         business_hours=store.business_hours,
@@ -112,6 +113,7 @@ async def update_my_store(
         "instagram_url",
         "facebook_url",
         "website_url",
+        "custom_client_fields",
     )
     theme_config = dict(store.theme_config or {})
     for key in theme_keys:

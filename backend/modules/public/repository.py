@@ -155,6 +155,7 @@ class PublicRepository:
         starts_at: datetime,
         client: User,
         notes: str | None,
+        intake_answers: dict[str, str] | None,
         idempotency_key: str,
         initial_status: str = AppointmentStatus.PENDING.value,
     ) -> tuple[Appointment, Service, Staff]:
@@ -227,6 +228,7 @@ class PublicRepository:
             client_email=client.email,
             client_phone=client.phone,
             notes=notes,
+            intake_answers=intake_answers or {},
             idempotency_key=idempotency_key,
             status=initial_status,
         )

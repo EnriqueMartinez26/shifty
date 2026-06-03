@@ -14,11 +14,12 @@ class ServiceBase(BaseModel):
     deposit_type: str = Field(default="percent", pattern=r"^(percent|fixed|full)$")
     deposit_amount: float | None = Field(None, ge=0, le=10_000_000)
     color: str | None = Field(None, pattern=r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$")
+    image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
 
-    @field_validator("youtube_trailer_url")
+    @field_validator("image_url", "youtube_trailer_url")
     @classmethod
-    def validate_youtube_url(cls, value: str | None) -> str | None:
+    def validate_media_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
 
 
@@ -35,12 +36,13 @@ class ServiceUpdate(BaseModel):
     deposit_type: str | None = Field(None, pattern=r"^(percent|fixed|full)$")
     deposit_amount: float | None = Field(None, ge=0, le=10_000_000)
     color: str | None = Field(None, pattern=r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$")
+    image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
     is_active: bool | None = None
 
-    @field_validator("youtube_trailer_url")
+    @field_validator("image_url", "youtube_trailer_url")
     @classmethod
-    def validate_youtube_url(cls, value: str | None) -> str | None:
+    def validate_media_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
 
 

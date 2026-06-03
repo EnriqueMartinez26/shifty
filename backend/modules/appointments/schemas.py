@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from typing import Optional, List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -42,6 +42,7 @@ class AppointmentResponse(BaseModel):
     status:       str
     notes:        Optional[str] = None
     notes_staff:  Optional[str] = None   # Notas del profesional (nuevo)
+    intake_answers: Dict[str, str] = Field(default_factory=dict)
     cancelled_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
@@ -60,6 +61,7 @@ class AppointmentListItem(BaseModel):
     status:      str
     notes:       Optional[str] = None
     notes_staff: Optional[str] = None
+    intake_answers: Dict[str, str] = Field(default_factory=dict)
 
 
 
@@ -118,6 +120,7 @@ class AppointmentSearchResult(BaseModel):
     status:       str
     notes:        Optional[str] = None
     notes_staff:  Optional[str] = None
+    intake_answers: Dict[str, str] = Field(default_factory=dict)
     cancelled_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     service_name: str

@@ -58,6 +58,65 @@ async def _bypass_rls(db: AsyncSession) -> None:
     await _apply_tenant_context(db)
 
 
+def _normalize_custom_field_value(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _validate_custom_fields(store, custom_fields: dict[str, str] | None) -> dict[str, str]:
+    configured_fields = store.custom_client_fields or []
+    configured_by_key = {
+        field.get("key"): field
+        for field in configured_fields
+        if isinstance(field, dict) and field.get("key")
+    }
+    incoming = custom_fields or {}
+
+    unknown_keys = [key for key in incoming if key not in configured_by_key]
+    if unknown_keys:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Campos extra invalidos: {', '.join(sorted(unknown_keys))}",
+        )
+
+    normalized: dict[str, str] = {}
+    for key, raw_value in incoming.items():
+        value = _normalize_custom_field_value(raw_value)
+        if len(value) > 500:
+            raise HTTPException(
+                status_code=422,
+                detail=f"El campo extra '{key}' supera el maximo permitido",
+            )
+
+        field_config = configured_by_key[key]
+        if field_config.get("type") == "select" and value:
+            allowed_values = {
+                str(option.get("value", "")).strip()
+                for option in (field_config.get("options") or [])
+                if isinstance(option, dict)
+            }
+            if allowed_values and value not in allowed_values:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Valor invalido para el campo '{field_config.get('label') or key}'",
+                )
+        normalized[key] = value
+
+    missing_required = [
+        field.get("label") or field.get("key")
+        for field in configured_fields
+        if field.get("required") and not normalized.get(field.get("key", ""), "").strip()
+    ]
+    if missing_required:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Faltan campos requeridos: {', '.join(missing_required)}",
+        )
+
+    return {key: value for key, value in normalized.items() if value}
+
+
 @router.get("/stores/{slug}", response_model=PublicStoreResponse)
 async def get_store_by_slug(slug: SlugPath, db: AsyncSession = Depends(get_db)):
     await _bypass_rls(db)
@@ -78,6 +137,7 @@ async def get_store_by_slug(slug: SlugPath, db: AsyncSession = Depends(get_db)):
             cover_url=store.cover_url,
             whatsapp_number=store.whatsapp_number,
             website_url=store.website_url,
+            custom_client_fields=store.custom_client_fields,
             feature_flags=store.normalized_feature_flags,
         )
     finally:
@@ -107,6 +167,7 @@ async def get_public_services(
                 deposit_type=getattr(service, "deposit_type", "percent") or "percent",
                 deposit_amount=float(service.deposit_amount) if getattr(service, "deposit_amount", None) is not None else None,
                 color=service.color,
+                image_url=service.image_url,
             )
             for service in services
         ]
@@ -285,6 +346,7 @@ async def create_public_booking(
                     detail="Se requiere validar OTP antes de reservar",
                 )
 
+        normalized_custom_fields = _validate_custom_fields(store, data.custom_fields)
         payment_required = is_store_feature_enabled(store.feature_flags, "payments") and service_requires_payment(service)
         initial_status = (
             AppointmentStatus.PENDING_PAYMENT.value
@@ -310,6 +372,7 @@ async def create_public_booking(
                     starts_at=data.starts_at,
                     client=client,
                     notes=data.notes,
+                    intake_answers=normalized_custom_fields,
                     idempotency_key=idempotency_key,
                     initial_status=initial_status,
                 )
@@ -337,6 +400,7 @@ async def create_public_booking(
             client_name=data.client_name,
             client_phone=data.client_phone,
             notes=data.notes,
+            custom_fields=appointment.intake_answers or normalized_custom_fields,
             payment_required=payment_required,
             payment_status=payment.status if payment else None,
             payment_link=payment.payment_link if payment else None,
@@ -402,6 +466,7 @@ async def get_client_appointments(
                     ends_at=appt.ends_at,
                     status=appt.status,
                     notes=appt.notes,
+                    custom_fields=appt.intake_answers or {},
                     can_cancel=can_cancel,
                     can_reschedule=can_cancel,
                 )
@@ -474,6 +539,8 @@ async def client_cancel_appointment(
             status=appointment.status,
             client_name=client.first_name or "Cliente",
             client_phone=data.phone,
+            notes=appointment.notes,
+            custom_fields=appointment.intake_answers or {},
         )
     finally:
         set_tenant_context(None, False)
@@ -557,6 +624,7 @@ async def client_reschedule_appointment(
                     client_email=client.email,
                     client_phone=client.phone,
                     notes=original.notes,
+                    intake_answers=original.intake_answers or {},
                     idempotency_key=data.idempotency_key,
                 )
                 db.add(new_appointment)
@@ -582,6 +650,8 @@ async def client_reschedule_appointment(
             status=new_appointment.status,
             client_name=client.first_name or "Cliente",
             client_phone=data.phone,
+            notes=new_appointment.notes,
+            custom_fields=new_appointment.intake_answers or {},
         )
         await idempotency_save(data.idempotency_key, response.model_dump(mode="json"), redis)
         return response

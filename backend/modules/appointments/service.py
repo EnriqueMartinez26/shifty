@@ -133,6 +133,7 @@ class AppointmentService:
             client_email=actor.email,
             client_phone=actor.phone,
             notes=data.get("notes"),
+            intake_answers=data.get("intake_answers") or {},
             idempotency_key=data.get("idempotency_key"),
         )
         self.uow.appointments.add(appointment)
@@ -322,6 +323,7 @@ class AppointmentService:
         service_id = original.service_id
         client_id  = original.client_id
         orig_notes = original.notes
+        orig_intake_answers = original.intake_answers or {}
 
         # 2. Resolver servicio para calcular duración
         service = await self.uow.appointments.get_service_by_id(service_id)
@@ -405,6 +407,7 @@ class AppointmentService:
             client_email=actor.email,
             client_phone=actor.phone,
             notes=orig_notes,
+            intake_answers=orig_intake_answers,
             idempotency_key=idempotency_key,
         )
         self.uow.appointments.add(new_appointment)

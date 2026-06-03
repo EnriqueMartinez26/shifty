@@ -13,6 +13,7 @@ import {
   Trash2,
   SlidersHorizontal,
 } from "lucide-react";
+import type { StoreCustomField, StoreCustomFieldOption } from "@application/services/StoreSettingsService";
 import { useStoreFeatureFlags, useStoreSettings, useUpdateStoreFeatureFlags, useUpdateStoreSettings } from "../hooks/useStores";
 import { useChangePassword } from "../hooks/useChangePassword";
 import { colors2000s, buttonStyles2000s } from "../../theme/colors";
@@ -53,6 +54,40 @@ const FEATURE_LABELS = [
   { key: "otp_booking", title: "OTP en reserva publica", description: "Validacion por SMS o WhatsApp antes de reservar." },
 ] as const;
 
+const CUSTOM_FIELD_TYPE_OPTIONS = [
+  { value: "text", label: "Texto corto" },
+  { value: "textarea", label: "Texto largo" },
+  { value: "tel", label: "Telefono" },
+  { value: "email", label: "Email" },
+  { value: "date", label: "Fecha" },
+  { value: "select", label: "Lista" },
+] as const;
+
+const createEmptyCustomField = (index: number): StoreCustomField => ({
+  key: `campo_${index}`,
+  label: "",
+  type: "text",
+  required: false,
+  placeholder: "",
+  help_text: "",
+  options: [],
+});
+
+const serializeFieldOptions = (options: StoreCustomFieldOption[]) =>
+  options.map((option) => (option.label === option.value ? option.value : `${option.label}|${option.value}`)).join("\n");
+
+const parseFieldOptions = (rawValue: string): StoreCustomFieldOption[] =>
+  rawValue
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [labelPart, valuePart] = line.split("|");
+      const label = (labelPart || "").trim();
+      const value = (valuePart || labelPart || "").trim();
+      return { label, value };
+    });
+
 const SettingsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState("identity");
   const { data: store, isLoading } = useStoreSettings();
@@ -79,6 +114,7 @@ const SettingsPage: React.FC = () => {
         instagram_url: store.instagram_url || "",
         facebook_url: store.facebook_url || "",
         website_url: store.website_url || "",
+        custom_client_fields: store.custom_client_fields || [],
         primary_color: store.primary_color,
         cancellation_hours: store.cancellation_hours,
         buffer_minutes: store.buffer_minutes,
@@ -308,6 +344,182 @@ const SettingsPage: React.FC = () => {
                 style={inputStyle}
                 placeholder="Breve descripcion visible en el portal publico."
               />
+            </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Campos extra del booking</label>
+                  <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.disabled }}>
+                    Define preguntas opcionales o requeridas para el portal publico.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFormData({
+                      ...formData,
+                      custom_client_fields: [
+                        ...(formData.custom_client_fields || []),
+                        createEmptyCustomField((formData.custom_client_fields?.length || 0) + 1),
+                      ],
+                    })
+                  }
+                  className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
+                  style={buttonStyles2000s.default}
+                >
+                  <Plus className="w-3 h-3 mr-1" />
+                  Agregar campo
+                </button>
+              </div>
+
+              {(formData.custom_client_fields || []).length === 0 ? (
+                <div className="p-4 rounded-2xl text-xs font-bold" style={{ background: "white", border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.insetDark, color: colors2000s.text.secondary }}>
+                  No hay campos extra configurados. El booking publico va a pedir solo nombre, telefono, email opcional y notas.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {(formData.custom_client_fields || []).map((field: StoreCustomField, index: number) => (
+                    <div
+                      key={`${field.key}-${index}`}
+                      className="p-5 rounded-[1.5rem] space-y-4"
+                      style={{ background: "white", border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.outer }}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Campo #{index + 1}</p>
+                          <p className="text-xs font-bold mt-1" style={{ color: colors2000s.text.disabled }}>
+                            La clave se usa internamente y conviene mantenerla corta, en minusculas y con guiones bajos.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFormData({
+                              ...formData,
+                              custom_client_fields: (formData.custom_client_fields || []).filter((_: StoreCustomField, fieldIndex: number) => fieldIndex !== index),
+                            })
+                          }
+                          className="p-2 rounded-xl transition-all active:scale-95"
+                          style={{ color: "#ef4444" }}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Etiqueta</label>
+                          <input
+                            value={field.label}
+                            onChange={(e) => {
+                              const nextFields = [...(formData.custom_client_fields || [])];
+                              nextFields[index] = { ...field, label: e.target.value };
+                              setFormData({ ...formData, custom_client_fields: nextFields });
+                            }}
+                            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                            style={inputStyle}
+                            placeholder="Ej: Motivo de consulta"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Clave</label>
+                          <input
+                            value={field.key}
+                            onChange={(e) => {
+                              const nextFields = [...(formData.custom_client_fields || [])];
+                              nextFields[index] = { ...field, key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") };
+                              setFormData({ ...formData, custom_client_fields: nextFields });
+                            }}
+                            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                            style={inputStyle}
+                            placeholder="motivo_consulta"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Tipo</label>
+                          <select
+                            value={field.type}
+                            onChange={(e) => {
+                              const nextFields = [...(formData.custom_client_fields || [])];
+                              nextFields[index] = { ...field, type: e.target.value as StoreCustomField["type"], options: e.target.value === "select" ? field.options : [] };
+                              setFormData({ ...formData, custom_client_fields: nextFields });
+                            }}
+                            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                            style={inputStyle}
+                          >
+                            {CUSTOM_FIELD_TYPE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Placeholder</label>
+                          <input
+                            value={field.placeholder || ""}
+                            onChange={(e) => {
+                              const nextFields = [...(formData.custom_client_fields || [])];
+                              nextFields[index] = { ...field, placeholder: e.target.value };
+                              setFormData({ ...formData, custom_client_fields: nextFields });
+                            }}
+                            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                            style={inputStyle}
+                            placeholder="Texto de ayuda dentro del campo"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid md:grid-cols-[1fr_auto] gap-4 items-start">
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Texto de ayuda</label>
+                          <input
+                            value={field.help_text || ""}
+                            onChange={(e) => {
+                              const nextFields = [...(formData.custom_client_fields || [])];
+                              nextFields[index] = { ...field, help_text: e.target.value };
+                              setFormData({ ...formData, custom_client_fields: nextFields });
+                            }}
+                            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+                            style={inputStyle}
+                            placeholder="Ej: Aclaranos si es primera vez o seguimiento"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextFields = [...(formData.custom_client_fields || [])];
+                            nextFields[index] = { ...field, required: !field.required };
+                            setFormData({ ...formData, custom_client_fields: nextFields });
+                          }}
+                          className="mt-7 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
+                          style={field.required ? buttonStyles2000s.selected : buttonStyles2000s.default}
+                        >
+                          {field.required ? "Obligatorio" : "Opcional"}
+                        </button>
+                      </div>
+
+                      {field.type === "select" && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Opciones</label>
+                          <textarea
+                            value={serializeFieldOptions(field.options || [])}
+                            onChange={(e) => {
+                              const nextFields = [...(formData.custom_client_fields || [])];
+                              nextFields[index] = { ...field, options: parseFieldOptions(e.target.value) };
+                              setFormData({ ...formData, custom_client_fields: nextFields });
+                            }}
+                            className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
+                            style={inputStyle}
+                            placeholder={"Una opcion por linea\nEj: Primera vez|primera_vez"}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="grid md:grid-cols-3 gap-8">

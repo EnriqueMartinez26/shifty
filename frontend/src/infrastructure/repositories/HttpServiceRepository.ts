@@ -1,14 +1,14 @@
-import type { AxiosInstance } from 'axios';
-import { Service } from '../../domain/entities/Service';
-import { BaseRepository } from './BaseRepository';
-import type { IServiceRepository } from '../../domain/repositories/IServiceRepository';
-import type { ServiceResponseDTO } from '../../application/dtos/ServiceDTO';
-import { ServiceMapper } from '../../application/mappers/ServiceMapper';
-import { QueryOptions } from '../../domain/repositories/IRepository';
+import type { AxiosInstance } from "axios";
+import { Service } from "../../domain/entities/Service";
+import { BaseRepository } from "./BaseRepository";
+import type { IServiceRepository } from "../../domain/repositories/IServiceRepository";
+import type { ServiceResponseDTO } from "../../application/dtos/ServiceDTO";
+import { ServiceMapper } from "../../application/mappers/ServiceMapper";
+import { QueryOptions } from "../../domain/repositories/IRepository";
 
-export class HttpServiceRepository 
-  extends BaseRepository<Service, Service, Partial<Service>> 
-  implements IServiceRepository 
+export class HttpServiceRepository
+  extends BaseRepository<Service, Service, Partial<Service>>
+  implements IServiceRepository
 {
   private client: AxiosInstance;
 
@@ -18,7 +18,7 @@ export class HttpServiceRepository
   }
 
   protected async findAllImpl(_options?: QueryOptions | boolean): Promise<Service[]> {
-    const { data } = await this.client.get<ServiceResponseDTO[]>('/services/');
+    const { data } = await this.client.get<ServiceResponseDTO[]>("/services/");
     return data.map(ServiceMapper.toDomain);
   }
 
@@ -36,12 +36,13 @@ export class HttpServiceRepository
 
   protected async createImpl(service: Service): Promise<Service> {
     const primitives = service.toPrimitives();
-    const { data } = await this.client.post<ServiceResponseDTO>('/services/', {
+    const { data } = await this.client.post<ServiceResponseDTO>("/services/", {
       name: primitives.name,
       description: primitives.description,
       duration_minutes: primitives.duration_minutes,
       price: primitives.price,
       color: primitives.color,
+      image_url: primitives.image_url,
       youtube_trailer_url: primitives.youtube_trailer_url,
     });
     return ServiceMapper.toDomain(data);
@@ -49,14 +50,24 @@ export class HttpServiceRepository
 
   protected async updateImpl(id: string, service: Partial<Service>): Promise<Service> {
     const updateData: any = {};
-    
-    if (service.name !== undefined) updateData.name = service.name;
-    if (service.description !== undefined) updateData.description = service.description;
-    if (service.duration !== undefined) updateData.duration_minutes = service.duration.getValue();
-    if (service.price !== undefined) updateData.price = service.price.getValue();
-    if (service.color !== undefined) updateData.color = service.color;
-    if (service.youtubeTrailerUrl !== undefined) updateData.youtube_trailer_url = service.youtubeTrailerUrl;
-    if (service.isActive !== undefined) updateData.is_active = service.isActive;
+    const serviceData = service as any;
+
+    if (serviceData.name !== undefined) updateData.name = serviceData.name;
+    if (serviceData.description !== undefined) updateData.description = serviceData.description;
+    if (serviceData.durationMinutes !== undefined) {
+      updateData.duration_minutes = serviceData.durationMinutes;
+    } else if (serviceData.duration !== undefined) {
+      updateData.duration_minutes = serviceData.duration.getValue();
+    }
+    if (serviceData.price !== undefined) {
+      updateData.price = typeof serviceData.price === "number" ? serviceData.price : serviceData.price.getValue();
+    }
+    if (serviceData.color !== undefined) updateData.color = serviceData.color;
+    if (serviceData.imageUrl !== undefined) updateData.image_url = serviceData.imageUrl;
+    if (serviceData.image_url !== undefined) updateData.image_url = serviceData.image_url;
+    if (serviceData.youtubeTrailerUrl !== undefined) updateData.youtube_trailer_url = serviceData.youtubeTrailerUrl;
+    if (serviceData.youtube_trailer_url !== undefined) updateData.youtube_trailer_url = serviceData.youtube_trailer_url;
+    if (serviceData.isActive !== undefined) updateData.is_active = serviceData.isActive;
 
     const { data: responseData } = await this.client.patch<ServiceResponseDTO>(`/services/${id}`, updateData);
     return ServiceMapper.toDomain(responseData);
@@ -66,4 +77,5 @@ export class HttpServiceRepository
     await this.client.delete(`/services/${id}`);
   }
 }
+
 export default HttpServiceRepository;

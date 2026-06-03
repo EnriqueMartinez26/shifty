@@ -52,14 +52,18 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Header Section: Avatar initials + Titles */}
         <div className="flex items-center gap-4 pr-20">
           <div 
-            className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0 shadow-md"
+            className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
             style={{ 
               background: `linear-gradient(180deg, ${accentColor} 0%, ${accentColor}dd 100%)`, 
               border: `1px solid ${accentColor}`,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
-            <Briefcase size={22} className="text-white" />
+            {service.imageUrl ? (
+              <img src={service.imageUrl} alt={service.name} className="w-full h-full object-cover" />
+            ) : (
+              <Briefcase size={22} className="text-white" />
+            )}
           </div>
           <div className="min-w-0">
             <h3 className="font-black text-gray-800 text-sm uppercase tracking-tight truncate leading-tight">

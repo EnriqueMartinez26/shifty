@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { AlertCircle, Check, ChevronLeft, ShieldCheck } from "lucide-react";
 
 import {
@@ -20,6 +20,10 @@ interface BookingWizardContainerProps {
 
 export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ store }) => {
   const requiresOtp = Boolean(store.feature_flags?.otp_booking);
+  const initialCustomFields = useMemo(
+    () => Object.fromEntries((store.custom_client_fields || []).map((field) => [field.key, ""])),
+    [store.custom_client_fields],
+  );
   const steps = useMemo(
     () => (requiresOtp ? ["Servicio", "Profesional", "Horario", "Datos", "OTP", "Confirmacion"] : ["Servicio", "Profesional", "Horario", "Datos", "Confirmacion"]),
     [requiresOtp],
@@ -46,9 +50,20 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
       email: "",
       phone: "",
       notes: "",
+      customFields: initialCustomFields,
     },
     idempotencyKey: crypto.randomUUID(),
   });
+
+  useEffect(() => {
+    setBookingState((prev) => ({
+      ...prev,
+      client: {
+        ...prev.client,
+        customFields: Object.keys(prev.client.customFields || {}).length ? prev.client.customFields : initialCustomFields,
+      },
+    }));
+  }, [initialCustomFields]);
 
   const createBooking = useCreatePublicBooking();
   const requestOtp = useRequestPublicOtp();
@@ -313,6 +328,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
         {currentStep === 3 && (
           <BookingStepClient
             clientData={bookingState.client}
+            customFields={store.custom_client_fields || []}
             onBack={prevStep}
             onSubmit={(clientData) => {
               updateState({ client: clientData });
@@ -346,6 +362,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                 client_email: bookingState.client.email || undefined,
                 client_phone: bookingState.client.phone,
                 notes: bookingState.client.notes,
+                custom_fields: bookingState.client.customFields,
                 idempotency_key: bookingState.idempotencyKey,
               })
             }

@@ -334,6 +334,11 @@ async def test_ledger_feature_flag_and_running_balance(client: AsyncClient):
     assert body["balance"] == "60.00"
     assert len(body["movements"]) == 2
 
+    summary = await client.get("/ledger/summary", headers=auth_headers(token))
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["debtors_count"] == 1
+    assert summary.json()["total_balance"] == "60.00"
+
 
 @pytest.mark.asyncio
 async def test_public_availability_hides_private_block_reasons(client: AsyncClient):
@@ -476,6 +481,68 @@ async def test_public_booking_allows_missing_email_and_any_professional(client: 
     body = booking.json()
     assert body["staff_id"] == staff_public_id
     assert body["client_phone"] == "5491166667777"
+
+
+@pytest.mark.asyncio
+async def test_public_booking_persists_configured_custom_fields(client: AsyncClient):
+    store_public_id, token = await register_and_login(client, slug="tienda-intake", email="intake@test.com")
+    settings_update = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={
+            "custom_client_fields": [
+                {
+                    "key": "motivo_consulta",
+                    "label": "Motivo de consulta",
+                    "type": "text",
+                    "required": True,
+                    "placeholder": "Contanos brevemente",
+                    "options": [],
+                },
+                {
+                    "key": "tipo_visita",
+                    "label": "Tipo de visita",
+                    "type": "select",
+                    "required": False,
+                    "options": [
+                        {"label": "Primera vez", "value": "primera_vez"},
+                        {"label": "Control", "value": "control"},
+                    ],
+                },
+            ]
+        },
+    )
+    assert settings_update.status_code == 200, settings_update.text
+    assert len(settings_update.json()["custom_client_fields"]) == 2
+
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=3)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=10, minute=30, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Intake",
+            "client_phone": "+5491170010020",
+            "custom_fields": {
+                "motivo_consulta": "Control anual",
+                "tipo_visita": "control",
+            },
+            "idempotency_key": "intake-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    assert booking.json()["custom_fields"]["motivo_consulta"] == "Control anual"
+
+    appointments = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    assert appointments.status_code == 200, appointments.text
+    stored = next(item for item in appointments.json()["results"] if item["public_id"] == booking.json()["public_id"])
+    assert stored["intake_answers"]["tipo_visita"] == "control"
 
 
 @pytest.mark.asyncio
@@ -720,3 +787,56 @@ async def test_professional_can_access_own_reports_only(client: AsyncClient, tes
     body = professionals.json()
     assert len(body["professionals"]) == 1
     assert body["professionals"][0]["staff_id"] == staff_public_id
+
+
+@pytest.mark.asyncio
+async def test_report_summary_includes_client_service_and_debt_metrics(client: AsyncClient):
+    store_public_id, token = await register_and_login(client, slug="tienda-reportes-full", email="reportes-full@test.com")
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=14, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Reporte Full",
+            "client_phone": "+5491199980011",
+            "idempotency_key": "report-full-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+
+    search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    assert search.status_code == 200, search.text
+    client_id = next(item for item in search.json()["results"] if item["public_id"] == booking.json()["public_id"])["client_id"]
+
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"ledger": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    charge = await client.post(
+        f"/ledger/customers/{client_id}/movements",
+        headers=auth_headers(token),
+        json={"movement_type": "charge", "amount": "100.00", "notes": "Saldo pendiente"},
+    )
+    assert charge.status_code == 200, charge.text
+
+    summary = await client.get(
+        f"/reports/summary?from_date={starts_at.date().isoformat()}&to_date={starts_at.date().isoformat()}",
+        headers=auth_headers(token),
+    )
+    assert summary.status_code == 200, summary.text
+    body = summary.json()
+    assert body["client_stats"]["total_clients"] == 1
+    assert body["top_services"][0]["service_id"] == service_public_id
+    assert body["top_clients"][0]["client_id"] == client_id
+    assert body["debt_summary"]["debtors_count"] == 1
+    assert body["debt_summary"]["outstanding_balance"] == 100.0

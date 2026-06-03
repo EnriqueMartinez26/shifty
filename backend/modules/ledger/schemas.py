@@ -25,3 +25,18 @@ class CustomerLedgerResponse(BaseModel):
     client_id: str
     balance: Decimal
     movements: list[LedgerMovementResponse]
+
+
+class LedgerSummaryClientItem(BaseModel):
+    client_id: str
+    client_name: str
+    balance: Decimal
+    last_movement_at: datetime
+
+
+class LedgerSummaryResponse(BaseModel):
+    total_balance: Decimal
+    debtors_count: int
+    average_balance: Decimal
+    total_movements: int
+    top_debtors: list[LedgerSummaryClientItem]

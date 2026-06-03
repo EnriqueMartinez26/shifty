@@ -99,5 +99,9 @@ class Store(BaseEntity):
         return normalize_business_type((self.theme_config or {}).get("business_type"))
 
     @property
+    def custom_client_fields(self) -> list[dict]:
+        return (self.theme_config or {}).get("custom_client_fields") or []
+
+    @property
     def normalized_feature_flags(self) -> dict:
         return normalize_store_feature_flags(self.feature_flags)

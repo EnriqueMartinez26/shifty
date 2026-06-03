@@ -1,5 +1,6 @@
 import apiClient from "@infrastructure/http/client";
 import type { BusinessType } from "@presentation/lib/businessLabels";
+import type { StoreCustomField } from "./StoreSettingsService";
 
 export interface PublicStoreFeatureFlags {
   payments: boolean;
@@ -21,6 +22,7 @@ export interface PublicStore {
   cover_url?: string | null;
   whatsapp_number?: string | null;
   website_url?: string | null;
+  custom_client_fields: StoreCustomField[];
   feature_flags: PublicStoreFeatureFlags;
 }
 
@@ -34,6 +36,7 @@ export interface PublicService {
   deposit_type: "percent" | "fixed" | "full";
   deposit_amount: number | null;
   color: string | null;
+  image_url: string | null;
 }
 
 export interface PublicStaff {
@@ -65,6 +68,7 @@ export interface PublicBookingPayload {
   client_name: string;
   client_email?: string;
   client_phone: string;
+  custom_fields?: Record<string, string>;
 }
 
 export interface BookingConfirmation {
@@ -79,6 +83,7 @@ export interface BookingConfirmation {
   client_name: string;
   client_phone: string;
   notes?: string | null;
+  custom_fields?: Record<string, string>;
   payment_required: boolean;
   payment_status?: string | null;
   payment_link?: string | null;
