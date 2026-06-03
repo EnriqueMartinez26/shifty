@@ -136,6 +136,101 @@ export interface ListStoresParams {
   has_subscription?: boolean | null;
 }
 
+export interface CreateSuperAdminStorePayload {
+  name: string;
+  slug: string;
+  logo_url?: string | null;
+  primary_color?: string;
+  cancellation_hours?: number;
+  buffer_minutes?: number;
+  send_email_confirmation?: boolean;
+  send_email_reminders?: boolean;
+}
+
+export interface UpdateSuperAdminStorePayload {
+  name?: string;
+  slug?: string;
+  logo_url?: string | null;
+  primary_color?: string;
+  cancellation_hours?: number;
+  buffer_minutes?: number;
+  send_email_confirmation?: boolean;
+  send_email_reminders?: boolean;
+  is_active?: boolean;
+}
+
+export interface CreateSuperAdminStoreAdminPayload {
+  email: string;
+  password: string;
+  first_name: string;
+  last_name: string;
+  phone?: string | null;
+}
+
+export interface UpdateSuperAdminUserPayload {
+  first_name?: string;
+  last_name?: string;
+  phone?: string | null;
+  role?: "admin" | "staff" | "receptionist" | "client";
+  password?: string;
+  is_active?: boolean;
+}
+
+export interface CreateSuperAdminPlanPayload {
+  name: string;
+  description?: string | null;
+  price: number | string;
+  currency?: string;
+  billing_interval?: string;
+  max_staff?: number | null;
+  max_services?: number | null;
+}
+
+export interface UpdateSuperAdminPlanPayload {
+  name?: string;
+  description?: string | null;
+  price?: number | string;
+  currency?: string;
+  billing_interval?: string;
+  max_staff?: number | null;
+  max_services?: number | null;
+  is_active?: boolean;
+}
+
+export interface AssignSuperAdminSubscriptionPayload {
+  plan_id: string;
+  status?: string;
+  base_amount?: number | string | null;
+  currency?: string | null;
+  current_period_start?: string | null;
+  current_period_end?: string | null;
+}
+
+export interface CreateSuperAdminCouponPayload {
+  code: string;
+  coupon_type: "percent" | "fixed";
+  value: number | string;
+  currency?: string | null;
+  max_uses?: number | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  one_time_per_store?: boolean;
+  description?: string | null;
+}
+
+export interface UpdateSuperAdminCouponPayload {
+  code?: string;
+  coupon_type?: "percent" | "fixed";
+  value?: number | string;
+  currency?: string | null;
+  max_uses?: number | null;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  one_time_per_store?: boolean;
+  description?: string | null;
+  is_active?: boolean;
+}
+
 export class SuperAdminService {
   async listStores(params: ListStoresParams = {}): Promise<SuperAdminStoreRow[]> {
     const searchParams = new URLSearchParams();
@@ -156,13 +251,84 @@ export class SuperAdminService {
     return data;
   }
 
+  async createStore(payload: CreateSuperAdminStorePayload): Promise<SuperAdminStoreRow> {
+    const { data } = await apiClient.post<SuperAdminStoreRow>("/superadmin/stores", payload);
+    return data;
+  }
+
+  async updateStore(storePublicId: string, payload: UpdateSuperAdminStorePayload): Promise<SuperAdminStoreRow> {
+    const { data } = await apiClient.patch<SuperAdminStoreRow>(`/superadmin/stores/${storePublicId}`, payload);
+    return data;
+  }
+
+  async createStoreAdmin(
+    storePublicId: string,
+    payload: CreateSuperAdminStoreAdminPayload
+  ): Promise<SuperAdminUser> {
+    const { data } = await apiClient.post<SuperAdminUser>(`/superadmin/stores/${storePublicId}/admins`, payload);
+    return data;
+  }
+
+  async updateUser(userPublicId: string, payload: UpdateSuperAdminUserPayload): Promise<SuperAdminUser> {
+    const { data } = await apiClient.patch<SuperAdminUser>(`/superadmin/users/${userPublicId}`, payload);
+    return data;
+  }
+
+  async setGlobalAdmin(userPublicId: string, is_global_admin: boolean): Promise<SuperAdminUser> {
+    const { data } = await apiClient.patch<SuperAdminUser>(`/superadmin/users/${userPublicId}/global-admin`, {
+      is_global_admin,
+    });
+    return data;
+  }
+
   async listPlans(includeInactive = false): Promise<SuperAdminPlan[]> {
     const { data } = await apiClient.get<SuperAdminPlan[]>(`/superadmin/plans?include_inactive=${includeInactive}`);
     return data;
   }
 
+  async createPlan(payload: CreateSuperAdminPlanPayload): Promise<SuperAdminPlan> {
+    const { data } = await apiClient.post<SuperAdminPlan>("/superadmin/plans", payload);
+    return data;
+  }
+
+  async updatePlan(planPublicId: string, payload: UpdateSuperAdminPlanPayload): Promise<SuperAdminPlan> {
+    const { data } = await apiClient.patch<SuperAdminPlan>(`/superadmin/plans/${planPublicId}`, payload);
+    return data;
+  }
+
+  async assignSubscription(
+    storePublicId: string,
+    payload: AssignSuperAdminSubscriptionPayload
+  ): Promise<SuperAdminSubscriptionOverview> {
+    const { data } = await apiClient.post<SuperAdminSubscriptionOverview>(
+      `/superadmin/stores/${storePublicId}/subscription`,
+      payload
+    );
+    return data;
+  }
+
   async listCoupons(includeInactive = false): Promise<SuperAdminCoupon[]> {
     const { data } = await apiClient.get<SuperAdminCoupon[]>(`/superadmin/coupons?include_inactive=${includeInactive}`);
+    return data;
+  }
+
+  async createCoupon(payload: CreateSuperAdminCouponPayload): Promise<SuperAdminCoupon> {
+    const { data } = await apiClient.post<SuperAdminCoupon>("/superadmin/coupons", payload);
+    return data;
+  }
+
+  async updateCoupon(couponPublicId: string, payload: UpdateSuperAdminCouponPayload): Promise<SuperAdminCoupon> {
+    const { data } = await apiClient.patch<SuperAdminCoupon>(`/superadmin/coupons/${couponPublicId}`, payload);
+    return data;
+  }
+
+  async redeemCoupon(storePublicId: string, couponCode: string): Promise<SuperAdminCouponRedemption> {
+    const { data } = await apiClient.post<SuperAdminCouponRedemption>(
+      `/superadmin/stores/${storePublicId}/coupons/redeem`,
+      {
+        coupon_code: couponCode,
+      }
+    );
     return data;
   }
 }
