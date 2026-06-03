@@ -1,6 +1,6 @@
 import apiClient from "@infrastructure/http/client";
 
-export type UserRole = "admin" | "staff" | "client";
+export type UserRole = "admin" | "staff" | "receptionist" | "client";
 
 export interface ManagedUser {
   public_id: string;

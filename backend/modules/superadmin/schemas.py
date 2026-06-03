@@ -62,6 +62,17 @@ class StoreGlobalResponse(BaseModel):
         from_attributes = True
 
 
+class StoreTableResponse(StoreGlobalResponse):
+    admins_count: int
+    users_count: int
+    active_users_count: int
+    has_subscription: bool
+    subscription_status: str | None
+    current_plan_name: str | None
+    current_period_end: datetime | None
+    last_redemption_at: datetime | None
+
+
 class StoreAdminCreate(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
@@ -160,6 +171,26 @@ class StoreSubscriptionResponse(BaseModel):
         from_attributes = True
 
 
+class AppliedCouponSummary(BaseModel):
+    public_id: str
+    code: str
+    coupon_type: str
+    value: Decimal
+    currency: str | None
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+
+class StoreSubscriptionOverviewResponse(StoreSubscriptionResponse):
+    plan_name: str | None = None
+    billing_interval: str | None = None
+    max_staff: int | None = None
+    max_services: int | None = None
+    applied_coupon: AppliedCouponSummary | None = None
+
+
 class CouponCreate(BaseModel):
     code: str = Field(..., min_length=3, max_length=50)
     coupon_type: CouponType
@@ -249,3 +280,18 @@ class CouponRedemptionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class StoreUsersOverviewResponse(BaseModel):
+    admins: list[UserGlobalResponse]
+    users: list[UserGlobalResponse]
+    admins_count: int
+    users_count: int
+    active_users_count: int
+
+
+class StoreOverviewResponse(BaseModel):
+    store: StoreGlobalResponse
+    users: StoreUsersOverviewResponse
+    subscription: StoreSubscriptionOverviewResponse | None
+    recent_redemptions: list[CouponRedemptionResponse]

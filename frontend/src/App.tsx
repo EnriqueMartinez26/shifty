@@ -6,6 +6,7 @@ import {
   ROLE_PROFESSIONAL,
   ROLE_STORE_ADMIN,
   ROLE_SUPER_ADMIN,
+  getDefaultAppRoute,
   hasAnyRole,
 } from "./presentation/context/roles";
 
@@ -13,6 +14,7 @@ const LoginPage = lazy(() => import("./presentation/pages/Login"));
 const ForgotPasswordPage = lazy(() => import("./presentation/pages/ForgotPassword"));
 const ResetPasswordPage = lazy(() => import("./presentation/pages/ResetPassword"));
 const AdminLayout = lazy(() => import("./presentation/layouts/AdminLayout"));
+const SuperAdminLayout = lazy(() => import("./presentation/layouts/SuperAdminLayout"));
 const Dashboard = lazy(() => import("./presentation/pages/Dashboard"));
 const CalendarPage = lazy(() => import("./presentation/pages/Calendar"));
 const ReportsPage = lazy(() => import("./presentation/pages/Reports"));
@@ -21,6 +23,7 @@ const PaymentsPage = lazy(() => import("./presentation/pages/Payments"));
 const LedgerPage = lazy(() => import("./presentation/pages/Ledger"));
 const ServicesPage = lazy(() => import("./presentation/pages/Services"));
 const StaffPage = lazy(() => import("./presentation/pages/Staff"));
+const SuperAdminPage = lazy(() => import("./presentation/pages/SuperAdmin"));
 const UsersPage = lazy(() => import("./presentation/pages/Users"));
 const PublicBookingPage = lazy(() => import("./presentation/pages/PublicBooking"));
 const SettingsPage = lazy(() => import("./presentation/pages/Settings"));
@@ -37,10 +40,19 @@ const ProtectedRoute = ({
   if (isLoading) return <div>Cargando...</div>;
   if (!token) return <Navigate to="/login" replace />;
   if (allowedRoles && user && !hasAnyRole(user.role, allowedRoles, user.is_global_admin)) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={getDefaultAppRoute(user.role, user.is_global_admin)} replace />;
   }
 
   return children;
+};
+
+const RootRedirect = () => {
+  const { token, isLoading, user } = useAuth();
+
+  if (isLoading) return <div>Cargando...</div>;
+  if (!token) return <Navigate to="/login" replace />;
+
+  return <Navigate to={getDefaultAppRoute(user?.role, user?.is_global_admin)} replace />;
 };
 
 function App() {
@@ -112,6 +124,14 @@ function App() {
                 }
               />
               <Route
+                path="superadmin"
+                element={
+                  <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
+                    <Navigate to="/control-global" replace />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
                 path="users"
                 element={
                   <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
@@ -130,7 +150,17 @@ function App() {
             </Route>
             <Route path="/booking/:slug" element={<PublicBookingPage />} />
             <Route path="/b/:slug" element={<PublicBookingPage />} />
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route
+              path="/control-global"
+              element={
+                <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
+                  <SuperAdminLayout />
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<SuperAdminPage />} />
+            </Route>
+            <Route path="/" element={<RootRedirect />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

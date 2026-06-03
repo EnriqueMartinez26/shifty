@@ -18,7 +18,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
     first_name: "",
     last_name: "",
     phone: "",
-    role: "staff" as "admin" | "staff" | "client",
+    role: "staff" as "admin" | "staff" | "receptionist" | "client",
   });
 
   useEffect(() => {
@@ -140,6 +140,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
               >
                 <option value="admin">Administrador</option>
                 <option value="staff">Staff / Profesional</option>
+                <option value="receptionist">Recepción</option>
                 <option value="client">Cliente</option>
               </select>
             </div>

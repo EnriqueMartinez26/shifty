@@ -1,4 +1,4 @@
-export type RoleValue = 'admin' | 'staff' | 'client';
+export type RoleValue = 'admin' | 'staff' | 'receptionist' | 'client';
 
 export class UserRole {
   private readonly value: RoleValue;
@@ -8,7 +8,7 @@ export class UserRole {
   }
 
   static create(value: string): UserRole {
-    const validRoles: RoleValue[] = ['admin', 'staff', 'client'];
+    const validRoles: RoleValue[] = ['admin', 'staff', 'receptionist', 'client'];
     if (!validRoles.includes(value as RoleValue)) {
       throw new Error(`Rol inválido: ${value}`);
     }
@@ -25,6 +25,10 @@ export class UserRole {
 
   isStaff(): boolean {
     return this.value === 'staff';
+  }
+
+  isReceptionist(): boolean {
+    return this.value === 'receptionist';
   }
 
   equals(other: UserRole): boolean {

@@ -6,7 +6,9 @@ import {
   Clock,
   ArrowUpRight,
   UserCheck,
-  Loader2
+  Loader2,
+  ShieldCheck,
+  Waypoints
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { format } from "date-fns";
@@ -15,8 +17,9 @@ import { useDashboardSummary } from "../hooks/useDashboard";
 import { colors2000s } from "../../theme/colors";
 
 const Dashboard: React.FC = () => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { data, isLoading, isError } = useDashboardSummary(Boolean(token));
+  const isGlobalAdmin = Boolean(user?.is_global_admin);
 
   const currencyFmt = new Intl.NumberFormat("es-AR", {
     style: "currency",
@@ -177,6 +180,59 @@ const Dashboard: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {isGlobalAdmin && (
+        <div
+          className="rounded-[2rem] p-8 relative overflow-hidden"
+          style={{
+            background: "linear-gradient(135deg, #fff7ed 0%, #eff6ff 100%)",
+            border: `1px solid ${colors2000s.border.default}`,
+            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`,
+          }}
+        >
+          <div className="absolute -right-6 -top-6 opacity-10 pointer-events-none">
+            <Waypoints className="w-36 h-36" style={{ color: colors2000s.orange.accent }} />
+          </div>
+
+          <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="max-w-2xl">
+              <div
+                className="inline-flex items-center gap-2 rounded-full px-4 py-2 mb-4"
+                style={{ background: "white", border: `1px solid ${colors2000s.border.light}` }}
+              >
+                <ShieldCheck className="w-4 h-4" style={{ color: colors2000s.orange.accent }} />
+                <span
+                  className="text-[10px] font-black uppercase tracking-[0.18em]"
+                  style={{ color: colors2000s.orange.accent }}
+                >
+                  Superficie de plataforma
+                </span>
+              </div>
+
+              <h3 className="text-2xl font-black uppercase tracking-tight mb-2" style={{ color: colors2000s.text.primary }}>
+                Control Global vive fuera de la tienda
+              </h3>
+              <p className="text-sm font-bold leading-relaxed" style={{ color: colors2000s.text.secondary }}>
+                Administrá dueños de tiendas, suscripciones y cupones SaaS desde una página aparte. El backoffice del negocio y la operación multi-tenant no comparten layout para evitar mezclar contexto.
+              </p>
+            </div>
+
+            <Link
+              to="/control-global"
+              className="inline-flex items-center justify-center gap-3 px-6 py-4 rounded-2xl text-xs font-black uppercase tracking-[0.18em] transition-all active:scale-95"
+              style={{
+                background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                color: colors2000s.text.onOrange,
+                border: `1px solid ${colors2000s.orange.accent}`,
+                boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`,
+              }}
+            >
+              Ir a Control Global
+              <ArrowUpRight className="w-4 h-4" />
+            </Link>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

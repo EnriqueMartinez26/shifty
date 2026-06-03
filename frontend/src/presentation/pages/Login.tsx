@@ -6,6 +6,7 @@ import { authService } from "@application/services/AuthService";
 import { setAuthToken } from "@infrastructure/http/client";
 import { Icon2000s } from "../components/legacy/Icon2000s";
 import { useAuth } from "../context/AuthContext";
+import { getDefaultAppRoute } from "../context/roles";
 import { useLogin } from "../hooks/useLogin";
 import { colors2000s, buttonStyles2000s } from "../../theme/colors";
 
@@ -26,7 +27,7 @@ const LoginPage: React.FC = () => {
       setAuthToken(access_token);
       const currentUser = await authService.fetchCurrentUser();
       login(access_token, currentUser);
-      navigate("/dashboard");
+      navigate(getDefaultAppRoute(currentUser.role, currentUser.is_global_admin), { replace: true });
     } catch (err: any) {
       setError(err.response?.data?.detail || "Error al iniciar sesion");
     }

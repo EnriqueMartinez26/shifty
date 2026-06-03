@@ -8,6 +8,7 @@ from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_global_admin
 from modules.superadmin.repository import SuperAdminRepository
 from modules.superadmin.schemas import (
+    AppliedCouponSummary,
     CouponCreate,
     CouponRedeemRequest,
     CouponRedemptionResponse,
@@ -20,9 +21,13 @@ from modules.superadmin.schemas import (
     StoreAdminCreate,
     StoreCreate,
     StoreGlobalResponse,
+    StoreOverviewResponse,
+    StoreSubscriptionOverviewResponse,
     StoreGlobalUpdate,
     StoreSubscriptionCreate,
     StoreSubscriptionResponse,
+    StoreTableResponse,
+    StoreUsersOverviewResponse,
     UserGlobalResponse,
     UserGlobalUpdate,
 )
@@ -66,18 +71,18 @@ def _user_response(user) -> UserGlobalResponse:
     )
 
 
-@router.get("/stores", response_model=list[StoreGlobalResponse])
+@router.get("/stores", response_model=list[StoreTableResponse])
 async def list_stores(
     search: str | None = Query(None, max_length=100),
-    include_inactive: bool = Query(False),
+    is_active: bool | None = Query(True),
+    has_subscription: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ):
     repo = SuperAdminRepository(db)
-    stores = await repo.list_stores(search, include_inactive, limit, offset)
-    return [_store_response(store) for store in stores]
+    return await repo.list_stores(search, is_active, has_subscription, limit, offset)
 
 
 @router.post("/stores", response_model=StoreGlobalResponse, status_code=status.HTTP_201_CREATED)
@@ -105,6 +110,70 @@ async def get_store(
     if not store:
         raise HTTPException(status_code=404, detail="Tienda no encontrada")
     return _store_response(store)
+
+
+@router.get("/stores/{store_public_id}/overview", response_model=StoreOverviewResponse)
+async def get_store_overview(
+    store_public_id: PublicIdPath,
+    actor: User = Depends(get_current_global_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    repo = SuperAdminRepository(db)
+    overview = await repo.get_store_overview(store_public_id)
+    if overview is None:
+        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+
+    admins = [_user_response(user) for user in overview["admins"]]
+    users = [_user_response(user) for user in overview["users"]]
+    subscription = overview["subscription"]
+    coupon = overview["coupon"]
+
+    subscription_response = None
+    if subscription is not None:
+        applied_coupon = None
+        if coupon is not None:
+            applied_coupon = AppliedCouponSummary(
+                public_id=coupon.public_id,
+                code=coupon.code,
+                coupon_type=coupon.coupon_type,
+                value=coupon.value,
+                currency=coupon.currency,
+                is_active=coupon.is_active,
+            )
+        subscription_response = StoreSubscriptionOverviewResponse(
+            public_id=subscription.public_id,
+            store_id=subscription.store_id,
+            plan_id=subscription.plan_id,
+            status=subscription.status,
+            base_amount=subscription.base_amount,
+            discount_amount=subscription.discount_amount,
+            total_amount=subscription.total_amount,
+            currency=subscription.currency,
+            current_period_start=subscription.current_period_start,
+            current_period_end=subscription.current_period_end,
+            coupon_id=subscription.coupon_id,
+            is_active=subscription.is_active,
+            created_at=subscription.created_at,
+            updated_at=subscription.updated_at,
+            plan_name=overview["plan_name"],
+            billing_interval=overview["billing_interval"],
+            max_staff=overview["max_staff"],
+            max_services=overview["max_services"],
+            applied_coupon=applied_coupon,
+        )
+
+    return StoreOverviewResponse(
+        store=_store_response(overview["store"]),
+        users=StoreUsersOverviewResponse(
+            admins=admins,
+            users=users,
+            admins_count=overview["admins_count"],
+            users_count=overview["users_count"],
+            active_users_count=overview["active_users_count"],
+        ),
+        subscription=subscription_response,
+        recent_redemptions=overview["recent_redemptions"],
+    )
 
 
 @router.patch("/stores/{store_public_id}", response_model=StoreGlobalResponse)
@@ -264,7 +333,10 @@ async def set_store_subscription(
     plan = await repo.get_plan(data.plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan no encontrado")
-    return await repo.set_store_subscription(store, plan, data.model_dump(), actor)
+    try:
+        return await repo.set_store_subscription(store, plan, data.model_dump(), actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/coupons", response_model=list[CouponResponse])

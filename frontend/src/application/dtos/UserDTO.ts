@@ -4,7 +4,7 @@ export interface UserResponseDTO {
   first_name: string | null;
   last_name: string | null;
   phone: string | null;
-  role: 'admin' | 'staff' | 'client';
+  role: 'admin' | 'staff' | 'receptionist' | 'client';
   is_active: boolean;
   is_global_admin?: boolean;
   created_at: string;
@@ -17,5 +17,5 @@ export interface CreateUserRequestDTO {
   first_name?: string;
   last_name?: string;
   phone?: string;
-  role: 'admin' | 'staff' | 'client';
+  role: 'admin' | 'staff' | 'receptionist' | 'client';
 }

@@ -23,3 +23,11 @@ export const hasAnyRole = (
   const currentRole = canonicalRole(role, isGlobalAdmin);
   return allowedRoles.includes(currentRole);
 };
+
+export const getDefaultAppRoute = (
+  role: string | null | undefined,
+  isGlobalAdmin?: boolean
+): string => {
+  const currentRole = canonicalRole(role, isGlobalAdmin);
+  return currentRole === ROLE_SUPER_ADMIN ? "/control-global" : "/dashboard";
+};

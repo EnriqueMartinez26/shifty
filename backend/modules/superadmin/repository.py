@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,14 @@ from modules.users.model import User, UserRole
 
 def _money(value: Decimal | float | int | str) -> Decimal:
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _json_safe(value):
@@ -49,20 +57,163 @@ class SuperAdminRepository:
             )
         )
 
-    async def list_stores(self, search: str | None, include_inactive: bool, limit: int, offset: int) -> list[Store]:
-        query = select(Store)
-        if not include_inactive:
-            query = query.where(Store.is_active.is_(True))
+    async def list_stores(
+        self,
+        search: str | None,
+        is_active: bool | None,
+        has_subscription: bool | None,
+        limit: int,
+        offset: int,
+    ) -> list[dict]:
+        admin_roles = (UserRole.ADMIN.value,)
+        admins_count = (
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.store_id == Store.id,
+                or_(User.role.in_(admin_roles), User.is_global_admin.is_(True)),
+            )
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        users_count = (
+            select(func.count())
+            .select_from(User)
+            .where(User.store_id == Store.id)
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        active_users_count = (
+            select(func.count())
+            .select_from(User)
+            .where(User.store_id == Store.id, User.is_active.is_(True))
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        has_subscription_query = (
+            select(func.count())
+            .select_from(StoreSubscription)
+            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        subscription_status = (
+            select(StoreSubscription.status)
+            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .order_by(StoreSubscription.created_at.desc())
+            .limit(1)
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        current_period_end = (
+            select(StoreSubscription.current_period_end)
+            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .order_by(StoreSubscription.created_at.desc())
+            .limit(1)
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        current_plan_name = (
+            select(Plan.name)
+            .join(StoreSubscription, Plan.id == StoreSubscription.plan_id)
+            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .order_by(StoreSubscription.created_at.desc())
+            .limit(1)
+            .correlate(Store)
+            .scalar_subquery()
+        )
+        last_redemption_at = (
+            select(func.max(CouponRedemption.created_at))
+            .where(CouponRedemption.store_id == Store.id)
+            .correlate(Store)
+            .scalar_subquery()
+        )
+
+        query = select(
+            Store,
+            admins_count.label("admins_count"),
+            users_count.label("users_count"),
+            active_users_count.label("active_users_count"),
+            has_subscription_query.label("has_subscription_count"),
+            subscription_status.label("subscription_status"),
+            current_plan_name.label("current_plan_name"),
+            current_period_end.label("current_period_end"),
+            last_redemption_at.label("last_redemption_at"),
+        )
+        if is_active is not None:
+            query = query.where(Store.is_active.is_(is_active))
         if search:
             pattern = f"%{search}%"
             query = query.where((Store.name.ilike(pattern)) | (Store.slug.ilike(pattern)))
+        if has_subscription is True:
+            query = query.where(has_subscription_query > 0)
+        elif has_subscription is False:
+            query = query.where(has_subscription_query == 0)
         query = query.order_by(Store.created_at.desc()).offset(offset).limit(limit)
         result = await self.db.execute(query)
-        return list(result.scalars().all())
+        rows: list[dict] = []
+        for row in result.all():
+            store = row[0]
+            rows.append(
+                {
+                    "public_id": store.public_id,
+                    "name": store.name,
+                    "slug": store.slug,
+                    "logo_url": store.logo_url,
+                    "primary_color": store.primary_color,
+                    "cancellation_hours": store.cancellation_hours,
+                    "buffer_minutes": store.buffer_minutes,
+                    "send_email_confirmation": store.send_email_confirmation,
+                    "send_email_reminders": store.send_email_reminders,
+                    "is_active": store.is_active,
+                    "created_at": store.created_at,
+                    "updated_at": store.updated_at,
+                    "admins_count": int(row.admins_count or 0),
+                    "users_count": int(row.users_count or 0),
+                    "active_users_count": int(row.active_users_count or 0),
+                    "has_subscription": bool(row.has_subscription_count),
+                    "subscription_status": row.subscription_status,
+                    "current_plan_name": row.current_plan_name,
+                    "current_period_end": row.current_period_end,
+                    "last_redemption_at": row.last_redemption_at,
+                }
+            )
+        return rows
 
     async def get_store(self, public_id: str) -> Store | None:
         result = await self.db.execute(select(Store).where(Store.public_id == public_id))
         return result.scalar_one_or_none()
+
+    async def get_store_overview(self, public_id: str) -> dict | None:
+        store = await self.get_store(public_id)
+        if store is None:
+            return None
+
+        users = await self.list_store_users(store.id, include_inactive=True)
+        admins = [
+            user
+            for user in users
+            if user.is_global_admin or str(user.role) == UserRole.ADMIN.value
+        ]
+        subscription = await self.get_store_subscription(store.id)
+        plan = await self.db.get(Plan, subscription.plan_id) if subscription is not None else None
+        coupon = await self.db.get(SaaSCoupon, subscription.coupon_id) if subscription and subscription.coupon_id else None
+
+        return {
+            "store": store,
+            "admins": admins,
+            "users": users,
+            "admins_count": len(admins),
+            "users_count": len(users),
+            "active_users_count": sum(1 for user in users if user.is_active),
+            "subscription": subscription,
+            "plan_name": getattr(plan, "name", None),
+            "billing_interval": getattr(plan, "billing_interval", None),
+            "max_staff": getattr(plan, "max_staff", None),
+            "max_services": getattr(plan, "max_services", None),
+            "coupon": coupon,
+            "recent_redemptions": await self.list_store_redemptions(store.id, limit=5),
+        }
 
     async def create_store(self, payload: dict, actor: User) -> Store:
         store = Store(**payload)
@@ -221,6 +372,8 @@ class SuperAdminRepository:
         return result.scalar_one_or_none()
 
     async def set_store_subscription(self, store: Store, plan: Plan, payload: dict, actor: User) -> StoreSubscription:
+        if not store.is_active:
+            raise ValueError("No se puede asignar una suscripción a una tienda inactiva")
         subscription = await self.get_store_subscription(store.id)
         base_amount = _money(payload.get("base_amount") or plan.price)
         currency = payload.get("currency") or plan.currency
@@ -310,6 +463,8 @@ class SuperAdminRepository:
             raise ValueError("No se pudo actualizar el cupón")
 
     async def redeem_coupon(self, store: Store, subscription: StoreSubscription, coupon: SaaSCoupon, actor: User) -> CouponRedemption:
+        if not store.is_active:
+            raise ValueError("No se puede canjear un cupón sobre una tienda inactiva")
         coupon_result = await self.db.execute(
             select(SaaSCoupon).where(SaaSCoupon.id == coupon.id).with_for_update()
         )
@@ -320,6 +475,11 @@ class SuperAdminRepository:
         subscription = subscription_result.scalar_one()
 
         now = datetime.now(timezone.utc)
+        period_end = _utc(subscription.current_period_end)
+        if subscription.status != "active":
+            raise ValueError("La suscripción de la tienda no está activa")
+        if period_end and period_end < now:
+            raise ValueError("La suscripción de la tienda está vencida")
         if not coupon.is_active:
             raise ValueError("El cupón no está activo")
         if coupon.valid_from and coupon.valid_from > now:
@@ -377,10 +537,13 @@ class SuperAdminRepository:
         await self.db.refresh(redemption)
         return redemption
 
-    async def list_store_redemptions(self, store_id: str) -> list[CouponRedemption]:
-        result = await self.db.execute(
+    async def list_store_redemptions(self, store_id: str, limit: int | None = None) -> list[CouponRedemption]:
+        query = (
             select(CouponRedemption)
             .where(CouponRedemption.store_id == store_id)
             .order_by(CouponRedemption.created_at.desc())
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await self.db.execute(query)
         return list(result.scalars().all())
