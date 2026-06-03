@@ -52,6 +52,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
       notes: "",
       customFields: initialCustomFields,
     },
+    promotionCode: "",
     idempotencyKey: crypto.randomUUID(),
   });
 
@@ -350,8 +351,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
 
         {currentStep === confirmationIndex && (
           <BookingStepConfirmation
+            storePublicId={store.public_id}
+            serviceId={bookingState.serviceId!}
             bookingState={bookingState}
             onBack={prevStep}
+            onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
             onConfirm={async () =>
               await createBooking.mutateAsync({
                 store_public_id: store.public_id,
@@ -363,6 +367,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                 client_phone: bookingState.client.phone,
                 notes: bookingState.client.notes,
                 custom_fields: bookingState.client.customFields,
+                promotion_code: bookingState.promotionCode || undefined,
                 idempotency_key: bookingState.idempotencyKey,
               })
             }

@@ -7,6 +7,8 @@ import {
   type OutboxStats,
   type PaymentPreference,
   type PaymentRecord,
+  type PromotionPayload,
+  type PromotionRecord,
   type ProcessOutboxResult,
   type ReconciliationSummary,
 } from "@application/services/PaymentsService";
@@ -37,6 +39,33 @@ export const useCreatePaymentPreference = () =>
   useMutation<PaymentPreference, Error, string>({
     mutationFn: (appointmentId) => paymentsService.createPreference(appointmentId),
   });
+
+export const usePromotions = (enabled = true, includeInactive = true) =>
+  useQuery<PromotionRecord[]>({
+    queryKey: ["payments-promotions", includeInactive],
+    queryFn: () => paymentsService.listPromotions(includeInactive),
+    enabled,
+  });
+
+export const useCreatePromotion = () => {
+  const queryClient = useQueryClient();
+  return useMutation<PromotionRecord, Error, PromotionPayload>({
+    mutationFn: (payload) => paymentsService.createPromotion(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payments-promotions"] });
+    },
+  });
+};
+
+export const useUpdatePromotion = () => {
+  const queryClient = useQueryClient();
+  return useMutation<PromotionRecord, Error, { promotionId: string; payload: Partial<PromotionPayload> }>({
+    mutationFn: ({ promotionId, payload }) => paymentsService.updatePromotion(promotionId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["payments-promotions"] });
+    },
+  });
+};
 
 export const useManualConfirmPayment = () =>
   useMutation<PaymentRecord, Error, { appointmentId: string; amount?: number; notes?: string }>({

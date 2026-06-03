@@ -8,6 +8,7 @@ import {
   type OtpVerifyPayload,
   type OtpVerifyResponse,
   type PublicBookingPayload,
+  type PromotionPreview,
   type PublicService,
   type PublicStaff,
   type PublicStore,
@@ -21,6 +22,7 @@ export type {
   OtpVerifyPayload,
   OtpVerifyResponse,
   PublicBookingPayload,
+  PromotionPreview,
   PublicService,
   PublicStaff,
   PublicStore,
@@ -63,6 +65,12 @@ export const usePublicAvailability = (
 export const useCreatePublicBooking = () =>
   useMutation<BookingConfirmation, Error, PublicBookingPayload>({
     mutationFn: (payload) => publicBookingService.createBooking(payload),
+  });
+
+export const usePreviewPublicPromotion = () =>
+  useMutation<PromotionPreview, Error, { storePublicId: string; serviceId: string; code: string }>({
+    mutationFn: ({ storePublicId, serviceId, code }) =>
+      publicBookingService.previewPromotion(storePublicId, serviceId, code),
   });
 
 export const useRequestPublicOtp = () =>

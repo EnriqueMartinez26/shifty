@@ -26,6 +26,7 @@ from modules.budget.router import router as budget_router
 from modules.ledger.router import router as ledger_router
 from modules.ops.router import router as ops_router
 from modules.payments.router import router as payments_router
+from modules.promotions.router import router as promotions_router
 from modules.stores.router import router as stores_router
 from modules.superadmin.router import router as superadmin_router
 
@@ -154,6 +155,7 @@ app.include_router(budget_router)
 app.include_router(stores_router)
 app.include_router(appointment_blocks_router)
 app.include_router(payments_router)
+app.include_router(promotions_router)
 app.include_router(ledger_router)
 app.include_router(ops_router)
 app.include_router(superadmin_router)

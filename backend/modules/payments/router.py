@@ -19,6 +19,7 @@ from modules.payments.model import OutboxMessage, Payment, PaymentGatewayConfig,
 from modules.payments.service import (
     calculate_service_payment_amount,
     ensure_payment_preference,
+    fetch_mercadopago_payment,
     stamp_payment_from_status,
     sync_appointment_with_payment,
 )
@@ -185,12 +186,54 @@ def _resolve_payment_status(payload: dict[str, Any]) -> str | None:
     mapping = {
         "approved": PaymentStatus.APPROVED.value,
         "accredited": PaymentStatus.APPROVED.value,
+        "pending": PaymentStatus.PENDING.value,
+        "in_process": PaymentStatus.PENDING.value,
         "rejected": PaymentStatus.REJECTED.value,
         "cancelled": PaymentStatus.REJECTED.value,
         "refunded": PaymentStatus.REFUNDED.value,
         "expired": PaymentStatus.EXPIRED.value,
     }
     return mapping.get(normalized) or (normalized if normalized in {status.value for status in PaymentStatus} else None)
+
+
+async def _enrich_mercadopago_webhook_payload(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    if not payment_id:
+        return payload
+
+    try:
+        payment_details = await fetch_mercadopago_payment(db, store_id=store_id, payment_id=payment_id)
+    except Exception:
+        return payload
+
+    if not payment_details:
+        return payload
+
+    merged_data = dict(data)
+    merged_data.update(
+        {
+            "id": payment_details.get("id", merged_data.get("id")),
+            "status": payment_details.get("status", merged_data.get("status")),
+            "external_reference": payment_details.get("external_reference", merged_data.get("external_reference")),
+            "preference_id": merged_data.get("preference_id"),
+            "metadata": payment_details.get("metadata") or merged_data.get("metadata"),
+            "date_approved": payment_details.get("date_approved", merged_data.get("date_approved")),
+        }
+    )
+    merged_payload = dict(payload)
+    merged_payload["data"] = merged_data
+    merged_payload["status"] = payment_details.get("status", payload.get("status"))
+    merged_payload["external_reference"] = payment_details.get(
+        "external_reference",
+        payload.get("external_reference"),
+    )
+    return merged_payload
 
 
 async def _find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dict[str, Any]) -> Payment | None:
@@ -267,18 +310,21 @@ async def upsert_gateway_config(
         )
     )
     config = result.scalar_one_or_none()
-    encrypted_access_token = encrypt_secret(data.access_token) or data.access_token
+    encrypted_access_token = encrypt_secret(data.access_token) if data.access_token else None
+    if not config and not encrypted_access_token:
+        raise HTTPException(status_code=422, detail="Debes ingresar un access token para configurar el gateway")
     if not config:
         config = PaymentGatewayConfig(
             store_id=user.store_id,
             provider=data.provider,
-            encrypted_access_token=encrypted_access_token,
+            encrypted_access_token=encrypted_access_token or "",
             public_key=data.public_key,
             webhook_secret=data.webhook_secret,
         )
         db.add(config)
     else:
-        config.encrypted_access_token = encrypted_access_token
+        if encrypted_access_token:
+            config.encrypted_access_token = encrypted_access_token
         config.public_key = data.public_key
         config.webhook_secret = data.webhook_secret
     await db.commit()
@@ -300,13 +346,19 @@ async def create_payment_preference(
     _require_payment_manager(user)
     await _ensure_payments_feature_enabled(db, user)
     appointment, service = await _get_appointment_with_service(db, appointment_id, user.store_id)
-    payment = await ensure_payment_preference(
-        db,
-        appointment=appointment,
-        service=service,
-        store_id=user.store_id,
-        amount_override=calculate_service_payment_amount(service) or Decimal(str(service.price)),
-    )
+    try:
+        payment = await ensure_payment_preference(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=user.store_id,
+            amount_override=calculate_service_payment_amount(service) or Decimal(str(service.price)),
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"No se pudo crear el link de pago: {exc}",
+        )
     await db.commit()
     await db.refresh(payment)
 
@@ -338,6 +390,7 @@ async def manual_confirm_payment(
         service=service,
         store_id=user.store_id,
         amount_override=amount,
+        create_provider_link=False,
     )
     stamp_payment_from_status(
         payment,
@@ -418,6 +471,11 @@ async def mercadopago_webhook(
             payload=payload,
             request=request,
             store_reference=store_id,
+        )
+        payload = await _enrich_mercadopago_webhook_payload(
+            db,
+            store_id=resolved_store_id,
+            payload=payload,
         )
 
         event_id = str(payload.get("id") or payload.get("data", {}).get("id") or payload.get("resource") or "")

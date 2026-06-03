@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class GatewayConfigUpsert(BaseModel):
     provider: str = Field(default="mercadopago", pattern=r"^(mercadopago|stripe)$")
-    access_token: str = Field(..., min_length=3, max_length=500)
+    access_token: str | None = Field(None, min_length=3, max_length=500)
     public_key: str | None = Field(None, max_length=255)
     webhook_secret: str | None = Field(None, max_length=255)
 

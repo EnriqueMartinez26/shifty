@@ -69,6 +69,7 @@ export interface PublicBookingPayload {
   client_email?: string;
   client_phone: string;
   custom_fields?: Record<string, string>;
+  promotion_code?: string;
 }
 
 export interface BookingConfirmation {
@@ -89,6 +90,19 @@ export interface BookingConfirmation {
   payment_link?: string | null;
   payment_public_id?: string | null;
   payment_amount?: number | null;
+  promotion_code?: string | null;
+  service_price?: number | null;
+  discount_amount?: number | null;
+  final_price?: number | null;
+}
+
+export interface PromotionPreview {
+  code: string;
+  title: string;
+  promotion_type: "percent" | "fixed";
+  base_amount: number;
+  discount_amount: number;
+  final_amount: number;
 }
 
 export interface OtpRequestPayload {
@@ -144,6 +158,13 @@ export class PublicBookingService {
 
   async createBooking(payload: PublicBookingPayload): Promise<BookingConfirmation> {
     const { data } = await apiClient.post<BookingConfirmation>("/public/appointments", payload);
+    return data;
+  }
+
+  async previewPromotion(storePublicId: string, serviceId: string, code: string): Promise<PromotionPreview> {
+    const { data } = await apiClient.get<PromotionPreview>("/public/promotions/preview", {
+      params: { store_public_id: storePublicId, service_id: serviceId, code },
+    });
     return data;
   }
 

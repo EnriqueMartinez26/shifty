@@ -9,7 +9,7 @@ export interface GatewayConfig {
 
 export interface GatewayConfigUpsertPayload {
   provider: "mercadopago" | "stripe";
-  access_token: string;
+  access_token?: string;
   public_key?: string;
   webhook_secret?: string;
 }
@@ -18,9 +18,12 @@ export interface PaymentPreference {
   payment_public_id: string;
   appointment_id: string;
   amount: number;
+  original_amount?: number | null;
+  discount_amount?: number | null;
   currency: string;
   preference_id?: string | null;
   payment_link?: string | null;
+  promotion_code?: string | null;
   status: string;
 }
 
@@ -71,6 +74,36 @@ export interface ProcessOutboxResult {
   inspected: number;
 }
 
+export interface PromotionRecord {
+  public_id: string;
+  code: string;
+  title: string;
+  description?: string | null;
+  promotion_type: "percent" | "fixed";
+  value: number;
+  min_service_amount?: number | null;
+  max_uses?: number | null;
+  current_uses: number;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromotionPayload {
+  code: string;
+  title: string;
+  description?: string;
+  promotion_type: "percent" | "fixed";
+  value: number;
+  min_service_amount?: number;
+  max_uses?: number;
+  valid_from?: string;
+  valid_until?: string;
+  is_active?: boolean;
+}
+
 export class PaymentsService {
   async getGatewayConfig(): Promise<GatewayConfig> {
     const { data } = await apiClient.get<GatewayConfig>("/payments/gateway-config");
@@ -91,6 +124,23 @@ export class PaymentsService {
 
   async createPreference(appointmentId: string): Promise<PaymentPreference> {
     const { data } = await apiClient.post<PaymentPreference>(`/payments/preferences/${appointmentId}`);
+    return data;
+  }
+
+  async listPromotions(includeInactive = true): Promise<PromotionRecord[]> {
+    const { data } = await apiClient.get<PromotionRecord[]>("/promotions", {
+      params: { include_inactive: includeInactive },
+    });
+    return data;
+  }
+
+  async createPromotion(payload: PromotionPayload): Promise<PromotionRecord> {
+    const { data } = await apiClient.post<PromotionRecord>("/promotions", payload);
+    return data;
+  }
+
+  async updatePromotion(promotionId: string, payload: Partial<PromotionPayload>): Promise<PromotionRecord> {
+    const { data } = await apiClient.patch<PromotionRecord>(`/promotions/${promotionId}`, payload);
     return data;
   }
 

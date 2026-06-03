@@ -5,6 +5,7 @@ Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 """
 import hashlib
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
@@ -22,7 +23,8 @@ from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
-from modules.payments.service import ensure_payment_preference, service_requires_payment
+from modules.payments.service import calculate_service_payment_amount, ensure_payment_preference, service_requires_payment
+from modules.promotions.service import quote_promotion, redeem_promotion
 from modules.public.repository import PublicRepository
 from modules.public.schemas import (
     ClientAppointmentItem,
@@ -33,6 +35,7 @@ from modules.public.schemas import (
     OtpVerifyPayload,
     PublicBookingCreate,
     PublicBookingResponse,
+    PublicPromotionPreviewResponse,
     PublicServiceResponse,
     PublicStaffResponse,
     PublicStoreResponse,
@@ -250,6 +253,44 @@ async def get_public_availability(
         set_tenant_context(None, False)
 
 
+@router.get("/promotions/preview", response_model=PublicPromotionPreviewResponse)
+async def preview_public_promotion(
+    store_public_id: PublicIdQuery,
+    service_id: PublicIdQuery,
+    code: Annotated[str, Query(min_length=3, max_length=30)],
+    db: AsyncSession = Depends(get_db),
+):
+    await _bypass_rls(db)
+    try:
+        repo = PublicRepository(db)
+        store = await repo.get_store_by_public_id(store_public_id)
+        if not store:
+            raise HTTPException(status_code=404, detail="Negocio no encontrado")
+        service = await repo.get_service_by_public_id(service_id)
+        if not service or service.store_id != store.id:
+            raise HTTPException(status_code=404, detail="Servicio no encontrado")
+
+        _promotion, quote, error = await quote_promotion(
+            db,
+            store_id=store.id,
+            service=service,
+            code=code,
+        )
+        if not quote:
+            raise HTTPException(status_code=422, detail=error or "Promocion invalida")
+
+        return PublicPromotionPreviewResponse(
+            code=quote.code,
+            title=quote.title,
+            promotion_type=quote.promotion_type,
+            base_amount=float(quote.base_amount),
+            discount_amount=float(quote.discount_amount),
+            final_amount=float(quote.final_amount),
+        )
+    finally:
+        set_tenant_context(None, False)
+
+
 @router.post("/otp/request")
 async def request_public_otp(
     request: Request,
@@ -347,7 +388,23 @@ async def create_public_booking(
                 )
 
         normalized_custom_fields = _validate_custom_fields(store, data.custom_fields)
-        payment_required = is_store_feature_enabled(store.feature_flags, "payments") and service_requires_payment(service)
+        base_service_price = Decimal(str(service.price or 0))
+        preview_promotion_quote = None
+        if data.promotion_code:
+            _promotion, preview_promotion_quote, preview_error = await quote_promotion(
+                db,
+                store_id=store_id,
+                service=service,
+                code=data.promotion_code,
+            )
+            if not preview_promotion_quote:
+                raise HTTPException(status_code=422, detail=preview_error or "Promocion invalida")
+
+        discounted_service_price = preview_promotion_quote.final_amount if preview_promotion_quote else base_service_price
+        payment_required = (
+            is_store_feature_enabled(store.feature_flags, "payments")
+            and calculate_service_payment_amount(service, base_price=discounted_service_price) > 0
+        )
         initial_status = (
             AppointmentStatus.PENDING_PAYMENT.value
             if payment_required
@@ -357,6 +414,7 @@ async def create_public_booking(
         )
 
         payment = None
+        promotion_quote = None
         try:
             async with db.begin_nested():
                 client = await repo.get_or_create_client(
@@ -376,16 +434,43 @@ async def create_public_booking(
                     idempotency_key=idempotency_key,
                     initial_status=initial_status,
                 )
+                if data.promotion_code:
+                    try:
+                        promotion_quote = await redeem_promotion(
+                            db,
+                            store_id=store_id,
+                            appointment_id=appointment.id,
+                            client=client,
+                            service=service,
+                            code=data.promotion_code,
+                        )
+                    except ValueError as exc:
+                        raise HTTPException(status_code=422, detail=str(exc))
                 if payment_required:
+                    payable_before_discount = calculate_service_payment_amount(service, base_price=base_service_price)
+                    payable_after_discount = calculate_service_payment_amount(
+                        service,
+                        base_price=promotion_quote.final_amount if promotion_quote else discounted_service_price,
+                    )
                     payment = await ensure_payment_preference(
                         db,
                         appointment=appointment,
                         service=service,
                         store_id=store_id,
+                        amount_override=payable_after_discount,
+                        original_amount=payable_before_discount,
+                        discount_amount=max(Decimal("0.00"), payable_before_discount - payable_after_discount),
+                        promotion_code=promotion_quote.code if promotion_quote else None,
                     )
         except ValueError as exc:
             await idempotency_release(idempotency_key, redis)
             raise HTTPException(status_code=409, detail=str(exc))
+        except RuntimeError as exc:
+            await idempotency_release(idempotency_key, redis)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"No se pudo iniciar el cobro online: {exc}",
+            )
 
         await db.commit()
         response = PublicBookingResponse(
@@ -406,6 +491,10 @@ async def create_public_booking(
             payment_link=payment.payment_link if payment else None,
             payment_public_id=payment.id if payment else None,
             payment_amount=float(payment.amount) if payment else None,
+            promotion_code=promotion_quote.code if promotion_quote else None,
+            service_price=float(base_service_price),
+            discount_amount=float(promotion_quote.discount_amount) if promotion_quote else 0.0,
+            final_price=float(promotion_quote.final_amount) if promotion_quote else float(base_service_price),
         )
         await idempotency_save(idempotency_key, response.model_dump(mode="json"), redis)
         return response

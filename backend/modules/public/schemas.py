@@ -74,6 +74,7 @@ class PublicBookingCreate(BaseModel):
     client_phone: str = Field(..., min_length=6, max_length=30)
     client_email: Optional[EmailStr] = Field(default=None, max_length=255)
     custom_fields: dict[str, str] = Field(default_factory=dict, max_length=12)
+    promotion_code: str | None = Field(default=None, min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
 
     @field_validator("client_phone")
     @classmethod
@@ -112,9 +113,22 @@ class PublicBookingResponse(BaseModel):
     payment_link: str | None = None
     payment_public_id: str | None = None
     payment_amount: float | None = None
+    promotion_code: str | None = None
+    service_price: float | None = None
+    discount_amount: float | None = None
+    final_price: float | None = None
 
     class Config:
         from_attributes = True
+
+
+class PublicPromotionPreviewResponse(BaseModel):
+    code: str
+    title: str
+    promotion_type: str
+    base_amount: float
+    discount_amount: float
+    final_amount: float
 
 
 class ClientAppointmentItem(BaseModel):

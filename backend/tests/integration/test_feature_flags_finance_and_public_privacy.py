@@ -20,6 +20,7 @@ import modules.budget.model
 import modules.ledger.model
 import modules.otp.model
 import modules.payments.model
+import modules.promotions.model
 import modules.services.model
 import modules.staff.model
 import modules.stores.model
@@ -484,6 +485,241 @@ async def test_public_booking_allows_missing_email_and_any_professional(client: 
 
 
 @pytest.mark.asyncio
+async def test_create_payment_preference_uses_real_mercadopago_payload_when_gateway_is_configured(
+    client: AsyncClient,
+    monkeypatch,
+):
+    import modules.payments.service as payments_service
+
+    async def fake_mp_request(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+        assert access_token == "TEST-ACCESS-TOKEN-1234567890"
+        assert method == "POST"
+        assert path == "/checkout/preferences"
+        assert json_body is not None
+        return {
+            "id": "real-pref-123",
+            "init_point": "https://www.mercadopago.com/checkout/v1/redirect?pref=real-prod",
+            "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=real-sandbox",
+        }
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_mp_request)
+
+    store_public_id, token = await register_and_login(client, slug="tienda-real-link", email="real-link@test.com")
+    assert store_public_id
+
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    upsert = await client.put(
+        "/payments/gateway-config",
+        headers=auth_headers(token),
+        json={
+            "access_token": "TEST-ACCESS-TOKEN-1234567890",
+            "public_key": "TEST-PUBLIC-KEY",
+            "webhook_secret": "secret-demo",
+        },
+    )
+    assert upsert.status_code == 200, upsert.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="percent",
+        deposit_amount=30,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=3)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Pago Real",
+            "client_phone": "+5491155511111",
+            "idempotency_key": "real-link-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    body = booking.json()
+    assert body["payment_link"].startswith("https://sandbox.mercadopago.com/")
+    assert body["payment_status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_is_minimal(
+    client: AsyncClient,
+    monkeypatch,
+):
+    import modules.payments.router as payments_router
+    import modules.payments.service as payments_service
+
+    async def fake_create_preference(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+        return {
+            "id": "pref-webhook-fetch",
+            "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=fetch",
+        }
+
+    async def fake_fetch_payment(db, *, store_id: str, payment_id: str) -> dict:
+        assert payment_id == "mp-pay-minimal-123"
+        return {
+            "id": payment_id,
+            "status": "approved",
+            "external_reference": booking_public_id,
+            "metadata": {"appointment_id": booking_public_id},
+            "date_approved": datetime.now(timezone.utc).isoformat(),
+        }
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_create_preference)
+    store_public_id, token = await register_and_login(client, slug="tienda-webhook-fetch", email="webhook-fetch@test.com")
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    upsert = await client.put(
+        "/payments/gateway-config",
+        headers=auth_headers(token),
+        json={
+            "access_token": "TEST-ACCESS-TOKEN-1234567890",
+            "public_key": "TEST-PUBLIC-KEY",
+            "webhook_secret": "secret-demo",
+        },
+    )
+    assert upsert.status_code == 200, upsert.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="fixed",
+        deposit_amount=2000,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=13, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Webhook Fetch",
+            "client_phone": "+5491144499999",
+            "idempotency_key": "webhook-fetch-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+
+    booking_public_id = booking.json()["public_id"]
+    monkeypatch.setattr(payments_router, "fetch_mercadopago_payment", fake_fetch_payment)
+
+    payload = {"id": "evt-fetch-123", "type": "payment", "data": {"id": "mp-pay-minimal-123"}}
+    signature_headers = webhook_signature_headers(
+        secret="secret-demo",
+        data_id="mp-pay-minimal-123",
+        request_id="req-fetch-123",
+        ts="1710001111",
+    )
+    webhook = await client.post(
+        f"/payments/webhooks/mercadopago?store_id={store_public_id}",
+        json=payload,
+        headers=signature_headers,
+    )
+    assert webhook.status_code == 200, webhook.text
+
+    appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking_public_id)
+    assert refreshed["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amount(client: AsyncClient):
+    store_public_id, token = await register_and_login(client, slug="tienda-promos", email="promos@test.com")
+
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    promo = await client.post(
+        "/promotions/",
+        headers=auth_headers(token),
+        json={
+            "code": "BIENVENIDA20",
+            "title": "Promo bienvenida",
+            "promotion_type": "fixed",
+            "value": "2000.00",
+            "is_active": True,
+        },
+    )
+    assert promo.status_code == 201, promo.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="percent",
+        deposit_amount=50,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    preview = await client.get(
+        "/public/promotions/preview",
+        params={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "code": "BIENVENIDA20",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["discount_amount"] == 2000.0
+    assert preview.json()["final_amount"] == 8000.0
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Promo",
+            "client_phone": "+5491166600000",
+            "promotion_code": "BIENVENIDA20",
+            "idempotency_key": "promotion-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    body = booking.json()
+    assert body["promotion_code"] == "BIENVENIDA20"
+    assert body["service_price"] == 10000.0
+    assert body["discount_amount"] == 2000.0
+    assert body["final_price"] == 8000.0
+    assert body["payment_amount"] == 4000.0
+
+    promotions = await client.get("/promotions/", headers=auth_headers(token))
+    assert promotions.status_code == 200, promotions.text
+    current = next(item for item in promotions.json() if item["code"] == "BIENVENIDA20")
+    assert current["current_uses"] == 1
+
+
+@pytest.mark.asyncio
 async def test_public_booking_persists_configured_custom_fields(client: AsyncClient):
     store_public_id, token = await register_and_login(client, slug="tienda-intake", email="intake@test.com")
     settings_update = await client.patch(
@@ -655,7 +891,16 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(cli
 
 
 @pytest.mark.asyncio
-async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client: AsyncClient, test_session):
+async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client: AsyncClient, test_session, monkeypatch):
+    import modules.payments.service as payments_service
+
+    async def fake_mp_request(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+        return {
+            "id": "pref-webhook-booking",
+            "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=booking",
+        }
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_mp_request)
     store_public_id, token = await register_and_login(client, slug="tienda-webhook-booking", email="webhook-booking@test.com")
     flags = await client.put(
         "/stores/me/feature-flags",
