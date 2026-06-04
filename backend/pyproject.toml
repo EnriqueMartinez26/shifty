@@ -37,6 +37,9 @@ dev = [
     "ipython>=8.22.0",
 ]
 
+[tool.vercel]
+entrypoint = "api.index:app"
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"
