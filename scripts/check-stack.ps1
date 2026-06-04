@@ -1,6 +1,7 @@
 param(
     [string]$BackendBaseUrl = "http://127.0.0.1:8000",
-    [string]$EnvFile = "backend/.env"
+    [string]$EnvFile = "backend/.env",
+    [string]$CorsOrigin = "http://localhost:5173"
 )
 
 $ErrorActionPreference = "Stop"
@@ -105,17 +106,26 @@ asyncio.run(main())
     return ($output -join "`n")
 }
 
-function Test-BackendRequest([string]$Url, [string]$Method, [string]$BodyJson = "") {
+function Test-BackendRequest([string]$Url, [string]$Method, [string]$Origin, [string]$BodyJson = "") {
     try {
         if ($Method -eq "POST") {
-            $response = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $Url -Headers @{ Origin = "http://localhost:3000" } -Body $BodyJson -ContentType "application/json" -ErrorAction Stop
+            $response = Invoke-WebRequest -UseBasicParsing -Method Post -Uri $Url -Headers @{ Origin = $Origin } -Body $BodyJson -ContentType "application/json" -ErrorAction Stop
+        } elseif ($Method -eq "OPTIONS") {
+            $response = Invoke-WebRequest -UseBasicParsing -Method Options -Uri $Url -Headers @{
+                Origin = $Origin
+                "Access-Control-Request-Method" = "POST"
+                "Access-Control-Request-Headers" = "content-type"
+            } -ErrorAction Stop
         } else {
-            $response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $Url -Headers @{ Origin = "http://localhost:3000" } -ErrorAction Stop
+            $response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri $Url -Headers @{ Origin = $Origin } -ErrorAction Stop
         }
 
         return [pscustomobject]@{
             StatusCode = [int]$response.StatusCode
             AllowOrigin = $response.Headers["Access-Control-Allow-Origin"]
+            AllowCredentials = $response.Headers["Access-Control-Allow-Credentials"]
+            AllowMethods = $response.Headers["Access-Control-Allow-Methods"]
+            AllowHeaders = $response.Headers["Access-Control-Allow-Headers"]
             Body = $response.Content
             IsError = $false
         }
@@ -134,6 +144,9 @@ function Test-BackendRequest([string]$Url, [string]$Method, [string]$BodyJson = 
             return [pscustomobject]@{
                 StatusCode = $statusCode
                 AllowOrigin = $allowOrigin
+                AllowCredentials = $webResponse.Headers["Access-Control-Allow-Credentials"]
+                AllowMethods = $webResponse.Headers["Access-Control-Allow-Methods"]
+                AllowHeaders = $webResponse.Headers["Access-Control-Allow-Headers"]
                 Body = $content
                 IsError = $true
             }
@@ -142,6 +155,9 @@ function Test-BackendRequest([string]$Url, [string]$Method, [string]$BodyJson = 
         return [pscustomobject]@{
             StatusCode = 0
             AllowOrigin = $null
+            AllowCredentials = $null
+            AllowMethods = $null
+            AllowHeaders = $null
             Body = $ex.Message
             IsError = $true
         }
@@ -153,6 +169,7 @@ Write-Info "Shifty stack check started"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $envPath = Join-Path $projectRoot $EnvFile
 Write-Info "Using env file: $envPath"
+Write-Info "Using CORS origin: $CorsOrigin"
 
 $databaseUrl = Get-EnvValue -Path $envPath -Key "DATABASE_URL"
 if ($databaseUrl) {
@@ -201,7 +218,7 @@ if ($dbConnResult -like "OK*") {
     Write-Fail "Database connection failed ($dbConnResult)"
 }
 
-$health = Test-BackendRequest -Url "$BackendBaseUrl/" -Method "GET"
+$health = Test-BackendRequest -Url "$BackendBaseUrl/" -Method "GET" -Origin $CorsOrigin
 if ($health.StatusCode -eq 200) {
     Write-Pass "Backend health reachable at $BackendBaseUrl/"
 } else {
@@ -209,7 +226,7 @@ if ($health.StatusCode -eq 200) {
 }
 
 $loginBody = '{"email":"noexiste@demo.com","password":"bad"}'
-$login = Test-BackendRequest -Url "$BackendBaseUrl/auth/login" -Method "POST" -BodyJson $loginBody
+$login = Test-BackendRequest -Url "$BackendBaseUrl/auth/login" -Method "POST" -Origin $CorsOrigin -BodyJson $loginBody
 if ($login.StatusCode -eq 401) {
     Write-Pass "Login endpoint reachable and returns expected 401"
 } elseif ($login.StatusCode -eq 200) {
@@ -222,6 +239,25 @@ if ($login.AllowOrigin) {
     Write-Pass "CORS header present on login response (Access-Control-Allow-Origin: $($login.AllowOrigin))"
 } else {
     Write-Fail "CORS header missing on login response"
+}
+
+$preflight = Test-BackendRequest -Url "$BackendBaseUrl/auth/login" -Method "OPTIONS" -Origin $CorsOrigin
+if ($preflight.StatusCode -eq 200 -or $preflight.StatusCode -eq 204) {
+    Write-Pass "CORS preflight succeeded for /auth/login"
+} else {
+    Write-Fail "CORS preflight failed (status $($preflight.StatusCode)): $($preflight.Body)"
+}
+
+if ($preflight.AllowOrigin -eq $CorsOrigin) {
+    Write-Pass "CORS preflight allows expected origin ($CorsOrigin)"
+} else {
+    Write-Fail "CORS preflight did not allow expected origin (received: $($preflight.AllowOrigin))"
+}
+
+if ($preflight.AllowCredentials -eq "true") {
+    Write-Pass "CORS preflight allows credentials"
+} else {
+    Write-Fail "CORS preflight missing Access-Control-Allow-Credentials: true"
 }
 
 Write-Info "Shifty stack check finished"

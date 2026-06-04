@@ -6,6 +6,10 @@ venv/
 .venv/
 env/
 .env
+backend/.env
+backend/.env.vercel.import
+backend/.env.local
+backend/.env.production.local
 *.log
 *.db
 shifty_dev.db
