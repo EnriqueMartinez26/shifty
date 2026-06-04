@@ -4,7 +4,7 @@ Alembic migration environment.
 Usa psycopg2 (sync) en lugar de asyncpg para evitar el bug WinError 64
 con el ProactorEventLoop de Python 3.13 en Windows.
 """
-import re
+from urllib.parse import parse_qs, unquote, urlparse
 from logging.config import fileConfig
 from sqlalchemy import create_engine, pool, text
 from alembic import context
@@ -42,25 +42,18 @@ def parse_db_url(url: str) -> dict:
     Parsea la DATABASE_URL y extrae los componentes.
     Soporta formato: postgresql+asyncpg://user:pass@host:port/db
     """
-    # Limpiar el driver y query params
-    clean = re.sub(r"postgresql\+\w+://", "", url)
-    if "?" in clean:
-        clean = clean.split("?")[0]
-
-    # user:password@host:port/dbname
-    match = re.match(
-        r"(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:/]+)(?::(?P<port>\d+))?/(?P<dbname>.+)",
-        clean,
-    )
-    if not match:
+    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
         raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
 
+    query = parse_qs(parsed.query)
     return {
-        "user": match.group("user"),
-        "password": match.group("password"),
-        "host": match.group("host"),
-        "port": int(match.group("port") or 5432),
-        "dbname": match.group("dbname"),
+        "user": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname,
+        "port": int(parsed.port or 5432),
+        "dbname": parsed.path.lstrip("/"),
+        "sslmode": query.get("sslmode", ["require"])[0],
     }
 
 
@@ -79,7 +72,7 @@ def get_sync_engine():
             "user": params["user"],
             "password": params["password"],
             "dbname": params["dbname"],
-            "sslmode": "disable",
+            "sslmode": params["sslmode"],
             "client_encoding": "utf8",
         },
         poolclass=pool.NullPool,

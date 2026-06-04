@@ -9,32 +9,33 @@ psycopg2 en Windows con codificación regional española.
 """
 import sys
 import os
+from urllib.parse import parse_qs, unquote, urlparse
+
+backend_dir = os.path.dirname(__file__)
+if sys.path and os.path.abspath(sys.path[0]) == os.path.abspath(backend_dir):
+    sys.path.pop(0)
+from alembic.config import Config
+from alembic import command as alembic_command
 
 # Asegurar que el backend está en el path
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, backend_dir)
 
 # Leer el .env manualmente ANTES de importar settings
 from dotenv import load_dotenv
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
-
-import re
+load_dotenv(os.path.join(backend_dir, ".env"))
 
 def parse_db_url(url: str) -> dict:
-    clean = re.sub(r"postgresql\+\w+://", "", url)
-    if "?" in clean:
-        clean = clean.split("?")[0]
-    match = re.match(
-        r"(?P<user>[^:]+):(?P<password>[^@]+)@(?P<host>[^:/]+)(?::(?P<port>\d+))?/(?P<dbname>.+)",
-        clean,
-    )
-    if not match:
+    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
         raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
+    query = parse_qs(parsed.query)
     return {
-        "user": match.group("user"),
-        "password": match.group("password"),
-        "host": match.group("host"),
-        "port": int(match.group("port") or 5432),
-        "dbname": match.group("dbname"),
+        "user": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname,
+        "port": int(parsed.port or 5432),
+        "dbname": parsed.path.lstrip("/"),
+        "sslmode": query.get("sslmode", ["require"])[0],
     }
 
 def main():
@@ -55,7 +56,7 @@ def main():
             user=params["user"],
             password=params["password"],
             dbname=params["dbname"],
-            sslmode="disable",
+            sslmode=params["sslmode"],
             options="-c client_encoding=UTF8",
         )
         conn.autocommit = True
@@ -72,11 +73,8 @@ def main():
     # Ahora correr Alembic programáticamente
     print("\nEjecutando migraciones de Alembic...")
     try:
-        from alembic.config import Config
-        from alembic import command as alembic_command
-
-        alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "alembic"))
+        alembic_cfg = Config(os.path.join(backend_dir, "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
         alembic_command.upgrade(alembic_cfg, "head")
         print("OK: Migraciones aplicadas correctamente.")
     except Exception as e:
