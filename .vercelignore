@@ -1,0 +1,10 @@
+.env
+.env.*
+backend/.env
+backend/.env.*
+.venv
+.venv_win
+__pycache__
+tests
+docs
+.codex-tmp

@@ -25,7 +25,7 @@ from core.exceptions import (
 from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
-from modules.notifications.tasks import send_appointment_confirmation
+from modules.notifications.tasks import enqueue_confirmation_email
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
@@ -55,6 +55,7 @@ class AppointmentService:
         data: dict,
         store_id: int,
         actor: User,
+        vercel_oidc_token: str | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         """
         Crea un nuevo turno con:
@@ -155,7 +156,7 @@ class AppointmentService:
         await self.uow.commit()
 
         # 5. Notificación (fuera de transacción, no blocking) ---------------
-        send_appointment_confirmation.delay(
+        await enqueue_confirmation_email(
             email=actor.email,
             details={
                 "public_id": appointment.public_id,
@@ -163,6 +164,7 @@ class AppointmentService:
                 "staff": staff.display_name,
                 "date": starts_at.isoformat(),
             },
+            vercel_oidc_token=vercel_oidc_token,
         )
 
         # Invalidar caché de disponibilidad

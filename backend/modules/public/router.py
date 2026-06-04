@@ -20,10 +20,12 @@ from core.idempotency import idempotency_guard, idempotency_release, idempotency
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_redis
 from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN
+from core.vercel_queue import extract_vercel_oidc_token
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
 from modules.payments.service import calculate_service_payment_amount, ensure_payment_preference, service_requires_payment
+from modules.notifications.tasks import enqueue_confirmation_email
 from modules.promotions.service import quote_promotion, redeem_promotion
 from modules.public.repository import PublicRepository
 from modules.public.schemas import (
@@ -473,6 +475,16 @@ async def create_public_booking(
             )
 
         await db.commit()
+        await enqueue_confirmation_email(
+            email=appointment.client_email,
+            details={
+                "public_id": appointment.public_id,
+                "service": service.name,
+                "staff": staff.display_name,
+                "date": appointment.starts_at.isoformat(),
+            },
+            vercel_oidc_token=extract_vercel_oidc_token(request),
+        )
         response = PublicBookingResponse(
             public_id=appointment.public_id,
             service_id=service.public_id,

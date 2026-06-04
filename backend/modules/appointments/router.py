@@ -7,7 +7,7 @@ y serializar la respuesta. Sin lógica de negocio.
 from datetime import date as date_type
 from typing import Annotated, Optional, List
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +15,7 @@ from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
 from core.validation import PUBLIC_ID_PATTERN
+from core.vercel_queue import extract_vercel_oidc_token
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.schemas import (
     AppointmentCreate,
@@ -140,6 +141,7 @@ async def get_availability(
 
 @router.post("/", response_model=AppointmentResponse)
 async def book_appointment(
+    request: Request,
     data: AppointmentCreate,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
@@ -163,6 +165,7 @@ async def book_appointment(
             data=data.model_dump(),
             store_id=user.store_id,
             actor=user,
+            vercel_oidc_token=extract_vercel_oidc_token(request),
         )
     except Exception:
         await idempotency_release(data.idempotency_key, redis)

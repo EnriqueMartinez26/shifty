@@ -16,7 +16,6 @@ from modules.services.router import router as services_router
 from modules.staff.router import router as staff_router
 from modules.appointments.router import router as appointments_router
 from modules.dashboard.router import router as dashboard_router
-from modules.notifications.subscribers import start_event_listeners
 from modules.auth.dependencies import get_current_user
 from modules.users.model import User
 from modules.users.router import router as users_router
@@ -34,12 +33,9 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Lógica al arrancar
-    import asyncio
-    await ensure_runtime_contracts(engine)
-    asyncio.create_task(start_event_listeners())
+    if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
+        await ensure_runtime_contracts(engine)
     yield
-    # Lógica al apagar (opcional)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

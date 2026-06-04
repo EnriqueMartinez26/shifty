@@ -1,0 +1,13 @@
+.venv
+.venv_win
+.env
+.env.*
+.pytest_cache
+tests
+loadtests
+scripts
+docs
+uv.lock.bak
+pytest_output.txt
+__pycache__
+*.pyc

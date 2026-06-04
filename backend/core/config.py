@@ -1,3 +1,4 @@
+import os
 from enum import Enum
 
 from pydantic import model_validator
@@ -8,6 +9,14 @@ class Environment(str, Enum):
     DEVELOPMENT = "development"
     STAGING = "staging"
     PRODUCTION = "production"
+
+
+def _env_files() -> tuple[str, ...] | None:
+    if os.getenv("VERCEL"):
+        return None
+    if os.getenv("ENV", "").lower() == Environment.PRODUCTION.value:
+        return None
+    return (".env", "../.env")
 
 
 class Settings(BaseSettings):
@@ -50,10 +59,18 @@ class Settings(BaseSettings):
     SLO_MAX_FAILED_WEBHOOKS: int = 20
     SLO_MAX_PENDING_OUTBOX: int = 200
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
+    CRON_SECRET: str | None = None
+    RUN_RUNTIME_CONTRACTS_ON_STARTUP: bool = False
+    VERCEL_QUEUE_REGION: str | None = None
+    VERCEL_QUEUE_CONFIRMATION_TOPIC: str = "appointment-confirmation"
+    VERCEL_QUEUE_REMINDER_TOPIC: str = "appointment-reminder"
+    VERCEL_QUEUE_CONFIRMATION_CONSUMER: str = "confirmation-emailer"
+    VERCEL_QUEUE_REMINDER_CONSUMER: str = "reminder-emailer"
+    VERCEL_QUEUE_MAX_BATCH: int = 10
+    VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC: bool = True
 
     DATABASE_URL: str
     REDIS_URL: str
-    CELERY_BROKER_URL: str
 
     SMTP_HOST: str
     SMTP_PORT: int
@@ -86,6 +103,8 @@ class Settings(BaseSettings):
                 raise ValueError("FIELD_ENCRYPTION_KEY debe estar definido en produccion")
             if self.ALLOW_PUBLIC_REGISTRATION:
                 raise ValueError("ALLOW_PUBLIC_REGISTRATION debe ser false en produccion")
+            if not self.CRON_SECRET:
+                raise ValueError("CRON_SECRET debe estar definido en produccion")
         if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
             raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
         if self.MAX_REQUEST_BODY_BYTES < 1024:
@@ -95,7 +114,7 @@ class Settings(BaseSettings):
         return self
 
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"),
+        env_file=_env_files(),
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
