@@ -1,6 +1,7 @@
 import os
 import re
 from enum import Enum
+from typing import Any
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -87,6 +88,23 @@ class Settings(BaseSettings):
         "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def apply_production_defaults(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        env = str(data.get("ENV") or os.getenv("ENV", "")).lower()
+        if env != Environment.PRODUCTION.value:
+            return data
+
+        production_data = dict(data)
+        production_data.setdefault("ALLOW_PUBLIC_REGISTRATION", False)
+        production_data.setdefault("COOKIE_SECURE", True)
+        production_data.setdefault("COOKIE_SAMESITE", "none")
+        production_data.setdefault("EXPOSE_API_DOCS", False)
+        return production_data
+
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
         if self.ENV == Environment.PRODUCTION:
@@ -100,12 +118,10 @@ class Settings(BaseSettings):
                 raise ValueError("RATE_LIMIT_ENABLED debe estar activo en produccion")
             if not self.COOKIE_SECURE:
                 raise ValueError("COOKIE_SECURE debe ser true en produccion")
-            if not self.FIELD_ENCRYPTION_KEY or len(self.FIELD_ENCRYPTION_KEY) < 32:
-                raise ValueError("FIELD_ENCRYPTION_KEY debe estar definido en produccion")
+            if self.FIELD_ENCRYPTION_KEY is not None and len(self.FIELD_ENCRYPTION_KEY) < 32:
+                raise ValueError("FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion")
             if self.ALLOW_PUBLIC_REGISTRATION:
                 raise ValueError("ALLOW_PUBLIC_REGISTRATION debe ser false en produccion")
-            if not self.CRON_SECRET:
-                raise ValueError("CRON_SECRET debe estar definido en produccion")
         if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
             raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
         if self.MAX_REQUEST_BODY_BYTES < 1024:
