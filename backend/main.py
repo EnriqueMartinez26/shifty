@@ -20,7 +20,7 @@ from modules.dashboard.router import router as dashboard_router
 from modules.auth.dependencies import get_current_user
 from modules.users.model import User
 from modules.users.router import router as users_router
-from modules.public.router import router as public_router
+from modules.public_api.router import router as public_router
 from modules.reports.router import router as reports_router
 from modules.budget.router import router as budget_router
 from modules.ledger.router import router as ledger_router

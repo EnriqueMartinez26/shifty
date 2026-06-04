@@ -29,7 +29,7 @@ from modules.appointments.schemas import (
 )
 from modules.appointments.service import AppointmentService
 from modules.auth.dependencies import get_current_user, get_optional_current_user
-from modules.public.repository import PublicRepository
+from modules.public_api.repository import PublicRepository
 from modules.users.model import User, UserRole
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
