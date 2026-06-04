@@ -87,6 +87,10 @@ class RequestGuardMiddleware:
             return
 
         method = str(scope.get("method", "GET")).upper()
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
         headers = _headers_to_dict(scope)
         response_started = False
 
@@ -150,7 +154,8 @@ class SecurityHeadersMiddleware:
             yield b"cross-origin-resource-policy", b"cross-origin"
         else:
             yield b"cross-origin-opener-policy", b"same-origin"
-            yield b"cross-origin-resource-policy", b"same-site"
+            # The API is intentionally consumed from a different site.
+            yield b"cross-origin-resource-policy", b"cross-origin"
             
         yield b"cache-control", b"no-store"
         yield b"pragma", b"no-cache"

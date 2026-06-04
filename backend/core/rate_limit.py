@@ -72,7 +72,7 @@ async def enforce_rate_limit(
         retry_after = await _hit_rate_limit(identifier, action, limit, window)
     except RedisError as exc:
         logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
-        if settings.RATE_LIMIT_FAIL_CLOSED or settings.ENV == Environment.PRODUCTION:
+        if settings.RATE_LIMIT_FAIL_CLOSED:
             raise HTTPException(status_code=503, detail="Rate limit temporalmente no disponible") from exc
         return
 
@@ -137,7 +137,7 @@ class RedisRateLimitMiddleware:
             retry_after = await _hit_rate_limit(ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS)
         except RedisError as exc:
             logger.warning("rate_limit_middleware_redis_unavailable", action=action, error=str(exc))
-            if settings.RATE_LIMIT_FAIL_CLOSED or settings.ENV == Environment.PRODUCTION:
+            if settings.RATE_LIMIT_FAIL_CLOSED:
                 await _send_rate_limit_response(send, 503, "Rate limit temporalmente no disponible")
                 return
             await self.app(scope, receive, send)

@@ -122,6 +122,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 app.add_middleware(TenantMiddleware)
 app.add_middleware(RedisRateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 # 2. Configurar CORS (debe ser el último en registrarse para ser la capa más externa)
 # Obtenemos los orígenes de la configuración y nos aseguramos de que no haya espacios.
@@ -136,8 +137,6 @@ app.add_middleware(
     expose_headers=["X-Idempotency-Key", "Content-Disposition"],
     max_age=600,
 )
-
-app.add_middleware(SecurityHeadersMiddleware)
 
 # 3. Registrar Routers
 app.include_router(auth_router)
