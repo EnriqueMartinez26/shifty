@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+import json
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
-from core.config import settings
+from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import engine
 from core.middleware import TenantMiddleware
 from core.runtime_contracts import ensure_runtime_contracts
@@ -30,6 +31,42 @@ from modules.stores.router import router as stores_router
 from modules.superadmin.router import router as superadmin_router
 
 logger = structlog.get_logger()
+
+
+class BootErrorMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or SETTINGS_BOOT_ERROR is None:
+            await self.app(scope, receive, send)
+            return
+
+        if str(scope.get("method", "GET")).upper() == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
+        body = json.dumps(
+            {
+                "success": False,
+                "error_code": "BACKEND_BOOT_FAILED",
+                "message": "Backend configuration failed during startup.",
+                "detail": SETTINGS_BOOT_ERROR,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [
+                    (b"content-type", b"application/json; charset=utf-8"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -123,6 +160,7 @@ app.add_middleware(TenantMiddleware)
 app.add_middleware(RedisRateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(BootErrorMiddleware)
 
 # 2. Configurar CORS (debe ser el último en registrarse para ser la capa más externa)
 # Obtenemos los orígenes de la configuración y nos aseguramos de que no haya espacios.

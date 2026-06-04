@@ -1,4 +1,5 @@
 import os
+import re
 from enum import Enum
 
 from pydantic import model_validator
@@ -121,4 +122,87 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+def _sanitize_settings_error(value: str) -> str:
+    value = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+", r"\1[redacted]", value)
+    value = re.sub(r"(?i)(secret|token|password|pass|key)=([^\s,;]+)", r"\1=[redacted]", value)
+    return value[:2000]
+
+
+def _fallback_settings() -> Settings:
+    cors_origins = os.getenv(
+        "CORS_ORIGINS",
+        "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site,"
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    return Settings.model_construct(
+        PROJECT_NAME="Shifty v2",
+        VERSION="0.1.0",
+        ENV=Environment.DEVELOPMENT,
+        SECRET_KEY="backend-boot-failed-placeholder-secret",
+        ALGORITHM="HS256",
+        ACCESS_TOKEN_EXPIRE_MINUTES=30,
+        REFRESH_TOKEN_EXPIRE_DAYS=30,
+        PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30,
+        ALLOW_PUBLIC_REGISTRATION=False,
+        COOKIE_SECURE=True,
+        COOKIE_SAMESITE="none",
+        FIELD_ENCRYPTION_KEY="backend-boot-failed-placeholder-field-key",
+        OTP_CODE_EXPIRE_MINUTES=10,
+        OTP_MAX_ATTEMPTS=5,
+        OTP_PROVIDER="console",
+        OTP_DEBUG_EXPOSE_CODE=False,
+        TWILIO_ACCOUNT_SID=None,
+        TWILIO_AUTH_TOKEN=None,
+        TWILIO_SMS_FROM=None,
+        TWILIO_WHATSAPP_FROM=None,
+        EXPOSE_API_DOCS=False,
+        MAX_REQUEST_BODY_BYTES=32 * 1024,
+        ALLOWED_WRITE_CONTENT_TYPES="application/json,application/x-www-form-urlencoded",
+        TRUST_PROXY_HEADERS=True,
+        RATE_LIMIT_ENABLED=False,
+        RATE_LIMIT_FAIL_CLOSED=False,
+        RATE_LIMIT_WINDOW_SECONDS=60,
+        RATE_LIMIT_GLOBAL_PER_MINUTE=240,
+        RATE_LIMIT_AUTH_PER_MINUTE=12,
+        RATE_LIMIT_PUBLIC_READ_PER_MINUTE=120,
+        RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE=20,
+        REPORT_MAX_RANGE_DAYS=370,
+        SENTRY_DSN=None,
+        OPS_ENABLE_PUBLIC_HEALTH=True,
+        SLO_MAX_PENDING_WEBHOOKS=200,
+        SLO_MAX_FAILED_WEBHOOKS=20,
+        SLO_MAX_PENDING_OUTBOX=200,
+        MERCADOPAGO_WEBHOOK_SECRET=None,
+        CRON_SECRET=None,
+        RUN_RUNTIME_CONTRACTS_ON_STARTUP=False,
+        VERCEL_QUEUE_REGION=None,
+        VERCEL_QUEUE_CONFIRMATION_TOPIC="appointment-confirmation",
+        VERCEL_QUEUE_REMINDER_TOPIC="appointment-reminder",
+        VERCEL_QUEUE_CONFIRMATION_CONSUMER="confirmation-emailer",
+        VERCEL_QUEUE_REMINDER_CONSUMER="reminder-emailer",
+        VERCEL_QUEUE_MAX_BATCH=10,
+        VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC=True,
+        DATABASE_URL="postgresql+asyncpg://invalid:invalid@localhost/invalid",
+        REDIS_URL="redis://localhost:6379/0",
+        SMTP_HOST="placeholder",
+        SMTP_PORT=587,
+        SMTP_USER="placeholder",
+        SMTP_PASS="placeholder",
+        EMAILS_FROM_EMAIL="no-reply@example.com",
+        FRONTEND_URL=os.getenv(
+            "FRONTEND_URL",
+            "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site",
+        ),
+        FRONTEND_RESET_PASSWORD_PATH="/reset-password",
+        PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "https://shifty-iota.vercel.app"),
+        CORS_ORIGINS=cors_origins,
+    )
+
+
+SETTINGS_BOOT_ERROR: str | None = None
+
+try:
+    settings = Settings()
+except Exception as exc:
+    SETTINGS_BOOT_ERROR = _sanitize_settings_error(str(exc))
+    settings = _fallback_settings()
