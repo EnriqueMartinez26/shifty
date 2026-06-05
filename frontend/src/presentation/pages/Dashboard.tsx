@@ -3,12 +3,16 @@ import type { CSSProperties, ReactNode } from "react";
 import { format, subDays } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import {
+  ArrowUpRight,
   CalendarClock,
   CircleAlert,
+  CircleDollarSign,
   Clock3,
+  Gauge,
   LayoutDashboard,
   Sparkles,
   TrendingUp,
+  UserRoundPlus,
   Wallet,
 } from "lucide-react";
 
@@ -31,6 +35,8 @@ type MetricItem = {
   label: string;
   value: ReactNode;
   detail?: ReactNode;
+  signal?: string;
+  icon?: ReactNode;
   tone?: Tone;
   onSelect?: () => void;
 };
@@ -188,6 +194,21 @@ const panelStyle: CSSProperties = {
 
 const panelBodyStyle: CSSProperties = {
   padding: 24,
+};
+
+const metricPanelStyle: CSSProperties = {
+  ...panelStyle,
+  padding: 0,
+};
+
+const metricPanelBodyStyle: CSSProperties = {
+  ...panelBodyStyle,
+  display: "grid",
+  gap: 20,
+  background: [
+    "linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.48))",
+    "radial-gradient(circle at top left, rgba(255, 140, 66, 0.12), transparent 32%)",
+  ].join(", "),
 };
 
 const subtleTextStyle: CSSProperties = {
@@ -413,6 +434,8 @@ const Dashboard = () => {
         label: "Turnos hoy",
         value: numberFormatter.format(stats?.appointments_today ?? 0),
         detail: `${numberFormatter.format(upcomingAppointments.length)} proximos en agenda`,
+        signal: Number(stats?.appointments_today ?? 0) > 0 ? "Agenda activa" : "Sin carga",
+        icon: <CalendarClock size={18} />,
         tone: "primary",
         onSelect: () => navigate("/dashboard/calendar"),
       },
@@ -421,6 +444,8 @@ const Dashboard = () => {
         label: "Ocupacion",
         value: formatPercent(stats?.occupancy_rate),
         detail: `${formatPercent(availableCapacity)} de capacidad libre`,
+        signal: occupancy >= 85 ? "Dia cargado" : availableCapacity >= 40 ? "Espacio para crecer" : "Ritmo estable",
+        icon: <Gauge size={18} />,
         tone: occupancy >= 85 ? "warning" : "neutral",
         onSelect: () => navigate("/dashboard/reports"),
       },
@@ -429,6 +454,8 @@ const Dashboard = () => {
         label: "Clientes nuevos",
         value: numberFormatter.format(stats?.new_clients_last_30d ?? 0),
         detail: `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`,
+        signal: Number(stats?.new_clients_last_30d ?? 0) > 0 ? "Adquisicion en curso" : "Sin altas recientes",
+        icon: <UserRoundPlus size={18} />,
         tone: "success",
         onSelect: () => navigate("/dashboard/users"),
       },
@@ -439,6 +466,8 @@ const Dashboard = () => {
         detail: `${Number(stats?.revenue_trend ?? 0) >= 0 ? "+" : ""}${formatPercent(
           stats?.revenue_trend
         )} vs semana pasada`,
+        signal: Number(stats?.revenue_trend ?? 0) >= 0 ? "Tendencia positiva" : "Revisar caida",
+        icon: <CircleDollarSign size={18} />,
         tone: Number(stats?.revenue_trend ?? 0) < 0 ? "warning" : "success",
         onSelect: () => navigate("/dashboard/reports"),
       },
@@ -721,18 +750,7 @@ function EnterpriseDashboard({
 
       <HeroPanel hero={hero} />
 
-      <section>
-        <SectionHeader
-          icon={<LayoutDashboard size={18} />}
-          title={copy.metricsTitle}
-          description="Cuatro senales para entender el pulso del negocio antes de entrar al detalle."
-        />
-        <div style={metricGridStyle}>
-          {todayMetrics.map((metric) => (
-            <MetricCard key={metric.id} item={metric} emphasis />
-          ))}
-        </div>
-      </section>
+      <SummaryMetricsPanel title={copy.metricsTitle} metrics={todayMetrics} />
 
       <section style={boardGridStyle} className="dashboard-board-grid">
         <OperationPanel title={copy.operationsTitle} description={copy.operationsDescription} agenda={agenda} cards={operationCards} />
@@ -853,6 +871,55 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
           {hero.quickActions.map((item) => (
             <QuickActionCard key={item.id} item={item} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SummaryMetricsPanel({ title, metrics }: { title: string; metrics: MetricItem[] }) {
+  return (
+    <section style={metricPanelStyle}>
+      <div style={metricPanelBodyStyle}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "space-between",
+            gap: 16,
+            flexWrap: "wrap",
+          }}
+        >
+          <SectionHeader
+            icon={<LayoutDashboard size={18} />}
+            title={title}
+            description="Cuatro senales para entender el pulso del negocio antes de entrar al detalle."
+          />
+
+          <div
+            style={{
+              alignSelf: "center",
+              padding: "10px 14px",
+              borderRadius: 999,
+              border: `1px solid ${colors2000s.border.default}`,
+              background: "rgba(255, 255, 255, 0.76)",
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+              color: colors2000s.text.secondary,
+              fontSize: 11,
+              lineHeight: "14px",
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+            }}
+          >
+            Lectura rapida del dia
+          </div>
+        </div>
+
+        <div style={metricGridStyle}>
+          {metrics.map((metric) => (
+            <MetricCard key={metric.id} item={metric} emphasis />
           ))}
         </div>
       </div>
@@ -1020,19 +1087,68 @@ function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: b
       onClick={item.onSelect}
       style={{
         display: "grid",
-        gap: 8,
-        minHeight: emphasis ? 128 : 112,
-        padding: 16,
-        background: emphasis ? "rgba(255, 255, 255, 0.82)" : "rgba(255, 255, 255, 0.65)",
+        gap: emphasis ? 12 : 8,
+        minHeight: emphasis ? 164 : 112,
+        padding: emphasis ? 18 : 16,
+        background: emphasis
+          ? [
+              "linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.82))",
+              tone.background,
+            ].join(", ")
+          : "rgba(255, 255, 255, 0.65)",
         border: `1px solid ${tone.border}`,
         borderRadius: 20,
         boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
         color: colors2000s.text.primary,
         textAlign: "left",
         cursor: item.onSelect ? "pointer" : "default",
+        position: "relative",
       }}
     >
-      <span style={{ ...subtleTextStyle, textTransform: "uppercase", letterSpacing: "0.08em" }}>{item.label}</span>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+        <div style={{ display: "grid", gap: 8 }}>
+          <span style={{ ...subtleTextStyle, textTransform: "uppercase", letterSpacing: "0.08em" }}>{item.label}</span>
+          {item.signal ? (
+            <span
+              style={{
+                alignSelf: "start",
+                padding: "4px 8px",
+                borderRadius: 999,
+                border: `1px solid ${tone.border}`,
+                background: "rgba(255, 255, 255, 0.74)",
+                color: tone.accent,
+                fontSize: 10,
+                lineHeight: "12px",
+                fontWeight: 900,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+              }}
+            >
+              {item.signal}
+            </span>
+          ) : null}
+        </div>
+
+        {item.icon ? (
+          <span
+            style={{
+              width: emphasis ? 40 : 34,
+              height: emphasis ? 40 : 34,
+              borderRadius: 14,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(255, 255, 255, 0.86)",
+              border: `1px solid ${tone.border}`,
+              color: tone.accent,
+              boxShadow: colors2000s.shadows.insetLight,
+              flexShrink: 0,
+            }}
+          >
+            {item.icon}
+          </span>
+        ) : null}
+      </div>
       <strong
         style={{
           color: item.tone === "primary" ? colors2000s.orange.accent : colors2000s.text.primary,
@@ -1044,7 +1160,22 @@ function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: b
       >
         {item.value}
       </strong>
-      {item.detail ? <span style={{ color: tone.accent, fontSize: 12, lineHeight: "16px", fontWeight: 800 }}>{item.detail}</span> : null}
+      {item.detail ? (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            marginTop: "auto",
+            paddingTop: emphasis ? 8 : 0,
+            borderTop: emphasis ? `1px solid ${tone.border}` : "none",
+          }}
+        >
+          <span style={{ color: tone.accent, fontSize: 12, lineHeight: "16px", fontWeight: 800 }}>{item.detail}</span>
+          {emphasis ? <ArrowUpRight size={14} color={tone.accent} /> : null}
+        </div>
+      ) : null}
     </button>
   );
 }
