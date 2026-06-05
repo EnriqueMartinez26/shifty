@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
@@ -8,18 +7,20 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, sta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
 from core.crypto import encrypt_secret
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
-from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
+from modules.payments.jobs import process_outbox_batch
 from modules.payments.model import OutboxMessage, Payment, PaymentGatewayConfig, PaymentStatus, WebhookInbox
+from modules.payments.processing import apply_mercadopago_webhook_payload, enrich_mercadopago_webhook_payload
 from modules.payments.service import (
     calculate_service_payment_amount,
     ensure_payment_preference,
-    fetch_mercadopago_payment,
     stamp_payment_from_status,
     sync_appointment_with_payment,
 )
@@ -170,110 +171,6 @@ async def _get_appointment_with_service(db: AsyncSession, appointment_id: str, s
     return row
 
 
-def _resolve_payment_status(payload: dict[str, Any]) -> str | None:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    candidate = (
-        data.get("status")
-        or payload.get("status")
-        or payload.get("action")
-        or payload.get("topic")
-    )
-    if not candidate:
-        return None
-    normalized = str(candidate).lower()
-    if normalized == "payment.updated" and data.get("status"):
-        normalized = str(data.get("status")).lower()
-    mapping = {
-        "approved": PaymentStatus.APPROVED.value,
-        "accredited": PaymentStatus.APPROVED.value,
-        "pending": PaymentStatus.PENDING.value,
-        "in_process": PaymentStatus.PENDING.value,
-        "rejected": PaymentStatus.REJECTED.value,
-        "cancelled": PaymentStatus.REJECTED.value,
-        "refunded": PaymentStatus.REFUNDED.value,
-        "expired": PaymentStatus.EXPIRED.value,
-    }
-    return mapping.get(normalized) or (normalized if normalized in {status.value for status in PaymentStatus} else None)
-
-
-async def _enrich_mercadopago_webhook_payload(
-    db: AsyncSession,
-    *,
-    store_id: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
-    if not payment_id:
-        return payload
-
-    try:
-        payment_details = await fetch_mercadopago_payment(db, store_id=store_id, payment_id=payment_id)
-    except Exception:
-        return payload
-
-    if not payment_details:
-        return payload
-
-    merged_data = dict(data)
-    merged_data.update(
-        {
-            "id": payment_details.get("id", merged_data.get("id")),
-            "status": payment_details.get("status", merged_data.get("status")),
-            "external_reference": payment_details.get("external_reference", merged_data.get("external_reference")),
-            "preference_id": merged_data.get("preference_id"),
-            "metadata": payment_details.get("metadata") or merged_data.get("metadata"),
-            "date_approved": payment_details.get("date_approved", merged_data.get("date_approved")),
-        }
-    )
-    merged_payload = dict(payload)
-    merged_payload["data"] = merged_data
-    merged_payload["status"] = payment_details.get("status", payload.get("status"))
-    merged_payload["external_reference"] = payment_details.get(
-        "external_reference",
-        payload.get("external_reference"),
-    )
-    return merged_payload
-
-
-async def _find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dict[str, Any]) -> Payment | None:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
-
-    appointment_id = (
-        metadata.get("appointment_id")
-        or payload.get("appointment_id")
-        or payload.get("external_reference")
-        or data.get("external_reference")
-    )
-    preference_id = data.get("preference_id") or payload.get("preference_id")
-    external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip() or None
-
-    if external_payment_id:
-        result = await db.execute(
-            select(Payment).where(Payment.store_id == store_id, Payment.external_payment_id == external_payment_id)
-        )
-        payment = result.scalar_one_or_none()
-        if payment:
-            return payment
-
-    if preference_id:
-        result = await db.execute(
-            select(Payment).where(Payment.store_id == store_id, Payment.preference_id == str(preference_id))
-        )
-        payment = result.scalar_one_or_none()
-        if payment:
-            return payment
-
-    if appointment_id:
-        result = await db.execute(
-            select(Payment).where(Payment.store_id == store_id, Payment.appointment_id == str(appointment_id))
-        )
-        return result.scalar_one_or_none()
-
-    return None
-
-
 @router.get("/gateway-config", response_model=GatewayConfigResponse)
 async def get_gateway_config(
     user: User = Depends(get_current_user),
@@ -353,6 +250,11 @@ async def create_payment_preference(
             service=service,
             store_id=user.store_id,
             amount_override=calculate_service_payment_amount(service) or Decimal(str(service.price)),
+        )
+    except CircuitBreakerOpenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Proveedor de pagos temporalmente no disponible: {exc}",
         )
     except RuntimeError as exc:
         raise HTTPException(
@@ -472,7 +374,7 @@ async def mercadopago_webhook(
             request=request,
             store_reference=store_id,
         )
-        payload = await _enrich_mercadopago_webhook_payload(
+        payload = await enrich_mercadopago_webhook_payload(
             db,
             store_id=resolved_store_id,
             payload=payload,
@@ -494,20 +396,7 @@ async def mercadopago_webhook(
                 payload=payload,
             )
             db.add(inbox)
-        payment = await _find_payment_for_webhook(db, resolved_store_id, payload)
-        payment_status = _resolve_payment_status(payload)
-        if payment and payment_status:
-            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-            external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
-            if external_payment_id:
-                payment.external_payment_id = external_payment_id
-            stamp_payment_from_status(payment, payment_status, payload=payload)
-            appointment_result = await db.execute(
-                select(Appointment).where(Appointment.id == payment.appointment_id, Appointment.store_id == resolved_store_id)
-            )
-            appointment = appointment_result.scalar_one_or_none()
-            if appointment:
-                sync_appointment_with_payment(appointment, payment.status)
+        await apply_mercadopago_webhook_payload(db, store_id=resolved_store_id, payload=payload)
         if inbox:
             inbox.mark_processed()
         await db.commit()
@@ -633,16 +522,5 @@ async def process_outbox(
 ):
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
-    result = await db.execute(
-        select(OutboxMessage)
-        .where(OutboxMessage.store_id == user.store_id, OutboxMessage.processed_at.is_(None))
-        .order_by(OutboxMessage.created_at.asc())
-        .limit(limit)
-    )
-    messages = list(result.scalars().all())
-    now = datetime.now(timezone.utc)
-    for message in messages:
-        message.processed_at = now
-        message.error = None
-    await db.commit()
-    return OutboxProcessResponse(processed=len(messages), failed=0, inspected=len(messages))
+    result = await process_outbox_batch(db, store_id=user.store_id, limit=limit)
+    return OutboxProcessResponse(**result)

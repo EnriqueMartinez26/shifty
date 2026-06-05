@@ -31,6 +31,25 @@ services:
         limits:
           memory: 128M
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: shifty_rabbitmq
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shifty}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-shifty_password}
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
   backend:
     build:
       context: ./backend
@@ -40,6 +59,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
       REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
       MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-32768}
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
       RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-240}
@@ -55,12 +76,65 @@ services:
     depends_on:
       - db
       - redis
+      - rabbitmq
     networks:
       - shifty_network
     deploy:
       resources:
         limits:
           memory: 512M
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uv run celery -A core.celery_app worker --loglevel=info
+    container_name: shifty_celery
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uv run celery -A core.celery_app beat --loglevel=info
+    container_name: shifty_celery_beat
+    restart: always
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
+      CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   frontend:
     build:
@@ -105,3 +179,4 @@ networks:
 
 volumes:
   postgres_data:
+  rabbitmq_data:

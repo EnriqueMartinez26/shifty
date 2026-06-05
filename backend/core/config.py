@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     OTP_MAX_ATTEMPTS: int = 5
     OTP_PROVIDER: str = "console"
     OTP_DEBUG_EXPOSE_CODE: bool = True
+    PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
+    PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS: int = 30
     TWILIO_ACCOUNT_SID: str | None = None
     TWILIO_AUTH_TOKEN: str | None = None
     TWILIO_SMS_FROM: str | None = None
@@ -54,6 +56,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_AUTH_PER_MINUTE: int = 12
     RATE_LIMIT_PUBLIC_READ_PER_MINUTE: int = 120
     RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE: int = 20
+    REDIS_MAX_CONNECTIONS: int = 100
+    REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: float = 2.0
+    REDIS_SOCKET_TIMEOUT_SECONDS: float = 2.0
     REPORT_MAX_RANGE_DAYS: int = 370
     SENTRY_DSN: str | None = None
     OPS_ENABLE_PUBLIC_HEALTH: bool = True
@@ -73,6 +78,12 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
     REDIS_URL: str
+    CELERY_BROKER_URL: str = "memory://"
+    CELERY_RESULT_BACKEND_URL: str | None = None
+    CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1
+    CELERY_TASK_ACKS_LATE: bool = True
+    CELERY_TASK_SOFT_TIME_LIMIT_SECONDS: int = 120
+    CELERY_TASK_TIME_LIMIT_SECONDS: int = 150
 
     SMTP_HOST: str
     SMTP_PORT: int
@@ -122,8 +133,24 @@ class Settings(BaseSettings):
                 raise ValueError("FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion")
             if self.ALLOW_PUBLIC_REGISTRATION:
                 raise ValueError("ALLOW_PUBLIC_REGISTRATION debe ser false en produccion")
+            if self.OTP_PROVIDER == "console":
+                raise ValueError("OTP_PROVIDER no puede ser console en produccion")
+            if self.OTP_DEBUG_EXPOSE_CODE:
+                raise ValueError("OTP_DEBUG_EXPOSE_CODE debe ser false en produccion")
         if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
             raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
+        if self.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1:
+            raise ValueError("PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1")
+        if self.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS < 1:
+            raise ValueError("PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS debe ser >= 1")
+        if self.REDIS_MAX_CONNECTIONS < 1:
+            raise ValueError("REDIS_MAX_CONNECTIONS debe ser >= 1")
+        if self.CELERY_WORKER_PREFETCH_MULTIPLIER < 1:
+            raise ValueError("CELERY_WORKER_PREFETCH_MULTIPLIER debe ser >= 1")
+        if self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS < 1:
+            raise ValueError("CELERY_TASK_SOFT_TIME_LIMIT_SECONDS debe ser >= 1")
+        if self.CELERY_TASK_TIME_LIMIT_SECONDS <= self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS:
+            raise ValueError("CELERY_TASK_TIME_LIMIT_SECONDS debe ser mayor al soft time limit")
         if self.MAX_REQUEST_BODY_BYTES < 1024:
             raise ValueError("MAX_REQUEST_BODY_BYTES no puede ser menor a 1024 bytes")
         if self.MAX_REQUEST_BODY_BYTES > 1024 * 1024:
@@ -167,6 +194,8 @@ def _fallback_settings() -> Settings:
         OTP_MAX_ATTEMPTS=5,
         OTP_PROVIDER="console",
         OTP_DEBUG_EXPOSE_CODE=False,
+        PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD=5,
+        PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS=30,
         TWILIO_ACCOUNT_SID=None,
         TWILIO_AUTH_TOKEN=None,
         TWILIO_SMS_FROM=None,
@@ -182,6 +211,9 @@ def _fallback_settings() -> Settings:
         RATE_LIMIT_AUTH_PER_MINUTE=12,
         RATE_LIMIT_PUBLIC_READ_PER_MINUTE=120,
         RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE=20,
+        REDIS_MAX_CONNECTIONS=100,
+        REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS=2.0,
+        REDIS_SOCKET_TIMEOUT_SECONDS=2.0,
         REPORT_MAX_RANGE_DAYS=370,
         SENTRY_DSN=None,
         OPS_ENABLE_PUBLIC_HEALTH=True,
@@ -200,6 +232,12 @@ def _fallback_settings() -> Settings:
         VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC=True,
         DATABASE_URL="postgresql+asyncpg://invalid:invalid@localhost/invalid",
         REDIS_URL="redis://localhost:6379/0",
+        CELERY_BROKER_URL="memory://",
+        CELERY_RESULT_BACKEND_URL=None,
+        CELERY_WORKER_PREFETCH_MULTIPLIER=1,
+        CELERY_TASK_ACKS_LATE=True,
+        CELERY_TASK_SOFT_TIME_LIMIT_SECONDS=120,
+        CELERY_TASK_TIME_LIMIT_SECONDS=150,
         SMTP_HOST="placeholder",
         SMTP_PORT=587,
         SMTP_USER="placeholder",

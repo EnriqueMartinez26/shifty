@@ -3,6 +3,7 @@
 Escenarios incluidos:
 
 - `PublicAvailabilityUser`: carga sobre disponibilidad publica y reservas.
+- `PublicAbuseUser`: spam controlado sobre OTP y autogestion sin OTP.
 - `PaymentsWebhookUser`: carga sobre endpoint de webhook.
 
 ## Variables recomendadas
@@ -10,7 +11,11 @@ Escenarios incluidos:
 - `SHIFTY_STORE_PUBLIC_ID`
 - `SHIFTY_SERVICE_PUBLIC_ID`
 - `SHIFTY_STAFF_PUBLIC_ID`
+- `SHIFTY_STORE_PUBLIC_IDS` (opcional, lista separada por comas para multi-tenant)
+- `SHIFTY_SERVICE_PUBLIC_IDS` (opcional, misma posicion que tiendas)
+- `SHIFTY_STAFF_PUBLIC_IDS` (opcional, misma posicion que servicios)
 - `SHIFTY_BOOKING_PHONE_PREFIX` (opcional, default `+54911`)
+- `SHIFTY_MERCADOPAGO_WEBHOOK_SECRET` (opcional, firma webhooks de prueba)
 
 ## Ejecucion local
 

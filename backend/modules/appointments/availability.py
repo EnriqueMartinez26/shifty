@@ -46,7 +46,11 @@ class AvailabilityService:
 
         # 2. Resolver servicio -----------------------------------------------
         svc_res = await self.db.execute(
-            select(Service).where(Service.public_id == service_public_id)
+            select(Service).where(
+                Service.public_id == service_public_id,
+                Service.store_id == store_id,
+                Service.is_active.is_(True),
+            )
         )
         service = svc_res.scalar_one_or_none()
         if not service:
@@ -71,6 +75,10 @@ class AvailabilityService:
             for member in all_store_staff
             if service_public_id in (member.service_ids or [])
         ]
+        if not staff_members:
+            await self.redis.setex(cache_key, 300, "[]")
+            return []
+        staff_ids = [member.id for member in staff_members]
 
         # 4. Resolver reglas del Store ----------------------------------------
         store_res = await self.db.execute(select(Store).where(Store.id == store_id))
@@ -82,47 +90,59 @@ class AvailabilityService:
         min_bookable_time = now_utc() + timedelta(hours=notice_hours)
 
         all_slots: list[dict] = []
+        day_of_week = search_date.weekday()
 
-        for staff in staff_members:
-            day_of_week = search_date.weekday()
+        schedules_res = await self.db.execute(
+            select(Schedule).where(
+                Schedule.staff_id.in_(staff_ids),
+                Schedule.day_of_week == day_of_week,
+            )
+        )
+        schedules_by_staff: dict[str, list[Schedule]] = {}
+        for schedule in schedules_res.scalars().all():
+            schedules_by_staff.setdefault(schedule.staff_id, []).append(schedule)
 
-            # 4. Horario del staff ese día -----------------------------------
-            sched_res = await self.db.execute(
-                select(Schedule).where(
-                    Schedule.staff_id == staff.id,
-                    Schedule.day_of_week == day_of_week,
+        from sqlalchemy.orm import joinedload
+        appt_res = await self.db.execute(
+            select(Appointment).options(joinedload(Appointment.service)).where(
+                and_(
+                    Appointment.staff_id.in_(staff_ids),
+                    Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+                    Appointment.starts_at >= day_start,
+                    Appointment.starts_at < day_end,
                 )
             )
-            schedules = sched_res.scalars().all()
+        )
+        booked_by_staff: dict[str, list[Appointment]] = {}
+        for appointment in appt_res.scalars().all():
+            booked_by_staff.setdefault(appointment.staff_id, []).append(appointment)
+
+        block_res = await self.db.execute(
+            select(StaffBlock).where(
+                and_(
+                    StaffBlock.staff_id.in_(staff_ids),
+                    StaffBlock.is_active.is_(True),
+                    StaffBlock.starts_at < day_end,
+                    StaffBlock.ends_at > day_start,
+                )
+            )
+        )
+        blocks_by_staff: dict[str, list[StaffBlock]] = {}
+        for block in block_res.scalars().all():
+            blocks_by_staff.setdefault(block.staff_id, []).append(block)
+
+        for staff in staff_members:
+
+            # 4. Horario del staff ese día -----------------------------------
+            schedules = schedules_by_staff.get(staff.id, [])
             if not schedules:
                 continue  # El staff no trabaja ese día
 
             # 5. Turnos ya reservados ----------------------------------------
-            from sqlalchemy.orm import joinedload
-            appt_res = await self.db.execute(
-                select(Appointment).options(joinedload(Appointment.service)).where(
-                    and_(
-                        Appointment.staff_id == staff.id,
-                        Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
-                        Appointment.starts_at >= day_start,
-                        Appointment.starts_at < day_end,
-                    )
-                )
-            )
-            booked = appt_res.scalars().all()
+            booked = booked_by_staff.get(staff.id, [])
 
             # 6. Bloqueos de agenda (StaffBlock) ------------------------------
-            block_res = await self.db.execute(
-                select(StaffBlock).where(
-                    and_(
-                        StaffBlock.staff_id == staff.id,
-                        StaffBlock.is_active.is_(True),
-                        StaffBlock.starts_at < day_end,
-                        StaffBlock.ends_at > day_start,
-                    )
-                )
-            )
-            blocks = block_res.scalars().all()
+            blocks = blocks_by_staff.get(staff.id, [])
 
             # 7. Cálculo de slots (granularidad 15 min) -----------------------
             for sched in schedules:

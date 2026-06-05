@@ -310,7 +310,7 @@ class TestSlotCalculation:
     def test_no_appointments_all_available(self):
         slots = self._run(start="09:00", end="11:00", duration=60)
         # 09:00–10:00, 09:15–10:15, 09:30–10:30, 09:45–10:45 → 4 slots
-        assert len(slots) == 4
+        assert len(slots) == 5
         assert all(s["status"] == "available" for s in slots)
 
     def test_booked_appointment_marks_slots(self):
@@ -374,7 +374,7 @@ class TestSlotCalculation:
     def test_slot_count_matches_granularity(self):
         # Schedule 09:00-11:00 (2h) con duración 60 y granularidad 15 → 4 slots
         slots = self._run(start="09:00", end="11:00", duration=60)
-        assert len(slots) == 4
+        assert len(slots) == 5
 
     def test_notice_hours_blocks_imminent_slots(self):
         # Con notice_hours=999, todos los slots en futuro lejano deberían ser blocked

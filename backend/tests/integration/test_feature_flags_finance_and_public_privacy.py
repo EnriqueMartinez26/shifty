@@ -460,6 +460,89 @@ async def test_public_booking_requires_otp_when_feature_enabled(client: AsyncCli
 
 
 @pytest.mark.asyncio
+async def test_public_client_self_service_requires_recent_otp_and_releases_failed_reschedule_key(
+    client: AsyncClient,
+):
+    settings.OTP_PROVIDER = "console"
+    settings.OTP_DEBUG_EXPOSE_CODE = True
+
+    store_public_id, token = await register_and_login(
+        client,
+        slug="tienda-self-service-otp",
+        email="self-service-otp@test.com",
+    )
+
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=8)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    phone = "+5491177700011"
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "client_name": "Cliente Autogestion",
+            "client_phone": phone,
+            "idempotency_key": "self-service-otp-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+
+    blocked_list = await client.get(
+        f"/public/client/{store_public_id}/5491177700011/appointments",
+    )
+    assert blocked_list.status_code == 403
+
+    reschedule_payload = {
+        "phone": phone,
+        "new_starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+        "idempotency_key": "self-service-reschedule-otp-001",
+    }
+    blocked_reschedule = await client.patch(
+        f"/public/client/appointments/{booking.json()['public_id']}/reschedule",
+        json=reschedule_payload,
+    )
+    assert blocked_reschedule.status_code == 403
+
+    otp_request = await client.post(
+        "/public/otp/request",
+        json={
+            "store_public_id": store_public_id,
+            "phone": phone,
+            "channel": "whatsapp",
+        },
+    )
+    assert otp_request.status_code == 200, otp_request.text
+
+    otp_verify = await client.post(
+        "/public/otp/verify",
+        json={
+            "store_public_id": store_public_id,
+            "phone": phone,
+            "code": otp_request.json()["debug_code"],
+        },
+    )
+    assert otp_verify.status_code == 200, otp_verify.text
+
+    allowed_list = await client.get(
+        f"/public/client/{store_public_id}/5491177700011/appointments",
+    )
+    assert allowed_list.status_code == 200, allowed_list.text
+    assert len(allowed_list.json()["appointments"]) == 1
+
+    allowed_reschedule = await client.patch(
+        f"/public/client/appointments/{booking.json()['public_id']}/reschedule",
+        json=reschedule_payload,
+    )
+    assert allowed_reschedule.status_code == 200, allowed_reschedule.text
+    assert allowed_reschedule.json()["starts_at"].startswith(starts_at.date().isoformat())
+
+
+@pytest.mark.asyncio
 async def test_public_booking_allows_missing_email_and_any_professional(client: AsyncClient):
     store_public_id, token = await register_and_login(client, slug="tienda-any-staff", email="any-staff@test.com")
     service_public_id = await create_service(client, token)
@@ -559,7 +642,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     client: AsyncClient,
     monkeypatch,
 ):
-    import modules.payments.router as payments_router
+    import modules.payments.processing as payments_processing
     import modules.payments.service as payments_service
 
     async def fake_create_preference(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
@@ -624,7 +707,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     assert booking.status_code == 201, booking.text
 
     booking_public_id = booking.json()["public_id"]
-    monkeypatch.setattr(payments_router, "fetch_mercadopago_payment", fake_fetch_payment)
+    monkeypatch.setattr(payments_processing, "fetch_mercadopago_payment", fake_fetch_payment)
 
     payload = {"id": "evt-fetch-123", "type": "payment", "data": {"id": "mp-pay-minimal-123"}}
     signature_headers = webhook_signature_headers(
@@ -977,6 +1060,96 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client
     appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
     refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking.json()["public_id"])
     assert refreshed["status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_provider_fails(
+    client: AsyncClient,
+    test_session,
+    monkeypatch,
+):
+    import modules.payments.service as payments_service
+
+    async def failing_mp_request(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+        raise RuntimeError("timeout upstream")
+
+    async def successful_mp_request(
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict | None = None,
+    ) -> dict:
+        return {
+            "id": "pref-retry-ok",
+            "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=retry-ok",
+        }
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", failing_mp_request)
+
+    store_public_id, token = await register_and_login(
+        client,
+        slug="tienda-provider-failure",
+        email="provider-failure@test.com",
+    )
+
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+
+    upsert = await client.put(
+        "/payments/gateway-config",
+        headers=auth_headers(token),
+        json={
+            "access_token": "TEST-ACCESS-TOKEN-1234567890",
+            "public_key": "TEST-PUBLIC-KEY",
+            "webhook_secret": "secret-demo",
+        },
+    )
+    assert upsert.status_code == 200, upsert.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="fixed",
+        deposit_amount=2500,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=6)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking_payload = {
+        "store_public_id": store_public_id,
+        "service_id": service_public_id,
+        "staff_id": staff_public_id,
+        "starts_at": starts_at.replace(hour=12, minute=30, second=0, microsecond=0).isoformat(),
+        "client_name": "Cliente Retry",
+        "client_phone": "+5491122299988",
+        "idempotency_key": "provider-failure-booking-001",
+    }
+
+    failed_booking = await client.post("/public/appointments", json=booking_payload)
+    assert failed_booking.status_code == 502, failed_booking.text
+
+    appointment_count = await test_session.scalar(select(func.count()).select_from(modules.appointments.model.Appointment))
+    payment_count = await test_session.scalar(select(func.count()).select_from(Payment))
+    assert appointment_count == 0
+    assert payment_count == 0
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", successful_mp_request)
+
+    retried_booking = await client.post("/public/appointments", json=booking_payload)
+    assert retried_booking.status_code == 201, retried_booking.text
+    assert retried_booking.json()["payment_link"].startswith("https://sandbox.mercadopago.com/")
+
+    appointment_count = await test_session.scalar(select(func.count()).select_from(modules.appointments.model.Appointment))
+    payment_count = await test_session.scalar(select(func.count()).select_from(Payment))
+    assert appointment_count == 1
+    assert payment_count == 1
 
 
 @pytest.mark.asyncio

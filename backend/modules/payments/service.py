@@ -8,6 +8,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.circuit_breaker import AsyncCircuitBreaker
 from core.config import Environment, settings
 from core.crypto import decrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -22,6 +23,24 @@ ACTIVE_APPOINTMENT_STATUSES = {
     AppointmentStatus.CONFIRMED.value,
 }
 MERCADOPAGO_API_BASE_URL = "https://api.mercadopago.com"
+_mercadopago_breaker = AsyncCircuitBreaker(
+    name="mercadopago",
+    failure_threshold=settings.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+    recovery_timeout_seconds=settings.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS,
+)
+
+
+class MercadoPagoAPIError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        transient: bool = False,
+    ) -> None:
+        self.status_code = status_code
+        self.transient = transient
+        super().__init__(message)
 
 
 def _money(value: Decimal) -> Decimal:
@@ -110,19 +129,61 @@ async def _mercadopago_api_request(
     path: str,
     json_body: dict | None = None,
 ) -> dict:
+    return await _mercadopago_breaker.call(
+        lambda: _perform_mercadopago_request(
+            access_token,
+            method=method,
+            path=path,
+            json_body=json_body,
+        ),
+        should_record_failure=_should_trip_mercadopago_breaker,
+    )
+
+
+def _should_trip_mercadopago_breaker(exc: Exception) -> bool:
+    return isinstance(exc, MercadoPagoAPIError) and exc.transient
+
+
+async def _perform_mercadopago_request(
+    access_token: str,
+    *,
+    method: str,
+    path: str,
+    json_body: dict | None = None,
+) -> dict:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    async with httpx.AsyncClient(base_url=MERCADOPAGO_API_BASE_URL, timeout=20.0) as client:
-        response = await client.request(method, path, headers=headers, json=json_body)
+    try:
+        async with httpx.AsyncClient(base_url=MERCADOPAGO_API_BASE_URL, timeout=20.0) as client:
+            response = await client.request(method, path, headers=headers, json=json_body)
+    except httpx.TimeoutException as exc:
+        raise MercadoPagoAPIError("Mercado Pago no respondio a tiempo", transient=True) from exc
+    except httpx.RequestError as exc:
+        raise MercadoPagoAPIError("Mercado Pago no esta disponible", transient=True) from exc
+
+    if response.status_code >= 500:
+        detail = response.text[:400]
+        raise MercadoPagoAPIError(
+            detail or f"Mercado Pago devolvio HTTP {response.status_code}",
+            status_code=response.status_code,
+            transient=True,
+        )
     if response.status_code >= 400:
         detail = response.text[:400]
-        raise RuntimeError(detail or f"Mercado Pago devolvio HTTP {response.status_code}")
+        raise MercadoPagoAPIError(
+            detail or f"Mercado Pago devolvio HTTP {response.status_code}",
+            status_code=response.status_code,
+            transient=False,
+        )
     if not response.content:
         return {}
-    return response.json()
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise MercadoPagoAPIError("Mercado Pago devolvio una respuesta invalida", transient=True) from exc
 
 
 async def _get_gateway_config(db: AsyncSession, store_id: str) -> PaymentGatewayConfig | None:

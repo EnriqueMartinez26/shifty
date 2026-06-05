@@ -1856,6 +1856,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aiosqlite" },
     { name = "factory-boy" },
     { name = "ipython" },
     { name = "locust" },
@@ -1891,6 +1892,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "factory-boy", specifier = ">=3.3.0" },
     { name = "ipython", specifier = ">=8.22.0" },
     { name = "locust", specifier = ">=2.24.0" },
