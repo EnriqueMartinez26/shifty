@@ -77,15 +77,17 @@ export const useRefundPayment = () =>
     mutationFn: ({ paymentId, amount, reason, manual }) => paymentsService.refund(paymentId, amount, reason, manual),
   });
 
-export const useReconciliationSummary = () =>
+export const useReconciliationSummary = (enabled = true) =>
   useQuery<ReconciliationSummary>({
     queryKey: ["payments-reconciliation-summary"],
+    enabled,
     queryFn: () => paymentsService.getReconciliationSummary(),
   });
 
-export const useOutboxStats = () =>
+export const useOutboxStats = (enabled = true) =>
   useQuery<OutboxStats>({
     queryKey: ["payments-outbox-stats"],
+    enabled,
     queryFn: () => paymentsService.getOutboxStats(),
   });
 

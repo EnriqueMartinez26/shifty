@@ -7,9 +7,10 @@ import {
   type LedgerSummary,
 } from "@application/services/LedgerService";
 
-export const useLedgerSummary = () =>
+export const useLedgerSummary = (enabled = true) =>
   useQuery<LedgerSummary>({
     queryKey: ["ledger-summary"],
+    enabled,
     queryFn: () => ledgerService.getSummary(),
   });
 

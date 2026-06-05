@@ -2,8 +2,11 @@ import apiClient from "@infrastructure/http/client";
 
 export interface DashboardStats {
   appointments_today: number;
+  pending_confirmations: number;
+  occupancy_rate: number;
   new_clients_last_30d: number;
   weekly_revenue: number;
+  revenue_trend: number;
   average_appointment_minutes: number;
 }
 

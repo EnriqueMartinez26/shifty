@@ -9,18 +9,18 @@ import {
 
 export type { ProfessionalReports, ReportExportFormat, ReportSummary };
 
-export const useReportSummary = (fromDate: string, toDate: string) => {
+export const useReportSummary = (fromDate: string, toDate: string, enabled = true) => {
   return useQuery({
     queryKey: ["reports-summary", fromDate, toDate],
-    enabled: Boolean(fromDate && toDate),
+    enabled: Boolean(fromDate && toDate && enabled),
     queryFn: (): Promise<ReportSummary> => reportsService.getSummary(fromDate, toDate),
   });
 };
 
-export const useProfessionalReports = (fromDate: string, toDate: string) => {
+export const useProfessionalReports = (fromDate: string, toDate: string, enabled = true) => {
   return useQuery({
     queryKey: ["reports-professionals", fromDate, toDate],
-    enabled: Boolean(fromDate && toDate),
+    enabled: Boolean(fromDate && toDate && enabled),
     queryFn: (): Promise<ProfessionalReports> => reportsService.getProfessionalReports(fromDate, toDate),
   });
 };
