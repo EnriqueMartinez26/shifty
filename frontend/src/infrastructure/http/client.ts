@@ -1,7 +1,9 @@
 import axios from "axios";
 import axiosRetry from "axios-retry";
 
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  (import.meta.env.DEV ? "http://localhost:8000" : "https://shifty-iota.vercel.app");
 const TOKEN_KEY = "shifty_token";
 
 const apiClient = axios.create({
