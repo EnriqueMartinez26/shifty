@@ -2,10 +2,20 @@ import { useMemo } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { format, subDays } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import {
+  CalendarClock,
+  CircleAlert,
+  Clock3,
+  LayoutDashboard,
+  Sparkles,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
 
-import type { ProfessionalReportItem, ReportTopServiceItem } from "@application/services/ReportsService";
 import type { UpcomingAppointment } from "@application/services/DashboardService";
+import type { ProfessionalReportItem, ReportTopServiceItem } from "@application/services/ReportsService";
 
+import { buttonStyles2000s, colors2000s } from "../../theme/colors";
 import { useAuth } from "../context/AuthContext";
 import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from "../context/roles";
 import { useDashboardSummary } from "../hooks/useDashboard";
@@ -50,42 +60,66 @@ type RankedItem = {
   detail?: ReactNode;
 };
 
+type HealthItem = {
+  id: string;
+  label: string;
+  value: string;
+  tone?: Tone;
+};
+
+type OpportunityItem = {
+  id: string;
+  title: string;
+  description: string;
+  tone?: Tone;
+  actionLabel?: string;
+  onSelect?: () => void;
+};
+
+type DashboardHero = {
+  title: string;
+  description: string;
+  periodLabel: string;
+  statusLabel: string;
+  health: HealthItem[];
+  quickActions: ActionItem[];
+};
+
 type DashboardCopy = {
+  metricsTitle: string;
+  operationsTitle: string;
+  operationsDescription: string;
   actionsTitle: string;
-  agendaTitle: string;
   moneyTitle: string;
   performanceTitle: string;
   alertsTitle: string;
+  opportunitiesTitle: string;
   emptyActions: string;
   emptyAgenda: string;
   emptyAlerts: string;
+  emptyOpportunities: string;
+};
+
+type DashboardOperationCard = {
+  title: string;
+  detail: string;
+  meta: string;
+  tone?: Tone;
 };
 
 type EnterpriseDashboardProps = {
   copy: DashboardCopy;
+  hero: DashboardHero;
   todayMetrics: MetricItem[];
   urgentActions: ActionItem[];
   agenda: AgendaItem[];
+  operationCards: DashboardOperationCard[];
   moneyMetrics: MetricItem[];
   performanceItems: RankedItem[];
   alerts: ActionItem[];
+  opportunities: OpportunityItem[];
   isLoading: boolean;
   errorMessage?: string;
-};
-
-const carbon = {
-  blue: "#0F62FE",
-  black: "#161616",
-  gray90: "#262626",
-  gray80: "#393939",
-  gray60: "#6F6F6F",
-  gray30: "#C6C6C6",
-  gray20: "#E0E0E0",
-  gray10: "#F4F4F4",
-  white: "#FFFFFF",
-  danger: "#DA1E28",
-  warning: "#F1C21B",
-  success: "#24A148",
 };
 
 const currencyFormatter = new Intl.NumberFormat("es-AR", {
@@ -102,22 +136,25 @@ const percentFormatter = new Intl.NumberFormat("es-AR", {
   maximumFractionDigits: 1,
 });
 
-const dashboardCopy: DashboardCopy = {
+const copy: DashboardCopy = {
+  metricsTitle: "Resumen del dia",
+  operationsTitle: "Operacion de hoy",
+  operationsDescription: "Turnos, carga operativa y capacidad disponible en una sola vista.",
   actionsTitle: "Acciones urgentes",
-  agendaTitle: "Agenda operacional",
   moneyTitle: "Dinero",
-  performanceTitle: "Rendimiento",
-  alertsTitle: "Alertas",
-  emptyActions: "No hay acciones urgentes.",
-  emptyAgenda: "No hay turnos proximos para mostrar.",
-  emptyAlerts: "No hay alertas activas.",
+  performanceTitle: "Rendimiento semanal",
+  alertsTitle: "Alertas del sistema",
+  opportunitiesTitle: "Oportunidades",
+  emptyActions: "No hay tareas criticas por resolver.",
+  emptyAgenda: "No hay proximos turnos para mostrar.",
+  emptyAlerts: "Sin alertas activas.",
+  emptyOpportunities: "Sin oportunidades destacadas por ahora.",
 };
 
 const pageStyle: CSSProperties = {
-  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  color: carbon.black,
   display: "grid",
   gap: 24,
+  color: colors2000s.text.primary,
 };
 
 const metricGridStyle: CSSProperties = {
@@ -126,66 +163,61 @@ const metricGridStyle: CSSProperties = {
   gap: 16,
 };
 
-const dashboardLayoutStyle: CSSProperties = {
+const boardGridStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "minmax(240px, 1fr) minmax(320px, 1.65fr) minmax(240px, 1fr)",
+  gridTemplateColumns: "minmax(0, 1.9fr) minmax(320px, 1fr)",
+  gap: 16,
+  alignItems: "start",
+};
+
+const lowerGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr)",
   gap: 16,
   alignItems: "start",
 };
 
 const panelStyle: CSSProperties = {
-  background: carbon.white,
-  border: `1px solid ${carbon.gray20}`,
-  borderRadius: 8,
+  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+  border: `1px solid ${colors2000s.border.default}`,
+  borderRadius: 24,
+  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`,
   minWidth: 0,
-};
-
-const panelHeaderStyle: CSSProperties = {
-  padding: 16,
-  borderBottom: `1px solid ${carbon.gray20}`,
-};
-
-const panelTitleStyle: CSSProperties = {
-  margin: 0,
-  color: carbon.black,
-  fontSize: 14,
-  lineHeight: "20px",
-  fontWeight: 600,
-  letterSpacing: 0,
+  overflow: "hidden",
 };
 
 const panelBodyStyle: CSSProperties = {
-  padding: 16,
+  padding: 24,
 };
 
-const listStyle: CSSProperties = {
-  display: "grid",
-  gap: 8,
+const subtleTextStyle: CSSProperties = {
+  color: colors2000s.text.secondary,
+  fontSize: 12,
+  lineHeight: "16px",
+  fontWeight: 700,
+};
+
+const headlineStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 28,
+  lineHeight: "32px",
+  fontWeight: 900,
+  color: colors2000s.text.primary,
+  letterSpacing: "-0.02em",
+  textTransform: "uppercase",
 };
 
 const emptyStyle: CSSProperties = {
   margin: 0,
   padding: 16,
-  background: carbon.gray10,
-  borderRadius: 8,
-  color: carbon.gray60,
+  borderRadius: 16,
+  border: `1px dashed ${colors2000s.border.default}`,
+  background: "rgba(255, 255, 255, 0.45)",
+  color: colors2000s.text.secondary,
   fontSize: 12,
   lineHeight: "16px",
+  fontWeight: 700,
 };
-
-const toneBorder = (tone: Tone = "neutral") => {
-  if (tone === "primary") return carbon.blue;
-  if (tone === "warning") return carbon.warning;
-  if (tone === "danger") return carbon.danger;
-  if (tone === "success") return carbon.success;
-  return carbon.gray20;
-};
-
-const formatCurrency = (value: number | string | null | undefined) =>
-  currencyFormatter.format(Number(value ?? 0));
-
-const formatPercent = (value: number | null | undefined) =>
-  `${percentFormatter.format(Number(value ?? 0))}%`;
 
 const canViewReports = (role: string | undefined, isGlobalAdmin: boolean) =>
   isGlobalAdmin || role === ROLE_STORE_ADMIN || role === ROLE_SUPER_ADMIN || role === ROLE_PROFESSIONAL;
@@ -199,6 +231,48 @@ const getAppointmentTone = (status: string): Tone => {
   if (["CONFIRMED", "COMPLETED"].includes(status)) return "success";
   return "neutral";
 };
+
+const toneTokens = (tone: Tone = "neutral") => {
+  if (tone === "primary") {
+    return {
+      border: colors2000s.orange.accent,
+      accent: colors2000s.orange.accent,
+      background: "rgba(255, 140, 66, 0.12)",
+    };
+  }
+  if (tone === "success") {
+    return {
+      border: "rgba(16, 185, 129, 0.45)",
+      accent: "#0f9f6e",
+      background: "rgba(16, 185, 129, 0.1)",
+    };
+  }
+  if (tone === "warning") {
+    return {
+      border: "rgba(245, 158, 11, 0.42)",
+      accent: "#b76a00",
+      background: "rgba(245, 158, 11, 0.12)",
+    };
+  }
+  if (tone === "danger") {
+    return {
+      border: "rgba(239, 68, 68, 0.38)",
+      accent: "#d13b3b",
+      background: "rgba(239, 68, 68, 0.1)",
+    };
+  }
+  return {
+    border: colors2000s.border.light,
+    accent: colors2000s.text.secondary,
+    background: "rgba(255, 255, 255, 0.45)",
+  };
+};
+
+const formatCurrency = (value: number | string | null | undefined) =>
+  currencyFormatter.format(Number(value ?? 0));
+
+const formatPercent = (value: number | null | undefined) =>
+  `${percentFormatter.format(Number(value ?? 0))}%`;
 
 const getTopProfessional = (items: ProfessionalReportItem[] | undefined) =>
   [...(items ?? [])].sort(
@@ -216,7 +290,7 @@ const mapAgenda = (appointments: UpcomingAppointment[] | undefined): AgendaItem[
   }));
 
 const mapTopServices = (items: ReportTopServiceItem[] | undefined): RankedItem[] =>
-  (items ?? []).slice(0, 3).map((item) => ({
+  (items ?? []).slice(0, 4).map((item) => ({
     id: item.service_id,
     label: item.service_name,
     value: formatCurrency(item.revenue),
@@ -251,8 +325,86 @@ const Dashboard = () => {
   const outstandingBalance = Number(
     ledgerQuery.data?.total_balance ?? reportsQuery.data?.debt_summary.outstanding_balance ?? 0
   );
-  const debtorsCount = Number(ledgerQuery.data?.debtors_count ?? reportsQuery.data?.debt_summary.debtors_count ?? 0);
+  const debtorsCount = Number(
+    ledgerQuery.data?.debtors_count ?? reportsQuery.data?.debt_summary.debtors_count ?? 0
+  );
   const topProfessional = getTopProfessional(professionalsQuery.data?.professionals);
+  const upcomingAppointments = summaryQuery.data?.upcoming_appointments ?? [];
+  const occupancy = Number(stats?.occupancy_rate ?? 0);
+  const availableCapacity = Math.max(0, 100 - occupancy);
+  const paymentErrors =
+    Number(outboxQuery.data?.pending_with_error ?? 0) + Number(paymentsQuery.data?.failed_webhooks ?? 0);
+
+  const hero = useMemo<DashboardHero>(() => {
+    const statusLabel =
+      paymentErrors > 0 || Number(stats?.pending_confirmations ?? 0) > 0 || debtorsCount > 0
+        ? "requiere seguimiento"
+        : "estable";
+
+    return {
+      title: "Hoy en Shifty",
+      description: `${numberFormatter.format(stats?.appointments_today ?? 0)} turnos, ${numberFormatter.format(
+        stats?.pending_confirmations ?? 0
+      )} pendientes, ocupacion ${formatPercent(stats?.occupancy_rate)}.`,
+      periodLabel: "Corte operativo: hoy + ultimos 7 dias",
+      statusLabel,
+      health: [
+        {
+          id: "agenda",
+          label: "Agenda",
+          value:
+            Number(stats?.pending_confirmations ?? 0) > 0
+              ? `${numberFormatter.format(stats?.pending_confirmations ?? 0)} pendientes`
+              : "al dia",
+          tone: Number(stats?.pending_confirmations ?? 0) > 0 ? "warning" : "success",
+        },
+        {
+          id: "pagos",
+          label: "Pagos",
+          value: !paymentsEnabled ? "deshabilitados" : paymentErrors > 0 ? `${numberFormatter.format(paymentErrors)} errores` : "sin fallas",
+          tone: !paymentsEnabled ? "neutral" : paymentErrors > 0 ? "danger" : "success",
+        },
+        {
+          id: "ledger",
+          label: "Ledger",
+          value: !ledgerEnabled ? "sin seguimiento" : debtorsCount > 0 ? `${numberFormatter.format(debtorsCount)} deudores` : "sin deuda",
+          tone: !ledgerEnabled ? "neutral" : debtorsCount > 0 ? "warning" : "success",
+        },
+        {
+          id: "ingresos",
+          label: "Ingresos",
+          value:
+            Number(stats?.revenue_trend ?? 0) < 0
+              ? `${formatPercent(stats?.revenue_trend)} vs semana pasada`
+              : `+${formatPercent(stats?.revenue_trend ?? 0)} de variacion`,
+          tone: Number(stats?.revenue_trend ?? 0) < 0 ? "warning" : "primary",
+        },
+      ],
+      quickActions: [
+        {
+          id: "agenda",
+          title: "Ver agenda",
+          description: "Gestionar turnos y estados",
+          tone: "primary",
+          onSelect: () => navigate("/dashboard/calendar"),
+        },
+        {
+          id: "cobros",
+          title: "Registrar cobro",
+          description: "Ir a pagos y conciliacion",
+          tone: "success",
+          onSelect: () => navigate(paymentsEnabled ? "/dashboard/payments" : "/dashboard/collections"),
+        },
+        {
+          id: "reportes",
+          title: "Abrir reportes",
+          description: "Revisar tendencia semanal",
+          tone: "neutral",
+          onSelect: () => navigate("/dashboard/reports"),
+        },
+      ],
+    };
+  }, [debtorsCount, ledgerEnabled, navigate, paymentErrors, paymentsEnabled, stats]);
 
   const todayMetrics = useMemo<MetricItem[]>(
     () => [
@@ -260,7 +412,7 @@ const Dashboard = () => {
         id: "appointments-today",
         label: "Turnos hoy",
         value: numberFormatter.format(stats?.appointments_today ?? 0),
-        detail: `${numberFormatter.format(stats?.pending_confirmations ?? 0)} pendientes`,
+        detail: `${numberFormatter.format(upcomingAppointments.length)} proximos en agenda`,
         tone: "primary",
         onSelect: () => navigate("/dashboard/calendar"),
       },
@@ -268,15 +420,15 @@ const Dashboard = () => {
         id: "occupancy",
         label: "Ocupacion",
         value: formatPercent(stats?.occupancy_rate),
-        detail: "Capacidad tomada hoy",
-        tone: Number(stats?.occupancy_rate ?? 0) >= 85 ? "warning" : "neutral",
+        detail: `${formatPercent(availableCapacity)} de capacidad libre`,
+        tone: occupancy >= 85 ? "warning" : "neutral",
         onSelect: () => navigate("/dashboard/reports"),
       },
       {
         id: "new-clients",
         label: "Clientes nuevos",
         value: numberFormatter.format(stats?.new_clients_last_30d ?? 0),
-        detail: "Ultimos 30 dias",
+        detail: `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`,
         tone: "success",
         onSelect: () => navigate("/dashboard/users"),
       },
@@ -284,16 +436,52 @@ const Dashboard = () => {
         id: "weekly-revenue",
         label: "Ingreso semanal",
         value: formatCurrency(stats?.weekly_revenue),
-        detail: `${formatPercent(stats?.revenue_trend)} vs semana anterior`,
+        detail: `${Number(stats?.revenue_trend ?? 0) >= 0 ? "+" : ""}${formatPercent(
+          stats?.revenue_trend
+        )} vs semana pasada`,
         tone: Number(stats?.revenue_trend ?? 0) < 0 ? "warning" : "success",
         onSelect: () => navigate("/dashboard/reports"),
       },
     ],
-    [navigate, stats]
+    [availableCapacity, clientStats?.returning_clients, navigate, occupancy, stats, upcomingAppointments.length]
+  );
+
+  const operationCards = useMemo<DashboardOperationCard[]>(
+    () => [
+      {
+        title: "Pendientes por confirmar",
+        detail:
+          Number(stats?.pending_confirmations ?? 0) > 0
+            ? "Hay reservas esperando decision"
+            : "No hay confirmaciones pendientes",
+        meta: numberFormatter.format(stats?.pending_confirmations ?? 0),
+        tone: Number(stats?.pending_confirmations ?? 0) > 0 ? "warning" : "success",
+      },
+      {
+        title: "Capacidad disponible",
+        detail: "Espacio operativo libre para hoy",
+        meta: formatPercent(availableCapacity),
+        tone: availableCapacity < 15 ? "danger" : availableCapacity < 35 ? "warning" : "success",
+      },
+      {
+        title: "Cancelaciones",
+        detail: "Impacto registrado en el periodo",
+        meta: numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
+        tone: Number(reportStats?.cancelled_appointments ?? 0) > 0 ? "warning" : "neutral",
+      },
+      {
+        title: "Profesional destacado",
+        detail: topProfessional ? topProfessional.staff_name : "Sin lider claro",
+        meta: topProfessional ? formatPercent(topProfessional.occupancy_rate) : "--",
+        tone: topProfessional ? "primary" : "neutral",
+      },
+    ],
+    [availableCapacity, reportStats?.cancelled_appointments, stats?.pending_confirmations, topProfessional]
   );
 
   const urgentActions = useMemo<ActionItem[]>(() => {
     const items: ActionItem[] = [];
+
     if (Number(stats?.pending_confirmations ?? 0) > 0) {
       items.push({
         id: "confirmations",
@@ -304,6 +492,7 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/calendar"),
       });
     }
+
     if (Number(paymentsQuery.data?.pending_payments ?? 0) > 0) {
       items.push({
         id: "pending-payments",
@@ -314,18 +503,18 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/payments"),
       });
     }
-    if (Number(outboxQuery.data?.pending_with_error ?? 0) > 0 || Number(paymentsQuery.data?.failed_webhooks ?? 0) > 0) {
+
+    if (paymentErrors > 0) {
       items.push({
         id: "payment-sync",
         title: "Corregir sincronizacion de pagos",
         description: "Hay webhooks u outbox con error",
-        meta: numberFormatter.format(
-          Number(outboxQuery.data?.pending_with_error ?? 0) + Number(paymentsQuery.data?.failed_webhooks ?? 0)
-        ),
+        meta: numberFormatter.format(paymentErrors),
         tone: "danger",
         onSelect: () => navigate("/dashboard/payments"),
       });
     }
+
     if (debtorsCount > 0) {
       items.push({
         id: "debtors",
@@ -336,8 +525,9 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/ledger"),
       });
     }
+
     return items;
-  }, [debtorsCount, navigate, outboxQuery.data, outstandingBalance, paymentsQuery.data, stats]);
+  }, [debtorsCount, navigate, outstandingBalance, paymentErrors, paymentsQuery.data, stats]);
 
   const moneyMetrics = useMemo<MetricItem[]>(
     () => [
@@ -353,7 +543,7 @@ const Dashboard = () => {
         id: "average-ticket",
         label: "Ticket promedio",
         value: formatCurrency(reportStats?.average_ticket),
-        detail: "Ultimos 7 dias",
+        detail: "Promedio movil de 7 dias",
         tone: "neutral",
         onSelect: () => navigate("/dashboard/reports"),
       },
@@ -361,7 +551,7 @@ const Dashboard = () => {
         id: "outstanding-balance",
         label: "Saldo pendiente",
         value: formatCurrency(outstandingBalance),
-        detail: `${numberFormatter.format(debtorsCount)} deudores`,
+        detail: `${numberFormatter.format(debtorsCount)} clientes con deuda`,
         tone: debtorsCount > 0 ? "warning" : "neutral",
         onSelect: () => navigate("/dashboard/ledger"),
       },
@@ -371,6 +561,7 @@ const Dashboard = () => {
 
   const performanceItems = useMemo<RankedItem[]>(() => {
     const items = mapTopServices(reportsQuery.data?.top_services);
+
     if (topProfessional) {
       items.unshift({
         id: topProfessional.staff_id,
@@ -379,19 +570,22 @@ const Dashboard = () => {
         detail: `${formatCurrency(topProfessional.revenue)} por profesional`,
       });
     }
+
     if (clientStats) {
       items.push({
         id: "returning-clients",
         label: "Clientes recurrentes",
         value: numberFormatter.format(clientStats.returning_clients),
-        detail: `${numberFormatter.format(clientStats.new_clients)} nuevos`,
+        detail: `${numberFormatter.format(clientStats.new_clients)} nuevos en el periodo`,
       });
     }
+
     return items.slice(0, 5);
   }, [clientStats, reportsQuery.data?.top_services, topProfessional]);
 
   const alerts = useMemo<ActionItem[]>(() => {
     const items: ActionItem[] = [];
+
     if (featureFlagsQuery.isSuccess && !paymentsEnabled) {
       items.push({
         id: "payments-disabled",
@@ -401,6 +595,7 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/settings"),
       });
     }
+
     if (featureFlagsQuery.isSuccess && !ledgerEnabled) {
       items.push({
         id: "ledger-disabled",
@@ -410,6 +605,7 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/settings"),
       });
     }
+
     if (Number(reportStats?.cancelled_appointments ?? 0) > 0) {
       items.push({
         id: "cancellations",
@@ -420,6 +616,7 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/reports"),
       });
     }
+
     if (Number(stats?.revenue_trend ?? 0) < -15) {
       items.push({
         id: "revenue-drop",
@@ -429,18 +626,65 @@ const Dashboard = () => {
         onSelect: () => navigate("/dashboard/reports"),
       });
     }
+
     return items;
   }, [featureFlagsQuery.isSuccess, ledgerEnabled, navigate, paymentsEnabled, reportStats, stats]);
 
+  const opportunities = useMemo<OpportunityItem[]>(() => {
+    const items: OpportunityItem[] = [];
+
+    if (availableCapacity >= 35) {
+      items.push({
+        id: "low-occupancy",
+        title: "Dia con capacidad libre",
+        description: `Queda ${formatPercent(availableCapacity)} sin ocupar. Conviene reforzar agenda o activar promociones.`,
+        tone: "primary",
+        actionLabel: "Ver agenda",
+        onSelect: () => navigate("/dashboard/calendar"),
+      });
+    }
+
+    if (topProfessional && topProfessional.occupancy_rate >= 70) {
+      items.push({
+        id: "top-professional",
+        title: "Hay una referencia clara para replicar",
+        description: `${topProfessional.staff_name} lidera con ${formatPercent(
+          topProfessional.occupancy_rate
+        )}. Sirve como benchmark interno.`,
+        tone: "success",
+        actionLabel: "Ver rendimiento",
+        onSelect: () => navigate("/dashboard/reports"),
+      });
+    }
+
+    if (clientStats && clientStats.new_clients > 0) {
+      items.push({
+        id: "client-growth",
+        title: "Base de clientes en movimiento",
+        description: `${numberFormatter.format(
+          clientStats.new_clients
+        )} clientes nuevos ingresaron al periodo. Conviene trabajar recurrencia y rebook.`,
+        tone: "warning",
+        actionLabel: "Abrir usuarios",
+        onSelect: () => navigate("/dashboard/users"),
+      });
+    }
+
+    return items.slice(0, 3);
+  }, [availableCapacity, clientStats, navigate, topProfessional]);
+
   return (
     <EnterpriseDashboard
-      copy={dashboardCopy}
+      copy={copy}
+      hero={hero}
       todayMetrics={todayMetrics}
       urgentActions={urgentActions}
-      agenda={mapAgenda(summaryQuery.data?.upcoming_appointments)}
+      agenda={mapAgenda(upcomingAppointments)}
+      operationCards={operationCards}
       moneyMetrics={moneyMetrics}
       performanceItems={performanceItems}
       alerts={alerts}
+      opportunities={opportunities}
       isLoading={summaryQuery.isLoading}
       errorMessage={summaryQuery.isError ? "No se pudo cargar el resumen operativo." : undefined}
     />
@@ -449,80 +693,100 @@ const Dashboard = () => {
 
 function EnterpriseDashboard({
   copy,
+  hero,
   todayMetrics,
   urgentActions,
   agenda,
+  operationCards,
   moneyMetrics,
   performanceItems,
   alerts,
+  opportunities,
   isLoading,
   errorMessage,
 }: EnterpriseDashboardProps) {
   if (isLoading) {
     return (
       <main style={pageStyle}>
-        <div style={{ ...panelStyle, padding: 24, color: carbon.gray60 }}>Cargando dashboard...</div>
+        <div style={{ ...panelStyle, ...panelBodyStyle, color: colors2000s.text.secondary, fontWeight: 700 }}>
+          Cargando dashboard...
+        </div>
       </main>
     );
   }
 
   return (
     <main style={pageStyle}>
-      {errorMessage && (
-        <div
-          style={{
-            ...panelStyle,
-            padding: 16,
-            borderColor: carbon.danger,
-            color: carbon.danger,
-            fontSize: 14,
-            lineHeight: "20px",
-          }}
-        >
-          {errorMessage}
-        </div>
-      )}
+      {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
 
-      <section style={metricGridStyle}>
-        {todayMetrics.map((metric) => (
-          <MetricCard key={metric.id} item={metric} />
-        ))}
+      <HeroPanel hero={hero} />
+
+      <section>
+        <SectionHeader
+          icon={<LayoutDashboard size={18} />}
+          title={copy.metricsTitle}
+          description="Cuatro senales para entender el pulso del negocio antes de entrar al detalle."
+        />
+        <div style={metricGridStyle}>
+          {todayMetrics.map((metric) => (
+            <MetricCard key={metric.id} item={metric} emphasis />
+          ))}
+        </div>
       </section>
 
-      <section style={dashboardLayoutStyle} className="enterprise-dashboard-layout">
-        <Panel title={copy.actionsTitle}>
-          <ActionList items={urgentActions} emptyText={copy.emptyActions} />
-        </Panel>
+      <section style={boardGridStyle} className="dashboard-board-grid">
+        <OperationPanel title={copy.operationsTitle} description={copy.operationsDescription} agenda={agenda} cards={operationCards} />
 
-        <Panel title={copy.agendaTitle} className="enterprise-dashboard-agenda">
-          <AgendaList items={agenda} emptyText={copy.emptyAgenda} />
-        </Panel>
+        <div style={{ display: "grid", gap: 16 }}>
+          <Panel
+            title={copy.actionsTitle}
+            description="Lo que merece atencion inmediata."
+            icon={<CircleAlert size={18} />}
+          >
+            <ActionList items={urgentActions} emptyText={copy.emptyActions} />
+          </Panel>
 
-        <Panel title={copy.moneyTitle}>
-          <MetricStack items={moneyMetrics} />
-        </Panel>
+          <Panel
+            title={copy.moneyTitle}
+            description="Cobros, ticket y deuda actual."
+            icon={<Wallet size={18} />}
+          >
+            <MetricStack items={moneyMetrics} />
+          </Panel>
+        </div>
+      </section>
 
-        <Panel title={copy.performanceTitle}>
+      <section style={lowerGridStyle} className="dashboard-lower-grid">
+        <Panel
+          title={copy.performanceTitle}
+          description="Servicios, profesionales y recurrencia."
+          icon={<TrendingUp size={18} />}
+        >
           <RankedList items={performanceItems} />
         </Panel>
 
-        <Panel title={copy.alertsTitle}>
+        <Panel
+          title={copy.alertsTitle}
+          description="Desvios, caidas y modulos fuera de regimen."
+          icon={<CircleAlert size={18} />}
+        >
           <ActionList items={alerts} emptyText={copy.emptyAlerts} compact />
+        </Panel>
+
+        <Panel
+          title={copy.opportunitiesTitle}
+          description="Espacios para crecer o corregir rapido."
+          icon={<Sparkles size={18} />}
+        >
+          <OpportunityList items={opportunities} emptyText={copy.emptyOpportunities} />
         </Panel>
       </section>
 
       <style>
         {`
           @media (max-width: 1200px) {
-            .enterprise-dashboard-layout {
-              grid-template-columns: 1fr 1fr !important;
-            }
-            .enterprise-dashboard-agenda {
-              grid-row: auto !important;
-            }
-          }
-          @media (max-width: 760px) {
-            .enterprise-dashboard-layout {
+            .dashboard-board-grid,
+            .dashboard-lower-grid {
               grid-template-columns: 1fr !important;
             }
           }
@@ -532,7 +796,224 @@ function EnterpriseDashboard({
   );
 }
 
-function MetricCard({ item }: { item: MetricItem }) {
+function HeroPanel({ hero }: { hero: DashboardHero }) {
+  return (
+    <section
+      style={{
+        ...panelStyle,
+        padding: 0,
+      }}
+    >
+      <div
+        style={{
+          padding: 24,
+          display: "grid",
+          gap: 24,
+          background: [
+            "radial-gradient(circle at top right, rgba(255, 140, 66, 0.18), transparent 34%)",
+            `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+          ].join(", "),
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 24, flexWrap: "wrap" }}>
+          <div style={{ display: "grid", gap: 8, minWidth: 280 }}>
+            <span style={{ ...subtleTextStyle, textTransform: "uppercase", letterSpacing: "0.12em" }}>{hero.periodLabel}</span>
+            <h2 style={headlineStyle}>{hero.title}</h2>
+            <p style={{ margin: 0, color: colors2000s.text.secondary, fontSize: 14, lineHeight: "20px", fontWeight: 700 }}>
+              {hero.description}
+            </p>
+          </div>
+
+          <div
+            style={{
+              alignSelf: "start",
+              padding: "10px 14px",
+              borderRadius: 999,
+              background: "rgba(255, 255, 255, 0.9)",
+              border: `1px solid ${colors2000s.border.default}`,
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+              color: colors2000s.text.secondary,
+              fontSize: 12,
+              lineHeight: "16px",
+              fontWeight: 900,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+            }}
+          >
+            Estado general: <span style={{ color: colors2000s.orange.accent }}>{hero.statusLabel}</span>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+          {hero.health.map((item) => (
+            <HealthPill key={item.id} item={item} />
+          ))}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+          {hero.quickActions.map((item) => (
+            <QuickActionCard key={item.id} item={item} />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ErrorPanel({ message }: { message: string }) {
+  return (
+    <div
+      style={{
+        ...panelStyle,
+        ...panelBodyStyle,
+        borderColor: "rgba(239, 68, 68, 0.42)",
+        color: "#d13b3b",
+        fontSize: 14,
+        lineHeight: "20px",
+        fontWeight: 800,
+      }}
+    >
+      {message}
+    </div>
+  );
+}
+
+function Panel({
+  title,
+  description,
+  icon,
+  children,
+}: {
+  title: string;
+  description: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section style={panelStyle}>
+      <div style={{ ...panelBodyStyle, display: "grid", gap: 16 }}>
+        <SectionHeader icon={icon} title={title} description={description} />
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function SectionHeader({
+  icon,
+  title,
+  description,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+}) {
+  return (
+    <header style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 12,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "rgba(255, 140, 66, 0.12)",
+            border: `1px solid rgba(200, 90, 15, 0.25)`,
+            color: colors2000s.orange.accent,
+            boxShadow: colors2000s.shadows.insetLight,
+          }}
+        >
+          {icon}
+        </span>
+        <div style={{ display: "grid", gap: 2 }}>
+          <h3
+            style={{
+              margin: 0,
+              color: colors2000s.text.primary,
+              fontSize: 18,
+              lineHeight: "22px",
+              fontWeight: 900,
+              letterSpacing: "-0.02em",
+            }}
+          >
+            {title}
+          </h3>
+          <p style={{ margin: 0, ...subtleTextStyle }}>{description}</p>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function OperationPanel({
+  title,
+  description,
+  agenda,
+  cards,
+}: {
+  title: string;
+  description: string;
+  agenda: AgendaItem[];
+  cards: DashboardOperationCard[];
+}) {
+  return (
+    <section style={panelStyle}>
+      <div style={{ ...panelBodyStyle, display: "grid", gap: 20 }}>
+        <SectionHeader icon={<CalendarClock size={18} />} title={title} description={description} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(240px, 0.9fr)", gap: 16 }} className="dashboard-operations-inner">
+          <div style={{ display: "grid", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                padding: "12px 16px",
+                borderRadius: 16,
+                background: "rgba(255, 255, 255, 0.72)",
+                border: `1px solid ${colors2000s.border.light}`,
+                boxShadow: colors2000s.shadows.insetLight,
+              }}
+            >
+              <div style={{ display: "grid", gap: 2 }}>
+                <strong style={{ fontSize: 13, lineHeight: "18px", fontWeight: 900, color: colors2000s.text.primary }}>
+                  Proximos movimientos de agenda
+                </strong>
+                <span style={subtleTextStyle}>Lo inmediato, antes de abrir el calendario completo.</span>
+              </div>
+              <Clock3 size={18} color={colors2000s.orange.accent} />
+            </div>
+
+            <AgendaList items={agenda} emptyText={copy.emptyAgenda} />
+          </div>
+
+          <div style={{ display: "grid", gap: 12 }}>
+            {cards.map((card) => (
+              <DashboardSignalCard key={card.title} card={card} />
+            ))}
+          </div>
+        </div>
+
+        <style>
+          {`
+            @media (max-width: 900px) {
+              .dashboard-operations-inner {
+                grid-template-columns: 1fr !important;
+              }
+            }
+          `}
+        </style>
+      </div>
+    </section>
+  );
+}
+
+function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: boolean }) {
+  const tone = toneTokens(item.tone);
+
   return (
     <button
       type="button"
@@ -540,33 +1021,85 @@ function MetricCard({ item }: { item: MetricItem }) {
       style={{
         display: "grid",
         gap: 8,
-        minHeight: 104,
+        minHeight: emphasis ? 128 : 112,
         padding: 16,
-        background: carbon.white,
-        border: `1px solid ${toneBorder(item.tone)}`,
-        borderRadius: 8,
-        color: carbon.black,
+        background: emphasis ? "rgba(255, 255, 255, 0.82)" : "rgba(255, 255, 255, 0.65)",
+        border: `1px solid ${tone.border}`,
+        borderRadius: 20,
+        boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+        color: colors2000s.text.primary,
         textAlign: "left",
         cursor: item.onSelect ? "pointer" : "default",
       }}
     >
-      <span style={{ color: carbon.gray60, fontSize: 12, lineHeight: "16px" }}>{item.label}</span>
-      <strong style={{ color: item.tone === "primary" ? carbon.blue : carbon.black, fontSize: 28, lineHeight: "32px", fontWeight: 600 }}>
+      <span style={{ ...subtleTextStyle, textTransform: "uppercase", letterSpacing: "0.08em" }}>{item.label}</span>
+      <strong
+        style={{
+          color: item.tone === "primary" ? colors2000s.orange.accent : colors2000s.text.primary,
+          fontSize: emphasis ? 32 : 26,
+          lineHeight: emphasis ? "36px" : "30px",
+          fontWeight: 900,
+          letterSpacing: "-0.03em",
+        }}
+      >
         {item.value}
       </strong>
-      {item.detail && <span style={{ color: carbon.gray60, fontSize: 12, lineHeight: "16px" }}>{item.detail}</span>}
+      {item.detail ? <span style={{ color: tone.accent, fontSize: 12, lineHeight: "16px", fontWeight: 800 }}>{item.detail}</span> : null}
     </button>
   );
 }
 
-function Panel({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
+function MetricStack({ items }: { items: MetricItem[] }) {
   return (
-    <section style={panelStyle} className={className}>
-      <header style={panelHeaderStyle}>
-        <h2 style={panelTitleStyle}>{title}</h2>
-      </header>
-      <div style={panelBodyStyle}>{children}</div>
-    </section>
+    <div style={{ display: "grid", gap: 12 }}>
+      {items.map((item) => (
+        <MetricCard key={item.id} item={item} />
+      ))}
+    </div>
+  );
+}
+
+function HealthPill({ item }: { item: HealthItem }) {
+  const tone = toneTokens(item.tone);
+
+  return (
+    <div
+      style={{
+        padding: "14px 16px",
+        borderRadius: 18,
+        border: `1px solid ${tone.border}`,
+        background: tone.background,
+        boxShadow: colors2000s.shadows.insetLight,
+        display: "grid",
+        gap: 4,
+      }}
+    >
+      <span style={{ ...subtleTextStyle, textTransform: "uppercase", letterSpacing: "0.08em" }}>{item.label}</span>
+      <strong style={{ color: tone.accent, fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.value}</strong>
+    </div>
+  );
+}
+
+function QuickActionCard({ item }: { item: ActionItem }) {
+  const tone = toneTokens(item.tone);
+
+  return (
+    <button
+      type="button"
+      onClick={item.onSelect}
+      style={{
+        ...buttonStyles2000s.default,
+        borderRadius: 20,
+        padding: 16,
+        textAlign: "left",
+        display: "grid",
+        gap: 6,
+        borderColor: tone.border,
+      }}
+    >
+      <strong style={{ color: colors2000s.text.primary, fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.title}</strong>
+      {item.description ? <span style={{ color: colors2000s.text.secondary, fontSize: 12, lineHeight: "16px", fontWeight: 700 }}>{item.description}</span> : null}
+    </button>
   );
 }
 
@@ -582,41 +1115,56 @@ function ActionList({
   if (!items.length) return <EmptyState text={emptyText} />;
 
   return (
-    <div style={listStyle}>
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          onClick={item.onSelect}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 16,
-            width: "100%",
-            minHeight: compact ? 48 : 56,
-            padding: 12,
-            background: carbon.gray10,
-            border: `1px solid ${toneBorder(item.tone)}`,
-            borderRadius: 8,
-            color: carbon.black,
-            cursor: item.onSelect ? "pointer" : "default",
-            textAlign: "left",
-          }}
-        >
-          <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
-            <strong style={{ fontSize: 14, lineHeight: "20px", fontWeight: 600 }}>{item.title}</strong>
-            {item.description && (
-              <small style={{ color: carbon.gray60, fontSize: 12, lineHeight: "16px" }}>{item.description}</small>
-            )}
-          </span>
-          {item.meta && (
-            <em style={{ color: carbon.gray80, fontSize: 12, lineHeight: "16px", fontStyle: "normal", whiteSpace: "nowrap" }}>
-              {item.meta}
-            </em>
-          )}
-        </button>
-      ))}
+    <div style={{ display: "grid", gap: 12 }}>
+      {items.map((item) => {
+        const tone = toneTokens(item.tone);
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={item.onSelect}
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
+              minHeight: compact ? 64 : 72,
+              padding: compact ? 14 : 16,
+              borderRadius: 18,
+              border: `1px solid ${tone.border}`,
+              background: tone.background,
+              boxShadow: colors2000s.shadows.insetLight,
+              color: colors2000s.text.primary,
+              cursor: item.onSelect ? "pointer" : "default",
+              textAlign: "left",
+            }}
+          >
+            <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
+              <strong style={{ fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.title}</strong>
+              {item.description ? (
+                <small style={{ color: colors2000s.text.secondary, fontSize: 12, lineHeight: "16px", fontWeight: 700 }}>
+                  {item.description}
+                </small>
+              ) : null}
+            </span>
+            {item.meta ? (
+              <em
+                style={{
+                  color: tone.accent,
+                  fontSize: 12,
+                  lineHeight: "16px",
+                  fontStyle: "normal",
+                  whiteSpace: "nowrap",
+                  fontWeight: 900,
+                }}
+              >
+                {item.meta}
+              </em>
+            ) : null}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -625,47 +1173,95 @@ function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: stri
   if (!items.length) return <EmptyState text={emptyText} />;
 
   return (
-    <div style={listStyle}>
-      {items.map((item) => (
-        <div
-          key={item.id}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 16,
-            minHeight: 56,
-            padding: 12,
-            background: carbon.gray10,
-            border: `1px solid ${toneBorder(item.tone)}`,
-            borderRadius: 8,
-            color: carbon.black,
-          }}
-        >
-          <time style={{ width: 48, color: carbon.gray80, fontSize: 12, lineHeight: "16px", fontWeight: 600 }}>
-            {item.time}
-          </time>
-          <span style={{ display: "grid", gap: 4, minWidth: 0, flex: 1 }}>
-            <strong style={{ fontSize: 14, lineHeight: "20px", fontWeight: 600 }}>{item.title}</strong>
-            {item.subtitle && <small style={{ color: carbon.gray60, fontSize: 12, lineHeight: "16px" }}>{item.subtitle}</small>}
-          </span>
-          {item.status && (
-            <em style={{ color: carbon.gray80, fontSize: 12, lineHeight: "16px", fontStyle: "normal", whiteSpace: "nowrap" }}>
-              {item.status}
-            </em>
-          )}
-        </div>
-      ))}
+    <div style={{ display: "grid", gap: 10 }}>
+      {items.map((item) => {
+        const tone = toneTokens(item.tone);
+
+        return (
+          <div
+            key={item.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 16,
+              minHeight: 74,
+              padding: 14,
+              borderRadius: 18,
+              border: `1px solid ${tone.border}`,
+              background: "rgba(255, 255, 255, 0.68)",
+              boxShadow: colors2000s.shadows.insetLight,
+            }}
+          >
+            <div
+              style={{
+                width: 60,
+                alignSelf: "stretch",
+                borderRadius: 14,
+                display: "grid",
+                placeItems: "center",
+                background: tone.background,
+                border: `1px solid ${tone.border}`,
+              }}
+            >
+              <time style={{ color: tone.accent, fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.time}</time>
+            </div>
+
+            <span style={{ display: "grid", gap: 4, minWidth: 0, flex: 1 }}>
+              <strong style={{ fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.title}</strong>
+              {item.subtitle ? (
+                <small style={{ color: colors2000s.text.secondary, fontSize: 12, lineHeight: "16px", fontWeight: 700 }}>
+                  {item.subtitle}
+                </small>
+              ) : null}
+            </span>
+
+            {item.status ? (
+              <span
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  background: tone.background,
+                  border: `1px solid ${tone.border}`,
+                  color: tone.accent,
+                  fontSize: 10,
+                  lineHeight: "12px",
+                  fontWeight: 900,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {item.status}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function MetricStack({ items }: { items: MetricItem[] }) {
+function DashboardSignalCard({ card }: { card: DashboardOperationCard }) {
+  const tone = toneTokens(card.tone);
+
   return (
-    <div style={listStyle}>
-      {items.map((item) => (
-        <MetricCard key={item.id} item={item} />
-      ))}
+    <div
+      style={{
+        padding: 16,
+        borderRadius: 18,
+        background: tone.background,
+        border: `1px solid ${tone.border}`,
+        boxShadow: colors2000s.shadows.insetLight,
+        display: "grid",
+        gap: 8,
+      }}
+    >
+      <span style={{ ...subtleTextStyle, textTransform: "uppercase", letterSpacing: "0.08em" }}>{card.title}</span>
+      <strong style={{ color: tone.accent, fontSize: 22, lineHeight: "26px", fontWeight: 900 }}>{card.meta}</strong>
+      <p style={{ margin: 0, color: colors2000s.text.secondary, fontSize: 12, lineHeight: "16px", fontWeight: 700 }}>
+        {card.detail}
+      </p>
     </div>
   );
 }
@@ -674,32 +1270,120 @@ function RankedList({ items }: { items: RankedItem[] }) {
   if (!items.length) return <EmptyState text="Sin datos para este periodo." />;
 
   return (
-    <ol style={{ ...listStyle, listStyle: "none", margin: 0, padding: 0 }}>
-      {items.map((item) => (
+    <ol style={{ display: "grid", gap: 12, listStyle: "none", margin: 0, padding: 0 }}>
+      {items.map((item, index) => (
         <li
           key={item.id}
           style={{
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 16,
-            minHeight: 56,
-            padding: 12,
-            background: carbon.gray10,
-            border: "1px solid transparent",
-            borderRadius: 8,
+            gap: 14,
+            minHeight: 70,
+            padding: 14,
+            borderRadius: 18,
+            background: "rgba(255, 255, 255, 0.65)",
+            border: `1px solid ${colors2000s.border.light}`,
+            boxShadow: colors2000s.shadows.insetLight,
           }}
         >
-          <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
-            <strong style={{ fontSize: 14, lineHeight: "20px", fontWeight: 600 }}>{item.label}</strong>
-            {item.detail && <small style={{ color: carbon.gray60, fontSize: 12, lineHeight: "16px" }}>{item.detail}</small>}
-          </span>
-          <em style={{ color: carbon.gray80, fontSize: 12, lineHeight: "16px", fontStyle: "normal", whiteSpace: "nowrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            <span
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 12,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "rgba(255, 140, 66, 0.12)",
+                border: `1px solid rgba(200, 90, 15, 0.18)`,
+                color: colors2000s.orange.accent,
+                fontSize: 12,
+                lineHeight: "16px",
+                fontWeight: 900,
+              }}
+            >
+              {index + 1}
+            </span>
+            <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
+              <strong style={{ fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.label}</strong>
+              {item.detail ? (
+                <small style={{ color: colors2000s.text.secondary, fontSize: 12, lineHeight: "16px", fontWeight: 700 }}>
+                  {item.detail}
+                </small>
+              ) : null}
+            </span>
+          </div>
+          <em
+            style={{
+              color: colors2000s.orange.accent,
+              fontSize: 12,
+              lineHeight: "16px",
+              fontStyle: "normal",
+              whiteSpace: "nowrap",
+              fontWeight: 900,
+            }}
+          >
             {item.value}
           </em>
         </li>
       ))}
     </ol>
+  );
+}
+
+function OpportunityList({ items, emptyText }: { items: OpportunityItem[]; emptyText: string }) {
+  if (!items.length) return <EmptyState text={emptyText} />;
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {items.map((item) => {
+        const tone = toneTokens(item.tone);
+        return (
+          <div
+            key={item.id}
+            style={{
+              padding: 16,
+              borderRadius: 18,
+              background: "rgba(255, 255, 255, 0.62)",
+              border: `1px solid ${tone.border}`,
+              boxShadow: colors2000s.shadows.insetLight,
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "grid", gap: 4 }}>
+              <strong style={{ color: colors2000s.text.primary, fontSize: 14, lineHeight: "18px", fontWeight: 900 }}>{item.title}</strong>
+              <p style={{ margin: 0, color: colors2000s.text.secondary, fontSize: 12, lineHeight: "16px", fontWeight: 700 }}>
+                {item.description}
+              </p>
+            </div>
+
+            {item.actionLabel && item.onSelect ? (
+              <button
+                type="button"
+                onClick={item.onSelect}
+                style={{
+                  ...buttonStyles2000s.default,
+                  borderRadius: 14,
+                  padding: "10px 12px",
+                  justifySelf: "start",
+                  fontSize: 11,
+                  lineHeight: "14px",
+                  fontWeight: 900,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  color: tone.accent,
+                }}
+              >
+                {item.actionLabel}
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
