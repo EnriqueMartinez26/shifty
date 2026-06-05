@@ -11,6 +11,13 @@ const currencyFmt = new Intl.NumberFormat("es-AR", {
   maximumFractionDigits: 0,
 });
 
+const movementTypeLabels: Record<"charge" | "payment" | "adjustment" | "refund", string> = {
+  charge: "Cargo",
+  payment: "Pago",
+  adjustment: "Ajuste",
+  refund: "Devolucion",
+};
+
 const LedgerPage: React.FC = () => {
   const usersQuery = useManagedUsers(true);
   const summaryQuery = useLedgerSummary();
@@ -72,16 +79,16 @@ const LedgerPage: React.FC = () => {
       <div className="p-6 rounded-3xl flex flex-wrap items-start justify-between gap-4" style={cardStyle}>
         <div>
           <h2 className="text-2xl font-black uppercase tracking-tight" style={{ color: colors2000s.text.primary }}>
-            Ledger de clientes
+            Cuentas pendientes
           </h2>
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Cargos, pagos, ajustes y devoluciones por cliente.
+            Mira cuanto debe cada cliente, que pago y que quedo pendiente.
           </p>
         </div>
         {(usersQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading) && (
           <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>
             <Loader2 className="w-4 h-4 animate-spin" />
-            Cargando ledger...
+            Cargando cuentas pendientes...
           </div>
         )}
       </div>
@@ -95,7 +102,7 @@ const LedgerPage: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <div className="p-5 rounded-2xl" style={cardStyle}>
-          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Saldo total</p>
+          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Saldo pendiente total</p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
             {currencyFmt.format(Number(summaryQuery.data?.total_balance ?? 0))}
           </p>
@@ -107,7 +114,7 @@ const LedgerPage: React.FC = () => {
           </p>
         </div>
         <div className="p-5 rounded-2xl" style={cardStyle}>
-          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Deuda promedio</p>
+          <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: colors2000s.text.secondary }}>Saldo promedio</p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.orange.accent }}>
             {currencyFmt.format(Number(summaryQuery.data?.average_balance ?? 0))}
           </p>
@@ -148,10 +155,10 @@ const LedgerPage: React.FC = () => {
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
             >
-              <option value="charge">Charge</option>
-              <option value="payment">Payment</option>
-              <option value="adjustment">Adjustment</option>
-              <option value="refund">Refund</option>
+              <option value="charge">Cargo</option>
+              <option value="payment">Pago</option>
+              <option value="adjustment">Ajuste</option>
+              <option value="refund">Devolucion</option>
             </select>
             <input
               value={movementForm.amount}
@@ -166,7 +173,7 @@ const LedgerPage: React.FC = () => {
               onChange={(e) => setMovementForm((prev) => ({ ...prev, appointment_id: e.target.value }))}
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
-              placeholder="appointment_public_id opcional"
+              placeholder="Turno asociado (opcional)"
             />
             <textarea
               value={movementForm.notes}
@@ -176,7 +183,7 @@ const LedgerPage: React.FC = () => {
               placeholder="Notas"
             />
             <button type="submit" disabled={!selectedClientId || addMovement.isPending} className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50" style={buttonStyles2000s.selected}>
-              Registrar movimiento
+              Guardar movimiento
             </button>
           </form>
         </div>
@@ -185,7 +192,7 @@ const LedgerPage: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-black uppercase tracking-tight" style={{ color: colors2000s.text.primary }}>
-                Balance
+                Estado de cuenta
               </h3>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
                 Cliente seleccionado: {clients.find((client) => client.public_id === selectedClientId)?.email || "-"}
@@ -203,7 +210,7 @@ const LedgerPage: React.FC = () => {
             {ledgerQuery.data?.movements.map((movement) => (
               <div key={movement.public_id} className="rounded-2xl p-4 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3" style={{ border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.insetDark }}>
                 <div>
-                  <p className="text-sm font-black uppercase" style={{ color: colors2000s.text.primary }}>{movement.movement_type}</p>
+                  <p className="text-sm font-black uppercase" style={{ color: colors2000s.text.primary }}>{movementTypeLabels[movement.movement_type]}</p>
                   <p className="text-[11px] font-bold" style={{ color: colors2000s.text.secondary }}>
                     {new Date(movement.created_at).toLocaleString("es-AR")}
                     {movement.notes ? ` · ${movement.notes}` : ""}
@@ -219,7 +226,7 @@ const LedgerPage: React.FC = () => {
             ))}
             {!ledgerQuery.data?.movements.length && !ledgerQuery.isLoading && (
               <div className="rounded-2xl p-6 bg-white text-sm font-bold" style={{ border: `1px solid ${colors2000s.border.light}`, boxShadow: colors2000s.shadows.insetDark, color: colors2000s.text.secondary }}>
-                Este cliente todavia no tiene movimientos en el ledger.
+                Este cliente todavia no tiene movimientos registrados.
               </div>
             )}
           </div>
@@ -228,7 +235,7 @@ const LedgerPage: React.FC = () => {
         <div className="p-6 rounded-3xl space-y-4" style={cardStyle}>
           <div>
             <h3 className="text-lg font-black uppercase tracking-tight" style={{ color: colors2000s.text.primary }}>
-              Top deudores
+              Clientes con mayor deuda
             </h3>
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
               Clientes con mayor saldo pendiente.

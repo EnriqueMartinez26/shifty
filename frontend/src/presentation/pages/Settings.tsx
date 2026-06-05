@@ -47,9 +47,9 @@ const DEFAULT_FEATURE_FLAGS = {
 };
 
 const FEATURE_LABELS = [
-  { key: "payments", title: "Pagos y senas", description: "Mercado Pago, confirmacion manual, devoluciones y conciliacion." },
-  { key: "ledger", title: "Deuda / fiado", description: "Ledger de cliente con cargos, pagos, ajustes y refunds." },
-  { key: "advanced_reports", title: "Reportes avanzados", description: "Metricas por tienda/profesional y exportacion." },
+  { key: "payments", title: "Cobros online y senas", description: "Mercado Pago, confirmacion manual, devoluciones y actualizacion de pagos." },
+  { key: "ledger", title: "Deuda / fiado", description: "Cuenta pendiente por cliente con cargos, pagos, ajustes y devoluciones." },
+  { key: "advanced_reports", title: "Reportes avanzados", description: "Metricas por tienda o profesional y exportacion." },
   { key: "new_calendar", title: "Agenda nueva", description: "Disponibilidad con bloqueos, gaps y estados extendidos." },
   { key: "otp_booking", title: "OTP en reserva publica", description: "Validacion por SMS o WhatsApp antes de reservar." },
 ] as const;

@@ -381,14 +381,14 @@ const Dashboard = () => {
         },
         {
           id: "pagos",
-          label: "Pagos",
+          label: "Cobros online",
           value: !paymentsEnabled ? "deshabilitados" : paymentErrors > 0 ? `${numberFormatter.format(paymentErrors)} errores` : "sin fallas",
           tone: !paymentsEnabled ? "neutral" : paymentErrors > 0 ? "danger" : "success",
         },
         {
           id: "ledger",
-          label: "Ledger",
-          value: !ledgerEnabled ? "sin seguimiento" : debtorsCount > 0 ? `${numberFormatter.format(debtorsCount)} deudores` : "sin deuda",
+          label: "Cuentas pendientes",
+          value: !ledgerEnabled ? "desactivadas" : debtorsCount > 0 ? `${numberFormatter.format(debtorsCount)} clientes con deuda` : "sin deuda",
           tone: !ledgerEnabled ? "neutral" : debtorsCount > 0 ? "warning" : "success",
         },
         {
@@ -412,9 +412,9 @@ const Dashboard = () => {
         {
           id: "cobros",
           title: "Registrar cobro",
-          description: "Ir a pagos y conciliacion",
+          description: "Ir a cobros pendientes del dia",
           tone: "success",
-          onSelect: () => navigate(paymentsEnabled ? "/dashboard/payments" : "/dashboard/collections"),
+          onSelect: () => navigate("/dashboard/collections"),
         },
         {
           id: "reportes",
@@ -525,19 +525,19 @@ const Dashboard = () => {
     if (Number(paymentsQuery.data?.pending_payments ?? 0) > 0) {
       items.push({
         id: "pending-payments",
-        title: "Revisar pagos pendientes",
+        title: "Revisar cobros pendientes",
         description: formatCurrency(paymentsQuery.data?.total_pending_amount),
         meta: numberFormatter.format(paymentsQuery.data?.pending_payments ?? 0),
         tone: "warning",
-        onSelect: () => navigate("/dashboard/payments"),
+        onSelect: () => navigate("/dashboard/collections"),
       });
     }
 
     if (paymentErrors > 0) {
       items.push({
         id: "payment-sync",
-        title: "Corregir sincronizacion de pagos",
-        description: "Hay webhooks u outbox con error",
+        title: "Revisar cobros online",
+        description: "Hay pagos pendientes de actualizar",
         meta: numberFormatter.format(paymentErrors),
         tone: "danger",
         onSelect: () => navigate("/dashboard/payments"),
@@ -566,7 +566,7 @@ const Dashboard = () => {
         value: formatCurrency(paymentsQuery.data?.total_approved_amount ?? reportStats?.total_revenue),
         detail: paymentsEnabled ? "Pagos aprobados y manuales" : "Ingresos por turnos",
         tone: "success",
-        onSelect: () => navigate(paymentsEnabled ? "/dashboard/payments" : "/dashboard/reports"),
+        onSelect: () => navigate(paymentsEnabled ? "/dashboard/collections" : "/dashboard/reports"),
       },
       {
         id: "average-ticket",
@@ -618,8 +618,8 @@ const Dashboard = () => {
     if (featureFlagsQuery.isSuccess && !paymentsEnabled) {
       items.push({
         id: "payments-disabled",
-        title: "Pagos deshabilitados",
-        description: "No hay conciliacion automatica activa",
+        title: "Cobros online desactivados",
+        description: "No hay cobro automatico activo",
         tone: "neutral",
         onSelect: () => navigate("/dashboard/settings"),
       });
@@ -628,8 +628,8 @@ const Dashboard = () => {
     if (featureFlagsQuery.isSuccess && !ledgerEnabled) {
       items.push({
         id: "ledger-disabled",
-        title: "Ledger deshabilitado",
-        description: "No se registra deuda por cliente",
+        title: "Cuentas pendientes desactivadas",
+        description: "No se lleva la deuda de cada cliente",
         tone: "neutral",
         onSelect: () => navigate("/dashboard/settings"),
       });

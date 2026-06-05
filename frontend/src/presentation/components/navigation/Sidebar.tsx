@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   mdiAccountGroup,
   mdiBriefcase,
-  mdiCalculator,
+  mdiCashClock,
   mdiCalendar,
   mdiChartBar,
   mdiChevronRight,
@@ -12,6 +12,7 @@ import {
   mdiLogout,
   mdiShieldCheck,
   mdiStore,
+  mdiTagOutline,
   mdiViewDashboard,
   mdiWalletOutline,
 } from "@mdi/js";
@@ -54,20 +55,26 @@ const menuItems: MenuItem[] = [
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL],
   },
   {
-    iconPath: mdiCalculator,
-    label: "Presupuesto",
-    path: "/dashboard/budget",
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN],
-  },
-  {
     iconPath: mdiCreditCardOutline,
-    label: "Pagos",
+    label: "Cobros online",
     path: "/dashboard/payments",
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL],
   },
   {
+    iconPath: mdiCashClock,
+    label: "Cobros",
+    path: "/dashboard/collections",
+    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL],
+  },
+  {
+    iconPath: mdiTagOutline,
+    label: "Promociones",
+    path: "/dashboard/promotions",
+    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN],
+  },
+  {
     iconPath: mdiWalletOutline,
-    label: "Ledger",
+    label: "Cuentas pendientes",
     path: "/dashboard/ledger",
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL],
   },
@@ -91,7 +98,7 @@ const menuItems: MenuItem[] = [
   },
   {
     iconPath: mdiCog,
-    label: "Configuracion",
+    label: "Configuración",
     path: "/dashboard/settings",
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN],
   },
@@ -238,7 +245,7 @@ const Sidebar: React.FC = () => {
               ].join(" "),
             }}
           />
-          <span>Cerrar Sesion</span>
+          <span>Cerrar sesión</span>
         </button>
       </div>
     </aside>
