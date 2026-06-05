@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.feature_flags import is_store_feature_enabled
@@ -120,6 +121,20 @@ def _validate_custom_fields(store, custom_fields: dict[str, str] | None) -> dict
         )
 
     return {key: value for key, value in normalized.items() if value}
+
+
+async def _require_recent_client_otp(db: AsyncSession, *, store_id: str, phone: str) -> None:
+    is_verified = await OtpService(db).is_recently_verified(store_id=store_id, phone=phone)
+    if not is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requiere validar OTP antes de autogestionar turnos",
+        )
+
+
+def _now_compatible_with(value: datetime) -> datetime:
+    now = datetime.now(timezone.utc)
+    return now if value.tzinfo else now.replace(tzinfo=None)
 
 
 @router.get("/stores/{slug}", response_model=PublicStoreResponse)
@@ -467,6 +482,12 @@ async def create_public_booking(
         except ValueError as exc:
             await idempotency_release(idempotency_key, redis)
             raise HTTPException(status_code=409, detail=str(exc))
+        except CircuitBreakerOpenError as exc:
+            await idempotency_release(idempotency_key, redis)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Proveedor de pagos temporalmente no disponible: {exc}",
+            )
         except RuntimeError as exc:
             await idempotency_release(idempotency_key, redis)
             raise HTTPException(
@@ -541,15 +562,17 @@ async def get_client_appointments(
         if not store:
             raise HTTPException(status_code=404, detail="Negocio no encontrado")
 
+        await _require_recent_client_otp(db, store_id=store.id, phone=phone)
+
         client = await repo.get_client_by_phone(store.id, phone)
         if not client:
             raise HTTPException(status_code=404, detail="No se encontraron turnos para ese número de teléfono")
 
         appointments = await repo.get_client_appointments(client.id, store.id)
-        now = datetime.now(timezone.utc)
         cancellation_cutoff_hours = getattr(store, "cancellation_hours", 2)
         items = []
         for appt in appointments:
+            now = _now_compatible_with(appt.starts_at)
             current_status = AppointmentStatus(appt.status)
             is_upcoming = appt.starts_at > now
             hours_until = (appt.starts_at - now).total_seconds() / 3600
@@ -608,9 +631,11 @@ async def client_cancel_appointment(
         if not client or client.id != appointment.client_id:
             raise HTTPException(status_code=403, detail="El teléfono no coincide con el titular del turno")
 
+        await _require_recent_client_otp(db, store_id=appointment.store_id, phone=data.phone)
+
         store = await repo.get_store_by_id(appointment.store_id)
         cancellation_hours = getattr(store, "cancellation_hours", 2) if store else 2
-        hours_until = (appointment.starts_at - datetime.now(timezone.utc)).total_seconds() / 3600
+        hours_until = (appointment.starts_at - _now_compatible_with(appointment.starts_at)).total_seconds() / 3600
         if hours_until < cancellation_hours:
             raise HTTPException(
                 status_code=409,
@@ -676,6 +701,8 @@ async def client_reschedule_appointment(
         client = await repo.get_client_by_phone(original.store_id, data.phone)
         if not client or client.id != original.client_id:
             raise HTTPException(status_code=403, detail="El teléfono no coincide con el titular del turno")
+
+        await _require_recent_client_otp(db, store_id=original.store_id, phone=data.phone)
 
         svc_res = await db.execute(select(Service).where(Service.id == original.service_id))
         service = svc_res.scalar_one_or_none()
@@ -756,5 +783,8 @@ async def client_reschedule_appointment(
         )
         await idempotency_save(data.idempotency_key, response.model_dump(mode="json"), redis)
         return response
+    except Exception:
+        await idempotency_release(data.idempotency_key, redis)
+        raise
     finally:
         set_tenant_context(None, False)

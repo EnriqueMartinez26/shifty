@@ -22,7 +22,6 @@ celery_app.conf.update(
     task_time_limit=settings.CELERY_TASK_TIME_LIMIT_SECONDS,
     # Auto-descubrimiento de tareas en los módulos
     imports=[
-        "modules.notifications.tasks",
         "modules.payments.tasks",
     ],
     # ----------------------------------------------------------------
@@ -30,10 +29,6 @@ celery_app.conf.update(
     # ----------------------------------------------------------------
     beat_schedule={
         # Ejecutar cada hora para detectar turnos del día siguiente
-        "send-24h-reminders-hourly": {
-            "task":     "send_24h_reminders",
-            "schedule": crontab(minute=0),  # :00 de cada hora
-        },
         "process-payment-outbox-every-minute": {
             "task": "process_payment_outbox",
             "schedule": crontab(),

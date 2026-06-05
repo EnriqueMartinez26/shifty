@@ -96,28 +96,42 @@ async def enqueue_confirmation_email(
     vercel_oidc_token: str | None,
 ) -> dict:
     payload = {"email": email, "details": details}
-    if queue_is_enabled() and vercel_oidc_token:
-        await publish_json_message(
-            topic=settings.VERCEL_QUEUE_CONFIRMATION_TOPIC,
-            payload=payload,
-            oidc_token=vercel_oidc_token,
-            idempotency_key=f"confirmation:{details.get('public_id')}",
-        )
-        drain_result = await drain_notification_queue(
-            queue_kind="confirmations",
-            vercel_oidc_token=vercel_oidc_token,
-            max_messages=1,
+    try:
+        if queue_is_enabled() and vercel_oidc_token:
+            await publish_json_message(
+                topic=settings.VERCEL_QUEUE_CONFIRMATION_TOPIC,
+                payload=payload,
+                oidc_token=vercel_oidc_token,
+                idempotency_key=f"confirmation:{details.get('public_id')}",
+            )
+            drain_result = await drain_notification_queue(
+                queue_kind="confirmations",
+                vercel_oidc_token=vercel_oidc_token,
+                max_messages=1,
+            )
+            return {
+                "status": "queued_and_drained",
+                "topic": settings.VERCEL_QUEUE_CONFIRMATION_TOPIC,
+                "drain": drain_result,
+            }
+
+        if settings.VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC:
+            return await send_appointment_confirmation(email, details)
+
+        return {"status": "skipped"}
+    except Exception as exc:
+        # Confirmations are operational side effects; they must never abort bookings.
+        logger.warning(
+            "confirmation_email_dispatch_failed",
+            email=email,
+            appointment=details.get("public_id"),
+            error_type=type(exc).__name__,
+            error=str(exc),
         )
         return {
-            "status": "queued_and_drained",
-            "topic": settings.VERCEL_QUEUE_CONFIRMATION_TOPIC,
-            "drain": drain_result,
+            "status": "failed",
+            "reason": type(exc).__name__,
         }
-
-    if settings.VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC:
-        return await send_appointment_confirmation(email, details)
-
-    return {"status": "skipped"}
 
 
 async def enqueue_reminder_email(
