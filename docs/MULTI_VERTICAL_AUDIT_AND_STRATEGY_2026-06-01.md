@@ -130,7 +130,6 @@ Impacto:
 Archivos afectados:
 
 - `backend/scripts/seed_simulation.py`
-- `backend/scripts/check_db.py`
 - `backend/tests/integration/test_appointments_api.py`
 - `docs/DOCUMENTACION_TURNERO.md`
 - `docs/PROJECT_CONTEXT.md`

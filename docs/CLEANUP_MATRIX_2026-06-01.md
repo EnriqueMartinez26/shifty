@@ -72,6 +72,9 @@ Objetivo:
 | `frontend/src/presentation/components/organisms/booking/BookingStepStaff.tsx` | refactorizar | consulta HTTP desde componente | mover a hook o servicio |
 | `frontend/src/presentation/components/organisms/booking/BookingStepDateTime.tsx` | refactorizar | consulta HTTP desde componente | mover a hook o servicio |
 | `frontend/src/presentation/components/organisms/StaffFormModal.tsx` | refactorizar | crea servicio y repositorio dentro del componente | mover a hook o DI central |
+| `frontend/src/presentation/components/atoms/SkeuoCard.tsx` | borrar | componente atomico sin consumidores | eliminado |
+| `frontend/src/presentation/components/atoms/UIAtoms.tsx` | borrar | utileria atomica sin consumidores | eliminado |
+| `frontend/src/assets/hero.png` | borrar | asset huérfano | eliminado |
 | `frontend/src/presentation/pages/Login.tsx` | refactorizar | auth page todavia usa `apiClient` directo | extraer hook `useLogin` |
 | `frontend/src/presentation/pages/Register.tsx` | refactorizar | register page usa `apiClient` directo | extraer hook `useRegisterBusiness` |
 | `frontend/src/presentation/pages/ForgotPassword.tsx` | refactorizar | auth page con HTTP directo | extraer hook |

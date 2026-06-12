@@ -86,7 +86,6 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = [
     "modules.*",
-    "application.*",
     "infrastructure.*",
     "presentation.*",
     "tests.*",
@@ -98,14 +97,12 @@ module = [
     "api",
     "scripts.*",
     "core.runtime_contracts",
-    "core.tenant_guard",
     "core.roles",
     "core.uow",
     "core.config",
     "core.security",
     "core.redis",
     "core.database",
-    "core.events",
     "core.middleware",
     "core.idempotency",
     "loadtests.*",
