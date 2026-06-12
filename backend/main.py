@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Depends, Request
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import json
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,7 @@ import structlog
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import engine
 from core.middleware import TenantMiddleware
+from core.responses import CanonicalJsonMiddleware, error_response
 from core.runtime_contracts import ensure_runtime_contracts
 from core.exceptions import AppException
 from core.rate_limit import RedisRateLimitMiddleware
@@ -20,9 +22,9 @@ from modules.dashboard.router import router as dashboard_router
 from modules.auth.dependencies import get_current_user
 from modules.users.model import User
 from modules.users.router import router as users_router
-from modules.public_api.router import router as public_router
+# AI AGENT NOTE: public_api was consolidated into modules.public to eliminate duplication.
+from modules.public.router import router as public_router
 from modules.reports.router import router as reports_router
-from modules.budget.router import router as budget_router
 from modules.ledger.router import router as ledger_router
 from modules.ops.router import router as ops_router
 from modules.payments.router import router as payments_router
@@ -68,11 +70,13 @@ class BootErrorMiddleware:
         )
         await send({"type": "http.response.body", "body": body})
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
         await ensure_runtime_contracts(engine)
     yield
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -86,26 +90,50 @@ app = FastAPI(
 
 from fastapi.exceptions import RequestValidationError
 
+
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
     """
     Handler global: convierte cualquier AppException del dominio en una
     respuesta JSON estructurada con su HTTP status code correspondiente.
     """
-    return JSONResponse(
+    return error_response(
         status_code=exc.http_status,
-        content={
-            "success": False,
-            "error_code": exc.error_code,
-            "message": exc.message,
-            "detail": exc.detail,
-        },
+        error_code=exc.error_code,
+        message=exc.message,
+        detail=exc.detail,
+        headers=exc.headers,
     )
 
-from fastapi.encoders import jsonable_encoder
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    detail = exc.detail
+    message = detail if isinstance(detail, str) else "Error de solicitud"
+    error_code_by_status = {
+        400: "BAD_REQUEST",
+        401: "UNAUTHORIZED",
+        403: "FORBIDDEN",
+        404: "NOT_FOUND",
+        409: "CONFLICT",
+        422: "VALIDATION_ERROR",
+        429: "RATE_LIMITED",
+    }
+    return error_response(
+        status_code=exc.status_code,
+        error_code=error_code_by_status.get(exc.status_code, "HTTP_ERROR"),
+        message=message,
+        detail=detail if not isinstance(detail, str) else None,
+        headers=exc.headers,
+    )
+
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     """
     Handler para errores de validación de Pydantic (422).
     Normaliza la salida para que el frontend reciba SIEMPRE strings, nunca objetos crudos.
@@ -116,18 +144,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         loc = " -> ".join([str(x) for x in error["loc"] if x != "body"])
         msg = error["msg"]
         error_strings.append(f"{loc}: {msg}" if loc else msg)
-    
-    readable_msg = "; ".join(error_strings) or "Error de validación en los datos enviados."
-    
-    return JSONResponse(
+
+    readable_msg = (
+        "; ".join(error_strings) or "Error de validación en los datos enviados."
+    )
+
+    return error_response(
         status_code=422,
-        content={
-            "success": False,
-            "error_code": "VALIDATION_ERROR",
-            "message": readable_msg,
-            # detail es lista de strings — nunca objetos — para que React pueda renderizar
-            "detail": error_strings,
-        },
+        error_code="VALIDATION_ERROR",
+        message=readable_msg,
+        detail=error_strings,
+        # detail es lista de strings — nunca objetos — para que React pueda renderizar
     )
 
 
@@ -139,16 +166,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         method=request.method,
         error_type=type(exc).__name__,
     )
-    return JSONResponse(
+    return error_response(
         status_code=500,
-        content={
-            "success": False,
-            "error_code": "INTERNAL_SERVER_ERROR",
-            "message": "Error interno del servidor",
-        },
+        error_code="INTERNAL_SERVER_ERROR",
+        message="Error interno del servidor",
         headers={"Cache-Control": "no-store"},
     )
-
 
 
 # IMPORTANTE: En Starlette, los middlewares se ejecutan en orden INVERSO al de registro.
@@ -161,6 +184,7 @@ app.add_middleware(RedisRateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BootErrorMiddleware)
+app.add_middleware(CanonicalJsonMiddleware)
 
 # 2. Configurar CORS (debe ser el último en registrarse para ser la capa más externa)
 # Obtenemos los orígenes de la configuración y nos aseguramos de que no haya espacios.
@@ -184,7 +208,6 @@ app.include_router(appointments_router)
 app.include_router(dashboard_router)
 app.include_router(users_router)
 app.include_router(reports_router)
-app.include_router(budget_router)
 app.include_router(stores_router)
 app.include_router(appointment_blocks_router)
 app.include_router(payments_router)
@@ -194,13 +217,15 @@ app.include_router(ops_router)
 app.include_router(superadmin_router)
 app.include_router(public_router)
 
+
 @app.get("/")
 async def root():
     return {
         "app": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "status": "online"
+        "status": "online",
     }
+
 
 @app.get("/me", tags=["Users"])
 async def get_me(user: User = Depends(get_current_user)):
@@ -213,6 +238,8 @@ async def get_me(user: User = Depends(get_current_user)):
         "is_global_admin": user.is_global_admin,
     }
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities.user import User, UserRole
 from infrastructure.persistence.models.user import UserModel
 
+
 class UserRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -31,7 +32,7 @@ class UserRepository:
                 store_id=user.store_id,
                 is_active=user.is_active,
                 created_at=user.created_at,
-                updated_at=user.updated_at
+                updated_at=user.updated_at,
             )
             self.session.add(model)
         else:
@@ -39,7 +40,7 @@ class UserRepository:
             model.role = user.role.value
             model.is_active = user.is_active
             model.updated_at = user.updated_at
-        
+
         await self.session.flush()
         return self._map_to_entity(model)
 
@@ -52,5 +53,5 @@ class UserRepository:
             store_id=model.store_id,
             is_active=model.is_active,
             created_at=model.created_at,
-            updated_at=model.updated_at
+            updated_at=model.updated_at,
         )

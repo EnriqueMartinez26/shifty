@@ -6,6 +6,7 @@ from domain.value_objects.time_slot import TimeSlot
 from domain.repositories.appointment_repository import IAppointmentRepository
 from domain.exceptions.base_exceptions import ConflictError
 
+
 class CreateAppointmentUseCase:
     """Use case for creating a new appointment."""
 
@@ -23,7 +24,7 @@ class CreateAppointmentUseCase:
         client_email: Optional[str] = None,
         client_phone: Optional[str] = None,
         notes: Optional[str] = None,
-        idempotency_key: Optional[str] = None
+        idempotency_key: Optional[str] = None,
     ) -> Appointment:
         # 1. Check idempotency
         if idempotency_key:
@@ -36,9 +37,14 @@ class CreateAppointmentUseCase:
 
         # 3. Check availability (conflict detection)
         # In a real scenario, we might also check 'appointment_blocks'
-        staff_appointments = await self.repository.find_by_staff_and_date(staff_id, start_time.date())
+        staff_appointments = await self.repository.find_by_staff_and_date(
+            staff_id, start_time.date()
+        )
         for existing in staff_appointments:
-            if existing.status != AppointmentStatus.CANCELLED and existing.time_slot.overlaps_with(time_slot):
+            if (
+                existing.status != AppointmentStatus.CANCELLED
+                and existing.time_slot.overlaps_with(time_slot)
+            ):
                 raise ConflictError(f"Staff member is already booked at {start_time}")
 
         # 4. Create Entity
@@ -52,7 +58,7 @@ class CreateAppointmentUseCase:
             client_email=client_email,
             client_phone=client_phone,
             notes=notes,
-            idempotency_key=idempotency_key
+            idempotency_key=idempotency_key,
         )
 
         # 5. Persist

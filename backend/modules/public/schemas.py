@@ -64,9 +64,13 @@ class AvailabilitySlot(BaseModel):
 
 
 class PublicBookingCreate(BaseModel):
-    store_public_id: Optional[str] = Field(None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    store_public_id: Optional[str] = Field(
+        None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
-    staff_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    staff_id: str | None = Field(
+        default=None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     starts_at: datetime
     notes: Optional[str] = Field(None, max_length=500)
     idempotency_key: Optional[str] = Field(default=None, min_length=10, max_length=128)
@@ -74,14 +78,18 @@ class PublicBookingCreate(BaseModel):
     client_phone: str = Field(..., min_length=6, max_length=30)
     client_email: Optional[EmailStr] = Field(default=None, max_length=255)
     custom_fields: dict[str, str] = Field(default_factory=dict, max_length=12)
-    promotion_code: str | None = Field(default=None, min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    promotion_code: str | None = Field(
+        default=None, min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
     @field_validator("client_phone")
     @classmethod
     def phone_must_be_numeric(cls, value: str) -> str:
         cleaned = re.sub(r"[\s\-\(\)\+]", "", value)
         if not cleaned.isdigit():
-            raise ValueError("El telefono solo puede contener digitos, espacios o los caracteres: + - ( )")
+            raise ValueError(
+                "El telefono solo puede contener digitos, espacios o los caracteres: + - ( )"
+            )
         if len(cleaned) < 6:
             raise ValueError("El telefono debe tener al menos 6 digitos")
         return cleaned
@@ -180,7 +188,9 @@ class ClientRescheduleRequest(BaseModel):
 
 
 class OtpRequestPayload(BaseModel):
-    store_public_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    store_public_id: str = Field(
+        ..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     phone: str = Field(..., min_length=6, max_length=30)
     channel: str = Field(default="whatsapp", pattern=r"^(whatsapp|sms)$")
 
@@ -191,7 +201,9 @@ class OtpRequestPayload(BaseModel):
 
 
 class OtpVerifyPayload(BaseModel):
-    store_public_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    store_public_id: str = Field(
+        ..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     phone: str = Field(..., min_length=6, max_length=30)
     code: str = Field(..., min_length=4, max_length=8)
 

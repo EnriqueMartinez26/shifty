@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 from domain.entities.staff import Staff
 
+
 class IStaffRepository(ABC):
     """Abstract interface for staff data access."""
 

@@ -1,8 +1,11 @@
 from datetime import time
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Depends
+from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.exceptions import AppException, PermissionDeniedException, StoreNotFoundException
 
 from core.database import get_db
 from core.feature_flags import merge_store_feature_flags, normalize_store_feature_flags
@@ -16,7 +19,7 @@ from modules.stores.schemas import (
 )
 from modules.users.model import User, UserRole
 
-router = APIRouter(prefix="/stores", tags=["Stores"])
+router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
 
 
 def _serialize_store(store: Store) -> StoreResponse:
@@ -47,7 +50,7 @@ async def _get_current_store(user: User, db: AsyncSession) -> Store:
     result = await db.execute(select(Store).where(Store.id == user.store_id))
     store = result.scalar_one_or_none()
     if not store:
-        raise HTTPException(status_code=404, detail="Negocio no encontrado")
+        raise StoreNotFoundException(user.store_id)
     return store
 
 
@@ -91,18 +94,17 @@ async def update_my_store(
     db: AsyncSession = Depends(get_db),
 ):
     if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo los administradores pueden cambiar la configuración",
-        )
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     update_data = data.model_dump(exclude_unset=True)
 
     if "slug" in update_data and update_data["slug"] != store.slug:
-        slug_check = await db.execute(select(Store).where(Store.slug == update_data["slug"]))
+        slug_check = await db.execute(
+            select(Store).where(Store.slug == update_data["slug"])
+        )
         if slug_check.scalar_one_or_none():
-            raise HTTPException(status_code=400, detail="El slug ya está en uso")
+            raise AppException("El slug ya está en uso", http_status=400, error_code="SLUG_ALREADY_IN_USE")
 
     business_hours = update_data.pop("business_hours", None)
     theme_keys = (
@@ -136,7 +138,9 @@ async def get_my_store_feature_flags(
     db: AsyncSession = Depends(get_db),
 ):
     store = await _get_current_store(user, db)
-    return StoreFeatureFlagsResponse(flags=normalize_store_feature_flags(store.feature_flags))
+    return StoreFeatureFlagsResponse(
+        flags=normalize_store_feature_flags(store.feature_flags)
+    )
 
 
 @router.put("/me/feature-flags", response_model=StoreFeatureFlagsResponse)
@@ -146,10 +150,7 @@ async def update_my_store_feature_flags(
     db: AsyncSession = Depends(get_db),
 ):
     if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo los administradores pueden cambiar la configuración",
-        )
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     store.feature_flags = merge_store_feature_flags(
@@ -158,4 +159,6 @@ async def update_my_store_feature_flags(
     )
     await db.commit()
     await db.refresh(store)
-    return StoreFeatureFlagsResponse(flags=normalize_store_feature_flags(store.feature_flags))
+    return StoreFeatureFlagsResponse(
+        flags=normalize_store_feature_flags(store.feature_flags)
+    )

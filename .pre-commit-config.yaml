@@ -1,0 +1,30 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-json
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: local
+    hooks:
+      - id: backend-ruff-format-check
+        name: backend ruff format check
+        entry: uv run --project backend ruff format --check backend
+        language: system
+        pass_filenames: false
+      - id: backend-ruff-check
+        name: backend ruff check
+        entry: uv run --project backend ruff check backend
+        language: system
+        pass_filenames: false
+      - id: frontend-typecheck
+        name: frontend typecheck
+        entry: npm --prefix frontend run typecheck
+        language: system
+        pass_filenames: false
+      - id: frontend-lint
+        name: frontend eslint
+        entry: npm --prefix frontend run lint
+        language: system
+        pass_filenames: false

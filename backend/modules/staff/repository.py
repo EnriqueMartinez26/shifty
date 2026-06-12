@@ -1,17 +1,20 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from modules.staff.model import Staff, Schedule, staff_services
+from modules.staff.model import Staff, Schedule
 from modules.services.model import Service
 from modules.users.model import User, UserRole
 from core.security import hash_password
 import ulid
 
+
 class StaffRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create(self, data: dict, store_id: int, service_public_ids: list[str]) -> Staff:
+    async def create(
+        self, data: dict, store_id: int, service_public_ids: list[str]
+    ) -> Staff:
         # 1. Evitar duplicar usuario por email dentro del store
         user_res = await self.db.execute(
             select(User).where(User.email == data["email"])
@@ -39,13 +42,13 @@ class StaffRepository:
 
         # 4. Crear Staff
         new_staff = Staff(
-            id=user.id, # Synchronize the staff ID with the user ID for simplicity
+            id=user.id,  # Synchronize the staff ID with the user ID for simplicity
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=data["email"],
             display_name=data["display_name"],
             store_id=store_id,
-            service_ids=[s.public_id for s in services]
+            service_ids=[s.public_id for s in services],
         )
         new_staff.services = services
         self.db.add(new_staff)
@@ -55,7 +58,9 @@ class StaffRepository:
 
     async def get_all(self) -> list[Staff]:
         result = await self.db.execute(
-            select(Staff).where(Staff.is_active == True).options(
+            select(Staff)
+            .where(Staff.is_active == True)
+            .options(
                 selectinload(Staff.schedules),
             )
         )
@@ -89,12 +94,10 @@ class StaffRepository:
                 member.services = []
         return member
 
-    async def add_schedule(self, staff: Staff, schedule_data: dict, store_id: int) -> Schedule:
-        new_schedule = Schedule(
-            **schedule_data,
-            staff_id=staff.id,
-            store_id=store_id
-        )
+    async def add_schedule(
+        self, staff: Staff, schedule_data: dict, store_id: int
+    ) -> Schedule:
+        new_schedule = Schedule(**schedule_data, staff_id=staff.id, store_id=store_id)
         self.db.add(new_schedule)
         await self.db.commit()
         await self.db.refresh(new_schedule)
@@ -163,9 +166,7 @@ class StaffRepository:
 
     async def soft_delete(self, staff: Staff) -> None:
         staff.is_active = False
-        user_res = await self.db.execute(
-            select(User).where(User.email == staff.email)
-        )
+        user_res = await self.db.execute(select(User).where(User.email == staff.email))
         user = user_res.scalar_one_or_none()
         if user:
             user.is_active = False

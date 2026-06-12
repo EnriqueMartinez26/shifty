@@ -35,7 +35,9 @@ async def test_engine():
 
 @pytest_asyncio.fixture(scope="function")
 async def test_session(test_engine):
-    session_local = async_sessionmaker(bind=test_engine, expire_on_commit=False, autoflush=False)
+    session_local = async_sessionmaker(
+        bind=test_engine, expire_on_commit=False, autoflush=False
+    )
     async with session_local() as session:
         yield session
 
@@ -47,7 +49,11 @@ async def client(test_session):
 
     app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as http_client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"x-raw-response": "true"},
+    ) as http_client:
         yield http_client
     app.dependency_overrides.pop(get_db, None)
 
@@ -78,11 +84,15 @@ async def _login(client: AsyncClient, email: str):
 
 
 @pytest.mark.asyncio
-async def test_superadmin_store_list_and_overview_include_operational_summaries(client: AsyncClient, test_session):
+async def test_superadmin_store_list_and_overview_include_operational_summaries(
+    client: AsyncClient, test_session
+):
     await _register_store(client, "uno", "admin-uno@demo.com")
     await _register_store(client, "dos", "admin-dos@demo.com")
 
-    result = await test_session.execute(select(User).where(User.email == "admin-uno@demo.com"))
+    result = await test_session.execute(
+        select(User).where(User.email == "admin-uno@demo.com")
+    )
     global_admin = result.scalar_one()
     global_admin.is_global_admin = True
     await test_session.commit()
@@ -90,7 +100,9 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
     token = await _login(client, "admin-uno@demo.com")
     headers = {"Authorization": f"Bearer {token}"}
 
-    stores_response = await client.get("/superadmin/stores?is_active=true", headers=headers)
+    stores_response = await client.get(
+        "/superadmin/stores?is_active=true", headers=headers
+    )
     assert stores_response.status_code == 200
     stores = stores_response.json()
     assert len(stores) == 2
@@ -125,12 +137,16 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
             "base_amount": "25000",
             "currency": "ARS",
             "current_period_start": datetime.now(timezone.utc).isoformat(),
-            "current_period_end": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
+            "current_period_end": (
+                datetime.now(timezone.utc) + timedelta(days=30)
+            ).isoformat(),
         },
     )
     assert subscription_response.status_code == 200
 
-    updated_list = await client.get("/superadmin/stores?has_subscription=true", headers=headers)
+    updated_list = await client.get(
+        "/superadmin/stores?has_subscription=true", headers=headers
+    )
     assert updated_list.status_code == 200
     filtered = updated_list.json()
     assert len(filtered) == 1
@@ -152,10 +168,14 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
 
 
 @pytest.mark.asyncio
-async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscription_to_inactive_store(client: AsyncClient, test_session):
+async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscription_to_inactive_store(
+    client: AsyncClient, test_session
+):
     await _register_store(client, "central", "admin-central@demo.com")
 
-    result = await test_session.execute(select(User).where(User.email == "admin-central@demo.com"))
+    result = await test_session.execute(
+        select(User).where(User.email == "admin-central@demo.com")
+    )
     global_admin = result.scalar_one()
     global_admin.is_global_admin = True
     await test_session.commit()
@@ -215,14 +235,20 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
         json={"plan_id": plan["public_id"]},
     )
     assert subscription_response.status_code == 400
-    assert "tienda inactiva" in subscription_response.json()["detail"].lower()
+    res_json = subscription_response.json()
+    err_msg = res_json.get("detail") or res_json.get("message") or ""
+    assert "tienda inactiva" in err_msg.lower()
 
 
 @pytest.mark.asyncio
-async def test_superadmin_coupon_redeem_rejects_expired_subscription(client: AsyncClient, test_session):
+async def test_superadmin_coupon_redeem_rejects_expired_subscription(
+    client: AsyncClient, test_session
+):
     await _register_store(client, "sur", "admin-sur@demo.com")
 
-    result = await test_session.execute(select(User).where(User.email == "admin-sur@demo.com"))
+    result = await test_session.execute(
+        select(User).where(User.email == "admin-sur@demo.com")
+    )
     global_admin = result.scalar_one()
     global_admin.is_global_admin = True
     await test_session.commit()
@@ -254,8 +280,12 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(client: Asy
             "status": "active",
             "base_amount": "10000",
             "currency": "ARS",
-            "current_period_start": (datetime.now(timezone.utc) - timedelta(days=60)).isoformat(),
-            "current_period_end": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+            "current_period_start": (
+                datetime.now(timezone.utc) - timedelta(days=60)
+            ).isoformat(),
+            "current_period_end": (
+                datetime.now(timezone.utc) - timedelta(days=1)
+            ).isoformat(),
         },
     )
     assert subscription_response.status_code == 200
@@ -272,7 +302,11 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(client: Asy
     )
     assert coupon_response.status_code == 201
 
-    store_result = await test_session.execute(select(StoreSubscription).where(StoreSubscription.store_id == global_admin.store_id))
+    store_result = await test_session.execute(
+        select(StoreSubscription).where(
+            StoreSubscription.store_id == global_admin.store_id
+        )
+    )
     assert store_result.scalar_one_or_none() is not None
 
     redeem_response = await client.post(
@@ -281,4 +315,6 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(client: Asy
         json={"coupon_code": "WELCOME10"},
     )
     assert redeem_response.status_code == 400
-    assert "vencida" in redeem_response.json()["detail"].lower()
+    res_json = redeem_response.json()
+    err_msg = res_json.get("detail") or res_json.get("message") or ""
+    assert "vencida" in err_msg.lower()

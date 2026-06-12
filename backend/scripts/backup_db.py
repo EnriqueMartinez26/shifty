@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import hashlib
@@ -17,7 +17,9 @@ def _normalize_postgres_url(raw_url: str) -> str:
     )
 
 
-def _build_pg_dump_command(database_url: str, backup_path: Path) -> tuple[list[str], dict[str, str]]:
+def _build_pg_dump_command(
+    database_url: str, backup_path: Path
+) -> tuple[list[str], dict[str, str]]:
     parsed = urlparse(_normalize_postgres_url(database_url))
     database_name = parsed.path.lstrip("/")
     if not database_name:
@@ -57,7 +59,9 @@ def _sha256_file(path: Path) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Genera backup PostgreSQL en formato custom (pg_dump).")
+    parser = argparse.ArgumentParser(
+        description="Genera backup PostgreSQL en formato custom (pg_dump)."
+    )
     parser.add_argument(
         "--output-dir",
         default="backups",
@@ -81,7 +85,9 @@ def main() -> int:
     checksum_path = output_dir / f"shifty-{timestamp}.sha256"
 
     command, env = _build_pg_dump_command(args.database_url, backup_path)
-    result = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        command, env=env, capture_output=True, text=True, check=False
+    )
     if result.returncode != 0:
         print(result.stderr.strip())
         raise SystemExit(result.returncode)

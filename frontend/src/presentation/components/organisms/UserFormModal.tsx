@@ -1,76 +1,81 @@
-import React, { useState, useEffect } from "react";
-import { User } from "@domain/entities/User";
-import { X, Loader2 } from "lucide-react";
-import { colors2000s, buttonStyles2000s } from "../../../theme/colors";
+import React, { useState, useEffect } from 'react'
+import { User } from '@domain/entities/User'
+import { X, Loader2 } from 'lucide-react'
+import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 
 interface UserFormModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (data: any) => Promise<void>;
-  editingUser?: User | null;
+  isOpen: boolean
+  onClose: () => void
+  onSubmit: (data: any) => Promise<void>
+  editingUser?: User | null
 }
 
-export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, onSubmit, editingUser }) => {
-  const [loading, setLoading] = useState(false);
+export const UserFormModal: React.FC<UserFormModalProps> = ({
+  isOpen,
+  onClose,
+  onSubmit,
+  editingUser
+}) => {
+  const [loading, setLoading] = useState(false)
   const [formData, setFormData] = useState({
-    email: "",
-    password: "",
-    first_name: "",
-    last_name: "",
-    phone: "",
-    role: "staff" as "admin" | "staff" | "receptionist" | "client",
-  });
+    email: '',
+    password: '',
+    first_name: '',
+    last_name: '',
+    phone: '',
+    role: 'staff' as 'admin' | 'staff' | 'receptionist' | 'client'
+  })
 
   useEffect(() => {
     if (editingUser) {
-      const p = editingUser.toPrimitives();
+      const p = editingUser.toPrimitives()
       setFormData({
         email: p.email,
-        password: "",
-        first_name: p.firstName || "",
-        last_name: p.lastName || "",
-        phone: p.phone || "",
-        role: p.role,
-      });
+        password: '',
+        first_name: p.firstName || '',
+        last_name: p.lastName || '',
+        phone: p.phone || '',
+        role: p.role
+      })
     } else {
       setFormData({
-        email: "",
-        password: "",
-        first_name: "",
-        last_name: "",
-        phone: "",
-        role: "staff",
-      });
+        email: '',
+        password: '',
+        first_name: '',
+        last_name: '',
+        phone: '',
+        role: 'staff'
+      })
     }
-  }, [editingUser, isOpen]);
+  }, [editingUser, isOpen])
 
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
+    e.preventDefault()
+    setLoading(true)
     try {
-      await onSubmit(formData);
-      onClose();
+      await onSubmit(formData)
+      onClose()
     } catch (error) {
-      console.error(error);
+      console.error(error)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const inputStyle = {
     background: 'white',
     border: `1px solid ${colors2000s.border.default}`,
     boxShadow: colors2000s.shadows.insetDark,
     color: colors2000s.text.primary,
-    outline: 'none',
-  };
+    outline: 'none'
+  }
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
-      <div 
+      <div
         className="relative w-full max-w-lg rounded-[2.5rem] border animate-in zoom-in-95 duration-200 p-8 overflow-y-auto max-h-[90vh]"
         style={{
           background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
@@ -80,13 +85,21 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
       >
         <div className="flex justify-between items-center mb-8">
           <div>
-            <h3 className="text-2xl font-black uppercase tracking-tight text-gray-800" style={{ color: colors2000s.text.primary }}>
-              {editingUser ? "Editar Usuario" : "Nuevo Usuario"}
+            <h3
+              className="text-2xl font-black uppercase tracking-tight text-gray-800"
+              style={{ color: colors2000s.text.primary }}
+            >
+              {editingUser ? 'Editar Usuario' : 'Nuevo Usuario'}
             </h3>
-            <p className="text-xs font-bold text-gray-500" style={{ color: colors2000s.text.secondary }}>Gestioná los permisos y datos del personal.</p>
+            <p
+              className="text-xs font-bold text-gray-500"
+              style={{ color: colors2000s.text.secondary }}
+            >
+              Gestioná los permisos y datos del personal.
+            </p>
           </div>
-          <button 
-            onClick={onClose} 
+          <button
+            onClick={onClose}
             className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90"
             style={buttonStyles2000s.default}
           >
@@ -96,21 +109,29 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Email de Acceso</label>
+            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
+              Email de Acceso
+            </label>
             <input
               type="email"
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
               disabled={Boolean(editingUser)}
               className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-              style={editingUser ? { ...inputStyle, background: colors2000s.bg.disabled, opacity: 0.7 } : inputStyle}
+              style={
+                editingUser
+                  ? { ...inputStyle, background: colors2000s.bg.disabled, opacity: 0.7 }
+                  : inputStyle
+              }
               required
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Nombre</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
+                Nombre
+              </label>
               <input
                 value={formData.first_name}
                 onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
@@ -119,7 +140,9 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Apellido</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
+                Apellido
+              </label>
               <input
                 value={formData.last_name}
                 onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
@@ -131,7 +154,9 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Rol</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
+                Rol
+              </label>
               <select
                 value={formData.role}
                 onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
@@ -145,7 +170,9 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
               </select>
             </div>
             <div className="space-y-1.5">
-              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Teléfono</label>
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
+                Teléfono
+              </label>
               <input
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
@@ -157,7 +184,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
-              {editingUser ? "Cambiar Contraseña (opcional)" : "Contraseña"}
+              {editingUser ? 'Cambiar Contraseña (opcional)' : 'Contraseña'}
             </label>
             <input
               type="password"
@@ -186,13 +213,15 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
             >
               {loading ? (
                 <Loader2 className="w-5 h-5 animate-spin mx-auto" />
+              ) : editingUser ? (
+                'Guardar Cambios'
               ) : (
-                editingUser ? "Guardar Cambios" : "Crear Usuario"
+                'Crear Usuario'
               )}
             </button>
           </div>
         </form>
       </div>
     </div>
-  );
-};
+  )
+}

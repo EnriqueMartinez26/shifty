@@ -4,13 +4,15 @@ Router de Turnos.
 Responsabilidad única: recibir requests HTTP, delegar al AppointmentService
 y serializar la respuesta. Sin lógica de negocio.
 """
+
 from datetime import date as date_type
 from typing import Annotated, Optional, List
 
-from fastapi import APIRouter, Depends, Path, Query, Request
+from fastapi import Depends, Path, Query, Request
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.router import CanonicalAPIRouter
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
@@ -29,12 +31,17 @@ from modules.appointments.schemas import (
 )
 from modules.appointments.service import AppointmentService
 from modules.auth.dependencies import get_current_user, get_optional_current_user
-from modules.public_api.repository import PublicRepository
+# AI AGENT NOTE: public_api was consolidated into modules.public.
+from modules.public.repository import PublicRepository
 from modules.users.model import User, UserRole
 
-router = APIRouter(prefix="/appointments", tags=["Appointments"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
-PublicIdQuery = Annotated[str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/appointments", tags=["Appointments"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
+PublicIdQuery = Annotated[
+    str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 # ---------------------------------------------------------------------------
@@ -45,10 +52,14 @@ from core.uow import AsyncSqlAlchemyUnitOfWork
 
 from typing import AsyncGenerator
 
-async def get_uow(db: AsyncSession = Depends(get_db)) -> AsyncGenerator[AsyncSqlAlchemyUnitOfWork, None]:
+
+async def get_uow(
+    db: AsyncSession = Depends(get_db),
+) -> AsyncGenerator[AsyncSqlAlchemyUnitOfWork, None]:
     uow = AsyncSqlAlchemyUnitOfWork(db)
     async with uow:
         yield uow
+
 
 def get_appointment_service(
     uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
@@ -79,6 +90,7 @@ def _to_appointment_response(appointment) -> AppointmentResponse:
 # Agenda diaria
 # ---------------------------------------------------------------------------
 
+
 @router.get("/", response_model=list[AppointmentListItem])
 async def list_appointments_by_date(
     date: date_type,
@@ -87,6 +99,7 @@ async def list_appointments_by_date(
 ):
     """Lista turnos por fecha para la agenda del día."""
     from modules.appointments.repository import AppointmentRepository
+
     repo = AppointmentRepository(db)
     rows = await repo.get_by_date(date)
     return [
@@ -95,7 +108,8 @@ async def list_appointments_by_date(
             service_id=service.public_id,
             service_name=service.name,
             staff_id=staff.public_id,
-            client_name=f"{client.first_name or ''} {client.last_name or ''}".strip() or client.email,
+            client_name=f"{client.first_name or ''} {client.last_name or ''}".strip()
+            or client.email,
             starts_at=appointment.starts_at,
             ends_at=appointment.ends_at,
             status=appointment.status,
@@ -109,6 +123,7 @@ async def list_appointments_by_date(
 # ---------------------------------------------------------------------------
 # Disponibilidad
 # ---------------------------------------------------------------------------
+
 
 @router.get("/availability")
 async def get_availability(
@@ -138,6 +153,7 @@ async def get_availability(
 # ---------------------------------------------------------------------------
 # Reservar turno
 # ---------------------------------------------------------------------------
+
 
 @router.post("/", response_model=AppointmentResponse)
 async def book_appointment(
@@ -190,6 +206,7 @@ async def book_appointment(
 # Cambios de estado (solo ADMIN / STAFF)
 # ---------------------------------------------------------------------------
 
+
 @router.patch("/{public_id}/cancel", response_model=AppointmentResponse)
 async def cancel_appointment(
     public_id: PublicIdPath,
@@ -210,6 +227,7 @@ async def confirm_appointment(
     """Confirma un turno. Solo ADMIN o STAFF."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
+
         raise PermissionDeniedException("confirmar turnos")
 
     appointment = await svc.confirm(public_id=public_id, actor=user)
@@ -225,6 +243,7 @@ async def complete_appointment(
     """Marca un turno como completado. Solo ADMIN o STAFF."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
+
         raise PermissionDeniedException("completar turnos")
 
     appointment = await svc.complete(public_id=public_id, actor=user)
@@ -240,6 +259,7 @@ async def mark_absent(
     """Registra que el cliente no se presentó (AUSENTE). Solo ADMIN o STAFF."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
+
         raise PermissionDeniedException("marcar ausencia")
 
     appointment = await svc.mark_absent(public_id=public_id, actor=user)
@@ -299,6 +319,7 @@ async def update_staff_notes(
     """Agrega o edita las notas del profesional sobre el turno. Solo STAFF o ADMIN."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
+
         raise PermissionDeniedException("editar notas del profesional")
 
     appointment = await svc.update_staff_notes(
@@ -311,16 +332,37 @@ async def update_staff_notes(
 # Búsqueda avanzada con filtros dinámicos
 # ---------------------------------------------------------------------------
 
+
 @router.get("/search", response_model=AppointmentSearchResponse)
 async def search_appointments(
-    client_name: Optional[str] = Query(default=None, max_length=100, description="Nombre, apellido o email del cliente"),
-    staff_id:    Optional[str] = Query(default=None, max_length=64, pattern=PUBLIC_ID_PATTERN, description="public_id del profesional"),
-    service_id:  Optional[str] = Query(default=None, max_length=64, pattern=PUBLIC_ID_PATTERN, description="public_id del servicio"),
-    statuses:    Optional[List[str]] = Query(default=None, max_length=10, description="Estados: pending, confirmed, cancelled, completed"),
-    from_date:   Optional[date_type] = Query(default=None, description="Desde (YYYY-MM-DD)"),
-    to_date:     Optional[date_type] = Query(default=None, description="Hasta (YYYY-MM-DD)"),
-    page:        int = Query(default=1, ge=1),
-    page_size:   int = Query(default=20, ge=1, le=100),
+    client_name: Optional[str] = Query(
+        default=None, max_length=100, description="Nombre, apellido o email del cliente"
+    ),
+    staff_id: Optional[str] = Query(
+        default=None,
+        max_length=64,
+        pattern=PUBLIC_ID_PATTERN,
+        description="public_id del profesional",
+    ),
+    service_id: Optional[str] = Query(
+        default=None,
+        max_length=64,
+        pattern=PUBLIC_ID_PATTERN,
+        description="public_id del servicio",
+    ),
+    statuses: Optional[List[str]] = Query(
+        default=None,
+        max_length=10,
+        description="Estados: pending, confirmed, cancelled, completed",
+    ),
+    from_date: Optional[date_type] = Query(
+        default=None, description="Desde (YYYY-MM-DD)"
+    ),
+    to_date: Optional[date_type] = Query(
+        default=None, description="Hasta (YYYY-MM-DD)"
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -329,6 +371,7 @@ async def search_appointments(
     Todos los parámetros son opcionales y combinables.
     """
     from modules.appointments.repository import AppointmentRepository
+
     filters = AppointmentFilterParams(
         client_name=client_name,
         staff_id=staff_id,

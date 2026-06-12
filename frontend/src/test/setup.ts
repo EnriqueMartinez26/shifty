@@ -3,20 +3,22 @@
  * Runs before all tests
  */
 
-declare var require: any;
+import '@testing-library/jest-dom'
+
+declare const require: any
 
 // Setup global crypto polyfill for Node.js / JSDOM test environments
-const customGlobal = globalThis as any;
+const customGlobal = globalThis as any
 
 if (typeof customGlobal.crypto === 'undefined') {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const nodeCrypto = require('crypto');
+    const nodeCrypto = require('crypto')
     Object.defineProperty(customGlobal, 'crypto', {
       value: nodeCrypto.webcrypto || nodeCrypto,
-      writable: true,
-    });
-  } catch (e) {
+      writable: true
+    })
+  } catch (_e) {
     // Fail-safe fallback if not in a Node environment
   }
 }
@@ -24,15 +26,15 @@ if (typeof customGlobal.crypto === 'undefined') {
 if (customGlobal.crypto && typeof customGlobal.crypto.randomUUID === 'undefined') {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const nodeCrypto = require('crypto');
+    const nodeCrypto = require('crypto')
     Object.defineProperty(customGlobal.crypto, 'randomUUID', {
       value: () => {
-        const crypt = nodeCrypto.webcrypto || nodeCrypto;
-        return crypt.randomUUID ? crypt.randomUUID() : 'test-uuid-random-fallback';
+        const crypt = nodeCrypto.webcrypto || nodeCrypto
+        return crypt.randomUUID ? crypt.randomUUID() : 'test-uuid-random-fallback'
       },
-      writable: true,
-    });
-  } catch (e) {
+      writable: true
+    })
+  } catch (_e) {
     // Fail-safe fallback if not in a Node environment
   }
 }

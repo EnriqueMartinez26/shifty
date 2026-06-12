@@ -4,6 +4,7 @@ Servicio de auditoría.
 Responsabilidad única: insertar registros en audit_logs.
 Se inyecta en los servicios de negocio que necesiten rastrear cambios.
 """
+
 from __future__ import annotations
 
 from typing import Any

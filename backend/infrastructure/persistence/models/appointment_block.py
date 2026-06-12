@@ -4,18 +4,27 @@ from sqlalchemy.orm import Mapped, mapped_column, synonym
 from infrastructure.persistence.models.base import Base
 import ulid
 
+
 class AppointmentBlockModel(Base):
     __tablename__ = "appointment_blocks"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, index=True, default=lambda: str(ulid.ULID()))
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+    )
     staff_id: Mapped[str] = mapped_column(String, ForeignKey("staff.id"), index=True)
     store_id: Mapped[str] = mapped_column(String, index=True)
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     reason: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     starts_at = synonym("start_time")
     ends_at = synonym("end_time")

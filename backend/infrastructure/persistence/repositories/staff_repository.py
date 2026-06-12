@@ -5,6 +5,7 @@ from domain.entities.staff import Staff
 from domain.repositories.staff_repository import IStaffRepository
 from infrastructure.persistence.models.staff import StaffModel
 
+
 class StaffRepository(IStaffRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -33,7 +34,7 @@ class StaffRepository(IStaffRepository):
                 service_ids=staff.service_ids,
                 is_active=staff.is_active,
                 created_at=staff.created_at,
-                updated_at=staff.updated_at
+                updated_at=staff.updated_at,
             )
             self.session.add(model)
         else:
@@ -43,7 +44,7 @@ class StaffRepository(IStaffRepository):
             model.service_ids = staff.service_ids
             model.is_active = staff.is_active
             model.updated_at = staff.updated_at
-        
+
         await self.session.flush()
         return self._map_to_entity(model)
 
@@ -64,5 +65,5 @@ class StaffRepository(IStaffRepository):
             service_ids=model.service_ids,
             is_active=model.is_active,
             created_at=model.created_at,
-            updated_at=model.updated_at
+            updated_at=model.updated_at,
         )

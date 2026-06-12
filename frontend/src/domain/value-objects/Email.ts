@@ -1,24 +1,24 @@
 export class Email {
-  private readonly value: string;
+  private readonly value: string
 
   private constructor(email: string) {
-    this.value = email;
+    this.value = email
   }
 
   static create(email: string): Email {
-    const normalized = email.toLowerCase().trim();
-    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const normalized = email.toLowerCase().trim()
+    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!regex.test(normalized)) {
-      throw new Error(`Email inválido: ${normalized}`);
+      throw new Error(`Email inválido: ${normalized}`)
     }
-    return new Email(normalized);
+    return new Email(normalized)
   }
 
   getValue(): string {
-    return this.value;
+    return this.value
   }
 
   equals(other: Email): boolean {
-    return this.value === other.getValue();
+    return this.value === other.getValue()
   }
 }

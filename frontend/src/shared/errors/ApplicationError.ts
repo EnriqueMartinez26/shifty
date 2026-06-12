@@ -1,11 +1,11 @@
 export interface ErrorResponse {
-  name: string;
-  message: string;
-  code: string;
-  statusCode: number;
-  isOperational: boolean;
-  context?: Record<string, unknown>;
-  stack?: string;
+  name: string
+  message: string
+  code: string
+  statusCode: number
+  isOperational: boolean
+  context?: Record<string, unknown>
+  stack?: string
 }
 
 /**
@@ -13,22 +13,19 @@ export interface ErrorResponse {
  * Define la estructura para un manejo unificado y tipado estricto de errores.
  */
 export abstract class ApplicationError extends Error {
-  public abstract readonly code: string;
-  public abstract readonly statusCode: number;
-  public abstract readonly isOperational: boolean;
-  public readonly context?: Record<string, unknown>;
+  public abstract readonly code: string
+  public abstract readonly statusCode: number
+  public abstract readonly isOperational: boolean
+  public readonly context?: Record<string, unknown>
 
-  constructor(
-    message: string,
-    context?: Record<string, unknown>
-  ) {
-    super(message);
-    this.name = this.constructor.name;
-    this.context = context;
-    Object.setPrototypeOf(this, new.target.prototype); // Reestablece la cadena de prototipos
-    
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message)
+    this.name = this.constructor.name
+    this.context = context
+    Object.setPrototypeOf(this, new.target.prototype) // Reestablece la cadena de prototipos
+
     if ((Error as any).captureStackTrace) {
-      (Error as any).captureStackTrace(this, this.constructor);
+      ;(Error as any).captureStackTrace(this, this.constructor)
     }
   }
 
@@ -43,8 +40,8 @@ export abstract class ApplicationError extends Error {
       statusCode: this.statusCode,
       isOperational: this.isOperational,
       context: this.context,
-      stack: this.stack,
-    };
+      stack: this.stack
+    }
   }
 }
-export default ApplicationError;
+export default ApplicationError

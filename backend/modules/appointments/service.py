@@ -6,6 +6,7 @@ Responsabilidades:
 - Coordinación entre repositorios, auditoría y notificaciones.
 - Los repositorios son solo "colecciones de datos"; la inteligencia está aquí.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -27,7 +28,7 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import enqueue_confirmation_email
 from modules.services.model import Service
-from modules.staff.model import Staff, StaffBlock
+from modules.staff.model import Staff
 from modules.users.model import User
 
 if TYPE_CHECKING:
@@ -66,7 +67,9 @@ class AppointmentService:
           5. Disparo de notificación por email (Celery, fuera de la transacción).
         """
         # 1. Resolver entidades -----------------------------------------
-        service = await self.uow.appointments.get_service_by_public_id(data["service_id"])
+        service = await self.uow.appointments.get_service_by_public_id(
+            data["service_id"]
+        )
         if not service:
             raise ResourceNotFoundException("Servicio", data["service_id"])
 
@@ -85,11 +88,15 @@ class AppointmentService:
             raise BookingNoticeException(notice_hours)
 
         # 2. Verificar bloqueos de agenda --------------------------------
-        block = await self.uow.appointments.get_overlapping_block(staff.id, starts_at, ends_at)
-        
+        block = await self.uow.appointments.get_overlapping_block(
+            staff.id, starts_at, ends_at
+        )
+
         # 3. Bloqueo pesimista + verificación de conflictos --------------
         await self.uow.appointments.lock_staff_row(staff.id)
-        conflict = await self.uow.appointments.get_conflicting_appointment(staff.id, starts_at, ends_at)
+        conflict = await self.uow.appointments.get_conflicting_appointment(
+            staff.id, starts_at, ends_at
+        )
 
         # Delegar validación al Domain Service (DDD + UX Feedback)
         try:
@@ -97,27 +104,29 @@ class AppointmentService:
                 requested_start=starts_at,
                 requested_end=ends_at,
                 conflicting_appointment=conflict,
-                overlapping_block=block
+                overlapping_block=block,
             )
         except (AppointmentConflictException, BlockedScheduleException) as e:
             # Don Norman: Si hay error, busca una alternativa inmediata
             # Buscamos desde el fin del conflicto o bloqueo
             search_start = conflict.ends_at if conflict else block.ends_at
-            suggestion = await self._find_suggestion(staff.id, search_start, service.duration_minutes)
-            
+            suggestion = await self._find_suggestion(
+                staff.id, search_start, service.duration_minutes
+            )
+
             # Re-lanzar con la sugerencia
             if isinstance(e, AppointmentConflictException):
                 raise AppointmentConflictException(
                     conflict_start=conflict.starts_at,
                     conflict_end=conflict.ends_at,
-                    suggestion=suggestion
+                    suggestion=suggestion,
                 )
             else:
                 raise BlockedScheduleException(
                     reason=block.note,
                     block_start=block.starts_at,
                     block_end=block.ends_at,
-                    suggestion=suggestion
+                    suggestion=suggestion,
                 )
 
         # 4. Creación atómica con auditoría ------------------------------
@@ -130,7 +139,10 @@ class AppointmentService:
             starts_at=starts_at,
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
-            client_name=(f"{actor.first_name or ''} {actor.last_name or ''}".strip() or actor.email),
+            client_name=(
+                f"{actor.first_name or ''} {actor.last_name or ''}".strip()
+                or actor.email
+            ),
             client_email=actor.email,
             client_phone=actor.phone,
             notes=data.get("notes"),
@@ -241,7 +253,12 @@ class AppointmentService:
             resource_id=appointment.public_id,
             actor=actor,
             payload_before=payload_before,
-            payload_after={"status": appointment.status, "completed_at": appointment.completed_at.isoformat() if appointment.completed_at else None},
+            payload_after={
+                "status": appointment.status,
+                "completed_at": appointment.completed_at.isoformat()
+                if appointment.completed_at
+                else None,
+            },
         )
 
         await self.uow.commit()
@@ -320,10 +337,10 @@ class AppointmentService:
             raise AppointmentNotFoundException(public_id)
 
         # Guardar IDs antes de cancelar
-        store_id   = original.store_id
-        staff_id   = original.staff_id
+        store_id = original.store_id
+        staff_id = original.staff_id
         service_id = original.service_id
-        client_id  = original.client_id
+        client_id = original.client_id
         orig_notes = original.notes
         orig_intake_answers = original.intake_answers or {}
 
@@ -346,7 +363,9 @@ class AppointmentService:
             raise BookingNoticeException(notice_hours)
 
         # 3. Verificar bloqueos de agenda en la nueva fecha
-        block = await self.uow.appointments.get_overlapping_block(staff_id, new_starts_at, ends_at)
+        block = await self.uow.appointments.get_overlapping_block(
+            staff_id, new_starts_at, ends_at
+        )
 
         # 4. Bloqueo pesimista + verificar conflictos (excluyendo el turno original)
         await self.uow.appointments.lock_staff_row(staff_id)
@@ -361,24 +380,26 @@ class AppointmentService:
                 requested_start=new_starts_at,
                 requested_end=ends_at,
                 conflicting_appointment=conflict,
-                overlapping_block=block
+                overlapping_block=block,
             )
         except (AppointmentConflictException, BlockedScheduleException) as e:
             search_start = conflict.ends_at if conflict else block.ends_at
-            suggestion = await self._find_suggestion(staff_id, search_start, service.duration_minutes)
-            
+            suggestion = await self._find_suggestion(
+                staff_id, search_start, service.duration_minutes
+            )
+
             if isinstance(e, AppointmentConflictException):
                 raise AppointmentConflictException(
                     conflict_start=conflict.starts_at,
                     conflict_end=conflict.ends_at,
-                    suggestion=suggestion
+                    suggestion=suggestion,
                 )
             else:
                 raise BlockedScheduleException(
                     reason=block.note,
                     block_start=block.starts_at,
                     block_end=block.ends_at,
-                    suggestion=suggestion
+                    suggestion=suggestion,
                 )
 
         # 5. Cancelar original (con timestamp y auditoría)
@@ -405,7 +426,10 @@ class AppointmentService:
             starts_at=new_starts_at,
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
-            client_name=(f"{actor.first_name or ''} {actor.last_name or ''}".strip() or actor.email),
+            client_name=(
+                f"{actor.first_name or ''} {actor.last_name or ''}".strip()
+                or actor.email
+            ),
             client_email=actor.email,
             client_phone=actor.phone,
             notes=orig_notes,
@@ -436,32 +460,38 @@ class AppointmentService:
 
         return new_appointment, service, staff
 
-    async def _find_suggestion(self, staff_id: int, start_from: datetime, duration_mins: int) -> datetime | None:
+    async def _find_suggestion(
+        self, staff_id: int, start_from: datetime, duration_mins: int
+    ) -> datetime | None:
         """
         Encuentra el próximo hueco disponible (max 6 horas adelante).
         Implementa el principio de Don Norman de ofrecer salidas claras al error.
         """
         from datetime import timedelta
+
         current = start_from
         max_search = start_from + timedelta(hours=6)
-        
+
         while current < max_search:
             end = current + timedelta(minutes=duration_mins)
-            
+
             # 1. Verificar bloqueos
-            block = await self.uow.appointments.get_overlapping_block(staff_id, current, end)
+            block = await self.uow.appointments.get_overlapping_block(
+                staff_id, current, end
+            )
             if block:
                 current = block.ends_at
                 continue
-                
+
             # 2. Verificar conflictos
-            conflict = await self.uow.appointments.get_conflicting_appointment(staff_id, current, end)
+            conflict = await self.uow.appointments.get_conflicting_appointment(
+                staff_id, current, end
+            )
             if conflict:
                 current = conflict.ends_at
                 continue
-                
+
             # Si llegamos aquí, el hueco está libre
             return current
-            
-        return None
 
+        return None

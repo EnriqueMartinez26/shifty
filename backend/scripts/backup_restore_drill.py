@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -8,8 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-def _run(command: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
-    result = subprocess.run(command, capture_output=True, text=True, env=env, check=False)
+def _run(
+    command: list[str], *, env: dict[str, str] | None = None
+) -> tuple[int, str, str]:
+    result = subprocess.run(
+        command, capture_output=True, text=True, env=env, check=False
+    )
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
@@ -19,9 +23,13 @@ def _latest_backup(backup_dir: Path) -> Path | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ejecuta drill de backup+restore y guarda evidencia JSON.")
+    parser = argparse.ArgumentParser(
+        description="Ejecuta drill de backup+restore y guarda evidencia JSON."
+    )
     parser.add_argument("--backup-dir", default="backups", help="Directorio de backups")
-    parser.add_argument("--evidence-dir", default="backups/evidence", help="Directorio de evidencias")
+    parser.add_argument(
+        "--evidence-dir", default="backups/evidence", help="Directorio de evidencias"
+    )
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
     parser.add_argument(
         "--restore-database-url",
@@ -69,7 +77,14 @@ def main() -> int:
             add_step("backup", False, stderr="DATABASE_URL no configurado")
         else:
             code, out, err = _run(
-                ["python", "scripts/backup_db.py", "--output-dir", str(backup_dir), "--database-url", args.database_url]
+                [
+                    "python",
+                    "scripts/backup_db.py",
+                    "--output-dir",
+                    str(backup_dir),
+                    "--database-url",
+                    args.database_url,
+                ]
             )
             add_step("backup", code == 0, out, err)
 
@@ -105,7 +120,9 @@ def main() -> int:
     evidence["duration_seconds"] = int((finished_at - started_at).total_seconds())
 
     evidence_path = evidence_dir / f"drill-{started_at.strftime('%Y%m%dT%H%M%SZ')}.json"
-    evidence_path.write_text(json.dumps(evidence, ensure_ascii=True, indent=2), encoding="utf-8")
+    evidence_path.write_text(
+        json.dumps(evidence, ensure_ascii=True, indent=2), encoding="utf-8"
+    )
     print(f"Evidencia generada: {evidence_path}")
     return 0 if evidence.get("status") == "ok" else 1
 

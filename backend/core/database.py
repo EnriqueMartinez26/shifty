@@ -8,10 +8,12 @@ from core.config import settings
 _current_store_id: ContextVar[int | None] = ContextVar("current_store_id", default=None)
 _is_global_admin: ContextVar[bool] = ContextVar("is_global_admin", default=False)
 
+
 def set_tenant_context(store_id: int | None, is_admin: bool = False):
     """Establece el contexto del tenant para la sesión actual."""
     _current_store_id.set(store_id)
     _is_global_admin.set(is_admin)
+
 
 class TenantSession(AsyncSession):
     """
@@ -43,6 +45,7 @@ async def _apply_tenant_context(session: AsyncSession) -> None:
         },
     )
 
+
 engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = async_sessionmaker(
@@ -53,14 +56,17 @@ SessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
+
 class Base(DeclarativeBase):
     pass
+
 
 async def get_db():
     """Dependency para FastAPI"""
     async with SessionLocal() as session:
         await _apply_tenant_context(session)
         yield session
+
 
 # Alias para uso fuera de FastAPI (Celery tasks, scripts, etc.)
 # Las tareas de Celery usan esto con "async with AsyncSessionFactory() as db:"

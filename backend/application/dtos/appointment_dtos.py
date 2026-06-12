@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
+
 
 class CreateAppointmentRequest(BaseModel):
     service_id: str
@@ -12,6 +13,7 @@ class CreateAppointmentRequest(BaseModel):
     client_phone: Optional[str] = None
     notes: Optional[str] = None
     idempotency_key: Optional[str] = None
+
 
 class AppointmentResponse(BaseModel):
     id: str

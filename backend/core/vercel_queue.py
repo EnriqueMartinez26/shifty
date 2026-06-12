@@ -47,7 +47,9 @@ def _queue_headers(oidc_token: str) -> dict[str, str]:
 def _queue_base_url(topic: str) -> str:
     if not settings.VERCEL_QUEUE_REGION:
         raise VercelQueueError("VERCEL_QUEUE_REGION no está configurado")
-    return f"https://{settings.VERCEL_QUEUE_REGION}.vercel-queue.com/api/v3/topic/{topic}"
+    return (
+        f"https://{settings.VERCEL_QUEUE_REGION}.vercel-queue.com/api/v3/topic/{topic}"
+    )
 
 
 async def publish_json_message(

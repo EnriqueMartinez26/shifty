@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import random
@@ -13,18 +13,36 @@ from locust import HttpUser, between, task
 STORE_PUBLIC_ID = os.getenv("SHIFTY_STORE_PUBLIC_ID", "")
 SERVICE_PUBLIC_ID = os.getenv("SHIFTY_SERVICE_PUBLIC_ID", "")
 STAFF_PUBLIC_ID = os.getenv("SHIFTY_STAFF_PUBLIC_ID", "")
-STORE_PUBLIC_IDS = [value.strip() for value in os.getenv("SHIFTY_STORE_PUBLIC_IDS", "").split(",") if value.strip()]
-SERVICE_PUBLIC_IDS = [value.strip() for value in os.getenv("SHIFTY_SERVICE_PUBLIC_IDS", "").split(",") if value.strip()]
-STAFF_PUBLIC_IDS = [value.strip() for value in os.getenv("SHIFTY_STAFF_PUBLIC_IDS", "").split(",") if value.strip()]
+STORE_PUBLIC_IDS = [
+    value.strip()
+    for value in os.getenv("SHIFTY_STORE_PUBLIC_IDS", "").split(",")
+    if value.strip()
+]
+SERVICE_PUBLIC_IDS = [
+    value.strip()
+    for value in os.getenv("SHIFTY_SERVICE_PUBLIC_IDS", "").split(",")
+    if value.strip()
+]
+STAFF_PUBLIC_IDS = [
+    value.strip()
+    for value in os.getenv("SHIFTY_STAFF_PUBLIC_IDS", "").split(",")
+    if value.strip()
+]
 BOOKING_PHONE_PREFIX = os.getenv("SHIFTY_BOOKING_PHONE_PREFIX", "+54911")
 MERCADOPAGO_WEBHOOK_SECRET = os.getenv("SHIFTY_MERCADOPAGO_WEBHOOK_SECRET", "")
 
 
 def _tenant_pool() -> list[tuple[str, str, str]]:
     if STORE_PUBLIC_IDS and SERVICE_PUBLIC_IDS and STAFF_PUBLIC_IDS:
-        size = min(len(STORE_PUBLIC_IDS), len(SERVICE_PUBLIC_IDS), len(STAFF_PUBLIC_IDS))
+        size = min(
+            len(STORE_PUBLIC_IDS), len(SERVICE_PUBLIC_IDS), len(STAFF_PUBLIC_IDS)
+        )
         return [
-            (STORE_PUBLIC_IDS[index], SERVICE_PUBLIC_IDS[index], STAFF_PUBLIC_IDS[index])
+            (
+                STORE_PUBLIC_IDS[index],
+                SERVICE_PUBLIC_IDS[index],
+                STAFF_PUBLIC_IDS[index],
+            )
             for index in range(size)
         ]
     if STORE_PUBLIC_ID and SERVICE_PUBLIC_ID and STAFF_PUBLIC_ID:
@@ -46,7 +64,9 @@ def _tenant() -> tuple[str, str, str] | None:
     return random.choice(TENANTS)
 
 
-def _webhook_signature_headers(*, secret: str, data_id: str, request_id: str, ts: str) -> dict[str, str]:
+def _webhook_signature_headers(
+    *, secret: str, data_id: str, request_id: str, ts: str
+) -> dict[str, str]:
     manifest = f"id:{data_id};request-id:{request_id};ts:{ts};"
     digest = hmac.new(
         secret.encode("utf-8"),
@@ -84,7 +104,9 @@ class PublicAvailabilityUser(HttpUser):
         if not tenant:
             return
         store_public_id, service_public_id, staff_public_id = tenant
-        starts_at = datetime.now(timezone.utc) + timedelta(days=7, hours=random.randint(8, 18))
+        starts_at = datetime.now(timezone.utc) + timedelta(
+            days=7, hours=random.randint(8, 18)
+        )
         payload = {
             "store_public_id": store_public_id,
             "service_id": service_public_id,
@@ -95,7 +117,9 @@ class PublicAvailabilityUser(HttpUser):
             "client_email": None,
             "idempotency_key": f"load-{uuid.uuid4().hex}",
         }
-        self.client.post("/public/appointments", json=payload, name="/public/appointments")
+        self.client.post(
+            "/public/appointments", json=payload, name="/public/appointments"
+        )
 
 
 class PublicAbuseUser(HttpUser):

@@ -4,6 +4,7 @@ Notificaciones async compatibles con runtime serverless.
 Usa Vercel Queues cuando hay token OIDC disponible y cae a SMTP directo
 para confirmaciones cuando no es posible publicar en la cola.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +16,12 @@ import structlog
 
 from core.config import settings
 from core.database import AsyncSessionFactory
-from core.vercel_queue import ack_message, publish_json_message, queue_is_enabled, receive_json_messages
+from core.vercel_queue import (
+    ack_message,
+    publish_json_message,
+    queue_is_enabled,
+    receive_json_messages,
+)
 
 logger = structlog.get_logger()
 
@@ -29,7 +35,9 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
         message.set_content(body)
 
         try:
-            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
+            with smtplib.SMTP(
+                settings.SMTP_HOST, settings.SMTP_PORT, timeout=10
+            ) as smtp:
                 smtp.starttls()
                 smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
                 smtp.send_message(message)
@@ -48,7 +56,7 @@ def _confirmation_subject(details: dict) -> str:
 def _confirmation_body(details: dict) -> str:
     return (
         "Hola,\n\n"
-        f"Tu turno para \"{details.get('service')}\" con {details.get('staff')} "
+        f'Tu turno para "{details.get("service")}" con {details.get("staff")} '
         "ha sido registrado correctamente.\n\n"
         f"Fecha y hora: {details.get('date')}\n\n"
         "Si necesitas cancelarlo, podes hacerlo desde la app hasta 2 horas antes.\n\n"
@@ -63,7 +71,7 @@ def _reminder_subject(details: dict) -> str:
 def _reminder_body(details: dict) -> str:
     return (
         "Hola,\n\n"
-        f"Te recordamos que manana tenes turno para \"{details.get('service')}\" "
+        f'Te recordamos que manana tenes turno para "{details.get("service")}" '
         f"con {details.get('staff')}.\n\n"
         f"Hora: {details.get('date')}\n\n"
         "Si necesitas cancelar, hacelo lo antes posible desde la app.\n\n"
@@ -72,8 +80,12 @@ def _reminder_body(details: dict) -> str:
 
 
 async def send_appointment_confirmation(email: str, details: dict) -> dict:
-    logger.info("sending_confirmation_email", email=email, appointment=details.get("public_id"))
-    success = await _send_email(email, _confirmation_subject(details), _confirmation_body(details))
+    logger.info(
+        "sending_confirmation_email", email=email, appointment=details.get("public_id")
+    )
+    success = await _send_email(
+        email, _confirmation_subject(details), _confirmation_body(details)
+    )
     if not success:
         raise RuntimeError("SMTP send failed")
     logger.info("confirmation_email_sent", email=email)
@@ -81,8 +93,12 @@ async def send_appointment_confirmation(email: str, details: dict) -> dict:
 
 
 async def send_appointment_reminder(email: str, details: dict) -> dict:
-    logger.info("sending_reminder_email", email=email, appointment=details.get("public_id"))
-    success = await _send_email(email, _reminder_subject(details), _reminder_body(details))
+    logger.info(
+        "sending_reminder_email", email=email, appointment=details.get("public_id")
+    )
+    success = await _send_email(
+        email, _reminder_subject(details), _reminder_body(details)
+    )
     if not success:
         raise RuntimeError("SMTP send failed")
     logger.info("reminder_email_sent", email=email)
@@ -175,7 +191,9 @@ async def schedule_24h_reminders(
             starts_before=window_end,
         )
         for appointment, service, staff, client in rows:
-            reminder_at = appointment.starts_at.replace(tzinfo=timezone.utc) - timedelta(hours=24)
+            reminder_at = appointment.starts_at.replace(
+                tzinfo=timezone.utc
+            ) - timedelta(hours=24)
             delay_seconds = max(0, int((reminder_at - now).total_seconds()))
             await enqueue_reminder_email(
                 email=client.email,

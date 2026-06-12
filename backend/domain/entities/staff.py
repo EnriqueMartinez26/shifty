@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
+
 
 @dataclass
 class Staff:
     """Domain entity representing a staff member (professional)."""
+
     id: str
     first_name: str
     last_name: str

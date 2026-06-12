@@ -1,13 +1,19 @@
-from typing import List, Optional
+from typing import List
 from datetime import date
-from application.dtos.appointment_dtos import CreateAppointmentRequest, AppointmentResponse
+from application.dtos.appointment_dtos import (
+    CreateAppointmentRequest,
+    AppointmentResponse,
+)
 from domain.use_cases.appointments.create_appointment import CreateAppointmentUseCase
 from domain.repositories.appointment_repository import IAppointmentRepository
 from domain.repositories.staff_repository import IStaffRepository
 from domain.exceptions.base_exceptions import EntityNotFoundError
 
+
 class AppointmentService:
-    def __init__(self, repository: IAppointmentRepository, staff_repository: IStaffRepository):
+    def __init__(
+        self, repository: IAppointmentRepository, staff_repository: IStaffRepository
+    ):
         self.repository = repository
         self.staff_repository = staff_repository
         self.create_use_case = CreateAppointmentUseCase(repository)
@@ -18,11 +24,15 @@ class AppointmentService:
             raise EntityNotFoundError(f"Appointment {appointment_id} not found")
         return self._map_to_response(appointment)
 
-    async def list_by_date(self, store_id: str, date_val: date) -> List[AppointmentResponse]:
+    async def list_by_date(
+        self, store_id: str, date_val: date
+    ) -> List[AppointmentResponse]:
         appointments = await self.repository.find_by_date(store_id, date_val)
         return [self._map_to_response(a) for a in appointments]
 
-    async def create(self, request: CreateAppointmentRequest, store_id: str) -> AppointmentResponse:
+    async def create(
+        self, request: CreateAppointmentRequest, store_id: str
+    ) -> AppointmentResponse:
         appointment = await self.create_use_case.execute(
             service_id=request.service_id,
             staff_id=request.staff_id,
@@ -33,7 +43,7 @@ class AppointmentService:
             client_email=request.client_email,
             client_phone=request.client_phone,
             notes=request.notes,
-            idempotency_key=request.idempotency_key
+            idempotency_key=request.idempotency_key,
         )
         return self._map_to_response(appointment)
 
@@ -41,7 +51,7 @@ class AppointmentService:
         appointment = await self.repository.find_by_id(appointment_id)
         if not appointment:
             raise EntityNotFoundError(f"Appointment {appointment_id} not found")
-        
+
         appointment.confirm()
         saved = await self.repository.save(appointment)
         return self._map_to_response(saved)
@@ -61,5 +71,5 @@ class AppointmentService:
             status=appointment.status.value,
             notes=appointment.notes,
             created_at=appointment.created_at,
-            updated_at=appointment.updated_at
+            updated_at=appointment.updated_at,
         )

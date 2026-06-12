@@ -1,10 +1,11 @@
-﻿"""evolve_shifty_payments_auth_ledger
+"""evolve_shifty_payments_auth_ledger
 
 Revision ID: c2d4e6f8a901
 Revises: b8e2f4a6c9d0
 Create Date: 2026-05-25 00:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -22,7 +23,9 @@ def _base_columns() -> list[sa.Column]:
         sa.Column("id", sa.String(), primary_key=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
     ]
 
 
@@ -45,22 +48,59 @@ def _enable_rls(table_name: str, store_column: str = "store_id") -> None:
 
 
 def upgrade() -> None:
-    op.add_column("services", sa.Column("image_url", sa.String(length=500), nullable=True))
-    op.add_column("services", sa.Column("deposit_mode", sa.String(length=20), nullable=False, server_default="none"))
-    op.add_column("services", sa.Column("deposit_type", sa.String(length=20), nullable=False, server_default="percent"))
-    op.add_column("services", sa.Column("deposit_amount", sa.Numeric(10, 2), nullable=True))
-    op.create_check_constraint("ck_services_deposit_mode", "services", "deposit_mode IN ('none', 'optional', 'required')")
-    op.create_check_constraint("ck_services_deposit_type", "services", "deposit_type IN ('percent', 'fixed', 'full')")
+    op.add_column(
+        "services", sa.Column("image_url", sa.String(length=500), nullable=True)
+    )
+    op.add_column(
+        "services",
+        sa.Column(
+            "deposit_mode", sa.String(length=20), nullable=False, server_default="none"
+        ),
+    )
+    op.add_column(
+        "services",
+        sa.Column(
+            "deposit_type",
+            sa.String(length=20),
+            nullable=False,
+            server_default="percent",
+        ),
+    )
+    op.add_column(
+        "services", sa.Column("deposit_amount", sa.Numeric(10, 2), nullable=True)
+    )
+    op.create_check_constraint(
+        "ck_services_deposit_mode",
+        "services",
+        "deposit_mode IN ('none', 'optional', 'required')",
+    )
+    op.create_check_constraint(
+        "ck_services_deposit_type",
+        "services",
+        "deposit_type IN ('percent', 'fixed', 'full')",
+    )
 
-    op.add_column("appointments", sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True))
-    op.execute("ALTER TABLE appointments DROP CONSTRAINT IF EXISTS check_appointment_status_v3;")
+    op.add_column(
+        "appointments",
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.execute(
+        "ALTER TABLE appointments DROP CONSTRAINT IF EXISTS check_appointment_status_v3;"
+    )
     op.create_check_constraint(
         "check_appointment_status_v3",
         "appointments",
         "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",
     )
-    op.execute("ALTER TABLE store_schedules DROP CONSTRAINT IF EXISTS uq_store_day_schedule;")
-    op.create_index("ix_store_schedules_store_day", "store_schedules", ["store_id", "day_of_week"], unique=False)
+    op.execute(
+        "ALTER TABLE store_schedules DROP CONSTRAINT IF EXISTS uq_store_day_schedule;"
+    )
+    op.create_index(
+        "ix_store_schedules_store_day",
+        "store_schedules",
+        ["store_id", "day_of_week"],
+        unique=False,
+    )
 
     op.create_table(
         "auth_sessions",
@@ -77,49 +117,87 @@ def upgrade() -> None:
     )
     op.create_index("ix_auth_sessions_user_id", "auth_sessions", ["user_id"])
     op.create_index("ix_auth_sessions_store_id", "auth_sessions", ["store_id"])
-    op.create_index("ix_auth_sessions_refresh_token_hash", "auth_sessions", ["refresh_token_hash"], unique=True)
+    op.create_index(
+        "ix_auth_sessions_refresh_token_hash",
+        "auth_sessions",
+        ["refresh_token_hash"],
+        unique=True,
+    )
     op.create_index("ix_auth_sessions_expires_at", "auth_sessions", ["expires_at"])
 
     op.create_table(
         "payment_gateway_configs",
         *_base_columns(),
         sa.Column("store_id", sa.String(), sa.ForeignKey("stores.id"), nullable=False),
-        sa.Column("provider", sa.String(length=50), nullable=False, server_default="mercadopago"),
+        sa.Column(
+            "provider",
+            sa.String(length=50),
+            nullable=False,
+            server_default="mercadopago",
+        ),
         sa.Column("encrypted_access_token", sa.Text(), nullable=False),
         sa.Column("public_key", sa.String(length=255), nullable=True),
         sa.Column("webhook_secret", sa.String(length=255), nullable=True),
-        sa.UniqueConstraint("store_id", "provider", name="uq_gateway_config_store_provider"),
+        sa.UniqueConstraint(
+            "store_id", "provider", name="uq_gateway_config_store_provider"
+        ),
     )
-    op.create_index("ix_payment_gateway_configs_store_id", "payment_gateway_configs", ["store_id"])
+    op.create_index(
+        "ix_payment_gateway_configs_store_id", "payment_gateway_configs", ["store_id"]
+    )
 
     op.create_table(
         "payments",
         *_base_columns(),
         sa.Column("store_id", sa.String(), sa.ForeignKey("stores.id"), nullable=False),
-        sa.Column("appointment_id", sa.String(), sa.ForeignKey("appointments.id"), nullable=False),
-        sa.Column("provider", sa.String(length=50), nullable=False, server_default="mercadopago"),
+        sa.Column(
+            "appointment_id",
+            sa.String(),
+            sa.ForeignKey("appointments.id"),
+            nullable=False,
+        ),
+        sa.Column(
+            "provider",
+            sa.String(length=50),
+            nullable=False,
+            server_default="mercadopago",
+        ),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False),
-        sa.Column("currency", sa.String(length=10), nullable=False, server_default="ARS"),
-        sa.Column("status", sa.String(length=50), nullable=False, server_default="pending"),
+        sa.Column(
+            "currency", sa.String(length=10), nullable=False, server_default="ARS"
+        ),
+        sa.Column(
+            "status", sa.String(length=50), nullable=False, server_default="pending"
+        ),
         sa.Column("preference_id", sa.String(length=255), nullable=True),
         sa.Column("payment_link", sa.Text(), nullable=True),
         sa.Column("external_payment_id", sa.String(length=255), nullable=True),
         sa.Column("transaction_id", sa.String(length=255), nullable=True),
         sa.Column("paid_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("raw_payload", sa.JSON(), nullable=True),
-        sa.CheckConstraint("status IN ('pending', 'approved', 'rejected', 'expired', 'refunded', 'manual_confirmed')", name="ck_payments_status"),
+        sa.CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'expired', 'refunded', 'manual_confirmed')",
+            name="ck_payments_status",
+        ),
     )
     op.create_index("ix_payments_store_id", "payments", ["store_id"])
     op.create_index("ix_payments_appointment_id", "payments", ["appointment_id"])
     op.create_index("ix_payments_status", "payments", ["status"])
     op.create_index("ix_payments_preference_id", "payments", ["preference_id"])
-    op.create_index("ix_payments_external_payment_id", "payments", ["external_payment_id"])
+    op.create_index(
+        "ix_payments_external_payment_id", "payments", ["external_payment_id"]
+    )
 
     op.create_table(
         "webhook_inbox",
         *_base_columns(),
         sa.Column("store_id", sa.String(), nullable=True),
-        sa.Column("provider", sa.String(length=50), nullable=False, server_default="mercadopago"),
+        sa.Column(
+            "provider",
+            sa.String(length=50),
+            nullable=False,
+            server_default="mercadopago",
+        ),
         sa.Column("event_id", sa.String(length=255), nullable=False),
         sa.Column("event_type", sa.String(length=100), nullable=True),
         sa.Column("payload", sa.JSON(), nullable=False),
@@ -127,7 +205,9 @@ def upgrade() -> None:
         sa.Column("error", sa.Text(), nullable=True),
     )
     op.create_index("ix_webhook_inbox_store_id", "webhook_inbox", ["store_id"])
-    op.create_index("ix_webhook_inbox_event_id", "webhook_inbox", ["event_id"], unique=True)
+    op.create_index(
+        "ix_webhook_inbox_event_id", "webhook_inbox", ["event_id"], unique=True
+    )
 
     op.create_table(
         "outbox_messages",
@@ -146,15 +226,27 @@ def upgrade() -> None:
         *_base_columns(),
         sa.Column("store_id", sa.String(), sa.ForeignKey("stores.id"), nullable=False),
         sa.Column("client_id", sa.String(), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("appointment_id", sa.String(), sa.ForeignKey("appointments.id"), nullable=True),
+        sa.Column(
+            "appointment_id",
+            sa.String(),
+            sa.ForeignKey("appointments.id"),
+            nullable=True,
+        ),
         sa.Column("movement_type", sa.String(length=30), nullable=False),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False),
         sa.Column("balance_after", sa.Numeric(12, 2), nullable=False),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.CheckConstraint("movement_type IN ('charge', 'payment', 'adjustment', 'refund')", name="ck_customer_ledger_type"),
+        sa.CheckConstraint(
+            "movement_type IN ('charge', 'payment', 'adjustment', 'refund')",
+            name="ck_customer_ledger_type",
+        ),
     )
-    op.create_index("ix_customer_ledger_store_client", "customer_ledger", ["store_id", "client_id"])
-    op.create_index("ix_customer_ledger_appointment_id", "customer_ledger", ["appointment_id"])
+    op.create_index(
+        "ix_customer_ledger_store_client", "customer_ledger", ["store_id", "client_id"]
+    )
+    op.create_index(
+        "ix_customer_ledger_appointment_id", "customer_ledger", ["appointment_id"]
+    )
 
     for table in (
         "auth_sessions",
@@ -188,7 +280,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("ALTER TABLE appointments DROP CONSTRAINT IF EXISTS ex_appointments_no_active_overlap;")
+    op.execute(
+        "ALTER TABLE appointments DROP CONSTRAINT IF EXISTS ex_appointments_no_active_overlap;"
+    )
     for table in (
         "customer_ledger",
         "outbox_messages",
@@ -199,8 +293,12 @@ def downgrade() -> None:
     ):
         op.drop_table(table)
     op.drop_index("ix_store_schedules_store_day", table_name="store_schedules")
-    op.create_unique_constraint("uq_store_day_schedule", "store_schedules", ["store_id", "day_of_week"])
-    op.execute("ALTER TABLE appointments DROP CONSTRAINT IF EXISTS check_appointment_status_v3;")
+    op.create_unique_constraint(
+        "uq_store_day_schedule", "store_schedules", ["store_id", "day_of_week"]
+    )
+    op.execute(
+        "ALTER TABLE appointments DROP CONSTRAINT IF EXISTS check_appointment_status_v3;"
+    )
     op.create_check_constraint(
         "check_appointment_status_v3",
         "appointments",

@@ -5,14 +5,14 @@ import './index.css'
 import App from './App.tsx'
 import { registerDependencies } from './infrastructure/di/dependencies'
 import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
-import { 
-  ValidationErrorHandler, 
-  NotFoundErrorHandler, 
-  UnauthorizedErrorHandler, 
-  ForbiddenErrorHandler, 
-  ConflictErrorHandler, 
-  InternalServerErrorHandler, 
-  NetworkErrorHandler 
+import {
+  ValidationErrorHandler,
+  NotFoundErrorHandler,
+  UnauthorizedErrorHandler,
+  ForbiddenErrorHandler,
+  ConflictErrorHandler,
+  InternalServerErrorHandler,
+  NetworkErrorHandler
 } from './shared/errors/handlers/SpecificHandlers'
 import { setupEventHandlers } from './infrastructure/setup/setupEventHandlers'
 
@@ -58,9 +58,9 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: false
     }
-  },
+  }
 })
 
 createRoot(document.getElementById('root')!).render(
@@ -68,6 +68,5 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <App />
     </QueryClientProvider>
-  </StrictMode>,
+  </StrictMode>
 )
-

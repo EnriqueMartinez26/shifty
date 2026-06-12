@@ -25,7 +25,9 @@ async def idempotency_guard(key: str, redis: Redis) -> dict[str, Any] | None:
             return json.loads(cached)
 
         if not cached:
-            acquired = await redis.set(cache_key, PROCESSING_VALUE, nx=True, px=PROCESSING_TTL_MS)
+            acquired = await redis.set(
+                cache_key, PROCESSING_VALUE, nx=True, px=PROCESSING_TTL_MS
+            )
             if acquired:
                 return None
 
@@ -33,6 +35,7 @@ async def idempotency_guard(key: str, redis: Redis) -> dict[str, Any] | None:
         waited += 0.25
 
     raise IdempotencyInProgressException()
+
 
 async def idempotency_save(key: str, result: Any, redis: Redis):
     """Guarda el resultado exitoso para futuras peticiones idempotentes."""

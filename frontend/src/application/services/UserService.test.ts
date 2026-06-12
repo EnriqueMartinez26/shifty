@@ -1,10 +1,10 @@
-import { UserService } from './UserService';
-import type { IUserRepository } from '../../domain/repositories/IUserRepository';
-import { User } from '../../domain/entities/User';
+import { UserService } from './UserService'
+import type { IUserRepository } from '../../domain/repositories/IUserRepository'
+import { User } from '../../domain/entities/User'
 
 describe('UserService', () => {
-  let mockRepository: jest.Mocked<IUserRepository>;
-  let service: UserService;
+  let mockRepository: jest.Mocked<IUserRepository>
+  let service: UserService
 
   beforeEach(() => {
     mockRepository = {
@@ -12,11 +12,11 @@ describe('UserService', () => {
       findAll: jest.fn(),
       findById: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn(),
-    } as any;
+      delete: jest.fn()
+    } as any
 
-    service = new UserService(mockRepository);
-  });
+    service = new UserService(mockRepository)
+  })
 
   describe('createUser', () => {
     it('should successfully validate input, trigger CreateUserUseCase, and create a user', async () => {
@@ -26,8 +26,8 @@ describe('UserService', () => {
         firstName: 'John',
         lastName: 'Doe',
         phone: '123456789',
-        role: 'client',
-      };
+        role: 'client'
+      }
 
       const expectedUser = User.fromPrimitives({
         id: 'user-id-123',
@@ -37,20 +37,17 @@ describe('UserService', () => {
         phone: input.phone,
         role: input.role,
         isActive: true,
-        createdAt: new Date().toISOString(),
-      });
+        createdAt: new Date().toISOString()
+      })
 
-      mockRepository.create.mockResolvedValue(expectedUser);
+      mockRepository.create.mockResolvedValue(expectedUser)
 
-      const result = await service.createUser(input);
+      const result = await service.createUser(input)
 
-      expect(result).toBe(expectedUser);
-      expect(mockRepository.create).toHaveBeenCalledTimes(1);
-      expect(mockRepository.create).toHaveBeenCalledWith(
-        expect.any(User),
-        input.password
-      );
-    });
+      expect(result).toBe(expectedUser)
+      expect(mockRepository.create).toHaveBeenCalledTimes(1)
+      expect(mockRepository.create).toHaveBeenCalledWith(expect.any(User), input.password)
+    })
 
     it('should throw validation error when email is invalid', async () => {
       const input = {
@@ -58,15 +55,15 @@ describe('UserService', () => {
         password: '123', // password too short
         firstName: 'John',
         lastName: 'Doe',
-        role: 'client',
-      };
+        role: 'client'
+      }
 
       await expect(service.createUser(input as any)).rejects.toThrow(
         'Error de validación: Verifique los datos ingresados.'
-      );
-      expect(mockRepository.create).not.toHaveBeenCalled();
-    });
-  });
+      )
+      expect(mockRepository.create).not.toHaveBeenCalled()
+    })
+  })
 
   describe('listUsers', () => {
     it('should call repository findAll with correct parameters', async () => {
@@ -79,27 +76,27 @@ describe('UserService', () => {
           phone: '',
           role: 'client',
           isActive: true,
-          createdAt: new Date().toISOString(),
-        }),
-      ];
-      mockRepository.findAll.mockResolvedValue(users);
+          createdAt: new Date().toISOString()
+        })
+      ]
+      mockRepository.findAll.mockResolvedValue(users)
 
-      const result = await service.listUsers(true);
+      const result = await service.listUsers(true)
 
-      expect(result).toEqual(users);
-      expect(mockRepository.findAll).toHaveBeenCalledWith(true);
-    });
-  });
+      expect(result).toEqual(users)
+      expect(mockRepository.findAll).toHaveBeenCalledWith(true)
+    })
+  })
 
   describe('deleteUser', () => {
     it('should call repository delete with correct id', async () => {
-      mockRepository.delete.mockResolvedValue(undefined);
+      mockRepository.delete.mockResolvedValue(undefined)
 
-      await service.deleteUser('user-id');
+      await service.deleteUser('user-id')
 
-      expect(mockRepository.delete).toHaveBeenCalledWith('user-id');
-    });
-  });
+      expect(mockRepository.delete).toHaveBeenCalledWith('user-id')
+    })
+  })
 
   describe('updateUser', () => {
     it('should call repository update with correct arguments', async () => {
@@ -111,19 +108,19 @@ describe('UserService', () => {
         phone: '',
         role: 'client',
         isActive: true,
-        createdAt: new Date().toISOString(),
-      });
-      
-      mockRepository.update.mockResolvedValue(updatedUser);
+        createdAt: new Date().toISOString()
+      })
+
+      mockRepository.update.mockResolvedValue(updatedUser)
 
       const result = await service.updateUser('user-id', {
-        firstName: 'John',
-      } as any);
+        firstName: 'John'
+      } as any)
 
-      expect(result).toBe(updatedUser);
+      expect(result).toBe(updatedUser)
       expect(mockRepository.update).toHaveBeenCalledWith('user-id', {
-        firstName: 'John',
-      });
-    });
-  });
-});
+        firstName: 'John'
+      })
+    })
+  })
+})

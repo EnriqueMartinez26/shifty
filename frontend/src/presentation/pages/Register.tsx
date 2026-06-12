@@ -1,87 +1,87 @@
-import React, { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
-import { ArrowRight, Store, User, Sparkles } from "lucide-react";
-import { mdiStore, mdiShieldAlert } from "@mdi/js";
-import { Icon2000s, LucideIcon2000s } from "../components/legacy/Icon2000s";
-import { colors2000s, buttonStyles2000s } from "../../theme/colors";
-import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from "../lib/businessLabels";
-import { useRegisterBusiness } from "../hooks/useRegisterBusiness";
+import React, { useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { ArrowRight, Store, User, Sparkles } from 'lucide-react'
+import { mdiStore, mdiShieldAlert } from '@mdi/js'
+import { Icon2000s, LucideIcon2000s } from '../components/legacy/Icon2000s'
+import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
+import { useRegisterBusiness } from '../hooks/useRegisterBusiness'
 
 const RegisterPage: React.FC = () => {
   const [formData, setFormData] = useState({
-    store_name: "",
-    store_slug: "",
-    business_type: "generic" as const,
-    admin_email: "",
-    admin_password: "",
-    admin_first_name: "",
-    admin_last_name: "",
-  });
-  const [error, setError] = useState<string | null>(null);
-  const navigate = useNavigate();
-  const labels = getBusinessLabels(formData.business_type);
-  const registerMutation = useRegisterBusiness();
+    store_name: '',
+    store_slug: '',
+    business_type: 'generic' as const,
+    admin_email: '',
+    admin_password: '',
+    admin_first_name: '',
+    admin_last_name: ''
+  })
+  const [error, setError] = useState<string | null>(null)
+  const navigate = useNavigate()
+  const labels = getBusinessLabels(formData.business_type)
+  const registerMutation = useRegisterBusiness()
 
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const nameVal = e.target.value;
+    const nameVal = e.target.value
     const computedSlug = nameVal
       .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-")
-      .trim();
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .trim()
 
     setFormData((prev) => {
       const isSlugEmptyOrAutoMatched =
-        prev.store_slug === "" ||
+        prev.store_slug === '' ||
         prev.store_slug ===
           prev.store_name
             .toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replace(/[^a-z0-9\s-]/g, "")
-            .replace(/\s+/g, "-")
-            .replace(/-+/g, "-")
-            .trim();
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9\s-]/g, '')
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-')
+            .trim()
 
       return {
         ...prev,
         store_name: nameVal,
-        store_slug: isSlugEmptyOrAutoMatched ? computedSlug : prev.store_slug,
-      };
-    });
-  };
+        store_slug: isSlugEmptyOrAutoMatched ? computedSlug : prev.store_slug
+      }
+    })
+  }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value });
-  };
+    setFormData({ ...formData, [e.target.name]: e.target.value })
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
+    e.preventDefault()
+    setError(null)
 
     try {
-      await registerMutation.mutateAsync(formData);
-      navigate("/login?registered=true");
+      await registerMutation.mutateAsync(formData)
+      navigate('/login?registered=true')
     } catch (err: any) {
-      setError(err.response?.data?.detail || "Error al registrar el negocio");
+      setError(err.response?.data?.detail || 'Error al registrar el negocio')
     }
-  };
+  }
 
   const inputStyle = {
-    background: "white",
+    background: 'white',
     border: `1px solid ${colors2000s.border.default}`,
     boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary,
-  };
+    color: colors2000s.text.primary
+  }
 
   return (
     <div
       className="min-h-screen w-full flex items-center justify-center relative overflow-y-auto py-12 px-4"
       style={{
-        background: `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`,
+        background: `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`
       }}
     >
       <div className="w-full max-w-2xl relative z-10 my-auto">
@@ -91,7 +91,7 @@ const RegisterPage: React.FC = () => {
             style={{
               background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
               boxShadow: `${colors2000s.shadows.outerOrange}, 0 8px 24px rgba(200,90,15,0.3)`,
-              border: `1px solid ${colors2000s.orange.accent}`,
+              border: `1px solid ${colors2000s.orange.accent}`
             }}
           >
             <div className="absolute top-0 left-0 right-0 h-1/2 bg-white/20 pointer-events-none" />
@@ -101,17 +101,20 @@ const RegisterPage: React.FC = () => {
           <div
             className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border mb-3 text-xs font-bold uppercase tracking-wider"
             style={{
-              background: "#ffffff",
+              background: '#ffffff',
               borderColor: colors2000s.border.default,
               color: colors2000s.orange.accent,
-              boxShadow: colors2000s.shadows.outer,
+              boxShadow: colors2000s.shadows.outer
             }}
           >
             <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-            Empeza hoy tu prueba gratuita
+            Empezá hoy tu prueba gratuita
           </div>
 
-          <h1 className="text-3xl md:text-4xl font-black tracking-tight" style={{ color: colors2000s.orange.accent }}>
+          <h1
+            className="text-3xl md:text-4xl font-black tracking-tight"
+            style={{ color: colors2000s.orange.accent }}
+          >
             Registra tu negocio
           </h1>
           <p className="text-sm font-medium mt-1" style={{ color: colors2000s.text.secondary }}>
@@ -124,7 +127,7 @@ const RegisterPage: React.FC = () => {
           style={{
             background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
             border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`,
+            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
           }}
         >
           <form onSubmit={handleSubmit} className="space-y-8">
@@ -134,12 +137,15 @@ const RegisterPage: React.FC = () => {
                 style={{ color: colors2000s.orange.accent, borderColor: colors2000s.border.light }}
               >
                 <LucideIcon2000s icon={Store} size={18} variant="pressed" />
-                Informacion del negocio
+                Información del negocio
               </h2>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     Rubro
                   </label>
                   <select
@@ -158,7 +164,10 @@ const RegisterPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     {labels.businessNameLabel}
                   </label>
                   <input
@@ -173,11 +182,17 @@ const RegisterPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     URL personalizada (Slug)
                   </label>
                   <div className="relative flex items-center">
-                    <span className="absolute left-4 font-bold text-xs pointer-events-none" style={{ color: colors2000s.text.disabled }}>
+                    <span
+                      className="absolute left-4 font-bold text-xs pointer-events-none"
+                      style={{ color: colors2000s.text.disabled }}
+                    >
                       shifty.app/
                     </span>
                     <input
@@ -205,7 +220,10 @@ const RegisterPage: React.FC = () => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     Nombre
                   </label>
                   <input
@@ -220,7 +238,10 @@ const RegisterPage: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     Apellido
                   </label>
                   <input
@@ -235,7 +256,10 @@ const RegisterPage: React.FC = () => {
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     Email Corporativo
                   </label>
                   <input
@@ -251,8 +275,11 @@ const RegisterPage: React.FC = () => {
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="block text-xs font-bold uppercase tracking-wider mb-2" style={{ color: colors2000s.text.secondary }}>
-                    Contrasena del Administrador
+                  <label
+                    className="block text-xs font-bold uppercase tracking-wider mb-2"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
+                    Contraseña del Administrador
                   </label>
                   <input
                     name="admin_password"
@@ -261,7 +288,7 @@ const RegisterPage: React.FC = () => {
                     onChange={handleChange}
                     className="w-full rounded-xl px-4 py-3 outline-none transition-all focus:border-[#ff8c42]"
                     style={inputStyle}
-                    placeholder="Minimo 8 caracteres"
+                    placeholder="Mínimo 8 caracteres"
                     required
                   />
                 </div>
@@ -272,10 +299,10 @@ const RegisterPage: React.FC = () => {
               <div
                 className="text-sm p-4 rounded-xl flex items-center gap-2.5"
                 style={{
-                  background: "#ffeeee",
-                  border: "1px solid #ffcccc",
-                  color: "#cc0000",
-                  boxShadow: colors2000s.shadows.insetDark,
+                  background: '#ffeeee',
+                  border: '1px solid #ffcccc',
+                  color: '#cc0000',
+                  boxShadow: colors2000s.shadows.insetDark
                 }}
               >
                 <Icon2000s path={mdiShieldAlert} size={18} variant="idle" color="#cc0000" />
@@ -287,10 +314,12 @@ const RegisterPage: React.FC = () => {
               type="submit"
               disabled={registerMutation.isPending}
               className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50 group"
-              style={registerMutation.isPending ? buttonStyles2000s.disabled : buttonStyles2000s.selected}
+              style={
+                registerMutation.isPending ? buttonStyles2000s.disabled : buttonStyles2000s.selected
+              }
             >
               {registerMutation.isPending ? (
-                "Creando negocio..."
+                'Creando negocio...'
               ) : (
                 <>
                   Crear mi cuenta y empezar
@@ -300,11 +329,18 @@ const RegisterPage: React.FC = () => {
             </button>
           </form>
 
-          <div className="mt-8 pt-6 text-center" style={{ borderTop: `1px solid ${colors2000s.border.light}` }}>
+          <div
+            className="mt-8 pt-6 text-center"
+            style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
+          >
             <p className="text-sm" style={{ color: colors2000s.text.secondary }}>
-              Ya tenes una cuenta creada?{" "}
-              <Link to="/login" className="font-bold transition-colors" style={{ color: colors2000s.orange.accent }}>
-                Inicia Sesion
+              ¿Ya tenés una cuenta creada?{' '}
+              <Link
+                to="/login"
+                className="font-bold transition-colors"
+                style={{ color: colors2000s.orange.accent }}
+              >
+                Iniciá sesión
               </Link>
             </p>
           </div>
@@ -315,7 +351,7 @@ const RegisterPage: React.FC = () => {
         </p>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default RegisterPage;
+export default RegisterPage

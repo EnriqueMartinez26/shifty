@@ -1,9 +1,16 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import Depends, Path, Query, status
+from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from core.exceptions import (
+    AppException,
+    ResourceNotFoundException,
+    StoreNotFoundException,
+    UserNotFoundException,
+)
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_global_admin
 from modules.superadmin.repository import SuperAdminRepository
@@ -33,8 +40,10 @@ from modules.superadmin.schemas import (
 )
 from modules.users.model import User
 
-router = APIRouter(prefix="/superadmin", tags=["SuperAdmin"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/superadmin", tags=["SuperAdmin"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 def _store_response(store) -> StoreGlobalResponse:
@@ -85,7 +94,9 @@ async def list_stores(
     return await repo.list_stores(search, is_active, has_subscription, limit, offset)
 
 
-@router.post("/stores", response_model=StoreGlobalResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/stores", response_model=StoreGlobalResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_store(
     data: StoreCreate,
     actor: User = Depends(get_current_global_admin),
@@ -96,7 +107,7 @@ async def create_store(
         store = await repo.create_store(data.model_dump(), actor)
         return _store_response(store)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/stores/{store_public_id}", response_model=StoreGlobalResponse)
@@ -108,7 +119,7 @@ async def get_store(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     return _store_response(store)
 
 
@@ -121,7 +132,7 @@ async def get_store_overview(
     repo = SuperAdminRepository(db)
     overview = await repo.get_store_overview(store_public_id)
     if overview is None:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
 
     admins = [_user_response(user) for user in overview["admins"]]
     users = [_user_response(user) for user in overview["users"]]
@@ -186,15 +197,21 @@ async def update_store(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     try:
-        updated = await repo.update_store(store, data.model_dump(exclude_unset=True), actor)
+        updated = await repo.update_store(
+            store, data.model_dump(exclude_unset=True), actor
+        )
         return _store_response(updated)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
-@router.post("/stores/{store_public_id}/admins", response_model=UserGlobalResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/stores/{store_public_id}/admins",
+    response_model=UserGlobalResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_store_admin(
     store_public_id: PublicIdPath,
     data: StoreAdminCreate,
@@ -204,12 +221,12 @@ async def create_store_admin(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     try:
         user = await repo.create_store_admin(store, data.model_dump(), actor)
         return _user_response(user)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/stores/{store_public_id}/users", response_model=list[UserGlobalResponse])
@@ -222,7 +239,7 @@ async def list_store_users(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     users = await repo.list_store_users(store.id, include_inactive)
     return [_user_response(user) for user in users]
 
@@ -237,12 +254,14 @@ async def update_user(
     repo = SuperAdminRepository(db)
     user = await repo.get_user(user_public_id)
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise UserNotFoundException(identifier=user_public_id)
     try:
-        updated = await repo.update_user(user, data.model_dump(exclude_unset=True), actor)
+        updated = await repo.update_user(
+            user, data.model_dump(exclude_unset=True), actor
+        )
         return _user_response(updated)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.patch("/users/{user_public_id}/global-admin", response_model=UserGlobalResponse)
@@ -255,12 +274,12 @@ async def set_global_admin(
     repo = SuperAdminRepository(db)
     user = await repo.get_user(user_public_id)
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise UserNotFoundException(identifier=user_public_id)
     try:
         updated = await repo.set_global_admin(user, data.is_global_admin, actor)
         return _user_response(updated)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/plans", response_model=list[PlanResponse])
@@ -283,7 +302,7 @@ async def create_plan(
     try:
         return await repo.create_plan(data.model_dump(), actor)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.patch("/plans/{plan_public_id}", response_model=PlanResponse)
@@ -296,14 +315,16 @@ async def update_plan(
     repo = SuperAdminRepository(db)
     plan = await repo.get_plan(plan_public_id)
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan no encontrado")
+        raise ResourceNotFoundException(resource="Plan", identifier=plan_public_id)
     try:
         return await repo.update_plan(plan, data.model_dump(exclude_unset=True), actor)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
-@router.get("/stores/{store_public_id}/subscription", response_model=StoreSubscriptionResponse)
+@router.get(
+    "/stores/{store_public_id}/subscription", response_model=StoreSubscriptionResponse
+)
 async def get_store_subscription(
     store_public_id: PublicIdPath,
     actor: User = Depends(get_current_global_admin),
@@ -312,14 +333,16 @@ async def get_store_subscription(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise ResourceNotFoundException(resource="Tienda", identifier=store_public_id)
     subscription = await repo.get_store_subscription(store.id)
     if not subscription:
-        raise HTTPException(status_code=404, detail="Suscripción no encontrada")
+        raise ResourceNotFoundException(resource="Suscripción", identifier=store_public_id)
     return subscription
 
 
-@router.post("/stores/{store_public_id}/subscription", response_model=StoreSubscriptionResponse)
+@router.post(
+    "/stores/{store_public_id}/subscription", response_model=StoreSubscriptionResponse
+)
 async def set_store_subscription(
     store_public_id: PublicIdPath,
     data: StoreSubscriptionCreate,
@@ -329,14 +352,14 @@ async def set_store_subscription(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     plan = await repo.get_plan(data.plan_id)
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan no encontrado")
+        raise ResourceNotFoundException(resource="Plan", identifier=data.plan_id)
     try:
         return await repo.set_store_subscription(store, plan, data.model_dump(), actor)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/coupons", response_model=list[CouponResponse])
@@ -349,7 +372,9 @@ async def list_coupons(
     return await repo.list_coupons(include_inactive)
 
 
-@router.post("/coupons", response_model=CouponResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/coupons", response_model=CouponResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_coupon(
     data: CouponCreate,
     actor: User = Depends(get_current_global_admin),
@@ -359,7 +384,7 @@ async def create_coupon(
     try:
         return await repo.create_coupon(data.model_dump(), actor)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/coupons/{coupon_public_id}", response_model=CouponResponse)
@@ -371,7 +396,7 @@ async def get_coupon(
     repo = SuperAdminRepository(db)
     coupon = await repo.get_coupon(coupon_public_id)
     if not coupon:
-        raise HTTPException(status_code=404, detail="Cupón no encontrado")
+        raise ResourceNotFoundException(resource="Cupón", identifier=coupon_public_id)
     return coupon
 
 
@@ -385,14 +410,18 @@ async def update_coupon(
     repo = SuperAdminRepository(db)
     coupon = await repo.get_coupon(coupon_public_id)
     if not coupon:
-        raise HTTPException(status_code=404, detail="Cupón no encontrado")
+        raise ResourceNotFoundException(resource="Cupón", identifier=coupon_public_id)
     try:
-        return await repo.update_coupon(coupon, data.model_dump(exclude_unset=True), actor)
+        return await repo.update_coupon(
+            coupon, data.model_dump(exclude_unset=True), actor
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
-@router.post("/stores/{store_public_id}/coupons/redeem", response_model=CouponRedemptionResponse)
+@router.post(
+    "/stores/{store_public_id}/coupons/redeem", response_model=CouponRedemptionResponse
+)
 async def redeem_store_coupon(
     store_public_id: PublicIdPath,
     data: CouponRedeemRequest,
@@ -402,20 +431,23 @@ async def redeem_store_coupon(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     subscription = await repo.get_store_subscription(store.id)
     if not subscription:
-        raise HTTPException(status_code=404, detail="La tienda no tiene suscripción activa")
+        raise AppException(message="La tienda no tiene suscripción activa", http_status=404, error_code="SUBSCRIPTION_NOT_FOUND")
     coupon = await repo.get_coupon_by_code(data.coupon_code)
     if not coupon:
-        raise HTTPException(status_code=404, detail="Cupón no encontrado")
+        raise ResourceNotFoundException(resource="Cupón", identifier=data.coupon_code)
     try:
         return await repo.redeem_coupon(store, subscription, coupon, actor)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
-@router.get("/stores/{store_public_id}/coupon-redemptions", response_model=list[CouponRedemptionResponse])
+@router.get(
+    "/stores/{store_public_id}/coupon-redemptions",
+    response_model=list[CouponRedemptionResponse],
+)
 async def list_store_redemptions(
     store_public_id: PublicIdPath,
     actor: User = Depends(get_current_global_admin),
@@ -424,5 +456,5 @@ async def list_store_redemptions(
     repo = SuperAdminRepository(db)
     store = await repo.get_store(store_public_id)
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(identifier=store_public_id)
     return await repo.list_store_redemptions(store.id)

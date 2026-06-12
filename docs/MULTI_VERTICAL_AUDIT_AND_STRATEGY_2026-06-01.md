@@ -134,8 +134,8 @@ Archivos afectados:
 - `backend/tests/integration/test_appointments_api.py`
 - `docs/DOCUMENTACION_TURNERO.md`
 - `docs/PROJECT_CONTEXT.md`
-- `docs/ANALISIS_3NF.md`
-- `docs/DB_DESIGN_3NF_RLS_AUDIT.md`
+- `docs/archive/data-model/ANALISIS_3NF.md`
+- `docs/archive/data-model/DB_DESIGN_3NF_RLS_AUDIT.md`
 
 Patrones:
 

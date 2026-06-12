@@ -1,8 +1,8 @@
-import { ApplicationError } from './ApplicationError';
+import { ApplicationError } from './ApplicationError'
 
 export class ForbiddenError extends ApplicationError {
-  public readonly code = 'FORBIDDEN_ERROR';
-  public readonly statusCode = 403;
-  public readonly isOperational = true;
+  public readonly code = 'FORBIDDEN_ERROR'
+  public readonly statusCode = 403
+  public readonly isOperational = true
 }
-export default ForbiddenError;
+export default ForbiddenError

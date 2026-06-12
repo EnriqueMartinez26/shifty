@@ -40,7 +40,9 @@ def resolve_payment_status(payload: dict[str, Any]) -> str | None:
         "expired": PaymentStatus.EXPIRED.value,
     }
     allowed_statuses = {status.value for status in PaymentStatus}
-    return mapping.get(normalized) or (normalized if normalized in allowed_statuses else None)
+    return mapping.get(normalized) or (
+        normalized if normalized in allowed_statuses else None
+    )
 
 
 async def enrich_mercadopago_webhook_payload(
@@ -55,7 +57,9 @@ async def enrich_mercadopago_webhook_payload(
         return payload
 
     try:
-        payment_details = await fetch_mercadopago_payment(db, store_id=store_id, payment_id=payment_id)
+        payment_details = await fetch_mercadopago_payment(
+            db, store_id=store_id, payment_id=payment_id
+        )
     except Exception:
         return payload
 
@@ -67,10 +71,14 @@ async def enrich_mercadopago_webhook_payload(
         {
             "id": payment_details.get("id", merged_data.get("id")),
             "status": payment_details.get("status", merged_data.get("status")),
-            "external_reference": payment_details.get("external_reference", merged_data.get("external_reference")),
+            "external_reference": payment_details.get(
+                "external_reference", merged_data.get("external_reference")
+            ),
             "preference_id": merged_data.get("preference_id"),
             "metadata": payment_details.get("metadata") or merged_data.get("metadata"),
-            "date_approved": payment_details.get("date_approved", merged_data.get("date_approved")),
+            "date_approved": payment_details.get(
+                "date_approved", merged_data.get("date_approved")
+            ),
         }
     )
     merged_payload = dict(payload)
@@ -83,7 +91,9 @@ async def enrich_mercadopago_webhook_payload(
     return merged_payload
 
 
-async def find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dict[str, Any]) -> Payment | None:
+async def find_payment_for_webhook(
+    db: AsyncSession, store_id: str, payload: dict[str, Any]
+) -> Payment | None:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
 
@@ -94,11 +104,16 @@ async def find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dic
         or data.get("external_reference")
     )
     preference_id = data.get("preference_id") or payload.get("preference_id")
-    external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip() or None
+    external_payment_id = (
+        str(data.get("id") or payload.get("payment_id") or "").strip() or None
+    )
 
     if external_payment_id:
         result = await db.execute(
-            select(Payment).where(Payment.store_id == store_id, Payment.external_payment_id == external_payment_id)
+            select(Payment).where(
+                Payment.store_id == store_id,
+                Payment.external_payment_id == external_payment_id,
+            )
         )
         payment = result.scalar_one_or_none()
         if payment:
@@ -106,7 +121,10 @@ async def find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dic
 
     if preference_id:
         result = await db.execute(
-            select(Payment).where(Payment.store_id == store_id, Payment.preference_id == str(preference_id))
+            select(Payment).where(
+                Payment.store_id == store_id,
+                Payment.preference_id == str(preference_id),
+            )
         )
         payment = result.scalar_one_or_none()
         if payment:
@@ -114,14 +132,19 @@ async def find_payment_for_webhook(db: AsyncSession, store_id: str, payload: dic
 
     if appointment_id:
         result = await db.execute(
-            select(Payment).where(Payment.store_id == store_id, Payment.appointment_id == str(appointment_id))
+            select(Payment).where(
+                Payment.store_id == store_id,
+                Payment.appointment_id == str(appointment_id),
+            )
         )
         return result.scalar_one_or_none()
 
     return None
 
 
-async def apply_mercadopago_webhook_payload(db: AsyncSession, *, store_id: str, payload: dict[str, Any]) -> bool:
+async def apply_mercadopago_webhook_payload(
+    db: AsyncSession, *, store_id: str, payload: dict[str, Any]
+) -> bool:
     payment = await find_payment_for_webhook(db, store_id, payload)
     payment_status = resolve_payment_status(payload)
     if not payment or not payment_status:
@@ -134,7 +157,9 @@ async def apply_mercadopago_webhook_payload(db: AsyncSession, *, store_id: str, 
 
     stamp_payment_from_status(payment, payment_status, payload=payload)
     appointment_result = await db.execute(
-        select(Appointment).where(Appointment.id == payment.appointment_id, Appointment.store_id == store_id)
+        select(Appointment).where(
+            Appointment.id == payment.appointment_id, Appointment.store_id == store_id
+        )
     )
     appointment = appointment_result.scalar_one_or_none()
     if appointment:

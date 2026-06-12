@@ -3,6 +3,7 @@ from typing import Any, Callable
 from redis.asyncio import Redis
 from core.redis import get_redis
 
+
 class EventBus:
     def __init__(self, redis: Redis):
         self.redis = redis
@@ -20,6 +21,7 @@ class EventBus:
                 if message["type"] == "message":
                     data = json.loads(message["data"])
                     await handler(data)
+
 
 async def get_event_bus():
     """Dependency para FastAPI"""

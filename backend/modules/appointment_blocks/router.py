@@ -1,11 +1,17 @@
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import Depends, Path, status
+from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from core.database import get_db
+from core.exceptions import (
+    PermissionDeniedException,
+    ResourceNotFoundException,
+    StaffNotFoundException,
+    ValidationException,
+)
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointment_blocks.schemas import (
     AppointmentBlockBatchResponse,
@@ -19,8 +25,10 @@ from modules.auth.dependencies import get_current_user
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User, UserRole
 
-router = APIRouter(prefix="/appointment-blocks", tags=["Appointment Blocks"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/appointment-blocks", tags=["Appointment Blocks"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 def _can_manage_blocks(user: User) -> bool:
@@ -52,7 +60,7 @@ async def list_blocks(
     db: AsyncSession = Depends(get_db),
 ):
     if not _can_manage_blocks(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para ver bloqueos")
+        raise PermissionDeniedException(action="No tenés permiso para ver bloqueos")
     result = await db.execute(
         select(StaffBlock)
         .where(StaffBlock.store_id == user.store_id)
@@ -61,20 +69,26 @@ async def list_blocks(
     return [_to_response(block) for block in result.scalars().all()]
 
 
-@router.post("/", response_model=AppointmentBlockResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/", response_model=AppointmentBlockResponse, status_code=status.HTTP_201_CREATED
+)
 async def create_block(
     data: AppointmentBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not _can_manage_blocks(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para crear bloqueos")
+        raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
     staff_result = await db.execute(
-        select(Staff).where(Staff.id == data.staff_id, Staff.store_id == user.store_id, Staff.is_active.is_(True))
+        select(Staff).where(
+            Staff.id == data.staff_id,
+            Staff.store_id == user.store_id,
+            Staff.is_active.is_(True),
+        )
     )
     staff = staff_result.scalar_one_or_none()
     if not staff:
-        raise HTTPException(status_code=404, detail="Profesional no encontrado")
+        raise StaffNotFoundException(identifier=data.staff_id)
     block = StaffBlock(
         store_id=user.store_id,
         staff_id=staff.id,
@@ -88,21 +102,29 @@ async def create_block(
     return _to_response(block)
 
 
-@router.post("/batch", response_model=AppointmentBlockBatchResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/batch",
+    response_model=AppointmentBlockBatchResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_block_batch(
     data: RecurringAppointmentBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not _can_manage_blocks(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para crear bloqueos")
+        raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
 
     staff_result = await db.execute(
-        select(Staff).where(Staff.id == data.staff_id, Staff.store_id == user.store_id, Staff.is_active.is_(True))
+        select(Staff).where(
+            Staff.id == data.staff_id,
+            Staff.store_id == user.store_id,
+            Staff.is_active.is_(True),
+        )
     )
     staff = staff_result.scalar_one_or_none()
     if not staff:
-        raise HTTPException(status_code=404, detail="Profesional no encontrado")
+        raise StaffNotFoundException(identifier=data.staff_id)
 
     ranges: list[tuple] = [(data.starts_at, data.ends_at)]
     if data.recurrence != "none":
@@ -139,12 +161,20 @@ async def create_block_batch(
 @router.get("/templates", response_model=list[BlockTemplateResponse])
 async def list_block_templates(user: User = Depends(get_current_user)):
     if not _can_manage_blocks(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para ver plantillas")
+        raise PermissionDeniedException(action="No tenés permiso para ver plantillas")
     return [
-        BlockTemplateResponse(key="vacaciones", label="Vacaciones", reason="Vacaciones"),
-        BlockTemplateResponse(key="no_atender", label="No atender", reason="No atender"),
-        BlockTemplateResponse(key="capacitacion", label="Capacitación", reason="Capacitación"),
-        BlockTemplateResponse(key="personal", label="Motivo personal", reason="Motivo personal"),
+        BlockTemplateResponse(
+            key="vacaciones", label="Vacaciones", reason="Vacaciones"
+        ),
+        BlockTemplateResponse(
+            key="no_atender", label="No atender", reason="No atender"
+        ),
+        BlockTemplateResponse(
+            key="capacitacion", label="Capacitación", reason="Capacitación"
+        ),
+        BlockTemplateResponse(
+            key="personal", label="Motivo personal", reason="Motivo personal"
+        ),
     ]
 
 
@@ -156,20 +186,22 @@ async def update_block(
     db: AsyncSession = Depends(get_db),
 ):
     if not _can_manage_blocks(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para editar bloqueos")
+        raise PermissionDeniedException(action="No tenés permiso para editar bloqueos")
     result = await db.execute(
-        select(StaffBlock).where(StaffBlock.id == public_id, StaffBlock.store_id == user.store_id)
+        select(StaffBlock).where(
+            StaffBlock.id == public_id, StaffBlock.store_id == user.store_id
+        )
     )
     block = result.scalar_one_or_none()
     if not block:
-        raise HTTPException(status_code=404, detail="Bloqueo no encontrado")
+        raise ResourceNotFoundException(resource="Bloqueo", identifier=public_id)
     update_data = data.model_dump(exclude_unset=True)
     if "starts_at" in update_data:
         block.start_time = update_data["starts_at"]
     if "ends_at" in update_data:
         block.end_time = update_data["ends_at"]
     if block.start_time >= block.end_time:
-        raise HTTPException(status_code=422, detail="El inicio debe ser anterior al fin")
+        raise ValidationException("El inicio debe ser anterior al fin")
     for key in ("reason", "is_active"):
         if key in update_data:
             setattr(block, key, update_data[key])
@@ -185,12 +217,14 @@ async def delete_block(
     db: AsyncSession = Depends(get_db),
 ):
     if not _can_manage_blocks(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para eliminar bloqueos")
+        raise PermissionDeniedException(action="No tenés permiso para eliminar bloqueos")
     result = await db.execute(
-        select(StaffBlock).where(StaffBlock.id == public_id, StaffBlock.store_id == user.store_id)
+        select(StaffBlock).where(
+            StaffBlock.id == public_id, StaffBlock.store_id == user.store_id
+        )
     )
     block = result.scalar_one_or_none()
     if not block:
-        raise HTTPException(status_code=404, detail="Bloqueo no encontrado")
+        raise ResourceNotFoundException(resource="Bloqueo", identifier=public_id)
     block.is_active = False
     await db.commit()
