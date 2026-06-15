@@ -24,3 +24,4 @@ async def test_login_preflight_returns_cors_headers_for_allowed_origin():
     assert response.headers["access-control-allow-credentials"] == "true"
     assert "POST" in response.headers["access-control-allow-methods"]
     assert "content-type" in response.headers["access-control-allow-headers"].lower()
+    assert "*" not in response.headers["access-control-allow-headers"]
