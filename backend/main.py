@@ -196,7 +196,17 @@ app.add_middleware(
     allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    # Con credenciales, el navegador no acepta un wildcard opaco en preflight.
+    # Declaramos explícitamente los headers que el frontend realmente usa.
+    allow_headers=[
+        "Accept",
+        "Accept-Language",
+        "Authorization",
+        "Content-Language",
+        "Content-Type",
+        "X-Requested-With",
+        "X-Idempotency-Key",
+    ],
     expose_headers=["X-Idempotency-Key", "Content-Disposition"],
     max_age=600,
 )

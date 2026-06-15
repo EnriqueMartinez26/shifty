@@ -88,7 +88,10 @@ def _error_app(error_code: str, message: str, detail: str):
                         b"access-control-allow-methods",
                         b"DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
                     ),
-                    (b"access-control-allow-headers", b"*"),
+                    (
+                        b"access-control-allow-headers",
+                        b"Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Requested-With, X-Idempotency-Key",
+                    ),
                     (b"access-control-max-age", b"600"),
                 ]
             )
