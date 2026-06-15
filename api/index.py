@@ -5,9 +5,11 @@ import sys
 from pathlib import Path
 
 
-BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+ROOT_DIR = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT_DIR / "backend"
+for candidate in (str(ROOT_DIR), str(BACKEND_DIR)):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
 DEFAULT_ALLOWED_ORIGINS = {
     "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site",
@@ -119,7 +121,7 @@ if missing_env_keys:
     )
 else:
     try:
-        from main import app
+        from backend.main import app
     except Exception as exc:
         app = _error_app(
             "BACKEND_BOOT_FAILED",
