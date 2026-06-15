@@ -44,8 +44,8 @@ from modules.payments.service import (
 )
 from modules.notifications.tasks import enqueue_confirmation_email
 from modules.promotions.service import quote_promotion, redeem_promotion
-from modules.public.repository import PublicRepository
-from modules.public.schemas import (
+from modules.public_api.repository import PublicRepository
+from modules.public_api.schemas import (
     ClientAppointmentItem,
     ClientAppointmentsResponse,
     ClientCancelRequest,

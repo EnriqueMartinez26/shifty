@@ -23,8 +23,8 @@ from modules.auth.dependencies import get_current_user
 from modules.users.model import User
 from modules.users.router import router as users_router
 
-# AI AGENT NOTE: public_api was consolidated into modules.public to eliminate duplication.
-from modules.public.router import router as public_router
+# AI AGENT NOTE: use public_api as the stable runtime import path for the public booking module.
+from modules.public_api.router import router as public_router
 from modules.reports.router import router as reports_router
 from modules.ledger.router import router as ledger_router
 from modules.ops.router import router as ops_router
