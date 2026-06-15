@@ -7,9 +7,8 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
-for candidate in (str(ROOT_DIR), str(BACKEND_DIR)):
-    if candidate not in sys.path:
-        sys.path.insert(0, candidate)
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 DEFAULT_ALLOWED_ORIGINS = {
     "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site",
@@ -87,7 +86,10 @@ def _error_app(error_code: str, message: str, detail: str):
             headers.extend(
                 [
                     (b"access-control-allow-methods", b"DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"),
-                    (b"access-control-allow-headers", b"*"),
+                    (
+                        b"access-control-allow-headers",
+                        b"Accept, Accept-Language, Authorization, Content-Language, Content-Type, X-Requested-With, X-Idempotency-Key",
+                    ),
                     (b"access-control-max-age", b"600"),
                 ]
             )
@@ -121,7 +123,7 @@ if missing_env_keys:
     )
 else:
     try:
-        from backend.main import app
+        from main import app
     except Exception as exc:
         app = _error_app(
             "BACKEND_BOOT_FAILED",
