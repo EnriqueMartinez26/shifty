@@ -267,6 +267,12 @@ class ReportService:
                     }:
                         client_bucket["revenue"] += price
 
+            resolved_client_name = (
+                appointment.client_name
+                or known_client_names.get(client_id, "")
+                or "Cliente"
+            )
+
             items.append(
                 ReportAppointmentItem(
                     public_id=appointment.public_id,
@@ -275,7 +281,7 @@ class ReportService:
                     status=status,
                     service_name=service.name,
                     staff_name=staff.display_name,
-                    client_name=appointment.client_name,
+                    client_name=resolved_client_name,
                     service_price=price,
                 )
             )
