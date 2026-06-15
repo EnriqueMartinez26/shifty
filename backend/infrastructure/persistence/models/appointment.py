@@ -5,14 +5,21 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from infrastructure.persistence.models.base import Base
 import ulid
 
+
 class AppointmentModel(Base):
     __tablename__ = "appointments"
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, index=True, default=lambda: str(ulid.ULID()))
-    service_id: Mapped[str] = mapped_column(String, ForeignKey("services.id"), index=True)
+    id: Mapped[str] = mapped_column(
+        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+    )
+    service_id: Mapped[str] = mapped_column(
+        String, ForeignKey("services.id"), index=True
+    )
     staff_id: Mapped[str] = mapped_column(String, ForeignKey("staff.id"), index=True)
     store_id: Mapped[str] = mapped_column(String, ForeignKey("stores.id"), index=True)
-    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("users.id"), index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(
+        String, ForeignKey("users.id"), index=True
+    )
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_minutes: Mapped[int] = mapped_column()
@@ -26,8 +33,14 @@ class AppointmentModel(Base):
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
     service = relationship("Service")
     staff = relationship("StaffModel")
@@ -40,7 +53,9 @@ class AppointmentModel(Base):
     def apply_status_transition(self, new_status) -> None:
         from core.exceptions import InvalidStatusTransitionException
 
-        attempted = new_status.value if hasattr(new_status, "value") else str(new_status)
+        attempted = (
+            new_status.value if hasattr(new_status, "value") else str(new_status)
+        )
         current = self.status
         allowed_transitions = {
             "pending": {"confirmed", "cancelled", "pending_payment"},
@@ -69,6 +84,6 @@ class AppointmentModel(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",
-            name="check_appointment_status_v3"
+            name="check_appointment_status_v3",
         ),
     )

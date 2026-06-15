@@ -4,6 +4,7 @@ Tests unitarios para lógica de dominio de AppointmentStatus.
 Testean las reglas puras del grafo de estados sin necesidad de
 instanciar modelos SQLAlchemy (que requieren una sesión de DB).
 """
+
 import pytest
 from datetime import datetime, timedelta
 
@@ -15,19 +16,21 @@ from core.exceptions import InvalidStatusTransitionException
 # Helper simple: simula el comportamiento de dominio sin ORM
 # ---------------------------------------------------------------------------
 
+
 class AppointmentStub:
     """
     Objeto liviano que replica la lógica de dominio de Appointment
     sin depender del ORM de SQLAlchemy.
     Ideal para tests unitarios puros.
     """
+
     def __init__(self, status: AppointmentStatus, starts_at: datetime):
-        self.status:       str            = status.value
-        self.starts_at:    datetime       = starts_at
-        self.ends_at:      datetime       = starts_at + timedelta(minutes=30)
-        self.public_id:    str            = "STUB-APPT-001"
-        self.notes:        str | None     = "Test"
-        self.notes_staff:  str | None     = None
+        self.status: str = status.value
+        self.starts_at: datetime = starts_at
+        self.ends_at: datetime = starts_at + timedelta(minutes=30)
+        self.public_id: str = "STUB-APPT-001"
+        self.notes: str | None = "Test"
+        self.notes_staff: str | None = None
         self.cancelled_at: datetime | None = None
         self.completed_at: datetime | None = None
 
@@ -35,12 +38,23 @@ class AppointmentStub:
     def current_status(self) -> AppointmentStatus:
         return AppointmentStatus(self.status)
 
-    def can_be_cancelled(self)      -> bool: return self.current_status.can_transition_to(AppointmentStatus.CANCELLED)
-    def can_be_confirmed(self)      -> bool: return self.current_status.can_transition_to(AppointmentStatus.CONFIRMED)
-    def can_be_completed(self)      -> bool: return self.current_status.can_transition_to(AppointmentStatus.COMPLETED)
-    def can_be_marked_absent(self)  -> bool: return self.current_status.can_transition_to(AppointmentStatus.ABSENT)
-    def is_upcoming(self)           -> bool: return self.starts_at > datetime.utcnow()
-    def is_in_past(self)            -> bool: return self.starts_at < datetime.utcnow()
+    def can_be_cancelled(self) -> bool:
+        return self.current_status.can_transition_to(AppointmentStatus.CANCELLED)
+
+    def can_be_confirmed(self) -> bool:
+        return self.current_status.can_transition_to(AppointmentStatus.CONFIRMED)
+
+    def can_be_completed(self) -> bool:
+        return self.current_status.can_transition_to(AppointmentStatus.COMPLETED)
+
+    def can_be_marked_absent(self) -> bool:
+        return self.current_status.can_transition_to(AppointmentStatus.ABSENT)
+
+    def is_upcoming(self) -> bool:
+        return self.starts_at > datetime.utcnow()
+
+    def is_in_past(self) -> bool:
+        return self.starts_at < datetime.utcnow()
 
     def apply_status_transition(self, next_status: AppointmentStatus) -> None:
         if not self.current_status.can_transition_to(next_status):
@@ -59,6 +73,7 @@ class AppointmentStub:
 def future() -> datetime:
     return datetime.utcnow() + timedelta(hours=2)
 
+
 def past() -> datetime:
     return datetime.utcnow() - timedelta(hours=2)
 
@@ -67,8 +82,8 @@ def past() -> datetime:
 # Tests: Grafo de transiciones (AppointmentStatus)
 # ---------------------------------------------------------------------------
 
-class TestAppointmentStatusGraph:
 
+class TestAppointmentStatusGraph:
     def test_pending_to_confirmed(self):
         assert AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.CONFIRMED)
 
@@ -76,22 +91,30 @@ class TestAppointmentStatusGraph:
         assert AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.CANCELLED)
 
     def test_pending_cannot_go_to_completed(self):
-        assert not AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.COMPLETED)
+        assert not AppointmentStatus.PENDING.can_transition_to(
+            AppointmentStatus.COMPLETED
+        )
 
     def test_pending_cannot_go_to_absent(self):
         assert not AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.ABSENT)
 
     def test_confirmed_to_completed(self):
-        assert AppointmentStatus.CONFIRMED.can_transition_to(AppointmentStatus.COMPLETED)
+        assert AppointmentStatus.CONFIRMED.can_transition_to(
+            AppointmentStatus.COMPLETED
+        )
 
     def test_confirmed_to_cancelled(self):
-        assert AppointmentStatus.CONFIRMED.can_transition_to(AppointmentStatus.CANCELLED)
+        assert AppointmentStatus.CONFIRMED.can_transition_to(
+            AppointmentStatus.CANCELLED
+        )
 
     def test_confirmed_to_absent(self):
         assert AppointmentStatus.CONFIRMED.can_transition_to(AppointmentStatus.ABSENT)
 
     def test_confirmed_cannot_go_to_pending(self):
-        assert not AppointmentStatus.CONFIRMED.can_transition_to(AppointmentStatus.PENDING)
+        assert not AppointmentStatus.CONFIRMED.can_transition_to(
+            AppointmentStatus.PENDING
+        )
 
     def test_completed_is_terminal(self):
         for status in AppointmentStatus:
@@ -110,8 +133,8 @@ class TestAppointmentStatusGraph:
 # Tests: Métodos de dominio
 # ---------------------------------------------------------------------------
 
-class TestAppointmentDomainMethods:
 
+class TestAppointmentDomainMethods:
     def test_can_be_cancelled_from_pending(self):
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         assert stub.can_be_cancelled() is True

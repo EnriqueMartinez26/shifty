@@ -7,6 +7,7 @@ un slot es libre solo si:
   - No solapa con ningún Appointment activo.
   - No solapa con ningún StaffBlock activo.
 """
+
 import json
 from datetime import date, datetime, timedelta, time
 
@@ -14,7 +15,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 
-from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
 from modules.staff.model import Staff, Schedule, StaffBlock
@@ -58,13 +59,13 @@ class AvailabilityService:
 
         duration = timedelta(minutes=service.duration_minutes)
         from datetime import timezone as _tz
+
         day_start = datetime.combine(search_date, time.min).replace(tzinfo=_tz.utc)
-        day_end   = datetime.combine(search_date, time.max).replace(tzinfo=_tz.utc)
+        day_end = datetime.combine(search_date, time.max).replace(tzinfo=_tz.utc)
 
         # 3. Staff que realiza el servicio ------------------------------------
         staff_res = await self.db.execute(
-            select(Staff)
-            .where(
+            select(Staff).where(
                 Staff.store_id == store_id,
                 Staff.is_active.is_(True),
             )
@@ -84,9 +85,10 @@ class AvailabilityService:
         store_res = await self.db.execute(select(Store).where(Store.id == store_id))
         store = store_res.scalar_one_or_none()
         notice_hours = getattr(store, "min_booking_notice_hours", 2)
-        
+
         from core.utils import now_utc
         from datetime import timezone
+
         min_bookable_time = now_utc() + timedelta(hours=notice_hours)
 
         all_slots: list[dict] = []
@@ -103,8 +105,11 @@ class AvailabilityService:
             schedules_by_staff.setdefault(schedule.staff_id, []).append(schedule)
 
         from sqlalchemy.orm import joinedload
+
         appt_res = await self.db.execute(
-            select(Appointment).options(joinedload(Appointment.service)).where(
+            select(Appointment)
+            .options(joinedload(Appointment.service))
+            .where(
                 and_(
                     Appointment.staff_id.in_(staff_ids),
                     Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
@@ -132,7 +137,6 @@ class AvailabilityService:
             blocks_by_staff.setdefault(block.staff_id, []).append(block)
 
         for staff in staff_members:
-
             # 4. Horario del staff ese día -----------------------------------
             schedules = schedules_by_staff.get(staff.id, [])
             if not schedules:
@@ -147,8 +151,12 @@ class AvailabilityService:
             # 7. Cálculo de slots (granularidad 15 min) -----------------------
             for sched in schedules:
                 # Forzamos que los datetimes generados de combine sean UTC aware
-                current = datetime.combine(search_date, sched.start_time).replace(tzinfo=timezone.utc)
-                end     = datetime.combine(search_date, sched.end_time).replace(tzinfo=timezone.utc)
+                current = datetime.combine(search_date, sched.start_time).replace(
+                    tzinfo=timezone.utc
+                )
+                end = datetime.combine(search_date, sched.end_time).replace(
+                    tzinfo=timezone.utc
+                )
 
                 while current + duration <= end:
                     slot_end = current + duration
@@ -161,10 +169,9 @@ class AvailabilityService:
 
                     # Verificar conflicto con bloqueos de agenda
                     overlapping_block = next(
-                        (b for b in blocks if b.overlaps_with(current, slot_end)),
-                        None
+                        (b for b in blocks if b.overlaps_with(current, slot_end)), None
                     )
-                    
+
                     # Forcing Function: min_booking_notice
                     too_soon = current < min_bookable_time
 
@@ -175,21 +182,27 @@ class AvailabilityService:
                         status = "booked"
                     elif overlapping_block:
                         status = "blocked"
-                        reason = "No disponible" if hide_private_reasons else overlapping_block.note
+                        reason = (
+                            "No disponible"
+                            if hide_private_reasons
+                            else overlapping_block.note
+                        )
                     elif too_soon:
                         status = "blocked"
                         reason = f"Requiere {notice_hours}h de antelación"
 
-                    all_slots.append({
-                        "staff_id":   staff.public_id,
-                        "staff_name": staff.display_name,
-                        "starts_at":  current.isoformat(),
-                        "ends_at":    slot_end.isoformat(),
-                        "start_time": current.time().isoformat(timespec="seconds"),
-                        "end_time":   slot_end.time().isoformat(timespec="seconds"),
-                        "status":     status,
-                        "reason":     reason
-                    })
+                    all_slots.append(
+                        {
+                            "staff_id": staff.public_id,
+                            "staff_name": staff.display_name,
+                            "starts_at": current.isoformat(),
+                            "ends_at": slot_end.isoformat(),
+                            "start_time": current.time().isoformat(timespec="seconds"),
+                            "end_time": slot_end.time().isoformat(timespec="seconds"),
+                            "status": status,
+                            "reason": reason,
+                        }
+                    )
 
                     current += timedelta(minutes=15)
 
@@ -207,9 +220,13 @@ class AvailabilityService:
                 end_index = {s["ends_at"]: s for s in staff_slots}
                 for slot in staff_slots:
                     # Keep if at day bounds or adjacent to another slot
-                    is_first = slot["starts_at"] == start_index[slot["starts_at"]]["starts_at"] and slot["starts_at"] == min(start_index.keys())
+                    is_first = slot["starts_at"] == start_index[slot["starts_at"]][
+                        "starts_at"
+                    ] and slot["starts_at"] == min(start_index.keys())
                     is_last = slot["ends_at"] == max(end_index.keys())
-                    adjacent = slot["ends_at"] in start_index or slot["starts_at"] in end_index
+                    adjacent = (
+                        slot["ends_at"] in start_index or slot["starts_at"] in end_index
+                    )
                     if is_first or is_last or adjacent:
                         filtered_slots.append(slot)
             all_slots = filtered_slots

@@ -33,7 +33,9 @@ class PromotionQuote:
     final_amount: Decimal
 
 
-def _validate_promotion_window(promotion: StorePromotion, base_amount: Decimal) -> str | None:
+def _validate_promotion_window(
+    promotion: StorePromotion, base_amount: Decimal
+) -> str | None:
     now = datetime.now(timezone.utc)
     if not promotion.is_active:
         return "La promocion no esta activa"
@@ -43,7 +45,9 @@ def _validate_promotion_window(promotion: StorePromotion, base_amount: Decimal) 
         return "La promocion ya vencio"
     if promotion.max_uses is not None and promotion.current_uses >= promotion.max_uses:
         return "La promocion ya alcanzo su limite de usos"
-    if promotion.min_service_amount is not None and base_amount < Decimal(str(promotion.min_service_amount)):
+    if promotion.min_service_amount is not None and base_amount < Decimal(
+        str(promotion.min_service_amount)
+    ):
         return "La promocion no aplica a este servicio"
     return None
 
@@ -84,7 +88,9 @@ async def quote_promotion(
     if not normalized_code:
         return None, None, "Codigo de promocion invalido"
 
-    promotion = await get_store_promotion(db, store_id=store_id, code=normalized_code, for_update=for_update)
+    promotion = await get_store_promotion(
+        db, store_id=store_id, code=normalized_code, for_update=for_update
+    )
     if not promotion:
         return None, None, "No encontramos una promocion con ese codigo"
 

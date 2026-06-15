@@ -1,4 +1,4 @@
-﻿"""add_store_feature_flags
+"""add_store_feature_flags
 
 Revision ID: d7f8a9b0c1d2
 Revises: c2d4e6f8a901
@@ -25,7 +25,7 @@ def upgrade() -> None:
             sa.JSON(),
             nullable=False,
             server_default=sa.text(
-                "'{\"payments\": false, \"ledger\": false, \"advanced_reports\": false, \"new_calendar\": false}'"
+                '\'{"payments": false, "ledger": false, "advanced_reports": false, "new_calendar": false}\''
             ),
         ),
     )

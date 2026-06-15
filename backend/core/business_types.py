@@ -1,6 +1,8 @@
 from typing import Literal
 
-BusinessType = Literal["generic", "beauty", "medical", "wellness", "professional_services"]
+BusinessType = Literal[
+    "generic", "beauty", "medical", "wellness", "professional_services"
+]
 
 DEFAULT_BUSINESS_TYPE: BusinessType = "generic"
 BUSINESS_TYPES: set[str] = {

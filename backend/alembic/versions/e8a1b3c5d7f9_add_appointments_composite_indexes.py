@@ -1,4 +1,4 @@
-﻿"""add_appointments_composite_indexes
+"""add_appointments_composite_indexes
 
 Revision ID: e8a1b3c5d7f9
 Revises: d7f8a9b0c1d2

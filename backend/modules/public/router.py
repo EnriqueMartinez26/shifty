@@ -3,12 +3,14 @@ Router Público del Turnero.
 
 Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 """
+
 import hashlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi import Depends, Path, Query, Request, status
+from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +18,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
 from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.exceptions import (
+    AppException,
+    AppointmentConflictException,
+    AppointmentNotFoundException,
+    OTPException,
+    PermissionDeniedException,
+    ServiceNotFoundException,
+    StaffNotFoundException,
+    StoreNotFoundException,
+    ValidationException,
+)
 from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
@@ -25,7 +38,10 @@ from core.vercel_queue import extract_vercel_oidc_token
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
-from modules.payments.service import calculate_service_payment_amount, ensure_payment_preference, service_requires_payment
+from modules.payments.service import (
+    calculate_service_payment_amount,
+    ensure_payment_preference,
+)
 from modules.notifications.tasks import enqueue_confirmation_email
 from modules.promotions.service import quote_promotion, redeem_promotion
 from modules.public.repository import PublicRepository
@@ -46,15 +62,24 @@ from modules.public.schemas import (
 from modules.services.model import Service
 from modules.staff.model import Staff
 
-router = APIRouter(prefix="/public", tags=["Public Booking"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
-PublicIdQuery = Annotated[str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/public", tags=["Public Booking"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
+PublicIdQuery = Annotated[
+    str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 SlugPath = Annotated[str, Path(min_length=2, max_length=100, pattern=SLUG_PATTERN)]
 
 
 def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
     raw_key = "|".join(
-        [data.service_id, data.staff_id or "any", data.starts_at.isoformat(), data.client_phone]
+        [
+            data.service_id,
+            data.staff_id or "any",
+            data.starts_at.isoformat(),
+            data.client_phone,
+        ]
     )
     return "public-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
@@ -70,7 +95,9 @@ def _normalize_custom_field_value(value: object) -> str:
     return str(value).strip()
 
 
-def _validate_custom_fields(store, custom_fields: dict[str, str] | None) -> dict[str, str]:
+def _validate_custom_fields(
+    store, custom_fields: dict[str, str] | None
+) -> dict[str, str]:
     configured_fields = store.custom_client_fields or []
     configured_by_key = {
         field.get("key"): field
@@ -81,18 +108,16 @@ def _validate_custom_fields(store, custom_fields: dict[str, str] | None) -> dict
 
     unknown_keys = [key for key in incoming if key not in configured_by_key]
     if unknown_keys:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Campos extra invalidos: {', '.join(sorted(unknown_keys))}",
+        raise ValidationException(
+            message=f"Campos extra invalidos: {', '.join(sorted(unknown_keys))}"
         )
 
     normalized: dict[str, str] = {}
     for key, raw_value in incoming.items():
         value = _normalize_custom_field_value(raw_value)
         if len(value) > 500:
-            raise HTTPException(
-                status_code=422,
-                detail=f"El campo extra '{key}' supera el maximo permitido",
+            raise ValidationException(
+                message=f"El campo extra '{key}' supera el maximo permitido"
             )
 
         field_config = configured_by_key[key]
@@ -103,32 +128,36 @@ def _validate_custom_fields(store, custom_fields: dict[str, str] | None) -> dict
                 if isinstance(option, dict)
             }
             if allowed_values and value not in allowed_values:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Valor invalido para el campo '{field_config.get('label') or key}'",
+                raise ValidationException(
+                    message=f"Valor invalido para el campo '{field_config.get('label') or key}'"
                 )
         normalized[key] = value
 
     missing_required = [
         field.get("label") or field.get("key")
         for field in configured_fields
-        if field.get("required") and not normalized.get(field.get("key", ""), "").strip()
+        if field.get("required")
+        and not normalized.get(field.get("key", ""), "").strip()
     ]
     if missing_required:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Faltan campos requeridos: {', '.join(missing_required)}",
+        raise ValidationException(
+            message=f"Faltan campos requeridos: {', '.join(missing_required)}"
         )
 
     return {key: value for key, value in normalized.items() if value}
 
 
-async def _require_recent_client_otp(db: AsyncSession, *, store_id: str, phone: str) -> None:
-    is_verified = await OtpService(db).is_recently_verified(store_id=store_id, phone=phone)
+async def _require_recent_client_otp(
+    db: AsyncSession, *, store_id: str, phone: str
+) -> None:
+    is_verified = await OtpService(db).is_recently_verified(
+        store_id=store_id, phone=phone
+    )
     if not is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Se requiere validar OTP antes de autogestionar turnos",
+        raise OTPException(
+            message="Se requiere validar OTP antes de autogestionar turnos",
+            error_code="OTP_VERIFICATION_REQUIRED",
+            http_status=status.HTTP_403_FORBIDDEN,
         )
 
 
@@ -144,7 +173,7 @@ async def get_store_by_slug(slug: SlugPath, db: AsyncSession = Depends(get_db)):
         repo = PublicRepository(db)
         store = await repo.get_store_by_slug(slug)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
+            raise StoreNotFoundException(identifier=slug)
         return PublicStoreResponse(
             public_id=store.public_id,
             name=store.name,
@@ -174,7 +203,7 @@ async def get_public_services(
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
+            raise StoreNotFoundException(identifier=store_public_id)
         services = await repo.get_services(store.id)
         return [
             PublicServiceResponse(
@@ -185,7 +214,9 @@ async def get_public_services(
                 price=float(service.price),
                 deposit_mode=getattr(service, "deposit_mode", "none") or "none",
                 deposit_type=getattr(service, "deposit_type", "percent") or "percent",
-                deposit_amount=float(service.deposit_amount) if getattr(service, "deposit_amount", None) is not None else None,
+                deposit_amount=float(service.deposit_amount)
+                if getattr(service, "deposit_amount", None) is not None
+                else None,
                 color=service.color,
                 image_url=service.image_url,
             )
@@ -197,8 +228,12 @@ async def get_public_services(
 
 @router.get("/staff", response_model=list[PublicStaffResponse])
 async def get_public_staff(
-    store_public_id: Annotated[str | None, Query(max_length=64, pattern=PUBLIC_ID_PATTERN)] = None,
-    service_id: Annotated[str | None, Query(max_length=64, pattern=PUBLIC_ID_PATTERN)] = None,
+    store_public_id: Annotated[
+        str | None, Query(max_length=64, pattern=PUBLIC_ID_PATTERN)
+    ] = None,
+    service_id: Annotated[
+        str | None, Query(max_length=64, pattern=PUBLIC_ID_PATTERN)
+    ] = None,
     db: AsyncSession = Depends(get_db),
 ):
     await _bypass_rls(db)
@@ -208,19 +243,19 @@ async def get_public_staff(
         if store_public_id:
             store = await repo.get_store_by_public_id(store_public_id)
             if not store:
-                raise HTTPException(status_code=404, detail="Negocio no encontrado")
+                raise StoreNotFoundException(identifier=store_public_id)
             store_id = store.id
 
         if service_id:
             service = await repo.get_service_by_public_id(service_id)
             if not service:
-                raise HTTPException(status_code=404, detail="Servicio no encontrado")
+                raise ServiceNotFoundException(identifier=service_id)
             if store_id is not None and service.store_id != store_id:
-                raise HTTPException(status_code=404, detail="Servicio no encontrado en este negocio")
+                raise ServiceNotFoundException(identifier=service_id)
             store_id = service.store_id
 
         if store_id is None:
-            raise HTTPException(status_code=400, detail="Debe indicar store_public_id o service_id")
+            raise ValidationException("Debe indicar store_public_id o service_id")
 
         staff_members = await repo.get_staff(store_id, service_public_id=service_id)
         return [
@@ -230,7 +265,8 @@ async def get_public_staff(
                 last_name=member.last_name or "",
                 email=None,
                 display_name=member.display_name,
-                service_ids=member.service_ids or [svc.public_id for svc in member.services],
+                service_ids=member.service_ids
+                or [svc.public_id for svc in member.services],
             )
             for member in staff_members
         ]
@@ -254,11 +290,11 @@ async def get_public_availability(
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
+            raise StoreNotFoundException(identifier=store_public_id)
         try:
             search_date = date_type.fromisoformat(date)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Fecha inválida")
+            raise ValidationException("Fecha inválida")
         return await AvailabilityService(db, redis).get_available_slots(
             store.id,
             service_id,
@@ -282,10 +318,10 @@ async def preview_public_promotion(
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
+            raise StoreNotFoundException(identifier=store_public_id)
         service = await repo.get_service_by_public_id(service_id)
         if not service or service.store_id != store.id:
-            raise HTTPException(status_code=404, detail="Servicio no encontrado")
+            raise ServiceNotFoundException(identifier=service_id)
 
         _promotion, quote, error = await quote_promotion(
             db,
@@ -294,7 +330,7 @@ async def preview_public_promotion(
             code=code,
         )
         if not quote:
-            raise HTTPException(status_code=422, detail=error or "Promocion invalida")
+            raise ValidationException(error or "Promocion invalida")
 
         return PublicPromotionPreviewResponse(
             code=quote.code,
@@ -325,8 +361,10 @@ async def request_public_otp(
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(data.store_public_id)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
-        return await OtpService(db).request_code(store_id=store.id, phone=data.phone, channel=data.channel)
+            raise StoreNotFoundException(identifier=data.store_public_id)
+        return await OtpService(db).request_code(
+            store_id=store.id, phone=data.phone, channel=data.channel
+        )
     finally:
         set_tenant_context(None, False)
 
@@ -348,13 +386,19 @@ async def verify_public_otp(
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(data.store_public_id)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
-        return await OtpService(db).verify_code(store_id=store.id, phone=data.phone, code=data.code)
+            raise StoreNotFoundException(identifier=data.store_public_id)
+        return await OtpService(db).verify_code(
+            store_id=store.id, phone=data.phone, code=data.code
+        )
     finally:
         set_tenant_context(None, False)
 
 
-@router.post("/appointments", response_model=PublicBookingResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/appointments",
+    response_model=PublicBookingResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_public_booking(
     request: Request,
     data: PublicBookingCreate,
@@ -378,20 +422,20 @@ async def create_public_booking(
         repo = PublicRepository(db)
         service = await repo.get_service_by_public_id(data.service_id)
         if not service:
-            raise HTTPException(status_code=404, detail="Servicio no encontrado")
+            raise ServiceNotFoundException(identifier=data.service_id)
 
         if data.store_public_id:
             store = await repo.get_store_by_public_id(data.store_public_id)
             if not store:
-                raise HTTPException(status_code=404, detail="Negocio no encontrado")
+                raise StoreNotFoundException(identifier=data.store_public_id)
             if service.store_id != store.id:
-                raise HTTPException(status_code=404, detail="Servicio no encontrado en este negocio")
+                raise ServiceNotFoundException(identifier=data.service_id)
             store_id = store.id
         else:
             store_id = service.store_id
             store = await repo.get_store_by_id(store_id)
             if not store:
-                raise HTTPException(status_code=404, detail="Negocio no encontrado")
+                raise StoreNotFoundException(identifier=str(store_id))
 
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
             is_verified = await OtpService(db).is_recently_verified(
@@ -399,9 +443,10 @@ async def create_public_booking(
                 phone=data.client_phone,
             )
             if not is_verified:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Se requiere validar OTP antes de reservar",
+                raise OTPException(
+                    message="Se requiere validar OTP antes de reservar",
+                    error_code="OTP_VERIFICATION_REQUIRED",
+                    http_status=status.HTTP_403_FORBIDDEN,
                 )
 
         normalized_custom_fields = _validate_custom_fields(store, data.custom_fields)
@@ -415,12 +460,19 @@ async def create_public_booking(
                 code=data.promotion_code,
             )
             if not preview_promotion_quote:
-                raise HTTPException(status_code=422, detail=preview_error or "Promocion invalida")
+                raise ValidationException(preview_error or "Promocion invalida")
 
-        discounted_service_price = preview_promotion_quote.final_amount if preview_promotion_quote else base_service_price
+        discounted_service_price = (
+            preview_promotion_quote.final_amount
+            if preview_promotion_quote
+            else base_service_price
+        )
         payment_required = (
             is_store_feature_enabled(store.feature_flags, "payments")
-            and calculate_service_payment_amount(service, base_price=discounted_service_price) > 0
+            and calculate_service_payment_amount(
+                service, base_price=discounted_service_price
+            )
+            > 0
         )
         initial_status = (
             AppointmentStatus.PENDING_PAYMENT.value
@@ -462,12 +514,16 @@ async def create_public_booking(
                             code=data.promotion_code,
                         )
                     except ValueError as exc:
-                        raise HTTPException(status_code=422, detail=str(exc))
+                        raise ValidationException(str(exc))
                 if payment_required:
-                    payable_before_discount = calculate_service_payment_amount(service, base_price=base_service_price)
+                    payable_before_discount = calculate_service_payment_amount(
+                        service, base_price=base_service_price
+                    )
                     payable_after_discount = calculate_service_payment_amount(
                         service,
-                        base_price=promotion_quote.final_amount if promotion_quote else discounted_service_price,
+                        base_price=promotion_quote.final_amount
+                        if promotion_quote
+                        else discounted_service_price,
                     )
                     payment = await ensure_payment_preference(
                         db,
@@ -476,23 +532,32 @@ async def create_public_booking(
                         store_id=store_id,
                         amount_override=payable_after_discount,
                         original_amount=payable_before_discount,
-                        discount_amount=max(Decimal("0.00"), payable_before_discount - payable_after_discount),
-                        promotion_code=promotion_quote.code if promotion_quote else None,
+                        discount_amount=max(
+                            Decimal("0.00"),
+                            payable_before_discount - payable_after_discount,
+                        ),
+                        promotion_code=promotion_quote.code
+                        if promotion_quote
+                        else None,
                     )
         except ValueError as exc:
             await idempotency_release(idempotency_key, redis)
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise AppException(
+                message=str(exc), http_status=409, error_code="APPOINTMENT_CONFLICT"
+            )
         except CircuitBreakerOpenError as exc:
             await idempotency_release(idempotency_key, redis)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"Proveedor de pagos temporalmente no disponible: {exc}",
+            raise AppException(
+                message=f"Proveedor de pagos temporalmente no disponible: {exc}",
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                error_code="PAYMENT_PROVIDER_UNAVAILABLE",
             )
         except RuntimeError as exc:
             await idempotency_release(idempotency_key, redis)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"No se pudo iniciar el cobro online: {exc}",
+            raise AppException(
+                message=f"No se pudo iniciar el cobro online: {exc}",
+                http_status=status.HTTP_502_BAD_GATEWAY,
+                error_code="PAYMENT_LINK_CREATION_FAILED",
             )
 
         await db.commit()
@@ -526,8 +591,12 @@ async def create_public_booking(
             payment_amount=float(payment.amount) if payment else None,
             promotion_code=promotion_quote.code if promotion_quote else None,
             service_price=float(base_service_price),
-            discount_amount=float(promotion_quote.discount_amount) if promotion_quote else 0.0,
-            final_price=float(promotion_quote.final_amount) if promotion_quote else float(base_service_price),
+            discount_amount=float(promotion_quote.discount_amount)
+            if promotion_quote
+            else 0.0,
+            final_price=float(promotion_quote.final_amount)
+            if promotion_quote
+            else float(base_service_price),
         )
         await idempotency_save(idempotency_key, response.model_dump(mode="json"), redis)
         return response
@@ -539,7 +608,10 @@ async def create_public_booking(
         set_tenant_context(None, False)
 
 
-@router.get("/client/{store_public_id}/{phone}/appointments", response_model=ClientAppointmentsResponse)
+@router.get(
+    "/client/{store_public_id}/{phone}/appointments",
+    response_model=ClientAppointmentsResponse,
+)
 async def get_client_appointments(
     request: Request,
     store_public_id: PublicIdPath,
@@ -560,13 +632,17 @@ async def get_client_appointments(
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
-            raise HTTPException(status_code=404, detail="Negocio no encontrado")
+            raise StoreNotFoundException(identifier=store_public_id)
 
         await _require_recent_client_otp(db, store_id=store.id, phone=phone)
 
         client = await repo.get_client_by_phone(store.id, phone)
         if not client:
-            raise HTTPException(status_code=404, detail="No se encontraron turnos para ese número de teléfono")
+            raise AppException(
+                message="No se encontraron turnos para ese número de teléfono",
+                http_status=404,
+                error_code="CLIENT_APPOINTMENTS_NOT_FOUND",
+            )
 
         appointments = await repo.get_client_appointments(client.id, store.id)
         cancellation_cutoff_hours = getattr(store, "cancellation_hours", 2)
@@ -577,7 +653,12 @@ async def get_client_appointments(
             is_upcoming = appt.starts_at > now
             hours_until = (appt.starts_at - now).total_seconds() / 3600
             can_cancel = (
-                current_status in (AppointmentStatus.PENDING, AppointmentStatus.PENDING_PAYMENT, AppointmentStatus.CONFIRMED)
+                current_status
+                in (
+                    AppointmentStatus.PENDING,
+                    AppointmentStatus.PENDING_PAYMENT,
+                    AppointmentStatus.CONFIRMED,
+                )
                 and is_upcoming
                 and hours_until >= cancellation_cutoff_hours
             )
@@ -605,7 +686,9 @@ async def get_client_appointments(
         set_tenant_context(None, False)
 
 
-@router.patch("/client/appointments/{public_id}/cancel", response_model=PublicBookingResponse)
+@router.patch(
+    "/client/appointments/{public_id}/cancel", response_model=PublicBookingResponse
+)
 async def client_cancel_appointment(
     public_id: PublicIdPath,
     request: Request,
@@ -622,37 +705,50 @@ async def client_cancel_appointment(
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
-        appt_res = await db.execute(select(Appointment).where(Appointment.id == public_id))
+        appt_res = await db.execute(
+            select(Appointment).where(Appointment.id == public_id)
+        )
         appointment = appt_res.scalar_one_or_none()
         if not appointment:
-            raise HTTPException(status_code=404, detail="Turno no encontrado")
+            raise AppointmentNotFoundException(public_id=public_id)
 
         client = await repo.get_client_by_phone(appointment.store_id, data.phone)
         if not client or client.id != appointment.client_id:
-            raise HTTPException(status_code=403, detail="El teléfono no coincide con el titular del turno")
+            raise PermissionDeniedException(
+                action="El teléfono no coincide con el titular del turno"
+            )
 
-        await _require_recent_client_otp(db, store_id=appointment.store_id, phone=data.phone)
+        await _require_recent_client_otp(
+            db, store_id=appointment.store_id, phone=data.phone
+        )
 
         store = await repo.get_store_by_id(appointment.store_id)
         cancellation_hours = getattr(store, "cancellation_hours", 2) if store else 2
-        hours_until = (appointment.starts_at - _now_compatible_with(appointment.starts_at)).total_seconds() / 3600
+        hours_until = (
+            appointment.starts_at - _now_compatible_with(appointment.starts_at)
+        ).total_seconds() / 3600
         if hours_until < cancellation_hours:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Solo se puede cancelar con {cancellation_hours}h de anticipación",
+            raise AppException(
+                message=f"Solo se puede cancelar con {cancellation_hours}h de anticipación",
+                http_status=409,
+                error_code="CANCELLATION_WINDOW_EXPIRED",
             )
 
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
         await db.commit()
         await db.refresh(appointment)
 
-        svc_res = await db.execute(select(Service).where(Service.id == appointment.service_id))
+        svc_res = await db.execute(
+            select(Service).where(Service.id == appointment.service_id)
+        )
         service = svc_res.scalar_one_or_none()
         if service:
             cache_key = f"availability:{appointment.store_id}:{service.public_id}:{appointment.starts_at.date().isoformat()}"
             await redis.delete(cache_key)
 
-        stf_res = await db.execute(select(Staff).where(Staff.id == appointment.staff_id))
+        stf_res = await db.execute(
+            select(Staff).where(Staff.id == appointment.staff_id)
+        )
         staff = stf_res.scalar_one_or_none()
         return PublicBookingResponse(
             public_id=appointment.public_id,
@@ -672,7 +768,9 @@ async def client_cancel_appointment(
         set_tenant_context(None, False)
 
 
-@router.patch("/client/appointments/{public_id}/reschedule", response_model=PublicBookingResponse)
+@router.patch(
+    "/client/appointments/{public_id}/reschedule", response_model=PublicBookingResponse
+)
 async def client_reschedule_appointment(
     public_id: PublicIdPath,
     request: Request,
@@ -693,32 +791,42 @@ async def client_reschedule_appointment(
         if cached:
             return cached
 
-        appt_res = await db.execute(select(Appointment).where(Appointment.id == public_id))
+        appt_res = await db.execute(
+            select(Appointment).where(Appointment.id == public_id)
+        )
         original = appt_res.scalar_one_or_none()
         if not original:
-            raise HTTPException(status_code=404, detail="Turno no encontrado")
+            raise AppointmentNotFoundException(public_id=public_id)
 
         client = await repo.get_client_by_phone(original.store_id, data.phone)
         if not client or client.id != original.client_id:
-            raise HTTPException(status_code=403, detail="El teléfono no coincide con el titular del turno")
+            raise PermissionDeniedException(
+                action="El teléfono no coincide con el titular del turno"
+            )
 
-        await _require_recent_client_otp(db, store_id=original.store_id, phone=data.phone)
+        await _require_recent_client_otp(
+            db, store_id=original.store_id, phone=data.phone
+        )
 
-        svc_res = await db.execute(select(Service).where(Service.id == original.service_id))
+        svc_res = await db.execute(
+            select(Service).where(Service.id == original.service_id)
+        )
         service = svc_res.scalar_one_or_none()
         if not service:
-            raise HTTPException(status_code=404, detail="Servicio no encontrado")
+            raise ServiceNotFoundException(identifier=str(original.service_id))
 
         stf_res = await db.execute(select(Staff).where(Staff.id == original.staff_id))
         staff = stf_res.scalar_one_or_none()
         if not staff:
-            raise HTTPException(status_code=404, detail="Profesional no encontrado")
+            raise StaffNotFoundException(identifier=str(original.staff_id))
 
         new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
 
         try:
             async with db.begin_nested():
-                await db.execute(select(Staff).where(Staff.id == staff.id).with_for_update())
+                await db.execute(
+                    select(Staff).where(Staff.id == staff.id).with_for_update()
+                )
                 conflict_res = await db.execute(
                     select(Appointment)
                     .where(
@@ -737,7 +845,7 @@ async def client_reschedule_appointment(
                     .limit(1)
                 )
                 if conflict_res.scalar_one_or_none():
-                    raise HTTPException(status_code=409, detail="El nuevo horario ya está ocupado")
+                    raise AppointmentConflictException()
 
                 original.apply_status_transition(AppointmentStatus.CANCELLED)
                 new_appointment = Appointment(
@@ -765,7 +873,9 @@ async def client_reschedule_appointment(
         await db.refresh(new_appointment)
 
         for key_date in {original.starts_at.date(), data.new_starts_at.date()}:
-            await redis.delete(f"availability:{original.store_id}:{service.public_id}:{key_date.isoformat()}")
+            await redis.delete(
+                f"availability:{original.store_id}:{service.public_id}:{key_date.isoformat()}"
+            )
 
         response = PublicBookingResponse(
             public_id=new_appointment.public_id,
@@ -781,7 +891,9 @@ async def client_reschedule_appointment(
             notes=new_appointment.notes,
             custom_fields=new_appointment.intake_answers or {},
         )
-        await idempotency_save(data.idempotency_key, response.model_dump(mode="json"), redis)
+        await idempotency_save(
+            data.idempotency_key, response.model_dump(mode="json"), redis
+        )
         return response
     except Exception:
         await idempotency_release(data.idempotency_key, redis)

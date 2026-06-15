@@ -1,26 +1,30 @@
 import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
+
 import { QueryClient, QueryClientProvider, QueryCache, MutationCache } from '@tanstack/react-query'
+
+import { createRoot } from 'react-dom/client'
+
 import './index.css'
 import App from './App.tsx'
 import { registerDependencies } from './infrastructure/di/dependencies'
-import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
-import { 
-  ValidationErrorHandler, 
-  NotFoundErrorHandler, 
-  UnauthorizedErrorHandler, 
-  ForbiddenErrorHandler, 
-  ConflictErrorHandler, 
-  InternalServerErrorHandler, 
-  NetworkErrorHandler 
-} from './shared/errors/handlers/SpecificHandlers'
 import { setupEventHandlers } from './infrastructure/setup/setupEventHandlers'
+import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
+import {
+  ValidationErrorHandler,
+  NotFoundErrorHandler,
+  UnauthorizedErrorHandler,
+  ForbiddenErrorHandler,
+  ConflictErrorHandler,
+  InternalServerErrorHandler,
+  NetworkErrorHandler
+} from './shared/errors/handlers/SpecificHandlers'
+import { EventBus } from './shared/events/EventBus'
 
 // 1. Initialize Dependency Injection Container
 const container = registerDependencies()
 
 // 2. Initialize and Wire Event Handlers
-const eventBus = container.resolve<any>('eventBus')
+const eventBus = container.resolve<EventBus>('eventBus')
 setupEventHandlers(eventBus, {})
 
 // 3. Initialize and Configure Global Error Handler Strategy
@@ -35,32 +39,32 @@ globalErrorHandler.registerHandler(new NetworkErrorHandler())
 
 // Listen for global window runtime errors
 window.addEventListener('error', (event) => {
-  globalErrorHandler.handle(event.error)
+  void globalErrorHandler.handle(event.error)
 })
 
 // Listen for unhandled promise rejections
 window.addEventListener('unhandledrejection', (event) => {
-  globalErrorHandler.handle(event.reason)
+  void globalErrorHandler.handle(event.reason)
 })
 
 // 4. Configure React Query with Global Error Handling
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error: unknown) => {
-      globalErrorHandler.handle(error)
+      void globalErrorHandler.handle(error)
     }
   }),
   mutationCache: new MutationCache({
     onError: (error: unknown) => {
-      globalErrorHandler.handle(error)
+      void globalErrorHandler.handle(error)
     }
   }),
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: false,
+      refetchOnWindowFocus: false
     }
-  },
+  }
 })
 
 createRoot(document.getElementById('root')!).render(
@@ -68,6 +72,5 @@ createRoot(document.getElementById('root')!).render(
     <QueryClientProvider client={queryClient}>
       <App />
     </QueryClientProvider>
-  </StrictMode>,
+  </StrictMode>
 )
-

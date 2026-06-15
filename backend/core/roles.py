@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from fastapi import HTTPException, status
+from fastapi import status
 
+from core.exceptions import AppException
 from modules.users.model import User
 
 
@@ -58,4 +59,8 @@ def has_any_role(user: User, allowed_roles: Iterable[str]) -> bool:
 
 def require_roles(user: User, allowed_roles: Iterable[str], detail: str) -> None:
     if not has_any_role(user, allowed_roles):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        raise AppException(
+            message=detail,
+            http_status=status.HTTP_403_FORBIDDEN,
+            error_code="PERMISSION_DENIED",
+        )

@@ -5,21 +5,18 @@ import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [
-    react(),
-    tailwindcss(),
-  ],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@domain': path.resolve(__dirname, './src/domain'),
       '@application': path.resolve(__dirname, './src/application'),
       '@infrastructure': path.resolve(__dirname, './src/infrastructure'),
       '@presentation': path.resolve(__dirname, './src/presentation'),
-      '@shared': path.resolve(__dirname, './src/shared'),
-    },
+      '@shared': path.resolve(__dirname, './src/shared')
+    }
   },
   server: {
     port: 3000,
-    allowedHosts: true,
+    allowedHosts: true
   }
 })

@@ -1,43 +1,56 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ServiceService } from "@application/services/ServiceService";
-import { HttpServiceRepository } from "@infrastructure/repositories/HttpServiceRepository";
-import apiClient from "@infrastructure/http/client";
-import { Service } from "@domain/entities/Service";
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-const serviceService = new ServiceService(new HttpServiceRepository(apiClient));
+import { Service } from '@domain/entities/Service'
 
-export const useManagedServices = () =>
-  useQuery<Service[]>({
-    queryKey: ["services"],
-    queryFn: () => serviceService.listServices(),
-  });
+import { ServiceService } from '@application/services/ServiceService'
+
+import { resolveService } from './resolveService'
+
+type CreateServiceInput = Parameters<ServiceService['createService']>[0]
+type UpdateServiceInput = Parameters<ServiceService['updateService']>[1]
+
+export const useManagedServices = () => {
+  const serviceService = resolveService<ServiceService>('serviceService')
+
+  return useQuery<Service[]>({
+    queryKey: ['services'],
+    queryFn: () => serviceService.listServices()
+  })
+}
 
 export const useCreateManagedService = () => {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
+  const serviceService = resolveService<ServiceService>('serviceService')
+
   return useMutation({
-    mutationFn: (data: any) => serviceService.createService(data),
+    mutationFn: (data: CreateServiceInput) => serviceService.createService(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["services"] });
-    },
-  });
-};
+      void queryClient.invalidateQueries({ queryKey: ['services'] })
+    }
+  })
+}
 
 export const useUpdateManagedService = () => {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
+  const serviceService = resolveService<ServiceService>('serviceService')
+
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => serviceService.updateService(id, data),
+    mutationFn: ({ id, data }: { id: string; data: UpdateServiceInput }) =>
+      serviceService.updateService(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["services"] });
-    },
-  });
-};
+      void queryClient.invalidateQueries({ queryKey: ['services'] })
+    }
+  })
+}
 
 export const useDeleteManagedService = () => {
-  const queryClient = useQueryClient();
+  const queryClient = useQueryClient()
+  const serviceService = resolveService<ServiceService>('serviceService')
+
   return useMutation({
     mutationFn: (id: string) => serviceService.deleteService(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["services"] });
-    },
-  });
-};
+      void queryClient.invalidateQueries({ queryKey: ['services'] })
+    }
+  })
+}

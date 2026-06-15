@@ -15,6 +15,7 @@ from core.security import hash_password
 from infrastructure.persistence.models.user import UserModel
 from infrastructure.persistence.models.store import StoreModel
 
+
 async def reset_db():
     print(f"Connecting to {settings.DATABASE_URL}...")
     engine = create_async_engine(settings.DATABASE_URL)
@@ -22,7 +23,8 @@ async def reset_db():
 
     async with engine.begin() as conn:
         print("Limpiando base de datos al 100%...")
-        await conn.execute(text("""
+        await conn.execute(
+            text("""
             TRUNCATE TABLE 
                 appointments, 
                 appointment_blocks, 
@@ -36,22 +38,20 @@ async def reset_db():
                 budgets, 
                 store_schedules 
             RESTART IDENTITY CASCADE;
-        """))
+        """)
+        )
         print("Base de datos limpia.")
 
     async with async_session() as session:
         print("Generando simulación de datos...")
-        
+
         # 1. Crear Store inicial
         store_id = "01J7K9M2N4P6Q8R0S2T4V6W8S1"
         store = StoreModel(
-            id=store_id,
-            name="Shifty Main Store",
-            slug="main",
-            is_active=True
+            id=store_id, name="Shifty Main Store", slug="main", is_active=True
         )
         session.add(store)
-        
+
         # 2. Crear Usuario Admin vinculado a la store
         user = UserModel(
             id="01J7K9M2N4P6Q8R0S2T4V6W8X0",
@@ -60,15 +60,16 @@ async def reset_db():
             hashed_password=hash_password("kukimZ10"),
             role="admin",
             is_active=True,
-            store_id=store_id
+            store_id=store_id,
         )
         session.add(user)
-        
+
         await session.commit()
         print(f"Store '{store.name}' creada.")
         print(f"Usuario {user.email} creado con éxito. Contraseña: kukimZ10")
 
     await engine.dispose()
+
 
 if __name__ == "__main__":
     asyncio.run(reset_db())

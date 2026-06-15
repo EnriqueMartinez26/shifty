@@ -5,6 +5,7 @@ Revises: c9f4b1a2d7e8
 Create Date: 2026-04-20 00:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -26,9 +27,13 @@ def upgrade() -> None:
         sa.Column("improvement_description", sa.Text(), nullable=False),
         sa.Column("estimated_hours", sa.Numeric(10, 2), nullable=False),
         sa.Column("hourly_rate", sa.Numeric(12, 2), nullable=False),
-        sa.Column("currency", sa.String(length=10), nullable=False, server_default="ARS"),
+        sa.Column(
+            "currency", sa.String(length=10), nullable=False, server_default="ARS"
+        ),
         sa.Column("total_cost", sa.Numeric(12, 2), nullable=False),
-        sa.Column("status", sa.String(length=30), nullable=False, server_default="draft"),
+        sa.Column(
+            "status", sa.String(length=30), nullable=False, server_default="draft"
+        ),
         sa.Column("notes", sa.Text(), nullable=True),
         sa.Column("id", sa.BigInteger(), autoincrement=True, nullable=False),
         sa.Column("public_id", sa.String(length=26), nullable=False),

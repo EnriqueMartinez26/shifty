@@ -1,4 +1,5 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from '@tanstack/react-query'
+
 import {
   publicBookingService,
   type AvailabilitySlot,
@@ -11,8 +12,8 @@ import {
   type PromotionPreview,
   type PublicService,
   type PublicStaff,
-  type PublicStore,
-} from "@application/services/PublicBookingService";
+  type PublicStore
+} from '@application/services/PublicBookingService'
 
 export type {
   AvailabilitySlot,
@@ -25,29 +26,29 @@ export type {
   PromotionPreview,
   PublicService,
   PublicStaff,
-  PublicStore,
-};
+  PublicStore
+}
 
 export const usePublicStore = (slug: string) =>
   useQuery<PublicStore>({
-    queryKey: ["public-store", slug],
+    queryKey: ['public-store', slug],
     queryFn: () => publicBookingService.getStore(slug),
-    retry: false,
-  });
+    retry: false
+  })
 
 export const usePublicServices = (storePublicId: string | undefined) =>
   useQuery<PublicService[]>({
-    queryKey: ["public-services", storePublicId],
+    queryKey: ['public-services', storePublicId],
     queryFn: () => publicBookingService.getServices(storePublicId as string),
-    enabled: !!storePublicId,
-  });
+    enabled: Boolean(storePublicId)
+  })
 
 export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
   useQuery<PublicStaff[]>({
-    queryKey: ["public-staff", storePublicId, serviceId],
+    queryKey: ['public-staff', storePublicId, serviceId],
     queryFn: () => publicBookingService.getStaff(storePublicId as string, serviceId),
-    enabled: !!storePublicId,
-  });
+    enabled: Boolean(storePublicId)
+  })
 
 export const usePublicAvailability = (
   storePublicId: string | undefined,
@@ -56,29 +57,35 @@ export const usePublicAvailability = (
   forceAll = false
 ) =>
   useQuery<AvailabilitySlot[]>({
-    queryKey: ["public-availability", storePublicId, serviceId, date, forceAll],
-    queryFn: () => publicBookingService.getAvailability(storePublicId as string, serviceId as string, date as string, forceAll),
-    enabled: !!storePublicId && !!serviceId && !!date,
-    staleTime: 1000 * 30,
-  });
+    queryKey: ['public-availability', storePublicId, serviceId, date, forceAll],
+    queryFn: () =>
+      publicBookingService.getAvailability(
+        storePublicId as string,
+        serviceId as string,
+        date as string,
+        forceAll
+      ),
+    enabled: Boolean(storePublicId) && Boolean(serviceId) && Boolean(date),
+    staleTime: 1000 * 30
+  })
 
 export const useCreatePublicBooking = () =>
   useMutation<BookingConfirmation, Error, PublicBookingPayload>({
-    mutationFn: (payload) => publicBookingService.createBooking(payload),
-  });
+    mutationFn: (payload) => publicBookingService.createBooking(payload)
+  })
 
 export const usePreviewPublicPromotion = () =>
   useMutation<PromotionPreview, Error, { storePublicId: string; serviceId: string; code: string }>({
     mutationFn: ({ storePublicId, serviceId, code }) =>
-      publicBookingService.previewPromotion(storePublicId, serviceId, code),
-  });
+      publicBookingService.previewPromotion(storePublicId, serviceId, code)
+  })
 
 export const useRequestPublicOtp = () =>
   useMutation<OtpRequestResponse, Error, OtpRequestPayload>({
-    mutationFn: (payload) => publicBookingService.requestOtp(payload),
-  });
+    mutationFn: (payload) => publicBookingService.requestOtp(payload)
+  })
 
 export const useVerifyPublicOtp = () =>
   useMutation<OtpVerifyResponse, Error, OtpVerifyPayload>({
-    mutationFn: (payload) => publicBookingService.verifyOtp(payload),
-  });
+    mutationFn: (payload) => publicBookingService.verifyOtp(payload)
+  })

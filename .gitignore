@@ -20,6 +20,8 @@ dist/
 build/
 .npm
 .eslintcache
+frontend/.env.production
+frontend/.env.local
 
 # Tests & Tools
 pytest_output.txt

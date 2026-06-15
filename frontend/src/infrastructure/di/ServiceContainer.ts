@@ -15,7 +15,7 @@
 /**
  * Factory function type for service instantiation
  */
-type ServiceFactory<T> = () => T;
+type ServiceFactory<T> = () => T
 
 /**
  * Service Container Registry
@@ -24,16 +24,16 @@ type ServiceFactory<T> = () => T;
  * Ensures all instances are created consistently and can be resolved type-safely.
  */
 export class ServiceContainer {
-  private static instance: ServiceContainer;
-  private registry: Map<string, ServiceFactory<unknown>>;
-  private instances: Map<string, unknown>;
+  private static instance: ServiceContainer
+  private registry: Map<string, ServiceFactory<unknown>>
+  private instances: Map<string, unknown>
 
   /**
    * Private constructor to enforce singleton pattern
    */
   private constructor() {
-    this.registry = new Map();
-    this.instances = new Map();
+    this.registry = new Map()
+    this.instances = new Map()
   }
 
   /**
@@ -43,9 +43,9 @@ export class ServiceContainer {
    */
   static getInstance(): ServiceContainer {
     if (!ServiceContainer.instance) {
-      ServiceContainer.instance = new ServiceContainer();
+      ServiceContainer.instance = new ServiceContainer()
     }
-    return ServiceContainer.instance;
+    return ServiceContainer.instance
   }
 
   /**
@@ -63,16 +63,16 @@ export class ServiceContainer {
    */
   register<T>(key: string, factory: ServiceFactory<T>): void {
     if (!key || key.trim().length === 0) {
-      throw new Error('Service key cannot be empty');
+      throw new Error('Service key cannot be empty')
     }
 
     if (typeof factory !== 'function') {
-      throw new Error(`Factory for key "${key}" must be a function`);
+      throw new Error(`Factory for key "${key}" must be a function`)
     }
 
-    this.registry.set(key, factory);
+    this.registry.set(key, factory)
     // Clear cached instance when registering
-    this.instances.delete(key);
+    this.instances.delete(key)
   }
 
   /**
@@ -97,20 +97,20 @@ export class ServiceContainer {
         `Service with key "${key}" is not registered. Available services: ${Array.from(
           this.registry.keys()
         ).join(', ')}`
-      );
+      )
     }
 
     // Return cached instance if available
     if (this.instances.has(key)) {
-      return this.instances.get(key) as T;
+      return this.instances.get(key) as T
     }
 
     // Create and cache new instance
-    const factory = this.registry.get(key) as ServiceFactory<T>;
-    const instance = factory();
-    this.instances.set(key, instance);
+    const factory = this.registry.get(key) as ServiceFactory<T>
+    const instance = factory()
+    this.instances.set(key, instance)
 
-    return instance;
+    return instance
   }
 
   /**
@@ -127,7 +127,7 @@ export class ServiceContainer {
    * ```
    */
   isRegistered(key: string): boolean {
-    return this.registry.has(key);
+    return this.registry.has(key)
   }
 
   /**
@@ -144,7 +144,7 @@ export class ServiceContainer {
    * ```
    */
   getRegisteredKeys(): string[] {
-    return Array.from(this.registry.keys());
+    return Array.from(this.registry.keys())
   }
 
   /**
@@ -160,8 +160,8 @@ export class ServiceContainer {
    * ```
    */
   clear(): void {
-    this.registry.clear();
-    this.instances.clear();
+    this.registry.clear()
+    this.instances.clear()
   }
 
   /**
@@ -170,8 +170,8 @@ export class ServiceContainer {
    * @internal
    */
   static reset(): void {
-    ServiceContainer.instance = new ServiceContainer();
+    ServiceContainer.instance = new ServiceContainer()
   }
 }
 
-export default ServiceContainer;
+export default ServiceContainer

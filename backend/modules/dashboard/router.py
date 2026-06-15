@@ -1,11 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, text
+from fastapi import Depends
+from core.router import CanonicalAPIRouter
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
 from modules.dashboard.schemas import (
     DashboardStatSummary,
@@ -16,7 +17,7 @@ from modules.services.model import Service
 from modules.staff.model import Schedule, Staff
 from modules.users.model import User, UserRole
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+router = CanonicalAPIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
 @router.get("/summary", response_model=DashboardSummaryResponse)
@@ -45,9 +46,7 @@ async def get_dashboard_summary(
     appointments_today = int(appointments_today_q.scalar() or 0)
 
     pending_q = await db.execute(
-        select(func.count(Appointment.id)).where(
-            Appointment.status == "PENDING"
-        )
+        select(func.count(Appointment.id)).where(Appointment.status == "PENDING")
     )
     pending_confirmations = int(pending_q.scalar() or 0)
 
@@ -79,7 +78,6 @@ async def get_dashboard_summary(
             if t2 > t1:
                 total_avail_mins += (t2 - t1).total_seconds() / 60.0
 
-
     occupancy_rate = 0.0
     if total_avail_mins > 0:
         occupancy_rate = round((booked_mins / total_avail_mins) * 100, 2)
@@ -93,9 +91,10 @@ async def get_dashboard_summary(
     new_clients_last_30d = int(new_clients_q.scalar() or 0)
 
     weekly_revenue_q = await db.execute(
-        select(func.coalesce(func.sum(Service.price), 0)).select_from(Appointment).join(
-            Service, Appointment.service_id == Service.id
-        ).where(
+        select(func.coalesce(func.sum(Service.price), 0))
+        .select_from(Appointment)
+        .join(Service, Appointment.service_id == Service.id)
+        .where(
             Appointment.starts_at >= week_start.replace(tzinfo=None),
             Appointment.starts_at < week_end.replace(tzinfo=None),
             Appointment.status.in_(["CONFIRMED", "COMPLETED"]),
@@ -107,19 +106,22 @@ async def get_dashboard_summary(
     last_week_start = week_start - timedelta(days=7)
     last_week_end = week_start
     last_week_revenue_q = await db.execute(
-        select(func.coalesce(func.sum(Service.price), 0)).select_from(Appointment).join(
-            Service, Appointment.service_id == Service.id
-        ).where(
+        select(func.coalesce(func.sum(Service.price), 0))
+        .select_from(Appointment)
+        .join(Service, Appointment.service_id == Service.id)
+        .where(
             Appointment.starts_at >= last_week_start.replace(tzinfo=None),
             Appointment.starts_at < last_week_end.replace(tzinfo=None),
             Appointment.status.in_(["CONFIRMED", "COMPLETED"]),
         )
     )
     last_week_revenue = float(last_week_revenue_q.scalar() or 0)
-    
+
     revenue_trend = 0.0
     if last_week_revenue > 0:
-        revenue_trend = round(((weekly_revenue - last_week_revenue) / last_week_revenue) * 100, 2)
+        revenue_trend = round(
+            ((weekly_revenue - last_week_revenue) / last_week_revenue) * 100, 2
+        )
     elif weekly_revenue > 0:
         revenue_trend = 100.0
 

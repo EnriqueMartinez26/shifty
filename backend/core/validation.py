@@ -16,7 +16,9 @@ def reject_unsafe_url(value: str | None) -> str | None:
         return None
     lowered = normalized.lower()
     if lowered.startswith(_FORBIDDEN_URL_PREFIXES):
-        raise ValueError("No se permiten URLs embebidas, data URLs ni esquemas inseguros")
+        raise ValueError(
+            "No se permiten URLs embebidas, data URLs ni esquemas inseguros"
+        )
     if not _HTTP_URL_PATTERN.match(normalized):
         raise ValueError("La URL debe usar http o https")
     return normalized

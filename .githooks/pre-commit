@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+printf '\n[pre-commit] Frontend checks\n'
+(
+  cd "$repo_root/frontend"
+  npm run check
+)
+
+printf '\n[pre-commit] Backend checks\n'
+(
+  cd "$repo_root/backend"
+  uv run ruff format --check .
+  uv run ruff check .
+  uv run mypy .
+)
+
+printf '\n[pre-commit] OK\n'

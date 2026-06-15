@@ -28,7 +28,9 @@ class RecurringAppointmentBlockCreate(AppointmentBlockBase):
     @model_validator(mode="after")
     def validate_recurrence(self) -> "RecurringAppointmentBlockCreate":
         if self.recurrence != "none" and self.recurrence_until is None:
-            raise ValueError("recurrence_until es obligatorio cuando recurrence no es none")
+            raise ValueError(
+                "recurrence_until es obligatorio cuando recurrence no es none"
+            )
         if self.recurrence_until and self.recurrence_until <= self.starts_at:
             raise ValueError("recurrence_until debe ser posterior al inicio")
         return self

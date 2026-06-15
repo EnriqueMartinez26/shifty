@@ -1,12 +1,13 @@
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from core.exceptions import AuthenticationException, PermissionDeniedException
 from core.roles import ROLE_SUPER_ADMIN, STORE_MANAGERS, has_any_role
 from core.security import decode_token
 from modules.users.model import User
@@ -26,10 +27,10 @@ async def get_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="No se pudo validar las credenciales",
-        headers={"WWW-Authenticate": "Bearer"},
+    # AI AGENT NOTE: Using structured AppException subclasses instead of raw FastAPI HTTPException
+    # to enforce a unified response contract across the entire application.
+    credentials_exception = AuthenticationException(
+        message="No se pudo validar las credenciales"
     )
     try:
         token = _token_from_request(request)
@@ -63,10 +64,7 @@ async def get_current_admin(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     if not has_any_role(current_user, STORE_MANAGERS):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Se requieren permisos de administrador de tienda",
-        )
+        raise PermissionDeniedException("administrador de tienda")
     return current_user
 
 
@@ -74,8 +72,5 @@ async def get_current_global_admin(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
     if not current_user.is_global_admin and str(current_user.role) != ROLE_SUPER_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Operacion exclusiva para soporte global",
-        )
+        raise PermissionDeniedException("soporte global")
     return current_user

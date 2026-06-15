@@ -6,6 +6,7 @@ NO contiene lógica de negocio, validaciones de dominio ni commits
 (excepto cuando actúa como operación técnica atómica y simple).
 El commit siempre lo realiza la capa de Servicios.
 """
+
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
@@ -18,6 +19,7 @@ from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.appointments.schemas import AppointmentFilterParams
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
+from modules.stores.model import Store
 from modules.users.model import User
 
 
@@ -30,7 +32,9 @@ class AppointmentRepository:
     # ------------------------------------------------------------------
 
     async def get_service_by_public_id(self, public_id: str) -> Service | None:
-        res = await self.db.execute(select(Service).where(Service.public_id == public_id))
+        res = await self.db.execute(
+            select(Service).where(Service.public_id == public_id)
+        )
         return res.scalar_one_or_none()
 
     async def get_service_by_id(self, service_id: int) -> Service | None:
@@ -46,12 +50,12 @@ class AppointmentRepository:
         return res.scalar_one_or_none()
 
     async def get_store_by_id(self, store_id: int) -> Store | None:
-        from modules.stores.model import Store
         res = await self.db.execute(select(Store).where(Store.id == store_id))
         return res.scalar_one_or_none()
 
     async def get_by_public_id(self, public_id: str) -> Appointment | None:
         from sqlalchemy.orm import joinedload
+
         res = await self.db.execute(
             select(Appointment)
             .options(joinedload(Appointment.service), joinedload(Appointment.staff))
@@ -122,7 +126,6 @@ class AppointmentRepository:
         res = await self.db.execute(query)
         return res.scalar_one_or_none()
 
-
     async def get_overlapping_block(
         self, staff_id: int, starts_at: datetime, ends_at: datetime
     ) -> StaffBlock | None:
@@ -148,6 +151,7 @@ class AppointmentRepository:
     ) -> list[tuple[Appointment, Service, Staff, User]]:
         """Lista turnos de una fecha para la agenda diaria."""
         from datetime import timezone
+
         day_start = datetime.combine(target_date, time.min).replace(tzinfo=timezone.utc)
         day_end = day_start + timedelta(days=1)
 
@@ -179,8 +183,8 @@ class AppointmentRepository:
         base = (
             select(Appointment, Service, Staff, User)
             .join(Service, Appointment.service_id == Service.id)
-            .join(Staff,   Appointment.staff_id == Staff.id)
-            .join(User,    Appointment.client_id == User.id)
+            .join(Staff, Appointment.staff_id == Staff.id)
+            .join(User, Appointment.client_id == User.id)
         )
 
         conditions = []
@@ -211,9 +215,8 @@ class AppointmentRepository:
 
         if filters.to_date:
             conditions.append(
-                Appointment.starts_at < datetime.combine(
-                    filters.to_date + timedelta(days=1), time.min
-                )
+                Appointment.starts_at
+                < datetime.combine(filters.to_date + timedelta(days=1), time.min)
             )
 
         if conditions:
@@ -228,8 +231,7 @@ class AppointmentRepository:
         # Paginación
         offset = (filters.page - 1) * filters.page_size
         data_query = (
-            base
-            .order_by(Appointment.starts_at.desc())
+            base.order_by(Appointment.starts_at.desc())
             .offset(offset)
             .limit(filters.page_size)
         )
@@ -251,16 +253,18 @@ class AppointmentRepository:
         result = await self.db.execute(
             select(Appointment, Service, Staff, User)
             .join(Service, Appointment.service_id == Service.id)
-            .join(Staff,   Appointment.staff_id == Staff.id)
-            .join(User,    Appointment.client_id == User.id)
+            .join(Staff, Appointment.staff_id == Staff.id)
+            .join(User, Appointment.client_id == User.id)
             .where(
                 Appointment.starts_at >= starts_after,
                 Appointment.starts_at < starts_before,
-                Appointment.status.in_([
-                    AppointmentStatus.PENDING.value,
-                    AppointmentStatus.PENDING_PAYMENT.value,
-                    AppointmentStatus.CONFIRMED.value,
-                ]),
+                Appointment.status.in_(
+                    [
+                        AppointmentStatus.PENDING.value,
+                        AppointmentStatus.PENDING_PAYMENT.value,
+                        AppointmentStatus.CONFIRMED.value,
+                    ]
+                ),
             )
             .order_by(Appointment.starts_at.asc())
         )

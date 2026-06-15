@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import Depends, Request
+from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.exceptions import AuthenticationException, PermissionDeniedException
 
 from core.config import settings
 from core.database import get_db
@@ -17,14 +20,14 @@ from modules.notifications.tasks import drain_notification_queue, schedule_24h_r
 from modules.payments.model import OutboxMessage, WebhookInbox
 from modules.users.model import User
 
-router = APIRouter(prefix="/ops", tags=["Operations"])
+router = CanonicalAPIRouter(prefix="/ops", tags=["Operations"])
 
 
 def _authorize_internal_job(request: Request) -> None:
     expected = settings.CRON_SECRET
     provided = request.headers.get("authorization", "")
     if not expected or provided != f"Bearer {expected}":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized cron request")
+        raise AuthenticationException("Unauthorized cron request")
 
 
 @router.get("/health/live")
@@ -71,7 +74,7 @@ async def slo_status(
 ):
     role = canonical_role(user)
     if role != ROLE_SUPER_ADMIN and not has_any_role(user, STORE_MANAGERS):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Sin permisos para ver SLO")
+        raise PermissionDeniedException("ver SLO")
 
     is_global = role == ROLE_SUPER_ADMIN or bool(user.is_global_admin)
     store_filter = [] if is_global else [WebhookInbox.store_id == user.store_id]
@@ -106,26 +109,32 @@ async def slo_status(
 
     alerts: list[dict[str, str | int]] = []
     if pending_webhooks > settings.SLO_MAX_PENDING_WEBHOOKS:
-        alerts.append({
-            "code": "pending_webhooks_high",
-            "severity": "critical",
-            "value": pending_webhooks,
-            "threshold": settings.SLO_MAX_PENDING_WEBHOOKS,
-        })
+        alerts.append(
+            {
+                "code": "pending_webhooks_high",
+                "severity": "critical",
+                "value": pending_webhooks,
+                "threshold": settings.SLO_MAX_PENDING_WEBHOOKS,
+            }
+        )
     if failed_webhooks > settings.SLO_MAX_FAILED_WEBHOOKS:
-        alerts.append({
-            "code": "failed_webhooks_high",
-            "severity": "critical",
-            "value": failed_webhooks,
-            "threshold": settings.SLO_MAX_FAILED_WEBHOOKS,
-        })
+        alerts.append(
+            {
+                "code": "failed_webhooks_high",
+                "severity": "critical",
+                "value": failed_webhooks,
+                "threshold": settings.SLO_MAX_FAILED_WEBHOOKS,
+            }
+        )
     if pending_outbox > settings.SLO_MAX_PENDING_OUTBOX:
-        alerts.append({
-            "code": "pending_outbox_high",
-            "severity": "warning",
-            "value": pending_outbox,
-            "threshold": settings.SLO_MAX_PENDING_OUTBOX,
-        })
+        alerts.append(
+            {
+                "code": "pending_outbox_high",
+                "severity": "warning",
+                "value": pending_outbox,
+                "threshold": settings.SLO_MAX_PENDING_OUTBOX,
+            }
+        )
 
     return {
         "scope": "global" if is_global else "store",

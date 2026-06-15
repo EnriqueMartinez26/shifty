@@ -9,6 +9,7 @@ from core.validation import SLUG_PATTERN, reject_unsafe_url
 CUSTOM_FIELD_KEY_PATTERN = r"^[a-z][a-z0-9_]{1,39}$"
 CustomClientFieldType = Literal["text", "textarea", "tel", "email", "date", "select"]
 
+
 class BusinessHourPeriod(BaseModel):
     open: str = Field(..., pattern=r"^\d{2}:\d{2}$")
     close: str = Field(..., pattern=r"^\d{2}:\d{2}$")
@@ -34,6 +35,7 @@ class StoreCustomField(BaseModel):
             raise ValueError("Los campos de tipo select requieren al menos una opcion")
         return self
 
+
 class StoreUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
     slug: Optional[str] = Field(None, max_length=100, pattern=SLUG_PATTERN)
@@ -47,16 +49,20 @@ class StoreUpdate(BaseModel):
     facebook_url: Optional[str] = Field(None, max_length=500)
     website_url: Optional[str] = Field(None, max_length=500)
     custom_client_fields: Optional[List[StoreCustomField]] = Field(None, max_length=8)
-    
+
     cancellation_hours: Optional[int] = Field(None, ge=0)
     buffer_minutes: Optional[int] = Field(None, ge=0)
-    
-    business_hours: Optional[Dict[str, List[BusinessHourPeriod]]] = Field(None, max_length=7)
-    
+
+    business_hours: Optional[Dict[str, List[BusinessHourPeriod]]] = Field(
+        None, max_length=7
+    )
+
     send_email_confirmation: Optional[bool] = None
     send_email_reminders: Optional[bool] = None
 
-    @field_validator("logo_url", "cover_url", "instagram_url", "facebook_url", "website_url")
+    @field_validator(
+        "logo_url", "cover_url", "instagram_url", "facebook_url", "website_url"
+    )
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
@@ -80,6 +86,7 @@ class StoreFeatureFlagsUpdate(BaseModel):
 
 class StoreFeatureFlagsResponse(BaseModel):
     flags: StoreFeatureFlags
+
 
 class StoreResponse(BaseModel):
     public_id: str

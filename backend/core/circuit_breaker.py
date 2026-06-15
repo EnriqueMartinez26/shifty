@@ -54,7 +54,9 @@ class AsyncCircuitBreaker:
         try:
             result = await operation()
         except Exception as exc:
-            record_failure = should_record_failure(exc) if should_record_failure else True
+            record_failure = (
+                should_record_failure(exc) if should_record_failure else True
+            )
             if record_failure:
                 await self._mark_failure(probe_call)
             else:
@@ -85,7 +87,9 @@ class AsyncCircuitBreaker:
 
             if self._state == "half_open":
                 if self._probe_in_flight:
-                    raise CircuitBreakerOpenError(self.name, max(0.0, self._retry_at - now))
+                    raise CircuitBreakerOpenError(
+                        self.name, max(0.0, self._retry_at - now)
+                    )
                 self._probe_in_flight = True
                 return True
 

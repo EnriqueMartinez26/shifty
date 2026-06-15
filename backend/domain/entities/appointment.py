@@ -4,6 +4,7 @@ from enum import Enum
 from typing import Optional
 from domain.value_objects.time_slot import TimeSlot
 
+
 class AppointmentStatus(Enum):
     PENDING = "PENDING"
     CONFIRMED = "CONFIRMED"
@@ -11,9 +12,11 @@ class AppointmentStatus(Enum):
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
 
+
 @dataclass
 class Appointment:
     """Domain entity representing a booking appointment."""
+
     id: str
     service_id: str
     staff_id: str

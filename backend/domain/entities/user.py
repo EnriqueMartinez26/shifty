@@ -1,16 +1,18 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+
 
 class UserRole(Enum):
     ADMIN = "ADMIN"
     STAFF = "STAFF"
     CLIENT = "CLIENT"
 
+
 @dataclass
 class User:
     """Domain entity representing a system user."""
+
     id: str
     email: str
     full_name: str

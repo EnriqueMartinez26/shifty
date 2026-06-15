@@ -27,6 +27,12 @@ class Service(BaseEntity):
     youtube_trailer_url: Mapped[str | None] = mapped_column(String(500))
 
     __table_args__ = (
-        CheckConstraint("deposit_mode IN ('none', 'optional', 'required')", name="ck_services_deposit_mode"),
-        CheckConstraint("deposit_type IN ('percent', 'fixed', 'full')", name="ck_services_deposit_type"),
+        CheckConstraint(
+            "deposit_mode IN ('none', 'optional', 'required')",
+            name="ck_services_deposit_mode",
+        ),
+        CheckConstraint(
+            "deposit_type IN ('percent', 'fixed', 'full')",
+            name="ck_services_deposit_type",
+        ),
     )

@@ -3,6 +3,7 @@ from core.config import settings
 
 _redis: Redis | None = None
 
+
 async def get_redis() -> Redis:
     global _redis
     if _redis is None:
@@ -15,6 +16,7 @@ async def get_redis() -> Redis:
             retry_on_timeout=True,
         )
     return _redis
+
 
 async def close_redis():
     global _redis

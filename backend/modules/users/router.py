@@ -1,8 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import Depends, Path, Query, status
+from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.exceptions import AppException, UserNotFoundException
 from core.database import get_db
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
@@ -10,8 +12,10 @@ from modules.users.model import User
 from modules.users.repository import UserRepository
 from modules.users.schemas import UserCreate, UserResponse, UserUpdate
 
-router = APIRouter(prefix="/users", tags=["Users Management"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/users", tags=["Users Management"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -24,7 +28,7 @@ async def create_user(
     try:
         return await repo.create(data.model_dump(), admin.store_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/", response_model=list[UserResponse])
@@ -53,7 +57,7 @@ async def get_user(
     repo = UserRepository(db)
     user = await repo.get_by_public_id(public_id, admin.store_id)
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise UserNotFoundException(public_id)
     return user
 
 
@@ -67,12 +71,12 @@ async def update_user(
     repo = UserRepository(db)
     user = await repo.get_by_public_id(public_id, admin.store_id)
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise UserNotFoundException(public_id)
 
     try:
         return await repo.update(user, data.model_dump())
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.delete("/{public_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -82,11 +86,15 @@ async def delete_user(
     db: AsyncSession = Depends(get_db),
 ):
     if admin.public_id == public_id:
-        raise HTTPException(status_code=400, detail="No podés desactivar tu propio usuario")
+        raise AppException(
+            message="No podés desactivar tu propio usuario",
+            http_status=400,
+            error_code="SELF_DEACTIVATION_DENIED",
+        )
 
     repo = UserRepository(db)
     user = await repo.get_by_public_id(public_id, admin.store_id)
     if not user:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise UserNotFoundException(public_id)
 
     await repo.soft_delete(user)

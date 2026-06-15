@@ -2,30 +2,44 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import Depends, Path, Query, status
+from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from core.exceptions import (
+    AppException,
+    PermissionDeniedException,
+    ResourceNotFoundException,
+    ServiceNotFoundException,
+    ValidationException,
+)
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user
 from modules.promotions.model import StorePromotion
-from modules.promotions.schemas import PromotionCreate, PromotionQuoteResponse, PromotionResponse, PromotionUpdate
+from modules.promotions.schemas import (
+    PromotionCreate,
+    PromotionQuoteResponse,
+    PromotionResponse,
+    PromotionUpdate,
+)
 from modules.promotions.service import quote_promotion
 from modules.services.model import Service
 from modules.users.model import User, UserRole
 
-router = APIRouter(prefix="/promotions", tags=["Promotions"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
-PublicIdQuery = Annotated[str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/promotions", tags=["Promotions"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
+PublicIdQuery = Annotated[
+    str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 def _require_admin(user: User) -> None:
     if user.role != UserRole.ADMIN and not user.is_global_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo administradores pueden gestionar promociones",
-        )
+        raise PermissionDeniedException("gestionar promociones")
 
 
 def _serialize_promotion(promotion: StorePromotion) -> PromotionResponse:
@@ -47,13 +61,18 @@ def _serialize_promotion(promotion: StorePromotion) -> PromotionResponse:
     )
 
 
-async def _get_store_promotion_or_404(db: AsyncSession, promotion_public_id: str, store_id: str) -> StorePromotion:
+async def _get_store_promotion_or_404(
+    db: AsyncSession, promotion_public_id: str, store_id: str
+) -> StorePromotion:
     result = await db.execute(
-        select(StorePromotion).where(StorePromotion.id == promotion_public_id, StorePromotion.store_id == store_id)
+        select(StorePromotion).where(
+            StorePromotion.id == promotion_public_id,
+            StorePromotion.store_id == store_id,
+        )
     )
     promotion = result.scalar_one_or_none()
     if not promotion:
-        raise HTTPException(status_code=404, detail="Promocion no encontrada")
+        raise ResourceNotFoundException("Promocion", promotion_public_id)
     return promotion
 
 
@@ -85,7 +104,11 @@ async def create_promotion(
         )
     )
     if duplicate.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Ya existe una promocion con ese codigo")
+        raise AppException(
+            message="Ya existe una promocion con ese codigo",
+            http_status=409,
+            error_code="PROMOTION_CODE_DUPLICATE",
+        )
 
     promotion = StorePromotion(store_id=user.store_id, **data.model_dump())
     db.add(promotion)
@@ -102,7 +125,9 @@ async def update_promotion(
     db: AsyncSession = Depends(get_db),
 ):
     _require_admin(user)
-    promotion = await _get_store_promotion_or_404(db, promotion_public_id, user.store_id)
+    promotion = await _get_store_promotion_or_404(
+        db, promotion_public_id, user.store_id
+    )
     payload = data.model_dump(exclude_unset=True)
 
     candidate_code = payload.get("code")
@@ -115,17 +140,29 @@ async def update_promotion(
             )
         )
         if duplicate.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail="Ya existe una promocion con ese codigo")
+            raise AppException(
+                message="Ya existe una promocion con ese codigo",
+                http_status=409,
+                error_code="PROMOTION_CODE_DUPLICATE",
+            )
 
     candidate_type = payload.get("promotion_type", promotion.promotion_type)
     candidate_value = payload.get("value", promotion.value)
-    if candidate_type == "percent" and candidate_value is not None and candidate_value > 100:
-        raise HTTPException(status_code=422, detail="El descuento porcentual no puede superar 100")
+    if (
+        candidate_type == "percent"
+        and candidate_value is not None
+        and candidate_value > 100
+    ):
+        raise ValidationException("El descuento porcentual no puede superar 100")
 
     candidate_valid_from = payload.get("valid_from", promotion.valid_from)
     candidate_valid_until = payload.get("valid_until", promotion.valid_until)
-    if candidate_valid_from and candidate_valid_until and candidate_valid_from >= candidate_valid_until:
-        raise HTTPException(status_code=422, detail="La vigencia de la promocion es invalida")
+    if (
+        candidate_valid_from
+        and candidate_valid_until
+        and candidate_valid_from >= candidate_valid_until
+    ):
+        raise ValidationException("La vigencia de la promocion es invalida")
 
     for key, value in payload.items():
         setattr(promotion, key, value)
@@ -143,11 +180,15 @@ async def preview_promotion(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Service).where(Service.public_id == service_id, Service.store_id == user.store_id, Service.is_active.is_(True))
+        select(Service).where(
+            Service.public_id == service_id,
+            Service.store_id == user.store_id,
+            Service.is_active.is_(True),
+        )
     )
     service = result.scalar_one_or_none()
     if not service:
-        raise HTTPException(status_code=404, detail="Servicio no encontrado")
+        raise ServiceNotFoundException(service_id)
 
     _promotion, quote, error = await quote_promotion(
         db,
@@ -156,7 +197,7 @@ async def preview_promotion(
         code=code,
     )
     if not quote:
-        raise HTTPException(status_code=422, detail=error or "Promocion invalida")
+        raise ValidationException(error or "Promocion invalida")
 
     return PromotionQuoteResponse(
         code=quote.code,

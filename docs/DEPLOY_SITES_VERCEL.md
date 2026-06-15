@@ -30,11 +30,11 @@ Crear un proyecto Vercel nuevo apuntando a la carpeta `backend/`.
 Archivos relevantes:
 
 - [vercel.json](/D:/Proyectos/martinez-scienza/shifty/vercel.json)
-- [server.py](/D:/Proyectos/martinez-scienza/shifty/server.py)
+- [api/index.py](/D:/Proyectos/martinez-scienza/shifty/api/index.py)
 - [requirements.txt](/D:/Proyectos/martinez-scienza/shifty/requirements.txt)
 - [backend/.env.production.example](/D:/Proyectos/martinez-scienza/shifty/backend/.env.production.example)
 - [backend/.env.vercel.import](/D:/Proyectos/martinez-scienza/shifty/backend/.env.vercel.import)
-- [backend/server.py](/D:/Proyectos/martinez-scienza/shifty/backend/server.py)
+- [backend/main.py](/D:/Proyectos/martinez-scienza/shifty/backend/main.py)
 - [backend/vercel.json](/D:/Proyectos/martinez-scienza/shifty/backend/vercel.json)
 - [backend/.vercelignore](/D:/Proyectos/martinez-scienza/shifty/backend/.vercelignore)
 
@@ -91,7 +91,7 @@ REDIS_URL=rediss://default:PASSWORD@HOST:6379
 1. Crear proyecto en Vercel.
 2. Elegir una de estas configuraciones:
    - recomendada: root `backend/`
-   - alternativa segura: root repo completo, usando [vercel.json](/D:/Proyectos/martinez-scienza/shifty/vercel.json) y [server.py](/D:/Proyectos/martinez-scienza/shifty/server.py)
+   - alternativa segura: root repo completo, usando [vercel.json](/D:/Proyectos/martinez-scienza/shifty/vercel.json) y [api/index.py](/D:/Proyectos/martinez-scienza/shifty/api/index.py)
 3. Cargar variables.
 4. Deploy.
 5. Validar:

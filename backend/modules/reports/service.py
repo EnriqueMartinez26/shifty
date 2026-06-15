@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -30,7 +30,9 @@ class ReportService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _resolve_date_range(self, from_date: date | None, to_date: date | None) -> tuple[date, date]:
+    def _resolve_date_range(
+        self, from_date: date | None, to_date: date | None
+    ) -> tuple[date, date]:
         today = datetime.now(timezone.utc).date()
         resolved_to = to_date or today
         resolved_from = from_date or (resolved_to - timedelta(days=30))
@@ -40,7 +42,9 @@ class ReportService:
 
         return resolved_from, resolved_to
 
-    def _range_bounds(self, from_date: date, to_date: date) -> tuple[datetime, datetime]:
+    def _range_bounds(
+        self, from_date: date, to_date: date
+    ) -> tuple[datetime, datetime]:
         start_dt = datetime.combine(from_date, time.min)
         end_dt = datetime.combine(to_date + timedelta(days=1), time.min)
         return start_dt, end_dt
@@ -53,7 +57,13 @@ class ReportService:
             top_debtors=[],
         )
 
-    def _user_display_name(self, user: User | None, *, fallback: str | None = None, client_id: str | None = None) -> str:
+    def _user_display_name(
+        self,
+        user: User | None,
+        *,
+        fallback: str | None = None,
+        client_id: str | None = None,
+    ) -> str:
         if user:
             full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
             if full_name:
@@ -68,7 +78,9 @@ class ReportService:
 
     async def _build_debt_summary(self) -> ReportDebtSummary:
         result = await self.db.execute(
-            select(CustomerLedger).order_by(CustomerLedger.client_id.asc(), CustomerLedger.created_at.asc())
+            select(CustomerLedger).order_by(
+                CustomerLedger.client_id.asc(), CustomerLedger.created_at.asc()
+            )
         )
         latest_by_client: dict[str, CustomerLedger] = {}
         for movement in result.scalars().all():
@@ -83,10 +95,15 @@ class ReportService:
             return self._empty_debt_summary()
 
         client_ids = [movement.client_id for movement in debt_rows]
-        users_result = await self.db.execute(select(User).where(User.id.in_(client_ids)))
+        users_result = await self.db.execute(
+            select(User).where(User.id.in_(client_ids))
+        )
         users_by_id = {user.id: user for user in users_result.scalars().all()}
 
-        total_balance = sum((Decimal(str(item.balance_after or 0)) for item in debt_rows), Decimal("0.00"))
+        total_balance = sum(
+            (Decimal(str(item.balance_after or 0)) for item in debt_rows),
+            Decimal("0.00"),
+        )
         top_debtors = sorted(
             debt_rows,
             key=lambda item: (Decimal(str(item.balance_after or 0)), item.created_at),
@@ -139,7 +156,9 @@ class ReportService:
     ) -> ReportSummaryResponse:
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
-        rows = await self._fetch_rows(from_date=resolved_from, to_date=resolved_to, staff_id=staff_id)
+        rows = await self._fetch_rows(
+            from_date=resolved_from, to_date=resolved_to, staff_id=staff_id
+        )
         historical_clients_query = select(
             Appointment.client_id,
             Appointment.client_name,
@@ -149,7 +168,9 @@ class ReportService:
             Appointment.starts_at < end_dt,
         )
         if staff_id:
-            historical_clients_query = historical_clients_query.where(Appointment.staff_id == staff_id)
+            historical_clients_query = historical_clients_query.where(
+                Appointment.staff_id == staff_id
+            )
         historical_clients_result = await self.db.execute(
             historical_clients_query.order_by(Appointment.starts_at.asc())
         )
@@ -213,24 +234,37 @@ class ReportService:
                 confirmed += 1
                 total_revenue += price
 
-            if status not in {AppointmentStatus.CANCELLED.value, AppointmentStatus.EXPIRED.value}:
+            if status not in {
+                AppointmentStatus.CANCELLED.value,
+                AppointmentStatus.EXPIRED.value,
+            }:
                 service_bucket = service_metrics[service.public_id]
                 service_bucket["service_id"] = service.public_id
                 service_bucket["service_name"] = service.name
                 service_bucket["appointments"] += 1
                 if status == AppointmentStatus.COMPLETED.value:
                     service_bucket["completed_appointments"] += 1
-                if status in {AppointmentStatus.COMPLETED.value, AppointmentStatus.CONFIRMED.value}:
+                if status in {
+                    AppointmentStatus.COMPLETED.value,
+                    AppointmentStatus.CONFIRMED.value,
+                }:
                     service_bucket["revenue"] += price
 
                 if client_id:
                     client_bucket = client_metrics[client_id]
                     client_bucket["client_id"] = client_id
-                    client_bucket["client_name"] = known_client_names.get(client_id) or appointment.client_name or client_id
+                    client_bucket["client_name"] = (
+                        known_client_names.get(client_id)
+                        or appointment.client_name
+                        or client_id
+                    )
                     client_bucket["appointments"] += 1
                     if status == AppointmentStatus.COMPLETED.value:
                         client_bucket["completed_appointments"] += 1
-                    if status in {AppointmentStatus.COMPLETED.value, AppointmentStatus.CONFIRMED.value}:
+                    if status in {
+                        AppointmentStatus.COMPLETED.value,
+                        AppointmentStatus.CONFIRMED.value,
+                    }:
                         client_bucket["revenue"] += price
 
             items.append(
@@ -279,7 +313,9 @@ class ReportService:
             returning_clients=max(len(clients_in_range) - new_clients, 0),
             inactive_clients=len(clients_seen_before_range - clients_in_range),
         )
-        debt_summary = self._empty_debt_summary() if staff_id else await self._build_debt_summary()
+        debt_summary = (
+            self._empty_debt_summary() if staff_id else await self._build_debt_summary()
+        )
 
         return ReportSummaryResponse(
             from_date=resolved_from,
@@ -323,13 +359,19 @@ class ReportService:
         staff_query = select(Staff).where(Staff.is_active.is_(True))
         if only_staff_id:
             staff_query = staff_query.where(Staff.id == only_staff_id)
-        staff_result = await self.db.execute(staff_query.order_by(Staff.display_name.asc()))
+        staff_result = await self.db.execute(
+            staff_query.order_by(Staff.display_name.asc())
+        )
         staff_members = list(staff_result.scalars().all())
         staff_ids = [staff.id for staff in staff_members]
         if not staff_ids:
-            return ProfessionalReportsResponse(from_date=resolved_from, to_date=resolved_to, professionals=[])
+            return ProfessionalReportsResponse(
+                from_date=resolved_from, to_date=resolved_to, professionals=[]
+            )
 
-        schedules_result = await self.db.execute(select(Schedule).where(Schedule.staff_id.in_(staff_ids)))
+        schedules_result = await self.db.execute(
+            select(Schedule).where(Schedule.staff_id.in_(staff_ids))
+        )
         blocks_result = await self.db.execute(
             select(StaffBlock).where(
                 StaffBlock.staff_id.in_(staff_ids),
@@ -338,7 +380,9 @@ class ReportService:
                 StaffBlock.ends_at > start_dt,
             )
         )
-        rows = await self._fetch_rows(from_date=resolved_from, to_date=resolved_to, staff_id=only_staff_id)
+        rows = await self._fetch_rows(
+            from_date=resolved_from, to_date=resolved_to, staff_id=only_staff_id
+        )
 
         schedules_by_staff: dict[str, list[Schedule]] = defaultdict(list)
         for schedule in schedules_result.scalars().all():
@@ -348,7 +392,9 @@ class ReportService:
         for block in blocks_result.scalars().all():
             blocks_by_staff[block.staff_id].append(block)
 
-        appointments_by_staff: dict[str, list[tuple[Appointment, Service, Staff]]] = defaultdict(list)
+        appointments_by_staff: dict[str, list[tuple[Appointment, Service, Staff]]] = (
+            defaultdict(list)
+        )
         for row in rows:
             appointment, _service, staff = row
             appointments_by_staff[staff.id].append(row)
@@ -360,13 +406,17 @@ class ReportService:
             available_minutes = 0
             for schedule in schedules_by_staff.get(staff.id, []):
                 daily_minutes = int(
-                    (datetime.combine(date.min, schedule.end_time) - datetime.combine(date.min, schedule.start_time)).total_seconds()
+                    (
+                        datetime.combine(date.min, schedule.end_time)
+                        - datetime.combine(date.min, schedule.start_time)
+                    ).total_seconds()
                     // 60
                 )
                 matching_days = sum(
                     1
                     for offset in range(total_days)
-                    if (resolved_from + timedelta(days=offset)).weekday() == schedule.day_of_week
+                    if (resolved_from + timedelta(days=offset)).weekday()
+                    == schedule.day_of_week
                 )
                 available_minutes += daily_minutes * matching_days
 
@@ -375,7 +425,9 @@ class ReportService:
                 clipped_start = max(block.starts_at.replace(tzinfo=None), start_dt)
                 clipped_end = min(block.ends_at.replace(tzinfo=None), end_dt)
                 if clipped_end > clipped_start:
-                    blocked_minutes += int((clipped_end - clipped_start).total_seconds() // 60)
+                    blocked_minutes += int(
+                        (clipped_end - clipped_start).total_seconds() // 60
+                    )
 
             total_appointments = 0
             completed = 0
@@ -387,7 +439,10 @@ class ReportService:
 
             for appointment, service, _ in appointments_by_staff.get(staff.id, []):
                 total_appointments += 1
-                if appointment.status not in {AppointmentStatus.CANCELLED.value, AppointmentStatus.EXPIRED.value}:
+                if appointment.status not in {
+                    AppointmentStatus.CANCELLED.value,
+                    AppointmentStatus.EXPIRED.value,
+                }:
                     used_minutes += int(appointment.duration_minutes)
                 if appointment.status == AppointmentStatus.COMPLETED.value:
                     completed += 1
@@ -401,7 +456,11 @@ class ReportService:
                     cancelled += 1
 
             effective_minutes = max(available_minutes - blocked_minutes, 0)
-            occupancy_rate = round((used_minutes / effective_minutes) * 100, 2) if effective_minutes else 0.0
+            occupancy_rate = (
+                round((used_minutes / effective_minutes) * 100, 2)
+                if effective_minutes
+                else 0.0
+            )
             items.append(
                 ProfessionalReportItem(
                     staff_id=staff.public_id,

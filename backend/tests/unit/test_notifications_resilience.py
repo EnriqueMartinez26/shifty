@@ -5,7 +5,9 @@ import modules.notifications.tasks as notification_tasks
 
 
 @pytest.mark.asyncio
-async def test_confirmation_enqueue_does_not_raise_when_smtp_fallback_fails(monkeypatch) -> None:
+async def test_confirmation_enqueue_does_not_raise_when_smtp_fallback_fails(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(settings, "VERCEL_QUEUE_REGION", None)
     monkeypatch.setattr(settings, "VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC", True)
 
@@ -25,7 +27,9 @@ async def test_confirmation_enqueue_does_not_raise_when_smtp_fallback_fails(monk
 
 
 @pytest.mark.asyncio
-async def test_confirmation_enqueue_does_not_raise_when_queue_publish_fails(monkeypatch) -> None:
+async def test_confirmation_enqueue_does_not_raise_when_queue_publish_fails(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(settings, "VERCEL_QUEUE_REGION", "iad1")
 
     async def publish_failure(*args, **kwargs) -> None:

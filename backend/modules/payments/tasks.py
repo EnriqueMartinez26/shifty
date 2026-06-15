@@ -16,7 +16,7 @@ def process_payment_outbox(self, limit: int = 100) -> dict[str, int]:
     try:
         return asyncio.run(_run())
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
 @celery_app.task(name="process_payment_webhook_inbox", bind=True, max_retries=3)
@@ -28,4 +28,4 @@ def process_payment_webhook_inbox(self, limit: int = 100) -> dict[str, int]:
     try:
         return asyncio.run(_run())
     except Exception as exc:
-        raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

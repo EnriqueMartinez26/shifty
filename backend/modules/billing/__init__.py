@@ -1,1 +1,0 @@
-"""Billing domain models for SaaS plans, subscriptions and coupons."""

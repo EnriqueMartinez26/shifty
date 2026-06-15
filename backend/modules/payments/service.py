@@ -12,7 +12,12 @@ from core.circuit_breaker import AsyncCircuitBreaker
 from core.config import Environment, settings
 from core.crypto import decrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.payments.model import OutboxMessage, Payment, PaymentGatewayConfig, PaymentStatus
+from modules.payments.model import (
+    OutboxMessage,
+    Payment,
+    PaymentGatewayConfig,
+    PaymentStatus,
+)
 from modules.services.model import Service
 from modules.stores.model import Store
 
@@ -49,7 +54,9 @@ def _money(value: Decimal) -> Decimal:
 
 def _clean_payload(value):
     if isinstance(value, dict):
-        return {key: _clean_payload(item) for key, item in value.items() if item is not None}
+        return {
+            key: _clean_payload(item) for key, item in value.items() if item is not None
+        }
     if isinstance(value, list):
         return [_clean_payload(item) for item in value if item is not None]
     return value
@@ -71,7 +78,9 @@ def _normalize_payer_email(email: str | None) -> str | None:
     return email
 
 
-def _booking_return_url(store: Store, appointment: Appointment, payment_status: str) -> str:
+def _booking_return_url(
+    store: Store, appointment: Appointment, payment_status: str
+) -> str:
     base_url = settings.FRONTEND_URL.rstrip("/")
     query = urlencode(
         {
@@ -94,11 +103,15 @@ def _resolve_checkout_link(payload: dict) -> str | None:
     return payload.get("sandbox_init_point") or payload.get("init_point")
 
 
-def calculate_service_payment_amount(service: Service, *, base_price: Decimal | None = None) -> Decimal:
+def calculate_service_payment_amount(
+    service: Service, *, base_price: Decimal | None = None
+) -> Decimal:
     mode = getattr(service, "deposit_mode", "none") or "none"
     payment_type = getattr(service, "deposit_type", "percent") or "percent"
     raw_amount = getattr(service, "deposit_amount", None)
-    service_price = _money(base_price if base_price is not None else Decimal(str(service.price or 0)))
+    service_price = _money(
+        base_price if base_price is not None else Decimal(str(service.price or 0))
+    )
 
     if mode == "none":
         return Decimal("0.00")
@@ -157,12 +170,20 @@ async def _perform_mercadopago_request(
         "Accept": "application/json",
     }
     try:
-        async with httpx.AsyncClient(base_url=MERCADOPAGO_API_BASE_URL, timeout=20.0) as client:
-            response = await client.request(method, path, headers=headers, json=json_body)
+        async with httpx.AsyncClient(
+            base_url=MERCADOPAGO_API_BASE_URL, timeout=20.0
+        ) as client:
+            response = await client.request(
+                method, path, headers=headers, json=json_body
+            )
     except httpx.TimeoutException as exc:
-        raise MercadoPagoAPIError("Mercado Pago no respondio a tiempo", transient=True) from exc
+        raise MercadoPagoAPIError(
+            "Mercado Pago no respondio a tiempo", transient=True
+        ) from exc
     except httpx.RequestError as exc:
-        raise MercadoPagoAPIError("Mercado Pago no esta disponible", transient=True) from exc
+        raise MercadoPagoAPIError(
+            "Mercado Pago no esta disponible", transient=True
+        ) from exc
 
     if response.status_code >= 500:
         detail = response.text[:400]
@@ -183,10 +204,14 @@ async def _perform_mercadopago_request(
     try:
         return response.json()
     except ValueError as exc:
-        raise MercadoPagoAPIError("Mercado Pago devolvio una respuesta invalida", transient=True) from exc
+        raise MercadoPagoAPIError(
+            "Mercado Pago devolvio una respuesta invalida", transient=True
+        ) from exc
 
 
-async def _get_gateway_config(db: AsyncSession, store_id: str) -> PaymentGatewayConfig | None:
+async def _get_gateway_config(
+    db: AsyncSession, store_id: str
+) -> PaymentGatewayConfig | None:
     result = await db.execute(
         select(PaymentGatewayConfig).where(
             PaymentGatewayConfig.store_id == store_id,
@@ -261,10 +286,14 @@ async def create_mercadopago_preference(
             },
         }
     )
-    return await _mercadopago_api_request(access_token, method="POST", path="/checkout/preferences", json_body=payload)
+    return await _mercadopago_api_request(
+        access_token, method="POST", path="/checkout/preferences", json_body=payload
+    )
 
 
-async def fetch_mercadopago_payment(db: AsyncSession, *, store_id: str, payment_id: str) -> dict | None:
+async def fetch_mercadopago_payment(
+    db: AsyncSession, *, store_id: str, payment_id: str
+) -> dict | None:
     config = await _get_gateway_config(db, store_id)
     access_token = _resolve_access_token(config)
     if not access_token:
@@ -288,14 +317,22 @@ async def ensure_payment_preference(
     promotion_code: str | None = None,
     create_provider_link: bool = True,
 ) -> Payment:
-    amount = amount_override if amount_override is not None else calculate_service_payment_amount(service)
+    amount = (
+        amount_override
+        if amount_override is not None
+        else calculate_service_payment_amount(service)
+    )
     amount = _money(Decimal(str(amount)))
 
-    original_amount = _money(Decimal(str(original_amount if original_amount is not None else amount)))
+    original_amount = _money(
+        Decimal(str(original_amount if original_amount is not None else amount))
+    )
     discount_amount = _money(Decimal(str(discount_amount or 0)))
 
     result = await db.execute(
-        select(Payment).where(Payment.appointment_id == appointment.id, Payment.store_id == store_id)
+        select(Payment).where(
+            Payment.appointment_id == appointment.id, Payment.store_id == store_id
+        )
     )
     payment = result.scalar_one_or_none()
     should_refresh_provider_link = False
@@ -313,7 +350,11 @@ async def ensure_payment_preference(
             PaymentStatus.REFUNDED.value,
         }:
             payment.status = PaymentStatus.PENDING.value
-        should_refresh_provider_link = should_refresh_provider_link or _is_placeholder_preference(payment.preference_id) or _is_placeholder_payment_link(payment.payment_link)
+        should_refresh_provider_link = (
+            should_refresh_provider_link
+            or _is_placeholder_preference(payment.preference_id)
+            or _is_placeholder_payment_link(payment.payment_link)
+        )
     else:
         payment = Payment(
             store_id=store_id,
@@ -359,8 +400,13 @@ async def ensure_payment_preference(
     return payment
 
 
-def sync_appointment_with_payment(appointment: Appointment, payment_status: str) -> None:
-    if payment_status in {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}:
+def sync_appointment_with_payment(
+    appointment: Appointment, payment_status: str
+) -> None:
+    if payment_status in {
+        PaymentStatus.APPROVED.value,
+        PaymentStatus.MANUAL_CONFIRMED.value,
+    }:
         if appointment.status in {
             AppointmentStatus.PENDING.value,
             AppointmentStatus.PENDING_PAYMENT.value,
@@ -378,8 +424,13 @@ def sync_appointment_with_payment(appointment: Appointment, payment_status: str)
             appointment.apply_status_transition(AppointmentStatus.EXPIRED)
 
 
-def stamp_payment_from_status(payment: Payment, payment_status: str, *, payload: dict | None = None) -> None:
+def stamp_payment_from_status(
+    payment: Payment, payment_status: str, *, payload: dict | None = None
+) -> None:
     payment.status = payment_status
     payment.raw_payload = payload or payment.raw_payload
-    if payment_status in {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}:
+    if payment_status in {
+        PaymentStatus.APPROVED.value,
+        PaymentStatus.MANUAL_CONFIRMED.value,
+    }:
         payment.paid_at = payment.paid_at or datetime.now(timezone.utc)

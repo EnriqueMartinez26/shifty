@@ -82,14 +82,7 @@ const ALLOWED_IMPORTS: Record<string, string[]> = {
 
 // Forbidden imports per layer
 const FORBIDDEN_IMPORTS: Record<string, string[]> = {
-  domain: [
-    'react',
-    'axios',
-    '@tanstack',
-    '@infrastructure',
-    '@application',
-    '@presentation'
-  ],
+  domain: ['react', 'axios', '@tanstack', '@infrastructure', '@application', '@presentation'],
   infrastructure: ['@application', '@presentation', 'react'],
   application: ['@presentation'],
   presentation: [],
@@ -169,8 +162,7 @@ function isViolation(
   let importLayer: string | null = null
   if (importModule.startsWith('@domain')) importLayer = 'domain'
   else if (importModule.startsWith('@application')) importLayer = 'application'
-  else if (importModule.startsWith('@infrastructure'))
-    importLayer = 'infrastructure'
+  else if (importModule.startsWith('@infrastructure')) importLayer = 'infrastructure'
   else if (importModule.startsWith('@presentation')) importLayer = 'presentation'
   else if (importModule.startsWith('@shared')) importLayer = 'shared'
   else if (
@@ -274,7 +266,8 @@ function checkFeaturesDirectory(): ViolationReport[] {
       line: 0,
       column: 0,
       severity: 'error',
-      message: '❌ ARCHITECTURE VIOLATION: features/ directory still exists. Must be deleted in Phase 3.',
+      message:
+        '❌ ARCHITECTURE VIOLATION: features/ directory still exists. Must be deleted in Phase 3.',
       code: 'ARCH-002'
     })
   }
@@ -399,18 +392,15 @@ function verifyArchitecture(): ArchitectureReport {
     const layer = getLayer(filePath)
     violations.forEach((v) => {
       if (layer === 'domain') report.summary.domainViolations++
-      else if (layer === 'infrastructure')
-        report.summary.infrastructureViolations++
+      else if (layer === 'infrastructure') report.summary.infrastructureViolations++
       else if (layer === 'application') report.summary.applicationViolations++
     })
   })
 
   // Count error/warning
   report.totalViolations = report.violations.length
-  report.errorCount = report.violations.filter((v) => v.severity === 'error')
-    .length
-  report.warningCount = report.violations.filter((v) => v.severity === 'warning')
-    .length
+  report.errorCount = report.violations.filter((v) => v.severity === 'error').length
+  report.warningCount = report.violations.filter((v) => v.severity === 'warning').length
   report.passed = report.errorCount === 0
 
   return report
@@ -420,9 +410,15 @@ function verifyArchitecture(): ArchitectureReport {
  * Print report
  */
 function printReport(report: ArchitectureReport): void {
-  console.log(`\n${colors.blue}═══════════════════════════════════════════════════════════════${colors.reset}`)
-  console.log(`${colors.blue}                    CLEAN ARCHITECTURE REPORT                     ${colors.reset}`)
-  console.log(`${colors.blue}═══════════════════════════════════════════════════════════════${colors.reset}\n`)
+  console.log(
+    `\n${colors.blue}═══════════════════════════════════════════════════════════════${colors.reset}`
+  )
+  console.log(
+    `${colors.blue}                    CLEAN ARCHITECTURE REPORT                     ${colors.reset}`
+  )
+  console.log(
+    `${colors.blue}═══════════════════════════════════════════════════════════════${colors.reset}\n`
+  )
 
   console.log(`Files analyzed:        ${report.totalFiles}`)
   console.log(`Total violations:      ${report.totalViolations}`)
@@ -430,21 +426,11 @@ function printReport(report: ArchitectureReport): void {
   console.log(`Warnings:              ${report.warningCount}\n`)
 
   console.log('Violations by category:')
-  console.log(
-    `  • Domain layer:        ${report.summary.domainViolations} violations`
-  )
-  console.log(
-    `  • Infrastructure:      ${report.summary.infrastructureViolations} violations`
-  )
-  console.log(
-    `  • Application:         ${report.summary.applicationViolations} violations`
-  )
-  console.log(
-    `  • Circular deps:       ${report.summary.circularDeps} violations`
-  )
-  console.log(
-    `  • Unused imports:      ${report.summary.unusedImports} violations\n`
-  )
+  console.log(`  • Domain layer:        ${report.summary.domainViolations} violations`)
+  console.log(`  • Infrastructure:      ${report.summary.infrastructureViolations} violations`)
+  console.log(`  • Application:         ${report.summary.applicationViolations} violations`)
+  console.log(`  • Circular deps:       ${report.summary.circularDeps} violations`)
+  console.log(`  • Unused imports:      ${report.summary.unusedImports} violations\n`)
 
   if (report.violations.length > 0) {
     console.log(`${colors.red}VIOLATIONS FOUND:${colors.reset}\n`)
@@ -459,7 +445,9 @@ function printReport(report: ArchitectureReport): void {
     })
   }
 
-  console.log(`${colors.blue}═══════════════════════════════════════════════════════════════${colors.reset}\n`)
+  console.log(
+    `${colors.blue}═══════════════════════════════════════════════════════════════${colors.reset}\n`
+  )
 
   if (report.passed) {
     console.log(

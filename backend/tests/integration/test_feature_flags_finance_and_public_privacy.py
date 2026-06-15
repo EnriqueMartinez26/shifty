@@ -62,12 +62,18 @@ async def client(test_session):
 
     app.dependency_overrides[get_db] = override_get_db
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"x-raw-response": "true"},
+    ) as c:
         yield c
     app.dependency_overrides.pop(get_db, None)
 
 
-async def register_and_login(client: AsyncClient, *, slug: str, email: str) -> tuple[str, str]:
+async def register_and_login(
+    client: AsyncClient, *, slug: str, email: str
+) -> tuple[str, str]:
     register = await client.post(
         "/auth/register",
         json={
@@ -95,7 +101,9 @@ def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def webhook_signature_headers(*, secret: str, data_id: str, request_id: str, ts: str) -> dict[str, str]:
+def webhook_signature_headers(
+    *, secret: str, data_id: str, request_id: str, ts: str
+) -> dict[str, str]:
     manifest = f"id:{data_id};request-id:{request_id};ts:{ts};"
     digest = hmac.new(
         secret.encode("utf-8"),
@@ -148,7 +156,9 @@ async def create_staff(client: AsyncClient, token: str, service_public_id: str) 
     return res.json()["public_id"]
 
 
-async def add_staff_schedule(client: AsyncClient, token: str, staff_public_id: str, *, target_date: datetime) -> None:
+async def add_staff_schedule(
+    client: AsyncClient, token: str, staff_public_id: str, *, target_date: datetime
+) -> None:
     res = await client.post(
         f"/staff/{staff_public_id}/schedules",
         headers=auth_headers(token),
@@ -162,8 +172,12 @@ async def add_staff_schedule(client: AsyncClient, token: str, staff_public_id: s
 
 
 @pytest.mark.asyncio
-async def test_payments_feature_flag_and_webhook_idempotency(client: AsyncClient, test_session):
-    store_public_id, token = await register_and_login(client, slug="tienda-payments", email="payments@test.com")
+async def test_payments_feature_flag_and_webhook_idempotency(
+    client: AsyncClient, test_session
+):
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-payments", email="payments@test.com"
+    )
 
     blocked = await client.get("/payments/gateway-config", headers=auth_headers(token))
     assert blocked.status_code == 403
@@ -214,13 +228,17 @@ async def test_payments_feature_flag_and_webhook_idempotency(client: AsyncClient
     assert first.status_code == 200
     assert second.status_code == 200
 
-    count_result = await test_session.execute(select(func.count()).select_from(WebhookInbox))
+    count_result = await test_session.execute(
+        select(func.count()).select_from(WebhookInbox)
+    )
     assert count_result.scalar_one() == 1
 
 
 @pytest.mark.asyncio
 async def test_webhook_rejects_invalid_signature(client: AsyncClient):
-    store_public_id, token = await register_and_login(client, slug="tienda-payments-bad-signature", email="bad-signature@test.com")
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-payments-bad-signature", email="bad-signature@test.com"
+    )
 
     flags = await client.put(
         "/stores/me/feature-flags",
@@ -256,7 +274,9 @@ async def test_webhook_rejects_invalid_signature(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_outbox_stats_and_manual_process(client: AsyncClient, test_session):
-    _, token = await register_and_login(client, slug="tienda-outbox", email="outbox@test.com")
+    _, token = await register_and_login(
+        client, slug="tienda-outbox", email="outbox@test.com"
+    )
 
     flags = await client.put(
         "/stores/me/feature-flags",
@@ -277,22 +297,30 @@ async def test_outbox_stats_and_manual_process(client: AsyncClient, test_session
     test_session.add(outbox)
     await test_session.commit()
 
-    stats_before = await client.get("/payments/outbox/stats", headers=auth_headers(token))
+    stats_before = await client.get(
+        "/payments/outbox/stats", headers=auth_headers(token)
+    )
     assert stats_before.status_code == 200, stats_before.text
     assert stats_before.json()["pending"] >= 1
 
-    processed = await client.post("/payments/outbox/process?limit=10", headers=auth_headers(token))
+    processed = await client.post(
+        "/payments/outbox/process?limit=10", headers=auth_headers(token)
+    )
     assert processed.status_code == 200, processed.text
     assert processed.json()["processed"] >= 1
 
-    stats_after = await client.get("/payments/outbox/stats", headers=auth_headers(token))
+    stats_after = await client.get(
+        "/payments/outbox/stats", headers=auth_headers(token)
+    )
     assert stats_after.status_code == 200
     assert stats_after.json()["pending"] == 0
 
 
 @pytest.mark.asyncio
 async def test_ledger_feature_flag_and_running_balance(client: AsyncClient):
-    _, token = await register_and_login(client, slug="tienda-ledger", email="ledger@test.com")
+    _, token = await register_and_login(
+        client, slug="tienda-ledger", email="ledger@test.com"
+    )
     client_id = "CLIENTE-001"
 
     blocked = await client.post(
@@ -424,7 +452,9 @@ async def test_public_booking_requires_otp_when_feature_enabled(client: AsyncCli
         "store_public_id": store_public_id,
         "service_id": service_public_id,
         "staff_id": staff_public_id,
-        "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+        "starts_at": starts_at.replace(
+            hour=10, minute=0, second=0, microsecond=0
+        ).isoformat(),
         "client_name": "Cliente OTP",
         "client_phone": "+5491123456789",
         "idempotency_key": "otp-booking-test-001",
@@ -484,7 +514,9 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=10, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Autogestion",
             "client_phone": phone,
             "idempotency_key": "self-service-otp-booking-001",
@@ -499,7 +531,9 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
 
     reschedule_payload = {
         "phone": phone,
-        "new_starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+        "new_starts_at": starts_at.replace(
+            hour=11, minute=0, second=0, microsecond=0
+        ).isoformat(),
         "idempotency_key": "self-service-reschedule-otp-001",
     }
     blocked_reschedule = await client.patch(
@@ -539,12 +573,18 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
         json=reschedule_payload,
     )
     assert allowed_reschedule.status_code == 200, allowed_reschedule.text
-    assert allowed_reschedule.json()["starts_at"].startswith(starts_at.date().isoformat())
+    assert allowed_reschedule.json()["starts_at"].startswith(
+        starts_at.date().isoformat()
+    )
 
 
 @pytest.mark.asyncio
-async def test_public_booking_allows_missing_email_and_any_professional(client: AsyncClient):
-    store_public_id, token = await register_and_login(client, slug="tienda-any-staff", email="any-staff@test.com")
+async def test_public_booking_allows_missing_email_and_any_professional(
+    client: AsyncClient,
+):
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-any-staff", email="any-staff@test.com"
+    )
     service_public_id = await create_service(client, token)
     staff_public_id = await create_staff(client, token, service_public_id)
     starts_at = datetime.now(timezone.utc) + timedelta(days=3)
@@ -555,7 +595,9 @@ async def test_public_booking_allows_missing_email_and_any_professional(client: 
         json={
             "store_public_id": store_public_id,
             "service_id": service_public_id,
-            "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=10, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Any",
             "client_phone": "+5491166667777",
             "idempotency_key": "any-professional-booking-001",
@@ -574,7 +616,9 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
 ):
     import modules.payments.service as payments_service
 
-    async def fake_mp_request(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+    async def fake_mp_request(
+        access_token: str, *, method: str, path: str, json_body: dict | None = None
+    ) -> dict:
         assert access_token == "TEST-ACCESS-TOKEN-1234567890"
         assert method == "POST"
         assert path == "/checkout/preferences"
@@ -587,7 +631,9 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
 
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_mp_request)
 
-    store_public_id, token = await register_and_login(client, slug="tienda-real-link", email="real-link@test.com")
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-real-link", email="real-link@test.com"
+    )
     assert store_public_id
 
     flags = await client.put(
@@ -625,7 +671,9 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=10, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Pago Real",
             "client_phone": "+5491155511111",
             "idempotency_key": "real-link-booking-001",
@@ -645,7 +693,9 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     import modules.payments.processing as payments_processing
     import modules.payments.service as payments_service
 
-    async def fake_create_preference(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+    async def fake_create_preference(
+        access_token: str, *, method: str, path: str, json_body: dict | None = None
+    ) -> dict:
         return {
             "id": "pref-webhook-fetch",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=fetch",
@@ -661,8 +711,12 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
             "date_approved": datetime.now(timezone.utc).isoformat(),
         }
 
-    monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_create_preference)
-    store_public_id, token = await register_and_login(client, slug="tienda-webhook-fetch", email="webhook-fetch@test.com")
+    monkeypatch.setattr(
+        payments_service, "_mercadopago_api_request", fake_create_preference
+    )
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-webhook-fetch", email="webhook-fetch@test.com"
+    )
     flags = await client.put(
         "/stores/me/feature-flags",
         headers=auth_headers(token),
@@ -698,7 +752,9 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=13, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=13, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Webhook Fetch",
             "client_phone": "+5491144499999",
             "idempotency_key": "webhook-fetch-booking-001",
@@ -707,9 +763,15 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     assert booking.status_code == 201, booking.text
 
     booking_public_id = booking.json()["public_id"]
-    monkeypatch.setattr(payments_processing, "fetch_mercadopago_payment", fake_fetch_payment)
+    monkeypatch.setattr(
+        payments_processing, "fetch_mercadopago_payment", fake_fetch_payment
+    )
 
-    payload = {"id": "evt-fetch-123", "type": "payment", "data": {"id": "mp-pay-minimal-123"}}
+    payload = {
+        "id": "evt-fetch-123",
+        "type": "payment",
+        "data": {"id": "mp-pay-minimal-123"},
+    }
     signature_headers = webhook_signature_headers(
         secret="secret-demo",
         data_id="mp-pay-minimal-123",
@@ -723,14 +785,24 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     )
     assert webhook.status_code == 200, webhook.text
 
-    appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
-    refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking_public_id)
+    appointment_search = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
+    refreshed = next(
+        item
+        for item in appointment_search.json()["results"]
+        if item["public_id"] == booking_public_id
+    )
     assert refreshed["status"] == "confirmed"
 
 
 @pytest.mark.asyncio
-async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amount(client: AsyncClient):
-    store_public_id, token = await register_and_login(client, slug="tienda-promos", email="promos@test.com")
+async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amount(
+    client: AsyncClient,
+):
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-promos", email="promos@test.com"
+    )
 
     flags = await client.put(
         "/stores/me/feature-flags",
@@ -781,7 +853,9 @@ async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amoun
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Promo",
             "client_phone": "+5491166600000",
             "promotion_code": "BIENVENIDA20",
@@ -804,7 +878,9 @@ async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amoun
 
 @pytest.mark.asyncio
 async def test_public_booking_persists_configured_custom_fields(client: AsyncClient):
-    store_public_id, token = await register_and_login(client, slug="tienda-intake", email="intake@test.com")
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-intake", email="intake@test.com"
+    )
     settings_update = await client.patch(
         "/stores/me",
         headers=auth_headers(token),
@@ -845,7 +921,9 @@ async def test_public_booking_persists_configured_custom_fields(client: AsyncCli
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=10, minute=30, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=10, minute=30, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Intake",
             "client_phone": "+5491170010020",
             "custom_fields": {
@@ -858,9 +936,15 @@ async def test_public_booking_persists_configured_custom_fields(client: AsyncCli
     assert booking.status_code == 201, booking.text
     assert booking.json()["custom_fields"]["motivo_consulta"] == "Control anual"
 
-    appointments = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    appointments = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
     assert appointments.status_code == 200, appointments.text
-    stored = next(item for item in appointments.json()["results"] if item["public_id"] == booking.json()["public_id"])
+    stored = next(
+        item
+        for item in appointments.json()["results"]
+        if item["public_id"] == booking.json()["public_id"]
+    )
     assert stored["intake_answers"]["tipo_visita"] == "control"
 
 
@@ -888,7 +972,9 @@ async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
         json={
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Refund",
             "client_phone": "+5491188877766",
             "idempotency_key": "refund-booking-001",
@@ -924,8 +1010,12 @@ async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(client: AsyncClient):
-    store_public_id, token = await register_and_login(client, slug="tienda-manual-confirm", email="manual-confirm@test.com")
+async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
+    client: AsyncClient,
+):
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-manual-confirm", email="manual-confirm@test.com"
+    )
     flags = await client.put(
         "/stores/me/feature-flags",
         headers=auth_headers(token),
@@ -950,7 +1040,9 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(cli
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Manual",
             "client_phone": "+5491133344455",
             "idempotency_key": "manual-confirm-booking-001",
@@ -967,24 +1059,36 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(cli
     assert manual_confirm.status_code == 200, manual_confirm.text
     assert manual_confirm.json()["status"] == "manual_confirmed"
 
-    appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    appointment_search = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
     assert appointment_search.status_code == 200, appointment_search.text
-    refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking.json()["public_id"])
+    refreshed = next(
+        item
+        for item in appointment_search.json()["results"]
+        if item["public_id"] == booking.json()["public_id"]
+    )
     assert refreshed["status"] == "confirmed"
 
 
 @pytest.mark.asyncio
-async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client: AsyncClient, test_session, monkeypatch):
+async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
+    client: AsyncClient, test_session, monkeypatch
+):
     import modules.payments.service as payments_service
 
-    async def fake_mp_request(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+    async def fake_mp_request(
+        access_token: str, *, method: str, path: str, json_body: dict | None = None
+    ) -> dict:
         return {
             "id": "pref-webhook-booking",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=booking",
         }
 
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_mp_request)
-    store_public_id, token = await register_and_login(client, slug="tienda-webhook-booking", email="webhook-booking@test.com")
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-webhook-booking", email="webhook-booking@test.com"
+    )
     flags = await client.put(
         "/stores/me/feature-flags",
         headers=auth_headers(token),
@@ -1020,7 +1124,9 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=12, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=12, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Webhook",
             "client_phone": "+5491122200011",
             "idempotency_key": "webhook-booking-001",
@@ -1057,8 +1163,14 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(client
     )
     assert webhook.status_code == 200, webhook.text
 
-    appointment_search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
-    refreshed = next(item for item in appointment_search.json()["results"] if item["public_id"] == booking.json()["public_id"])
+    appointment_search = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
+    refreshed = next(
+        item
+        for item in appointment_search.json()["results"]
+        if item["public_id"] == booking.json()["public_id"]
+    )
     assert refreshed["status"] == "confirmed"
 
 
@@ -1070,7 +1182,9 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
 ):
     import modules.payments.service as payments_service
 
-    async def failing_mp_request(access_token: str, *, method: str, path: str, json_body: dict | None = None) -> dict:
+    async def failing_mp_request(
+        access_token: str, *, method: str, path: str, json_body: dict | None = None
+    ) -> dict:
         raise RuntimeError("timeout upstream")
 
     async def successful_mp_request(
@@ -1085,7 +1199,9 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=retry-ok",
         }
 
-    monkeypatch.setattr(payments_service, "_mercadopago_api_request", failing_mp_request)
+    monkeypatch.setattr(
+        payments_service, "_mercadopago_api_request", failing_mp_request
+    )
 
     store_public_id, token = await register_and_login(
         client,
@@ -1126,7 +1242,9 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
         "store_public_id": store_public_id,
         "service_id": service_public_id,
         "staff_id": staff_public_id,
-        "starts_at": starts_at.replace(hour=12, minute=30, second=0, microsecond=0).isoformat(),
+        "starts_at": starts_at.replace(
+            hour=12, minute=30, second=0, microsecond=0
+        ).isoformat(),
         "client_name": "Cliente Retry",
         "client_phone": "+5491122299988",
         "idempotency_key": "provider-failure-booking-001",
@@ -1135,33 +1253,47 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
     failed_booking = await client.post("/public/appointments", json=booking_payload)
     assert failed_booking.status_code == 502, failed_booking.text
 
-    appointment_count = await test_session.scalar(select(func.count()).select_from(modules.appointments.model.Appointment))
+    appointment_count = await test_session.scalar(
+        select(func.count()).select_from(modules.appointments.model.Appointment)
+    )
     payment_count = await test_session.scalar(select(func.count()).select_from(Payment))
     assert appointment_count == 0
     assert payment_count == 0
 
-    monkeypatch.setattr(payments_service, "_mercadopago_api_request", successful_mp_request)
+    monkeypatch.setattr(
+        payments_service, "_mercadopago_api_request", successful_mp_request
+    )
 
     retried_booking = await client.post("/public/appointments", json=booking_payload)
     assert retried_booking.status_code == 201, retried_booking.text
-    assert retried_booking.json()["payment_link"].startswith("https://sandbox.mercadopago.com/")
+    assert retried_booking.json()["payment_link"].startswith(
+        "https://sandbox.mercadopago.com/"
+    )
 
-    appointment_count = await test_session.scalar(select(func.count()).select_from(modules.appointments.model.Appointment))
+    appointment_count = await test_session.scalar(
+        select(func.count()).select_from(modules.appointments.model.Appointment)
+    )
     payment_count = await test_session.scalar(select(func.count()).select_from(Payment))
     assert appointment_count == 1
     assert payment_count == 1
 
 
 @pytest.mark.asyncio
-async def test_professional_can_access_own_reports_only(client: AsyncClient, test_session):
-    store_public_id, token = await register_and_login(client, slug="tienda-reports-pro", email="reports-pro@test.com")
+async def test_professional_can_access_own_reports_only(
+    client: AsyncClient, test_session
+):
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-reports-pro", email="reports-pro@test.com"
+    )
     assert store_public_id
     service_public_id = await create_service(client, token)
     staff_public_id = await create_staff(client, token, service_public_id)
     starts_at = datetime.now(timezone.utc) + timedelta(days=7)
     await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
 
-    user_result = await test_session.execute(select(User).where(User.id == staff_public_id))
+    user_result = await test_session.execute(
+        select(User).where(User.id == staff_public_id)
+    )
     professional_user = user_result.scalar_one()
     professional_user.hashed_password = hash_password("StaffPass123!")
     await test_session.commit()
@@ -1172,7 +1304,9 @@ async def test_professional_can_access_own_reports_only(client: AsyncClient, tes
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=15, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=15, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Reportes",
             "client_phone": "+5491199988877",
             "idempotency_key": "professional-reports-booking-001",
@@ -1208,8 +1342,12 @@ async def test_professional_can_access_own_reports_only(client: AsyncClient, tes
 
 
 @pytest.mark.asyncio
-async def test_report_summary_includes_client_service_and_debt_metrics(client: AsyncClient):
-    store_public_id, token = await register_and_login(client, slug="tienda-reportes-full", email="reportes-full@test.com")
+async def test_report_summary_includes_client_service_and_debt_metrics(
+    client: AsyncClient,
+):
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-reportes-full", email="reportes-full@test.com"
+    )
     service_public_id = await create_service(client, token)
     staff_public_id = await create_staff(client, token, service_public_id)
     starts_at = datetime.now(timezone.utc) + timedelta(days=4)
@@ -1221,7 +1359,9 @@ async def test_report_summary_includes_client_service_and_debt_metrics(client: A
             "store_public_id": store_public_id,
             "service_id": service_public_id,
             "staff_id": staff_public_id,
-            "starts_at": starts_at.replace(hour=14, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": starts_at.replace(
+                hour=14, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente Reporte Full",
             "client_phone": "+5491199980011",
             "idempotency_key": "report-full-booking-001",
@@ -1229,9 +1369,15 @@ async def test_report_summary_includes_client_service_and_debt_metrics(client: A
     )
     assert booking.status_code == 201, booking.text
 
-    search = await client.get("/appointments/search?page=1&page_size=10", headers=auth_headers(token))
+    search = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
     assert search.status_code == 200, search.text
-    client_id = next(item for item in search.json()["results"] if item["public_id"] == booking.json()["public_id"])["client_id"]
+    client_id = next(
+        item
+        for item in search.json()["results"]
+        if item["public_id"] == booking.json()["public_id"]
+    )["client_id"]
 
     flags = await client.put(
         "/stores/me/feature-flags",
@@ -1243,7 +1389,11 @@ async def test_report_summary_includes_client_service_and_debt_metrics(client: A
     charge = await client.post(
         f"/ledger/customers/{client_id}/movements",
         headers=auth_headers(token),
-        json={"movement_type": "charge", "amount": "100.00", "notes": "Saldo pendiente"},
+        json={
+            "movement_type": "charge",
+            "amount": "100.00",
+            "notes": "Saldo pendiente",
+        },
     )
     assert charge.status_code == 200, charge.text
 

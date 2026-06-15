@@ -28,20 +28,28 @@ class PublicRepository:
         self.db = db
 
     async def get_store_by_slug(self, slug: str) -> Store | None:
-        result = await self.db.execute(select(Store).where(Store.slug == slug, Store.is_active == True))
+        result = await self.db.execute(
+            select(Store).where(Store.slug == slug, Store.is_active == True)
+        )
         return result.scalar_one_or_none()
 
     async def get_store_by_public_id(self, public_id: str) -> Store | None:
-        result = await self.db.execute(select(Store).where(Store.public_id == public_id, Store.is_active == True))
+        result = await self.db.execute(
+            select(Store).where(Store.public_id == public_id, Store.is_active == True)
+        )
         return result.scalar_one_or_none()
 
     async def get_store_by_id(self, store_id: str) -> Store | None:
-        result = await self.db.execute(select(Store).where(Store.id == store_id, Store.is_active == True))
+        result = await self.db.execute(
+            select(Store).where(Store.id == store_id, Store.is_active == True)
+        )
         return result.scalar_one_or_none()
 
     async def get_services(self, store_id: str) -> list[Service]:
         result = await self.db.execute(
-            select(Service).where(Service.store_id == store_id, Service.is_active == True)
+            select(Service).where(
+                Service.store_id == store_id, Service.is_active == True
+            )
         )
         return list(result.scalars().all())
 
@@ -49,16 +57,26 @@ class PublicRepository:
         result = await self.db.execute(
             select(Service)
             .join(Store, Service.store_id == Store.id)
-            .where(Service.public_id == public_id, Service.is_active == True, Store.is_active == True)
+            .where(
+                Service.public_id == public_id,
+                Service.is_active == True,
+                Store.is_active == True,
+            )
         )
         return result.scalar_one_or_none()
 
-    async def get_staff(self, store_id: str, service_public_id: str | None = None) -> list[Staff]:
-        result = await self.db.execute(select(Staff).where(Staff.store_id == store_id, Staff.is_active == True))
+    async def get_staff(
+        self, store_id: str, service_public_id: str | None = None
+    ) -> list[Staff]:
+        result = await self.db.execute(
+            select(Staff).where(Staff.store_id == store_id, Staff.is_active == True)
+        )
         staff_members = list(result.scalars().all())
         if service_public_id:
             staff_members = [
-                member for member in staff_members if service_public_id in (member.service_ids or [])
+                member
+                for member in staff_members
+                if service_public_id in (member.service_ids or [])
             ]
 
         for member in staff_members:
@@ -83,7 +101,11 @@ class PublicRepository:
         email: str | None,
     ) -> User:
         result = await self.db.execute(
-            select(User).where(User.phone == phone, User.store_id == store_id, User.role == UserRole.CLIENT)
+            select(User).where(
+                User.phone == phone,
+                User.store_id == store_id,
+                User.role == UserRole.CLIENT,
+            )
         )
         existing = result.scalar_one_or_none()
 
@@ -126,17 +148,26 @@ class PublicRepository:
         await self.db.flush()
         return new_client
 
-    async def _staff_has_schedule_for_slot(self, staff_id: str, starts_at: datetime, ends_at: datetime) -> bool:
+    async def _staff_has_schedule_for_slot(
+        self, staff_id: str, starts_at: datetime, ends_at: datetime
+    ) -> bool:
         weekday = starts_at.weekday()
         start_time = starts_at.astimezone(timezone.utc).time().replace(tzinfo=None)
         end_time = ends_at.astimezone(timezone.utc).time().replace(tzinfo=None)
         schedules_result = await self.db.execute(
-            select(Schedule).where(Schedule.staff_id == staff_id, Schedule.day_of_week == weekday)
+            select(Schedule).where(
+                Schedule.staff_id == staff_id, Schedule.day_of_week == weekday
+            )
         )
         schedules = list(schedules_result.scalars().all())
-        return any(schedule.start_time <= start_time and schedule.end_time >= end_time for schedule in schedules)
+        return any(
+            schedule.start_time <= start_time and schedule.end_time >= end_time
+            for schedule in schedules
+        )
 
-    async def _staff_has_overlapping_block(self, staff_id: str, starts_at: datetime, ends_at: datetime) -> bool:
+    async def _staff_has_overlapping_block(
+        self, staff_id: str, starts_at: datetime, ends_at: datetime
+    ) -> bool:
         blocks_result = await self.db.execute(
             select(StaffBlock).where(
                 StaffBlock.staff_id == staff_id,
@@ -171,28 +202,42 @@ class PublicRepository:
             raise ValueError("Servicio no encontrado")
 
         ends_at = starts_at + timedelta(minutes=service.duration_minutes)
-        qualified_staff = await self.get_staff(store_id, service_public_id=service_public_id)
+        qualified_staff = await self.get_staff(
+            store_id, service_public_id=service_public_id
+        )
 
         if staff_public_id:
-            candidates = [member for member in qualified_staff if member.public_id == staff_public_id]
+            candidates = [
+                member
+                for member in qualified_staff
+                if member.public_id == staff_public_id
+            ]
             if not candidates:
                 raise ValueError("El profesional no realiza el servicio seleccionado")
         else:
-            candidates = sorted(qualified_staff, key=lambda member: (member.display_name or "", member.public_id))
+            candidates = sorted(
+                qualified_staff,
+                key=lambda member: (member.display_name or "", member.public_id),
+            )
 
         if not candidates:
             raise ValueError("No hay profesionales disponibles para este servicio")
 
         selected_staff: Staff | None = None
         for staff in candidates:
-            if not await self._staff_has_schedule_for_slot(staff.id, starts_at, ends_at):
+            if not await self._staff_has_schedule_for_slot(
+                staff.id, starts_at, ends_at
+            ):
                 continue
             if await self._staff_has_overlapping_block(staff.id, starts_at, ends_at):
                 continue
 
-            await self.db.execute(select(Staff).where(Staff.id == staff.id).with_for_update())
+            await self.db.execute(
+                select(Staff).where(Staff.id == staff.id).with_for_update()
+            )
             conflict_res = await self.db.execute(
-                select(Appointment).where(
+                select(Appointment)
+                .where(
                     Appointment.staff_id == staff.id,
                     Appointment.status.in_(
                         [
@@ -203,7 +248,8 @@ class PublicRepository:
                     ),
                     Appointment.starts_at < ends_at,
                     Appointment.ends_at > starts_at,
-                ).limit(1)
+                )
+                .limit(1)
             )
             if conflict_res.scalar_one_or_none():
                 continue
@@ -240,11 +286,17 @@ class PublicRepository:
 
     async def get_client_by_phone(self, store_id: str, phone: str) -> User | None:
         result = await self.db.execute(
-            select(User).where(User.phone == phone, User.store_id == store_id, User.role == UserRole.CLIENT)
+            select(User).where(
+                User.phone == phone,
+                User.store_id == store_id,
+                User.role == UserRole.CLIENT,
+            )
         )
         return result.scalar_one_or_none()
 
-    async def get_client_appointments(self, client_id: str, store_id: str) -> list[Appointment]:
+    async def get_client_appointments(
+        self, client_id: str, store_id: str
+    ) -> list[Appointment]:
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
@@ -253,10 +305,14 @@ class PublicRepository:
         )
         return list(result.scalars().all())
 
-    async def get_appointment_by_public_id_and_client(self, public_id: str, client_id: str) -> Appointment | None:
+    async def get_appointment_by_public_id_and_client(
+        self, public_id: str, client_id: str
+    ) -> Appointment | None:
         result = await self.db.execute(
             select(Appointment)
-            .where(Appointment.public_id == public_id, Appointment.client_id == client_id)
+            .where(
+                Appointment.public_id == public_id, Appointment.client_id == client_id
+            )
             .options(selectinload(Appointment.service), selectinload(Appointment.staff))
         )
         return result.scalar_one_or_none()

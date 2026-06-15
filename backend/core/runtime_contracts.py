@@ -14,13 +14,18 @@ async def ensure_runtime_contracts(engine: AsyncEngine) -> None:
             inspector = inspect(sync_conn)
             tables = inspector.get_table_names()
             return {
-                table_name: {column["name"] for column in inspector.get_columns(table_name)}
+                table_name: {
+                    column["name"] for column in inspector.get_columns(table_name)
+                }
                 for table_name in tables
             }
 
         columns_by_table = await conn.run_sync(sync_check)
 
-        if "stores" in columns_by_table and "feature_flags" not in columns_by_table["stores"]:
+        if (
+            "stores" in columns_by_table
+            and "feature_flags" not in columns_by_table["stores"]
+        ):
             await conn.execute(text("ALTER TABLE stores ADD COLUMN feature_flags JSON"))
 
         from modules.appointments.model import Appointment  # noqa: F401
