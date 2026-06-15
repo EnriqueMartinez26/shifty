@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+
 import {
   AlertTriangle,
   BadgeCheck,
@@ -18,6 +19,8 @@ import {
   type SuperAdminStoreRow,
   type SuperAdminUser
 } from '@application/services/SuperAdminService'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { SuperAdminFormModal } from '../components/organisms/SuperAdminFormModal'
@@ -39,6 +42,17 @@ import {
   useUpdateSuperAdminStore,
   useUpdateSuperAdminUser
 } from '../hooks/useSuperAdmin'
+import {
+  formatCurrencyEsAr,
+  formatDateEsAr,
+  formatDateTimeEsAr
+} from '../lib/formatters'
+import {
+  create2000sEmptyStateStyle,
+  create2000sInputStyle,
+  create2000sInnerCardStyle,
+  create2000sPanelStyle
+} from '../lib/surfaceStyles'
 
 type ActivityFilter = 'active' | 'inactive' | 'all'
 type SubscriptionFilter = 'all' | 'with' | 'without'
@@ -128,33 +142,6 @@ interface RedeemFormState {
   coupon_code: string
 }
 
-const money = (value: string | number, currency = 'ARS') =>
-  new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency,
-    maximumFractionDigits: 0
-  }).format(Number(value || 0))
-
-const formatDate = (value: string | null) =>
-  value
-    ? new Intl.DateTimeFormat('es-AR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric'
-      }).format(new Date(value))
-    : 'Sin fecha'
-
-const formatDateTime = (value: string | null) =>
-  value
-    ? new Intl.DateTimeFormat('es-AR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      }).format(new Date(value))
-    : 'Sin actividad'
-
 const scopeBadgeStyle = (variant: 'global' | 'tenant' | 'danger') => {
   if (variant === 'global') {
     return {
@@ -177,31 +164,9 @@ const scopeBadgeStyle = (variant: 'global' | 'tenant' | 'danger') => {
   }
 }
 
-const panelStyle = {
-  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-  border: `1px solid ${colors2000s.border.default}`,
-  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-}
-
-const innerCardStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.light}`,
-  boxShadow: colors2000s.shadows.outer
-}
-
-const emptyStateStyle = {
-  background: 'white',
-  border: `1px dashed ${colors2000s.border.default}`,
-  boxShadow: colors2000s.shadows.insetDark
-}
-
-const inputStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.default}`,
-  boxShadow: colors2000s.shadows.insetDark,
-  color: colors2000s.text.primary,
-  outline: 'none'
-}
+const panelStyle = create2000sPanelStyle()
+const innerCardStyle = create2000sInnerCardStyle()
+const emptyStateStyle = create2000sEmptyStateStyle()
 
 const primaryActionStyle = {
   ...buttonStyles2000s.selected,
@@ -312,14 +277,6 @@ const roleLabel = (role: string, isGlobalAdmin: boolean) => {
 
 const statusLabel = (active: boolean) => (active ? 'Activa' : 'Inactiva')
 
-const getErrorMessage = (error: unknown, fallback: string) => {
-  const maybeError = error as {
-    response?: { data?: { detail?: string } }
-    message?: string
-  }
-  return maybeError?.response?.data?.detail || maybeError?.message || fallback
-}
-
 const parseOptionalInt = (value: string) => {
   const trimmed = value.trim()
   return trimmed ? Number.parseInt(trimmed, 10) : null
@@ -360,7 +317,7 @@ const TextInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({
   <input
     {...props}
     className={`w-full rounded-2xl px-4 py-3 text-sm font-bold ${className}`.trim()}
-    style={inputStyle}
+    style={create2000sInputStyle()}
   />
 )
 
@@ -371,7 +328,7 @@ const TextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement>> = ({
   <textarea
     {...props}
     className={`min-h-24 w-full rounded-2xl px-4 py-3 text-sm font-bold resize-y ${className}`.trim()}
-    style={inputStyle}
+    style={create2000sInputStyle()}
   />
 )
 
@@ -383,7 +340,7 @@ const SelectInput: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({
   <select
     {...props}
     className={`w-full rounded-2xl px-4 py-3 text-sm font-bold ${className}`.trim()}
-    style={inputStyle}
+    style={create2000sInputStyle()}
   >
     {children}
   </select>
@@ -397,11 +354,7 @@ const ToggleRow: React.FC<{
 }> = ({ label, description, checked, onToggle }) => (
   <div
     className="flex items-center justify-between gap-4 rounded-2xl px-4 py-3"
-    style={{
-      background: 'white',
-      border: `1px solid ${colors2000s.border.light}`,
-      boxShadow: colors2000s.shadows.insetDark
-    }}
+    style={create2000sInnerCardStyle()}
   >
     <div>
       <p
@@ -1260,7 +1213,7 @@ const SuperAdminPage: React.FC = () => {
                     onChange={(event) => setSearch(event.target.value)}
                     placeholder="Buscar por nombre o slug"
                     className="w-full rounded-2xl py-3 pl-11 pr-4 text-sm font-bold outline-none md:w-72"
-                    style={{ ...inputStyle, boxShadow: colors2000s.shadows.insetDark }}
+                    style={create2000sInputStyle()}
                   />
                 </div>
 
@@ -1437,7 +1390,7 @@ const SuperAdminPage: React.FC = () => {
                               className="px-4 py-4 text-sm font-bold"
                               style={{ color: colors2000s.text.primary }}
                             >
-                              {formatDate(store.current_period_end)}
+                              {formatDateEsAr(store.current_period_end)}
                             </td>
                             <td className="px-4 py-4">
                               <div className="flex flex-wrap gap-2">
@@ -1525,7 +1478,7 @@ const SuperAdminPage: React.FC = () => {
                           className="text-[10px] font-bold uppercase tracking-widest"
                           style={{ color: colors2000s.text.secondary }}
                         >
-                          {plan.billing_interval} · {money(plan.price, plan.currency)}
+                  {plan.billing_interval} · {formatCurrencyEsAr(plan.price, plan.currency)}
                         </p>
                       </div>
                       <span
@@ -1636,7 +1589,7 @@ const SuperAdminPage: React.FC = () => {
                               {coupon.coupon_type} ·{' '}
                               {coupon.coupon_type === 'percent'
                                 ? `${coupon.value}%`
-                                : money(coupon.value, coupon.currency || 'ARS')}
+                                : formatCurrencyEsAr(coupon.value, coupon.currency || 'ARS')}
                             </p>
                           </div>
                           <span
@@ -1659,7 +1612,7 @@ const SuperAdminPage: React.FC = () => {
                           <div>
                             Vigencia:{' '}
                             <span style={{ color: colors2000s.text.primary }}>
-                              {formatDate(coupon.valid_from)} a {formatDate(coupon.valid_until)}
+                              {formatDateEsAr(coupon.valid_from)} a {formatDateEsAr(coupon.valid_until)}
                             </span>
                           </div>
                           <div>
@@ -1710,7 +1663,7 @@ const SuperAdminPage: React.FC = () => {
                     )
                   })
                 ) : (
-                  <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
+            <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
                     <Tag className="mx-auto mb-3 h-10 w-10 opacity-25" />
                     <p
                       className="text-sm font-black uppercase tracking-widest"
@@ -2033,7 +1986,10 @@ const SuperAdminPage: React.FC = () => {
                     className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
                     style={scopeBadgeStyle('tenant')}
                   >
-                    {money(overview.subscription.total_amount, overview.subscription.currency)}
+                    {formatCurrencyEsAr(
+                      overview.subscription.total_amount,
+                      overview.subscription.currency
+                    )}
                   </span>
                 </div>
                 <div
@@ -2043,13 +1999,19 @@ const SuperAdminPage: React.FC = () => {
                   <div>
                     Base:{' '}
                     <span style={{ color: colors2000s.text.primary }}>
-                      {money(overview.subscription.base_amount, overview.subscription.currency)}
+                      {formatCurrencyEsAr(
+                        overview.subscription.base_amount,
+                        overview.subscription.currency
+                      )}
                     </span>
                   </div>
                   <div>
                     Descuento:{' '}
                     <span style={{ color: colors2000s.text.primary }}>
-                      {money(overview.subscription.discount_amount, overview.subscription.currency)}
+                      {formatCurrencyEsAr(
+                        overview.subscription.discount_amount,
+                        overview.subscription.currency
+                      )}
                     </span>
                   </div>
                   <div>
@@ -2067,13 +2029,13 @@ const SuperAdminPage: React.FC = () => {
                   <div>
                     Inicio:{' '}
                     <span style={{ color: colors2000s.text.primary }}>
-                      {formatDate(overview.subscription.current_period_start)}
+                      {formatDateEsAr(overview.subscription.current_period_start)}
                     </span>
                   </div>
                   <div>
                     Fin:{' '}
                     <span style={{ color: colors2000s.text.primary }}>
-                      {formatDate(overview.subscription.current_period_end)}
+                      {formatDateEsAr(overview.subscription.current_period_end)}
                     </span>
                   </div>
                 </div>
@@ -2140,14 +2102,14 @@ const SuperAdminPage: React.FC = () => {
                           style={{ color: colors2000s.text.secondary }}
                         >
                           {redemption.coupon_type_snapshot} ·{' '}
-                          {formatDateTime(redemption.created_at)}
+                          {formatDateTimeEsAr(redemption.created_at)}
                         </p>
                       </div>
                       <span
                         className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
                         style={scopeBadgeStyle('tenant')}
                       >
-                        -{money(redemption.discount_amount, redemption.currency)}
+                        -{formatCurrencyEsAr(redemption.discount_amount, redemption.currency)}
                       </span>
                     </div>
                     <p
@@ -2156,7 +2118,7 @@ const SuperAdminPage: React.FC = () => {
                     >
                       Final:{' '}
                       <span style={{ color: colors2000s.text.primary }}>
-                        {money(redemption.final_amount, redemption.currency)}
+                        {formatCurrencyEsAr(redemption.final_amount, redemption.currency)}
                       </span>
                     </p>
                   </div>
@@ -2632,7 +2594,7 @@ const SuperAdminPage: React.FC = () => {
               <option value="">Selecciona un plan</option>
               {activePlans.map((plan) => (
                 <option key={plan.public_id} value={plan.public_id}>
-                  {plan.name} · {money(plan.price, plan.currency)}
+                  {plan.name} · {formatCurrencyEsAr(plan.price, plan.currency)}
                 </option>
               ))}
             </SelectInput>
@@ -2888,7 +2850,7 @@ const SuperAdminPage: React.FC = () => {
                 {coupon.code} ·{' '}
                 {coupon.coupon_type === 'percent'
                   ? `${coupon.value}%`
-                  : money(coupon.value, coupon.currency || 'ARS')}
+                  : formatCurrencyEsAr(coupon.value, coupon.currency || 'ARS')}
               </option>
             ))}
           </SelectInput>

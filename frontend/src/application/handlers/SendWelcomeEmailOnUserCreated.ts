@@ -1,5 +1,5 @@
-import { EventHandler } from '../../shared/events/EventHandler'
 import { UserCreatedEvent } from '../../domain/events/UserEvents'
+import { EventHandler } from '../../shared/events/EventHandler'
 
 export interface EmailService {
   sendWelcomeEmail(email: string): Promise<void>

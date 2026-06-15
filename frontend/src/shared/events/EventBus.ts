@@ -1,5 +1,5 @@
-import { DomainEvent } from '../../domain/events/DomainEvent'
 import { EventHandler } from './EventHandler'
+import { DomainEvent } from '../../domain/events/DomainEvent'
 
 export type Unsubscribe = () => void
 
@@ -9,7 +9,7 @@ export type Unsubscribe = () => void
  */
 export class EventBus {
   private static instance: EventBus
-  private subscribers: Map<string, Set<EventHandler<any>>> = new Map()
+  private subscribers: Map<string, Set<EventHandler<DomainEvent>>> = new Map()
   private eventHistory: DomainEvent[] = []
 
   private constructor() {}
@@ -36,7 +36,7 @@ export class EventBus {
       this.subscribers.set(eventName, new Set())
     }
 
-    this.subscribers.get(eventName)!.add(handler)
+    this.subscribers.get(eventName)!.add(handler as EventHandler<DomainEvent>)
 
     return () => {
       const handlers = this.subscribers.get(eventName)

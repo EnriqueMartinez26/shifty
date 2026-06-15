@@ -1,6 +1,6 @@
 import { StaffService } from './StaffService'
-import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 import { Staff } from '../../domain/entities/Staff'
+import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 
 describe('StaffService', () => {
   let mockRepository: jest.Mocked<IStaffRepository>

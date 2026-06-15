@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+
 import { format, subDays } from 'date-fns'
-import { useNavigate } from 'react-router-dom'
 import {
   ArrowUpRight,
   CalendarClock,
@@ -15,6 +15,7 @@ import {
   UserRoundPlus,
   Wallet
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 
 import type { UpcomingAppointment } from '@application/services/DashboardService'
 import type {
@@ -30,6 +31,10 @@ import { useLedgerSummary } from '../hooks/useLedger'
 import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
 import { useProfessionalReports, useReportSummary } from '../hooks/useReports'
 import { useStoreFeatureFlags } from '../hooks/useStores'
+import {
+  createDashboardListItemStyle,
+  createDashboardPanelStyle
+} from '../lib/surfaceStyles'
 
 type Tone = 'neutral' | 'primary' | 'warning' | 'danger' | 'success'
 
@@ -186,21 +191,12 @@ const lowerGridStyle: CSSProperties = {
   alignItems: 'start'
 }
 
-const panelStyle: CSSProperties = {
-  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-  border: `1px solid ${colors2000s.border.default}`,
-  borderRadius: 24,
-  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`,
-  minWidth: 0,
-  overflow: 'hidden'
-}
-
 const panelBodyStyle: CSSProperties = {
   padding: 24
 }
 
 const metricPanelStyle: CSSProperties = {
-  ...panelStyle,
+  ...createDashboardPanelStyle(),
   padding: 0
 }
 
@@ -325,7 +321,7 @@ const mapTopServices = (items: ReportTopServiceItem[] | undefined): RankedItem[]
   }))
 
 const Dashboard = () => {
-  const navigate = useNavigate()
+  const navigate = useNavigate() as unknown as (path: string) => void
   const { token, user } = useAuth()
   const isGlobalAdmin = Boolean(user?.is_global_admin)
   const reportsAllowed = canViewReports(user?.role, isGlobalAdmin)
@@ -776,7 +772,7 @@ function EnterpriseDashboard({
       <main style={pageStyle}>
         <div
           style={{
-            ...panelStyle,
+            ...createDashboardPanelStyle(),
             ...panelBodyStyle,
             color: colors2000s.text.secondary,
             fontWeight: 700
@@ -867,7 +863,7 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
   return (
     <section
       style={{
-        ...panelStyle,
+        ...createDashboardPanelStyle(),
         padding: 0
       }}
     >
@@ -1007,7 +1003,7 @@ function ErrorPanel({ message }: { message: string }) {
   return (
     <div
       style={{
-        ...panelStyle,
+        ...createDashboardPanelStyle(),
         ...panelBodyStyle,
         borderColor: 'rgba(239, 68, 68, 0.42)',
         color: '#d13b3b',
@@ -1033,7 +1029,7 @@ function Panel({
   children: ReactNode
 }) {
   return (
-    <section style={panelStyle}>
+    <section style={createDashboardPanelStyle()}>
       <div style={{ ...panelBodyStyle, display: 'grid', gap: 16 }}>
         <SectionHeader icon={icon} title={title} description={description} />
         {children}
@@ -1102,7 +1098,7 @@ function OperationPanel({
   cards: DashboardOperationCard[]
 }) {
   return (
-    <section style={panelStyle}>
+    <section style={createDashboardPanelStyle()}>
       <div style={{ ...panelBodyStyle, display: 'grid', gap: 20 }}>
         <SectionHeader icon={<CalendarClock size={18} />} title={title} description={description} />
 
@@ -1388,11 +1384,7 @@ function ActionList({
               justifyContent: 'space-between',
               gap: 16,
               minHeight: compact ? 64 : 72,
-              padding: compact ? 14 : 16,
-              borderRadius: 18,
-              border: `1px solid ${tone.border}`,
-              background: tone.background,
-              boxShadow: colors2000s.shadows.insetLight,
+              ...createDashboardListItemStyle(tone.border, tone.background, compact ? 14 : 16),
               color: colors2000s.text.primary,
               cursor: item.onSelect ? 'pointer' : 'default',
               textAlign: 'left'
@@ -1453,11 +1445,7 @@ function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: stri
               justifyContent: 'space-between',
               gap: 16,
               minHeight: 74,
-              padding: 14,
-              borderRadius: 18,
-              border: `1px solid ${tone.border}`,
-              background: 'rgba(255, 255, 255, 0.68)',
-              boxShadow: colors2000s.shadows.insetLight
+              ...createDashboardListItemStyle(tone.border, 'rgba(255, 255, 255, 0.68)', 14)
             }}
           >
             <div
@@ -1528,11 +1516,7 @@ function DashboardSignalCard({ card }: { card: DashboardOperationCard }) {
   return (
     <div
       style={{
-        padding: 16,
-        borderRadius: 18,
-        background: tone.background,
-        border: `1px solid ${tone.border}`,
-        boxShadow: colors2000s.shadows.insetLight,
+        ...createDashboardListItemStyle(tone.border, tone.background),
         display: 'grid',
         gap: 8
       }}
@@ -1564,21 +1548,17 @@ function RankedList({ items }: { items: RankedItem[] }) {
   return (
     <ol style={{ display: 'grid', gap: 12, listStyle: 'none', margin: 0, padding: 0 }}>
       {items.map((item, index) => (
-        <li
-          key={item.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 14,
-            minHeight: 70,
-            padding: 14,
-            borderRadius: 18,
-            background: 'rgba(255, 255, 255, 0.65)',
-            border: `1px solid ${colors2000s.border.light}`,
-            boxShadow: colors2000s.shadows.insetLight
-          }}
-        >
+          <li
+            key={item.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 14,
+              minHeight: 70,
+              ...createDashboardListItemStyle(colors2000s.border.light, 'rgba(255, 255, 255, 0.65)', 14)
+            }}
+          >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
             <span
               style={{
@@ -1645,11 +1625,7 @@ function OpportunityList({ items, emptyText }: { items: OpportunityItem[]; empty
           <div
             key={item.id}
             style={{
-              padding: 16,
-              borderRadius: 18,
-              background: 'rgba(255, 255, 255, 0.62)',
-              border: `1px solid ${tone.border}`,
-              boxShadow: colors2000s.shadows.insetLight,
+              ...createDashboardListItemStyle(tone.border, 'rgba(255, 255, 255, 0.62)', 16),
               display: 'grid',
               gap: 10
             }}

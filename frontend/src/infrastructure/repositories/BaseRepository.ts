@@ -27,7 +27,7 @@ export abstract class BaseRepository<
     }
   }
 
-  public async create(data: CreateDTO, extra?: any): Promise<T> {
+  public async create(data: CreateDTO, extra?: unknown): Promise<T> {
     try {
       return await this.createImpl(data, extra)
     } catch (error) {
@@ -54,7 +54,7 @@ export abstract class BaseRepository<
   // --- Abstract hooks implementados por subclases concretas ---
   protected abstract findAllImpl(options?: QueryOptions | boolean): Promise<T[]>
   protected abstract findByIdImpl(id: string): Promise<T | null>
-  protected abstract createImpl(data: CreateDTO, extra?: any): Promise<T>
+  protected abstract createImpl(data: CreateDTO, extra?: unknown): Promise<T>
   protected abstract updateImpl(id: string, data: UpdateDTO): Promise<T>
   protected abstract deleteImpl(id: string): Promise<void>
 

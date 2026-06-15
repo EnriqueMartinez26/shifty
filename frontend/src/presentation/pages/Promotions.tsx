@@ -1,15 +1,18 @@
 import React, { useMemo, useState } from 'react'
+
 import { AlertCircle, Loader2, Save, TicketPercent } from 'lucide-react'
 
-import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
-const currencyFmt = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
+import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
+import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import {
+  create2000sInputStyle,
+  create2000sListCardStyle,
+  create2000sPanelStyle
+} from '../lib/surfaceStyles'
 
 const createEmptyPromotionForm = () => ({
   code: '',
@@ -35,18 +38,8 @@ const PromotionsPage: React.FC = () => {
   const [editingPromotionId, setEditingPromotionId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
 
-  const cardStyle = {
-    background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-  }
-
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
+  const cardStyle = create2000sPanelStyle()
+  const inputStyle = create2000sInputStyle()
 
   const promotionCards = useMemo(() => {
     const promotions = promotionsQuery.data ?? []
@@ -90,8 +83,8 @@ const PromotionsPage: React.FC = () => {
 
       setEditingPromotionId(null)
       setPromotionForm(createEmptyPromotionForm())
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo guardar la promoción')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo guardar la promoción'))
     }
   }
 
@@ -119,8 +112,8 @@ const PromotionsPage: React.FC = () => {
         payload: { is_active: !promotion.is_active }
       })
       setMessage(`Promoción ${response.code} ${response.is_active ? 'activada' : 'pausada'}`)
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo actualizar la promoción')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo actualizar la promoción'))
     }
   }
 
@@ -195,12 +188,14 @@ const PromotionsPage: React.FC = () => {
                 Lo que ve el cliente antes de confirmar la reserva.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleSavePromotion}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-              style={buttonStyles2000s.selected}
-            >
+          <button
+            type="button"
+            onClick={() => {
+              void handleSavePromotion()
+            }}
+            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+            style={buttonStyles2000s.selected}
+          >
               <Save className="w-4 h-4 inline mr-2" />
               {editingPromotionId ? 'Actualizar' : 'Crear'}
             </button>
@@ -384,10 +379,7 @@ const PromotionsPage: React.FC = () => {
 
           <div
             className="flex items-center justify-between rounded-2xl p-4 bg-white"
-            style={{
-              border: `1px solid ${colors2000s.border.light}`,
-              boxShadow: colors2000s.shadows.insetDark
-            }}
+            style={create2000sListCardStyle()}
           >
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
@@ -458,11 +450,8 @@ const PromotionsPage: React.FC = () => {
             {promotionsQuery.data?.map((promotion) => (
               <div
                 key={promotion.public_id}
-                className="rounded-2xl p-4 bg-white flex flex-col gap-4"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
+              className="rounded-2xl p-4 bg-white flex flex-col gap-4"
+              style={create2000sListCardStyle()}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -532,7 +521,9 @@ const PromotionsPage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleTogglePromotion(promotion)}
+                    onClick={() => {
+                      void handleTogglePromotion(promotion)
+                    }}
                     className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
                     style={
                       promotion.is_active ? buttonStyles2000s.selected : buttonStyles2000s.default
@@ -546,12 +537,8 @@ const PromotionsPage: React.FC = () => {
 
             {!promotionsQuery.data?.length && !promotionsQuery.isLoading && (
               <div
-                className="rounded-2xl p-6 bg-white text-sm font-bold"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.secondary
-                }}
+              className="rounded-2xl p-6 bg-white text-sm font-bold"
+              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 Todavía no hay promociones configuradas.
               </div>

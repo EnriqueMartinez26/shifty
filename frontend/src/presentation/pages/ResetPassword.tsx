@@ -1,6 +1,10 @@
 import React, { useMemo, useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+
 import { ArrowLeft, KeyRound } from 'lucide-react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
 import { useResetPassword } from '../hooks/useResetPassword'
 
 const ResetPasswordPage: React.FC = () => {
@@ -41,8 +45,8 @@ const ResetPasswordPage: React.FC = () => {
       })
       setMessage(response.message || 'Contrasena actualizada correctamente.')
       setTimeout(() => navigate('/login'), 1200)
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'No se pudo restablecer la contrasena')
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, 'No se pudo restablecer la contrasena'))
     }
   }
 
@@ -52,12 +56,23 @@ const ResetPasswordPage: React.FC = () => {
         <h1 className="text-2xl font-bold text-white mb-2">Restablecer contrasena</h1>
         <p className="text-zinc-400 text-sm mb-6">Defini una nueva contrasena para tu cuenta.</p>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={(event) => {
+            void handleSubmit(event)
+          }}
+          className="space-y-4"
+        >
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-2">Nueva contrasena</label>
+            <label
+              htmlFor="reset-new-password"
+              className="block text-sm font-medium text-zinc-300 mb-2"
+            >
+              Nueva contrasena
+            </label>
             <div className="relative">
               <KeyRound className="absolute left-3 top-3.5 w-4 h-4 text-zinc-500" />
               <input
+                id="reset-new-password"
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -69,10 +84,14 @@ const ResetPasswordPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-zinc-300 mb-2">
+            <label
+              htmlFor="reset-confirm-password"
+              className="block text-sm font-medium text-zinc-300 mb-2"
+            >
               Confirmar contrasena
             </label>
             <input
+              id="reset-confirm-password"
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
@@ -82,12 +101,20 @@ const ResetPasswordPage: React.FC = () => {
           </div>
 
           {message && (
-            <div className="text-emerald-400 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3">
+            <div
+              role="status"
+              aria-live="polite"
+              className="text-emerald-400 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3"
+            >
               {message}
             </div>
           )}
           {error && (
-            <div className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl p-3">
+            <div
+              role="alert"
+              aria-live="polite"
+              className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl p-3"
+            >
               {error}
             </div>
           )}
@@ -95,6 +122,7 @@ const ResetPasswordPage: React.FC = () => {
           <button
             type="submit"
             disabled={resetPasswordMutation.isPending}
+            aria-busy={resetPasswordMutation.isPending}
             className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-3 rounded-xl transition-all disabled:opacity-50"
           >
             {resetPasswordMutation.isPending ? 'Actualizando...' : 'Actualizar contrasena'}

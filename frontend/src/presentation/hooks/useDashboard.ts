@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+
 import { dashboardService, type DashboardSummary } from '@application/services/DashboardService'
 
 export const useDashboardSummary = (enabled = true) => {

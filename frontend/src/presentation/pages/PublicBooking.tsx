@@ -1,9 +1,12 @@
 import React from 'react'
-import { useParams } from 'react-router-dom'
-import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
-import { usePublicStore } from '../hooks/usePublic'
+
 import { Store, MapPin, Phone } from 'lucide-react'
+import { useParams } from 'react-router-dom'
+
+import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
+
 import { colors2000s } from '../../theme/colors'
+import { usePublicStore } from '../hooks/usePublic'
 
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()

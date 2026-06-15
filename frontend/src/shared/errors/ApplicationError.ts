@@ -24,8 +24,12 @@ export abstract class ApplicationError extends Error {
     this.context = context
     Object.setPrototypeOf(this, new.target.prototype) // Reestablece la cadena de prototipos
 
-    if ((Error as any).captureStackTrace) {
-      ;(Error as any).captureStackTrace(this, this.constructor)
+    const errorConstructor = Error as ErrorConstructor & {
+      captureStackTrace?: (targetObject: object, constructorOpt?: Function) => void
+    }
+
+    if (typeof errorConstructor.captureStackTrace === 'function') {
+      errorConstructor.captureStackTrace(this, this.constructor)
     }
   }
 

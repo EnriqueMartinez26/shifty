@@ -1,11 +1,15 @@
 import React, { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { ArrowRight, Store, User, Sparkles } from 'lucide-react'
+
 import { mdiStore, mdiShieldAlert } from '@mdi/js'
-import { Icon2000s, LucideIcon2000s } from '../components/legacy/Icon2000s'
+import { ArrowRight, Store, User, Sparkles } from 'lucide-react'
+import { useNavigate, Link } from 'react-router-dom'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
-import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
+import { Icon2000s, LucideIcon2000s } from '../components/legacy/Icon2000s'
 import { useRegisterBusiness } from '../hooks/useRegisterBusiness'
+import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
 
 const RegisterPage: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -64,9 +68,9 @@ const RegisterPage: React.FC = () => {
 
     try {
       await registerMutation.mutateAsync(formData)
-      navigate('/login?registered=true')
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Error al registrar el negocio')
+      void navigate('/login?registered=true')
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, 'Error al registrar el negocio'))
     }
   }
 
@@ -130,7 +134,12 @@ const RegisterPage: React.FC = () => {
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
           }}
         >
-          <form onSubmit={handleSubmit} className="space-y-8">
+          <form
+            onSubmit={(event) => {
+              void handleSubmit(event)
+            }}
+            className="space-y-8"
+          >
             <div className="space-y-4">
               <h2
                 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2 pb-2 border-b"

@@ -1,7 +1,11 @@
 import React from 'react'
+
 import { Briefcase, Clock, Loader2, Check } from 'lucide-react'
+
 import { usePublicServices } from '@presentation/hooks/usePublic'
+
 import { colors2000s } from '../../../../theme/colors'
+import { createBookingChoiceCardStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepServiceProps {
   storePublicId: string
@@ -49,15 +53,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
               key={svc.public_id}
               onClick={() => onSelect(svc.public_id)}
               className="w-full text-left p-5 flex items-center gap-4 rounded-2xl transition-all active:scale-98 group border relative overflow-hidden"
-              style={{
-                background: isSelected
-                  ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-                  : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-                borderColor: isSelected ? colors2000s.orange.accent : colors2000s.border.default,
-                boxShadow: isSelected
-                  ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-                  : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-              }}
+              style={createBookingChoiceCardStyle(isSelected)}
             >
               {/* Left dynamic accented border */}
               <div

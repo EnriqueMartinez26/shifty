@@ -1,6 +1,9 @@
 import React from 'react'
-import { Staff } from '@domain/entities/Staff'
+
 import { Mail, Edit3, Trash2, CheckCircle2, XCircle } from 'lucide-react'
+
+import { Staff } from '@domain/entities/Staff'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 
 interface StaffCardProps {

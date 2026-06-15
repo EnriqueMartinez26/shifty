@@ -1,8 +1,8 @@
 import { BaseService } from './BaseService'
 import type { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
-import { createBookingSchema } from '../validators/booking.validators'
 import type { CreateBookingRequestDTO } from '../dtos/BookingDTO'
+import { createBookingSchema } from '../validators/booking.validators'
 
 /**
  * Service to manage client-facing Booking operations.
@@ -40,7 +40,7 @@ export class BookingService extends BaseService<Appointment> {
    * @param date Date string in format YYYY-MM-DD.
    * @returns A promise that resolves to the availability object.
    */
-  async getAvailability(serviceId: string, date: string): Promise<any> {
+  async getAvailability(serviceId: string, date: string): Promise<Record<string, unknown>> {
     return await this.execute(async () => {
       return await this.repository.getAvailability(serviceId, date)
     }, 'getAvailability')

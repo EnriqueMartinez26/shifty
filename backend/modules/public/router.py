@@ -542,7 +542,9 @@ async def create_public_booking(
                     )
         except ValueError as exc:
             await idempotency_release(idempotency_key, redis)
-            raise AppException(message=str(exc), http_status=409, error_code="APPOINTMENT_CONFLICT")
+            raise AppException(
+                message=str(exc), http_status=409, error_code="APPOINTMENT_CONFLICT"
+            )
         except CircuitBreakerOpenError as exc:
             await idempotency_release(idempotency_key, redis)
             raise AppException(

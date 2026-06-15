@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
 import {
   ledgerService,
   type CustomerLedger,
@@ -26,8 +27,8 @@ export const useAddLedgerMovement = () => {
   return useMutation<LedgerMovement, Error, { clientId: string; payload: LedgerMovementPayload }>({
     mutationFn: ({ clientId, payload }) => ledgerService.addMovement(clientId, payload),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['ledger-summary'] })
-      queryClient.invalidateQueries({ queryKey: ['customer-ledger', variables.clientId] })
+      void queryClient.invalidateQueries({ queryKey: ['ledger-summary'] })
+      void queryClient.invalidateQueries({ queryKey: ['customer-ledger', variables.clientId] })
     }
   })
 }

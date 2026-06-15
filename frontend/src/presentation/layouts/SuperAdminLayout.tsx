@@ -1,9 +1,10 @@
 import React from 'react'
-import { Outlet } from 'react-router-dom'
-import { ArrowLeftRight, LogOut, ShieldCheck } from 'lucide-react'
 
-import { useAuth } from '../context/AuthContext'
+import { ArrowLeftRight, LogOut, ShieldCheck } from 'lucide-react'
+import { Outlet } from 'react-router-dom'
+
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { useAuth } from '../context/AuthContext'
 
 const SuperAdminLayout: React.FC = () => {
   const { logout, user } = useAuth()

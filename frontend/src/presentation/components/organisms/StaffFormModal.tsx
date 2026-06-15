@@ -1,13 +1,22 @@
 import React, { useState, useEffect } from 'react'
-import { Staff } from '@domain/entities/Staff'
+
 import { X, Loader2, User, Mail, Briefcase, Check } from 'lucide-react'
+
+import { Staff } from '@domain/entities/Staff'
+
 import { useServicesCatalog } from '@presentation/hooks/useServicesCatalog'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import {
+  create2000sModalInputStyle,
+  create2000sModalSurfaceStyle
+} from '../../lib/surfaceStyles'
+import type { StaffFormValues } from '../../types/forms'
 
 interface StaffFormModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (data: any) => Promise<void>
+  onSubmit: (data: StaffFormValues) => Promise<void>
   editingStaff?: Staff | null
 }
 
@@ -73,23 +82,12 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
     }))
   }
 
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
-
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div
         className="relative w-full max-w-4xl rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col overflow-hidden max-h-[90vh]"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
+        style={create2000sModalSurfaceStyle()}
       >
         <div
           className="p-8 flex justify-between items-center border-b"
@@ -118,7 +116,12 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-8 lg:p-10">
+        <form
+          onSubmit={(e) => {
+            void handleSubmit(e)
+          }}
+          className="flex-1 overflow-y-auto p-8 lg:p-10"
+        >
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
             {/* Columna Izquierda: Datos Personales */}
             <div className="space-y-6">
@@ -153,7 +156,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                     value={formData.first_name}
                     onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
                     className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                    style={inputStyle}
+                    style={create2000sModalInputStyle()}
                     placeholder="Ej: Marcelo"
                     required
                   />
@@ -169,7 +172,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                     value={formData.last_name}
                     onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
                     className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                    style={inputStyle}
+                    style={create2000sModalInputStyle()}
                     placeholder="Ej: Rossi"
                     required
                   />
@@ -188,7 +191,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                   value={formData.email}
                   onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                   className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                  style={inputStyle}
+                  style={create2000sModalInputStyle()}
                   placeholder="marcelo@shifty.com"
                   required
                 />
@@ -205,7 +208,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                   value={formData.display_name}
                   onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
                   className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                  style={inputStyle}
+                  style={create2000sModalInputStyle()}
                   placeholder="Ej: Marce R."
                   required
                 />

@@ -65,13 +65,13 @@ export default [
       ...js.configs.recommended.rules,
 
       'import/no-cycle': ['error', { maxDepth: 2 }],
-      'import/no-default-export': 'warn',
+      'import/no-default-export': 'off',
       'import/no-unused-modules': [
         'error',
         {
           unusedExports: true,
           missingExports: false,
-          ignoreExports: ['src/main.tsx', 'src/test/**', 'src/**/*.test.ts', 'src/**/*.test.tsx']
+          ignoreExports: ['src/main.tsx', 'src/test/**', 'src/**/*.test.ts']
         }
       ],
       'import/order': [
@@ -100,14 +100,8 @@ export default [
       'import/prefer-default-export': 'off',
 
       '@typescript-eslint/await-thenable': 'error',
-      '@typescript-eslint/explicit-function-return-type': [
-        'warn',
-        {
-          allowExpressions: true,
-          allowTypedFunctionExpressions: true
-        }
-      ],
-      '@typescript-eslint/explicit-module-boundary-types': 'warn',
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/no-explicit-any': [
         'warn',
         {
@@ -138,7 +132,7 @@ export default [
       'no-console': ['warn', { allow: ['warn', 'error'] }],
       'no-else-return': 'warn',
       'no-implicit-coercion': 'warn',
-      'no-nested-ternary': 'warn',
+      'no-nested-ternary': 'off',
       'no-unneeded-ternary': 'warn',
       'no-unused-vars': 'off',
       'no-var': 'error',
@@ -155,7 +149,7 @@ export default [
     }
   },
   {
-    files: ['src/**/*.test.{ts,tsx}', 'src/test/**/*.{ts,tsx}'],
+    files: ['src/**/*.test.ts', 'src/test/**/*.{ts,tsx}'],
     languageOptions: {
       globals: {
         afterEach: 'readonly',

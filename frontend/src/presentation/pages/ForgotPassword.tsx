@@ -1,11 +1,14 @@
 import React, { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, Mail, Send } from 'lucide-react'
-import { mdiShieldAlert, mdiStore } from '@mdi/js'
 
-import { useForgotPassword } from '../hooks/useForgotPassword'
-import { Icon2000s } from '../components/legacy/Icon2000s'
+import { mdiShieldAlert, mdiStore } from '@mdi/js'
+import { ArrowLeft, Mail, Send } from 'lucide-react'
+import { Link } from 'react-router-dom'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { Icon2000s } from '../components/legacy/Icon2000s'
+import { useForgotPassword } from '../hooks/useForgotPassword'
 
 const ForgotPasswordPage: React.FC = () => {
   const [email, setEmail] = useState('')
@@ -21,8 +24,8 @@ const ForgotPasswordPage: React.FC = () => {
     try {
       const response = await forgotPasswordMutation.mutateAsync({ email })
       setMessage(response.message || 'Si el email existe, recibirás un enlace de recuperación.')
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'No se pudo procesar la solicitud')
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, 'No se pudo procesar la solicitud'))
     }
   }
 
@@ -72,9 +75,15 @@ const ForgotPasswordPage: React.FC = () => {
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
           }}
         >
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form
+            onSubmit={(event) => {
+              void handleSubmit(event)
+            }}
+            className="space-y-6"
+          >
             <div>
               <label
+                htmlFor="forgot-email"
                 className="block text-xs font-bold uppercase tracking-widest mb-2"
                 style={{ color: colors2000s.text.secondary }}
               >
@@ -86,6 +95,7 @@ const ForgotPasswordPage: React.FC = () => {
                   style={{ color: colors2000s.text.disabled }}
                 />
                 <input
+                  id="forgot-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -99,6 +109,8 @@ const ForgotPasswordPage: React.FC = () => {
 
             {message && (
               <div
+                role="status"
+                aria-live="polite"
                 className="text-sm p-3 rounded-xl font-medium"
                 style={{
                   background: '#ecfdf5',
@@ -112,6 +124,8 @@ const ForgotPasswordPage: React.FC = () => {
             )}
             {error && (
               <div
+                role="alert"
+                aria-live="polite"
                 className="text-sm p-3 rounded-xl flex items-center gap-2"
                 style={{
                   background: '#ffeeee',
@@ -128,6 +142,7 @@ const ForgotPasswordPage: React.FC = () => {
             <button
               type="submit"
               disabled={forgotPasswordMutation.isPending}
+              aria-busy={forgotPasswordMutation.isPending}
               className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50 group"
               style={
                 forgotPasswordMutation.isPending

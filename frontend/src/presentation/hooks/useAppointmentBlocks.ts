@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
 import {
   appointmentBlocksService,
   type AppointmentBlock,
@@ -25,7 +26,7 @@ export const useCreateAppointmentBlock = () => {
   return useMutation<AppointmentBlock, Error, AppointmentBlockPayload>({
     mutationFn: (payload) => appointmentBlocksService.create(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
     }
   })
 }
@@ -35,7 +36,7 @@ export const useCreateRecurringAppointmentBlock = () => {
   return useMutation<RecurringBlocksResult, Error, RecurringAppointmentBlockPayload>({
     mutationFn: (payload) => appointmentBlocksService.createRecurring(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
     }
   })
 }
@@ -49,7 +50,7 @@ export const useUpdateAppointmentBlock = () => {
   >({
     mutationFn: ({ publicId, payload }) => appointmentBlocksService.update(publicId, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
     }
   })
 }
@@ -59,7 +60,7 @@ export const useDeleteAppointmentBlock = () => {
   return useMutation<void, Error, string>({
     mutationFn: (publicId) => appointmentBlocksService.delete(publicId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
     }
   })
 }

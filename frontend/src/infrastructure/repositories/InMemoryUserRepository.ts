@@ -1,9 +1,9 @@
 import { BaseRepository } from './BaseRepository'
-import { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { User } from '../../domain/entities/User'
+import { QueryOptions } from '../../domain/repositories/IRepository'
+import { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
-import { QueryOptions } from '../../domain/repositories/IRepository'
 import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 /**
@@ -44,7 +44,7 @@ export class InMemoryUserRepository
     if (typeof options === 'boolean') {
       includeInactive = options
     } else if (options && typeof options === 'object') {
-      includeInactive = !!options.includeInactive
+      includeInactive = Boolean(options.includeInactive)
     }
 
     let users = Array.from(this.store.values())

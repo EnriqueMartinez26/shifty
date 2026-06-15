@@ -1,20 +1,20 @@
 import React, { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+
+import { mdiShieldAlert, mdiStore } from '@mdi/js'
 import { ArrowRight } from 'lucide-react'
-import { mdiStore, mdiShieldAlert } from '@mdi/js'
-import { authService } from '@application/services/AuthService'
-import { setAuthToken } from '@infrastructure/http/client'
+import { Link, useNavigate } from 'react-router-dom'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { Icon2000s } from '../components/legacy/Icon2000s'
-import { useAuth } from '../context/AuthContext'
 import { getDefaultAppRoute } from '../context/roles'
 import { useLogin } from '../hooks/useLogin'
-import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const { login } = useAuth()
   const navigate = useNavigate()
   const loginMutation = useLogin()
 
@@ -24,13 +24,15 @@ const LoginPage: React.FC = () => {
     const normalizedEmail = email.trim().toLowerCase()
 
     try {
-      const { access_token } = await loginMutation.mutateAsync({ email: normalizedEmail, password })
-      setAuthToken(access_token)
-      const currentUser = await authService.fetchCurrentUser()
-      login(access_token, currentUser)
-      navigate(getDefaultAppRoute(currentUser.role, currentUser.is_global_admin), { replace: true })
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Error al iniciar sesión')
+      const { user: currentUser } = await loginMutation.mutateAsync({
+        email: normalizedEmail,
+        password
+      })
+      void navigate(getDefaultAppRoute(currentUser.role, currentUser.is_global_admin), {
+        replace: true
+      })
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, 'Error al iniciar sesión'))
     }
   }
 
@@ -80,15 +82,22 @@ const LoginPage: React.FC = () => {
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
           }}
         >
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form
+            onSubmit={(event) => {
+              void handleSubmit(event)
+            }}
+            className="space-y-6"
+          >
             <div>
               <label
+                htmlFor="login-email"
                 className="block text-xs font-bold uppercase tracking-widest mb-2"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Email
               </label>
               <input
+                id="login-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -101,12 +110,14 @@ const LoginPage: React.FC = () => {
 
             <div>
               <label
+                htmlFor="login-password"
                 className="block text-xs font-bold uppercase tracking-widest mb-2"
                 style={{ color: colors2000s.text.secondary }}
               >
                 Contraseña
               </label>
               <input
+                id="login-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -128,6 +139,8 @@ const LoginPage: React.FC = () => {
 
             {error && (
               <div
+                role="alert"
+                aria-live="polite"
                 className="text-sm p-3 rounded-xl flex items-center gap-2"
                 style={{
                   background: '#ffeeee',
@@ -144,6 +157,7 @@ const LoginPage: React.FC = () => {
             <button
               type="submit"
               disabled={loginMutation.isPending}
+              aria-busy={loginMutation.isPending}
               className="w-full font-bold py-4 rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50 group"
               style={
                 loginMutation.isPending ? buttonStyles2000s.disabled : buttonStyles2000s.selected

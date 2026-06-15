@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+
 import {
   AlertCircle,
   Calendar,
@@ -10,24 +11,30 @@ import {
   Tag
 } from 'lucide-react'
 
-import type { BookingConfirmation } from '@application/services/PublicBookingService'
+import type { BookingConfirmation, PromotionPreview } from '@application/services/PublicBookingService'
+
 import { usePreviewPublicPromotion } from '@presentation/hooks/usePublic'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
+import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
+import {
+  createBookingBackButtonStyle,
+  createBookingInputStyle,
+  createBookingSurfaceStyle,
+  createBookingAccentBoxStyle
+} from '../../../lib/surfaceStyles'
 
 interface BookingStepConfirmationProps {
   storePublicId: string
   serviceId: string
-  bookingState: any
+  bookingState: BookingWizardState
   onBack: () => void
   onPromotionCodeChange: (promotionCode: string) => void
   onConfirm: () => Promise<BookingConfirmation>
 }
-
-const currencyFmt = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
 
 export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = ({
   storePublicId,
@@ -41,19 +48,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [promotionCode, setPromotionCode] = useState(bookingState.promotionCode || '')
-  const [promotionPreview, setPromotionPreview] = useState<any>(null)
+  const [promotionPreview, setPromotionPreview] = useState<PromotionPreview | null>(null)
   const previewPromotion = usePreviewPublicPromotion()
 
   useEffect(() => {
     setPromotionCode(bookingState.promotionCode || '')
   }, [bookingState.promotionCode])
-
-  const inputStyle = {
-    background: '#ffffff',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
 
   const handleApplyPromotion = async () => {
     const normalizedCode = promotionCode.trim().toUpperCase()
@@ -74,10 +74,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       onPromotionCodeChange(normalizedCode)
       setPromotionCode(normalizedCode)
       setErrorMessage('')
-    } catch (error: any) {
+    } catch (error: unknown) {
       setPromotionPreview(null)
       onPromotionCodeChange('')
-      setErrorMessage(error.response?.data?.detail || 'No pudimos validar ese codigo')
+      setErrorMessage(getErrorMessage(error, 'No pudimos validar ese codigo'))
     }
   }
 
@@ -88,11 +88,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       const result = await onConfirm()
       setConfirmation(result)
       setStatus('success')
-    } catch (error: any) {
+    } catch (error: unknown) {
       setStatus('error')
       setErrorMessage(
-        error.response?.data?.detail ||
-          'No pudimos procesar tu reserva. El horario podria estar ocupado.'
+        getErrorMessage(error, 'No pudimos procesar tu reserva. El horario podria estar ocupado.')
       )
     }
   }
@@ -299,12 +298,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           onClick={onBack}
           type="button"
           className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-            color: colors2000s.text.primary
-          }}
+          style={createBookingBackButtonStyle()}
         >
           <ChevronLeft size={20} className="stroke-[3px]" />
         </button>
@@ -323,19 +317,16 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
       <div
         className="rounded-3xl p-6 bg-white space-y-5"
-        style={{
-          border: `1px solid ${colors2000s.border.light}`,
-          boxShadow: colors2000s.shadows.insetDark
-        }}
+        style={createBookingSurfaceStyle()}
       >
-        <div className="grid sm:grid-cols-2 gap-4">
-          <div className="rounded-2xl p-4 border" style={{ borderColor: '#e5e7eb' }}>
+          <div className="grid sm:grid-cols-2 gap-4">
+          <div className="rounded-2xl p-4 border" style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}>
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
               Fecha
             </p>
             <p className="text-lg font-black text-gray-800">{bookingState.date}</p>
           </div>
-          <div className="rounded-2xl p-4 border" style={{ borderColor: '#e5e7eb' }}>
+          <div className="rounded-2xl p-4 border" style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}>
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
               Hora
             </p>
@@ -343,7 +334,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </div>
         </div>
 
-        <div className="rounded-2xl p-4 border space-y-3" style={{ borderColor: '#e5e7eb' }}>
+        <div
+          className="rounded-2xl p-4 border space-y-3"
+          style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
+        >
           <div className="flex items-center gap-2">
             <Tag className="w-4 h-4 text-orange-500" />
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
@@ -360,12 +354,14 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 setErrorMessage('')
               }}
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-              style={inputStyle}
+              style={createBookingInputStyle()}
               placeholder="Ej: BIENVENIDA10"
             />
             <button
               type="button"
-              onClick={handleApplyPromotion}
+              onClick={() => {
+                void handleApplyPromotion()
+              }}
               disabled={previewPromotion.isPending}
               className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={{
@@ -379,10 +375,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             </button>
           </div>
           {promotionPreview && (
-            <div
-              className="rounded-2xl p-4 border"
-              style={{ background: '#ecfdf5', borderColor: '#bbf7d0' }}
-            >
+              <div
+                className="rounded-2xl p-4 border"
+                style={{ ...createBookingAccentBoxStyle('#ecfdf5', '#bbf7d0', '#166534') }}
+              >
               <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
                 {promotionPreview.title}
               </p>
@@ -397,8 +393,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         {errorMessage && (
           <div
+            role="alert"
+            aria-live="polite"
             className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
-            style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}
+            style={createBookingAccentBoxStyle('#fef2f2', '#fecaca', '#b91c1c')}
           >
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             {errorMessage}
@@ -407,7 +405,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         <button
           type="button"
-          onClick={handleConfirm}
+          onClick={() => {
+            void handleConfirm()
+          }}
           className="w-full text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none"
           style={{
             background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
@@ -421,8 +421,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
       {status === 'error' && (
         <div
+          role="alert"
+          aria-live="polite"
           className="rounded-2xl p-4 text-xs font-bold flex items-center gap-2"
-          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+          style={createBookingAccentBoxStyle('#fff7ed', '#fed7aa', '#c2410c')}
         >
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           El horario podria haberse ocupado mientras completabas el formulario. Volve un paso atras

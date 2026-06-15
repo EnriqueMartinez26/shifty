@@ -1,15 +1,23 @@
 import React, { useState } from 'react'
+
+import { Plus, Search, Loader2, User as UserIcon } from 'lucide-react'
+
+import { User } from '@domain/entities/User'
+
+import { UserService } from '@application/services/UserService'
+
+import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { UserCard } from '../components/molecules/UserCard'
 import { UserFormModal } from '../components/organisms/UserFormModal'
-import { User } from '@domain/entities/User'
-import { colors2000s, buttonStyles2000s } from '../../theme/colors'
-import { Plus, Search, Loader2, User as UserIcon } from 'lucide-react'
 import {
   useCreateManagedDomainUser,
   useDeleteManagedDomainUser,
   useManagedDomainUsers,
   useUpdateManagedDomainUser
 } from '../hooks/useManagedDomainUsers'
+import type { UserFormValues } from '../types/forms'
+
+type UpdateUserInput = Parameters<UserService['updateUser']>[1]
 
 export const UserManagementContainer: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -43,9 +51,12 @@ export const UserManagementContainer: React.FC = () => {
     setIsModalOpen(true)
   }
 
-  const handleFormSubmit = async (formData: any) => {
+  const handleFormSubmit = async (formData: UserFormValues) => {
     if (editingUser) {
-      await updateMutation.mutateAsync({ id: editingUser.id, data: formData })
+      await updateMutation.mutateAsync({
+        id: editingUser.id,
+        data: formData as unknown as UpdateUserInput
+      })
     } else {
       await createMutation.mutateAsync(formData)
     }

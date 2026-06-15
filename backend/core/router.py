@@ -105,8 +105,7 @@ class CanonicalRoute(APIRoute):
                             filtered_headers = {
                                 k: v
                                 for k, v in response.headers.items()
-                                if k.lower()
-                                not in ("content-length", "content-type")
+                                if k.lower() not in ("content-length", "content-type")
                             }
                             return JSONResponse(
                                 content=payload["data"],

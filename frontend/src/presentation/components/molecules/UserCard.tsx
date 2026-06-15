@@ -1,5 +1,5 @@
 import React from 'react'
-import { User } from '@domain/entities/User'
+
 import {
   Shield,
   User as UserIcon,
@@ -10,6 +10,9 @@ import {
   Edit2,
   Trash2
 } from 'lucide-react'
+
+import { User } from '@domain/entities/User'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 
 interface UserCardProps {

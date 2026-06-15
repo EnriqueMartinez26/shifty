@@ -1,5 +1,6 @@
 import apiClient from '@infrastructure/http/client'
-import type { BusinessType } from '@presentation/lib/businessLabels'
+
+import type { BusinessType } from '@shared/types/business'
 
 export interface BusinessHourPeriod {
   open: string

@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import { z, type ZodTypeAny } from 'zod'
 
 /**
  * Base abstract class defining standard operations, validation,
@@ -87,7 +87,7 @@ export abstract class BaseService<T> {
    * @param schema The zod schema.
    * @throws {z.ZodError} If data doesn't match the schema rules.
    */
-  protected validate(data: unknown, schema?: any): void {
+  protected validate(data: unknown, schema?: ZodTypeAny): void {
     if (!schema) {
       return
     }
@@ -135,7 +135,7 @@ export abstract class BaseService<T> {
 
       // If it's already an error containing custom details, let's keep them
       if ('details' in error) {
-        details = (error as any).details
+        details = (error as { details?: unknown }).details
       }
 
       this.log('ERROR', `${serviceName} - Exception: ${error.message}\nStack: ${errorStack}`)
@@ -160,7 +160,7 @@ export abstract class BaseService<T> {
    * @param message Text to print.
    * @param data Optional context metadata.
    */
-  protected log(level: string, message: string, data?: any): void {
+  protected log(level: string, message: string, data?: unknown): void {
     const formattedMessage = `[${level}] ${message}`
 
     if (level === 'ERROR') {
@@ -171,9 +171,9 @@ export abstract class BaseService<T> {
       }
     } else {
       if (data !== undefined) {
-        console.log(formattedMessage, data)
+        console.warn(formattedMessage, data)
       } else {
-        console.log(formattedMessage)
+        console.warn(formattedMessage)
       }
     }
   }

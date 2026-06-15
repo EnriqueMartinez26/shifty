@@ -16,7 +16,7 @@ export interface QueryOptions {
 export interface IRepository<T, CreateDTO = T, UpdateDTO = Partial<T>> {
   findAll(options?: QueryOptions | boolean): Promise<T[]>
   findById(id: string): Promise<T | null>
-  create(data: CreateDTO, extra?: any): Promise<T>
+  create(data: CreateDTO, extra?: unknown): Promise<T>
   update(id: string, data: UpdateDTO): Promise<T>
   delete(id: string): Promise<void>
 }

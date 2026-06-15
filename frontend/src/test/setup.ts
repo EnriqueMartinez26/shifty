@@ -10,7 +10,7 @@ declare const require: any
 // Setup global crypto polyfill for Node.js / JSDOM test environments
 const customGlobal = globalThis as any
 
-  if (typeof customGlobal.crypto === 'undefined') {
+if (typeof customGlobal.crypto === 'undefined') {
   try {
     const nodeCrypto = require('crypto')
     Object.defineProperty(customGlobal, 'crypto', {

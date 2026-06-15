@@ -1,19 +1,18 @@
 import React, { useMemo, useState } from 'react'
+
 import { AlertCircle, CheckCircle2, CreditCard, ExternalLink, Link2, Loader2 } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import {
   useCreatePaymentPreference,
   useManualConfirmPayment,
   usePaymentsAppointments,
   useReconciliationSummary
 } from '../hooks/usePayments'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-
-const currencyFmt = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
+import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
 
 const statusLabel: Record<string, string> = {
   pending: 'Pendiente',
@@ -34,11 +33,7 @@ const CollectionsPage: React.FC = () => {
   const manualConfirm = useManualConfirmPayment()
   const [message, setMessage] = useState('')
 
-  const cardStyle = {
-    background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-  }
+  const cardStyle = create2000sPanelStyle()
 
   const appointments = useMemo(
     () =>
@@ -64,8 +59,8 @@ const CollectionsPage: React.FC = () => {
     try {
       const response = await createPreference.mutateAsync(appointmentId)
       setMessage(`Link de cobro creado: ${response.payment_public_id}`)
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo crear el link de cobro')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo crear el link de cobro'))
     }
   }
 
@@ -73,8 +68,8 @@ const CollectionsPage: React.FC = () => {
     try {
       const response = await manualConfirm.mutateAsync({ appointmentId })
       setMessage(`Pago confirmado manualmente: ${response.public_id}`)
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo confirmar el pago')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo confirmar el pago'))
     }
   }
 
@@ -155,10 +150,7 @@ const CollectionsPage: React.FC = () => {
               <div
                 key={appointment.public_id}
                 className="rounded-2xl p-4 bg-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
+                style={create2000sListCardStyle()}
               >
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -188,7 +180,9 @@ const CollectionsPage: React.FC = () => {
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => handleCreatePreference(appointment.public_id)}
+                    onClick={() => {
+                      void handleCreatePreference(appointment.public_id)
+                    }}
                     className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
                     style={buttonStyles2000s.default}
                   >
@@ -197,7 +191,9 @@ const CollectionsPage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleManualConfirm(appointment.public_id)}
+                    onClick={() => {
+                      void handleManualConfirm(appointment.public_id)
+                    }}
                     className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
                     style={buttonStyles2000s.selected}
                   >
@@ -224,11 +220,7 @@ const CollectionsPage: React.FC = () => {
           {!appointments.length && !appointmentsQuery.isLoading && (
             <div
               className="rounded-2xl p-6 bg-white text-sm font-bold"
-              style={{
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.secondary
-              }}
+              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
             >
               No hay turnos pendientes o confirmados para operar cobros ahora.
             </div>

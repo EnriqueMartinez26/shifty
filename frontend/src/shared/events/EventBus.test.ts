@@ -1,8 +1,8 @@
 import { EventBus } from './EventBus'
+import { EventHandler } from './EventHandler'
 import { UserCreatedEvent } from '../../domain/events/UserEvents'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
-import { EventHandler } from './EventHandler'
 
 class MockHandler implements EventHandler<UserCreatedEvent> {
   public handle = jest.fn().mockResolvedValue(undefined)

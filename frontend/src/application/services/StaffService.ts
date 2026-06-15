@@ -1,6 +1,7 @@
 import { BaseService } from './BaseService'
 import { Staff } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
+import type { CreateStaffSchema } from '../validators/staff.validators'
 import { createStaffSchema } from '../validators/staff.validators'
 
 /**
@@ -37,7 +38,7 @@ export class StaffService extends BaseService<Staff> {
    * @param data The staff data to create (will be validated).
    * @returns A promise that resolves to the created Staff entity.
    */
-  async createStaff(data: any): Promise<Staff> {
+  async createStaff(data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
       this.validate(data, createStaffSchema)
       const validated = createStaffSchema.parse(data)
@@ -64,7 +65,7 @@ export class StaffService extends BaseService<Staff> {
    * @returns A promise that resolves to the updated Staff entity.
    * @throws Error if the staff member is not found.
    */
-  async updateStaff(id: string, data: any): Promise<Staff> {
+  async updateStaff(id: string, data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
       const existing = await this.repository.findById(id)
       if (!existing) throw new Error('Staff no encontrado')

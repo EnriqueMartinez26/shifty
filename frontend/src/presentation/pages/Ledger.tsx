@@ -1,15 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
+
 import { AlertCircle, Loader2, WalletCards } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from '../hooks/useLedger'
 import { useManagedUsers } from '../hooks/useManagedUsers'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-
-const currencyFmt = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
+import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import { create2000sListCardStyle } from '../lib/surfaceStyles'
 
 const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund', string> = {
   charge: 'Cargo',
@@ -69,8 +68,8 @@ const LedgerPage: React.FC = () => {
       })
       setMovementForm({ movement_type: 'charge', amount: '', appointment_id: '', notes: '' })
       setMessage('Movimiento registrado')
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo registrar el movimiento')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo registrar el movimiento'))
     }
   }
 
@@ -183,7 +182,12 @@ const LedgerPage: React.FC = () => {
             ))}
           </select>
 
-          <form onSubmit={handleSubmit} className="space-y-3">
+          <form
+            onSubmit={(event) => {
+              void handleSubmit(event)
+            }}
+            className="space-y-3"
+          >
             <select
               value={movementForm.movement_type}
               onChange={(e) =>
@@ -267,10 +271,7 @@ const LedgerPage: React.FC = () => {
               <div
                 key={movement.public_id}
                 className="rounded-2xl p-4 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
+                style={create2000sListCardStyle()}
               >
                 <div>
                   <p
@@ -302,12 +303,8 @@ const LedgerPage: React.FC = () => {
             ))}
             {!ledgerQuery.data?.movements.length && !ledgerQuery.isLoading && (
               <div
-                className="rounded-2xl p-6 bg-white text-sm font-bold"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.secondary
-                }}
+              className="rounded-2xl p-6 bg-white text-sm font-bold"
+              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 Este cliente todavia no tiene movimientos registrados.
               </div>
@@ -332,10 +329,7 @@ const LedgerPage: React.FC = () => {
               <div
                 key={debtor.client_id}
                 className="rounded-2xl p-4 bg-white"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
+                style={create2000sListCardStyle()}
               >
                 <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
                   {debtor.client_name}
@@ -353,12 +347,8 @@ const LedgerPage: React.FC = () => {
             ))}
             {(summaryQuery.data?.top_debtors.length ?? 0) === 0 && !summaryQuery.isLoading && (
               <div
-                className="rounded-2xl p-4 bg-white text-sm font-bold"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.secondary
-                }}
+              className="rounded-2xl p-4 bg-white text-sm font-bold"
+              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 No hay clientes con deuda registrada.
               </div>

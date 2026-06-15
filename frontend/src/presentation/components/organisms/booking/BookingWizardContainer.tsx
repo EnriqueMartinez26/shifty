@@ -1,18 +1,27 @@
 import React, { useEffect, useMemo, useState } from 'react'
+
 import { AlertCircle, Check, ChevronLeft, ShieldCheck } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import { BookingStepClient } from './BookingStepClient'
+import { BookingStepConfirmation } from './BookingStepConfirmation'
+import { BookingStepDateTime } from './BookingStepDateTime'
+import { BookingStepService } from './BookingStepService'
+import { BookingStepStaff } from './BookingStepStaff'
+import type { BookingWizardState } from './types'
+import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
-import { BookingStepClient } from './BookingStepClient'
-import { BookingStepConfirmation } from './BookingStepConfirmation'
-import { BookingStepDateTime } from './BookingStepDateTime'
-import { BookingStepService } from './BookingStepService'
-import { BookingStepStaff } from './BookingStepStaff'
-import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
+import {
+  createBookingBackButtonStyle,
+  createBookingInputStyle,
+  createBookingSurfaceStyle
+} from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
   store: PublicStore
@@ -42,12 +51,12 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
     expiresAt: '',
     error: ''
   })
-  const [bookingState, setBookingState] = useState({
-    serviceId: null as string | null,
-    requestedStaffId: null as string | null,
-    assignedStaffId: null as string | null,
-    date: null as string | null,
-    startTime: null as string | null,
+  const [bookingState, setBookingState] = useState<BookingWizardState>({
+    serviceId: null,
+    requestedStaffId: null,
+    assignedStaffId: null,
+    date: null,
+    startTime: null,
     client: {
       name: '',
       email: '',
@@ -81,15 +90,52 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
 
   const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
   const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 0))
+  const handleRequestOtp = async () => {
+    try {
+      const response = await requestOtp.mutateAsync({
+        store_public_id: store.public_id,
+        phone: bookingState.client.phone,
+        channel: otpState.channel
+      })
+      setOtpState((prev) => ({
+        ...prev,
+        debugCode: response.debug_code || '',
+        expiresAt: response.expires_at,
+        error: ''
+      }))
+    } catch (error: unknown) {
+      setOtpState((prev) => ({
+        ...prev,
+        error: getErrorMessage(error, 'No se pudo enviar el codigo')
+      }))
+    }
+  }
+
+  const handleVerifyOtp = async () => {
+    try {
+      const response = await verifyOtp.mutateAsync({
+        store_public_id: store.public_id,
+        phone: bookingState.client.phone,
+        code: otpState.code
+      })
+      setOtpState((prev) => ({
+        ...prev,
+        verified: true,
+        verifiedPhone: response.phone,
+        error: ''
+      }))
+    } catch (error: unknown) {
+      setOtpState((prev) => ({
+        ...prev,
+        error: getErrorMessage(error, 'Codigo invalido')
+      }))
+    }
+  }
 
   const renderStepIndicator = () => (
     <div
       className="flex items-center justify-between p-4 mb-8 rounded-2xl relative overflow-hidden"
-      style={{
-        background: '#ffffff',
-        border: `1px solid ${colors2000s.border.light}`,
-        boxShadow: colors2000s.shadows.insetDark
-      }}
+      style={createBookingSurfaceStyle()}
     >
       {steps.map((label, i) => {
         const isCompleted = i < currentStep
@@ -151,12 +197,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           onClick={prevStep}
           type="button"
           className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-            color: colors2000s.text.primary
-          }}
+          style={createBookingBackButtonStyle()}
         >
           <ChevronLeft size={20} className="stroke-[3px]" />
         </button>
@@ -175,10 +216,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
 
       <div
         className="rounded-3xl p-6 bg-white space-y-4"
-        style={{
-          border: `1px solid ${colors2000s.border.light}`,
-          boxShadow: colors2000s.shadows.insetDark
-        }}
+        style={createBookingSurfaceStyle()}
       >
         <div className="flex items-start gap-3">
           <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
@@ -199,37 +237,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
               setOtpState((prev) => ({ ...prev, channel: e.target.value as 'whatsapp' | 'sms' }))
             }
             className="rounded-2xl px-4 py-3 font-bold outline-none"
-            style={{
-              background: 'white',
-              border: `1px solid ${colors2000s.border.default}`,
-              boxShadow: colors2000s.shadows.insetDark,
-              color: colors2000s.text.primary
-            }}
+            style={createBookingInputStyle()}
           >
             <option value="whatsapp">WhatsApp</option>
             <option value="sms">SMS</option>
           </select>
           <button
             type="button"
-            onClick={async () => {
-              try {
-                const response = await requestOtp.mutateAsync({
-                  store_public_id: store.public_id,
-                  phone: bookingState.client.phone,
-                  channel: otpState.channel
-                })
-                setOtpState((prev) => ({
-                  ...prev,
-                  debugCode: response.debug_code || '',
-                  expiresAt: response.expires_at,
-                  error: ''
-                }))
-              } catch (error: any) {
-                setOtpState((prev) => ({
-                  ...prev,
-                  error: error.response?.data?.detail || 'No se pudo enviar el codigo'
-                }))
-              }
+            onClick={() => {
+              void handleRequestOtp()
             }}
             className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest"
             style={buttonStyles2000s.default}
@@ -243,12 +259,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             value={otpState.code}
             onChange={(e) => setOtpState((prev) => ({ ...prev, code: e.target.value, error: '' }))}
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-            style={{
-              background: 'white',
-              border: `1px solid ${colors2000s.border.default}`,
-              boxShadow: colors2000s.shadows.insetDark,
-              color: colors2000s.text.primary
-            }}
+            style={createBookingInputStyle()}
             placeholder="Ingresa el codigo OTP"
           />
 
@@ -263,6 +274,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
 
           {otpState.error && (
             <div
+              role="alert"
+              aria-live="polite"
               className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
               style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}
             >
@@ -283,25 +296,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             <button
               type="button"
               disabled={!otpState.code || verifyOtp.isPending}
-              onClick={async () => {
-                try {
-                  const response = await verifyOtp.mutateAsync({
-                    store_public_id: store.public_id,
-                    phone: bookingState.client.phone,
-                    code: otpState.code
-                  })
-                  setOtpState((prev) => ({
-                    ...prev,
-                    verified: true,
-                    verifiedPhone: response.phone,
-                    error: ''
-                  }))
-                } catch (error: any) {
-                  setOtpState((prev) => ({
-                    ...prev,
-                    error: error.response?.data?.detail || 'Codigo invalido'
-                  }))
-                }
+              onClick={() => {
+                void handleVerifyOtp()
               }}
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}

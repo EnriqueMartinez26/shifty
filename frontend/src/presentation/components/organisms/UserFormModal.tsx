@@ -1,12 +1,20 @@
 import React, { useState, useEffect } from 'react'
-import { User } from '@domain/entities/User'
+
 import { X, Loader2 } from 'lucide-react'
+
+import { User } from '@domain/entities/User'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import {
+  create2000sModalInputStyle,
+  create2000sModalSurfaceStyle
+} from '../../lib/surfaceStyles'
+import type { UserFormValues } from '../../types/forms'
 
 interface UserFormModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (data: any) => Promise<void>
+  onSubmit: (data: UserFormValues) => Promise<void>
   editingUser?: User | null
 }
 
@@ -64,24 +72,12 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
     }
   }
 
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary,
-    outline: 'none'
-  }
-
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
       <div
         className="relative w-full max-w-lg rounded-[2.5rem] border animate-in zoom-in-95 duration-200 p-8 overflow-y-auto max-h-[90vh]"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
+        style={create2000sModalSurfaceStyle()}
       >
         <div className="flex justify-between items-center mb-8">
           <div>
@@ -107,7 +103,12 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form
+          onSubmit={(e) => {
+            void handleSubmit(e)
+          }}
+          className="space-y-5"
+        >
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
               Email de Acceso
@@ -120,8 +121,8 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
               style={
                 editingUser
-                  ? { ...inputStyle, background: colors2000s.bg.disabled, opacity: 0.7 }
-                  : inputStyle
+                  ? { ...create2000sModalInputStyle(), background: colors2000s.bg.disabled, opacity: 0.7 }
+                  : create2000sModalInputStyle()
               }
               required
             />
@@ -136,7 +137,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
                 value={formData.first_name}
                 onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
               />
             </div>
             <div className="space-y-1.5">
@@ -147,7 +148,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
                 value={formData.last_name}
                 onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
               />
             </div>
           </div>
@@ -159,9 +160,14 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               </label>
               <select
                 value={formData.role}
-                onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    role: e.target.value as UserFormValues['role']
+                  })
+                }
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all appearance-none cursor-pointer"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
               >
                 <option value="admin">Administrador</option>
                 <option value="staff">Staff / Profesional</option>
@@ -177,7 +183,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
               />
             </div>
           </div>
@@ -191,7 +197,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-              style={inputStyle}
+              style={create2000sModalInputStyle()}
               required={!editingUser}
             />
           </div>

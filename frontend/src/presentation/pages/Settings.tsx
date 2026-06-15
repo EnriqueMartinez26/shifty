@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+
 import {
   Store,
   Settings as SettingsIcon,
@@ -13,19 +14,29 @@ import {
   Trash2,
   SlidersHorizontal
 } from 'lucide-react'
+
 import type {
   StoreCustomField,
-  StoreCustomFieldOption
+  StoreCustomFieldOption,
+  StoreFeatureFlags
 } from '@application/services/StoreSettingsService'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import type { BusinessType } from '@shared/types/business'
+
+import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { useChangePassword } from '../hooks/useChangePassword'
 import {
   useStoreFeatureFlags,
   useStoreSettings,
   useUpdateStoreFeatureFlags,
   useUpdateStoreSettings
 } from '../hooks/useStores'
-import { useChangePassword } from '../hooks/useChangePassword'
-import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
+import {
+  create2000sPanelStyle,
+  createSettingsInputStyle
+} from '../lib/surfaceStyles'
 
 const TABS = [
   { id: 'identity', label: 'Identidad', icon: <Store className="w-4 h-4" /> },
@@ -52,6 +63,32 @@ const DEFAULT_FEATURE_FLAGS = {
   advanced_reports: false,
   new_calendar: false,
   otp_booking: false
+}
+
+type BusinessHoursPeriod = {
+  open: string
+  close: string
+}
+
+type SettingsFormData = {
+  name: string
+  slug: string
+  business_type: BusinessType
+  logo_url: string
+  cover_url: string
+  description: string
+  whatsapp_number: string
+  instagram_url: string
+  facebook_url: string
+  website_url: string
+  custom_client_fields: StoreCustomField[]
+  primary_color: string
+  cancellation_hours: number
+  buffer_minutes: number
+  business_hours: Record<string, BusinessHoursPeriod[]>
+  send_email_confirmation: boolean
+  send_email_reminders: boolean
+  feature_flags: StoreFeatureFlags
 }
 
 const FEATURE_LABELS = [
@@ -128,7 +165,7 @@ const SettingsPage: React.FC = () => {
   const updateFeatureFlags = useUpdateStoreFeatureFlags()
   const changePassword = useChangePassword()
 
-  const [formData, setFormData] = useState<any>(null)
+  const [formData, setFormData] = useState<SettingsFormData | null>(null)
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' })
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
@@ -172,9 +209,9 @@ const SettingsPage: React.FC = () => {
       }
       setSaveStatus('success')
       setTimeout(() => setSaveStatus('idle'), 3000)
-    } catch (err: any) {
+    } catch (error: unknown) {
       setSaveStatus('error')
-      setErrorMessage(err.response?.data?.detail || 'Error al guardar')
+      setErrorMessage(getErrorMessage(error, 'Error al guardar'))
     }
   }
 
@@ -193,9 +230,9 @@ const SettingsPage: React.FC = () => {
       setSaveStatus('success')
       setPasswordForm({ current: '', new: '', confirm: '' })
       setTimeout(() => setSaveStatus('idle'), 3000)
-    } catch (err: any) {
+    } catch (error: unknown) {
       setSaveStatus('error')
-      setErrorMessage(err.response?.data?.detail || 'Error al cambiar contraseña')
+      setErrorMessage(getErrorMessage(error, 'Error al cambiar contraseña'))
     }
   }
 
@@ -213,13 +250,6 @@ const SettingsPage: React.FC = () => {
     )
   }
 
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
-
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center justify-between">
@@ -231,7 +261,9 @@ const SettingsPage: React.FC = () => {
         </h1>
         {activeTab !== 'security' && (
           <button
-            onClick={handleSave}
+            onClick={() => {
+              void handleSave()
+            }}
             disabled={saveStatus === 'saving'}
             className="flex items-center gap-2 px-6 py-3 font-black uppercase tracking-widest text-xs rounded-xl transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.selected}
@@ -292,11 +324,7 @@ const SettingsPage: React.FC = () => {
       {/* Tab Content */}
       <div
         className="p-8 rounded-[2.5rem] animate-in fade-in slide-in-from-bottom-4 duration-500"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
+        style={create2000sPanelStyle()}
       >
         {activeTab === 'identity' && (
           <div className="space-y-8">
@@ -310,9 +338,14 @@ const SettingsPage: React.FC = () => {
                 </label>
                 <select
                   value={formData.business_type}
-                  onChange={(e) => setFormData({ ...formData, business_type: e.target.value })}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      business_type: e.target.value as BusinessType
+                    })
+                  }
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                 >
                   {BUSINESS_TYPE_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -332,7 +365,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder={labels.businessNamePlaceholder}
                 />
               </div>
@@ -346,7 +379,10 @@ const SettingsPage: React.FC = () => {
                 >
                   Slug de la URL
                 </label>
-                <div className="flex items-center gap-2 rounded-2xl px-5 py-3.5" style={inputStyle}>
+                <div
+                  className="flex items-center gap-2 rounded-2xl px-5 py-3.5"
+                  style={createSettingsInputStyle()}
+                >
                   <span className="text-xs font-black opacity-30">/booking/</span>
                   <input
                     value={formData.slug}
@@ -372,7 +408,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.logo_url}
                   onChange={(e) => setFormData({ ...formData, logo_url: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="https://..."
                 />
               </div>
@@ -393,7 +429,7 @@ const SettingsPage: React.FC = () => {
                   />
                   <div
                     className="flex-1 px-5 py-3.5 font-black uppercase tracking-widest rounded-2xl"
-                    style={inputStyle}
+                    style={createSettingsInputStyle()}
                   >
                     {formData.primary_color}
                   </div>
@@ -413,7 +449,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.cover_url}
                   onChange={(e) => setFormData({ ...formData, cover_url: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="https://..."
                 />
               </div>
@@ -428,7 +464,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.whatsapp_number}
                   onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="+54911..."
                 />
               </div>
@@ -445,7 +481,7 @@ const SettingsPage: React.FC = () => {
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 className="w-full min-h-28 rounded-2xl px-5 py-3.5 font-bold outline-none resize-y"
-                style={inputStyle}
+                style={createSettingsInputStyle()}
                 placeholder="Breve descripcion visible en el portal publico."
               />
             </div>
@@ -560,7 +596,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, custom_client_fields: nextFields })
                               }}
                               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                               placeholder="Ej: Motivo de consulta"
                             />
                           </div>
@@ -582,7 +618,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, custom_client_fields: nextFields })
                               }}
                               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                               placeholder="motivo_consulta"
                             />
                           </div>
@@ -605,7 +641,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, custom_client_fields: nextFields })
                               }}
                               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                             >
                               {CUSTOM_FIELD_TYPE_OPTIONS.map((option) => (
                                 <option key={option.value} value={option.value}>
@@ -629,7 +665,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, custom_client_fields: nextFields })
                               }}
                               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                               placeholder="Texto de ayuda dentro del campo"
                             />
                           </div>
@@ -651,7 +687,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, custom_client_fields: nextFields })
                               }}
                               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                               placeholder="Ej: Aclaranos si es primera vez o seguimiento"
                             />
                           </div>
@@ -692,7 +728,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, custom_client_fields: nextFields })
                               }}
                               className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                               placeholder={'Una opcion por linea\nEj: Primera vez|primera_vez'}
                             />
                           </div>
@@ -716,7 +752,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.instagram_url}
                   onChange={(e) => setFormData({ ...formData, instagram_url: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="https://instagram.com/..."
                 />
               </div>
@@ -731,7 +767,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.facebook_url}
                   onChange={(e) => setFormData({ ...formData, facebook_url: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="https://facebook.com/..."
                 />
               </div>
@@ -746,7 +782,7 @@ const SettingsPage: React.FC = () => {
                   value={formData.website_url}
                   onChange={(e) => setFormData({ ...formData, website_url: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="https://..."
                 />
               </div>
@@ -791,7 +827,7 @@ const SettingsPage: React.FC = () => {
                           Cerrado
                         </span>
                       ) : (
-                        dayHours.map((period: any, idx: number) => (
+                        dayHours.map((period: BusinessHoursPeriod, idx: number) => (
                           <div key={idx} className="flex items-center gap-2">
                             <input
                               type="time"
@@ -802,7 +838,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, business_hours: newHours })
                               }}
                               className="rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                             />
                             <span
                               className="text-[10px] font-bold"
@@ -819,7 +855,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, business_hours: newHours })
                               }}
                               className="rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none"
-                              style={inputStyle}
+                              style={createSettingsInputStyle()}
                             />
                             <button
                               onClick={() => {
@@ -874,7 +910,7 @@ const SettingsPage: React.FC = () => {
                     setFormData({ ...formData, cancellation_hours: parseInt(e.target.value) || 0 })
                   }
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                   placeholder="24"
                 />
                 <p
@@ -898,7 +934,7 @@ const SettingsPage: React.FC = () => {
                     setFormData({ ...formData, buffer_minutes: parseInt(e.target.value) || 0 })
                   }
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                style={createSettingsInputStyle()}
                   placeholder="0"
                 />
                 <p
@@ -1079,7 +1115,12 @@ const SettingsPage: React.FC = () => {
         )}
 
         {activeTab === 'security' && (
-          <form onSubmit={handlePasswordChange} className="max-w-md space-y-6">
+          <form
+            onSubmit={(event) => {
+              void handlePasswordChange(event)
+            }}
+            className="max-w-md space-y-6"
+          >
             <h3
               className="text-lg font-black uppercase tracking-tight"
               style={{ color: colors2000s.orange.accent }}
@@ -1100,7 +1141,7 @@ const SettingsPage: React.FC = () => {
                   value={passwordForm.current}
                   onChange={(e) => setPasswordForm({ ...passwordForm, current: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                style={createSettingsInputStyle()}
                 />
               </div>
 
@@ -1117,7 +1158,7 @@ const SettingsPage: React.FC = () => {
                   value={passwordForm.new}
                   onChange={(e) => setPasswordForm({ ...passwordForm, new: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                style={createSettingsInputStyle()}
                 />
               </div>
 
@@ -1134,7 +1175,7 @@ const SettingsPage: React.FC = () => {
                   value={passwordForm.confirm}
                   onChange={(e) => setPasswordForm({ ...passwordForm, confirm: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={inputStyle}
+                  style={createSettingsInputStyle()}
                 />
               </div>
             </div>

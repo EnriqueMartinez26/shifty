@@ -217,7 +217,9 @@ async def delete_block(
     db: AsyncSession = Depends(get_db),
 ):
     if not _can_manage_blocks(user):
-        raise PermissionDeniedException(action="No tenés permiso para eliminar bloqueos")
+        raise PermissionDeniedException(
+            action="No tenés permiso para eliminar bloqueos"
+        )
     result = await db.execute(
         select(StaffBlock).where(
             StaffBlock.id == public_id, StaffBlock.store_id == user.store_id

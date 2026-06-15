@@ -1,6 +1,6 @@
 import { Email } from '../value-objects/Email'
-import { UserRole } from '../value-objects/UserRole'
 import { UserId } from '../value-objects/UserId'
+import { UserRole } from '../value-objects/UserRole'
 
 export interface UserProps {
   id: UserId

@@ -12,18 +12,18 @@
  */
 
 import { ServiceContainer } from './ServiceContainer'
-import { UserService } from '../../application/services/UserService'
-import { StaffService } from '../../application/services/StaffService'
 import { AppointmentService } from '../../application/services/AppointmentService'
 import { BookingService } from '../../application/services/BookingService'
 import { ServiceService } from '../../application/services/ServiceService'
-import { HttpUserRepository } from '../repositories/HttpUserRepository'
-import { HttpStaffRepository } from '../repositories/HttpStaffRepository'
+import { StaffService } from '../../application/services/StaffService'
+import { UserService } from '../../application/services/UserService'
+import { EventBus } from '../../shared/events/EventBus'
+import apiClient from '../http/client'
 import { HttpAppointmentRepository } from '../repositories/HttpAppointmentRepository'
 import { HttpBookingRepository } from '../repositories/HttpBookingRepository'
 import { HttpServiceRepository } from '../repositories/HttpServiceRepository'
-import apiClient from '../http/client'
-import { EventBus } from '../../shared/events/EventBus'
+import { HttpStaffRepository } from '../repositories/HttpStaffRepository'
+import { HttpUserRepository } from '../repositories/HttpUserRepository'
 import { InMemoryUserRepository } from '../repositories/InMemoryUserRepository'
 
 /**

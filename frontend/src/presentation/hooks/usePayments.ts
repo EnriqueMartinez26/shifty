@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
 import {
   paymentsService,
   type AppointmentSearchItem,
@@ -24,7 +25,7 @@ export const useUpsertGatewayConfig = () => {
   return useMutation<GatewayConfig, Error, GatewayConfigUpsertPayload>({
     mutationFn: (payload) => paymentsService.upsertGatewayConfig(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['payments-gateway-config'] })
+      void queryClient.invalidateQueries({ queryKey: ['payments-gateway-config'] })
     }
   })
 }
@@ -52,7 +53,7 @@ export const useCreatePromotion = () => {
   return useMutation<PromotionRecord, Error, PromotionPayload>({
     mutationFn: (payload) => paymentsService.createPromotion(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['payments-promotions'] })
+      void queryClient.invalidateQueries({ queryKey: ['payments-promotions'] })
     }
   })
 }
@@ -66,7 +67,7 @@ export const useUpdatePromotion = () => {
   >({
     mutationFn: ({ promotionId, payload }) => paymentsService.updatePromotion(promotionId, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['payments-promotions'] })
+      void queryClient.invalidateQueries({ queryKey: ['payments-promotions'] })
     }
   })
 }
@@ -106,8 +107,8 @@ export const useProcessOutbox = () => {
   return useMutation<ProcessOutboxResult, Error, number | undefined>({
     mutationFn: (limit) => paymentsService.processOutbox(limit),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['payments-outbox-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['payments-reconciliation-summary'] })
+      void queryClient.invalidateQueries({ queryKey: ['payments-outbox-stats'] })
+      void queryClient.invalidateQueries({ queryKey: ['payments-reconciliation-summary'] })
     }
   })
 }

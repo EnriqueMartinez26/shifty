@@ -1,10 +1,11 @@
 import type { AxiosInstance } from 'axios'
-import { Staff } from '../../domain/entities/Staff'
+
 import { BaseRepository } from './BaseRepository'
-import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 import type { StaffResponseDTO } from '../../application/dtos/StaffDTO'
 import { StaffMapper } from '../../application/mappers/StaffMapper'
+import { Staff } from '../../domain/entities/Staff'
 import { QueryOptions } from '../../domain/repositories/IRepository'
+import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 
 export class HttpStaffRepository
   extends BaseRepository<Staff, Staff, Staff>
@@ -26,8 +27,9 @@ export class HttpStaffRepository
     try {
       const { data } = await this.client.get<StaffResponseDTO>(`/staff/${id}`)
       return StaffMapper.toDomain(data)
-    } catch (error: any) {
-      if (error.response?.status === 404) {
+    } catch (error: unknown) {
+      const maybeError = error as { response?: { status?: number } }
+      if (maybeError.response?.status === 404) {
         return null
       }
       throw error

@@ -1,6 +1,6 @@
 import { AppointmentService } from './AppointmentService'
-import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import type { Appointment } from '../../domain/entities/Appointment'
+import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 
 describe('AppointmentService', () => {
   let mockRepository: jest.Mocked<IBookingRepository>
@@ -9,6 +9,7 @@ describe('AppointmentService', () => {
   beforeEach(() => {
     mockRepository = {
       findByDate: jest.fn(),
+      searchByDateRange: jest.fn(),
       getAvailability: jest.fn(),
       create: jest.fn(),
       confirm: jest.fn(),
@@ -20,15 +21,15 @@ describe('AppointmentService', () => {
     service = new AppointmentService(mockRepository)
   })
 
-  describe('getCalendar', () => {
-    it('should retrieve list of appointments for a date', async () => {
-      const appointments = [{ id: 'appt-1' }] as Appointment[]
-      mockRepository.findByDate.mockResolvedValue(appointments)
+  describe('getCalendarRange', () => {
+    it('should retrieve list of appointments for a date range', async () => {
+      const appointments = [{ id: 'appt-2' }] as Appointment[]
+      mockRepository.searchByDateRange.mockResolvedValue(appointments)
 
-      const result = await service.getCalendar('2026-05-18')
+      const result = await service.getCalendarRange('2026-05-18', '2026-05-25')
 
       expect(result).toBe(appointments)
-      expect(mockRepository.findByDate).toHaveBeenCalledWith('2026-05-18')
+      expect(mockRepository.searchByDateRange).toHaveBeenCalledWith('2026-05-18', '2026-05-25', 500)
     })
   })
 
@@ -39,6 +40,7 @@ describe('AppointmentService', () => {
         staff_id: 'st-1',
         starts_at: '2026-05-18T10:00:00Z',
         client_name: 'Bob Ross',
+        client_phone: '+5491112345678',
         notes: 'Happy little trees'
       }
 
@@ -94,15 +96,15 @@ describe('AppointmentService', () => {
 
   describe('reschedule', () => {
     it('should output reschedule trace', async () => {
-      const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {})
+      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
 
       await service.reschedule('appt-id', '2026-05-18T12:00:00Z', '2026-05-18T13:00:00Z')
 
-      expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Rescheduling appt-id to 2026-05-18T12:00:00Z')
       )
 
-      consoleLogSpy.mockRestore()
+      consoleWarnSpy.mockRestore()
     })
   })
 })

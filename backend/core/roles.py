@@ -59,4 +59,8 @@ def has_any_role(user: User, allowed_roles: Iterable[str]) -> bool:
 
 def require_roles(user: User, allowed_roles: Iterable[str], detail: str) -> None:
     if not has_any_role(user, allowed_roles):
-        raise AppException(message=detail, http_status=status.HTTP_403_FORBIDDEN, error_code="PERMISSION_DENIED")
+        raise AppException(
+            message=detail,
+            http_status=status.HTTP_403_FORBIDDEN,
+            error_code="PERMISSION_DENIED",
+        )

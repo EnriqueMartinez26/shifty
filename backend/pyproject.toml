@@ -78,6 +78,7 @@ ignore = [
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+explicit_package_bases = true
 
 # GRADUAL ADOPTION STRATEGY FOR AI AGENTS:
 # We enforce `strict = true` globally for any new code, but legacy packages

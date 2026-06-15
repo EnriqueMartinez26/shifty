@@ -1,5 +1,7 @@
 import apiClient from '@infrastructure/http/client'
-import type { BusinessType } from '@presentation/lib/businessLabels'
+
+import type { BusinessType } from '@shared/types/business'
+
 import type { StoreCustomField } from './StoreSettingsService'
 
 export interface PublicStoreFeatureFlags {

@@ -1,7 +1,9 @@
 import React from 'react'
+
 import { Loader2, X } from 'lucide-react'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 
 interface SuperAdminFormModalProps {
   isOpen: boolean
@@ -38,11 +40,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
 
       <div
         className="relative w-full max-w-3xl overflow-y-auto rounded-[2.5rem] border p-8 max-h-[92vh]"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
+        style={create2000sModalSurfaceStyle()}
       >
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
@@ -67,7 +65,12 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={onSubmit} className="space-y-6">
+        <form
+          onSubmit={(event) => {
+            void onSubmit(event)
+          }}
+          className="space-y-6"
+        >
           {error ? (
             <div
               className="rounded-2xl px-4 py-3 text-sm font-bold"

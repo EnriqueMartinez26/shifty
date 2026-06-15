@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
+
 import {
   publicBookingService,
   type AvailabilitySlot,
@@ -39,14 +40,14 @@ export const usePublicServices = (storePublicId: string | undefined) =>
   useQuery<PublicService[]>({
     queryKey: ['public-services', storePublicId],
     queryFn: () => publicBookingService.getServices(storePublicId as string),
-    enabled: !!storePublicId
+    enabled: Boolean(storePublicId)
   })
 
 export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
   useQuery<PublicStaff[]>({
     queryKey: ['public-staff', storePublicId, serviceId],
     queryFn: () => publicBookingService.getStaff(storePublicId as string, serviceId),
-    enabled: !!storePublicId
+    enabled: Boolean(storePublicId)
   })
 
 export const usePublicAvailability = (
@@ -64,7 +65,7 @@ export const usePublicAvailability = (
         date as string,
         forceAll
       ),
-    enabled: !!storePublicId && !!serviceId && !!date,
+    enabled: Boolean(storePublicId) && Boolean(serviceId) && Boolean(date),
     staleTime: 1000 * 30
   })
 

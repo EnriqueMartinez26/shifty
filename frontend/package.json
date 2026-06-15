@@ -12,9 +12,13 @@
     "test:coverage": "jest --coverage",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
-    "dead-code": "eslint src --quiet --rule \"import/no-unused-modules: [error, { unusedExports: true, missingExports: false, ignoreExports: ['src/main.tsx', 'src/test/**', 'src/**/*.test.ts', 'src/**/*.test.tsx'] }]\"",
+    "lint:strict": "eslint src --max-warnings 0",
+    "lint:fix": "eslint src --fix",
+    "dead-code": "eslint src --quiet --rule \"import/no-unused-modules: [error, { unusedExports: true, missingExports: false, ignoreExports: ['src/main.tsx', 'src/test/**', 'src/**/*.test.ts'] }]\"",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:fix": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run dead-code"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

@@ -1,4 +1,4 @@
-export type BusinessType = 'generic' | 'beauty' | 'medical' | 'wellness' | 'professional_services'
+import type { BusinessType } from '@shared/types/business'
 
 export interface BusinessTypeOption {
   value: BusinessType

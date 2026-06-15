@@ -1,5 +1,6 @@
-import { BaseService } from './BaseService'
 import { z } from 'zod'
+
+import { BaseService } from './BaseService'
 
 // Concrete subclass of BaseService to test the abstract class logic
 class TestService extends BaseService<any> {
@@ -59,17 +60,17 @@ class TestService extends BaseService<any> {
 
 describe('BaseService', () => {
   let service: TestService
-  let consoleLogSpy: jest.SpyInstance
+  let consoleWarnSpy: jest.SpyInstance
   let consoleErrorSpy: jest.SpyInstance
 
   beforeEach(() => {
     service = new TestService()
-    consoleLogSpy = jest.spyOn(console, 'log').mockImplementation(() => {})
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
   })
 
   afterEach(() => {
-    consoleLogSpy.mockRestore()
+    consoleWarnSpy.mockRestore()
     consoleErrorSpy.mockRestore()
   })
 
@@ -78,10 +79,10 @@ describe('BaseService', () => {
       const result = await service.runSuccessOperation('hello')
 
       expect(result).toBe('hello')
-      expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('[INFO] TestService.runSuccessOperation - started')
       )
-      expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('[SUCCESS] TestService.runSuccessOperation - completed')
       )
     })
@@ -91,15 +92,15 @@ describe('BaseService', () => {
 
       expect(result).toBe('success after retry')
       // Should log the start, the warning/retry, and the ultimate completion
-      expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('[INFO] TestService.runRetryableOperation - started')
       )
-      expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining(
           '[WARNING] TestService.runRetryableOperation - Attempt 1 failed. Retrying'
         )
       )
-      expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('[SUCCESS] TestService.runRetryableOperation - completed')
       )
     })
@@ -154,7 +155,7 @@ describe('BaseService', () => {
   describe('Logging', () => {
     it('should format logs with [LEVEL] prefixes', () => {
       service.triggerLog('INFO', 'Test log info')
-      expect(consoleLogSpy).toHaveBeenCalledWith('[INFO] Test log info')
+      expect(consoleWarnSpy).toHaveBeenCalledWith('[INFO] Test log info')
 
       service.triggerLog('ERROR', 'Test log error', { detail: 'stack trace' })
       expect(consoleErrorSpy).toHaveBeenCalledWith('[ERROR] Test log error', {

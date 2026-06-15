@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
+
 import {
   addDays,
   addMinutes,
@@ -21,6 +22,9 @@ import {
   ShieldBan
 } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import {
   useAppointmentBlocks,
   useBlockTemplates,
@@ -29,9 +33,9 @@ import {
   useDeleteAppointmentBlock,
   useUpdateAppointmentBlock
 } from '../hooks/useAppointmentBlocks'
+import { useCalendarAgenda } from '../hooks/useCalendarAgenda'
 import { useManagedStaff } from '../hooks/useManagedStaff'
-import { type CalendarAgendaAppointment, useCalendarAgenda } from '../hooks/useCalendarAgenda'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
 
@@ -69,6 +73,25 @@ const VIEW_LABELS: Record<CalendarView, string> = {
   week: 'Semana',
   month: 'Mes',
   list: 'Lista'
+}
+
+const panelStyle = create2000sPanelStyle()
+
+const canvasStyle = {
+  background: 'white',
+  border: `1px solid ${colors2000s.border.default}`,
+  boxShadow: colors2000s.shadows.outerMedium
+}
+
+const cardStyle = {
+  background: 'white',
+  border: `1px solid ${colors2000s.border.light}`,
+  boxShadow: colors2000s.shadows.insetDark
+}
+
+const fieldStyle = {
+  ...cardStyle,
+  color: colors2000s.text.primary
 }
 
 const toDateInput = (date: Date) => format(date, 'yyyy-MM-dd')
@@ -181,15 +204,17 @@ export const CalendarContainer: React.FC = () => {
 
   const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
     const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data || []).map(
-      (appointment: CalendarAgendaAppointment) => ({
-        id: appointment.public_id,
+      (appointment) => ({
+        id: appointment.id,
         type: appointment.status === 'absent' ? 'absence' : 'appointment',
-        staffId: appointment.staff_id,
-        staffName: appointment.staff_name,
-        title: appointment.client_name,
-        subtitle: appointment.service_name,
-        startsAt: new Date(appointment.starts_at),
-        endsAt: new Date(appointment.ends_at),
+        staffId: appointment.staffId,
+        staffName:
+          staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
+          'Profesional',
+        title: appointment.clientName,
+        subtitle: appointment.serviceName,
+        startsAt: appointment.timeSpan.getStartsAt(),
+        endsAt: appointment.timeSpan.getEndsAt(),
         status: appointment.status
       })
     )
@@ -322,8 +347,8 @@ export const CalendarContainer: React.FC = () => {
         setMessage('Serie de bloqueos creada')
       }
       handleResetBlockForm()
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo guardar el bloqueo')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
     }
   }
 
@@ -368,11 +393,7 @@ export const CalendarContainer: React.FC = () => {
   const renderDayView = () => (
     <div
       className="rounded-[3rem] border overflow-hidden relative"
-      style={{
-        background: 'white',
-        borderColor: colors2000s.border.default,
-        boxShadow: colors2000s.shadows.outerMedium
-      }}
+      style={canvasStyle}
     >
       {(loadingStaff || agendaQuery.isLoading) && (
         <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center">
@@ -394,9 +415,7 @@ export const CalendarContainer: React.FC = () => {
             </div>
             <div
               className="flex flex-1"
-              style={{
-                background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`
-              }}
+              style={panelStyle}
             >
               {staffMembers?.map((staff, idx) => (
                 <div
@@ -532,7 +551,7 @@ export const CalendarContainer: React.FC = () => {
                                 color: style.text
                               }}
                             >
-                              {event.timeLabel} · {event.status}
+                              {event.timeLabel} - {event.status}
                             </span>
                           </div>
                         )
@@ -552,14 +571,7 @@ export const CalendarContainer: React.FC = () => {
       {daysInRange.map((day) => {
         const dayEvents = unifiedEvents.filter((event) => isSameDay(event.startsAt, day))
         return (
-          <div
-            key={day.toISOString()}
-            className="rounded-3xl p-4 bg-white"
-            style={{
-              border: `1px solid ${colors2000s.border.light}`,
-              boxShadow: colors2000s.shadows.insetDark
-            }}
-          >
+          <div key={day.toISOString()} className="rounded-3xl p-4 bg-white" style={cardStyle}>
             <div className="mb-3">
               <p
                 className="text-[9px] font-black uppercase tracking-widest"
@@ -602,11 +614,7 @@ export const CalendarContainer: React.FC = () => {
     <div className="space-y-6 animate-in fade-in duration-700">
       <div
         className="flex flex-col md:flex-row items-center justify-between gap-6 p-6 rounded-3xl"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
+        style={panelStyle}
       >
         <div className="flex items-center gap-4">
           <div
@@ -635,14 +643,7 @@ export const CalendarContainer: React.FC = () => {
           </div>
         </div>
 
-        <div
-          className="flex items-center gap-3 p-2 rounded-2xl border"
-          style={{
-            background: 'white',
-            borderColor: colors2000s.border.default,
-            boxShadow: colors2000s.shadows.insetDark
-          }}
-        >
+        <div className="flex items-center gap-3 p-2 rounded-2xl border" style={fieldStyle}>
           <button
             onClick={() =>
               setSelectedDate((prev) =>
@@ -733,14 +734,7 @@ export const CalendarContainer: React.FC = () => {
       )}
 
       <div className="grid xl:grid-cols-[1.05fr_0.95fr] gap-6">
-        <div
-          className="p-6 rounded-3xl space-y-4"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-          }}
-        >
+        <div className="p-6 rounded-3xl space-y-4" style={panelStyle}>
           <div className="flex items-center gap-3">
             <ShieldBan className="w-5 h-5" style={{ color: colors2000s.orange.accent }} />
             <h3
@@ -770,12 +764,7 @@ export const CalendarContainer: React.FC = () => {
               value={blockForm.staff_id}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, staff_id: e.target.value }))}
               className="rounded-2xl px-4 py-3 font-bold outline-none"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.default}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.primary
-              }}
+              style={fieldStyle}
             >
               {staffMembers?.map((staff) => (
                 <option key={staff.id} value={staff.id}>
@@ -787,12 +776,7 @@ export const CalendarContainer: React.FC = () => {
               value={blockForm.reason}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, reason: e.target.value }))}
               className="rounded-2xl px-4 py-3 font-bold outline-none"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.default}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.primary
-              }}
+              style={fieldStyle}
               placeholder="Motivo interno"
             />
           </div>
@@ -803,36 +787,21 @@ export const CalendarContainer: React.FC = () => {
               value={blockForm.date}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, date: e.target.value }))}
               className="rounded-2xl px-4 py-3 font-bold outline-none"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.default}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.primary
-              }}
+              style={fieldStyle}
             />
             <input
               type="time"
               value={blockForm.starts_at}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, starts_at: e.target.value }))}
               className="rounded-2xl px-4 py-3 font-bold outline-none"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.default}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.primary
-              }}
+              style={fieldStyle}
             />
             <input
               type="time"
               value={blockForm.ends_at}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, ends_at: e.target.value }))}
               className="rounded-2xl px-4 py-3 font-bold outline-none"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.default}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.primary
-              }}
+              style={fieldStyle}
             />
           </div>
 
@@ -847,12 +816,7 @@ export const CalendarContainer: React.FC = () => {
                   }))
                 }
                 className="rounded-2xl px-4 py-3 font-bold outline-none"
-                style={{
-                  background: 'white',
-                  border: `1px solid ${colors2000s.border.default}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.primary
-                }}
+                style={fieldStyle}
               >
                 <option value="none">Sin recurrencia</option>
                 <option value="daily">Diaria</option>
@@ -865,12 +829,7 @@ export const CalendarContainer: React.FC = () => {
                   setBlockForm((prev) => ({ ...prev, recurrence_until: e.target.value }))
                 }
                 className="rounded-2xl px-4 py-3 font-bold outline-none"
-                style={{
-                  background: 'white',
-                  border: `1px solid ${colors2000s.border.default}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.primary
-                }}
+                style={fieldStyle}
               />
               <input
                 type="number"
@@ -881,15 +840,10 @@ export const CalendarContainer: React.FC = () => {
                   setBlockForm((prev) => ({
                     ...prev,
                     max_occurrences: Number(e.target.value) || 1
-                  }))
+                }))
                 }
                 className="rounded-2xl px-4 py-3 font-bold outline-none"
-                style={{
-                  background: 'white',
-                  border: `1px solid ${colors2000s.border.default}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.primary
-                }}
+                style={fieldStyle}
               />
             </div>
           )}
@@ -897,7 +851,9 @@ export const CalendarContainer: React.FC = () => {
           <div className="flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={handleSaveBlock}
+              onClick={() => {
+                void handleSaveBlock()
+              }}
               disabled={!blockForm.staff_id}
               className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
@@ -915,14 +871,7 @@ export const CalendarContainer: React.FC = () => {
           </div>
         </div>
 
-        <div
-          className="p-6 rounded-3xl space-y-4"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-          }}
-        >
+        <div className="p-6 rounded-3xl space-y-4" style={panelStyle}>
           <h3
             className="text-lg font-black uppercase tracking-tight"
             style={{ color: colors2000s.text.primary }}
@@ -934,10 +883,7 @@ export const CalendarContainer: React.FC = () => {
               <div
                 key={`${event.type}-${event.id}`}
                 className="rounded-2xl p-4 bg-white flex flex-col gap-3"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark
-                }}
+                style={cardStyle}
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
@@ -982,13 +928,15 @@ export const CalendarContainer: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={async () => {
-                        try {
-                          await deleteBlock.mutateAsync(event.id)
-                          setMessage('Bloqueo desactivado')
-                        } catch (error: any) {
-                          setMessage(error.response?.data?.detail || 'No se pudo desactivar')
-                        }
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            await deleteBlock.mutateAsync(event.id)
+                            setMessage('Bloqueo desactivado')
+                          } catch (error: unknown) {
+                            setMessage(getErrorMessage(error, 'No se pudo desactivar'))
+                          }
+                        })()
                       }}
                       className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
                       style={buttonStyles2000s.selected}
@@ -1002,11 +950,7 @@ export const CalendarContainer: React.FC = () => {
             {!timelineEvents.length && (
               <div
                 className="rounded-2xl p-6 bg-white text-sm font-bold"
-                style={{
-                  border: `1px solid ${colors2000s.border.light}`,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  color: colors2000s.text.secondary
-                }}
+                style={{ ...cardStyle, color: colors2000s.text.secondary }}
               >
                 No hay bloqueos ni ausencias en el rango actual.
               </div>

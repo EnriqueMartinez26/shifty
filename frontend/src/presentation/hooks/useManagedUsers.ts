@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+
 import {
   userAdminService,
   type CreateUserPayload,
@@ -17,7 +18,7 @@ export const useCreateManagedUser = () => {
   return useMutation({
     mutationFn: (payload: CreateUserPayload) => userAdminService.create(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] })
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
     }
   })
 }
@@ -28,7 +29,7 @@ export const useUpdateManagedUser = () => {
     mutationFn: ({ publicId, payload }: { publicId: string; payload: UpdateUserPayload }) =>
       userAdminService.update(publicId, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] })
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
     }
   })
 }
@@ -38,7 +39,7 @@ export const useDeleteManagedUser = () => {
   return useMutation({
     mutationFn: (publicId: string) => userAdminService.delete(publicId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] })
+      void queryClient.invalidateQueries({ queryKey: ['users'] })
     }
   })
 }

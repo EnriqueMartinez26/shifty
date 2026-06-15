@@ -1,5 +1,5 @@
-import { EventHandler } from '../../shared/events/EventHandler'
 import { ShiftCreatedEvent } from '../../domain/events/ShiftEvents'
+import { EventHandler } from '../../shared/events/EventHandler'
 
 export class AuditLogOnShiftCreated implements EventHandler<ShiftCreatedEvent> {
   public async handle(event: ShiftCreatedEvent): Promise<void> {

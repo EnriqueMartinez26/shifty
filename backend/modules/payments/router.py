@@ -72,7 +72,9 @@ def _require_payment_manager(user: User) -> None:
 
 def _require_payment_admin(user: User) -> None:
     if user.role != UserRole.ADMIN and not user.is_global_admin:
-        raise PermissionDeniedException(action="Solo administradores pueden ejecutar esta accion")
+        raise PermissionDeniedException(
+            action="Solo administradores pueden ejecutar esta accion"
+        )
 
 
 async def _ensure_payments_feature_enabled(db: AsyncSession, user: User) -> None:
@@ -248,7 +250,9 @@ async def upsert_gateway_config(
         encrypt_secret(data.access_token) if data.access_token else None
     )
     if not config and not encrypted_access_token:
-        raise ValidationException("Debes ingresar un access token para configurar el gateway")
+        raise ValidationException(
+            "Debes ingresar un access token para configurar el gateway"
+        )
     if not config:
         config = PaymentGatewayConfig(
             store_id=user.store_id,

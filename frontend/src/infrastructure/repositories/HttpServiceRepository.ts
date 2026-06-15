@@ -1,10 +1,11 @@
 import type { AxiosInstance } from 'axios'
-import { Service } from '../../domain/entities/Service'
+
 import { BaseRepository } from './BaseRepository'
-import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
 import type { ServiceResponseDTO } from '../../application/dtos/ServiceDTO'
 import { ServiceMapper } from '../../application/mappers/ServiceMapper'
+import { Service } from '../../domain/entities/Service'
 import { QueryOptions } from '../../domain/repositories/IRepository'
+import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
 
 export class HttpServiceRepository
   extends BaseRepository<Service, Service, Partial<Service>>
@@ -26,8 +27,9 @@ export class HttpServiceRepository
     try {
       const { data } = await this.client.get<ServiceResponseDTO>(`/services/${id}`)
       return ServiceMapper.toDomain(data)
-    } catch (error: any) {
-      if (error.response?.status === 404) {
+    } catch (error: unknown) {
+      const maybeError = error as { response?: { status?: number } }
+      if (maybeError.response?.status === 404) {
         return null
       }
       throw error
@@ -49,8 +51,13 @@ export class HttpServiceRepository
   }
 
   protected async updateImpl(id: string, service: Partial<Service>): Promise<Service> {
-    const updateData: any = {}
-    const serviceData = service as any
+    const updateData: Record<string, unknown> = {}
+    const serviceData = service as Partial<Service> & {
+      durationMinutes?: number
+      image_url?: string | null
+      youtube_trailer_url?: string | null
+      isActive?: boolean
+    }
 
     if (serviceData.name !== undefined) updateData.name = serviceData.name
     if (serviceData.description !== undefined) updateData.description = serviceData.description

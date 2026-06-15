@@ -1,7 +1,7 @@
-import { GlobalErrorHandler } from './GlobalErrorHandler'
 import { ErrorHandler } from './ErrorHandler'
-import { ValidationError } from './ValidationError'
+import { GlobalErrorHandler } from './GlobalErrorHandler'
 import { UnauthorizedError } from './UnauthorizedError'
+import { ValidationError } from './ValidationError'
 
 class MockHandler extends ErrorHandler {
   private readonly targetClass: any

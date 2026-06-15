@@ -7,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.exceptions import FeatureDisabledException, PermissionDeniedException, StoreNotFoundException
+from core.exceptions import (
+    FeatureDisabledException,
+    PermissionDeniedException,
+    StoreNotFoundException,
+)
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user

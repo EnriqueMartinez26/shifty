@@ -1,43 +1,56 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { UserService } from '@application/services/UserService'
-import { HttpUserRepository } from '@infrastructure/repositories/HttpUserRepository'
-import apiClient from '@infrastructure/http/client'
+
 import { User } from '@domain/entities/User'
 
-const userService = new UserService(new HttpUserRepository(apiClient))
+import { UserService } from '@application/services/UserService'
 
-export const useManagedDomainUsers = () =>
-  useQuery<User[]>({
+import { resolveService } from './resolveService'
+
+type CreateManagedUserInput = Parameters<UserService['createUser']>[0]
+type UpdateManagedUserInput = Parameters<UserService['updateUser']>[1]
+
+export const useManagedDomainUsers = () => {
+  const userService = resolveService<UserService>('userService')
+
+  return useQuery<User[]>({
     queryKey: ['managed-users'],
     queryFn: () => userService.listUsers(true)
   })
+}
 
 export const useCreateManagedDomainUser = () => {
   const queryClient = useQueryClient()
+  const userService = resolveService<UserService>('userService')
+
   return useMutation({
-    mutationFn: (data: any) => userService.createUser(data),
+    mutationFn: (data: CreateManagedUserInput) => userService.createUser(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['managed-users'] })
+      void queryClient.invalidateQueries({ queryKey: ['managed-users'] })
     }
   })
 }
 
 export const useUpdateManagedDomainUser = () => {
   const queryClient = useQueryClient()
+  const userService = resolveService<UserService>('userService')
+
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => userService.updateUser(id, data),
+    mutationFn: ({ id, data }: { id: string; data: UpdateManagedUserInput }) =>
+      userService.updateUser(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['managed-users'] })
+      void queryClient.invalidateQueries({ queryKey: ['managed-users'] })
     }
   })
 }
 
 export const useDeleteManagedDomainUser = () => {
   const queryClient = useQueryClient()
+  const userService = resolveService<UserService>('userService')
+
   return useMutation({
     mutationFn: (id: string) => userService.deleteUser(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['managed-users'] })
+      void queryClient.invalidateQueries({ queryKey: ['managed-users'] })
     }
   })
 }

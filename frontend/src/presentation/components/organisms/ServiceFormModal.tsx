@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Service } from '@domain/entities/Service'
+
 import {
   X,
   Loader2,
@@ -11,12 +11,20 @@ import {
   CheckCircle2,
   Image as ImageIcon
 } from 'lucide-react'
+
+import { Service } from '@domain/entities/Service'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import {
+  create2000sModalInputStyle,
+  create2000sModalSurfaceStyle
+} from '../../lib/surfaceStyles'
+import type { ServiceFormValues } from '../../types/forms'
 
 interface ServiceFormModalProps {
   isOpen: boolean
   onClose: () => void
-  onSubmit: (data: any) => Promise<void>
+  onSubmit: (data: ServiceFormValues) => Promise<void>
   editingService?: Service | null
 }
 
@@ -88,24 +96,12 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     }
   }
 
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary,
-    outline: 'none'
-  }
-
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
       <div
         className="relative w-full max-w-5xl rounded-[2.5rem] border animate-in zoom-in-95 duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
+        style={create2000sModalSurfaceStyle()}
       >
         {/* Formulario (Izquierda) */}
         <div
@@ -136,7 +132,12 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form
+            onSubmit={(e) => {
+              void handleSubmit(e)
+            }}
+            className="space-y-6"
+          >
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                 Nombre del Servicio
@@ -145,7 +146,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
                 placeholder="Ej: Corte de Cabello Premium"
                 required
               />
@@ -159,7 +160,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                 value={formData.description}
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all min-h-[100px] resize-none"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
                 placeholder="Describí qué incluye el servicio..."
               />
             </div>
@@ -176,7 +177,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     setFormData({ ...formData, durationMinutes: parseInt(e.target.value) || 0 })
                   }
                   className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                  style={inputStyle}
+                  style={create2000sModalInputStyle()}
                   min={5}
                   required
                 />
@@ -192,7 +193,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     setFormData({ ...formData, price: parseInt(e.target.value) || 0 })
                   }
                   className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                  style={inputStyle}
+                  style={create2000sModalInputStyle()}
                   min={0}
                   required
                 />
@@ -207,7 +208,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                 value={formData.imageUrl}
                 onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
                 placeholder="https://.../servicio.jpg"
               />
             </div>
@@ -220,7 +221,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                 value={formData.youtubeTrailerUrl}
                 onChange={(e) => setFormData({ ...formData, youtubeTrailerUrl: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-                style={inputStyle}
+                style={create2000sModalInputStyle()}
                 placeholder="https://youtube.com/..."
               />
             </div>

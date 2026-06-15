@@ -1,20 +1,22 @@
 import React, { useEffect, useState } from 'react'
+
 import { ChevronLeft, FileText, Mail, Phone, User } from 'lucide-react'
 
 import type { StoreCustomField } from '@application/services/StoreSettingsService'
+
+import type { BookingClientData } from './types'
 import { colors2000s } from '../../../../theme/colors'
+import {
+  createBookingBackButtonStyle,
+  createBookingInputStyle,
+  createBookingSurfaceStyle
+} from '../../../lib/surfaceStyles'
 
 interface BookingStepClientProps {
-  clientData: {
-    name: string
-    email: string
-    phone: string
-    notes: string
-    customFields: Record<string, string>
-  }
+  clientData: BookingClientData
   customFields: StoreCustomField[]
   onBack: () => void
-  onSubmit: (data: any) => void
+  onSubmit: (data: BookingClientData) => void
 }
 
 export const BookingStepClient: React.FC<BookingStepClientProps> = ({
@@ -35,11 +37,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
   }
 
   const inputStyle = {
-    background: '#ffffff',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
     borderRadius: '12px',
-    color: colors2000s.text.primary,
     fontFamily: 'inherit',
     outline: 'none',
     transition: 'all 0.15s'
@@ -107,12 +105,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
           onClick={onBack}
           type="button"
           className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-            color: colors2000s.text.primary
-          }}
+          style={createBookingBackButtonStyle()}
         >
           <ChevronLeft size={20} className="stroke-[3px]" />
         </button>
@@ -134,15 +127,15 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
           </label>
           <div className="relative">
             <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              required
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full pl-12 pr-4 py-3.5 font-bold"
-              style={inputStyle}
-              placeholder="Ej: Juan Perez"
-            />
+              <input
+                type="text"
+                required
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                className="w-full pl-12 pr-4 py-3.5 font-bold"
+                style={{ ...createBookingInputStyle(), ...inputStyle }}
+                placeholder="Ej: Juan Perez"
+              />
           </div>
         </div>
 
@@ -158,7 +151,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 className="w-full pl-12 pr-4 py-3.5 font-bold"
-                style={inputStyle}
+                style={{ ...createBookingInputStyle(), ...inputStyle }}
                 placeholder="juan@email.com"
               />
             </div>
@@ -176,7 +169,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 className="w-full pl-12 pr-4 py-3.5 font-bold"
-                style={inputStyle}
+                style={{ ...createBookingInputStyle(), ...inputStyle }}
                 placeholder="11 2345 6789"
               />
             </div>
@@ -186,10 +179,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
         {customFields.length > 0 && (
           <div
             className="space-y-4 rounded-2xl p-4"
-            style={{
-              background: 'rgba(255,255,255,0.55)',
-              border: `1px solid ${colors2000s.border.light}`
-            }}
+            style={{ ...createBookingSurfaceStyle(), background: 'rgba(255,255,255,0.55)' }}
           >
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
@@ -224,7 +214,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
               value={formData.notes}
               onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold min-h-[100px] resize-none"
-              style={inputStyle}
+              style={{ ...createBookingInputStyle(), ...inputStyle }}
               placeholder="Algo que debamos saber?"
             />
           </div>

@@ -1,5 +1,5 @@
-import { ErrorHandler } from './ErrorHandler'
 import { ApplicationError } from './ApplicationError'
+import { ErrorHandler } from './ErrorHandler'
 import { InternalServerError } from './InternalServerError'
 
 /**

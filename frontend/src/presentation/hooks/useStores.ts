@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+
 import {
   storeSettingsService,
   type StoreFeatureFlags,
@@ -18,7 +19,7 @@ export const useUpdateStoreSettings = () => {
   return useMutation<StoreSettings, Error, StoreUpdatePayload>({
     mutationFn: (payload) => storeSettingsService.updateSettings(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['store-settings'] })
+      void queryClient.invalidateQueries({ queryKey: ['store-settings'] })
     }
   })
 }
@@ -34,8 +35,8 @@ export const useUpdateStoreFeatureFlags = () => {
   return useMutation<StoreFeatureFlagsResponse, Error, Partial<StoreFeatureFlags>>({
     mutationFn: (payload) => storeSettingsService.updateFeatureFlags(payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['store-feature-flags'] })
-      queryClient.invalidateQueries({ queryKey: ['store-settings'] })
+      void queryClient.invalidateQueries({ queryKey: ['store-feature-flags'] })
+      void queryClient.invalidateQueries({ queryKey: ['store-settings'] })
     }
   })
 }

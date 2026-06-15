@@ -1,16 +1,21 @@
 import type { AxiosInstance } from 'axios'
-import { Appointment } from '../../domain/entities/Appointment'
+
 import { BaseRepository } from './BaseRepository'
-import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import type {
   AppointmentResponseDTO,
   CreateBookingRequestDTO
 } from '../../application/dtos/BookingDTO'
 import { BookingMapper } from '../../application/mappers/BookingMapper'
+import { Appointment } from '../../domain/entities/Appointment'
+import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 
+type BookingUpdatePayload = {
+  notes_staff?: string
+}
+
 export class HttpBookingRepository
-  extends BaseRepository<Appointment, CreateBookingRequestDTO, any>
+  extends BaseRepository<Appointment, CreateBookingRequestDTO, BookingUpdatePayload>
   implements IBookingRepository
 {
   private client: AxiosInstance
@@ -31,7 +36,28 @@ export class HttpBookingRepository
     }
   }
 
-  async getAvailability(serviceId: string, date: string): Promise<any> {
+  async searchByDateRange(
+    fromDate: string,
+    toDate: string,
+    page = 1,
+    pageSize = 500
+  ): Promise<Appointment[]> {
+    try {
+      const { data } = await this.client.get('/appointments/search', {
+        params: {
+          from_date: fromDate,
+          to_date: toDate,
+          page,
+          page_size: pageSize
+        }
+      })
+      return (data.results || []).map(BookingMapper.toDomain)
+    } catch (error) {
+      this.handleRepositoryError('searchByDateRange', error)
+    }
+  }
+
+  async getAvailability(serviceId: string, date: string): Promise<Record<string, unknown>> {
     try {
       const { data } = await this.client.get(
         `/appointments/availability?service_id=${serviceId}&date=${date}`
@@ -92,16 +118,12 @@ export class HttpBookingRepository
     const fromDate = new Date()
     fromDate.setDate(fromDate.getDate() - 30)
     const toDate = new Date()
-
-    const { data } = await this.client.get('/appointments/search', {
-      params: {
-        from_date: fromDate.toISOString().slice(0, 10),
-        to_date: toDate.toISOString().slice(0, 10),
-        page,
-        page_size: pageSize
-      }
-    })
-    return (data.results || []).map(BookingMapper.toDomain)
+    return await this.searchByDateRange(
+      fromDate.toISOString().slice(0, 10),
+      toDate.toISOString().slice(0, 10),
+      page,
+      pageSize
+    )
   }
 
   protected async findByIdImpl(id: string): Promise<Appointment | null> {
@@ -115,7 +137,7 @@ export class HttpBookingRepository
     return found ? BookingMapper.toDomain(found) : null
   }
 
-  protected async updateImpl(id: string, data: any): Promise<Appointment> {
+  protected async updateImpl(id: string, data: BookingUpdatePayload): Promise<Appointment> {
     if (data?.notes_staff) {
       await this.client.patch(`/appointments/${id}/notes-staff`, { notes_staff: data.notes_staff })
     }

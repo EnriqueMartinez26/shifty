@@ -5,7 +5,11 @@ from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.exceptions import AppException, PermissionDeniedException, StoreNotFoundException
+from core.exceptions import (
+    AppException,
+    PermissionDeniedException,
+    StoreNotFoundException,
+)
 
 from core.database import get_db
 from core.feature_flags import merge_store_feature_flags, normalize_store_feature_flags
@@ -104,7 +108,11 @@ async def update_my_store(
             select(Store).where(Store.slug == update_data["slug"])
         )
         if slug_check.scalar_one_or_none():
-            raise AppException("El slug ya está en uso", http_status=400, error_code="SLUG_ALREADY_IN_USE")
+            raise AppException(
+                "El slug ya está en uso",
+                http_status=400,
+                error_code="SLUG_ALREADY_IN_USE",
+            )
 
     business_hours = update_data.pop("business_hours", None)
     theme_keys = (

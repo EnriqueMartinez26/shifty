@@ -1,10 +1,16 @@
 import React, { useMemo, useState } from 'react'
+
 import { addDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { Calendar as CalendarIcon, ChevronLeft, Clock, Loader2 } from 'lucide-react'
 
 import { usePublicAvailability } from '@presentation/hooks/usePublic'
+
 import { colors2000s } from '../../../../theme/colors'
+import {
+  createBookingBackButtonStyle,
+  createBookingSurfaceStyle
+} from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
   storePublicId: string
@@ -71,12 +77,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         <button
           onClick={onBack}
           className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-            color: colors2000s.text.primary
-          }}
+          style={createBookingBackButtonStyle()}
         >
           <ChevronLeft size={20} className="stroke-[3px]" />
         </button>
@@ -103,11 +104,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
         <div
           className="flex gap-3 overflow-x-auto p-4 snap-x hide-scrollbar rounded-2xl border"
-          style={{
-            background: '#ffffff',
-            borderColor: colors2000s.border.light,
-            boxShadow: colors2000s.shadows.insetDark
-          }}
+          style={createBookingSurfaceStyle()}
         >
           {dates.map((date) => {
             const formattedDate = format(date, 'yyyy-MM-dd')
@@ -171,11 +168,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         ) : visibleSlots.length === 0 ? (
           <div
             className="text-center py-10 rounded-2xl border"
-            style={{
-              background: '#ffffff',
-              borderColor: colors2000s.border.light,
-              boxShadow: colors2000s.shadows.insetDark
-            }}
+            style={createBookingSurfaceStyle()}
           >
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
               No hay turnos disponibles.

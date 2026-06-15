@@ -1,6 +1,6 @@
 import { BookingService } from './BookingService'
-import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import type { Appointment } from '../../domain/entities/Appointment'
+import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import type { CreateBookingRequestDTO } from '../dtos/BookingDTO'
 
 describe('BookingService', () => {

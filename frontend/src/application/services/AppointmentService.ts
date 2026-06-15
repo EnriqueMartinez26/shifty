@@ -1,6 +1,7 @@
 import { BaseService } from './BaseService'
 import type { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
+import type { CreateBookingRequestDTO } from '../dtos/BookingDTO'
 
 /**
  * Service to manage internal Appointment operations.
@@ -19,16 +20,10 @@ export class AppointmentService extends BaseService<Appointment> {
     this.repository = repository
   }
 
-  /**
-   * Retrieves the appointments calendar for a specific date.
-   *
-   * @param date Date string in format YYYY-MM-DD.
-   * @returns A promise that resolves to an array of Appointment entities.
-   */
-  async getCalendar(date: string): Promise<Appointment[]> {
+  async getCalendarRange(fromDate: string, toDate: string, pageSize = 500): Promise<Appointment[]> {
     return await this.execute(async () => {
-      return await this.repository.findByDate(date)
-    }, 'getCalendar')
+      return await this.repository.searchByDateRange(fromDate, toDate, pageSize)
+    }, 'getCalendarRange')
   }
 
   /**
@@ -37,13 +32,7 @@ export class AppointmentService extends BaseService<Appointment> {
    * @param data Raw booking parameters.
    * @returns A promise that resolves to the booked Appointment entity.
    */
-  async bookAppointment(data: {
-    service_id: string
-    staff_id: string
-    starts_at: string
-    client_name: string
-    notes?: string
-  }): Promise<Appointment> {
+  async bookAppointment(data: CreateBookingRequestDTO): Promise<Appointment> {
     return await this.execute(async () => {
       return await this.repository.create({
         ...data
@@ -109,7 +98,7 @@ export class AppointmentService extends BaseService<Appointment> {
    */
   async reschedule(id: string, newStartTime: string, _newEndTime: string): Promise<void> {
     await this.execute(async () => {
-      console.log(`Rescheduling ${id} to ${newStartTime}`)
+      console.warn(`Rescheduling ${id} to ${newStartTime}`)
     }, 'reschedule')
   }
 }

@@ -1,6 +1,9 @@
 import React from 'react'
-import { Service } from '@domain/entities/Service'
+
 import { Briefcase, Clock, DollarSign, Edit2, Trash2, CheckCircle2, XCircle } from 'lucide-react'
+
+import { Service } from '@domain/entities/Service'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 
 interface ServiceCardProps {

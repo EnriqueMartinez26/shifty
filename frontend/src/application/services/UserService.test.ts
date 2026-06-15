@@ -1,6 +1,6 @@
 import { UserService } from './UserService'
-import type { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { User } from '../../domain/entities/User'
+import type { IUserRepository } from '../../domain/repositories/IUserRepository'
 
 describe('UserService', () => {
   let mockRepository: jest.Mocked<IUserRepository>

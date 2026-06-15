@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 
 import { authService, type AuthenticatedUser } from '@application/services/AuthService'
+
 import { setAuthToken } from '@infrastructure/http/client'
 
 import { canonicalRole } from './roles'

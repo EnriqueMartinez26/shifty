@@ -336,7 +336,9 @@ async def get_store_subscription(
         raise ResourceNotFoundException(resource="Tienda", identifier=store_public_id)
     subscription = await repo.get_store_subscription(store.id)
     if not subscription:
-        raise ResourceNotFoundException(resource="Suscripción", identifier=store_public_id)
+        raise ResourceNotFoundException(
+            resource="Suscripción", identifier=store_public_id
+        )
     return subscription
 
 
@@ -434,7 +436,11 @@ async def redeem_store_coupon(
         raise StoreNotFoundException(identifier=store_public_id)
     subscription = await repo.get_store_subscription(store.id)
     if not subscription:
-        raise AppException(message="La tienda no tiene suscripción activa", http_status=404, error_code="SUBSCRIPTION_NOT_FOUND")
+        raise AppException(
+            message="La tienda no tiene suscripción activa",
+            http_status=404,
+            error_code="SUBSCRIPTION_NOT_FOUND",
+        )
     coupon = await repo.get_coupon_by_code(data.coupon_code)
     if not coupon:
         raise ResourceNotFoundException(resource="Cupón", identifier=data.coupon_code)

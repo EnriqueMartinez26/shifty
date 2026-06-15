@@ -1,5 +1,5 @@
 import React from 'react'
-import { Link, useLocation } from 'react-router-dom'
+
 import {
   mdiAccountGroup,
   mdiBriefcase,
@@ -16,8 +16,9 @@ import {
   mdiViewDashboard,
   mdiWalletOutline
 } from '@mdi/js'
+import { Link, useLocation } from 'react-router-dom'
 
-import { Icon2000s } from '../legacy/Icon2000s'
+import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { useAuth } from '../../context/AuthContext'
 import {
   ROLE_PROFESSIONAL,
@@ -26,7 +27,7 @@ import {
   ROLE_SUPER_ADMIN,
   hasAnyRole
 } from '../../context/roles'
-import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { Icon2000s } from '../legacy/Icon2000s'
 
 type MenuItem = {
   iconPath: string

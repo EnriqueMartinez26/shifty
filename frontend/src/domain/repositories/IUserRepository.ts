@@ -1,5 +1,5 @@
-import { User } from '../entities/User'
 import { IRepository } from './IRepository'
+import { User } from '../entities/User'
 import { Email } from '../value-objects/Email'
 import { UserRole } from '../value-objects/UserRole'
 

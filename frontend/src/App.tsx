@@ -1,4 +1,5 @@
 import React, { Suspense, lazy } from 'react'
+
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
 import { AuthProvider, useAuth } from './presentation/context/AuthContext'
@@ -39,7 +40,13 @@ const ProtectedRoute = ({
 }) => {
   const { token, isLoading, user } = useAuth()
 
-  if (isLoading) return <div>Cargando...</div>
+  if (isLoading) {
+    return (
+      <div role="status" aria-live="polite">
+        Cargando...
+      </div>
+    )
+  }
   if (!token) return <Navigate to="/login" replace />
   if (allowedRoles && user && !hasAnyRole(user.role, allowedRoles, user.is_global_admin)) {
     return <Navigate to={getDefaultAppRoute(user.role, user.is_global_admin)} replace />
@@ -51,7 +58,13 @@ const ProtectedRoute = ({
 const RootRedirect = () => {
   const { token, isLoading, user } = useAuth()
 
-  if (isLoading) return <div>Cargando...</div>
+  if (isLoading) {
+    return (
+      <div role="status" aria-live="polite">
+        Cargando...
+      </div>
+    )
+  }
   if (!token) return <Navigate to="/login" replace />
 
   return <Navigate to={getDefaultAppRoute(user?.role, user?.is_global_admin)} replace />
@@ -63,7 +76,13 @@ function App() {
       <BrowserRouter>
         <Suspense
           fallback={
-            <div className="min-h-screen flex items-center justify-center">Cargando...</div>
+            <div
+              className="min-h-screen flex items-center justify-center"
+              role="status"
+              aria-live="polite"
+            >
+              Cargando...
+            </div>
           }
         >
           <Routes>

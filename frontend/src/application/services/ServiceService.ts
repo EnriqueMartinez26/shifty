@@ -1,8 +1,8 @@
 import { BaseService } from './BaseService'
 import { Service } from '../../domain/entities/Service'
 import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
-import { Price } from '../../domain/value-objects/Price'
 import { Duration } from '../../domain/value-objects/Duration'
+import { Price } from '../../domain/value-objects/Price'
 import { ServiceColor } from '../../domain/value-objects/ServiceColor'
 import { createServiceSchema } from '../validators/service.validators'
 

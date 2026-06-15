@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
+
 import { AlertCircle, Loader2, RefreshCcw, Save, Settings2 } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import {
   useGatewayConfig,
   useOutboxStats,
@@ -9,13 +13,12 @@ import {
   useRefundPayment,
   useUpsertGatewayConfig
 } from '../hooks/usePayments'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-
-const currencyFmt = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
+import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import {
+  create2000sInputStyle,
+  create2000sListCardStyle,
+  create2000sPanelStyle
+} from '../lib/surfaceStyles'
 
 const PaymentsPage: React.FC = () => {
   const gatewayQuery = useGatewayConfig()
@@ -68,8 +71,8 @@ const PaymentsPage: React.FC = () => {
         access_token: gatewayForm.access_token.trim() || undefined
       })
       setMessage(`Cobros online configurados: ${response.provider}`)
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo guardar la configuracion')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo guardar la configuracion'))
     }
   }
 
@@ -82,8 +85,8 @@ const PaymentsPage: React.FC = () => {
         manual: true
       })
       setMessage(`Devolucion registrada: ${response.public_id}`)
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo registrar la devolucion')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo registrar la devolucion'))
     }
   }
 
@@ -91,22 +94,13 @@ const PaymentsPage: React.FC = () => {
     try {
       const response = await processOutbox.mutateAsync(100)
       setMessage(`Actualizacion completada: ${response.processed} cobros revisados`)
-    } catch (error: any) {
-      setMessage(error.response?.data?.detail || 'No se pudo actualizar el estado de los cobros')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo actualizar el estado de los cobros'))
     }
   }
 
-  const cardStyle = {
-    background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-  }
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
+  const cardStyle = create2000sPanelStyle()
+  const inputStyle = create2000sInputStyle()
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -171,12 +165,14 @@ const PaymentsPage: React.FC = () => {
             >
               Integracion de cobros
             </h3>
-            <button
-              type="button"
-              onClick={handleSaveGateway}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-              style={buttonStyles2000s.selected}
-            >
+          <button
+            type="button"
+            onClick={() => {
+              void handleSaveGateway()
+            }}
+            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+            style={buttonStyles2000s.selected}
+          >
               <Save className="w-4 h-4 inline mr-2" />
               Guardar
             </button>
@@ -277,12 +273,14 @@ const PaymentsPage: React.FC = () => {
             >
               Estado de sincronizacion
             </h3>
-            <button
-              type="button"
-              onClick={handleProcessOutbox}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-              style={buttonStyles2000s.default}
-            >
+          <button
+            type="button"
+            onClick={() => {
+              void handleProcessOutbox()
+            }}
+            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+            style={buttonStyles2000s.default}
+          >
               <RefreshCcw className="w-4 h-4 inline mr-2" />
               Actualizar cobros
             </button>
@@ -291,10 +289,7 @@ const PaymentsPage: React.FC = () => {
           <div className="grid grid-cols-3 gap-3">
             <div
               className="rounded-2xl p-4 bg-white"
-              style={{
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.insetDark
-              }}
+              style={create2000sListCardStyle()}
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                 Por revisar
@@ -305,10 +300,7 @@ const PaymentsPage: React.FC = () => {
             </div>
             <div
               className="rounded-2xl p-4 bg-white"
-              style={{
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.insetDark
-              }}
+              style={create2000sListCardStyle()}
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                 Con error
@@ -319,10 +311,7 @@ const PaymentsPage: React.FC = () => {
             </div>
             <div
               className="rounded-2xl p-4 bg-white"
-              style={{
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.insetDark
-              }}
+              style={create2000sListCardStyle()}
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                 Actualizados
@@ -361,12 +350,14 @@ const PaymentsPage: React.FC = () => {
               style={inputStyle}
               placeholder="Motivo de la devolucion"
             />
-            <button
-              type="button"
-              onClick={handleRefund}
-              disabled={!refundForm.paymentId}
-              className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-              style={buttonStyles2000s.selected}
+          <button
+            type="button"
+            onClick={() => {
+              void handleRefund()
+            }}
+            disabled={!refundForm.paymentId}
+            className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+            style={buttonStyles2000s.selected}
             >
               Registrar devolucion
             </button>

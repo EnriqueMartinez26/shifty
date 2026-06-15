@@ -1,12 +1,13 @@
 import type { AxiosInstance } from 'axios'
+
 import { BaseRepository } from './BaseRepository'
-import { IUserRepository } from '../../domain/repositories/IUserRepository'
-import { User } from '../../domain/entities/User'
-import { Email } from '../../domain/value-objects/Email'
-import { UserRole } from '../../domain/value-objects/UserRole'
-import { QueryOptions } from '../../domain/repositories/IRepository'
 import { UserResponseDTO } from '../../application/dtos/UserDTO'
 import { UserMapper } from '../../application/mappers/UserMapper'
+import { User } from '../../domain/entities/User'
+import { QueryOptions } from '../../domain/repositories/IRepository'
+import { IUserRepository } from '../../domain/repositories/IUserRepository'
+import { Email } from '../../domain/value-objects/Email'
+import { UserRole } from '../../domain/value-objects/UserRole'
 
 /**
  * Implementación HTTP concreta para la persistencia de usuarios.
@@ -50,7 +51,7 @@ export class HttpUserRepository
     if (typeof options === 'boolean') {
       includeInactive = options
     } else if (options && typeof options === 'object') {
-      includeInactive = !!options.includeInactive
+      includeInactive = Boolean(options.includeInactive)
     }
 
     const { data } = await this.client.get<UserResponseDTO[]>(
@@ -63,8 +64,9 @@ export class HttpUserRepository
     try {
       const { data } = await this.client.get<UserResponseDTO>(`/users/${id}`)
       return UserMapper.toDomain(data)
-    } catch (error: any) {
-      if (error.response?.status === 404) {
+    } catch (error: unknown) {
+      const maybeError = error as { response?: { status?: number } }
+      if (maybeError.response?.status === 404) {
         return null
       }
       throw error
@@ -85,7 +87,7 @@ export class HttpUserRepository
   }
 
   protected async updateImpl(id: string, data: Partial<User>): Promise<User> {
-    const updateData: any = {}
+    const updateData: Record<string, unknown> = {}
     if (data.firstName !== undefined) updateData.first_name = data.firstName
     if (data.lastName !== undefined) updateData.last_name = data.lastName
     if (data.phone !== undefined) updateData.phone = data.phone

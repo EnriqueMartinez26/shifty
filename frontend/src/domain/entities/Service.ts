@@ -1,5 +1,5 @@
-import { Price } from '../value-objects/Price'
 import { Duration } from '../value-objects/Duration'
+import { Price } from '../value-objects/Price'
 import { ServiceColor } from '../value-objects/ServiceColor'
 import { UserId } from '../value-objects/UserId'
 

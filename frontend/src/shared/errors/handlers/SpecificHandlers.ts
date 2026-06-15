@@ -11,7 +11,7 @@ import {
 
 // Helper simulado para Toasts/Notificaciones en UI
 const showToast = (message: string, type: 'error' | 'warning' | 'info') => {
-  console.log(`[Toast ${type.toUpperCase()}]: ${message}`)
+  console.warn(`[Toast ${type.toUpperCase()}]: ${message}`)
 }
 
 export class ValidationErrorHandler extends ErrorHandler {

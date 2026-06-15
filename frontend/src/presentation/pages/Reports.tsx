@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from 'react'
+
+import { format, subDays } from 'date-fns'
 import {
   Download,
   FileSpreadsheet,
@@ -9,18 +11,18 @@ import {
   Users,
   Wallet
 } from 'lucide-react'
-import { format, subDays } from 'date-fns'
+
+import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
-import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import {
+  create2000sInputStyle,
+  create2000sListCardStyle,
+  create2000sPanelStyle
+} from '../lib/surfaceStyles'
 
 const toInputDate = (date: Date) => format(date, 'yyyy-MM-dd')
-const currencyFmt = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
-
 const ReportsPage: React.FC = () => {
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
@@ -46,18 +48,8 @@ const ReportsPage: React.FC = () => {
     window.URL.revokeObjectURL(url)
   }
 
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
-
-  const cardStyle = {
-    background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.outer
-  }
+  const inputStyle = create2000sInputStyle()
+  const cardStyle = create2000sPanelStyle()
 
   if (summaryQuery.isLoading) {
     return (
@@ -254,7 +246,9 @@ const ReportsPage: React.FC = () => {
 
       <div className="flex flex-wrap gap-3">
         <button
-          onClick={() => downloadFile('csv')}
+          onClick={() => {
+            void downloadFile('csv')
+          }}
           disabled={exportMutation.isPending}
           className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
@@ -262,7 +256,9 @@ const ReportsPage: React.FC = () => {
           <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
         </button>
         <button
-          onClick={() => downloadFile('excel')}
+          onClick={() => {
+            void downloadFile('excel')
+          }}
           disabled={exportMutation.isPending}
           className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={{
@@ -274,7 +270,9 @@ const ReportsPage: React.FC = () => {
           <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
         </button>
         <button
-          onClick={() => downloadFile('pdf')}
+          onClick={() => {
+            void downloadFile('pdf')
+          }}
           disabled={exportMutation.isPending}
           className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={{
@@ -288,14 +286,7 @@ const ReportsPage: React.FC = () => {
       </div>
 
       <div className="grid xl:grid-cols-3 gap-6">
-        <div
-          className="rounded-3xl overflow-hidden"
-          style={{
-            background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: colors2000s.shadows.insetDark
-          }}
-        >
+        <div className="rounded-3xl overflow-hidden" style={create2000sListCardStyle()}>
           <div
             className="px-6 py-4 font-black uppercase tracking-tight text-sm"
             style={{
@@ -344,14 +335,7 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        <div
-          className="rounded-3xl overflow-hidden"
-          style={{
-            background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: colors2000s.shadows.insetDark
-          }}
-        >
+        <div className="rounded-3xl overflow-hidden" style={create2000sListCardStyle()}>
           <div
             className="px-6 py-4 font-black uppercase tracking-tight text-sm"
             style={{
@@ -400,14 +384,7 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        <div
-          className="rounded-3xl overflow-hidden"
-          style={{
-            background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
-            boxShadow: colors2000s.shadows.insetDark
-          }}
-        >
+        <div className="rounded-3xl overflow-hidden" style={create2000sListCardStyle()}>
           <div
             className="px-6 py-4 font-black uppercase tracking-tight text-sm"
             style={{
@@ -457,14 +434,7 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div
-        className="rounded-3xl overflow-hidden shadow-xl"
-        style={{
-          background: 'white',
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: colors2000s.shadows.insetDark
-        }}
-      >
+      <div className="rounded-3xl overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
         <div
           className="px-6 py-4 flex items-center gap-2 font-black uppercase tracking-tight text-sm"
           style={{
@@ -551,14 +521,7 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div
-        className="rounded-3xl overflow-hidden shadow-xl"
-        style={{
-          background: 'white',
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: colors2000s.shadows.insetDark
-        }}
-      >
+      <div className="rounded-3xl overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
         <div
           className="px-6 py-4 flex items-center gap-2 font-black uppercase tracking-tight text-sm"
           style={{

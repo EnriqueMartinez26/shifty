@@ -1,9 +1,12 @@
 import React, { useState } from 'react'
+
 import { Plus, User, Loader2, Search } from 'lucide-react'
+
+import { Staff } from '@domain/entities/Staff'
+
+import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { StaffCard } from '../components/molecules/StaffCard'
 import { StaffFormModal } from '../components/organisms/StaffFormModal'
-import { Staff } from '@domain/entities/Staff'
-import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import {
   useCreateManagedStaff,
   useDeleteManagedStaff,
