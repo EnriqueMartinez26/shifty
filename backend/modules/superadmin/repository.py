@@ -42,7 +42,15 @@ class SuperAdminRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    def _audit(self, actor: User, resource_type: str, resource_id: str, action: str, before=None, after=None) -> None:
+    def _audit(
+        self,
+        actor: User,
+        resource_type: str,
+        resource_id: str,
+        action: str,
+        before=None,
+        after=None,
+    ) -> None:
         self.db.add(
             AuditLog(
                 actor_id=actor.id,
@@ -93,13 +101,19 @@ class SuperAdminRepository:
         has_subscription_query = (
             select(func.count())
             .select_from(StoreSubscription)
-            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .where(
+                StoreSubscription.store_id == Store.id,
+                StoreSubscription.is_active.is_(True),
+            )
             .correlate(Store)
             .scalar_subquery()
         )
         subscription_status = (
             select(StoreSubscription.status)
-            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .where(
+                StoreSubscription.store_id == Store.id,
+                StoreSubscription.is_active.is_(True),
+            )
             .order_by(StoreSubscription.created_at.desc())
             .limit(1)
             .correlate(Store)
@@ -107,7 +121,10 @@ class SuperAdminRepository:
         )
         current_period_end = (
             select(StoreSubscription.current_period_end)
-            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .where(
+                StoreSubscription.store_id == Store.id,
+                StoreSubscription.is_active.is_(True),
+            )
             .order_by(StoreSubscription.created_at.desc())
             .limit(1)
             .correlate(Store)
@@ -116,7 +133,10 @@ class SuperAdminRepository:
         current_plan_name = (
             select(Plan.name)
             .join(StoreSubscription, Plan.id == StoreSubscription.plan_id)
-            .where(StoreSubscription.store_id == Store.id, StoreSubscription.is_active.is_(True))
+            .where(
+                StoreSubscription.store_id == Store.id,
+                StoreSubscription.is_active.is_(True),
+            )
             .order_by(StoreSubscription.created_at.desc())
             .limit(1)
             .correlate(Store)
@@ -144,7 +164,9 @@ class SuperAdminRepository:
             query = query.where(Store.is_active.is_(is_active))
         if search:
             pattern = f"%{search}%"
-            query = query.where((Store.name.ilike(pattern)) | (Store.slug.ilike(pattern)))
+            query = query.where(
+                (Store.name.ilike(pattern)) | (Store.slug.ilike(pattern))
+            )
         if has_subscription is True:
             query = query.where(has_subscription_query > 0)
         elif has_subscription is False:
@@ -181,7 +203,9 @@ class SuperAdminRepository:
         return rows
 
     async def get_store(self, public_id: str) -> Store | None:
-        result = await self.db.execute(select(Store).where(Store.public_id == public_id))
+        result = await self.db.execute(
+            select(Store).where(Store.public_id == public_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_store_overview(self, public_id: str) -> dict | None:
@@ -196,8 +220,16 @@ class SuperAdminRepository:
             if user.is_global_admin or str(user.role) == UserRole.ADMIN.value
         ]
         subscription = await self.get_store_subscription(store.id)
-        plan = await self.db.get(Plan, subscription.plan_id) if subscription is not None else None
-        coupon = await self.db.get(SaaSCoupon, subscription.coupon_id) if subscription and subscription.coupon_id else None
+        plan = (
+            await self.db.get(Plan, subscription.plan_id)
+            if subscription is not None
+            else None
+        )
+        coupon = (
+            await self.db.get(SaaSCoupon, subscription.coupon_id)
+            if subscription and subscription.coupon_id
+            else None
+        )
 
         return {
             "store": store,
@@ -217,10 +249,17 @@ class SuperAdminRepository:
 
     async def create_store(self, payload: dict, actor: User) -> Store:
         store = Store(**payload)
+        store.public_id = store.id
         self.db.add(store)
         try:
             await self.db.flush()
-            self._audit(actor, "Store", store.public_id, AuditAction.CREATE.value, after={"slug": store.slug, "name": store.name})
+            self._audit(
+                actor,
+                "Store",
+                store.public_id,
+                AuditAction.CREATE.value,
+                after={"slug": store.slug, "name": store.name},
+            )
             await self.db.commit()
             await self.db.refresh(store)
             return store
@@ -235,15 +274,26 @@ class SuperAdminRepository:
                 setattr(store, key, value)
         try:
             await self.db.flush()
-            self._audit(actor, "Store", store.public_id, AuditAction.UPDATE.value, before=before, after=payload)
+            self._audit(
+                actor,
+                "Store",
+                store.public_id,
+                AuditAction.UPDATE.value,
+                before=before,
+                after=payload,
+            )
             await self.db.commit()
             await self.db.refresh(store)
             return store
         except IntegrityError:
             await self.db.rollback()
-            raise ValueError("No se pudo actualizar la tienda; revisá slug único y datos enviados")
+            raise ValueError(
+                "No se pudo actualizar la tienda; revisá slug único y datos enviados"
+            )
 
-    async def list_store_users(self, store_id: str, include_inactive: bool) -> list[User]:
+    async def list_store_users(
+        self, store_id: str, include_inactive: bool
+    ) -> list[User]:
         query = select(User).where(User.store_id == store_id)
         if not include_inactive:
             query = query.where(User.is_active.is_(True))
@@ -255,7 +305,9 @@ class SuperAdminRepository:
         result = await self.db.execute(select(User).where(User.id == public_id))
         return result.scalar_one_or_none()
 
-    async def create_store_admin(self, store: Store, payload: dict, actor: User) -> User:
+    async def create_store_admin(
+        self, store: Store, payload: dict, actor: User
+    ) -> User:
         data = payload.copy()
         password = data.pop("password")
         first_name = data.get("first_name") or ""
@@ -271,7 +323,13 @@ class SuperAdminRepository:
         self.db.add(user)
         try:
             await self.db.flush()
-            self._audit(actor, "User", user.public_id, AuditAction.CREATE.value, after={"email": user.email, "store_id": store.id, "role": "admin"})
+            self._audit(
+                actor,
+                "User",
+                user.public_id,
+                AuditAction.CREATE.value,
+                after={"email": user.email, "store_id": store.id, "role": "admin"},
+            )
             await self.db.commit()
             await self.db.refresh(user)
             return user
@@ -282,7 +340,11 @@ class SuperAdminRepository:
     async def update_user(self, user: User, payload: dict, actor: User) -> User:
         data = payload.copy()
         password = data.pop("password", None)
-        before = {"role": user.role, "is_active": user.is_active, "is_global_admin": user.is_global_admin}
+        before = {
+            "role": user.role,
+            "is_active": user.is_active,
+            "is_global_admin": user.is_global_admin,
+        }
         for key, value in data.items():
             if value is not None:
                 setattr(user, key, value)
@@ -292,7 +354,14 @@ class SuperAdminRepository:
             user.hashed_password = hash_password(password)
         try:
             await self.db.flush()
-            self._audit(actor, "User", user.public_id, AuditAction.UPDATE.value, before=before, after=data)
+            self._audit(
+                actor,
+                "User",
+                user.public_id,
+                AuditAction.UPDATE.value,
+                before=before,
+                after=data,
+            )
             await self.db.commit()
             await self.db.refresh(user)
             return user
@@ -305,7 +374,9 @@ class SuperAdminRepository:
             raise ValueError("No podés revocar tu propio acceso SuperAdmin")
         if not enabled and user.is_global_admin:
             result = await self.db.execute(
-                select(func.count()).select_from(User).where(
+                select(func.count())
+                .select_from(User)
+                .where(
                     User.is_active.is_(True),
                     User.is_global_admin.is_(True),
                 )
@@ -318,7 +389,14 @@ class SuperAdminRepository:
             user.role = UserRole.ADMIN
             user.is_active = True
         await self.db.flush()
-        self._audit(actor, "User", user.public_id, AuditAction.UPDATE.value, before=before, after={"is_global_admin": enabled})
+        self._audit(
+            actor,
+            "User",
+            user.public_id,
+            AuditAction.UPDATE.value,
+            before=before,
+            after={"is_global_admin": enabled},
+        )
         await self.db.commit()
         await self.db.refresh(user)
         return user
@@ -339,7 +417,13 @@ class SuperAdminRepository:
         self.db.add(plan)
         try:
             await self.db.flush()
-            self._audit(actor, "Plan", plan.public_id, AuditAction.CREATE.value, after={"name": plan.name, "price": str(plan.price)})
+            self._audit(
+                actor,
+                "Plan",
+                plan.public_id,
+                AuditAction.CREATE.value,
+                after={"name": plan.name, "price": str(plan.price)},
+            )
             await self.db.commit()
             await self.db.refresh(plan)
             return plan
@@ -348,13 +432,24 @@ class SuperAdminRepository:
             raise ValueError("Ya existe un plan con ese nombre")
 
     async def update_plan(self, plan: Plan, payload: dict, actor: User) -> Plan:
-        before = {"name": plan.name, "price": str(plan.price), "is_active": plan.is_active}
+        before = {
+            "name": plan.name,
+            "price": str(plan.price),
+            "is_active": plan.is_active,
+        }
         for key, value in payload.items():
             if value is not None:
                 setattr(plan, key, value)
         try:
             await self.db.flush()
-            self._audit(actor, "Plan", plan.public_id, AuditAction.UPDATE.value, before=before, after=payload)
+            self._audit(
+                actor,
+                "Plan",
+                plan.public_id,
+                AuditAction.UPDATE.value,
+                before=before,
+                after=payload,
+            )
             await self.db.commit()
             await self.db.refresh(plan)
             return plan
@@ -365,15 +460,22 @@ class SuperAdminRepository:
     async def get_store_subscription(self, store_id: str) -> StoreSubscription | None:
         result = await self.db.execute(
             select(StoreSubscription)
-            .where(StoreSubscription.store_id == store_id, StoreSubscription.is_active.is_(True))
+            .where(
+                StoreSubscription.store_id == store_id,
+                StoreSubscription.is_active.is_(True),
+            )
             .order_by(StoreSubscription.created_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none()
 
-    async def set_store_subscription(self, store: Store, plan: Plan, payload: dict, actor: User) -> StoreSubscription:
+    async def set_store_subscription(
+        self, store: Store, plan: Plan, payload: dict, actor: User
+    ) -> StoreSubscription:
         if not store.is_active:
-            raise ValueError("No se puede asignar una suscripción a una tienda inactiva")
+            raise ValueError(
+                "No se puede asignar una suscripción a una tienda inactiva"
+            )
         subscription = await self.get_store_subscription(store.id)
         base_amount = _money(payload.get("base_amount") or plan.price)
         currency = payload.get("currency") or plan.currency
@@ -393,7 +495,11 @@ class SuperAdminRepository:
             action = AuditAction.CREATE.value
             before = None
         else:
-            before = {"plan_id": subscription.plan_id, "base_amount": str(subscription.base_amount), "total_amount": str(subscription.total_amount)}
+            before = {
+                "plan_id": subscription.plan_id,
+                "base_amount": str(subscription.base_amount),
+                "total_amount": str(subscription.total_amount),
+            }
             subscription.plan_id = plan.id
             subscription.status = payload.get("status", subscription.status)
             subscription.base_amount = base_amount
@@ -401,12 +507,27 @@ class SuperAdminRepository:
             subscription.total_amount = base_amount
             subscription.currency = currency
             subscription.coupon_id = None
-            subscription.current_period_start = payload.get("current_period_start", subscription.current_period_start)
-            subscription.current_period_end = payload.get("current_period_end", subscription.current_period_end)
+            subscription.current_period_start = payload.get(
+                "current_period_start", subscription.current_period_start
+            )
+            subscription.current_period_end = payload.get(
+                "current_period_end", subscription.current_period_end
+            )
             action = AuditAction.UPDATE.value
 
         await self.db.flush()
-        self._audit(actor, "StoreSubscription", subscription.public_id, action, before=before, after={"store_id": store.id, "plan_id": plan.id, "total_amount": str(subscription.total_amount)})
+        self._audit(
+            actor,
+            "StoreSubscription",
+            subscription.public_id,
+            action,
+            before=before,
+            after={
+                "store_id": store.id,
+                "plan_id": plan.id,
+                "total_amount": str(subscription.total_amount),
+            },
+        )
         await self.db.commit()
         await self.db.refresh(subscription)
         return subscription
@@ -419,11 +540,15 @@ class SuperAdminRepository:
         return list(result.scalars().all())
 
     async def get_coupon(self, public_id: str) -> SaaSCoupon | None:
-        result = await self.db.execute(select(SaaSCoupon).where(SaaSCoupon.id == public_id))
+        result = await self.db.execute(
+            select(SaaSCoupon).where(SaaSCoupon.id == public_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_coupon_by_code(self, code: str) -> SaaSCoupon | None:
-        result = await self.db.execute(select(SaaSCoupon).where(func.upper(SaaSCoupon.code) == code.upper()))
+        result = await self.db.execute(
+            select(SaaSCoupon).where(func.upper(SaaSCoupon.code) == code.upper())
+        )
         return result.scalar_one_or_none()
 
     async def create_coupon(self, payload: dict, actor: User) -> SaaSCoupon:
@@ -431,7 +556,13 @@ class SuperAdminRepository:
         self.db.add(coupon)
         try:
             await self.db.flush()
-            self._audit(actor, "SaaSCoupon", coupon.public_id, AuditAction.CREATE.value, after={"code": coupon.code, "type": coupon.coupon_type})
+            self._audit(
+                actor,
+                "SaaSCoupon",
+                coupon.public_id,
+                AuditAction.CREATE.value,
+                after={"code": coupon.code, "type": coupon.coupon_type},
+            )
             await self.db.commit()
             await self.db.refresh(coupon)
             return coupon
@@ -439,22 +570,39 @@ class SuperAdminRepository:
             await self.db.rollback()
             raise ValueError("Ya existe un cupón con ese código")
 
-    async def update_coupon(self, coupon: SaaSCoupon, payload: dict, actor: User) -> SaaSCoupon:
-        before = {"code": coupon.code, "is_active": coupon.is_active, "current_uses": coupon.current_uses}
+    async def update_coupon(
+        self, coupon: SaaSCoupon, payload: dict, actor: User
+    ) -> SaaSCoupon:
+        before = {
+            "code": coupon.code,
+            "is_active": coupon.is_active,
+            "current_uses": coupon.current_uses,
+        }
         candidate_type = payload.get("coupon_type", coupon.coupon_type)
         candidate_value = payload.get("value", coupon.value)
         candidate_valid_from = payload.get("valid_from", coupon.valid_from)
         candidate_valid_until = payload.get("valid_until", coupon.valid_until)
         if candidate_type == "percent" and candidate_value > 100:
             raise ValueError("El porcentaje de descuento no puede superar 100")
-        if candidate_valid_from and candidate_valid_until and candidate_valid_from >= candidate_valid_until:
+        if (
+            candidate_valid_from
+            and candidate_valid_until
+            and candidate_valid_from >= candidate_valid_until
+        ):
             raise ValueError("valid_from debe ser anterior a valid_until")
         for key, value in payload.items():
             if value is not None:
                 setattr(coupon, key, value)
         try:
             await self.db.flush()
-            self._audit(actor, "SaaSCoupon", coupon.public_id, AuditAction.UPDATE.value, before=before, after=payload)
+            self._audit(
+                actor,
+                "SaaSCoupon",
+                coupon.public_id,
+                AuditAction.UPDATE.value,
+                before=before,
+                after=payload,
+            )
             await self.db.commit()
             await self.db.refresh(coupon)
             return coupon
@@ -462,7 +610,13 @@ class SuperAdminRepository:
             await self.db.rollback()
             raise ValueError("No se pudo actualizar el cupón")
 
-    async def redeem_coupon(self, store: Store, subscription: StoreSubscription, coupon: SaaSCoupon, actor: User) -> CouponRedemption:
+    async def redeem_coupon(
+        self,
+        store: Store,
+        subscription: StoreSubscription,
+        coupon: SaaSCoupon,
+        actor: User,
+    ) -> CouponRedemption:
         if not store.is_active:
             raise ValueError("No se puede canjear un cupón sobre una tienda inactiva")
         coupon_result = await self.db.execute(
@@ -470,7 +624,9 @@ class SuperAdminRepository:
         )
         coupon = coupon_result.scalar_one()
         subscription_result = await self.db.execute(
-            select(StoreSubscription).where(StoreSubscription.id == subscription.id).with_for_update()
+            select(StoreSubscription)
+            .where(StoreSubscription.id == subscription.id)
+            .with_for_update()
         )
         subscription = subscription_result.scalar_one()
 
@@ -503,7 +659,9 @@ class SuperAdminRepository:
 
         base_amount = _money(subscription.base_amount)
         if coupon.coupon_type == "percent":
-            discount_amount = _money(base_amount * _money(coupon.value) / Decimal("100"))
+            discount_amount = _money(
+                base_amount * _money(coupon.value) / Decimal("100")
+            )
         elif coupon.coupon_type == "fixed":
             discount_amount = _money(coupon.value)
         else:
@@ -532,12 +690,25 @@ class SuperAdminRepository:
         )
         self.db.add(redemption)
         await self.db.flush()
-        self._audit(actor, "CouponRedemption", redemption.public_id, AuditAction.CREATE.value, after={"store_id": store.id, "code": coupon.code, "discount_amount": str(discount_amount), "final_amount": str(final_amount)})
+        self._audit(
+            actor,
+            "CouponRedemption",
+            redemption.public_id,
+            AuditAction.CREATE.value,
+            after={
+                "store_id": store.id,
+                "code": coupon.code,
+                "discount_amount": str(discount_amount),
+                "final_amount": str(final_amount),
+            },
+        )
         await self.db.commit()
         await self.db.refresh(redemption)
         return redemption
 
-    async def list_store_redemptions(self, store_id: str, limit: int | None = None) -> list[CouponRedemption]:
+    async def list_store_redemptions(
+        self, store_id: str, limit: int | None = None
+    ) -> list[CouponRedemption]:
         query = (
             select(CouponRedemption)
             .where(CouponRedemption.store_id == store_id)

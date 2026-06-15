@@ -29,7 +29,9 @@ def _media_type(content_type: str | None) -> str:
     return content_type.split(";", 1)[0].strip().lower()
 
 
-async def _send_json(send: Send, status_code: int, error_code: str, message: str) -> None:
+async def _send_json(
+    send: Send, status_code: int, error_code: str, message: str
+) -> None:
     body = json.dumps(
         {"success": False, "error_code": error_code, "message": message},
         separators=(",", ":"),
@@ -67,9 +69,15 @@ class RequestGuardMiddleware:
             try:
                 content_length = int(raw_content_length)
             except ValueError as exc:
-                raise _RejectedRequest(400, "INVALID_CONTENT_LENGTH", "Content-Length inválido") from exc
+                raise _RejectedRequest(
+                    400, "INVALID_CONTENT_LENGTH", "Content-Length inválido"
+                ) from exc
             if content_length > self.max_body_bytes:
-                raise _RejectedRequest(413, "REQUEST_TOO_LARGE", "El cuerpo del request supera el límite permitido")
+                raise _RejectedRequest(
+                    413,
+                    "REQUEST_TOO_LARGE",
+                    "El cuerpo del request supera el límite permitido",
+                )
         else:
             content_length = None
 
@@ -77,9 +85,17 @@ class RequestGuardMiddleware:
             return
 
         content_type = _media_type(headers.get("content-type"))
-        has_declared_body = (content_length is not None and content_length > 0) or bool(headers.get("transfer-encoding"))
-        if (has_declared_body or content_type) and content_type not in self.allowed_write_content_types:
-            raise _RejectedRequest(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Type no permitido para escritura")
+        has_declared_body = (content_length is not None and content_length > 0) or bool(
+            headers.get("transfer-encoding")
+        )
+        if (
+            has_declared_body or content_type
+        ) and content_type not in self.allowed_write_content_types:
+            raise _RejectedRequest(
+                415,
+                "UNSUPPORTED_MEDIA_TYPE",
+                "Content-Type no permitido para escritura",
+            )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -110,10 +126,18 @@ class RequestGuardMiddleware:
                 if body and method in WRITE_METHODS:
                     content_type = _media_type(headers.get("content-type"))
                     if content_type not in self.allowed_write_content_types:
-                        raise _RejectedRequest(415, "UNSUPPORTED_MEDIA_TYPE", "Content-Type no permitido para escritura")
+                        raise _RejectedRequest(
+                            415,
+                            "UNSUPPORTED_MEDIA_TYPE",
+                            "Content-Type no permitido para escritura",
+                        )
                 received += len(body)
                 if received > self.max_body_bytes:
-                    raise _RejectedRequest(413, "REQUEST_TOO_LARGE", "El cuerpo del request supera el límite permitido")
+                    raise _RejectedRequest(
+                        413,
+                        "REQUEST_TOO_LARGE",
+                        "El cuerpo del request supera el límite permitido",
+                    )
             return message
 
         async def guarded_send(message: Message) -> None:
@@ -137,7 +161,9 @@ class SecurityHeadersMiddleware:
         self.app = app
 
     @staticmethod
-    def _append_if_missing(headers: list[tuple[bytes, bytes]], key: bytes, value: bytes) -> None:
+    def _append_if_missing(
+        headers: list[tuple[bytes, bytes]], key: bytes, value: bytes
+    ) -> None:
         key_lower = key.lower()
         if not any(existing_key.lower() == key_lower for existing_key, _ in headers):
             headers.append((key, value))
@@ -146,9 +172,12 @@ class SecurityHeadersMiddleware:
         yield b"x-content-type-options", b"nosniff"
         yield b"x-frame-options", b"DENY"
         yield b"referrer-policy", b"strict-origin-when-cross-origin"
-        yield b"permissions-policy", b"camera=(), microphone=(), geolocation=(), payment=()"
+        yield (
+            b"permissions-policy",
+            b"camera=(), microphone=(), geolocation=(), payment=()",
+        )
         yield b"x-permitted-cross-domain-policies", b"none"
-        
+
         if settings.ENV == Environment.DEVELOPMENT:
             yield b"cross-origin-opener-policy", b"unsafe-none"
             yield b"cross-origin-resource-policy", b"cross-origin"
@@ -156,13 +185,16 @@ class SecurityHeadersMiddleware:
             yield b"cross-origin-opener-policy", b"same-origin"
             # The API is intentionally consumed from a different site.
             yield b"cross-origin-resource-policy", b"cross-origin"
-            
+
         yield b"cache-control", b"no-store"
         yield b"pragma", b"no-cache"
         if settings.ENV == Environment.PRODUCTION:
             yield b"strict-transport-security", b"max-age=31536000; includeSubDomains"
             if not path.startswith(("/docs", "/redoc", "/openapi.json")):
-                yield b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+                yield (
+                    b"content-security-policy",
+                    b"default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+                )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":

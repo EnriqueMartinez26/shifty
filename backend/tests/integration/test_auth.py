@@ -23,6 +23,7 @@ from modules.users.model import User
 # Configuración de base de datos de test en memoria
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
+
 @pytest_asyncio.fixture(scope="function")
 async def test_engine():
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
@@ -48,13 +49,18 @@ async def client(test_session):
     """
     Crea el cliente HTTP con override de la dependencia de base de datos.
     """
+
     async def override_get_db():
         yield test_session
 
     app.dependency_overrides[get_db] = override_get_db
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"x-raw-response": "true"},
+    ) as c:
         yield c
 
     app.dependency_overrides.pop(get_db, None)
@@ -63,55 +69,63 @@ async def client(test_session):
 @pytest.mark.asyncio
 async def test_cross_tenant_isolation(client: AsyncClient):
     # 1. Registrar Tienda A
-    res_a = await client.post("/auth/register", json={
-        "store_name": "Tienda A",
-        "store_slug": "tienda-a",
-        "admin_email": "admin@a.com",
-        "admin_password": "password123",
-        "admin_first_name": "Admin",
-        "admin_last_name": "A"
-    })
+    res_a = await client.post(
+        "/auth/register",
+        json={
+            "store_name": "Tienda A",
+            "store_slug": "tienda-a",
+            "admin_email": "admin@a.com",
+            "admin_password": "password123",
+            "admin_first_name": "Admin",
+            "admin_last_name": "A",
+        },
+    )
     assert res_a.status_code == 201
-    
+
     # 2. Registrar Tienda B
-    res_b = await client.post("/auth/register", json={
-        "store_name": "Tienda B",
-        "store_slug": "tienda-b",
-        "admin_email": "admin@b.com",
-        "admin_password": "password123",
-        "admin_first_name": "Admin",
-        "admin_last_name": "B"
-    })
+    res_b = await client.post(
+        "/auth/register",
+        json={
+            "store_name": "Tienda B",
+            "store_slug": "tienda-b",
+            "admin_email": "admin@b.com",
+            "admin_password": "password123",
+            "admin_first_name": "Admin",
+            "admin_last_name": "B",
+        },
+    )
     assert res_b.status_code == 201
-    
+
     # 3. Login en Tienda A
-    login_a = await client.post("/auth/login", json={
-        "email": "admin@a.com",
-        "password": "password123"
-    })
+    login_a = await client.post(
+        "/auth/login", json={"email": "admin@a.com", "password": "password123"}
+    )
     token_a = login_a.json()["access_token"]
-    
+
     # 4. Login en Tienda B
-    login_b = await client.post("/auth/login", json={
-        "email": "admin@b.com",
-        "password": "password123"
-    })
-    token_b = login_b.json()["access_token"]
-    
+    login_b = await client.post(
+        "/auth/login", json={"email": "admin@b.com", "password": "password123"}
+    )
+    _token_b = login_b.json()["access_token"]
+
     # 5. Validar aislamiento (Prueba de Fuego)
     # Pedimos '/me' con Token A -> Debe devolver store_id de A
     me_a = await client.get("/me", headers={"Authorization": f"Bearer {token_a}"})
     data_a = me_a.json()
     assert data_a["email"] == "admin@a.com"
-    
+
 
 @pytest.mark.asyncio
 async def test_password_reset_flow(client: AsyncClient, test_session, monkeypatch):
     reset_token = "test-reset-token-1234567890"
 
     # Evitamos dependencia SMTP en tests y fijamos token determinístico.
-    monkeypatch.setattr("modules.auth.router.generate_password_reset_token", lambda: reset_token)
-    monkeypatch.setattr("modules.auth.router._send_password_reset_email", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "modules.auth.router.generate_password_reset_token", lambda: reset_token
+    )
+    monkeypatch.setattr(
+        "modules.auth.router._send_password_reset_email", lambda *_args, **_kwargs: None
+    )
 
     register_response = await client.post(
         "/auth/register",
@@ -132,7 +146,9 @@ async def test_password_reset_flow(client: AsyncClient, test_session, monkeypatc
     assert forgot_response.status_code == 200
 
     # Verifica que el token se haya persistido hasheado.
-    result = await test_session.execute(select(User).where(User.email == "reset@demo.com"))
+    result = await test_session.execute(
+        select(User).where(User.email == "reset@demo.com")
+    )
     user = result.scalar_one()
     assert user.password_reset_token_hash == hash_password_reset_token(reset_token)
     assert user.password_reset_expires_at is not None
@@ -152,6 +168,28 @@ async def test_password_reset_flow(client: AsyncClient, test_session, monkeypatc
         "/auth/login", json={"email": "reset@demo.com", "password": "nuevaPassword123"}
     )
     assert login_new.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_login_normalizes_email_whitespace_and_case(client: AsyncClient):
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "store_name": "Tienda Normalize",
+            "store_slug": "tienda-normalize",
+            "admin_email": "normalize@demo.com",
+            "admin_password": "password123",
+            "admin_first_name": "Admin",
+            "admin_last_name": "Normalize",
+        },
+    )
+    assert register_response.status_code == 201
+
+    login_response = await client.post(
+        "/auth/login",
+        json={"email": "  NORMALIZE@DEMO.COM  ", "password": "password123"},
+    )
+    assert login_response.status_code == 200
 
 
 @pytest.mark.asyncio

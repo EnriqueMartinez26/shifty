@@ -73,7 +73,10 @@ class UserRepository:
             if value is not None:
                 setattr(user, key, value)
 
-        if payload.get("first_name") is not None or payload.get("last_name") is not None:
+        if (
+            payload.get("first_name") is not None
+            or payload.get("last_name") is not None
+        ):
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
 
         if password:

@@ -10,6 +10,7 @@ Variables opcionales:
 - SUPERADMIN_STORE_SLUG
 - SUPERADMIN_STORE_NAME
 """
+
 import asyncio
 import os
 import sys
@@ -42,8 +43,14 @@ async def bootstrap() -> None:
 
     first_name = os.getenv("SUPERADMIN_FIRST_NAME", "Shifty").strip() or "Shifty"
     last_name = os.getenv("SUPERADMIN_LAST_NAME", "SuperAdmin").strip() or "SuperAdmin"
-    store_slug = os.getenv("SUPERADMIN_STORE_SLUG", "shifty-internal").strip() or "shifty-internal"
-    store_name = os.getenv("SUPERADMIN_STORE_NAME", "Shifty Internal").strip() or "Shifty Internal"
+    store_slug = (
+        os.getenv("SUPERADMIN_STORE_SLUG", "shifty-internal").strip()
+        or "shifty-internal"
+    )
+    store_name = (
+        os.getenv("SUPERADMIN_STORE_NAME", "Shifty Internal").strip()
+        or "Shifty Internal"
+    )
 
     set_tenant_context(None, True)
     async with AsyncSessionFactory() as db:
@@ -68,6 +75,7 @@ async def bootstrap() -> None:
         store = store_result.scalar_one_or_none()
         if store is None:
             store = Store(name=store_name, slug=store_slug)
+            store.public_id = store.id
             db.add(store)
             await db.flush()
 

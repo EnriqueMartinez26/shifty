@@ -1,5 +1,5 @@
 import pytest
-from fastapi import HTTPException
+from core.exceptions import AppException
 from redis.exceptions import RedisError
 from starlette.requests import Request
 
@@ -30,15 +30,17 @@ async def test_rate_limit_fails_closed_when_redis_is_unavailable(monkeypatch) ->
 
     monkeypatch.setattr(rate_limit, "_hit_rate_limit", broken_hit_rate_limit)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(AppException) as exc_info:
         await rate_limit.enforce_rate_limit(_request(), "public:test", 5)
 
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.detail == "Rate limit temporalmente no disponible"
+    assert exc_info.value.http_status == 503
+    assert exc_info.value.message == "Rate limit temporalmente no disponible"
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_fails_open_in_development_when_redis_is_unavailable(monkeypatch) -> None:
+async def test_rate_limit_fails_open_in_development_when_redis_is_unavailable(
+    monkeypatch,
+) -> None:
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
     monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", False)
     monkeypatch.setattr(settings, "ENV", Environment.DEVELOPMENT)

@@ -1,10 +1,10 @@
-import { StaffService } from './StaffService';
-import type { IStaffRepository } from '../../domain/repositories/IStaffRepository';
-import { Staff } from '../../domain/entities/Staff';
+import { StaffService } from './StaffService'
+import { Staff } from '../../domain/entities/Staff'
+import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 
 describe('StaffService', () => {
-  let mockRepository: jest.Mocked<IStaffRepository>;
-  let service: StaffService;
+  let mockRepository: jest.Mocked<IStaffRepository>
+  let service: StaffService
 
   beforeEach(() => {
     mockRepository = {
@@ -12,11 +12,11 @@ describe('StaffService', () => {
       findById: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn(),
-    } as any;
+      delete: jest.fn()
+    } as any
 
-    service = new StaffService(mockRepository);
-  });
+    service = new StaffService(mockRepository)
+  })
 
   describe('listStaff', () => {
     it('should retrieve list of all staff', async () => {
@@ -28,17 +28,17 @@ describe('StaffService', () => {
           email: 'jane@example.com',
           display_name: 'Jane D.',
           is_active: true,
-          service_ids: ['s1'],
-        }),
-      ];
-      mockRepository.findAll.mockResolvedValue(staffList);
+          service_ids: ['s1']
+        })
+      ]
+      mockRepository.findAll.mockResolvedValue(staffList)
 
-      const result = await service.listStaff();
+      const result = await service.listStaff()
 
-      expect(result).toBe(staffList);
-      expect(mockRepository.findAll).toHaveBeenCalledTimes(1);
-    });
-  });
+      expect(result).toBe(staffList)
+      expect(mockRepository.findAll).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe('createStaff', () => {
     it('should validate and create new staff', async () => {
@@ -47,22 +47,22 @@ describe('StaffService', () => {
         last_name: 'Doe',
         email: 'jane@example.com',
         display_name: 'Jane D.',
-        service_ids: ['service-1', 'service-2'],
-      };
+        service_ids: ['service-1', 'service-2']
+      }
 
       const createdStaff = Staff.fromPrimitives({
         public_id: 'uuid-1234',
         ...input,
-        is_active: true,
-      });
+        is_active: true
+      })
 
-      mockRepository.create.mockResolvedValue(createdStaff);
+      mockRepository.create.mockResolvedValue(createdStaff)
 
-      const result = await service.createStaff(input);
+      const result = await service.createStaff(input)
 
-      expect(result).toBe(createdStaff);
-      expect(mockRepository.create).toHaveBeenCalledWith(expect.any(Staff));
-    });
+      expect(result).toBe(createdStaff)
+      expect(mockRepository.create).toHaveBeenCalledWith(expect.any(Staff))
+    })
 
     it('should throw validation error if email is invalid', async () => {
       const input = {
@@ -70,15 +70,15 @@ describe('StaffService', () => {
         last_name: 'Doe',
         email: 'invalid-email',
         display_name: 'Jane D.',
-        service_ids: [],
-      };
+        service_ids: []
+      }
 
       await expect(service.createStaff(input)).rejects.toThrow(
         'Error de validación: Verifique los datos ingresados.'
-      );
-      expect(mockRepository.create).not.toHaveBeenCalled();
-    });
-  });
+      )
+      expect(mockRepository.create).not.toHaveBeenCalled()
+    })
+  })
 
   describe('updateStaff', () => {
     it('should retrieve existing, validate updates, and save them', async () => {
@@ -89,53 +89,55 @@ describe('StaffService', () => {
         email: 'old@example.com',
         display_name: 'Old D.',
         is_active: true,
-        service_ids: ['s1'],
-      });
+        service_ids: ['s1']
+      })
 
       const updatedInput = {
         first_name: 'Jane',
         last_name: 'Doe',
         email: 'jane@example.com',
         display_name: 'Jane D.',
-        service_ids: ['s2'],
-      };
+        service_ids: ['s2']
+      }
 
       const expectedStaff = Staff.fromPrimitives({
         public_id: 'staff-id',
         ...updatedInput,
-        is_active: true,
-      });
+        is_active: true
+      })
 
-      mockRepository.findById.mockResolvedValue(existingStaff);
-      mockRepository.update.mockResolvedValue(expectedStaff);
+      mockRepository.findById.mockResolvedValue(existingStaff)
+      mockRepository.update.mockResolvedValue(expectedStaff)
 
-      const result = await service.updateStaff('staff-id', updatedInput);
+      const result = await service.updateStaff('staff-id', updatedInput)
 
-      expect(result).toBe(expectedStaff);
-      expect(mockRepository.findById).toHaveBeenCalledWith('staff-id');
-      expect(mockRepository.update).toHaveBeenCalledWith('staff-id', expect.any(Staff));
-    });
+      expect(result).toBe(expectedStaff)
+      expect(mockRepository.findById).toHaveBeenCalledWith('staff-id')
+      expect(mockRepository.update).toHaveBeenCalledWith('staff-id', expect.any(Staff))
+    })
 
     it('should throw error if staff is not found', async () => {
-      mockRepository.findById.mockResolvedValue(null);
+      mockRepository.findById.mockResolvedValue(null)
 
-      await expect(service.updateStaff('invalid-id', {
-        first_name: 'Jane',
-        last_name: 'Doe',
-        email: 'jane@example.com',
-        display_name: 'Jane D.',
-        service_ids: [],
-      })).rejects.toThrow('Staff no encontrado');
-    });
-  });
+      await expect(
+        service.updateStaff('invalid-id', {
+          first_name: 'Jane',
+          last_name: 'Doe',
+          email: 'jane@example.com',
+          display_name: 'Jane D.',
+          service_ids: []
+        })
+      ).rejects.toThrow('Staff no encontrado')
+    })
+  })
 
   describe('deleteStaff', () => {
     it('should call delete on repository', async () => {
-      mockRepository.delete.mockResolvedValue(undefined);
+      mockRepository.delete.mockResolvedValue(undefined)
 
-      await service.deleteStaff('staff-id');
+      await service.deleteStaff('staff-id')
 
-      expect(mockRepository.delete).toHaveBeenCalledWith('staff-id');
-    });
-  });
-});
+      expect(mockRepository.delete).toHaveBeenCalledWith('staff-id')
+    })
+  })
+})

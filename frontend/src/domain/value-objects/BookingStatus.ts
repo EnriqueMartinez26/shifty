@@ -5,13 +5,13 @@ export type BookingStatusValue =
   | 'completed'
   | 'cancelled'
   | 'absent'
-  | 'expired';
+  | 'expired'
 
 export class BookingStatus {
-  private readonly value: BookingStatusValue;
+  private readonly value: BookingStatusValue
 
   private constructor(value: BookingStatusValue) {
-    this.value = value;
+    this.value = value
   }
 
   static create(value: string): BookingStatus {
@@ -22,23 +22,23 @@ export class BookingStatus {
       'completed',
       'cancelled',
       'absent',
-      'expired',
-    ];
+      'expired'
+    ]
     if (!validStatuses.includes(value as BookingStatusValue)) {
-      throw new Error(`Estado de reserva inválido: ${value}`);
+      throw new Error(`Estado de reserva inválido: ${value}`)
     }
-    return new BookingStatus(value as BookingStatusValue);
+    return new BookingStatus(value as BookingStatusValue)
   }
 
   getValue(): BookingStatusValue {
-    return this.value;
+    return this.value
   }
 
   isPending(): boolean {
-    return this.value === 'pending' || this.value === 'pending_payment';
+    return this.value === 'pending' || this.value === 'pending_payment'
   }
 
   isFinalized(): boolean {
-    return ['completed', 'cancelled', 'absent', 'expired'].includes(this.value);
+    return ['completed', 'cancelled', 'absent', 'expired'].includes(this.value)
   }
 }

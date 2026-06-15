@@ -7,6 +7,7 @@ from domain.value_objects.time_slot import TimeSlot
 from domain.repositories.appointment_repository import IAppointmentRepository
 from infrastructure.persistence.models.appointment import AppointmentModel
 
+
 class AppointmentRepository(IAppointmentRepository):
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -24,20 +25,22 @@ class AppointmentRepository(IAppointmentRepository):
             and_(
                 AppointmentModel.store_id == store_id,
                 AppointmentModel.starts_at >= start,
-                AppointmentModel.starts_at <= end
+                AppointmentModel.starts_at <= end,
             )
         )
         result = await self.session.execute(stmt)
         return [self._map_to_entity(m) for m in result.scalars().all()]
 
-    async def find_by_staff_and_date(self, staff_id: str, date_val: date) -> List[Appointment]:
+    async def find_by_staff_and_date(
+        self, staff_id: str, date_val: date
+    ) -> List[Appointment]:
         start = datetime.combine(date_val, time.min)
         end = datetime.combine(date_val, time.max)
         stmt = select(AppointmentModel).where(
             and_(
                 AppointmentModel.staff_id == staff_id,
                 AppointmentModel.starts_at >= start,
-                AppointmentModel.starts_at <= end
+                AppointmentModel.starts_at <= end,
             )
         )
         result = await self.session.execute(stmt)
@@ -51,7 +54,7 @@ class AppointmentRepository(IAppointmentRepository):
 
     async def save(self, appointment: Appointment) -> Appointment:
         model = await self.session.get(AppointmentModel, appointment.id)
-        
+
         if not model:
             model = AppointmentModel(
                 id=appointment.id,
@@ -67,7 +70,7 @@ class AppointmentRepository(IAppointmentRepository):
                 notes=appointment.notes,
                 idempotency_key=appointment.idempotency_key,
                 created_at=appointment.created_at,
-                updated_at=appointment.updated_at
+                updated_at=appointment.updated_at,
             )
             self.session.add(model)
         else:
@@ -87,7 +90,9 @@ class AppointmentRepository(IAppointmentRepository):
             service_id=model.service_id,
             staff_id=model.staff_id,
             store_id=model.store_id,
-            time_slot=TimeSlot.from_start_and_duration(model.starts_at, model.duration_minutes),
+            time_slot=TimeSlot.from_start_and_duration(
+                model.starts_at, model.duration_minutes
+            ),
             client_name=model.client_name,
             client_email=model.client_email,
             client_phone=model.client_phone,
@@ -95,5 +100,5 @@ class AppointmentRepository(IAppointmentRepository):
             notes=model.notes,
             idempotency_key=model.idempotency_key,
             created_at=model.created_at,
-            updated_at=model.updated_at
+            updated_at=model.updated_at,
         )

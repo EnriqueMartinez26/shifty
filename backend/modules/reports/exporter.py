@@ -21,16 +21,18 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
     writer.writerow(["average_ticket", summary.stats.average_ticket])
     writer.writerow([])
 
-    writer.writerow([
-        "public_id",
-        "starts_at",
-        "ends_at",
-        "status",
-        "service_name",
-        "staff_name",
-        "client_name",
-        "service_price",
-    ])
+    writer.writerow(
+        [
+            "public_id",
+            "starts_at",
+            "ends_at",
+            "status",
+            "service_name",
+            "staff_name",
+            "client_name",
+            "service_price",
+        ]
+    )
 
     for item in summary.appointments:
         writer.writerow(
@@ -64,24 +66,32 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
     summary_sheet.append([])
     summary_sheet.append(["metric", "value"])
     summary_sheet.append(["total_appointments", summary.stats.total_appointments])
-    summary_sheet.append(["completed_appointments", summary.stats.completed_appointments])
-    summary_sheet.append(["cancelled_appointments", summary.stats.cancelled_appointments])
+    summary_sheet.append(
+        ["completed_appointments", summary.stats.completed_appointments]
+    )
+    summary_sheet.append(
+        ["cancelled_appointments", summary.stats.cancelled_appointments]
+    )
     summary_sheet.append(["pending_appointments", summary.stats.pending_appointments])
-    summary_sheet.append(["confirmed_appointments", summary.stats.confirmed_appointments])
+    summary_sheet.append(
+        ["confirmed_appointments", summary.stats.confirmed_appointments]
+    )
     summary_sheet.append(["total_revenue", summary.stats.total_revenue])
     summary_sheet.append(["average_ticket", summary.stats.average_ticket])
 
     appointments_sheet = wb.create_sheet(title="Appointments")
-    appointments_sheet.append([
-        "public_id",
-        "starts_at",
-        "ends_at",
-        "status",
-        "service_name",
-        "staff_name",
-        "client_name",
-        "service_price",
-    ])
+    appointments_sheet.append(
+        [
+            "public_id",
+            "starts_at",
+            "ends_at",
+            "status",
+            "service_name",
+            "staff_name",
+            "client_name",
+            "service_price",
+        ]
+    )
     for item in summary.appointments:
         appointments_sheet.append(
             [

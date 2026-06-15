@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import os
@@ -15,7 +15,9 @@ def _normalize_postgres_url(raw_url: str) -> str:
     )
 
 
-def _build_pg_restore_command(database_url: str, backup_path: Path) -> tuple[list[str], dict[str, str]]:
+def _build_pg_restore_command(
+    database_url: str, backup_path: Path
+) -> tuple[list[str], dict[str, str]]:
     parsed = urlparse(_normalize_postgres_url(database_url))
     database_name = parsed.path.lstrip("/")
     if not database_name:
@@ -45,7 +47,9 @@ def _build_pg_restore_command(database_url: str, backup_path: Path) -> tuple[lis
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Restaura backup PostgreSQL en formato custom (pg_restore).")
+    parser = argparse.ArgumentParser(
+        description="Restaura backup PostgreSQL en formato custom (pg_restore)."
+    )
     parser.add_argument("--backup-file", required=True, help="Ruta al archivo .dump")
     parser.add_argument(
         "--database-url",
@@ -62,7 +66,9 @@ def main() -> int:
         raise SystemExit(f"Backup no encontrado: {backup_path}")
 
     command, env = _build_pg_restore_command(args.database_url, backup_path)
-    result = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        command, env=env, capture_output=True, text=True, check=False
+    )
     if result.returncode != 0:
         print(result.stderr.strip())
         raise SystemExit(result.returncode)

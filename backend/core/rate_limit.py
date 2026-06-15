@@ -3,11 +3,12 @@ import json
 import time
 
 import structlog
-from fastapi import HTTPException, Request, status
+from fastapi import Request
+from core.exceptions import AppException, RateLimitedException
 from redis.exceptions import RedisError
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-from core.config import Environment, settings
+from core.config import settings
 from core.redis import get_redis
 
 logger = structlog.get_logger()
@@ -37,10 +38,14 @@ def _client_ip(headers: dict[str, str], fallback: str = "unknown") -> str:
 
 def client_ip_from_request(request: Request) -> str:
     fallback = request.client.host if request.client else "unknown"
-    return _client_ip({key.lower(): value for key, value in request.headers.items()}, fallback)
+    return _client_ip(
+        {key.lower(): value for key, value in request.headers.items()}, fallback
+    )
 
 
-async def _hit_rate_limit(identifier: str, action: str, limit: int, window_seconds: int) -> int | None:
+async def _hit_rate_limit(
+    identifier: str, action: str, limit: int, window_seconds: int
+) -> int | None:
     now = int(time.time())
     bucket = now // window_seconds
     retry_after = window_seconds - (now % window_seconds)
@@ -73,13 +78,16 @@ async def enforce_rate_limit(
     except RedisError as exc:
         logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
         if settings.RATE_LIMIT_FAIL_CLOSED:
-            raise HTTPException(status_code=503, detail="Rate limit temporalmente no disponible") from exc
+            raise AppException(
+                message="Rate limit temporalmente no disponible",
+                http_status=503,
+                error_code="RATE_LIMIT_UNAVAILABLE",
+            ) from exc
         return
 
     if retry_after is not None:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Demasiadas solicitudes. Intentá nuevamente más tarde.",
+        raise RateLimitedException(
+            retry_after=retry_after,
             headers={"Retry-After": str(retry_after)},
         )
 
@@ -94,7 +102,9 @@ def _policy_for_request(method: str, path: str) -> tuple[str, int]:
     return "global", settings.RATE_LIMIT_GLOBAL_PER_MINUTE
 
 
-async def _send_rate_limit_response(send: Send, status_code: int, message: str, retry_after: int | None = None) -> None:
+async def _send_rate_limit_response(
+    send: Send, status_code: int, message: str, retry_after: int | None = None
+) -> None:
     body = json.dumps(
         {"success": False, "error_code": "RATE_LIMITED", "message": message},
         separators=(",", ":"),
@@ -106,7 +116,9 @@ async def _send_rate_limit_response(send: Send, status_code: int, message: str, 
     ]
     if retry_after is not None:
         headers.append((b"retry-after", str(retry_after).encode("ascii")))
-    await send({"type": "http.response.start", "status": status_code, "headers": headers})
+    await send(
+        {"type": "http.response.start", "status": status_code, "headers": headers}
+    )
     await send({"type": "http.response.body", "body": body})
 
 
@@ -134,17 +146,28 @@ class RedisRateLimitMiddleware:
         action, limit = _policy_for_request(method, path)
 
         try:
-            retry_after = await _hit_rate_limit(ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS)
+            retry_after = await _hit_rate_limit(
+                ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS
+            )
         except RedisError as exc:
-            logger.warning("rate_limit_middleware_redis_unavailable", action=action, error=str(exc))
+            logger.warning(
+                "rate_limit_middleware_redis_unavailable", action=action, error=str(exc)
+            )
             if settings.RATE_LIMIT_FAIL_CLOSED:
-                await _send_rate_limit_response(send, 503, "Rate limit temporalmente no disponible")
+                await _send_rate_limit_response(
+                    send, 503, "Rate limit temporalmente no disponible"
+                )
                 return
             await self.app(scope, receive, send)
             return
 
         if retry_after is not None:
-            await _send_rate_limit_response(send, 429, "Demasiadas solicitudes. Intentá nuevamente más tarde.", retry_after)
+            await _send_rate_limit_response(
+                send,
+                429,
+                "Demasiadas solicitudes. Intentá nuevamente más tarde.",
+                retry_after,
+            )
             return
 
         await self.app(scope, receive, send)

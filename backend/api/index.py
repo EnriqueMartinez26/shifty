@@ -36,9 +36,7 @@ REQUIRED_ENV_KEYS = {
 def _allowed_origins() -> set[str]:
     configured = os.getenv("CORS_ORIGINS", "")
     return {
-        origin.strip()
-        for origin in configured.split(",")
-        if origin.strip()
+        origin.strip() for origin in configured.split(",") if origin.strip()
     } or DEFAULT_ALLOWED_ORIGINS
 
 
@@ -65,7 +63,9 @@ def _cors_headers(scope: dict) -> list[tuple[bytes, bytes]]:
 
 def _sanitize_error(value: str) -> str:
     value = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+", r"\1[redacted]", value)
-    value = re.sub(r"(?i)(secret|token|password|pass|key)=([^\s,;]+)", r"\1=[redacted]", value)
+    value = re.sub(
+        r"(?i)(secret|token|password|pass|key)=([^\s,;]+)", r"\1=[redacted]", value
+    )
     return value[:2000]
 
 
@@ -84,13 +84,18 @@ def _error_app(error_code: str, message: str, detail: str):
         if method == "OPTIONS":
             headers.extend(
                 [
-                    (b"access-control-allow-methods", b"DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"),
+                    (
+                        b"access-control-allow-methods",
+                        b"DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+                    ),
                     (b"access-control-allow-headers", b"*"),
                     (b"access-control-max-age", b"600"),
                 ]
             )
             body = b"{}"
-            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            await send(
+                {"type": "http.response.start", "status": 200, "headers": headers}
+            )
             await send({"type": "http.response.body", "body": body})
             return
 

@@ -1,6 +1,8 @@
 import enum
 
-from infrastructure.persistence.models.appointment import AppointmentModel as Appointment
+from infrastructure.persistence.models.appointment import (
+    AppointmentModel as Appointment,
+)
 
 
 class AppointmentStatus(str, enum.Enum):

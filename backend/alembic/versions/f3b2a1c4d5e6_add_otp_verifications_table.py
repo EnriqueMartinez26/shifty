@@ -1,4 +1,4 @@
-﻿"""add_otp_verifications_table
+"""add_otp_verifications_table
 
 Revision ID: f3b2a1c4d5e6
 Revises: e8a1b3c5d7f9
@@ -23,10 +23,14 @@ def upgrade() -> None:
         sa.Column("id", sa.String(), primary_key=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")
+        ),
         sa.Column("store_id", sa.String(), sa.ForeignKey("stores.id"), nullable=False),
         sa.Column("phone", sa.String(length=30), nullable=False),
-        sa.Column("channel", sa.String(length=20), nullable=False, server_default="whatsapp"),
+        sa.Column(
+            "channel", sa.String(length=20), nullable=False, server_default="whatsapp"
+        ),
         sa.Column("code_hash", sa.String(length=128), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
@@ -35,8 +39,12 @@ def upgrade() -> None:
     )
     op.create_index("ix_otp_verifications_store_id", "otp_verifications", ["store_id"])
     op.create_index("ix_otp_verifications_phone", "otp_verifications", ["phone"])
-    op.create_index("ix_otp_verifications_code_hash", "otp_verifications", ["code_hash"])
-    op.create_index("ix_otp_verifications_expires_at", "otp_verifications", ["expires_at"])
+    op.create_index(
+        "ix_otp_verifications_code_hash", "otp_verifications", ["code_hash"]
+    )
+    op.create_index(
+        "ix_otp_verifications_expires_at", "otp_verifications", ["expires_at"]
+    )
 
     op.execute("ALTER TABLE otp_verifications ENABLE ROW LEVEL SECURITY;")
     op.execute("ALTER TABLE otp_verifications FORCE ROW LEVEL SECURITY;")

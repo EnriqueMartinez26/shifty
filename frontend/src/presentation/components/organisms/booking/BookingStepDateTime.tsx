@@ -1,19 +1,25 @@
-import React, { useMemo, useState } from "react";
-import { addDays, format, parseISO } from "date-fns";
-import { es } from "date-fns/locale";
-import { Calendar as CalendarIcon, ChevronLeft, Clock, Loader2 } from "lucide-react";
+import React, { useMemo, useState } from 'react'
 
-import { usePublicAvailability } from "@presentation/hooks/usePublic";
-import { colors2000s } from "../../../../theme/colors";
+import { addDays, format, parseISO } from 'date-fns'
+import { es } from 'date-fns/locale'
+import { Calendar as CalendarIcon, ChevronLeft, Clock, Loader2 } from 'lucide-react'
+
+import { usePublicAvailability } from '@presentation/hooks/usePublic'
+
+import { colors2000s } from '../../../../theme/colors'
+import {
+  createBookingBackButtonStyle,
+  createBookingSurfaceStyle
+} from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
-  storePublicId: string;
-  serviceId: string;
-  staffId: string | null;
-  selectedDate: string | null;
-  selectedTime: string | null;
-  onSelect: (date: string, time: string, staffId: string) => void;
-  onBack: () => void;
+  storePublicId: string
+  serviceId: string
+  staffId: string | null
+  selectedDate: string | null
+  selectedTime: string | null
+  onSelect: (date: string, time: string, staffId: string) => void
+  onBack: () => void
 }
 
 export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
@@ -23,45 +29,47 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   selectedDate,
   selectedTime,
   onSelect,
-  onBack,
+  onBack
 }) => {
   const [activeDate, setActiveDate] = useState<Date>(() => {
-    if (!selectedDate || selectedDate === "invalid") return new Date();
-    const parsed = parseISO(selectedDate);
-    return isNaN(parsed.getTime()) ? new Date() : parsed;
-  });
-  const [forceAll, setForceAll] = useState(false);
+    if (!selectedDate || selectedDate === 'invalid') return new Date()
+    const parsed = parseISO(selectedDate)
+    return isNaN(parsed.getTime()) ? new Date() : parsed
+  })
+  const [forceAll, setForceAll] = useState(false)
 
-  const dates = useMemo(() => Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i)), []);
-  const dateStr = format(activeDate, "yyyy-MM-dd");
+  const dates = useMemo(() => Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i)), [])
+  const dateStr = format(activeDate, 'yyyy-MM-dd')
 
   const { data: availability, isLoading } = usePublicAvailability(
     storePublicId,
     serviceId,
     /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : undefined,
-    forceAll,
-  );
+    forceAll
+  )
 
   const visibleSlots = useMemo(() => {
-    if (!availability) return [];
+    if (!availability) return []
     if (staffId) {
-      return availability.filter((slot) => slot.staff_id === staffId);
+      return availability.filter((slot) => slot.staff_id === staffId)
     }
 
-    const firstSlotByTime = new Map<string, (typeof availability)[number]>();
+    const firstSlotByTime = new Map<string, (typeof availability)[number]>()
     for (const slot of availability) {
-      const timeKey = (slot.start_time || slot.starts_at.split("T")[1] || "").substring(0, 5);
-      const current = firstSlotByTime.get(timeKey);
+      const timeKey = (slot.start_time || slot.starts_at.split('T')[1] || '').substring(0, 5)
+      const current = firstSlotByTime.get(timeKey)
       if (!current) {
-        firstSlotByTime.set(timeKey, slot);
-        continue;
+        firstSlotByTime.set(timeKey, slot)
+        continue
       }
-      if (current.status !== "available" && slot.status === "available") {
-        firstSlotByTime.set(timeKey, slot);
+      if (current.status !== 'available' && slot.status === 'available') {
+        firstSlotByTime.set(timeKey, slot)
       }
     }
-    return Array.from(firstSlotByTime.values()).sort((a, b) => a.starts_at.localeCompare(b.starts_at));
-  }, [availability, staffId]);
+    return Array.from(firstSlotByTime.values()).sort((a, b) =>
+      a.starts_at.localeCompare(b.starts_at)
+    )
+  }, [availability, staffId])
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
@@ -69,21 +77,21 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         <button
           onClick={onBack}
           className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-            borderColor: colors2000s.border.default,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-            color: colors2000s.text.primary,
-          }}
+          style={createBookingBackButtonStyle()}
         >
           <ChevronLeft size={20} className="stroke-[3px]" />
         </button>
         <div>
-          <h2 className="text-2xl font-black uppercase tracking-tight" style={{ color: colors2000s.orange.accent }}>
+          <h2
+            className="text-2xl font-black uppercase tracking-tight"
+            style={{ color: colors2000s.orange.accent }}
+          >
             Elegi fecha y hora
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            {staffId ? "Busca un horario disponible para ese profesional." : "Te mostramos horarios con cualquier profesional disponible."}
+            {staffId
+              ? 'Busca un horario disponible para ese profesional.'
+              : 'Te mostramos horarios con cualquier profesional disponible.'}
           </p>
         </div>
       </div>
@@ -96,16 +104,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
         <div
           className="flex gap-3 overflow-x-auto p-4 snap-x hide-scrollbar rounded-2xl border"
-          style={{
-            background: "#ffffff",
-            borderColor: colors2000s.border.light,
-            boxShadow: colors2000s.shadows.insetDark,
-          }}
+          style={createBookingSurfaceStyle()}
         >
           {dates.map((date) => {
-            const formattedDate = format(date, "yyyy-MM-dd");
-            const isSelected = format(activeDate, "yyyy-MM-dd") === formattedDate;
-            const isToday = format(date, "yyyy-MM-dd") === format(new Date(), "yyyy-MM-dd");
+            const formattedDate = format(date, 'yyyy-MM-dd')
+            const isSelected = format(activeDate, 'yyyy-MM-dd') === formattedDate
+            const isToday = format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
 
             return (
               <button
@@ -120,18 +124,18 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   boxShadow: isSelected
                     ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                     : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                  color: isSelected ? "#ffffff" : colors2000s.text.primary,
+                  color: isSelected ? '#ffffff' : colors2000s.text.primary
                 }}
               >
                 <span className="text-[9px] uppercase font-black tracking-widest opacity-80">
-                  {isToday ? "Hoy" : format(date, "EEE", { locale: es })}
+                  {isToday ? 'Hoy' : format(date, 'EEE', { locale: es })}
                 </span>
-                <span className="text-2xl font-black mt-1 leading-none">{format(date, "dd")}</span>
+                <span className="text-2xl font-black mt-1 leading-none">{format(date, 'dd')}</span>
                 <span className="text-[9px] font-black uppercase tracking-widest opacity-80 mt-1">
-                  {format(date, "MMM", { locale: es })}
+                  {format(date, 'MMM', { locale: es })}
                 </span>
               </button>
-            );
+            )
           })}
         </div>
       </div>
@@ -143,12 +147,16 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <span>Horarios Disponibles</span>
           </div>
           <label className="flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity">
-            <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">Ver todos</span>
+            <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
+              Ver todos
+            </span>
             <div
-              className={`w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? "bg-orange-500" : "bg-gray-300"}`}
+              className={`w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? 'bg-orange-500' : 'bg-gray-300'}`}
               onClick={() => setForceAll(!forceAll)}
             >
-              <div className={`w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? "translate-x-4" : "translate-x-0"}`} />
+              <div
+                className={`w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? 'translate-x-4' : 'translate-x-0'}`}
+              />
             </div>
           </label>
         </div>
@@ -160,22 +168,28 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         ) : visibleSlots.length === 0 ? (
           <div
             className="text-center py-10 rounded-2xl border"
-            style={{
-              background: "#ffffff",
-              borderColor: colors2000s.border.light,
-              boxShadow: colors2000s.shadows.insetDark,
-            }}
+            style={createBookingSurfaceStyle()}
           >
-            <p className="font-black text-gray-400 uppercase tracking-widest text-xs">No hay turnos disponibles.</p>
+            <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
+              No hay turnos disponibles.
+            </p>
             <p className="text-xs text-gray-400 mt-2 font-medium">Proba seleccionando otro dia.</p>
           </div>
         ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
             {visibleSlots.map((slot) => {
-              const timeString = (slot.start_time || slot.starts_at.split("T")[1] || "").substring(0, 5);
-              const isSelected = selectedDate === dateStr && selectedTime === timeString;
-              const isAvailable = slot.status === "available";
-              const badgeColor = slot.status === "blocked" ? "#dc2626" : slot.status === "booked" ? "#2563eb" : colors2000s.text.secondary;
+              const timeString = (slot.start_time || slot.starts_at.split('T')[1] || '').substring(
+                0,
+                5
+              )
+              const isSelected = selectedDate === dateStr && selectedTime === timeString
+              const isAvailable = slot.status === 'available'
+              const badgeColor =
+                slot.status === 'blocked'
+                  ? '#dc2626'
+                  : slot.status === 'booked'
+                    ? '#2563eb'
+                    : colors2000s.text.secondary
 
               return (
                 <button
@@ -188,31 +202,44 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
                       : isAvailable
                         ? `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`
-                        : "linear-gradient(180deg, #f5f5f5 0%, #e5e7eb 100%)",
-                    borderColor: isSelected ? colors2000s.orange.accent : colors2000s.border.default,
+                        : 'linear-gradient(180deg, #f5f5f5 0%, #e5e7eb 100%)',
+                    borderColor: isSelected
+                      ? colors2000s.orange.accent
+                      : colors2000s.border.default,
                     boxShadow: isSelected
                       ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                       : `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-                    color: isSelected ? "#ffffff" : isAvailable ? colors2000s.text.primary : colors2000s.text.disabled,
+                    color: isSelected
+                      ? '#ffffff'
+                      : isAvailable
+                        ? colors2000s.text.primary
+                        : colors2000s.text.disabled
                   }}
                 >
                   <div>{timeString}</div>
-                  <div className="text-[8px] uppercase tracking-widest mt-1" style={{ color: isSelected ? "#ffffff" : badgeColor }}>
+                  <div
+                    className="text-[8px] uppercase tracking-widest mt-1"
+                    style={{ color: isSelected ? '#ffffff' : badgeColor }}
+                  >
                     {staffId ? slot.status : slot.staff_name}
                   </div>
                 </button>
-              );
+              )
             })}
           </div>
         )}
       </div>
 
-      <style dangerouslySetInnerHTML={{ __html: `
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
         .hide-scrollbar::-webkit-scrollbar { display: none; }
         .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-      ` }} />
+      `
+        }}
+      />
     </div>
-  );
-};
+  )
+}
 
-export default BookingStepDateTime;
+export default BookingStepDateTime

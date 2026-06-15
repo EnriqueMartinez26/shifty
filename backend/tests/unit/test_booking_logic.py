@@ -26,12 +26,15 @@ from core.exceptions import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def dt(hour: int, minute: int = 0) -> datetime:
     """Crea un datetime UTC aware en la fecha de hoy para simplificar fixtures."""
     return datetime(2030, 6, 15, hour, minute, tzinfo=timezone.utc)
 
 
-def make_appointment(starts_at: datetime, duration_minutes: int = 60) -> SimpleNamespace:
+def make_appointment(
+    starts_at: datetime, duration_minutes: int = 60
+) -> SimpleNamespace:
     ends_at = starts_at + timedelta(minutes=duration_minutes)
     return SimpleNamespace(
         starts_at=starts_at,
@@ -41,7 +44,9 @@ def make_appointment(starts_at: datetime, duration_minutes: int = 60) -> SimpleN
     )
 
 
-def make_block(starts_at: datetime, ends_at: datetime, note: str = "Bloqueo") -> SimpleNamespace:
+def make_block(
+    starts_at: datetime, ends_at: datetime, note: str = "Bloqueo"
+) -> SimpleNamespace:
     return SimpleNamespace(
         starts_at=starts_at,
         ends_at=ends_at,
@@ -53,6 +58,7 @@ def make_block(starts_at: datetime, ends_at: datetime, note: str = "Bloqueo") ->
 # ---------------------------------------------------------------------------
 # SchedulingDomainService
 # ---------------------------------------------------------------------------
+
 
 class TestSchedulingDomainService:
     """Tests para el servicio de dominio puro — sin IO."""
@@ -77,7 +83,7 @@ class TestSchedulingDomainService:
         existing = make_appointment(dt(10), 60)  # 10:00–11:00
         with pytest.raises(AppointmentConflictException) as exc:
             self.svc.validate_availability(
-                requested_start=dt(10, 30),   # 10:30 — dentro del bloque
+                requested_start=dt(10, 30),  # 10:30 — dentro del bloque
                 requested_end=dt(11, 30),
                 conflicting_appointment=existing,
                 overlapping_block=None,
@@ -163,6 +169,7 @@ class TestSchedulingDomainService:
 # Overlap detection — lógica pura extraída del repositorio
 # ---------------------------------------------------------------------------
 
+
 def overlaps(
     existing_start: datetime,
     existing_end: datetime,
@@ -217,6 +224,7 @@ class TestOverlapFormula:
 # AvailabilityService — slot calculation logic (sin DB)
 # ---------------------------------------------------------------------------
 
+
 def compute_slots_for_schedule(
     schedule_start: time,
     schedule_end: time,
@@ -266,12 +274,14 @@ def compute_slots_for_schedule(
             status = "blocked"
             reason = f"Requiere {notice_hours}h de antelación"
 
-        slots.append({
-            "starts_at": current.isoformat(),
-            "ends_at": slot_end.isoformat(),
-            "status": status,
-            "reason": reason,
-        })
+        slots.append(
+            {
+                "starts_at": current.isoformat(),
+                "ends_at": slot_end.isoformat(),
+                "status": status,
+                "reason": reason,
+            }
+        )
 
         current += timedelta(minutes=granularity_minutes)
 
@@ -361,8 +371,12 @@ class TestSlotCalculation:
             datetime(2030, 6, 15, 13, 0, tzinfo=timezone.utc),
         )
         slots = self._run(start="09:00", end="13:00", duration=60, blocks=[block])
-        slot_09 = next(s for s in slots if s["starts_at"].startswith("2030-06-15T09:00"))
-        slot_10 = next(s for s in slots if s["starts_at"].startswith("2030-06-15T10:00"))
+        slot_09 = next(
+            s for s in slots if s["starts_at"].startswith("2030-06-15T09:00")
+        )
+        slot_10 = next(
+            s for s in slots if s["starts_at"].startswith("2030-06-15T10:00")
+        )
         assert slot_09["status"] == "available"
         assert slot_10["status"] == "available"
 
@@ -381,6 +395,7 @@ class TestSlotCalculation:
         # (hoy a las 09:00 del 2030 no está dentro de 999h desde now si now < 2030)
         # Usamos fecha casi real: date.today()
         from datetime import date as date_type
+
         today = date_type.today()
         slots = compute_slots_for_schedule(
             schedule_start=time(9, 0),

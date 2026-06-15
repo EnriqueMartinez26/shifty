@@ -3,6 +3,7 @@ from typing import List, Optional
 from datetime import date
 from domain.entities.appointment import Appointment
 
+
 class IAppointmentRepository(ABC):
     """Abstract interface for appointment data access."""
 
@@ -17,7 +18,9 @@ class IAppointmentRepository(ABC):
         pass
 
     @abstractmethod
-    async def find_by_staff_and_date(self, staff_id: str, date_val: date) -> List[Appointment]:
+    async def find_by_staff_and_date(
+        self, staff_id: str, date_val: date
+    ) -> List[Appointment]:
         """Find all appointments for a specific staff member on a specific date."""
         pass
 

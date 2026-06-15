@@ -4,6 +4,7 @@ Alembic migration environment.
 Usa psycopg2 (sync) en lugar de asyncpg para evitar el bug WinError 64
 con el ProactorEventLoop de Python 3.13 en Windows.
 """
+
 from urllib.parse import parse_qs, unquote, urlparse
 from logging.config import fileConfig
 from sqlalchemy import create_engine, pool, text
@@ -11,9 +12,11 @@ from alembic import context
 
 # Importar Base y modelos para autogenerate
 from core.models import Base
+
 # from modules.users.model import User
 from modules.stores.model import Store
 from modules.services.model import Service
+
 # from modules.staff.model import Staff, Schedule, StaffBlock
 # from modules.appointments.model import Appointment
 from modules.budget.model import Budget

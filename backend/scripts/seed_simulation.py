@@ -5,7 +5,6 @@ import sys
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
-import ulid
 from dotenv import load_dotenv
 from sqlalchemy import insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -109,10 +108,19 @@ STORE_SCENARIOS = [
                 "display_name": "Carlos Barber",
                 "email": "carlos.barber@shifty.com",
                 "phone": "+54 11 5000-2001",
-                "service_names": ["Corte Moderno", "Barba y Perfilado", "Skin Fade Premium"],
+                "service_names": [
+                    "Corte Moderno",
+                    "Barba y Perfilado",
+                    "Skin Fade Premium",
+                ],
                 "hours": {0: (9, 18), 1: (9, 18), 2: (9, 18), 3: (9, 18), 4: (10, 19)},
                 "blocks": [
-                    {"days_from_now": 2, "start_hour": 13, "duration_hours": 2, "reason": "training"},
+                    {
+                        "days_from_now": 2,
+                        "start_hour": 13,
+                        "duration_hours": 2,
+                        "reason": "training",
+                    },
                 ],
             },
             {
@@ -122,9 +130,20 @@ STORE_SCENARIOS = [
                 "email": "elena.stylist@shifty.com",
                 "phone": "+54 11 5000-2002",
                 "service_names": ["Corte Moderno", "Servicio VIP Completo"],
-                "hours": {0: (11, 19), 1: (11, 19), 2: (11, 19), 3: (11, 19), 5: (10, 16)},
+                "hours": {
+                    0: (11, 19),
+                    1: (11, 19),
+                    2: (11, 19),
+                    3: (11, 19),
+                    5: (10, 16),
+                },
                 "blocks": [
-                    {"days_from_now": 4, "start_hour": 15, "duration_hours": 3, "reason": "personal"},
+                    {
+                        "days_from_now": 4,
+                        "start_hour": 15,
+                        "duration_hours": 3,
+                        "reason": "personal",
+                    },
                 ],
             },
             {
@@ -134,15 +153,41 @@ STORE_SCENARIOS = [
                 "email": "mateo.rios@shifty.com",
                 "phone": "+54 11 5000-2003",
                 "service_names": ["Barba y Perfilado", "Servicio VIP Completo"],
-                "hours": {1: (12, 20), 2: (12, 20), 3: (12, 20), 4: (12, 20), 6: (11, 16)},
+                "hours": {
+                    1: (12, 20),
+                    2: (12, 20),
+                    3: (12, 20),
+                    4: (12, 20),
+                    6: (11, 16),
+                },
                 "blocks": [],
             },
         ],
         "clients": [
-            {"email": "bruno.lopez@example.com", "first_name": "Bruno", "last_name": "Lopez", "phone": "+54 11 6000-3001"},
-            {"email": "camila.rossi@example.com", "first_name": "Camila", "last_name": "Rossi", "phone": "+54 11 6000-3002"},
-            {"email": "diego.mendez@example.com", "first_name": "Diego", "last_name": "Mendez", "phone": "+54 11 6000-3003"},
-            {"email": "florencia.suarez@example.com", "first_name": "Florencia", "last_name": "Suarez", "phone": "+54 11 6000-3004"},
+            {
+                "email": "bruno.lopez@example.com",
+                "first_name": "Bruno",
+                "last_name": "Lopez",
+                "phone": "+54 11 6000-3001",
+            },
+            {
+                "email": "camila.rossi@example.com",
+                "first_name": "Camila",
+                "last_name": "Rossi",
+                "phone": "+54 11 6000-3002",
+            },
+            {
+                "email": "diego.mendez@example.com",
+                "first_name": "Diego",
+                "last_name": "Mendez",
+                "phone": "+54 11 6000-3003",
+            },
+            {
+                "email": "florencia.suarez@example.com",
+                "first_name": "Florencia",
+                "last_name": "Suarez",
+                "phone": "+54 11 6000-3004",
+            },
         ],
         "budgets": [
             {
@@ -219,9 +264,20 @@ STORE_SCENARIOS = [
                 "email": "julieta.color@shifty.com",
                 "phone": "+54 11 5000-2101",
                 "service_names": ["Color Completo", "Tratamiento Capilar"],
-                "hours": {0: (10, 18), 1: (10, 18), 2: (10, 18), 4: (12, 20), 5: (9, 15)},
+                "hours": {
+                    0: (10, 18),
+                    1: (10, 18),
+                    2: (10, 18),
+                    4: (12, 20),
+                    5: (9, 15),
+                },
                 "blocks": [
-                    {"days_from_now": 3, "start_hour": 10, "duration_hours": 4, "reason": "vacation"},
+                    {
+                        "days_from_now": 3,
+                        "start_hour": 10,
+                        "duration_hours": 4,
+                        "reason": "vacation",
+                    },
                 ],
             },
             {
@@ -231,14 +287,35 @@ STORE_SCENARIOS = [
                 "email": "lucia.brush@shifty.com",
                 "phone": "+54 11 5000-2102",
                 "service_names": ["Corte y Brushing", "Tratamiento Capilar"],
-                "hours": {1: (11, 19), 2: (11, 19), 3: (11, 19), 4: (11, 19), 5: (10, 16)},
+                "hours": {
+                    1: (11, 19),
+                    2: (11, 19),
+                    3: (11, 19),
+                    4: (11, 19),
+                    5: (10, 16),
+                },
                 "blocks": [],
             },
         ],
         "clients": [
-            {"email": "nora.vera@example.com", "first_name": "Nora", "last_name": "Vera", "phone": "+54 11 6000-4001"},
-            {"email": "paula.luna@example.com", "first_name": "Paula", "last_name": "Luna", "phone": "+54 11 6000-4002"},
-            {"email": "romina.paz@example.com", "first_name": "Romina", "last_name": "Paz", "phone": "+54 11 6000-4003"},
+            {
+                "email": "nora.vera@example.com",
+                "first_name": "Nora",
+                "last_name": "Vera",
+                "phone": "+54 11 6000-4001",
+            },
+            {
+                "email": "paula.luna@example.com",
+                "first_name": "Paula",
+                "last_name": "Luna",
+                "phone": "+54 11 6000-4002",
+            },
+            {
+                "email": "romina.paz@example.com",
+                "first_name": "Romina",
+                "last_name": "Paz",
+                "phone": "+54 11 6000-4003",
+            },
         ],
         "budgets": [
             {
@@ -317,6 +394,7 @@ async def ensure_store(session: AsyncSession, scenario: dict):
     }
     if store is None:
         store = Store(**attrs)
+        store.public_id = store.id
         session.add(store)
         await session.flush()
     else:
@@ -324,7 +402,13 @@ async def ensure_store(session: AsyncSession, scenario: dict):
     return store
 
 
-async def ensure_store_schedule(session: AsyncSession, store_id: str, day_of_week: int, open_time: time, close_time: time):
+async def ensure_store_schedule(
+    session: AsyncSession,
+    store_id: str,
+    day_of_week: int,
+    open_time: time,
+    close_time: time,
+):
     schedule = await get_by(
         session,
         StoreSchedule,
@@ -365,6 +449,7 @@ async def ensure_service(session: AsyncSession, store_id: str, service_data: dic
     }
     if service is None:
         service = Service(**attrs)
+        service.public_id = service.id
         session.add(service)
         await session.flush()
     else:
@@ -372,7 +457,9 @@ async def ensure_service(session: AsyncSession, store_id: str, service_data: dic
     return service
 
 
-async def ensure_staff(session: AsyncSession, store_id: str, staff_data: dict, service_ids: list[str]):
+async def ensure_staff(
+    session: AsyncSession, store_id: str, staff_data: dict, service_ids: list[str]
+):
     staff = await get_by(
         session,
         Staff,
@@ -397,7 +484,9 @@ async def ensure_staff(session: AsyncSession, store_id: str, staff_data: dict, s
     return staff
 
 
-async def ensure_staff_service_links(session: AsyncSession, staff_id: str, service_ids: list[str]):
+async def ensure_staff_service_links(
+    session: AsyncSession, staff_id: str, service_ids: list[str]
+):
     for service_id in service_ids:
         exists = await session.execute(
             select(staff_services.c.staff_id).where(
@@ -407,7 +496,9 @@ async def ensure_staff_service_links(session: AsyncSession, staff_id: str, servi
         )
         if exists.first() is None:
             await session.execute(
-                insert(staff_services).values(staff_id=staff_id, service_id=service_id, rating=None)
+                insert(staff_services).values(
+                    staff_id=staff_id, service_id=service_id, rating=None
+                )
             )
 
 
@@ -471,7 +562,8 @@ async def ensure_appointment(
         "starts_at": starts_at,
         "ends_at": ends_at,
         "duration_minutes": duration_minutes,
-        "client_name": client.full_name or f"{client.first_name} {client.last_name}".strip(),
+        "client_name": client.full_name
+        or f"{client.first_name} {client.last_name}".strip(),
         "client_email": client.email,
         "client_phone": client.phone,
         "status": status,
@@ -575,7 +667,9 @@ async def ensure_audit_log(
 async def seed_store(session: AsyncSession, scenario: dict):
     store = await ensure_store(session, scenario)
     for day_of_week, (open_time, close_time) in scenario["hours"].items():
-        await ensure_store_schedule(session, store.id, day_of_week, open_time, close_time)
+        await ensure_store_schedule(
+            session, store.id, day_of_week, open_time, close_time
+        )
 
     admin_data = scenario["admin"]
     admin_user = await ensure_user(
@@ -608,7 +702,9 @@ async def seed_store(session: AsyncSession, scenario: dict):
             full_name=staff_data["display_name"],
             phone=staff_data["phone"],
         )
-        service_ids = [services_by_name[name].id for name in staff_data["service_names"]]
+        service_ids = [
+            services_by_name[name].id for name in staff_data["service_names"]
+        ]
         staff = await ensure_staff(session, store.id, staff_data, service_ids)
         await ensure_staff_service_links(session, staff.id, service_ids)
         for day_of_week, (start_hour, end_hour) in staff_data["hours"].items():
@@ -657,7 +753,9 @@ async def seed_store(session: AsyncSession, scenario: dict):
     ]
     for index, (status, day_offset) in enumerate(appointment_statuses):
         staff = staff_records[index % len(staff_records)]
-        service_name = scenario["staff"][index % len(scenario["staff"])]["service_names"][0]
+        service_name = scenario["staff"][index % len(scenario["staff"])][
+            "service_names"
+        ][0]
         service = services_by_name[service_name]
         client = client_records[index % len(client_records)]
         start_hour = 10 + (index * 2)

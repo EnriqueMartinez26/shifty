@@ -19,7 +19,9 @@ class CustomerLedger(BaseEntity):
 
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
     client_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    appointment_id: Mapped[str | None] = mapped_column(ForeignKey("appointments.id"), nullable=True, index=True)
+    appointment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("appointments.id"), nullable=True, index=True
+    )
     movement_type: Mapped[str] = mapped_column(String(30), index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     balance_after: Mapped[Decimal] = mapped_column(Numeric(12, 2))

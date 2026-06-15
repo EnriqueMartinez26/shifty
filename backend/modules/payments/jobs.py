@@ -72,7 +72,9 @@ async def process_webhook_inbox_batch(
     for inbox in inbox_items:
         try:
             if inbox.provider == "mercadopago" and inbox.store_id:
-                await apply_mercadopago_webhook_payload(db, store_id=inbox.store_id, payload=inbox.payload)
+                await apply_mercadopago_webhook_payload(
+                    db, store_id=inbox.store_id, payload=inbox.payload
+                )
             inbox.mark_processed()
             processed += 1
         except Exception as exc:

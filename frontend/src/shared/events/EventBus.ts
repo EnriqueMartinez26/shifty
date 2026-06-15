@@ -1,16 +1,16 @@
-import { DomainEvent } from '../../domain/events/DomainEvent';
-import { EventHandler } from './EventHandler';
+import { EventHandler } from './EventHandler'
+import { DomainEvent } from '../../domain/events/DomainEvent'
 
-export type Unsubscribe = () => void;
+export type Unsubscribe = () => void
 
 /**
  * Bus de eventos centralizado en memoria para coordinar la comunicación reactiva.
  * Implementa el patrón Observer con replay para historial de auditoría de eventos.
  */
 export class EventBus {
-  private static instance: EventBus;
-  private subscribers: Map<string, Set<EventHandler<any>>> = new Map();
-  private eventHistory: DomainEvent[] = [];
+  private static instance: EventBus
+  private subscribers: Map<string, Set<EventHandler<DomainEvent>>> = new Map()
+  private eventHistory: DomainEvent[] = []
 
   private constructor() {}
 
@@ -19,9 +19,9 @@ export class EventBus {
    */
   public static getInstance(): EventBus {
     if (!EventBus.instance) {
-      EventBus.instance = new EventBus();
+      EventBus.instance = new EventBus()
     }
-    return EventBus.instance;
+    return EventBus.instance
   }
 
   /**
@@ -33,31 +33,31 @@ export class EventBus {
     handler: EventHandler<T>
   ): Unsubscribe {
     if (!this.subscribers.has(eventName)) {
-      this.subscribers.set(eventName, new Set());
+      this.subscribers.set(eventName, new Set())
     }
 
-    this.subscribers.get(eventName)!.add(handler);
+    this.subscribers.get(eventName)!.add(handler as EventHandler<DomainEvent>)
 
     return () => {
-      const handlers = this.subscribers.get(eventName);
+      const handlers = this.subscribers.get(eventName)
       if (handlers) {
-        handlers.delete(handler);
+        handlers.delete(handler)
         if (handlers.size === 0) {
-          this.subscribers.delete(eventName);
+          this.subscribers.delete(eventName)
         }
       }
-    };
+    }
   }
 
   /**
    * Despacha un evento individual y ejecuta de forma asíncrona todos sus handlers asociados.
    */
   public async publish<T extends DomainEvent>(event: T): Promise<void> {
-    this.eventHistory.push(event);
-    const handlers = this.subscribers.get(event.eventName);
+    this.eventHistory.push(event)
+    const handlers = this.subscribers.get(event.eventName)
 
     if (!handlers || handlers.size === 0) {
-      return;
+      return
     }
 
     const executions = Array.from(handlers).map((handler) =>
@@ -65,11 +65,11 @@ export class EventBus {
         console.error(
           `[EventBus] Error crítico al procesar handler en evento "${event.eventName}":`,
           err
-        );
+        )
       })
-    );
+    )
 
-    await Promise.all(executions);
+    await Promise.all(executions)
   }
 
   /**
@@ -77,7 +77,7 @@ export class EventBus {
    */
   public async publishAll(events: DomainEvent[]): Promise<void> {
     for (const event of events) {
-      await this.publish(event);
+      await this.publish(event)
     }
   }
 
@@ -85,15 +85,15 @@ export class EventBus {
    * Retorna el historial completo de eventos despachados para auditoría (replay/logs).
    */
   public getHistory(): DomainEvent[] {
-    return [...this.eventHistory];
+    return [...this.eventHistory]
   }
 
   /**
    * Restablece el historial de eventos e inscribe suscriptores (útil para testing).
    */
   public reset(): void {
-    this.subscribers.clear();
-    this.eventHistory = [];
+    this.subscribers.clear()
+    this.eventHistory = []
   }
 }
-export default EventBus;
+export default EventBus

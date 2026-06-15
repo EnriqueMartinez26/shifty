@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+.vite
+.venv
+.venv_win
+backend/.venv
+backend/.venv_win
+backend/uv.lock
+frontend/package-lock.json
+shifty_dev.db

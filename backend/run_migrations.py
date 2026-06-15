@@ -7,6 +7,7 @@ USO:
 Bypassa completamente Alembic CLI para evitar el UnicodeDecodeError de
 psycopg2 en Windows con codificación regional española.
 """
+
 import sys
 import os
 from urllib.parse import parse_qs, unquote, urlparse
@@ -22,7 +23,9 @@ sys.path.insert(0, backend_dir)
 
 # Leer el .env manualmente ANTES de importar settings
 from dotenv import load_dotenv
+
 load_dotenv(os.path.join(backend_dir, ".env"))
+
 
 def parse_db_url(url: str) -> dict:
     parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
@@ -38,6 +41,7 @@ def parse_db_url(url: str) -> dict:
         "sslmode": query.get("sslmode", ["require"])[0],
     }
 
+
 def main():
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
@@ -45,10 +49,13 @@ def main():
         sys.exit(1)
 
     params = parse_db_url(db_url)
-    print(f"Conectando a PostgreSQL en {params['host']}:{params['port']}/{params['dbname']} ...")
+    print(
+        f"Conectando a PostgreSQL en {params['host']}:{params['port']}/{params['dbname']} ..."
+    )
 
     try:
         import psycopg2
+
         # Conectar usando parámetros de keyword (sin DSN string)
         conn = psycopg2.connect(
             host=params["host"],
@@ -74,14 +81,18 @@ def main():
     print("\nEjecutando migraciones de Alembic...")
     try:
         alembic_cfg = Config(os.path.join(backend_dir, "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", os.path.join(backend_dir, "alembic"))
+        alembic_cfg.set_main_option(
+            "script_location", os.path.join(backend_dir, "alembic")
+        )
         alembic_command.upgrade(alembic_cfg, "head")
         print("OK: Migraciones aplicadas correctamente.")
     except Exception as e:
         print(f"ERROR: Error en migraciones: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

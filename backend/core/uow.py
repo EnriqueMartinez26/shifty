@@ -5,13 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.appointments.repository import AppointmentRepository
 from modules.audit.service import AuditService
 
+
 class AbstractUnitOfWork(abc.ABC):
     """
     Interface genérica del Unit of Work.
     La capa de servicio dependerá de esta abstracción y no de SQLAlchemy directamente.
     """
+
     appointments: AppointmentRepository
-    audit: AuditService  # TODO: Podría extraerse a AuditRepository también para limpieza
+    audit: (
+        AuditService  # TODO: Podría extraerse a AuditRepository también para limpieza
+    )
 
     async def __aenter__(self) -> "AbstractUnitOfWork":
         return self
@@ -36,6 +40,7 @@ class AsyncSqlAlchemyUnitOfWork(AbstractUnitOfWork):
     """
     Implementación concreta de UoW usando SQLAlchemy AsyncSession.
     """
+
     def __init__(self, session: AsyncSession):
         self.session = session
 
@@ -51,4 +56,3 @@ class AsyncSqlAlchemyUnitOfWork(AbstractUnitOfWork):
 
     async def rollback(self):
         await self.session.rollback()
-

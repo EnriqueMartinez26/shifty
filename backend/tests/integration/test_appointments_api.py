@@ -12,6 +12,7 @@ Casos cubiertos:
   5. Reprogramación de turno atómica.
   6. Marcar turno como AUSENTE.
 """
+
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta, timezone
@@ -60,6 +61,7 @@ async def test_session(test_engine):
 # Fixture: Cliente HTTP de FastAPI con DB de test inyectada
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture(scope="function")
 async def client(test_session):
     """
@@ -74,7 +76,11 @@ async def client(test_session):
     app.dependency_overrides[get_db] = override_get_db
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"x-raw-response": "true"},
+    ) as c:
         yield c
 
     app.dependency_overrides.clear()
@@ -84,23 +90,30 @@ async def client(test_session):
 # Helpers para crear datos de prueba
 # ---------------------------------------------------------------------------
 
+
 async def create_test_store_and_admin(client: AsyncClient) -> tuple[str, str]:
     """Registra un salón y retorna (store_public_id, access_token)."""
-    resp = await client.post("/auth/register", json={
-        "store_name": "Barbería Test",
-        "store_slug": "barberia-test",
-        "admin_email": "admin@test.com",
-        "admin_password": "Password123!",
-        "admin_first_name": "Test",
-        "admin_last_name": "Admin",
-    })
+    resp = await client.post(
+        "/auth/register",
+        json={
+            "store_name": "Barbería Test",
+            "store_slug": "barberia-test",
+            "admin_email": "admin@test.com",
+            "admin_password": "Password123!",
+            "admin_first_name": "Test",
+            "admin_last_name": "Admin",
+        },
+    )
     assert resp.status_code == 201, f"Register failed: {resp.text}"
     store_public_id = resp.json()["store_public_id"]
 
-    token_resp = await client.post("/auth/login", json={
-        "email": "admin@test.com",
-        "password": "Password123!",
-    })
+    token_resp = await client.post(
+        "/auth/login",
+        json={
+            "email": "admin@test.com",
+            "password": "Password123!",
+        },
+    )
     assert token_resp.status_code == 200
     token = token_resp.json()["access_token"]
     return store_public_id, token
@@ -121,8 +134,8 @@ async def create_service(client: AsyncClient, token: str) -> str:
 # Tests de integración
 # ---------------------------------------------------------------------------
 
-class TestAppointmentEndpoints:
 
+class TestAppointmentEndpoints:
     @pytest.mark.asyncio
     async def test_create_appointment_in_past_fails(self, client: AsyncClient):
         """
@@ -137,7 +150,9 @@ class TestAppointmentEndpoints:
             json={
                 "service_id": service_id,
                 "staff_id": "cualquier-staff-id",
-                "starts_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+                "starts_at": (
+                    datetime.now(timezone.utc) - timedelta(hours=1)
+                ).isoformat(),
                 "idempotency_key": "test-key-past-0001",
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -168,7 +183,9 @@ class TestAppointmentEndpoints:
         assert resp.json()["error_code"] == "APPOINTMENT_NOT_FOUND"
 
     @pytest.mark.asyncio
-    async def test_app_exception_handler_returns_structured_json(self, client: AsyncClient):
+    async def test_app_exception_handler_returns_structured_json(
+        self, client: AsyncClient
+    ):
         """
         Caso: Verificar que el handler global convierte AppException en JSON estructurado.
         Esperado: Respuesta con error_code, message y detail.
@@ -196,7 +213,9 @@ class TestAppointmentEndpoints:
         resp = await client.patch(
             "/appointments/TURNO-ID/reschedule",
             json={
-                "new_starts_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+                "new_starts_at": (
+                    datetime.now(timezone.utc) - timedelta(days=1)
+                ).isoformat(),
                 "idempotency_key": "idempotency-key-reschedule-001",
             },
             headers={"Authorization": f"Bearer {token}"},
@@ -213,18 +232,24 @@ class TestAppointmentEndpoints:
         _, admin_token = await create_test_store_and_admin(client)
 
         # Crear usuario cliente
-        await client.post("/auth/register", json={
-            "store_name": "Otro Salon",
-            "store_slug": "otro-salon-slug",
-            "admin_email": "cliente@test.com",
-            "admin_password": "ClientPass123!",
-            "admin_first_name": "Juan",
-            "admin_last_name": "Cliente",
-        })
-        client_token_resp = await client.post("/auth/login", json={
-            "email": "cliente@test.com",
-            "password": "ClientPass123!",
-        })
+        await client.post(
+            "/auth/register",
+            json={
+                "store_name": "Otro Salon",
+                "store_slug": "otro-salon-slug",
+                "admin_email": "cliente@test.com",
+                "admin_password": "ClientPass123!",
+                "admin_first_name": "Juan",
+                "admin_last_name": "Cliente",
+            },
+        )
+        client_token_resp = await client.post(
+            "/auth/login",
+            json={
+                "email": "cliente@test.com",
+                "password": "ClientPass123!",
+            },
+        )
         client_token = client_token_resp.json()["access_token"]
 
         resp = await client.patch(
@@ -235,7 +260,9 @@ class TestAppointmentEndpoints:
         assert resp.status_code in (403, 404)
 
     @pytest.mark.asyncio
-    async def test_search_endpoint_returns_paginated_response(self, client: AsyncClient):
+    async def test_search_endpoint_returns_paginated_response(
+        self, client: AsyncClient
+    ):
         """
         Caso: Búsqueda sin filtros retorna estructura de paginación válida.
         Esperado: Respuesta con keys total, page, page_size, results.

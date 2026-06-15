@@ -47,7 +47,9 @@ class Settings(BaseSettings):
     TWILIO_WHATSAPP_FROM: str | None = None
     EXPOSE_API_DOCS: bool = True
     MAX_REQUEST_BODY_BYTES: int = 32 * 1024
-    ALLOWED_WRITE_CONTENT_TYPES: str = "application/json,application/x-www-form-urlencoded"
+    ALLOWED_WRITE_CONTENT_TYPES: str = (
+        "application/json,application/x-www-form-urlencoded"
+    )
     TRUST_PROXY_HEADERS: bool = True
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_FAIL_CLOSED: bool = False
@@ -95,9 +97,7 @@ class Settings(BaseSettings):
     FRONTEND_RESET_PASSWORD_PATH: str = "/reset-password"
     PUBLIC_API_URL: str = "http://localhost:8000"
 
-    CORS_ORIGINS: str = (
-        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
-    )
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
 
     @model_validator(mode="before")
     @classmethod
@@ -119,7 +119,10 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
         if self.ENV == Environment.PRODUCTION:
-            if self.SECRET_KEY == "generate_a_very_secret_key_here_for_production" or len(self.SECRET_KEY) < 32:
+            if (
+                self.SECRET_KEY == "generate_a_very_secret_key_here_for_production"
+                or len(self.SECRET_KEY) < 32
+            ):
                 raise ValueError("SECRET_KEY debe ser fuerte y unico en produccion")
             if "localhost" in self.CORS_ORIGINS or "127.0.0.1" in self.CORS_ORIGINS:
                 raise ValueError("CORS_ORIGINS no debe incluir localhost en produccion")
@@ -129,10 +132,17 @@ class Settings(BaseSettings):
                 raise ValueError("RATE_LIMIT_ENABLED debe estar activo en produccion")
             if not self.COOKIE_SECURE:
                 raise ValueError("COOKIE_SECURE debe ser true en produccion")
-            if self.FIELD_ENCRYPTION_KEY is not None and len(self.FIELD_ENCRYPTION_KEY) < 32:
-                raise ValueError("FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion")
+            if (
+                self.FIELD_ENCRYPTION_KEY is not None
+                and len(self.FIELD_ENCRYPTION_KEY) < 32
+            ):
+                raise ValueError(
+                    "FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion"
+                )
             if self.ALLOW_PUBLIC_REGISTRATION:
-                raise ValueError("ALLOW_PUBLIC_REGISTRATION debe ser false en produccion")
+                raise ValueError(
+                    "ALLOW_PUBLIC_REGISTRATION debe ser false en produccion"
+                )
             if self.OTP_PROVIDER == "console":
                 raise ValueError("OTP_PROVIDER no puede ser console en produccion")
             if self.OTP_DEBUG_EXPOSE_CODE:
@@ -149,12 +159,19 @@ class Settings(BaseSettings):
             raise ValueError("CELERY_WORKER_PREFETCH_MULTIPLIER debe ser >= 1")
         if self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS < 1:
             raise ValueError("CELERY_TASK_SOFT_TIME_LIMIT_SECONDS debe ser >= 1")
-        if self.CELERY_TASK_TIME_LIMIT_SECONDS <= self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS:
-            raise ValueError("CELERY_TASK_TIME_LIMIT_SECONDS debe ser mayor al soft time limit")
+        if (
+            self.CELERY_TASK_TIME_LIMIT_SECONDS
+            <= self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS
+        ):
+            raise ValueError(
+                "CELERY_TASK_TIME_LIMIT_SECONDS debe ser mayor al soft time limit"
+            )
         if self.MAX_REQUEST_BODY_BYTES < 1024:
             raise ValueError("MAX_REQUEST_BODY_BYTES no puede ser menor a 1024 bytes")
         if self.MAX_REQUEST_BODY_BYTES > 1024 * 1024:
-            raise ValueError("MAX_REQUEST_BODY_BYTES no debe superar 1MB sin revision de seguridad")
+            raise ValueError(
+                "MAX_REQUEST_BODY_BYTES no debe superar 1MB sin revision de seguridad"
+            )
         return self
 
     model_config = SettingsConfigDict(
@@ -167,7 +184,9 @@ class Settings(BaseSettings):
 
 def _sanitize_settings_error(value: str) -> str:
     value = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+", r"\1[redacted]", value)
-    value = re.sub(r"(?i)(secret|token|password|pass|key)=([^\s,;]+)", r"\1=[redacted]", value)
+    value = re.sub(
+        r"(?i)(secret|token|password|pass|key)=([^\s,;]+)", r"\1=[redacted]", value
+    )
     return value[:2000]
 
 

@@ -13,7 +13,9 @@ class FakeClock:
 
 
 @pytest.mark.asyncio
-async def test_mercadopago_circuit_breaker_opens_for_transient_failures(monkeypatch) -> None:
+async def test_mercadopago_circuit_breaker_opens_for_transient_failures(
+    monkeypatch,
+) -> None:
     breaker = AsyncCircuitBreaker(
         name="mercadopago-test",
         failure_threshold=2,
@@ -29,7 +31,9 @@ async def test_mercadopago_circuit_breaker_opens_for_transient_failures(monkeypa
             transient=True,
         )
 
-    monkeypatch.setattr(payments_service, "_perform_mercadopago_request", transient_failure)
+    monkeypatch.setattr(
+        payments_service, "_perform_mercadopago_request", transient_failure
+    )
 
     with pytest.raises(payments_service.MercadoPagoAPIError):
         await payments_service._mercadopago_api_request(
@@ -57,7 +61,9 @@ async def test_mercadopago_circuit_breaker_opens_for_transient_failures(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_mercadopago_circuit_breaker_ignores_non_transient_failures(monkeypatch) -> None:
+async def test_mercadopago_circuit_breaker_ignores_non_transient_failures(
+    monkeypatch,
+) -> None:
     breaker = AsyncCircuitBreaker(
         name="mercadopago-test",
         failure_threshold=1,

@@ -1,8 +1,8 @@
-import { ApplicationError } from './ApplicationError';
+import { ApplicationError } from './ApplicationError'
 
 export class ValidationError extends ApplicationError {
-  public readonly code = 'VALIDATION_ERROR';
-  public readonly statusCode = 400;
-  public readonly isOperational = true;
+  public readonly code = 'VALIDATION_ERROR'
+  public readonly statusCode = 400
+  public readonly isOperational = true
 }
-export default ValidationError;
+export default ValidationError

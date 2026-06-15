@@ -1,20 +1,22 @@
-import React from "react";
-import { Loader2, X } from "lucide-react";
+import React from 'react'
 
-import { buttonStyles2000s, colors2000s } from "../../../theme/colors";
+import { Loader2, X } from 'lucide-react'
+
+import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 
 interface SuperAdminFormModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void | Promise<void>;
-  title: string;
-  subtitle: string;
-  submitLabel: string;
-  cancelLabel?: string;
-  error?: string | null;
-  loading?: boolean;
-  submitDisabled?: boolean;
-  children: React.ReactNode;
+  isOpen: boolean
+  onClose: () => void
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void | Promise<void>
+  title: string
+  subtitle: string
+  submitLabel: string
+  cancelLabel?: string
+  error?: string | null
+  loading?: boolean
+  submitDisabled?: boolean
+  children: React.ReactNode
 }
 
 export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
@@ -24,13 +26,13 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
   title,
   subtitle,
   submitLabel,
-  cancelLabel = "Cancelar",
+  cancelLabel = 'Cancelar',
   error,
   loading = false,
   submitDisabled = false,
-  children,
+  children
 }) => {
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -38,11 +40,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
 
       <div
         className="relative w-full max-w-3xl overflow-y-auto rounded-[2.5rem] border p-8 max-h-[92vh]"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`,
-        }}
+        style={create2000sModalSurfaceStyle()}
       >
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
@@ -67,14 +65,19 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
           </button>
         </div>
 
-        <form onSubmit={onSubmit} className="space-y-6">
+        <form
+          onSubmit={(event) => {
+            void onSubmit(event)
+          }}
+          className="space-y-6"
+        >
           {error ? (
             <div
               className="rounded-2xl px-4 py-3 text-sm font-bold"
               style={{
-                background: "#fff1f2",
-                border: "1px solid #fecdd3",
-                color: "#be123c",
+                background: '#fff1f2',
+                border: '1px solid #fecdd3',
+                color: '#be123c'
               }}
             >
               {error}
@@ -105,7 +108,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
         </form>
       </div>
     </div>
-  );
-};
+  )
+}
 
-export default SuperAdminFormModal;
+export default SuperAdminFormModal

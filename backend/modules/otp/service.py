@@ -4,7 +4,7 @@ import random
 import re
 from datetime import datetime, timedelta, timezone
 
-from fastapi import HTTPException, status
+from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,7 +20,7 @@ def normalize_phone(raw_phone: str) -> str:
     if not cleaned.startswith("+"):
         cleaned = f"+{cleaned}"
     if len(cleaned) < 8 or len(cleaned) > 20:
-        raise HTTPException(status_code=422, detail="Telefono invalido")
+        raise ValidationException("Telefono invalido")
     return cleaned
 
 
@@ -31,10 +31,12 @@ class OtpService:
     async def request_code(self, *, store_id: str, phone: str, channel: str) -> dict:
         normalized_phone = normalize_phone(phone)
         if channel not in {"whatsapp", "sms"}:
-            raise HTTPException(status_code=422, detail="Canal invalido")
+            raise ValidationException("Canal invalido")
 
         code = f"{random.randint(0, 999999):06d}"
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.OTP_CODE_EXPIRE_MINUTES
+        )
         now = datetime.now(timezone.utc)
 
         await self.db.execute(
@@ -78,20 +80,26 @@ class OtpService:
         )
         otp = result.scalar_one_or_none()
         if not otp or otp.is_consumed or otp.is_expired:
-            raise HTTPException(status_code=400, detail="OTP invalido o expirado")
+            raise OTPException()
         if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
-            raise HTTPException(status_code=429, detail="Maximo de intentos OTP alcanzado")
+            raise OTPRateLimitedException()
 
         otp.attempts += 1
         if otp.code_hash != hash_token(code):
             await self.db.commit()
-            raise HTTPException(status_code=400, detail="Codigo OTP incorrecto")
+            raise OTPException(
+                message="Codigo OTP incorrecto.",
+                error_code="OTP_INCORRECT",
+                http_status=400,
+            )
 
         otp.consumed_at = now
         await self.db.commit()
         return {"ok": True, "verified_at": now.isoformat(), "phone": normalized_phone}
 
-    async def is_recently_verified(self, *, store_id: str, phone: str, window_minutes: int = 30) -> bool:
+    async def is_recently_verified(
+        self, *, store_id: str, phone: str, window_minutes: int = 30
+    ) -> bool:
         normalized_phone = normalize_phone(phone)
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
         result = await self.db.execute(

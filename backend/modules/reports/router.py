@@ -1,9 +1,12 @@
 from datetime import date
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Depends
+from core.router import CanonicalAPIRouter
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.exceptions import AppException, PermissionDeniedException
 
 from core.database import get_db
 from core.roles import REPORT_VIEWERS, has_any_role
@@ -17,15 +20,12 @@ from modules.reports.schemas import (
 from modules.reports.service import ReportService
 from modules.users.model import User
 
-router = APIRouter(prefix="/reports", tags=["Reports"])
+router = CanonicalAPIRouter(prefix="/reports", tags=["Reports"])
 
 
 def _report_scope_for(user: User) -> str | None:
     if not has_any_role(user, REPORT_VIEWERS):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No tenes permiso para ver reportes",
-        )
+        raise PermissionDeniedException("ver reportes")
     if str(user.role) == "staff" and not user.is_global_admin:
         return user.id
     return None
@@ -43,7 +43,7 @@ async def get_report_summary(
     try:
         return await service.get_summary(from_date, to_date, staff_id=staff_scope)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.get("/professionals", response_model=ProfessionalReportsResponse)
@@ -56,9 +56,11 @@ async def get_professional_reports(
     service = ReportService(db)
     staff_scope = _report_scope_for(user)
     try:
-        return await service.get_professionals(from_date, to_date, only_staff_id=staff_scope)
+        return await service.get_professionals(
+            from_date, to_date, only_staff_id=staff_scope
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
 
 @router.post("/export")
@@ -70,9 +72,11 @@ async def export_report(
     service = ReportService(db)
     staff_scope = _report_scope_for(user)
     try:
-        summary = await service.get_summary(payload.from_date, payload.to_date, staff_id=staff_scope)
+        summary = await service.get_summary(
+            payload.from_date, payload.to_date, staff_id=staff_scope
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise AppException(message=str(exc), http_status=400)
 
     try:
         if payload.format == "csv":
@@ -81,15 +85,19 @@ async def export_report(
             extension = "csv"
         elif payload.format == "excel":
             file_bytes = export_to_excel(summary)
-            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            media_type = (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
             extension = "xlsx"
         else:
             file_bytes = export_to_pdf(summary)
             media_type = "application/pdf"
             extension = "pdf"
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise AppException(message=str(exc), http_status=500, error_code="EXPORT_ERROR")
 
     filename = f"{payload.filename_prefix}-{summary.from_date.isoformat()}-{summary.to_date.isoformat()}.{extension}"
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
-    return StreamingResponse(BytesIO(file_bytes), media_type=media_type, headers=headers)
+    return StreamingResponse(
+        BytesIO(file_bytes), media_type=media_type, headers=headers
+    )

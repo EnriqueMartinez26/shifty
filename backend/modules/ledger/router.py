@@ -1,11 +1,17 @@
 from decimal import Decimal
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, status
+from fastapi import Depends, Path
+from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
+from core.exceptions import (
+    FeatureDisabledException,
+    PermissionDeniedException,
+    StoreNotFoundException,
+)
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user
@@ -20,29 +26,31 @@ from modules.ledger.schemas import (
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
-router = APIRouter(prefix="/ledger", tags=["Customer Ledger"])
-PublicIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+router = CanonicalAPIRouter(prefix="/ledger", tags=["Customer Ledger"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 
 def _require_financial_access(user: User) -> None:
     if user.role not in (UserRole.ADMIN, UserRole.STAFF) and not user.is_global_admin:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para ver deuda")
+        raise PermissionDeniedException("ver deudas")
 
 
 async def _ensure_ledger_feature_enabled(db: AsyncSession, user: User) -> None:
     result = await db.execute(select(Store).where(Store.id == user.store_id))
     store = result.scalar_one_or_none()
     if not store:
-        raise HTTPException(status_code=404, detail="Tienda no encontrada")
+        raise StoreNotFoundException(user.store_id)
     if not is_store_feature_enabled(store.feature_flags, "ledger"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="La funcionalidad de deuda no está habilitada para esta tienda",
-        )
+        raise FeatureDisabledException("deuda")
 
 
 def _signed_amount(movement_type: str, amount: Decimal) -> Decimal:
-    if movement_type in {LedgerMovementType.PAYMENT.value, LedgerMovementType.REFUND.value}:
+    if movement_type in {
+        LedgerMovementType.PAYMENT.value,
+        LedgerMovementType.REFUND.value,
+    }:
         return -amount
     return amount
 
@@ -85,9 +93,13 @@ async def get_ledger_summary(
     users_by_id: dict[str, User] = {}
     if client_ids:
         users_result = await db.execute(select(User).where(User.id.in_(client_ids)))
-        users_by_id = {customer.id: customer for customer in users_result.scalars().all()}
+        users_by_id = {
+            customer.id: customer for customer in users_result.scalars().all()
+        }
 
-    total_balance = sum((Decimal(str(item.balance_after or 0)) for item in debt_rows), Decimal("0.00"))
+    total_balance = sum(
+        (Decimal(str(item.balance_after or 0)) for item in debt_rows), Decimal("0.00")
+    )
     average_balance = (total_balance / len(debt_rows)) if debt_rows else Decimal("0.00")
     top_debtors = sorted(
         debt_rows,
@@ -103,7 +115,9 @@ async def get_ledger_summary(
         top_debtors=[
             LedgerSummaryClientItem(
                 client_id=item.client_id,
-                client_name=_client_display_name(users_by_id.get(item.client_id), fallback_id=item.client_id),
+                client_name=_client_display_name(
+                    users_by_id.get(item.client_id), fallback_id=item.client_id
+                ),
                 balance=Decimal(str(item.balance_after or 0)).quantize(Decimal("0.01")),
                 last_movement_at=item.created_at,
             )
@@ -122,7 +136,10 @@ async def get_customer_ledger(
     await _ensure_ledger_feature_enabled(db, user)
     result = await db.execute(
         select(CustomerLedger)
-        .where(CustomerLedger.store_id == user.store_id, CustomerLedger.client_id == client_id)
+        .where(
+            CustomerLedger.store_id == user.store_id,
+            CustomerLedger.client_id == client_id,
+        )
         .order_by(CustomerLedger.created_at.asc())
     )
     movements = list(result.scalars().all())
@@ -156,7 +173,10 @@ async def add_customer_ledger_movement(
     await _ensure_ledger_feature_enabled(db, user)
     result = await db.execute(
         select(CustomerLedger)
-        .where(CustomerLedger.store_id == user.store_id, CustomerLedger.client_id == client_id)
+        .where(
+            CustomerLedger.store_id == user.store_id,
+            CustomerLedger.client_id == client_id,
+        )
         .order_by(CustomerLedger.created_at.desc())
         .limit(1)
     )

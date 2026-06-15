@@ -33,5 +33,7 @@ def merge_store_feature_flags(
     return merged
 
 
-def is_store_feature_enabled(raw_flags: dict[str, Any] | None, feature_key: str) -> bool:
+def is_store_feature_enabled(
+    raw_flags: dict[str, Any] | None, feature_key: str
+) -> bool:
     return normalize_store_feature_flags(raw_flags).get(feature_key, False)

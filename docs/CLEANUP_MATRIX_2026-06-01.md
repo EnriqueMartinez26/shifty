@@ -8,6 +8,13 @@ montada en el worktree local `.worktrees/origin-main-aligned`.
 No se aplico esa alineacion sobre `main` porque el repo padre sigue con cambios no relacionados
 fuera de `shifty/`. Forzarla ahi mezclaria historia valida con trabajo ajeno y subiria el riesgo.
 
+## Circuito Operativo Actual
+
+- Guia de trabajo para backend: [docs/PLAN_AUDITORIA_BACKEND.md](./PLAN_AUDITORIA_BACKEND.md)
+- Guia de trabajo para frontend: [docs/PLAN_AUDITORIA_AMIGO.md](./PLAN_AUDITORIA_AMIGO.md)
+- Matriz compartida de decisiones: [docs/AUDIT_MATRIX_SHARED.md](./AUDIT_MATRIX_SHARED.md)
+- Regla vigente: borrar solo cuando no haya consumidores en runtime, tests, migraciones, scripts o docs operativas
+
 ## Criterio
 
 Estados posibles:
@@ -28,20 +35,20 @@ Objetivo:
 | Archivo | Accion | Motivo | Siguiente paso |
 | --- | --- | --- | --- |
 | `.worktrees/` | conservar | worktree auxiliar valido para alinear historia sin tocar `main` sucio | mantenerlo ignorado por git |
-| `docs/AVANCES_SHIFTY_2026-05-28.md` | conservar | referencia de alcance entregado | mantener si cambia el baseline |
-| `docs/AVANCES_MATRIX_2026-05-30.md` | conservar | estado de integracion contra avances | mantener como snapshot |
+| `docs/archive/status/AVANCES_SHIFTY_2026-05-28.md` | archivar | referencia de alcance entregado | dejar archivado |
+| `docs/archive/status/AVANCES_MATRIX_2026-05-30.md` | archivar | estado de integracion contra avances | dejar archivado |
 | `docs/MULTI_VERTICAL_AUDIT_AND_STRATEGY_2026-06-01.md` | conservar | hoja de ruta multi-rubro vigente | usar como base de implementacion |
 | `docs/ROLE_MATRIX.md` | conservar | documento operativo vigente | mantener alineado a roles reales |
 | `docs/BACKUP_RESTORE_RUNBOOK.md` | conservar | runbook operativo vigente | mantener |
 | `docs/SCALING_AND_HARDENING_PLAYBOOK.md` | conservar | soporte tecnico vigente | mantener |
 | `docs/SETUP_GUIDE.md` | refactorizar | probable drift respecto al setup real actual | revisar comandos, puertos, auth y dependencias |
 | `docs/DOCUMENTACION_TURNERO.md` | refactorizar | sigue sesgado a salones y barberias | reescribir como turnero multi-rubro |
-| `docs/ANALISIS_3NF.md` | archivar | material historico de analisis, no runtime | mover a `docs/archive/data-model/` |
-| `docs/DB_DESIGN_3NF_RLS_AUDIT.md` | archivar | auditoria de diseno historica | mover a `docs/archive/data-model/` |
-| `docs/normalizacion_3fn.md` | archivar | duplicado conceptual del analisis 3NF | mover a `docs/archive/data-model/` |
-| `docs/POLISH_PLAN.md` | archivar | backlog de polish viejo, no estado vigente | mover a `docs/archive/plans/` |
-| `docs/PROJECT_AUDIT_2026-05-18.md` | archivar | snapshot de auditoria pasada | mover a `docs/archive/audits/` |
-| `docs/SANITIZATION_PLAN.md` | archivar | plan tecnico historico | mover a `docs/archive/plans/` |
+| `docs/archive/data-model/ANALISIS_3NF.md` | archivar | material historico de analisis, no runtime | dejar archivado |
+| `docs/archive/data-model/DB_DESIGN_3NF_RLS_AUDIT.md` | archivar | auditoria de diseno historica | dejar archivado |
+| `docs/archive/data-model/normalizacion_3fn.md` | archivar | duplicado conceptual del analisis 3NF | dejar archivado |
+| `docs/archive/plans/POLISH_PLAN.md` | archivar | backlog de polish viejo, no estado vigente | dejar archivado |
+| `docs/archive/audits/PROJECT_AUDIT_2026-05-18.md` | archivar | snapshot de auditoria pasada | dejar archivado |
+| `docs/archive/plans/SANITIZATION_PLAN.md` | archivar | plan tecnico historico | dejar archivado |
 | `docs/fetch-standar.md` | conservar | referencia util de especificacion | mover opcionalmente a `docs/reference/` |
 | `docs/archive/refactoring/*.md` | conservar | historial de migracion ya archivado | no reactivar como fuente de verdad |
 | `docs/archive/poo-elevation/*.md` | conservar | referencia historica ya archivada | no usar como estado actual |
@@ -65,6 +72,9 @@ Objetivo:
 | `frontend/src/presentation/components/organisms/booking/BookingStepStaff.tsx` | refactorizar | consulta HTTP desde componente | mover a hook o servicio |
 | `frontend/src/presentation/components/organisms/booking/BookingStepDateTime.tsx` | refactorizar | consulta HTTP desde componente | mover a hook o servicio |
 | `frontend/src/presentation/components/organisms/StaffFormModal.tsx` | refactorizar | crea servicio y repositorio dentro del componente | mover a hook o DI central |
+| `frontend/src/presentation/components/atoms/SkeuoCard.tsx` | borrar | componente atomico sin consumidores | eliminado |
+| `frontend/src/presentation/components/atoms/UIAtoms.tsx` | borrar | utileria atomica sin consumidores | eliminado |
+| `frontend/src/assets/hero.png` | borrar | asset huérfano | eliminado |
 | `frontend/src/presentation/pages/Login.tsx` | refactorizar | auth page todavia usa `apiClient` directo | extraer hook `useLogin` |
 | `frontend/src/presentation/pages/Register.tsx` | refactorizar | register page usa `apiClient` directo | extraer hook `useRegisterBusiness` |
 | `frontend/src/presentation/pages/ForgotPassword.tsx` | refactorizar | auth page con HTTP directo | extraer hook |
@@ -75,6 +85,8 @@ Objetivo:
 | `backend/scripts/backup_db.py` | conservar | utilidad operativa vigente | mantener |
 | `backend/scripts/restore_backup.py` | conservar | utilidad operativa vigente | mantener |
 | `backend/scripts/backup_restore_drill.py` | conservar | utilidad operativa vigente | mantener |
+| `backend/modules/notifications/service.py` | borrar | archivo vacio sin consumidores | eliminado |
+| `backend/modules/notifications/templates.py` | borrar | archivo vacio sin consumidores | eliminado |
 | `backend/test_uow.py` | conservar | test activo en `origin/main` | no volver a borrarlo |
 | `backend/loadtests/locustfile.py` | conservar | soporte de performance vigente | mantener |
 | `backend/loadtests/README.md` | conservar | documentacion de load test vigente | mantener |
@@ -111,12 +123,12 @@ Objetivo:
 
 ### P3
 
-- `docs/ANALISIS_3NF.md`
-- `docs/DB_DESIGN_3NF_RLS_AUDIT.md`
-- `docs/normalizacion_3fn.md`
-- `docs/POLISH_PLAN.md`
-- `docs/PROJECT_AUDIT_2026-05-18.md`
-- `docs/SANITIZATION_PLAN.md`
+- `docs/archive/data-model/ANALISIS_3NF.md`
+- `docs/archive/data-model/DB_DESIGN_3NF_RLS_AUDIT.md`
+- `docs/archive/data-model/normalizacion_3fn.md`
+- `docs/archive/plans/POLISH_PLAN.md`
+- `docs/archive/audits/PROJECT_AUDIT_2026-05-18.md`
+- `docs/archive/plans/SANITIZATION_PLAN.md`
 - `POO_ELEVATION/code_ServiceContainer.ts`
 
 ## Regla de Ejecucion

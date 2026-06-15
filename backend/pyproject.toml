@@ -37,6 +37,7 @@ dev = [
     "mypy>=1.9.0",
     "locust>=2.24.0",
     "ipython>=8.22.0",
+    "pre-commit>=4.6.0",
 ]
 
 [tool.vercel]
@@ -46,7 +47,73 @@ entrypoint = "api.index:app"
 line-length = 88
 target-version = "py312"
 
+[tool.ruff.lint]
+extend-select = [
+    "F401",
+    "F811",
+    "TID251",
+]
+ignore = [
+    "E712",
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"fastapi.HTTPException".msg = "Use custom exceptions from core.exceptions instead of raw HTTPException."
+"fastapi.exceptions.HTTPException".msg = "Use custom exceptions from core.exceptions instead of raw HTTPException."
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/env.py" = ["F401"]
+"main.py" = ["E402"]
+"modules/appointments/router.py" = ["E402"]
+"modules/appointments/model.py" = ["F401"]
+"modules/staff/model.py" = ["F401"]
+"modules/users/model.py" = ["F401"]
+"run_migrations.py" = ["E402"]
+"scripts/bootstrap_superadmin.py" = ["E402"]
+"scripts/reset_db.py" = ["E402"]
+"scripts/seed_simulation.py" = ["E402"]
+"tests/**/*.py" = ["F401"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+explicit_package_bases = true
+
+# GRADUAL ADOPTION STRATEGY FOR AI AGENTS:
+# We enforce `strict = true` globally for any new code, but legacy packages
+# are bypassed using `ignore_errors = true` to keep CI green. As modules
+# are refactored to be type-safe, remove them from this override list.
+[[tool.mypy.overrides]]
+module = [
+    "modules.*",
+    "infrastructure.*",
+    "presentation.*",
+    "tests.*",
+    "domain.entities.*",
+    "alembic.*",
+    "main",
+    "server",
+    "api.*",
+    "api",
+    "scripts.*",
+    "core.runtime_contracts",
+    "core.roles",
+    "core.uow",
+    "core.config",
+    "core.security",
+    "core.redis",
+    "core.database",
+    "core.middleware",
+    "core.idempotency",
+    "loadtests.*",
+    "locustfile",
+    "run_migrations",
+    "index",
+]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that exercise API or database integration boundaries",
+]

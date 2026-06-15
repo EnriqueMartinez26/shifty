@@ -255,7 +255,9 @@ class CouponResponse(BaseModel):
 
 
 class CouponRedeemRequest(BaseModel):
-    coupon_code: str = Field(..., min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_-]+$")
+    coupon_code: str = Field(
+        ..., min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
     @field_validator("coupon_code")
     @classmethod

@@ -19,7 +19,9 @@ class PromotionBase(BaseModel):
     description: str | None = Field(None, max_length=1000)
     promotion_type: str = Field(default="percent", pattern=r"^(percent|fixed)$")
     value: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
-    min_service_amount: Decimal | None = Field(None, ge=0, max_digits=12, decimal_places=2)
+    min_service_amount: Decimal | None = Field(
+        None, ge=0, max_digits=12, decimal_places=2
+    )
     max_uses: int | None = Field(None, gt=0)
     valid_from: datetime | None = None
     valid_until: datetime | None = None
@@ -44,12 +46,16 @@ class PromotionCreate(PromotionBase):
 
 
 class PromotionUpdate(BaseModel):
-    code: str | None = Field(None, min_length=3, max_length=30, pattern=PROMOTION_CODE_PATTERN)
+    code: str | None = Field(
+        None, min_length=3, max_length=30, pattern=PROMOTION_CODE_PATTERN
+    )
     title: str | None = Field(None, min_length=2, max_length=120)
     description: str | None = Field(None, max_length=1000)
     promotion_type: str | None = Field(None, pattern=r"^(percent|fixed)$")
     value: Decimal | None = Field(None, gt=0, max_digits=12, decimal_places=2)
-    min_service_amount: Decimal | None = Field(None, ge=0, max_digits=12, decimal_places=2)
+    min_service_amount: Decimal | None = Field(
+        None, ge=0, max_digits=12, decimal_places=2
+    )
     max_uses: int | None = Field(None, gt=0)
     valid_from: datetime | None = None
     valid_until: datetime | None = None
@@ -66,7 +72,11 @@ class PromotionUpdate(BaseModel):
     def validate_window(self) -> "PromotionUpdate":
         if self.valid_from and self.valid_until and self.valid_from >= self.valid_until:
             raise ValueError("La vigencia de la promocion es invalida")
-        if self.promotion_type == "percent" and self.value is not None and self.value > Decimal("100"):
+        if (
+            self.promotion_type == "percent"
+            and self.value is not None
+            and self.value > Decimal("100")
+        ):
             raise ValueError("El descuento porcentual no puede superar 100")
         return self
 
