@@ -1,4 +1,5 @@
 import { CanonicalApiError, unwrapApiEnvelope } from './api-contract'
+import { resolveApiBaseUrl } from './api-base-url'
 
 describe('apiClient canonical envelope', () => {
   it('unwraps successful canonical responses for services', async () => {
@@ -50,5 +51,21 @@ describe('apiClient canonical envelope', () => {
         detail: { public_id: 'appt_1' }
       })
     }
+  })
+
+  it('normalizes configured API URLs without trailing slashes', () => {
+    expect(resolveApiBaseUrl('https://api.example.com///', false)).toBe(
+      'https://api.example.com'
+    )
+  })
+
+  it('falls back to localhost in development when the env var is absent', () => {
+    expect(resolveApiBaseUrl(undefined, true)).toBe('http://localhost:8000')
+  })
+
+  it('refuses to guess an API URL in production', () => {
+    expect(() => resolveApiBaseUrl(undefined, false)).toThrow(
+      'VITE_API_URL is required in production'
+    )
   })
 })
