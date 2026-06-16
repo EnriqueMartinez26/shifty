@@ -147,8 +147,16 @@ class Settings(BaseSettings):
                 raise ValueError("OTP_PROVIDER no puede ser console en produccion")
             if self.OTP_DEBUG_EXPOSE_CODE:
                 raise ValueError("OTP_DEBUG_EXPOSE_CODE debe ser false en produccion")
-        if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
-            raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
+            if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
+                raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
+            if self.FRONTEND_URL.startswith(("http://localhost", "http://127.0.0.1")):
+                raise ValueError("FRONTEND_URL no puede apuntar a localhost en produccion")
+            if self.PUBLIC_API_URL.startswith(("http://localhost", "http://127.0.0.1")):
+                raise ValueError("PUBLIC_API_URL no puede apuntar a localhost en produccion")
+            if self.PUBLIC_API_URL == "https://shifty-iota.vercel.app":
+                raise ValueError(
+                    "PUBLIC_API_URL debe apuntar al backend publico real en produccion"
+                )
         if self.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1:
             raise ValueError("PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1")
         if self.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS < 1:
@@ -267,7 +275,7 @@ def _fallback_settings() -> Settings:
             "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site",
         ),
         FRONTEND_RESET_PASSWORD_PATH="/reset-password",
-        PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "https://shifty-iota.vercel.app"),
+        PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "http://localhost:8000"),
         CORS_ORIGINS=cors_origins,
     )
 
