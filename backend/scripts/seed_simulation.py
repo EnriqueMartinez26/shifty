@@ -383,6 +383,15 @@ async def cleanup_seed(session: AsyncSession) -> None:
     )
     service_ids = [row[0] for row in service_rows.fetchall()]
 
+    await session.execute(
+        delete(AuditLog).where(AuditLog.context.like(f"{SIMULATION_CONTEXT_PREFIX}:%"))
+    )
+    if user_ids:
+        await session.execute(delete(AuditLog).where(AuditLog.actor_id.in_(user_ids)))
+        await session.execute(
+            delete(SaaSCoupon).where(SaaSCoupon.created_by_id.in_(user_ids))
+        )
+
     if appointment_ids:
         await session.execute(
             delete(Payment).where(Payment.appointment_id.in_(appointment_ids))
@@ -459,16 +468,10 @@ async def cleanup_seed(session: AsyncSession) -> None:
         delete(StoreSubscription).where(StoreSubscription.store_id.in_(store_ids))
     )
     await session.execute(
-        delete(SaaSCoupon).where(SaaSCoupon.created_by_id.in_(user_ids))
-    )
-    await session.execute(
         delete(WebhookInbox).where(WebhookInbox.store_id.in_(store_ids))
     )
     await session.execute(
         delete(OutboxMessage).where(OutboxMessage.store_id.in_(store_ids))
-    )
-    await session.execute(
-        delete(AuditLog).where(AuditLog.context.like(f"{SIMULATION_CONTEXT_PREFIX}:%"))
     )
     await session.execute(delete(Store).where(Store.id.in_(store_ids)))
 
