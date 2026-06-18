@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
-import ForgotPasswordPage from '@presentation/pages/ForgotPassword'
 import Sidebar from '@presentation/components/navigation/Sidebar'
+import ForgotPasswordPage from '@presentation/pages/ForgotPassword'
 
 const logoutMock = jest.fn()
 

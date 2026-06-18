@@ -370,9 +370,7 @@ class TestAppointmentEndpoints:
         assert body["data"]["staff_id"] == staff_id
 
     @pytest.mark.asyncio
-    async def test_create_appointment_is_idempotent(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_create_appointment_is_idempotent(self, client: AsyncClient) -> None:
         _, token = await create_test_store_and_admin(client)
         service_id = await create_service(client, token)
         staff_id = await create_staff(client, token, service_id)

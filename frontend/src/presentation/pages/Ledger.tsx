@@ -303,8 +303,8 @@ const LedgerPage: React.FC = () => {
             ))}
             {!ledgerQuery.data?.movements.length && !ledgerQuery.isLoading && (
               <div
-              className="rounded-2xl p-6 bg-white text-sm font-bold"
-              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
+                className="rounded-2xl p-6 bg-white text-sm font-bold"
+                style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 Este cliente todavia no tiene movimientos registrados.
               </div>
@@ -347,8 +347,8 @@ const LedgerPage: React.FC = () => {
             ))}
             {(summaryQuery.data?.top_debtors.length ?? 0) === 0 && !summaryQuery.isLoading && (
               <div
-              className="rounded-2xl p-4 bg-white text-sm font-bold"
-              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
+                className="rounded-2xl p-4 bg-white text-sm font-bold"
+                style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 No hay clientes con deuda registrada.
               </div>

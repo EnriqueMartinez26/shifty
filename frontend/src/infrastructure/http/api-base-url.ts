@@ -1,9 +1,6 @@
 const DEFAULT_DEV_API_URL = 'http://localhost:8000'
 
-export const resolveApiBaseUrl = (
-  configuredUrl: string | undefined,
-  isDev: boolean
-): string => {
+export const resolveApiBaseUrl = (configuredUrl: string | undefined, isDev: boolean): string => {
   const normalizedUrl = configuredUrl?.trim().replace(/\/+$/, '')
 
   if (normalizedUrl) {

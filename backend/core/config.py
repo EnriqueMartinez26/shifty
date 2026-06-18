@@ -144,9 +144,13 @@ class Settings(BaseSettings):
             if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
                 raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
             if self.FRONTEND_URL.startswith(("http://localhost", "http://127.0.0.1")):
-                raise ValueError("FRONTEND_URL no puede apuntar a localhost en produccion")
+                raise ValueError(
+                    "FRONTEND_URL no puede apuntar a localhost en produccion"
+                )
             if self.PUBLIC_API_URL.startswith(("http://localhost", "http://127.0.0.1")):
-                raise ValueError("PUBLIC_API_URL no puede apuntar a localhost en produccion")
+                raise ValueError(
+                    "PUBLIC_API_URL no puede apuntar a localhost en produccion"
+                )
         if self.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1:
             raise ValueError("PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1")
         if self.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS < 1:
@@ -191,8 +195,7 @@ def _sanitize_settings_error(value: str) -> str:
 def _fallback_settings() -> Settings:
     cors_origins = os.getenv(
         "CORS_ORIGINS",
-        "http://localhost,http://127.0.0.1,"
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
     )
     return Settings.model_construct(
         PROJECT_NAME="Shifty v2",

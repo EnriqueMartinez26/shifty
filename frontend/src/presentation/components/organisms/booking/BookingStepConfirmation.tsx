@@ -11,7 +11,10 @@ import {
   Tag
 } from 'lucide-react'
 
-import type { BookingConfirmation, PromotionPreview } from '@application/services/PublicBookingService'
+import type {
+  BookingConfirmation,
+  PromotionPreview
+} from '@application/services/PublicBookingService'
 
 import { usePreviewPublicPromotion } from '@presentation/hooks/usePublic'
 
@@ -315,18 +318,21 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         </div>
       </div>
 
-      <div
-        className="rounded-3xl p-6 bg-white space-y-5"
-        style={createBookingSurfaceStyle()}
-      >
-          <div className="grid sm:grid-cols-2 gap-4">
-          <div className="rounded-2xl p-4 border" style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}>
+      <div className="rounded-3xl p-6 bg-white space-y-5" style={createBookingSurfaceStyle()}>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div
+            className="rounded-2xl p-4 border"
+            style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
+          >
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
               Fecha
             </p>
             <p className="text-lg font-black text-gray-800">{bookingState.date}</p>
           </div>
-          <div className="rounded-2xl p-4 border" style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}>
+          <div
+            className="rounded-2xl p-4 border"
+            style={{ ...createBookingAccentBoxStyle('#ffffff', '#e5e7eb') }}
+          >
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
               Hora
             </p>
@@ -375,10 +381,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             </button>
           </div>
           {promotionPreview && (
-              <div
-                className="rounded-2xl p-4 border"
-                style={{ ...createBookingAccentBoxStyle('#ecfdf5', '#bbf7d0', '#166534') }}
-              >
+            <div
+              className="rounded-2xl p-4 border"
+              style={{ ...createBookingAccentBoxStyle('#ecfdf5', '#bbf7d0', '#166534') }}
+            >
               <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
                 {promotionPreview.title}
               </p>

@@ -7,10 +7,7 @@ import { Calendar as CalendarIcon, ChevronLeft, Clock, Loader2 } from 'lucide-re
 import { usePublicAvailability } from '@presentation/hooks/usePublic'
 
 import { colors2000s } from '../../../../theme/colors'
-import {
-  createBookingBackButtonStyle,
-  createBookingSurfaceStyle
-} from '../../../lib/surfaceStyles'
+import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
   storePublicId: string
@@ -166,10 +163,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
           </div>
         ) : visibleSlots.length === 0 ? (
-          <div
-            className="text-center py-10 rounded-2xl border"
-            style={createBookingSurfaceStyle()}
-          >
+          <div className="text-center py-10 rounded-2xl border" style={createBookingSurfaceStyle()}>
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
               No hay turnos disponibles.
             </p>

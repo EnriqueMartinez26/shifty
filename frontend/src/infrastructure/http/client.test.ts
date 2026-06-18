@@ -1,5 +1,5 @@
-import { CanonicalApiError, unwrapApiEnvelope } from './api-contract'
 import { resolveApiBaseUrl } from './api-base-url'
+import { CanonicalApiError, unwrapApiEnvelope } from './api-contract'
 
 describe('apiClient canonical envelope', () => {
   it('unwraps successful canonical responses for services', async () => {

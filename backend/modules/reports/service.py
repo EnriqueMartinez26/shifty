@@ -160,14 +160,16 @@ class ReportService:
         rows = await self._fetch_rows(
             from_date=resolved_from, to_date=resolved_to, staff_id=staff_id
         )
-        historical_clients_query = select(
-            Appointment.client_id,
-            User.first_name,
-            User.last_name,
-            User.email,
-            Appointment.starts_at,
-        ).join(User, Appointment.client_id == User.id).where(
-            Appointment.client_id.is_not(None), Appointment.starts_at < end_dt
+        historical_clients_query = (
+            select(
+                Appointment.client_id,
+                User.first_name,
+                User.last_name,
+                User.email,
+                Appointment.starts_at,
+            )
+            .join(User, Appointment.client_id == User.id)
+            .where(Appointment.client_id.is_not(None), Appointment.starts_at < end_dt)
         )
         if staff_id:
             historical_clients_query = historical_clients_query.where(
@@ -213,7 +215,13 @@ class ReportService:
                 return (fallback or "").strip()
             return client.full_name or client.email or (fallback or "").strip()
 
-        for client_id, first_name, last_name, email, starts_at in historical_clients_result.all():
+        for (
+            client_id,
+            first_name,
+            last_name,
+            email,
+            starts_at,
+        ) in historical_clients_result.all():
             if not client_id:
                 continue
             first_seen_by_client.setdefault(client_id, starts_at)
@@ -222,7 +230,9 @@ class ReportService:
             resolved_name = _client_display_name(
                 None,
                 fallback=(
-                    f"{first_name or ''} {last_name or ''}".strip() if first_name or last_name else ""
+                    f"{first_name or ''} {last_name or ''}".strip()
+                    if first_name or last_name
+                    else ""
                 )
                 or email,
             )

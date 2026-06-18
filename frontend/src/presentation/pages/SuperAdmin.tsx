@@ -42,11 +42,7 @@ import {
   useUpdateSuperAdminStore,
   useUpdateSuperAdminUser
 } from '../hooks/useSuperAdmin'
-import {
-  formatCurrencyEsAr,
-  formatDateEsAr,
-  formatDateTimeEsAr
-} from '../lib/formatters'
+import { formatCurrencyEsAr, formatDateEsAr, formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sEmptyStateStyle,
   create2000sInputStyle,
@@ -1478,7 +1474,7 @@ const SuperAdminPage: React.FC = () => {
                           className="text-[10px] font-bold uppercase tracking-widest"
                           style={{ color: colors2000s.text.secondary }}
                         >
-                  {plan.billing_interval} · {formatCurrencyEsAr(plan.price, plan.currency)}
+                          {plan.billing_interval} · {formatCurrencyEsAr(plan.price, plan.currency)}
                         </p>
                       </div>
                       <span
@@ -1612,7 +1608,8 @@ const SuperAdminPage: React.FC = () => {
                           <div>
                             Vigencia:{' '}
                             <span style={{ color: colors2000s.text.primary }}>
-                              {formatDateEsAr(coupon.valid_from)} a {formatDateEsAr(coupon.valid_until)}
+                              {formatDateEsAr(coupon.valid_from)} a{' '}
+                              {formatDateEsAr(coupon.valid_until)}
                             </span>
                           </div>
                           <div>
@@ -1663,7 +1660,7 @@ const SuperAdminPage: React.FC = () => {
                     )
                   })
                 ) : (
-            <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
+                  <div className="rounded-[1.5rem] p-8 text-center" style={emptyStateStyle}>
                     <Tag className="mx-auto mb-3 h-10 w-10 opacity-25" />
                     <p
                       className="text-sm font-black uppercase tracking-widest"

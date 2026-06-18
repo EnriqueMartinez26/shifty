@@ -391,10 +391,7 @@ export const CalendarContainer: React.FC = () => {
   }
 
   const renderDayView = () => (
-    <div
-      className="rounded-[3rem] border overflow-hidden relative"
-      style={canvasStyle}
-    >
+    <div className="rounded-[3rem] border overflow-hidden relative" style={canvasStyle}>
       {(loadingStaff || agendaQuery.isLoading) && (
         <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center">
           <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" />
@@ -413,10 +410,7 @@ export const CalendarContainer: React.FC = () => {
             >
               <Clock size={16} className="text-gray-400" />
             </div>
-            <div
-              className="flex flex-1"
-              style={panelStyle}
-            >
+            <div className="flex flex-1" style={panelStyle}>
               {staffMembers?.map((staff, idx) => (
                 <div
                   key={staff.id}
@@ -840,7 +834,7 @@ export const CalendarContainer: React.FC = () => {
                   setBlockForm((prev) => ({
                     ...prev,
                     max_occurrences: Number(e.target.value) || 1
-                }))
+                  }))
                 }
                 className="rounded-2xl px-4 py-3 font-bold outline-none"
                 style={fieldStyle}

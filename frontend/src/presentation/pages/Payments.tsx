@@ -165,14 +165,14 @@ const PaymentsPage: React.FC = () => {
             >
               Integracion de cobros
             </h3>
-          <button
-            type="button"
-            onClick={() => {
-              void handleSaveGateway()
-            }}
-            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-            style={buttonStyles2000s.selected}
-          >
+            <button
+              type="button"
+              onClick={() => {
+                void handleSaveGateway()
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+              style={buttonStyles2000s.selected}
+            >
               <Save className="w-4 h-4 inline mr-2" />
               Guardar
             </button>
@@ -273,24 +273,21 @@ const PaymentsPage: React.FC = () => {
             >
               Estado de sincronizacion
             </h3>
-          <button
-            type="button"
-            onClick={() => {
-              void handleProcessOutbox()
-            }}
-            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-            style={buttonStyles2000s.default}
-          >
+            <button
+              type="button"
+              onClick={() => {
+                void handleProcessOutbox()
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+              style={buttonStyles2000s.default}
+            >
               <RefreshCcw className="w-4 h-4 inline mr-2" />
               Actualizar cobros
             </button>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <div
-              className="rounded-2xl p-4 bg-white"
-              style={create2000sListCardStyle()}
-            >
+            <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                 Por revisar
               </p>
@@ -298,10 +295,7 @@ const PaymentsPage: React.FC = () => {
                 {outboxStatsQuery.data?.pending ?? 0}
               </p>
             </div>
-            <div
-              className="rounded-2xl p-4 bg-white"
-              style={create2000sListCardStyle()}
-            >
+            <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                 Con error
               </p>
@@ -309,10 +303,7 @@ const PaymentsPage: React.FC = () => {
                 {outboxStatsQuery.data?.pending_with_error ?? 0}
               </p>
             </div>
-            <div
-              className="rounded-2xl p-4 bg-white"
-              style={create2000sListCardStyle()}
-            >
+            <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                 Actualizados
               </p>
@@ -350,14 +341,14 @@ const PaymentsPage: React.FC = () => {
               style={inputStyle}
               placeholder="Motivo de la devolucion"
             />
-          <button
-            type="button"
-            onClick={() => {
-              void handleRefund()
-            }}
-            disabled={!refundForm.paymentId}
-            className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-            style={buttonStyles2000s.selected}
+            <button
+              type="button"
+              onClick={() => {
+                void handleRefund()
+              }}
+              disabled={!refundForm.paymentId}
+              className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+              style={buttonStyles2000s.selected}
             >
               Registrar devolucion
             </button>

@@ -29,7 +29,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.add_column(
         "users",
-        sa.Column("full_name", sa.String(length=255), nullable=False, server_default=""),
+        sa.Column(
+            "full_name", sa.String(length=255), nullable=False, server_default=""
+        ),
     )
     op.add_column(
         "staff",
@@ -37,7 +39,9 @@ def downgrade() -> None:
     )
     op.add_column(
         "appointments",
-        sa.Column("client_name", sa.String(length=255), nullable=False, server_default=""),
+        sa.Column(
+            "client_name", sa.String(length=255), nullable=False, server_default=""
+        ),
     )
     op.add_column(
         "appointments",

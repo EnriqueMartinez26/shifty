@@ -31,10 +31,7 @@ import { useLedgerSummary } from '../hooks/useLedger'
 import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
 import { useProfessionalReports, useReportSummary } from '../hooks/useReports'
 import { useStoreFeatureFlags } from '../hooks/useStores'
-import {
-  createDashboardListItemStyle,
-  createDashboardPanelStyle
-} from '../lib/surfaceStyles'
+import { createDashboardListItemStyle, createDashboardPanelStyle } from '../lib/surfaceStyles'
 
 type Tone = 'neutral' | 'primary' | 'warning' | 'danger' | 'success'
 
@@ -1548,17 +1545,21 @@ function RankedList({ items }: { items: RankedItem[] }) {
   return (
     <ol style={{ display: 'grid', gap: 12, listStyle: 'none', margin: 0, padding: 0 }}>
       {items.map((item, index) => (
-          <li
-            key={item.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 14,
-              minHeight: 70,
-              ...createDashboardListItemStyle(colors2000s.border.light, 'rgba(255, 255, 255, 0.65)', 14)
-            }}
-          >
+        <li
+          key={item.id}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 14,
+            minHeight: 70,
+            ...createDashboardListItemStyle(
+              colors2000s.border.light,
+              'rgba(255, 255, 255, 0.65)',
+              14
+            )
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
             <span
               style={{
