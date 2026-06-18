@@ -138,9 +138,10 @@ async def get_dashboard_summary(
     average_appointment_minutes = int(round(float(avg_duration_q.scalar() or 0)))
 
     upcoming_q = await db.execute(
-        select(Appointment, Service, Staff)
+        select(Appointment, Service, Staff, User)
         .join(Service, Appointment.service_id == Service.id)
         .join(Staff, Appointment.staff_id == Staff.id)
+        .join(User, Appointment.client_id == User.id)
         .where(
             Appointment.starts_at >= now.replace(tzinfo=None),
             Appointment.status.in_(["PENDING", "CONFIRMED"]),
@@ -150,7 +151,7 @@ async def get_dashboard_summary(
     )
 
     upcoming_items: list[UpcomingAppointmentItem] = []
-    for appointment, service, staff in upcoming_q.all():
+    for appointment, service, staff, client in upcoming_q.all():
         upcoming_items.append(
             UpcomingAppointmentItem(
                 public_id=appointment.public_id,
@@ -158,7 +159,7 @@ async def get_dashboard_summary(
                 status=appointment.status,
                 service_name=service.name,
                 staff_name=staff.display_name,
-                client_name=appointment.client_name,
+                client_name=client.full_name or client.email,
             )
         )
 

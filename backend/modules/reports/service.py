@@ -133,12 +133,13 @@ class ReportService:
         from_date: date,
         to_date: date,
         staff_id: str | None = None,
-    ) -> list[tuple[Appointment, Service, Staff]]:
+    ) -> list[tuple[Appointment, Service, Staff, User]]:
         start_dt, end_dt = self._range_bounds(from_date, to_date)
         query = (
-            select(Appointment, Service, Staff)
+            select(Appointment, Service, Staff, User)
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
+            .join(User, Appointment.client_id == User.id)
             .where(Appointment.starts_at >= start_dt, Appointment.starts_at < end_dt)
             .order_by(Appointment.starts_at.asc())
         )
@@ -161,11 +162,12 @@ class ReportService:
         )
         historical_clients_query = select(
             Appointment.client_id,
-            Appointment.client_name,
+            User.first_name,
+            User.last_name,
+            User.email,
             Appointment.starts_at,
-        ).where(
-            Appointment.client_id.is_not(None),
-            Appointment.starts_at < end_dt,
+        ).join(User, Appointment.client_id == User.id).where(
+            Appointment.client_id.is_not(None), Appointment.starts_at < end_dt
         )
         if staff_id:
             historical_clients_query = historical_clients_query.where(
@@ -204,24 +206,44 @@ class ReportService:
             }
         )
 
-        for client_id, client_name, starts_at in historical_clients_result.all():
+        def _client_display_name(
+            client: User | None, fallback: str | None = None
+        ) -> str:
+            if client is None:
+                return (fallback or "").strip()
+            return client.full_name or client.email or (fallback or "").strip()
+
+        for client_id, first_name, last_name, email, starts_at in historical_clients_result.all():
             if not client_id:
                 continue
             first_seen_by_client.setdefault(client_id, starts_at)
             if starts_at < start_dt:
                 clients_seen_before_range.add(client_id)
-            if client_name and client_name.strip():
-                known_client_names.setdefault(client_id, client_name.strip())
+            resolved_name = _client_display_name(
+                None,
+                fallback=(
+                    f"{first_name or ''} {last_name or ''}".strip() if first_name or last_name else ""
+                )
+                or email,
+            )
+            if resolved_name and resolved_name.strip():
+                known_client_names.setdefault(client_id, resolved_name.strip())
 
-        for appointment, service, staff in rows:
+        for row in rows:
+            if len(row) == 4:
+                appointment, service, staff, client = row
+            else:
+                appointment, service, staff = row
+                client = None
             status = appointment.status
             price = float(service.price)
             status_upper = status.upper() if status else ""
             client_id = appointment.client_id
             if client_id:
                 clients_in_range.add(client_id)
-                if appointment.client_name:
-                    known_client_names[client_id] = appointment.client_name
+                current_name = _client_display_name(client, appointment.client_name)
+                if current_name:
+                    known_client_names[client_id] = current_name
 
             if status_upper == "COMPLETED":
                 completed += 1
@@ -255,7 +277,7 @@ class ReportService:
                     client_bucket["client_id"] = client_id
                     client_bucket["client_name"] = (
                         known_client_names.get(client_id)
-                        or appointment.client_name
+                        or _client_display_name(client, appointment.client_name)
                         or client_id
                     )
                     client_bucket["appointments"] += 1
@@ -268,7 +290,7 @@ class ReportService:
                         client_bucket["revenue"] += price
 
             resolved_client_name = (
-                appointment.client_name
+                _client_display_name(client, appointment.client_name)
                 or known_client_names.get(client_id, "")
                 or "Cliente"
             )

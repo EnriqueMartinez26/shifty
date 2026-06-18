@@ -12,10 +12,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
-from redis.asyncio import Redis
-from core.uow import AbstractUnitOfWork
 import ulid
 
+from core.cache import CacheInvalidator
+from core.uow import AbstractUnitOfWork
 from core.exceptions import (
     AppointmentConflictException,
     AppointmentNotFoundException,
@@ -41,9 +41,9 @@ class AppointmentService:
     Se instancia por request, inyectando db y redis desde FastAPI Depends.
     """
 
-    def __init__(self, uow: AbstractUnitOfWork, redis: Redis) -> None:
+    def __init__(self, uow: AbstractUnitOfWork, cache: CacheInvalidator) -> None:
         self.uow = uow
-        self.redis = redis
+        self.cache = cache
         self.scheduler = SchedulingDomainService()
 
     # ------------------------------------------------------------------
@@ -56,7 +56,6 @@ class AppointmentService:
         data: dict,
         store_id: int,
         actor: User,
-        vercel_oidc_token: str | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         """
         Crea un nuevo turno con:
@@ -176,12 +175,11 @@ class AppointmentService:
                 "staff": staff.display_name,
                 "date": starts_at.isoformat(),
             },
-            vercel_oidc_token=vercel_oidc_token,
         )
 
         # Invalidar caché de disponibilidad
         cache_key = f"availability:{store_id}:{service.public_id}:{starts_at.date().isoformat()}"
-        await self.redis.delete(cache_key)
+        await self.cache.delete(cache_key)
 
         return appointment, service, staff
 
@@ -213,7 +211,7 @@ class AppointmentService:
 
         # Invalidar caché de disponibilidad
         cache_key = f"availability:{appointment.store_id}:*:{appointment.starts_at.date().isoformat()}"
-        await self.redis.delete(cache_key)
+        await self.cache.delete(cache_key)
 
         return appointment
 
@@ -454,7 +452,7 @@ class AppointmentService:
 
         # Invalidar caché de disponibilidad para ambos días
         for key_date in {original.starts_at.date(), new_starts_at.date()}:
-            await self.redis.delete(
+            await self.cache.delete(
                 f"availability:{store_id}:{service.public_id}:{key_date.isoformat()}"
             )
 

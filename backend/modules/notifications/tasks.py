@@ -1,10 +1,3 @@
-"""
-Notificaciones async compatibles con runtime serverless.
-
-Usa Vercel Queues cuando hay token OIDC disponible y cae a SMTP directo
-para confirmaciones cuando no es posible publicar en la cola.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -14,14 +7,10 @@ from email.message import EmailMessage
 
 import structlog
 
+from core.celery_app import celery_app
 from core.config import settings
 from core.database import AsyncSessionFactory
-from core.vercel_queue import (
-    ack_message,
-    publish_json_message,
-    queue_is_enabled,
-    receive_json_messages,
-)
+from core.redis import get_redis
 
 logger = structlog.get_logger()
 
@@ -105,36 +94,9 @@ async def send_appointment_reminder(email: str, details: dict) -> dict:
     return {"status": "sent", "to": email}
 
 
-async def enqueue_confirmation_email(
-    *,
-    email: str,
-    details: dict,
-    vercel_oidc_token: str | None,
-) -> dict:
-    payload = {"email": email, "details": details}
+async def enqueue_confirmation_email(*, email: str, details: dict) -> dict:
     try:
-        if queue_is_enabled() and vercel_oidc_token:
-            await publish_json_message(
-                topic=settings.VERCEL_QUEUE_CONFIRMATION_TOPIC,
-                payload=payload,
-                oidc_token=vercel_oidc_token,
-                idempotency_key=f"confirmation:{details.get('public_id')}",
-            )
-            drain_result = await drain_notification_queue(
-                queue_kind="confirmations",
-                vercel_oidc_token=vercel_oidc_token,
-                max_messages=1,
-            )
-            return {
-                "status": "queued_and_drained",
-                "topic": settings.VERCEL_QUEUE_CONFIRMATION_TOPIC,
-                "drain": drain_result,
-            }
-
-        if settings.VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC:
-            return await send_appointment_confirmation(email, details)
-
-        return {"status": "skipped"}
+        return await send_appointment_confirmation(email, details)
     except Exception as exc:
         # Confirmations are operational side effects; they must never abort bookings.
         logger.warning(
@@ -150,137 +112,98 @@ async def enqueue_confirmation_email(
         }
 
 
-async def enqueue_reminder_email(
-    *,
-    email: str,
-    details: dict,
-    vercel_oidc_token: str,
-    delay_seconds: int = 0,
+async def process_due_appointment_reminders(
+    *, now: datetime | None = None, lookahead_hours: int = 48
 ) -> dict:
-    await publish_json_message(
-        topic=settings.VERCEL_QUEUE_REMINDER_TOPIC,
-        payload={"email": email, "details": details},
-        oidc_token=vercel_oidc_token,
-        delay_seconds=delay_seconds,
-        retention_seconds=max(3600, delay_seconds + 3600),
-        idempotency_key=f"reminder:{details.get('public_id')}:{details.get('date')}",
-    )
-    return {"status": "queued", "topic": settings.VERCEL_QUEUE_REMINDER_TOPIC}
-
-
-async def schedule_24h_reminders(
-    *,
-    now: datetime,
-    vercel_oidc_token: str | None,
-) -> dict:
-    if not queue_is_enabled():
-        return {"status": "disabled", "reason": "VERCEL_QUEUE_REGION no configurado"}
-    if not vercel_oidc_token:
-        raise RuntimeError("No hay token OIDC de Vercel para publicar mensajes")
-
+    now = now or datetime.now(timezone.utc)
     window_start = now
-    window_end = now + timedelta(hours=48)
+    window_end = now + timedelta(hours=lookahead_hours)
 
     from modules.appointments.repository import AppointmentRepository
 
     published = 0
+    skipped = 0
     async with AsyncSessionFactory() as db:
         repo = AppointmentRepository(db)
         rows = await repo.get_upcoming_for_reminders(
             starts_after=window_start,
             starts_before=window_end,
         )
-        for appointment, service, staff, client in rows:
-            reminder_at = appointment.starts_at.replace(
-                tzinfo=timezone.utc
-            ) - timedelta(hours=24)
-            delay_seconds = max(0, int((reminder_at - now).total_seconds()))
-            await enqueue_reminder_email(
-                email=client.email,
-                details={
-                    "public_id": appointment.public_id,
-                    "service": service.name,
-                    "staff": staff.display_name,
-                    "date": appointment.starts_at.isoformat(),
-                },
-                vercel_oidc_token=vercel_oidc_token,
-                delay_seconds=delay_seconds,
+        redis = await get_redis()
+        for appointment, service, staff, client, store in rows:
+            if not getattr(store, "send_email_reminders", True):
+                skipped += 1
+                continue
+
+            starts_at = appointment.starts_at
+            if starts_at.tzinfo is None:
+                starts_at = starts_at.replace(tzinfo=timezone.utc)
+            else:
+                starts_at = starts_at.astimezone(timezone.utc)
+
+            reminder_at = starts_at - timedelta(hours=24)
+            if reminder_at > now:
+                continue
+
+            reminder_key = f"reminder:sent:{appointment.public_id}"
+            claimed = await redis.set(
+                reminder_key,
+                "1",
+                nx=True,
+                ex=60 * 60 * 24 * 7,
             )
-            published += 1
+            if not claimed:
+                continue
+
+            try:
+                await send_appointment_reminder(
+                    client.email,
+                    {
+                        "public_id": appointment.public_id,
+                        "service": service.name,
+                        "staff": staff.display_name,
+                        "date": starts_at.isoformat(),
+                    },
+                )
+                published += 1
+            except Exception as exc:  # pragma: no cover - depende de SMTP real
+                await redis.delete(reminder_key)
+                logger.warning(
+                    "appointment_reminder_dispatch_failed",
+                    appointment=appointment.public_id,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
 
     logger.info(
-        "reminders_scheduled",
+        "reminders_processed",
         published=published,
+        skipped=skipped,
         window_start=window_start.isoformat(),
         window_end=window_end.isoformat(),
     )
-    drain_result = await drain_notification_queue(
-        queue_kind="reminders",
-        vercel_oidc_token=vercel_oidc_token,
-    )
     return {
-        "status": "scheduled",
+        "status": "processed",
         "published": published,
+        "skipped": skipped,
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
-        "drain": drain_result,
     }
 
 
-async def drain_notification_queue(
-    *,
-    queue_kind: str,
-    vercel_oidc_token: str | None,
-    max_messages: int | None = None,
-) -> dict:
-    if not queue_is_enabled():
-        return {"status": "disabled", "reason": "VERCEL_QUEUE_REGION no configurado"}
-    if not vercel_oidc_token:
-        raise RuntimeError("No hay token OIDC de Vercel para consumir la cola")
+@celery_app.task(name="process_appointment_reminders", bind=True, max_retries=3)
+def process_appointment_reminders(self, lookahead_hours: int = 48) -> dict[str, int]:
+    async def _run() -> dict[str, int]:
+        result = await process_due_appointment_reminders(
+            now=datetime.now(timezone.utc),
+            lookahead_hours=lookahead_hours,
+        )
+        return {
+            "published": int(result["published"]),
+            "skipped": int(result["skipped"]),
+        }
 
-    if queue_kind == "confirmations":
-        topic = settings.VERCEL_QUEUE_CONFIRMATION_TOPIC
-        consumer = settings.VERCEL_QUEUE_CONFIRMATION_CONSUMER
-        handler = send_appointment_confirmation
-    elif queue_kind == "reminders":
-        topic = settings.VERCEL_QUEUE_REMINDER_TOPIC
-        consumer = settings.VERCEL_QUEUE_REMINDER_CONSUMER
-        handler = send_appointment_reminder
-    else:
-        raise ValueError("queue_kind debe ser 'confirmations' o 'reminders'")
-
-    drained = 0
-    failed = 0
-    messages = await receive_json_messages(
-        topic=topic,
-        consumer=consumer,
-        oidc_token=vercel_oidc_token,
-        max_messages=max_messages or settings.VERCEL_QUEUE_MAX_BATCH,
-    )
-    for message in messages:
-        try:
-            await handler(message.body["email"], message.body["details"])
-            await ack_message(
-                topic=topic,
-                consumer=consumer,
-                receipt_handle=message.receipt_handle,
-                oidc_token=vercel_oidc_token,
-            )
-            drained += 1
-        except Exception as exc:  # pragma: no cover - depende de SMTP/Queue real
-            failed += 1
-            logger.error(
-                "queue_message_failed",
-                topic=topic,
-                message_id=message.message_id,
-                delivery_count=message.delivery_count,
-                error=str(exc),
-            )
-
-    return {
-        "status": "drained",
-        "queue": queue_kind,
-        "drained": drained,
-        "failed": failed,
-        "received": len(messages),
-    }
+    try:
+        return asyncio.run(_run())
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))

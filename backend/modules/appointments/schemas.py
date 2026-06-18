@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
 
 
 # ---------------------------------------------------------------------------
@@ -27,6 +27,11 @@ class AppointmentCreate(BaseModel):
             val = val.replace(tzinfo=timezone.utc)
         if val <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado.")
+        return self
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_notes(self) -> "AppointmentCreate":
+        self.notes = reject_payload_control_chars(self.notes)
         return self
 
 
@@ -75,6 +80,11 @@ class AppointmentNotesStaffUpdate(BaseModel):
     """Permite al staff agregar o editar sus notas sobre el turno."""
 
     notes_staff: str = Field(..., max_length=1000)
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_notes(self) -> "AppointmentNotesStaffUpdate":
+        self.notes_staff = reject_payload_control_chars(self.notes_staff)
+        return self
 
 
 # ---------------------------------------------------------------------------

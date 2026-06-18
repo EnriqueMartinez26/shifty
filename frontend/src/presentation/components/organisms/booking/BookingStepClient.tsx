@@ -170,7 +170,7 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 className="w-full pl-12 pr-4 py-3.5 font-bold"
                 style={{ ...createBookingInputStyle(), ...inputStyle }}
-                placeholder="11 2345 6789"
+                placeholder="PREFIJO + NUM"
               />
             </div>
           </div>

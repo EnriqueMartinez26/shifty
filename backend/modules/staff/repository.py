@@ -62,6 +62,7 @@ class StaffRepository:
             .where(Staff.is_active == True)
             .options(
                 selectinload(Staff.schedules),
+                selectinload(Staff.services),
             )
         )
         staff_members = list(result.scalars().all())
@@ -81,6 +82,7 @@ class StaffRepository:
             .where(Staff.id == public_id)
             .options(
                 selectinload(Staff.schedules),
+                selectinload(Staff.services),
             )
         )
         member = result.scalar_one_or_none()

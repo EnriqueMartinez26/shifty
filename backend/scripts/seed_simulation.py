@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import insert, select
+from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -15,16 +15,30 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-load_dotenv(backend_dir / ".env")
+load_dotenv(backend_dir.parent / ".env")
 
 from core.security import hash_password
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditAction, AuditLog
 from modules.budget.model import Budget
+from modules.billing.model import (
+    CouponRedemption,
+    SaaSCoupon,
+    StoreSubscription,
+)
+from modules.ledger.model import CustomerLedger
+from modules.payments.model import (
+    OutboxMessage,
+    Payment,
+    PaymentGatewayConfig,
+    WebhookInbox,
+)
+from modules.promotions.model import PromotionRedemption, StorePromotion
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock, staff_services
 from modules.stores.model import Store, StoreSchedule
 from modules.users.model import User, UserRole
+from modules.auth.session_model import AuthSession
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -330,10 +344,129 @@ STORE_SCENARIOS = [
     },
 ]
 
+SIMULATION_STORE_SLUGS = {scenario["slug"] for scenario in STORE_SCENARIOS}
+
 
 async def get_by(session: AsyncSession, model, *filters):
     result = await session.execute(select(model).where(*filters))
     return result.scalar_one_or_none()
+
+
+async def cleanup_seed(session: AsyncSession) -> None:
+    store_rows = await session.execute(
+        select(Store.id).where(Store.slug.in_(SIMULATION_STORE_SLUGS))
+    )
+    store_ids = [row[0] for row in store_rows.fetchall()]
+    if not store_ids:
+        return
+
+    appointment_rows = await session.execute(
+        select(Appointment.id).where(
+            Appointment.store_id.in_(store_ids),
+            Appointment.idempotency_key.like(f"{SIMULATION_CONTEXT_PREFIX}:%"),
+        )
+    )
+    appointment_ids = [row[0] for row in appointment_rows.fetchall()]
+
+    staff_rows = await session.execute(
+        select(Staff.id).where(Staff.store_id.in_(store_ids))
+    )
+    staff_ids = [row[0] for row in staff_rows.fetchall()]
+
+    user_rows = await session.execute(
+        select(User.id).where(User.store_id.in_(store_ids))
+    )
+    user_ids = [row[0] for row in user_rows.fetchall()]
+
+    service_rows = await session.execute(
+        select(Service.id).where(Service.store_id.in_(store_ids))
+    )
+    service_ids = [row[0] for row in service_rows.fetchall()]
+
+    if appointment_ids:
+        await session.execute(
+            delete(Payment).where(Payment.appointment_id.in_(appointment_ids))
+        )
+        await session.execute(
+            delete(CustomerLedger).where(
+                CustomerLedger.appointment_id.in_(appointment_ids)
+            )
+        )
+        await session.execute(
+            delete(PromotionRedemption).where(
+                PromotionRedemption.appointment_id.in_(appointment_ids)
+            )
+        )
+        await session.execute(
+            delete(CouponRedemption).where(
+                CouponRedemption.subscription_id.in_(
+                    select(StoreSubscription.id).where(
+                        StoreSubscription.store_id.in_(store_ids)
+                    )
+                )
+            )
+        )
+        await session.execute(
+            delete(Appointment).where(Appointment.id.in_(appointment_ids))
+        )
+
+    if staff_ids:
+        await session.execute(
+            delete(StaffBlock).where(StaffBlock.staff_id.in_(staff_ids))
+        )
+        await session.execute(delete(Schedule).where(Schedule.staff_id.in_(staff_ids)))
+        await session.execute(
+            delete(staff_services).where(staff_services.c.staff_id.in_(staff_ids))
+        )
+        await session.execute(delete(Staff).where(Staff.id.in_(staff_ids)))
+
+    if service_ids:
+        await session.execute(
+            delete(staff_services).where(staff_services.c.service_id.in_(service_ids))
+        )
+        await session.execute(delete(Service).where(Service.id.in_(service_ids)))
+
+    if user_ids:
+        await session.execute(
+            delete(AuthSession).where(AuthSession.user_id.in_(user_ids))
+        )
+        await session.execute(
+            delete(CustomerLedger).where(CustomerLedger.client_id.in_(user_ids))
+        )
+        await session.execute(
+            delete(PromotionRedemption).where(
+                PromotionRedemption.client_id.in_(user_ids)
+            )
+        )
+        await session.execute(
+            delete(CouponRedemption).where(CouponRedemption.redeemed_by_id.in_(user_ids))
+        )
+        await session.execute(delete(User).where(User.id.in_(user_ids)))
+
+    await session.execute(
+        delete(StoreSchedule).where(StoreSchedule.store_id.in_(store_ids))
+    )
+    await session.execute(delete(Budget).where(Budget.store_id.in_(store_ids)))
+    await session.execute(
+        delete(PaymentGatewayConfig).where(PaymentGatewayConfig.store_id.in_(store_ids))
+    )
+    await session.execute(
+        delete(StorePromotion).where(StorePromotion.store_id.in_(store_ids))
+    )
+    await session.execute(
+        delete(StoreSubscription).where(StoreSubscription.store_id.in_(store_ids))
+    )
+    await session.execute(delete(SaaSCoupon).where(SaaSCoupon.created_by_id.in_(user_ids)))
+    await session.execute(
+        delete(WebhookInbox).where(WebhookInbox.store_id.in_(store_ids))
+    )
+    await session.execute(
+        delete(OutboxMessage).where(OutboxMessage.store_id.in_(store_ids))
+    )
+    await session.execute(
+        delete(AuditLog).where(AuditLog.context.like(f"{SIMULATION_CONTEXT_PREFIX}:%"))
+    )
+    await session.execute(delete(Store).where(Store.id.in_(store_ids)))
 
 
 def apply_attrs(instance, **attrs):
@@ -472,7 +605,6 @@ async def ensure_staff(
         "display_name": staff_data["display_name"],
         "email": staff_data["email"],
         "store_id": store_id,
-        "service_ids": service_ids,
         "is_active": True,
     }
     if staff is None:
@@ -487,19 +619,26 @@ async def ensure_staff(
 async def ensure_staff_service_links(
     session: AsyncSession, staff_id: str, service_ids: list[str]
 ):
-    for service_id in service_ids:
-        exists = await session.execute(
-            select(staff_services.c.staff_id).where(
+    desired = set(service_ids)
+    existing_result = await session.execute(
+        select(staff_services.c.service_id).where(staff_services.c.staff_id == staff_id)
+    )
+    existing = {row[0] for row in existing_result.fetchall()}
+
+    for service_id in existing - desired:
+        await session.execute(
+            delete(staff_services).where(
                 staff_services.c.staff_id == staff_id,
                 staff_services.c.service_id == service_id,
             )
         )
-        if exists.first() is None:
-            await session.execute(
-                insert(staff_services).values(
-                    staff_id=staff_id, service_id=service_id, rating=None
-                )
+
+    for service_id in desired - existing:
+        await session.execute(
+            insert(staff_services).values(
+                staff_id=staff_id, service_id=service_id, rating=None
             )
+        )
 
 
 async def ensure_staff_schedule(
@@ -562,10 +701,6 @@ async def ensure_appointment(
         "starts_at": starts_at,
         "ends_at": ends_at,
         "duration_minutes": duration_minutes,
-        "client_name": client.full_name
-        or f"{client.first_name} {client.last_name}".strip(),
-        "client_email": client.email,
-        "client_phone": client.phone,
         "status": status,
         "notes": notes,
         "notes_staff": notes_staff,
@@ -883,6 +1018,7 @@ async def seed_simulation():
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as session:
+        await cleanup_seed(session)
         reports = []
         for scenario in STORE_SCENARIOS:
             report = await seed_store(session, scenario)

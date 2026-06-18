@@ -69,7 +69,9 @@ class PublicRepository:
         self, store_id: str, service_public_id: str | None = None
     ) -> list[Staff]:
         result = await self.db.execute(
-            select(Staff).where(Staff.store_id == store_id, Staff.is_active == True)
+            select(Staff)
+            .options(selectinload(Staff.services))
+            .where(Staff.store_id == store_id, Staff.is_active == True)
         )
         staff_members = list(result.scalars().all())
         if service_public_id:
@@ -114,7 +116,7 @@ class PublicRepository:
                 existing.email = email
                 await self.db.flush()
             if name and not existing.first_name:
-                existing.first_name = name
+                existing.full_name = name
             return existing
 
         if email:
@@ -130,7 +132,7 @@ class PublicRepository:
                 if not existing_by_email.phone:
                     existing_by_email.phone = phone
                 if name and not existing_by_email.first_name:
-                    existing_by_email.first_name = name
+                    existing_by_email.full_name = name
                 await self.db.flush()
                 return existing_by_email
 
@@ -138,8 +140,7 @@ class PublicRepository:
         new_client = User(
             email=technical_email,
             hashed_password=hash_password(str(ulid.ULID())),
-            first_name=name,
-            last_name=None,
+            full_name=name,
             phone=phone,
             role=UserRole.CLIENT,
             store_id=store_id,
@@ -270,7 +271,7 @@ class PublicRepository:
             starts_at=starts_at,
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
-            client_name=client.first_name or client.email,
+            client_name=client.full_name or client.email,
             client_email=client.email,
             client_phone=client.phone,
             notes=notes,

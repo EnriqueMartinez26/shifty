@@ -1,6 +1,6 @@
 param(
     [string]$BackendBaseUrl = "http://127.0.0.1:8000",
-    [string]$EnvFile = "backend/.env",
+    [string]$EnvFile = ".env",
     [string]$CorsOrigin = "http://localhost:5173"
 )
 
@@ -164,7 +164,7 @@ function Test-BackendRequest([string]$Url, [string]$Method, [string]$Origin, [st
     }
 }
 
-Write-Info "Shifty stack check started"
+Write-Info "Shifty Docker-first stack check started"
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $envPath = Join-Path $projectRoot $EnvFile

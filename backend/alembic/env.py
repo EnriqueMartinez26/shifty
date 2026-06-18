@@ -56,7 +56,7 @@ def parse_db_url(url: str) -> dict:
         "host": parsed.hostname,
         "port": int(parsed.port or 5432),
         "dbname": parsed.path.lstrip("/"),
-        "sslmode": query.get("sslmode", ["require"])[0],
+        "sslmode": query.get("sslmode", ["disable"])[0],
     }
 
 

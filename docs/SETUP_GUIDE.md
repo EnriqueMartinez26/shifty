@@ -12,29 +12,24 @@ This guide explains how to set up the development environment for Shifty on Wind
 ## 🔧 Backend Setup
 
 1. **Environment Variables**:
-   Copy `.env.example` to `backend/.env` and configure your database credentials.
+   Copy `.env.example` to the repository root `.env` and configure your database credentials.
    ```bash
-   cp .env.example backend/.env
+   cp .env.example .env
    ```
 
-2. **Installation**:
-   Create a virtual environment and install dependencies.
+2. **Docker-first startup**:
+   Build and run the stack with Docker Compose. This is the primary path for local setup.
    ```bash
-   python -m venv .venv
-   source .venv/Scripts/activate
-   pip install -r backend/requirements.txt
+   docker compose up --build
    ```
 
-3. **Database Migrations**:
-   Run the specific migration script for Windows to avoid asyncpg issues.
-   ```bash
-   python backend/run_migrations.py
-   ```
-
-4. **Running the Server**:
+3. **uv-first local backend workflow**:
+   If you want to run the backend directly on the host, use `uv` from the `backend` directory.
    ```bash
    cd backend
-   python main.py
+   uv sync --frozen
+   uv run python run_migrations.py
+   uv run python main.py
    ```
    The API will be available at `http://localhost:8000`.
 
@@ -61,4 +56,5 @@ This guide explains how to set up the development environment for Shifty on Wind
 ## ⚠️ Windows Specific Notes
 
 - Always use `run_migrations.py` instead of `alembic upgrade head` to handle the `WinError 64` bug.
-- Ensure Memurai service is running before starting the backend.
+- Ensure Memurai service is running before starting the backend directly on Windows.
+- Keep `.env` at the repository root so Docker and the `uv` workflow resolve the same configuration.

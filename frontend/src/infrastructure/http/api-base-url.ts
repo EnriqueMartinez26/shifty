@@ -15,6 +15,6 @@ export const resolveApiBaseUrl = (
   }
 
   throw new Error(
-    'VITE_API_URL is required in production. Set it to the public backend URL, for example https://api.tudominio.com.'
+    'VITE_API_URL is required in production. Set it to the backend path or public URL, for example /api behind Nginx.'
   )
 }

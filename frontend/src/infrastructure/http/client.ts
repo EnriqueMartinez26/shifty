@@ -3,14 +3,15 @@ import axios from 'axios'
 import axiosRetry from 'axios-retry'
 
 import {
-  CanonicalApiError,
+  normalizeApiError,
   isApiEnvelope,
-  unwrapApiEnvelope,
-  type ApiErrorResponse
+  unwrapApiEnvelope
 } from './api-contract'
 import { resolveApiBaseUrl } from './api-base-url'
+import { getRuntimeEnv } from './runtime-env'
 
-const API_URL = resolveApiBaseUrl(import.meta.env.VITE_API_URL, import.meta.env.DEV)
+const { apiUrl, dev } = getRuntimeEnv()
+const API_URL = resolveApiBaseUrl(apiUrl, dev)
 const TOKEN_KEY = 'shifty_token'
 
 const apiClient = axios.create({
@@ -66,21 +67,21 @@ apiClient.interceptors.response.use(
     return response
   },
   async (error) => {
+    const normalizedError = normalizeApiError(error)
     const payload = error.response?.data
+
     if (isApiEnvelope(payload) && !payload.success) {
-      const canonicalError = new CanonicalApiError(
-        payload as ApiErrorResponse,
-        error.response.status
-      )
-      if (canonicalError.statusCode === 401) {
+      const statusCode = error.response.status
+      if (statusCode === 401) {
         setAuthToken(null)
       }
-      return Promise.reject(canonicalError)
+      return Promise.reject(normalizedError)
     }
-    if (error.response?.status === 401) {
+
+    if (normalizedError.statusCode === 401) {
       setAuthToken(null)
     }
-    return Promise.reject(error)
+    return Promise.reject(normalizedError)
   }
 )
 

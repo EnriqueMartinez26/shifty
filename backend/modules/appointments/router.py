@@ -8,7 +8,7 @@ y serializar la respuesta. Sin lógica de negocio.
 from datetime import date as date_type
 from typing import Annotated, Optional, List
 
-from fastapi import Depends, Path, Query, Request
+from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,6 @@ from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
 from core.validation import PUBLIC_ID_PATTERN
-from core.vercel_queue import extract_vercel_oidc_token
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.schemas import (
     AppointmentCreate,
@@ -66,7 +65,7 @@ def get_appointment_service(
     uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
     redis: Redis = Depends(get_redis),
 ) -> AppointmentService:
-    return AppointmentService(uow=uow, redis=redis)
+    return AppointmentService(uow=uow, cache=redis)
 
 
 def _to_appointment_response(appointment) -> AppointmentResponse:
@@ -109,8 +108,7 @@ async def list_appointments_by_date(
             service_id=service.public_id,
             service_name=service.name,
             staff_id=staff.public_id,
-            client_name=f"{client.first_name or ''} {client.last_name or ''}".strip()
-            or client.email,
+            client_name=client.full_name or client.email,
             starts_at=appointment.starts_at,
             ends_at=appointment.ends_at,
             status=appointment.status,
@@ -156,9 +154,10 @@ async def get_availability(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/", response_model=AppointmentResponse)
+@router.post(
+    "/", response_model=AppointmentResponse, status_code=status.HTTP_201_CREATED
+)
 async def book_appointment(
-    request: Request,
     data: AppointmentCreate,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
@@ -182,7 +181,6 @@ async def book_appointment(
             data=data.model_dump(),
             store_id=user.store_id,
             actor=user,
-            vercel_oidc_token=extract_vercel_oidc_token(request),
         )
     except Exception:
         await idempotency_release(data.idempotency_key, redis)
@@ -400,10 +398,7 @@ async def search_appointments(
             service_id=service.public_id,
             staff_name=staff.display_name,
             staff_id=staff.public_id,
-            client_name=(
-                f"{client.first_name or ''} {client.last_name or ''}".strip()
-                or client.email
-            ),
+            client_name=client.full_name or client.email,
             client_id=client.public_id,
         )
         for appointment, service, staff, client in rows

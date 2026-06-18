@@ -23,6 +23,7 @@ celery_app.conf.update(
     # Auto-descubrimiento de tareas en los módulos
     imports=[
         "modules.payments.tasks",
+        "modules.notifications.tasks",
     ],
     # ----------------------------------------------------------------
     # Celery Beat — Tareas periódicas
@@ -36,6 +37,10 @@ celery_app.conf.update(
         "process-payment-webhook-inbox-every-minute": {
             "task": "process_payment_webhook_inbox",
             "schedule": crontab(),
+        },
+        "process-appointment-reminders-every-15-minutes": {
+            "task": "process_appointment_reminders",
+            "schedule": crontab(minute="*/15"),
         },
     },
 )

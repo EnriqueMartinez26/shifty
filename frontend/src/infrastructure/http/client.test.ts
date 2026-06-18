@@ -54,9 +54,7 @@ describe('apiClient canonical envelope', () => {
   })
 
   it('normalizes configured API URLs without trailing slashes', () => {
-    expect(resolveApiBaseUrl('https://api.example.com///', false)).toBe(
-      'https://api.example.com'
-    )
+    expect(resolveApiBaseUrl('/api///', false)).toBe('/api')
   })
 
   it('falls back to localhost in development when the env var is absent', () => {

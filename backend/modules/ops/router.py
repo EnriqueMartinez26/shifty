@@ -2,32 +2,23 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.exceptions import AuthenticationException, PermissionDeniedException
+from core.exceptions import PermissionDeniedException
 
 from core.config import settings
 from core.database import get_db
 from core.redis import get_redis
 from core.roles import ROLE_SUPER_ADMIN, STORE_MANAGERS, canonical_role, has_any_role
-from core.vercel_queue import extract_vercel_oidc_token
 from modules.auth.dependencies import get_current_user
-from modules.notifications.tasks import drain_notification_queue, schedule_24h_reminders
 from modules.payments.model import OutboxMessage, WebhookInbox
 from modules.users.model import User
 
 router = CanonicalAPIRouter(prefix="/ops", tags=["Operations"])
-
-
-def _authorize_internal_job(request: Request) -> None:
-    expected = settings.CRON_SECRET
-    provided = request.headers.get("authorization", "")
-    if not expected or provided != f"Bearer {expected}":
-        raise AuthenticationException("Unauthorized cron request")
 
 
 @router.get("/health/live")
@@ -153,21 +144,3 @@ async def slo_status(
         },
         "alerts": alerts,
     }
-
-
-@router.get("/internal/cron/reminders/schedule")
-async def schedule_reminders_cron(request: Request):
-    _authorize_internal_job(request)
-    return await schedule_24h_reminders(
-        now=datetime.now(timezone.utc),
-        vercel_oidc_token=extract_vercel_oidc_token(request),
-    )
-
-
-@router.post("/internal/queues/{queue_kind}/drain")
-async def drain_notification_jobs(queue_kind: str, request: Request):
-    _authorize_internal_job(request)
-    return await drain_notification_queue(
-        queue_kind=queue_kind,
-        vercel_oidc_token=extract_vercel_oidc_token(request),
-    )

@@ -40,9 +40,6 @@ dev = [
     "pre-commit>=4.6.0",
 ]
 
-[tool.vercel]
-entrypoint = "api.index:app"
-
 [tool.ruff]
 line-length = 88
 target-version = "py312"
@@ -70,7 +67,6 @@ ignore = [
 "modules/users/model.py" = ["F401"]
 "run_migrations.py" = ["E402"]
 "scripts/bootstrap_superadmin.py" = ["E402"]
-"scripts/reset_db.py" = ["E402"]
 "scripts/seed_simulation.py" = ["E402"]
 "tests/**/*.py" = ["F401"]
 
@@ -88,14 +84,9 @@ explicit_package_bases = true
 module = [
     "modules.*",
     "infrastructure.*",
-    "presentation.*",
     "tests.*",
-    "domain.entities.*",
     "alembic.*",
     "main",
-    "server",
-    "api.*",
-    "api",
     "scripts.*",
     "core.runtime_contracts",
     "core.roles",
@@ -107,9 +98,7 @@ module = [
     "core.middleware",
     "core.idempotency",
     "loadtests.*",
-    "locustfile",
     "run_migrations",
-    "index",
 ]
 ignore_errors = true
 
