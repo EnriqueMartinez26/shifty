@@ -37,10 +37,10 @@ export const create2000sListCardStyle = (
 })
 
 export const createBookingBackButtonStyle = (): CSSProperties => ({
-  background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-  borderColor: colors2000s.border.default,
-  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-  color: colors2000s.text.primary
+  background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+  borderColor: colors2000s.orange.accent,
+  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`,
+  color: '#ffffff'
 })
 
 export const createBookingInputStyle = (): CSSProperties => ({

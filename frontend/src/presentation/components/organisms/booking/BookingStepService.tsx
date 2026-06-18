@@ -110,7 +110,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                       background: '#ffffff',
                       borderColor: colors2000s.border.light,
                       boxShadow: colors2000s.shadows.insetDark,
-                      color: isSelected ? colors2000s.orange.dark : '#2563eb'
+                      color: colors2000s.orange.accent
                     }}
                   >
                     ${svc.price}

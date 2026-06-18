@@ -39,7 +39,7 @@ Cada fila debe indicar:
 | `backend/pytest_output.txt` | artefacto de ejecución | borrado | ninguno | borrar | backend |
 | `backend/server.py` | entrypoint legacy | borrado | ninguno | borrar | backend |
 | `server.py` | entrypoint legacy | borrado | ninguno | borrar | backend |
-| `backend/reset_db.py` | script manual legacy | borrado | ninguno | borrar | backend |
+| `backend/scripts/reset_db.py` | script manual legacy | borrado | ninguno | borrar | backend |
 | `backend/refactor_service.py` | script manual legacy | borrado | ninguno | borrar | backend |
 | `backend/fix_tests.py` | script manual legacy | borrado | ninguno | borrar | backend |
 | `create_sqlite_dev_db.py` | script manual legacy | borrado | ninguno | borrar | backend |

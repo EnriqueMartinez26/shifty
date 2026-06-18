@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 import re
+from typing import Any
 
 PUBLIC_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$"
@@ -29,4 +31,23 @@ def reject_control_chars(value: str | None) -> str | None:
         return None
     if any(ord(char) < 32 and char not in "\t\n\r" for char in value):
         raise ValueError("El texto contiene caracteres de control no permitidos")
+    return value
+
+
+def reject_payload_control_chars(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return reject_control_chars(value)
+    if isinstance(value, Mapping):
+        return {
+            reject_payload_control_chars(key): reject_payload_control_chars(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [reject_payload_control_chars(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(reject_payload_control_chars(item) for item in value)
+    if isinstance(value, set):
+        return {reject_payload_control_chars(item) for item in value}
     return value

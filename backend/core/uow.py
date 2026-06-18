@@ -43,12 +43,15 @@ class AsyncSqlAlchemyUnitOfWork(AbstractUnitOfWork):
 
     def __init__(self, session: AsyncSession):
         self.session = session
+        self._transaction = None
 
     async def __aenter__(self) -> "AbstractUnitOfWork":
         # Inicializamos los repositorios inyectando la sesión.
         self.appointments = AppointmentRepository(self.session)
         # AuditService aún tiene responsabilidades mixtas pero funciona como Repositorio para la creación de logs.
         self.audit = AuditService(self.session)
+        if not self.session.in_transaction():
+            self._transaction = await self.session.begin()
         return await super().__aenter__()
 
     async def commit(self):

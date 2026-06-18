@@ -1,6 +1,7 @@
 import os
 import re
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import model_validator
@@ -14,11 +15,12 @@ class Environment(str, Enum):
 
 
 def _env_files() -> tuple[str, ...] | None:
-    if os.getenv("VERCEL"):
-        return None
     if os.getenv("ENV", "").lower() == Environment.PRODUCTION.value:
         return None
-    return (".env", "../.env")
+    candidate = Path(__file__).resolve().parents[2] / ".env"
+    if candidate.is_file():
+        return (str(candidate),)
+    return None
 
 
 class Settings(BaseSettings):
@@ -68,15 +70,7 @@ class Settings(BaseSettings):
     SLO_MAX_FAILED_WEBHOOKS: int = 20
     SLO_MAX_PENDING_OUTBOX: int = 200
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
-    CRON_SECRET: str | None = None
     RUN_RUNTIME_CONTRACTS_ON_STARTUP: bool = False
-    VERCEL_QUEUE_REGION: str | None = None
-    VERCEL_QUEUE_CONFIRMATION_TOPIC: str = "appointment-confirmation"
-    VERCEL_QUEUE_REMINDER_TOPIC: str = "appointment-reminder"
-    VERCEL_QUEUE_CONFIRMATION_CONSUMER: str = "confirmation-emailer"
-    VERCEL_QUEUE_REMINDER_CONSUMER: str = "reminder-emailer"
-    VERCEL_QUEUE_MAX_BATCH: int = 10
-    VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC: bool = True
 
     DATABASE_URL: str
     REDIS_URL: str
@@ -153,10 +147,6 @@ class Settings(BaseSettings):
                 raise ValueError("FRONTEND_URL no puede apuntar a localhost en produccion")
             if self.PUBLIC_API_URL.startswith(("http://localhost", "http://127.0.0.1")):
                 raise ValueError("PUBLIC_API_URL no puede apuntar a localhost en produccion")
-            if self.PUBLIC_API_URL == "https://shifty-iota.vercel.app":
-                raise ValueError(
-                    "PUBLIC_API_URL debe apuntar al backend publico real en produccion"
-                )
         if self.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1:
             raise ValueError("PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1")
         if self.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS < 1:
@@ -201,7 +191,7 @@ def _sanitize_settings_error(value: str) -> str:
 def _fallback_settings() -> Settings:
     cors_origins = os.getenv(
         "CORS_ORIGINS",
-        "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site,"
+        "http://localhost,http://127.0.0.1,"
         "http://localhost:5173,http://127.0.0.1:5173",
     )
     return Settings.model_construct(
@@ -248,15 +238,7 @@ def _fallback_settings() -> Settings:
         SLO_MAX_FAILED_WEBHOOKS=20,
         SLO_MAX_PENDING_OUTBOX=200,
         MERCADOPAGO_WEBHOOK_SECRET=None,
-        CRON_SECRET=None,
         RUN_RUNTIME_CONTRACTS_ON_STARTUP=False,
-        VERCEL_QUEUE_REGION=None,
-        VERCEL_QUEUE_CONFIRMATION_TOPIC="appointment-confirmation",
-        VERCEL_QUEUE_REMINDER_TOPIC="appointment-reminder",
-        VERCEL_QUEUE_CONFIRMATION_CONSUMER="confirmation-emailer",
-        VERCEL_QUEUE_REMINDER_CONSUMER="reminder-emailer",
-        VERCEL_QUEUE_MAX_BATCH=10,
-        VERCEL_QUEUE_CONFIRMATION_FALLBACK_SYNC=True,
         DATABASE_URL="postgresql+asyncpg://invalid:invalid@localhost/invalid",
         REDIS_URL="redis://localhost:6379/0",
         CELERY_BROKER_URL="memory://",
@@ -272,10 +254,10 @@ def _fallback_settings() -> Settings:
         EMAILS_FROM_EMAIL="no-reply@example.com",
         FRONTEND_URL=os.getenv(
             "FRONTEND_URL",
-            "https://shifty-frontend.mart-nez-sci-1390.chatgpt-team.site",
+            "http://localhost",
         ),
         FRONTEND_RESET_PASSWORD_PATH="/reset-password",
-        PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "http://localhost:8000"),
+        PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "http://localhost/api"),
         CORS_ORIGINS=cors_origins,
     )
 

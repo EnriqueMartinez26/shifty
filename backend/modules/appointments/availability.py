@@ -14,6 +14,7 @@ from datetime import date, datetime, timedelta, time
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
+from sqlalchemy.orm import selectinload
 
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
@@ -65,7 +66,9 @@ class AvailabilityService:
 
         # 3. Staff que realiza el servicio ------------------------------------
         staff_res = await self.db.execute(
-            select(Staff).where(
+            select(Staff)
+            .options(selectinload(Staff.services))
+            .where(
                 Staff.store_id == store_id,
                 Staff.is_active.is_(True),
             )

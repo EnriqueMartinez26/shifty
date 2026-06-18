@@ -24,7 +24,7 @@ sys.path.insert(0, backend_dir)
 # Leer el .env manualmente ANTES de importar settings
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(backend_dir, ".env"))
+load_dotenv(os.path.join(backend_dir, "..", ".env"))
 
 
 def parse_db_url(url: str) -> dict:

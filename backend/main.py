@@ -175,19 +175,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-# IMPORTANTE: En Starlette, los middlewares se ejecutan en orden INVERSO al de registro.
-# El SecurityHeadersMiddleware queda como capa externa; CORS envuelve a los guards,
-# y los guards cortan payload/rate limit antes de llegar al tenant y routers.
-
-# 1. Registrar TenantMiddleware primero
+# IMPORTANTE: En Starlette/FastAPI, los middlewares se ejecutan en orden INVERSO al de registro.
+# Registramos de lo más interno a lo más externo:
+# tenant -> rate limit -> request guard -> boot error -> canonical JSON -> security headers -> CORS.
 app.add_middleware(TenantMiddleware)
 app.add_middleware(RedisRateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BootErrorMiddleware)
 app.add_middleware(CanonicalJsonMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
-# 2. Configurar CORS (debe ser el último en registrarse para ser la capa más externa)
+# Configurar CORS como la capa más externa.
 # Obtenemos los orígenes de la configuración y nos aseguramos de que no haya espacios.
 origins = [o.strip() for o in settings.CORS_ORIGINS.split(",")]
 

@@ -20,6 +20,7 @@ from modules.payments.model import (
 )
 from modules.services.model import Service
 from modules.stores.model import Store
+from modules.users.model import User
 
 
 ACTIVE_APPOINTMENT_STATUSES = {
@@ -76,6 +77,21 @@ def _normalize_payer_email(email: str | None) -> str | None:
     if email.endswith(".noreply"):
         return None
     return email
+
+
+async def _resolve_appointment_payer(
+    db: AsyncSession, appointment: Appointment
+) -> tuple[str | None, str | None]:
+    client = appointment.__dict__.get("client")
+    if client is None and appointment.client_id:
+        result = await db.execute(select(User).where(User.id == appointment.client_id))
+        client = result.scalar_one_or_none()
+
+    if client is None:
+        return appointment.client_name or None, appointment.client_email
+
+    resolved_name = client.full_name or client.email
+    return resolved_name or None, client.email
 
 
 def _booking_return_url(
@@ -253,6 +269,8 @@ async def create_mercadopago_preference(
     if not store:
         raise RuntimeError("No encontramos la tienda del pago")
 
+    payer_name, payer_email = await _resolve_appointment_payer(db, appointment)
+
     payload = _clean_payload(
         {
             "items": [
@@ -267,8 +285,8 @@ async def create_mercadopago_preference(
                 }
             ],
             "payer": {
-                "name": appointment.client_name,
-                "email": _normalize_payer_email(appointment.client_email),
+                "name": payer_name,
+                "email": _normalize_payer_email(payer_email),
             },
             "external_reference": appointment.id,
             "notification_url": _notification_url(store),

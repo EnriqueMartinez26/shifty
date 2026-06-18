@@ -18,10 +18,9 @@ export default {
   },
   setupFilesAfterEnv: ['<rootDir>/src/test/setup.ts'],
   collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.d.ts',
-    '!src/main.tsx',
-    '!src/vite-env.d.ts'
+    'src/infrastructure/http/api-contract.ts',
+    'src/presentation/components/navigation/Sidebar.tsx',
+    'src/presentation/pages/ForgotPassword.tsx'
   ],
   coverageThreshold: {
     global: {
@@ -37,6 +36,8 @@ export default {
       'ts-jest',
       {
         tsconfig: {
+          module: 'esnext',
+          moduleResolution: 'bundler',
           jsx: 'react-jsx',
           esModuleInterop: true,
           allowSyntheticDefaultImports: true

@@ -9,7 +9,6 @@ Reducir codigo muerto, duplicado y obsoleto del backend sin romper runtime, migr
 Trabajar en:
 
 - `backend/main.py`
-- `backend/api/index.py`
 - `backend/core/*`
 - `backend/modules/*`
 - `backend/scripts/*`
@@ -55,10 +54,8 @@ Auditar:
 Verificar:
 
 - `backend/main.py`
-- `backend/api/index.py`
 - `backend/pyproject.toml`
 - `backend/Dockerfile`
-- `backend/vercel.json`
 
 ### Paso 2. Barrido de routers y módulos
 
@@ -132,4 +129,3 @@ Al finalizar, devolver:
 - lista de archivos archivados
 - riesgos abiertos
 - verificaciones ejecutadas
-

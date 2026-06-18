@@ -7,7 +7,6 @@ venv/
 env/
 .env
 backend/.env
-backend/.env.vercel.import
 backend/.env.local
 backend/.env.production.local
 *.log
@@ -32,6 +31,7 @@ test_sentinel.py
 validation_complete.py
 run_validation.py
 .worktrees/
+.atl/
 
 # OS
 .DS_Store

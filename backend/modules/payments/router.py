@@ -197,8 +197,11 @@ async def _validate_mercadopago_signature(
 async def _get_appointment_with_service(
     db: AsyncSession, appointment_id: str, store_id: str
 ) -> tuple[Appointment, Service]:
+    from sqlalchemy.orm import joinedload
+
     result = await db.execute(
         select(Appointment, Service)
+        .options(joinedload(Appointment.client))
         .join(Service, Appointment.service_id == Service.id)
         .where(Appointment.id == appointment_id, Appointment.store_id == store_id)
     )

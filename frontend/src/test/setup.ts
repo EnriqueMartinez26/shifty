@@ -36,3 +36,25 @@ if (customGlobal.crypto && typeof customGlobal.crypto.randomUUID === 'undefined'
     // Fail-safe fallback if not in a Node environment
   }
 }
+
+if (typeof customGlobal.TextEncoder === 'undefined' || typeof customGlobal.TextDecoder === 'undefined') {
+  try {
+    const { TextEncoder, TextDecoder } = require('util')
+
+    if (typeof customGlobal.TextEncoder === 'undefined') {
+      Object.defineProperty(customGlobal, 'TextEncoder', {
+        value: TextEncoder,
+        writable: true
+      })
+    }
+
+    if (typeof customGlobal.TextDecoder === 'undefined') {
+      Object.defineProperty(customGlobal, 'TextDecoder', {
+        value: TextDecoder,
+        writable: true
+      })
+    }
+  } catch (_e) {
+    // Fail-safe fallback if util is unavailable.
+  }
+}

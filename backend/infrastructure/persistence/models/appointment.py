@@ -1,9 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import ulid
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from infrastructure.persistence.models.base import Base
-import ulid
 
 
 class AppointmentModel(Base):
@@ -23,9 +25,6 @@ class AppointmentModel(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_minutes: Mapped[int] = mapped_column()
-    client_name: Mapped[str] = mapped_column(String(255))
-    client_email: Mapped[Optional[str]] = mapped_column(String(255))
-    client_phone: Mapped[Optional[str]] = mapped_column(String(50))
     status: Mapped[str] = mapped_column(String(50), default="pending")
     notes: Mapped[Optional[str]] = mapped_column(Text)
     notes_staff: Mapped[Optional[str]] = mapped_column(Text)
@@ -46,9 +45,72 @@ class AppointmentModel(Base):
     staff = relationship("StaffModel")
     client = relationship("UserModel")
 
+    def __init__(self, **kwargs):
+        client_name = kwargs.pop("client_name", None)
+        client_email = kwargs.pop("client_email", None)
+        client_phone = kwargs.pop("client_phone", None)
+        super().__init__(**kwargs)
+        if client_name is not None:
+            self.client_name = client_name
+        if client_email is not None:
+            self.client_email = client_email
+        if client_phone is not None:
+            self.client_phone = client_phone
+
     @property
     def public_id(self) -> str:
         return self.id
+
+    @property
+    def client_name(self) -> str:
+        override = getattr(self, "_client_name_override", None)
+        if override:
+            return override
+        client = self.__dict__.get("client")
+        if client is not None:
+            value = " ".join(
+                part.strip()
+                for part in (getattr(client, "first_name", None), getattr(client, "last_name", None))
+                if part and part.strip()
+            ).strip()
+            if value:
+                return value
+            email = getattr(client, "email", None)
+            if email:
+                return email
+        return ""
+
+    @client_name.setter
+    def client_name(self, value: str | None) -> None:
+        self._client_name_override = (value or "").strip()
+
+    @property
+    def client_email(self) -> Optional[str]:
+        override = getattr(self, "_client_email_override", None)
+        if override is not None:
+            return override
+        client = self.__dict__.get("client")
+        if client is not None:
+            return getattr(client, "email", None)
+        return None
+
+    @client_email.setter
+    def client_email(self, value: str | None) -> None:
+        self._client_email_override = value.strip() if isinstance(value, str) else value
+
+    @property
+    def client_phone(self) -> Optional[str]:
+        override = getattr(self, "_client_phone_override", None)
+        if override is not None:
+            return override
+        client = self.__dict__.get("client")
+        if client is not None:
+            return getattr(client, "phone", None)
+        return None
+
+    @client_phone.setter
+    def client_phone(self, value: str | None) -> None:
+        self._client_phone_override = value.strip() if isinstance(value, str) else value
 
     def apply_status_transition(self, new_status) -> None:
         from core.exceptions import InvalidStatusTransitionException
@@ -80,6 +142,10 @@ class AppointmentModel(Base):
         elif attempted == "completed":
             self.completed_at = now
         self.updated_at = now
+
+    @property
+    def ends_at_derived(self) -> datetime:
+        return self.starts_at + timedelta(minutes=self.duration_minutes)
 
     __table_args__ = (
         CheckConstraint(

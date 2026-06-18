@@ -13,12 +13,15 @@ Casos cubiertos:
   6. Marcar turno como AUSENTE.
 """
 
+import json
+
 import pytest
 import pytest_asyncio
 from datetime import datetime, timedelta, timezone
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
+from core.config import settings
 from core.models import Base
 from core.exceptions import AppException
 import modules.stores.model
@@ -86,6 +89,27 @@ async def client(test_session):
     app.dependency_overrides.clear()
 
 
+@pytest_asyncio.fixture(scope="function")
+async def public_client(test_session):
+    """
+    Cliente HTTP sin la cabecera de respuesta cruda para verificar el envelope
+    canónico real que ve un consumidor externo.
+    """
+    from main import app
+    from core.database import get_db
+
+    async def override_get_db():
+        yield test_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+
+    app.dependency_overrides.clear()
+
+
 # ---------------------------------------------------------------------------
 # Helpers para crear datos de prueba
 # ---------------------------------------------------------------------------
@@ -105,7 +129,9 @@ async def create_test_store_and_admin(client: AsyncClient) -> tuple[str, str]:
         },
     )
     assert resp.status_code == 201, f"Register failed: {resp.text}"
-    store_public_id = resp.json()["store_public_id"]
+    register_body = resp.json()
+    register_data = register_body.get("data", register_body)
+    store_public_id = register_data["store_public_id"]
 
     token_resp = await client.post(
         "/auth/login",
@@ -115,7 +141,8 @@ async def create_test_store_and_admin(client: AsyncClient) -> tuple[str, str]:
         },
     )
     assert token_resp.status_code == 200
-    token = token_resp.json()["access_token"]
+    token_body = token_resp.json()
+    token = token_body.get("data", token_body)["access_token"]
     return store_public_id, token
 
 
@@ -127,7 +154,25 @@ async def create_service(client: AsyncClient, token: str) -> str:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 201, f"Create service failed: {resp.text}"
-    return resp.json()["public_id"]
+    service_body = resp.json()
+    return service_body.get("data", service_body)["public_id"]
+
+
+async def create_staff(client: AsyncClient, token: str, service_public_id: str) -> str:
+    resp = await client.post(
+        "/staff/",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "display_name": "Pro Demo",
+            "first_name": "Pro",
+            "last_name": "Demo",
+            "email": "pro-demo@test.com",
+            "service_ids": [service_public_id],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    staff_body = resp.json()
+    return staff_body.get("data", staff_body)["public_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -295,3 +340,96 @@ class TestAppointmentEndpoints:
         )
         assert resp.status_code == 200
         assert resp.json()["total"] == 0
+
+    @pytest.mark.asyncio
+    async def test_create_appointment_returns_201_and_canonical_envelope(
+        self, public_client: AsyncClient
+    ):
+        _, token = await create_test_store_and_admin(public_client)
+        service_id = await create_service(public_client, token)
+        staff_id = await create_staff(public_client, token, service_id)
+        starts_at = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+
+        resp = await public_client.post(
+            "/appointments/",
+            json={
+                "service_id": service_id,
+                "staff_id": staff_id,
+                "starts_at": starts_at,
+                "notes": "Corte completo",
+                "idempotency_key": "appointment-create-001",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["success"] is True
+        assert "data" in body
+        assert body["data"]["service_id"] == service_id
+        assert body["data"]["staff_id"] == staff_id
+
+    @pytest.mark.asyncio
+    async def test_create_appointment_is_idempotent(
+        self, client: AsyncClient
+    ) -> None:
+        _, token = await create_test_store_and_admin(client)
+        service_id = await create_service(client, token)
+        staff_id = await create_staff(client, token, service_id)
+        starts_at = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+        payload = {
+            "service_id": service_id,
+            "staff_id": staff_id,
+            "starts_at": starts_at,
+            "notes": "Reserva repetida",
+            "idempotency_key": "appointment-create-002",
+        }
+
+        first = await client.post(
+            "/appointments/",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        second = await client.post(
+            "/appointments/",
+            json=payload,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert first.status_code == 201
+        assert second.status_code == 201
+        assert first.json()["public_id"] == second.json()["public_id"]
+
+    @pytest.mark.asyncio
+    async def test_openapi_documents_appointment_create_as_201(self) -> None:
+        from main import app
+
+        openapi = app.openapi()
+        post_responses = openapi["paths"]["/appointments/"]["post"]["responses"]
+
+        assert "201" in post_responses
+        assert "200" not in post_responses
+
+    @pytest.mark.asyncio
+    async def test_oversized_write_requests_keep_security_headers(
+        self, public_client: AsyncClient
+    ) -> None:
+        _, token = await create_test_store_and_admin(public_client)
+        oversized_json = json.dumps(
+            {"payload": "x" * (settings.MAX_REQUEST_BODY_BYTES + 1024)},
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+        resp = await public_client.post(
+            "/appointments/",
+            content=oversized_json,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+
+        assert resp.status_code == 413
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert resp.headers["x-frame-options"] == "DENY"
+        assert resp.headers["referrer-policy"] == "strict-origin-when-cross-origin"

@@ -58,7 +58,11 @@ class AppointmentRepository:
 
         res = await self.db.execute(
             select(Appointment)
-            .options(joinedload(Appointment.service), joinedload(Appointment.staff))
+            .options(
+                joinedload(Appointment.service),
+                joinedload(Appointment.staff),
+                joinedload(Appointment.client),
+            )
             .where(Appointment.public_id == public_id)
         )
         return res.scalar_one_or_none()
@@ -245,16 +249,17 @@ class AppointmentRepository:
 
     async def get_upcoming_for_reminders(
         self, starts_after: datetime, starts_before: datetime
-    ) -> list[tuple[Appointment, Service, Staff, User]]:
+    ) -> list[tuple[Appointment, Service, Staff, User, Store]]:
         """
         Devuelve turnos CONFIRMED o PENDING en el rango horario indicado.
         Usado por la tarea de recordatorios 24h antes.
         """
         result = await self.db.execute(
-            select(Appointment, Service, Staff, User)
+            select(Appointment, Service, Staff, User, Store)
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
+            .join(Store, Appointment.store_id == Store.id)
             .where(
                 Appointment.starts_at >= starts_after,
                 Appointment.starts_at < starts_before,

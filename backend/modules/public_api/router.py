@@ -34,7 +34,6 @@ from core.idempotency import idempotency_guard, idempotency_release, idempotency
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_redis
 from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN
-from core.vercel_queue import extract_vercel_oidc_token
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
@@ -569,7 +568,6 @@ async def create_public_booking(
                 "staff": staff.display_name,
                 "date": appointment.starts_at.isoformat(),
             },
-            vercel_oidc_token=extract_vercel_oidc_token(request),
         )
         response = PublicBookingResponse(
             public_id=appointment.public_id,
@@ -678,7 +676,7 @@ async def get_client_appointments(
             )
 
         return ClientAppointmentsResponse(
-            client_name=client.first_name or "Cliente",
+            client_name=client.full_name or "Cliente",
             client_phone=phone,
             appointments=items,
         )
@@ -759,7 +757,7 @@ async def client_cancel_appointment(
             starts_at=appointment.starts_at,
             ends_at=appointment.ends_at,
             status=appointment.status,
-            client_name=client.first_name or "Cliente",
+            client_name=client.full_name or "Cliente",
             client_phone=data.phone,
             notes=appointment.notes,
             custom_fields=appointment.intake_answers or {},
@@ -856,7 +854,7 @@ async def client_reschedule_appointment(
                     starts_at=data.new_starts_at,
                     ends_at=new_ends_at,
                     duration_minutes=service.duration_minutes,
-                    client_name=client.first_name or client.email,
+                    client_name=client.full_name or client.email,
                     client_email=client.email,
                     client_phone=client.phone,
                     notes=original.notes,
@@ -886,7 +884,7 @@ async def client_reschedule_appointment(
             starts_at=new_appointment.starts_at,
             ends_at=new_appointment.ends_at,
             status=new_appointment.status,
-            client_name=client.first_name or "Cliente",
+            client_name=client.full_name or "Cliente",
             client_phone=data.phone,
             notes=new_appointment.notes,
             custom_fields=new_appointment.intake_answers or {},

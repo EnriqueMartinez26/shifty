@@ -69,7 +69,13 @@ def error_response(
 
 
 def is_canonical_payload(payload: Any) -> bool:
-    return isinstance(payload, dict) and payload.get("success") in (True, False)
+    if not isinstance(payload, dict):
+        return False
+    if "success" not in payload or not isinstance(payload["success"], bool):
+        return False
+    if payload["success"]:
+        return "data" in payload
+    return "error_code" in payload and "message" in payload
 
 
 class CanonicalJsonMiddleware(BaseHTTPMiddleware):
