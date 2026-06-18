@@ -70,7 +70,10 @@ class AppointmentModel(Base):
         if client is not None:
             value = " ".join(
                 part.strip()
-                for part in (getattr(client, "first_name", None), getattr(client, "last_name", None))
+                for part in (
+                    getattr(client, "first_name", None),
+                    getattr(client, "last_name", None),
+                )
                 if part and part.strip()
             ).strip()
             if value:

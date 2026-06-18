@@ -5,10 +5,7 @@ import { X, Loader2 } from 'lucide-react'
 import { User } from '@domain/entities/User'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
-import {
-  create2000sModalInputStyle,
-  create2000sModalSurfaceStyle
-} from '../../lib/surfaceStyles'
+import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { UserFormValues } from '../../types/forms'
 
 interface UserFormModalProps {
@@ -121,7 +118,11 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
               style={
                 editingUser
-                  ? { ...create2000sModalInputStyle(), background: colors2000s.bg.disabled, opacity: 0.7 }
+                  ? {
+                      ...create2000sModalInputStyle(),
+                      background: colors2000s.bg.disabled,
+                      opacity: 0.7
+                    }
                   : create2000sModalInputStyle()
               }
               required

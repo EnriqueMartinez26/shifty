@@ -127,15 +127,15 @@ export const BookingStepClient: React.FC<BookingStepClientProps> = ({
           </label>
           <div className="relative">
             <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                required
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full pl-12 pr-4 py-3.5 font-bold"
-                style={{ ...createBookingInputStyle(), ...inputStyle }}
-                placeholder="Ej: Juan Perez"
-              />
+            <input
+              type="text"
+              required
+              value={formData.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              className="w-full pl-12 pr-4 py-3.5 font-bold"
+              style={{ ...createBookingInputStyle(), ...inputStyle }}
+              placeholder="Ej: Juan Perez"
+            />
           </div>
         </div>
 

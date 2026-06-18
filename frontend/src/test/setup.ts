@@ -37,7 +37,10 @@ if (customGlobal.crypto && typeof customGlobal.crypto.randomUUID === 'undefined'
   }
 }
 
-if (typeof customGlobal.TextEncoder === 'undefined' || typeof customGlobal.TextDecoder === 'undefined') {
+if (
+  typeof customGlobal.TextEncoder === 'undefined' ||
+  typeof customGlobal.TextDecoder === 'undefined'
+) {
   try {
     const { TextEncoder, TextDecoder } = require('util')
 

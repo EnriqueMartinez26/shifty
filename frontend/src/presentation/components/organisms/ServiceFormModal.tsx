@@ -15,10 +15,7 @@ import {
 import { Service } from '@domain/entities/Service'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
-import {
-  create2000sModalInputStyle,
-  create2000sModalSurfaceStyle
-} from '../../lib/surfaceStyles'
+import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { ServiceFormValues } from '../../types/forms'
 
 interface ServiceFormModalProps {

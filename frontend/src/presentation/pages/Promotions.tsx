@@ -188,14 +188,14 @@ const PromotionsPage: React.FC = () => {
                 Lo que ve el cliente antes de confirmar la reserva.
               </p>
             </div>
-          <button
-            type="button"
-            onClick={() => {
-              void handleSavePromotion()
-            }}
-            className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-            style={buttonStyles2000s.selected}
-          >
+            <button
+              type="button"
+              onClick={() => {
+                void handleSavePromotion()
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+              style={buttonStyles2000s.selected}
+            >
               <Save className="w-4 h-4 inline mr-2" />
               {editingPromotionId ? 'Actualizar' : 'Crear'}
             </button>
@@ -450,8 +450,8 @@ const PromotionsPage: React.FC = () => {
             {promotionsQuery.data?.map((promotion) => (
               <div
                 key={promotion.public_id}
-              className="rounded-2xl p-4 bg-white flex flex-col gap-4"
-              style={create2000sListCardStyle()}
+                className="rounded-2xl p-4 bg-white flex flex-col gap-4"
+                style={create2000sListCardStyle()}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -537,8 +537,8 @@ const PromotionsPage: React.FC = () => {
 
             {!promotionsQuery.data?.length && !promotionsQuery.isLoading && (
               <div
-              className="rounded-2xl p-6 bg-white text-sm font-bold"
-              style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
+                className="rounded-2xl p-6 bg-white text-sm font-bold"
+                style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 Todavía no hay promociones configuradas.
               </div>

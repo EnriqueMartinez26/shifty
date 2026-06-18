@@ -149,7 +149,7 @@ export default [
     }
   },
   {
-    files: ['src/**/*.test.ts', 'src/test/**/*.{ts,tsx}'],
+    files: ['src/**/*.test.{ts,tsx}', 'src/test/**/*.{ts,tsx}'],
     languageOptions: {
       globals: {
         afterEach: 'readonly',

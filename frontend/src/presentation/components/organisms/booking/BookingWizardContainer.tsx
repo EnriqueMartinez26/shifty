@@ -214,10 +214,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
         </div>
       </div>
 
-      <div
-        className="rounded-3xl p-6 bg-white space-y-4"
-        style={createBookingSurfaceStyle()}
-      >
+      <div className="rounded-3xl p-6 bg-white space-y-4" style={createBookingSurfaceStyle()}>
         <div className="flex items-start gap-3">
           <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
           <div>

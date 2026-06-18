@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 import ulid
 from sqlalchemy import Boolean, DateTime, String
@@ -6,6 +7,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from infrastructure.persistence.models.base import Base
 from infrastructure.persistence.models.schedule import ScheduleModel
+
+if TYPE_CHECKING:
+    from modules.services.model import Service
 
 
 class StaffModel(Base):

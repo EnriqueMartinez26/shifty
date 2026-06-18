@@ -33,10 +33,7 @@ import {
   useUpdateStoreSettings
 } from '../hooks/useStores'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
-import {
-  create2000sPanelStyle,
-  createSettingsInputStyle
-} from '../lib/surfaceStyles'
+import { create2000sPanelStyle, createSettingsInputStyle } from '../lib/surfaceStyles'
 
 const TABS = [
   { id: 'identity', label: 'Identidad', icon: <Store className="w-4 h-4" /> },
@@ -934,7 +931,7 @@ const SettingsPage: React.FC = () => {
                     setFormData({ ...formData, buffer_minutes: parseInt(e.target.value) || 0 })
                   }
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                style={createSettingsInputStyle()}
+                  style={createSettingsInputStyle()}
                   placeholder="0"
                 />
                 <p
@@ -1141,7 +1138,7 @@ const SettingsPage: React.FC = () => {
                   value={passwordForm.current}
                   onChange={(e) => setPasswordForm({ ...passwordForm, current: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                style={createSettingsInputStyle()}
+                  style={createSettingsInputStyle()}
                 />
               </div>
 
@@ -1158,7 +1155,7 @@ const SettingsPage: React.FC = () => {
                   value={passwordForm.new}
                   onChange={(e) => setPasswordForm({ ...passwordForm, new: e.target.value })}
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                style={createSettingsInputStyle()}
+                  style={createSettingsInputStyle()}
                 />
               </div>
 

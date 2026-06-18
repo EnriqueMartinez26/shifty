@@ -2,12 +2,8 @@ import axios from 'axios'
 
 import axiosRetry from 'axios-retry'
 
-import {
-  normalizeApiError,
-  isApiEnvelope,
-  unwrapApiEnvelope
-} from './api-contract'
 import { resolveApiBaseUrl } from './api-base-url'
+import { normalizeApiError, isApiEnvelope, unwrapApiEnvelope } from './api-contract'
 import { getRuntimeEnv } from './runtime-env'
 
 const { apiUrl, dev } = getRuntimeEnv()

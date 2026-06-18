@@ -439,7 +439,9 @@ async def cleanup_seed(session: AsyncSession) -> None:
             )
         )
         await session.execute(
-            delete(CouponRedemption).where(CouponRedemption.redeemed_by_id.in_(user_ids))
+            delete(CouponRedemption).where(
+                CouponRedemption.redeemed_by_id.in_(user_ids)
+            )
         )
         await session.execute(delete(User).where(User.id.in_(user_ids)))
 
@@ -456,7 +458,9 @@ async def cleanup_seed(session: AsyncSession) -> None:
     await session.execute(
         delete(StoreSubscription).where(StoreSubscription.store_id.in_(store_ids))
     )
-    await session.execute(delete(SaaSCoupon).where(SaaSCoupon.created_by_id.in_(user_ids)))
+    await session.execute(
+        delete(SaaSCoupon).where(SaaSCoupon.created_by_id.in_(user_ids))
+    )
     await session.execute(
         delete(WebhookInbox).where(WebhookInbox.store_id.in_(store_ids))
     )

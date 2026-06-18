@@ -36,10 +36,7 @@ describe('Sidebar', () => {
       </MemoryRouter>
     )
 
-    expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveAttribute(
-      'href',
-      '/dashboard'
-    )
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toHaveAttribute('href', '/dashboard')
     expect(screen.getByRole('link', { name: 'Agenda' })).toHaveAttribute(
       'href',
       '/dashboard/calendar'

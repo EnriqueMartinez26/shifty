@@ -7,10 +7,7 @@ import { Staff } from '@domain/entities/Staff'
 import { useServicesCatalog } from '@presentation/hooks/useServicesCatalog'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
-import {
-  create2000sModalInputStyle,
-  create2000sModalSurfaceStyle
-} from '../../lib/surfaceStyles'
+import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { StaffFormValues } from '../../types/forms'
 
 interface StaffFormModalProps {

@@ -39,9 +39,7 @@ describe('ForgotPasswordPage', () => {
       expect(mockMutateAsync).toHaveBeenCalledWith({ email: 'ana@example.com' })
     })
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      'Revisá tu casilla de correo.'
-    )
+    expect(await screen.findByRole('status')).toHaveTextContent('Revisá tu casilla de correo.')
   })
 
   it('shows the error message when the request fails', async () => {
