@@ -14,23 +14,30 @@ Casos cubiertos:
 """
 
 import json
+from collections.abc import AsyncGenerator
+from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
-from datetime import datetime, timedelta, timezone
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from core.config import settings
 from core.models import Base
-from core.exceptions import AppException
-import modules.stores.model
-import modules.users.model
-import modules.services.model
-import modules.staff.model
-import modules.appointments.model
-import modules.budget.model
-import modules.audit.model
+
+import modules.appointments.model  # noqa: F401
+import modules.audit.model  # noqa: F401
+import modules.budget.model  # noqa: F401
+import modules.services.model  # noqa: F401
+import modules.staff.model  # noqa: F401
+import modules.stores.model  # noqa: F401
+import modules.users.model  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -38,10 +45,11 @@ import modules.audit.model
 # ---------------------------------------------------------------------------
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+JsonDict = dict[str, Any]
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_engine():
+async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -52,11 +60,13 @@ async def test_engine():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_session(test_engine):
-    SessionLocal = async_sessionmaker(
+async def test_session(
+    test_engine: AsyncEngine,
+) -> AsyncGenerator[AsyncSession, None]:
+    session_local = async_sessionmaker(
         bind=test_engine, expire_on_commit=False, autoflush=False
     )
-    async with SessionLocal() as session:
+    async with session_local() as session:
         yield session
 
 
@@ -66,14 +76,14 @@ async def test_session(test_engine):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def client(test_session):
+async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
     """
     Crea el cliente HTTP con override de la dependencia de base de datos.
     """
     from main import app
     from core.database import get_db
 
-    async def override_get_db():
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield test_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -86,11 +96,13 @@ async def client(test_session):
     ) as c:
         yield c
 
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_db, None)
 
 
 @pytest_asyncio.fixture(scope="function")
-async def public_client(test_session):
+async def public_client(
+    test_session: AsyncSession,
+) -> AsyncGenerator[AsyncClient, None]:
     """
     Cliente HTTP sin la cabecera de respuesta cruda para verificar el envelope
     canónico real que ve un consumidor externo.
@@ -98,7 +110,7 @@ async def public_client(test_session):
     from main import app
     from core.database import get_db
 
-    async def override_get_db():
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield test_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -107,7 +119,7 @@ async def public_client(test_session):
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
-    app.dependency_overrides.clear()
+    app.dependency_overrides.pop(get_db, None)
 
 
 # ---------------------------------------------------------------------------
@@ -129,9 +141,9 @@ async def create_test_store_and_admin(client: AsyncClient) -> tuple[str, str]:
         },
     )
     assert resp.status_code == 201, f"Register failed: {resp.text}"
-    register_body = resp.json()
-    register_data = register_body.get("data", register_body)
-    store_public_id = register_data["store_public_id"]
+    register_body = cast(JsonDict, resp.json())
+    register_data = cast(JsonDict, register_body.get("data", register_body))
+    store_public_id = str(register_data["store_public_id"])
 
     token_resp = await client.post(
         "/auth/login",
@@ -141,8 +153,9 @@ async def create_test_store_and_admin(client: AsyncClient) -> tuple[str, str]:
         },
     )
     assert token_resp.status_code == 200
-    token_body = token_resp.json()
-    token = token_body.get("data", token_body)["access_token"]
+    token_body = cast(JsonDict, token_resp.json())
+    token_data = cast(JsonDict, token_body.get("data", token_body))
+    token = str(token_data["access_token"])
     return store_public_id, token
 
 
@@ -154,8 +167,9 @@ async def create_service(client: AsyncClient, token: str) -> str:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 201, f"Create service failed: {resp.text}"
-    service_body = resp.json()
-    return service_body.get("data", service_body)["public_id"]
+    service_body = cast(JsonDict, resp.json())
+    service_data = cast(JsonDict, service_body.get("data", service_body))
+    return str(service_data["public_id"])
 
 
 async def create_staff(client: AsyncClient, token: str, service_public_id: str) -> str:
@@ -171,8 +185,9 @@ async def create_staff(client: AsyncClient, token: str, service_public_id: str) 
         },
     )
     assert resp.status_code == 201, resp.text
-    staff_body = resp.json()
-    return staff_body.get("data", staff_body)["public_id"]
+    staff_body = cast(JsonDict, resp.json())
+    staff_data = cast(JsonDict, staff_body.get("data", staff_body))
+    return str(staff_data["public_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +197,7 @@ async def create_staff(client: AsyncClient, token: str, service_public_id: str) 
 
 class TestAppointmentEndpoints:
     @pytest.mark.asyncio
-    async def test_create_appointment_in_past_fails(self, client: AsyncClient):
+    async def test_create_appointment_in_past_fails(self, client: AsyncClient) -> None:
         """
         Caso: Intentar crear un turno con starts_at en el pasado.
         Esperado: 422 Unprocessable Entity (validación Pydantic).
@@ -203,7 +218,7 @@ class TestAppointmentEndpoints:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 422
-        body = resp.json()
+        body = cast(JsonDict, resp.json())
         # FastAPI retorna "detail" con los errores de validación
         assert any(
             "pasado" in str(e).lower() or "future" in str(e).lower()
@@ -211,7 +226,9 @@ class TestAppointmentEndpoints:
         )
 
     @pytest.mark.asyncio
-    async def test_invalid_status_transition_returns_422(self, client: AsyncClient):
+    async def test_invalid_status_transition_returns_422(
+        self, client: AsyncClient
+    ) -> None:
         """
         Caso: Intentar completar un turno que está CANCELLED.
         Esperado: El handler global de AppException retorna 422.
@@ -225,12 +242,12 @@ class TestAppointmentEndpoints:
         )
         # Debe retornar 404 porque el turno no existe
         assert resp.status_code == 404
-        assert resp.json()["error_code"] == "APPOINTMENT_NOT_FOUND"
+        assert cast(JsonDict, resp.json())["error_code"] == "APPOINTMENT_NOT_FOUND"
 
     @pytest.mark.asyncio
     async def test_app_exception_handler_returns_structured_json(
         self, client: AsyncClient
-    ):
+    ) -> None:
         """
         Caso: Verificar que el handler global convierte AppException en JSON estructurado.
         Esperado: Respuesta con error_code, message y detail.
@@ -242,13 +259,13 @@ class TestAppointmentEndpoints:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 404
-        body = resp.json()
+        body = cast(JsonDict, resp.json())
         assert "error_code" in body
         assert "message" in body
         assert "detail" in body
 
     @pytest.mark.asyncio
-    async def test_reschedule_to_past_fails(self, client: AsyncClient):
+    async def test_reschedule_to_past_fails(self, client: AsyncClient) -> None:
         """
         Caso: Intentar reprogramar a una fecha pasada.
         Esperado: 422 por validación Pydantic en AppointmentReschedule.
@@ -268,13 +285,13 @@ class TestAppointmentEndpoints:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_unauthorized_user_cannot_confirm(self, client: AsyncClient):
+    async def test_unauthorized_user_cannot_confirm(self, client: AsyncClient) -> None:
         """
         Caso: Un cliente (role=CLIENT) no puede confirmar turnos.
         Esperado: Error de autenticación o de permisos.
         """
         # Registrar como admin
-        _, admin_token = await create_test_store_and_admin(client)
+        await create_test_store_and_admin(client)
 
         # Crear usuario cliente
         await client.post(
@@ -295,7 +312,7 @@ class TestAppointmentEndpoints:
                 "password": "ClientPass123!",
             },
         )
-        client_token = client_token_resp.json()["access_token"]
+        client_token = str(cast(JsonDict, client_token_resp.json())["access_token"])
 
         resp = await client.patch(
             "/appointments/TURNO-CUALQUIERA/confirm",
@@ -307,7 +324,7 @@ class TestAppointmentEndpoints:
     @pytest.mark.asyncio
     async def test_search_endpoint_returns_paginated_response(
         self, client: AsyncClient
-    ):
+    ) -> None:
         """
         Caso: Búsqueda sin filtros retorna estructura de paginación válida.
         Esperado: Respuesta con keys total, page, page_size, results.
@@ -319,7 +336,7 @@ class TestAppointmentEndpoints:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
-        body = resp.json()
+        body = cast(JsonDict, resp.json())
         assert "total" in body
         assert "page" in body
         assert "page_size" in body
@@ -328,7 +345,7 @@ class TestAppointmentEndpoints:
         assert body["total"] == 0  # BD vacía
 
     @pytest.mark.asyncio
-    async def test_search_filters_by_status(self, client: AsyncClient):
+    async def test_search_filters_by_status(self, client: AsyncClient) -> None:
         """
         Caso: Búsqueda con filtro de estado returns lista vacía correctamente.
         """
@@ -339,12 +356,12 @@ class TestAppointmentEndpoints:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
-        assert resp.json()["total"] == 0
+        assert cast(JsonDict, resp.json())["total"] == 0
 
     @pytest.mark.asyncio
     async def test_create_appointment_returns_201_and_canonical_envelope(
         self, public_client: AsyncClient
-    ):
+    ) -> None:
         _, token = await create_test_store_and_admin(public_client)
         service_id = await create_service(public_client, token)
         staff_id = await create_staff(public_client, token, service_id)
@@ -363,7 +380,7 @@ class TestAppointmentEndpoints:
         )
 
         assert resp.status_code == 201
-        body = resp.json()
+        body = cast(JsonDict, resp.json())
         assert body["success"] is True
         assert "data" in body
         assert body["data"]["service_id"] == service_id
@@ -396,7 +413,9 @@ class TestAppointmentEndpoints:
 
         assert first.status_code == 201
         assert second.status_code == 201
-        assert first.json()["public_id"] == second.json()["public_id"]
+        first_body = cast(JsonDict, first.json())
+        second_body = cast(JsonDict, second.json())
+        assert first_body["public_id"] == second_body["public_id"]
 
     @pytest.mark.asyncio
     async def test_openapi_documents_appointment_create_as_201(self) -> None:

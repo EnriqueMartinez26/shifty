@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
 from sqlalchemy import select
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.payments.model import OutboxMessage, WebhookInbox
@@ -15,7 +15,7 @@ async def process_outbox_batch(
     limit: int = 100,
     store_id: str | None = None,
 ) -> dict[str, int]:
-    filters = [
+    filters: list[ColumnElement[bool]] = [
         OutboxMessage.processed_at.is_(None),
         OutboxMessage.is_active.is_(True),
     ]
@@ -52,7 +52,7 @@ async def process_webhook_inbox_batch(
     limit: int = 100,
     store_id: str | None = None,
 ) -> dict[str, int]:
-    filters = [
+    filters: list[ColumnElement[bool]] = [
         WebhookInbox.processed_at.is_(None),
         WebhookInbox.is_active.is_(True),
     ]

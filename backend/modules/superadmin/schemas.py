@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -282,6 +282,17 @@ class CouponRedemptionResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AuditLogResponse(BaseModel):
+    public_id: str
+    created_at: datetime
+    actor_email: str | None
+    resource_type: str
+    action: str
+    payload_before: dict[str, Any] | list[Any] | str | int | float | bool | None
+    payload_after: dict[str, Any] | list[Any] | str | int | float | bool | None
+    context: str | None
 
 
 class StoreUsersOverviewResponse(BaseModel):

@@ -7,7 +7,8 @@ con el ProactorEventLoop de Python 3.13 en Windows.
 
 from urllib.parse import parse_qs, unquote, urlparse
 from logging.config import fileConfig
-from sqlalchemy import create_engine, pool, text
+from typing import Any
+from sqlalchemy import Engine, create_engine, pool
 from alembic import context
 
 # Importar Base y modelos para autogenerate
@@ -40,7 +41,7 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def parse_db_url(url: str) -> dict:
+def parse_db_url(url: str) -> dict[str, Any]:
     """
     Parsea la DATABASE_URL y extrae los componentes.
     Soporta formato: postgresql+asyncpg://user:pass@host:port/db
@@ -60,7 +61,7 @@ def parse_db_url(url: str) -> dict:
     }
 
 
-def get_sync_engine():
+def get_sync_engine() -> Engine:
     """
     Crea un engine síncrono con psycopg2 usando parámetros explícitos.
     Evita el UnicodeDecodeError al no construir un DSN string.

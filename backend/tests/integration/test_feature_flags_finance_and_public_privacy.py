@@ -1,12 +1,18 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+from typing import Any, AsyncIterator, cast
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from core.config import settings
 from core.database import get_db
@@ -32,7 +38,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_engine():
+async def test_engine() -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -43,7 +49,7 @@ async def test_engine():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_session(test_engine):
+async def test_session(test_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     session_local = async_sessionmaker(
         bind=test_engine,
         expire_on_commit=False,
@@ -54,10 +60,10 @@ async def test_session(test_engine):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def client(test_session):
+async def client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     settings.ALLOW_PUBLIC_REGISTRATION = True
 
-    async def override_get_db():
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield test_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -86,14 +92,14 @@ async def register_and_login(
         },
     )
     assert register.status_code == 201, register.text
-    store_public_id = register.json()["store_public_id"]
+    store_public_id = cast(str, register.json()["store_public_id"])
 
     login = await client.post(
         "/auth/login",
         json={"email": email, "password": "Password123!"},
     )
     assert login.status_code == 200, login.text
-    token = login.json()["access_token"]
+    token = cast(str, login.json()["access_token"])
     return store_public_id, token
 
 
@@ -137,7 +143,7 @@ async def create_service(
         },
     )
     assert res.status_code == 201, res.text
-    return res.json()["public_id"]
+    return cast(str, res.json()["public_id"])
 
 
 async def create_staff(client: AsyncClient, token: str, service_public_id: str) -> str:
@@ -153,7 +159,7 @@ async def create_staff(client: AsyncClient, token: str, service_public_id: str) 
         },
     )
     assert res.status_code == 201, res.text
-    return res.json()["public_id"]
+    return cast(str, res.json()["public_id"])
 
 
 async def add_staff_schedule(
@@ -173,8 +179,8 @@ async def add_staff_schedule(
 
 @pytest.mark.asyncio
 async def test_payments_feature_flag_and_webhook_idempotency(
-    client: AsyncClient, test_session
-):
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-payments", email="payments@test.com"
     )
@@ -235,7 +241,7 @@ async def test_payments_feature_flag_and_webhook_idempotency(
 
 
 @pytest.mark.asyncio
-async def test_webhook_rejects_invalid_signature(client: AsyncClient):
+async def test_webhook_rejects_invalid_signature(client: AsyncClient) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-payments-bad-signature", email="bad-signature@test.com"
     )
@@ -273,7 +279,9 @@ async def test_webhook_rejects_invalid_signature(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_outbox_stats_and_manual_process(client: AsyncClient, test_session):
+async def test_outbox_stats_and_manual_process(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     _, token = await register_and_login(
         client, slug="tienda-outbox", email="outbox@test.com"
     )
@@ -317,7 +325,7 @@ async def test_outbox_stats_and_manual_process(client: AsyncClient, test_session
 
 
 @pytest.mark.asyncio
-async def test_ledger_feature_flag_and_running_balance(client: AsyncClient):
+async def test_ledger_feature_flag_and_running_balance(client: AsyncClient) -> None:
     _, token = await register_and_login(
         client, slug="tienda-ledger", email="ledger@test.com"
     )
@@ -370,7 +378,9 @@ async def test_ledger_feature_flag_and_running_balance(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_public_availability_hides_private_block_reasons(client: AsyncClient):
+async def test_public_availability_hides_private_block_reasons(
+    client: AsyncClient,
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-privacy", email="privacy@test.com"
     )
@@ -428,7 +438,9 @@ async def test_public_availability_hides_private_block_reasons(client: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_public_booking_requires_otp_when_feature_enabled(client: AsyncClient):
+async def test_public_booking_requires_otp_when_feature_enabled(
+    client: AsyncClient,
+) -> None:
     settings.OTP_PROVIDER = "console"
     settings.OTP_DEBUG_EXPOSE_CODE = True
 
@@ -492,7 +504,7 @@ async def test_public_booking_requires_otp_when_feature_enabled(client: AsyncCli
 @pytest.mark.asyncio
 async def test_public_client_self_service_requires_recent_otp_and_releases_failed_reschedule_key(
     client: AsyncClient,
-):
+) -> None:
     settings.OTP_PROVIDER = "console"
     settings.OTP_DEBUG_EXPOSE_CODE = True
 
@@ -581,7 +593,7 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
 @pytest.mark.asyncio
 async def test_public_booking_allows_missing_email_and_any_professional(
     client: AsyncClient,
-):
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-any-staff", email="any-staff@test.com"
     )
@@ -612,13 +624,17 @@ async def test_public_booking_allows_missing_email_and_any_professional(
 @pytest.mark.asyncio
 async def test_create_payment_preference_uses_real_mercadopago_payload_when_gateway_is_configured(
     client: AsyncClient,
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import modules.payments.service as payments_service
 
     async def fake_mp_request(
-        access_token: str, *, method: str, path: str, json_body: dict | None = None
-    ) -> dict:
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         assert access_token == "TEST-ACCESS-TOKEN-1234567890"
         assert method == "POST"
         assert path == "/checkout/preferences"
@@ -688,21 +704,29 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
 @pytest.mark.asyncio
 async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_is_minimal(
     client: AsyncClient,
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import modules.payments.processing as payments_processing
     import modules.payments.service as payments_service
 
     async def fake_create_preference(
-        access_token: str, *, method: str, path: str, json_body: dict | None = None
-    ) -> dict:
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return {
             "id": "pref-webhook-fetch",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=fetch",
         }
 
-    async def fake_fetch_payment(db, *, store_id: str, payment_id: str) -> dict:
+    async def fake_fetch_payment(
+        db: AsyncSession, *, store_id: str, payment_id: str
+    ) -> dict[str, Any]:
         assert payment_id == "mp-pay-minimal-123"
+        assert store_id
+        assert db
         return {
             "id": payment_id,
             "status": "approved",
@@ -799,7 +823,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
 @pytest.mark.asyncio
 async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amount(
     client: AsyncClient,
-):
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-promos", email="promos@test.com"
     )
@@ -877,7 +901,9 @@ async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amoun
 
 
 @pytest.mark.asyncio
-async def test_public_booking_persists_configured_custom_fields(client: AsyncClient):
+async def test_public_booking_persists_configured_custom_fields(
+    client: AsyncClient,
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-intake", email="intake@test.com"
     )
@@ -949,7 +975,9 @@ async def test_public_booking_persists_configured_custom_fields(client: AsyncCli
 
 
 @pytest.mark.asyncio
-async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
+async def test_manual_refund_and_reconciliation_summary(
+    client: AsyncClient,
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-refund", email="refund@test.com"
     )
@@ -1012,7 +1040,7 @@ async def test_manual_refund_and_reconciliation_summary(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
     client: AsyncClient,
-):
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-manual-confirm", email="manual-confirm@test.com"
     )
@@ -1073,13 +1101,23 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
 
 @pytest.mark.asyncio
 async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
-    client: AsyncClient, test_session, monkeypatch
-):
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import modules.payments.service as payments_service
 
     async def fake_mp_request(
-        access_token: str, *, method: str, path: str, json_body: dict | None = None
-    ) -> dict:
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert access_token
+        assert method
+        assert path
+        assert json_body is None or isinstance(json_body, dict)
         return {
             "id": "pref-webhook-booking",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=booking",
@@ -1177,14 +1215,22 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
 @pytest.mark.asyncio
 async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_provider_fails(
     client: AsyncClient,
-    test_session,
-    monkeypatch,
-):
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import modules.payments.service as payments_service
 
     async def failing_mp_request(
-        access_token: str, *, method: str, path: str, json_body: dict | None = None
-    ) -> dict:
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert access_token
+        assert method
+        assert path
+        assert json_body is None or isinstance(json_body, dict)
         raise RuntimeError("timeout upstream")
 
     async def successful_mp_request(
@@ -1192,8 +1238,12 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
         *,
         method: str,
         path: str,
-        json_body: dict | None = None,
-    ) -> dict:
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert access_token
+        assert method
+        assert path
+        assert json_body is None or isinstance(json_body, dict)
         return {
             "id": "pref-retry-ok",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=retry-ok",
@@ -1280,8 +1330,8 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
 
 @pytest.mark.asyncio
 async def test_professional_can_access_own_reports_only(
-    client: AsyncClient, test_session
-):
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-reports-pro", email="reports-pro@test.com"
     )
@@ -1344,7 +1394,7 @@ async def test_professional_can_access_own_reports_only(
 @pytest.mark.asyncio
 async def test_report_summary_includes_client_service_and_debt_metrics(
     client: AsyncClient,
-):
+) -> None:
     store_public_id, token = await register_and_login(
         client, slug="tienda-reportes-full", email="reportes-full@test.com"
     )

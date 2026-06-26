@@ -1,77 +1,92 @@
-﻿# Backup And Restore Runbook (Shifty)
+﻿# Backup and Restore Runbook (Shifty)
 
-## Objetivo operativo
+This runbook defines the minimum production expectations for database backups, restore drills, and recovery evidence.
 
-- `RPO <= 24h`
-- `RTO <= 4h`
+## Recovery targets
 
-Este runbook cubre la operacion minima para respaldos y prueba de recuperacion.
+| Target | Expectation | Evidence |
+| --- | --- | --- |
+| RPO | `<= 24h` maximum acceptable data loss. | Latest restorable backup timestamp and checksum. |
+| RTO | `<= 4h` maximum time to restore service from backup. | Restore drill start/end timestamps and result JSON. |
+| Drill cadence | At least monthly; evidence must not be older than 31 days for a release. | `backup-drill-evidence` artifact or stored JSON record. |
 
-## Requisitos
+If either target is missed, stop the release unless the release owner records an explicit exception and rollback/mitigation plan.
 
-- PostgreSQL client tools instalados (`pg_dump`, `pg_restore`)
-- Variables de entorno de conexion configuradas (`DATABASE_URL`)
-- Acceso al storage donde se guardan backups
+## Requirements
 
-## Backup manual
+- PostgreSQL client tools installed (`pg_dump`, `pg_restore`).
+- Source database URL available as `DATABASE_URL` or `BACKUP_DATABASE_URL`.
+- Isolated drill/restore database URL available as `DRILL_DATABASE_URL`.
+- Backup storage outside the application host.
+- Access to the deployment health checks and operational dashboards.
 
-Ejecutar desde el directorio `backend`:
+## Manual backup
+
+Run from the `backend` directory:
 
 ```bash
 python scripts/backup_db.py --output-dir ../backups
 ```
 
-Salida esperada:
+Expected output:
 
-- Archivo `shifty-YYYYMMDDTHHMMSSZ.dump`
-- Archivo `shifty-YYYYMMDDTHHMMSSZ.sha256`
+- `shifty-YYYYMMDDTHHMMSSZ.dump`
+- `shifty-YYYYMMDDTHHMMSSZ.sha256`
 
-## Restore manual
+Store both files together. The checksum is part of the restore evidence, not decoration.
 
-Ejecutar desde el directorio `backend`:
+## Manual restore
+
+Restore into an isolated validation database first. Do not restore directly into production unless this is an approved incident response action.
 
 ```bash
 python scripts/restore_backup.py --backup-file ../backups/shifty-YYYYMMDDTHHMMSSZ.dump
 ```
 
-Recomendacion: restaurar primero en una base temporal de validacion antes de produccion.
+After restore, run health checks for:
 
-## Prueba mensual de restore (obligatoria)
+- Admin login.
+- Appointment calendar read path.
+- Reporting read path.
+- Worker/webhook processing if the release touches async or payment flows.
 
-1. Tomar el backup mas reciente.
-2. Restaurarlo en una base de staging aislada.
-3. Ejecutar health checks:
-   - login admin
-   - lectura de agenda
-   - consulta de reportes
-4. Registrar evidencia:
-   - fecha/hora inicio-fin
-   - backup usado
-   - resultado del chequeo
-   - incidentes detectados
+## Monthly restore drill
 
-## Pipeline automatizado (GitHub Actions)
+1. Select the latest production backup.
+2. Verify the backup checksum is present.
+3. Restore into an isolated staging/drill database.
+4. Run the health checks listed above.
+5. Record evidence:
+   - start and finish timestamp,
+   - backup file and checksum file,
+   - restore command result,
+   - health-check result,
+   - incidents or exceptions,
+   - measured restore duration for RTO tracking.
+
+## Automated drill
 
 - Workflow: `.github/workflows/monthly-backup-drill.yml`
-- Frecuencia: primer dia de cada mes (`cron: 0 5 1 * *`) y ejecucion manual.
-- Evidencia: artefacto `backup-drill-evidence` con JSON y checksums.
+- Schedule: first day of each month (`cron: 0 5 1 * *`) and manual dispatch.
+- Evidence: `backup-drill-evidence` artifact with JSON and checksums.
 
-Secrets requeridos:
+Required secrets:
 
 - `BACKUP_DATABASE_URL`
 - `DRILL_DATABASE_URL`
 
-## Hardening de proxy y cabeceras
+## Proxy and edge hardening
 
-- `TRUST_PROXY_HEADERS` debe estar `true` solo si API esta detras de proxy confiable (`Cloudflare`, `Nginx`, `Traefik`).
-- Si la API queda expuesta directa a internet, setear `TRUST_PROXY_HEADERS=false`.
-- Forzar TLS en edge/proxy.
-- Limitar metodos HTTP y tamano de body a nivel proxy.
-- Activar WAF y rate limiting en edge.
+- `TRUST_PROXY_HEADERS=true` only when the API is behind a trusted proxy such as Cloudflare, Nginx, or Traefik.
+- Use `TRUST_PROXY_HEADERS=false` when the API is directly exposed to the internet.
+- Enforce TLS at the edge/proxy.
+- Limit HTTP methods and request body size at the proxy.
+- Enable WAF and edge rate limiting.
 
-## Alertas minimas recomendadas
+## Minimum alerts
 
-- Error rate API mayor a 1%
-- Latencia p95 anormal
-- Cola de webhooks/outbox acumulada
-- Fallo en tarea periodica de expiracion o procesamiento de outbox
+- API error rate above 1%.
+- Abnormal p95 latency.
+- Webhook/outbox queue accumulation.
+- Periodic expiration or outbox processing failures.
+- Missing backup or stale restore-drill evidence.

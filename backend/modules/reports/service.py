@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,8 @@ from modules.reports.schemas import (
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock
 from modules.users.model import User
+
+MetricBucket = dict[str, Any]
 
 
 class ReportService:
@@ -94,7 +97,9 @@ class ReportService:
         if not debt_rows:
             return self._empty_debt_summary()
 
-        client_ids = [movement.client_id for movement in debt_rows]
+        client_ids = [
+            movement.client_id for movement in debt_rows if movement.client_id
+        ]
         users_result = await self.db.execute(
             select(User).where(User.id.in_(client_ids))
         )
@@ -109,22 +114,25 @@ class ReportService:
             key=lambda item: (Decimal(str(item.balance_after or 0)), item.created_at),
             reverse=True,
         )[:5]
+        top_debtor_items: list[ReportDebtClientItem] = []
+        for item in top_debtors:
+            client_id = item.client_id or ""
+            top_debtor_items.append(
+                ReportDebtClientItem(
+                    client_id=client_id,
+                    client_name=self._user_display_name(
+                        users_by_id.get(client_id),
+                        client_id=client_id,
+                    ),
+                    balance=round(float(Decimal(str(item.balance_after or 0))), 2),
+                )
+            )
 
         return ReportDebtSummary(
             outstanding_balance=round(float(total_balance), 2),
             debtors_count=len(debt_rows),
             average_debt=round(float(total_balance / len(debt_rows)), 2),
-            top_debtors=[
-                ReportDebtClientItem(
-                    client_id=item.client_id,
-                    client_name=self._user_display_name(
-                        users_by_id.get(item.client_id),
-                        client_id=item.client_id,
-                    ),
-                    balance=round(float(Decimal(str(item.balance_after or 0))), 2),
-                )
-                for item in top_debtors
-            ],
+            top_debtors=top_debtor_items,
         )
 
     async def _fetch_rows(
@@ -146,7 +154,10 @@ class ReportService:
         if staff_id:
             query = query.where(Appointment.staff_id == staff_id)
         result = await self.db.execute(query)
-        return list(result.all())
+        return cast(
+            list[tuple[Appointment, Service, Staff, User]],
+            result.all(),
+        )
 
     async def get_summary(
         self,
@@ -189,7 +200,7 @@ class ReportService:
         clients_seen_before_range: set[str] = set()
         first_seen_by_client: dict[str, datetime] = {}
         known_client_names: dict[str, str] = {}
-        service_metrics: dict[str, dict] = defaultdict(
+        service_metrics: dict[str, MetricBucket] = defaultdict(
             lambda: {
                 "service_id": "",
                 "service_name": "",
@@ -198,7 +209,7 @@ class ReportService:
                 "revenue": 0.0,
             }
         )
-        client_metrics: dict[str, dict] = defaultdict(
+        client_metrics: dict[str, MetricBucket] = defaultdict(
             lambda: {
                 "client_id": "",
                 "client_name": "",
@@ -249,6 +260,7 @@ class ReportService:
             price = float(service.price)
             status_upper = status.upper() if status else ""
             client_id = appointment.client_id
+            client_key = client_id or ""
             if client_id:
                 clients_in_range.add(client_id)
                 current_name = _client_display_name(client, appointment.client_name)
@@ -283,12 +295,12 @@ class ReportService:
                     service_bucket["revenue"] += price
 
                 if client_id:
-                    client_bucket = client_metrics[client_id]
-                    client_bucket["client_id"] = client_id
+                    client_bucket = client_metrics[client_key]
+                    client_bucket["client_id"] = client_key
                     client_bucket["client_name"] = (
-                        known_client_names.get(client_id)
+                        known_client_names.get(client_key)
                         or _client_display_name(client, appointment.client_name)
-                        or client_id
+                        or client_key
                     )
                     client_bucket["appointments"] += 1
                     if status == AppointmentStatus.COMPLETED.value:
@@ -301,7 +313,7 @@ class ReportService:
 
             resolved_client_name = (
                 _client_display_name(client, appointment.client_name)
-                or known_client_names.get(client_id, "")
+                or known_client_names.get(client_key, "")
                 or "Cliente"
             )
 
@@ -434,8 +446,8 @@ class ReportService:
             defaultdict(list)
         )
         for row in rows:
-            appointment, _service, staff = row
-            appointments_by_staff[staff.id].append(row)
+            appointment, service, staff = row[:3]
+            appointments_by_staff[staff.id].append((appointment, service, staff))
 
         items: list[ProfessionalReportItem] = []
         total_days = (resolved_to - resolved_from).days + 1

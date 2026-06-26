@@ -10,16 +10,40 @@ Cubre:
 No requiere base de datos ni Redis: todo es lógica pura o con mocks.
 """
 
-import pytest
-from datetime import datetime, timedelta, timezone, time, date
-from unittest.mock import AsyncMock, MagicMock, patch
-from types import SimpleNamespace
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
+from typing import TypedDict
 
-from modules.appointments.domain_service import SchedulingDomainService
+import pytest
+
 from core.exceptions import (
     AppointmentConflictException,
     BlockedScheduleException,
 )
+from modules.appointments.domain_service import SchedulingDomainService
+
+
+@dataclass
+class AppointmentStub:
+    starts_at: datetime
+    ends_at: datetime
+    status: str
+    public_id: str
+
+
+@dataclass
+class BlockStub:
+    starts_at: datetime
+    ends_at: datetime
+    note: str
+    is_active: bool
+
+
+class Slot(TypedDict):
+    starts_at: str
+    ends_at: str
+    status: str
+    reason: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -34,9 +58,9 @@ def dt(hour: int, minute: int = 0) -> datetime:
 
 def make_appointment(
     starts_at: datetime, duration_minutes: int = 60
-) -> SimpleNamespace:
+) -> AppointmentStub:
     ends_at = starts_at + timedelta(minutes=duration_minutes)
-    return SimpleNamespace(
+    return AppointmentStub(
         starts_at=starts_at,
         ends_at=ends_at,
         status="confirmed",
@@ -46,8 +70,8 @@ def make_appointment(
 
 def make_block(
     starts_at: datetime, ends_at: datetime, note: str = "Bloqueo"
-) -> SimpleNamespace:
-    return SimpleNamespace(
+) -> BlockStub:
+    return BlockStub(
         starts_at=starts_at,
         ends_at=ends_at,
         note=note,
@@ -63,12 +87,12 @@ def make_block(
 class TestSchedulingDomainService:
     """Tests para el servicio de dominio puro — sin IO."""
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         self.svc = SchedulingDomainService()
 
     # --- Happy path ---
 
-    def test_no_conflict_no_block_passes(self):
+    def test_no_conflict_no_block_passes(self) -> None:
         """Sin conflictos ni bloqueos, validate_availability no lanza."""
         self.svc.validate_availability(
             requested_start=dt(10),
@@ -79,7 +103,7 @@ class TestSchedulingDomainService:
 
     # --- Conflicto con otro turno ---
 
-    def test_raises_conflict_when_appointment_overlaps(self):
+    def test_raises_conflict_when_appointment_overlaps(self) -> None:
         existing = make_appointment(dt(10), 60)  # 10:00–11:00
         with pytest.raises(AppointmentConflictException) as exc:
             self.svc.validate_availability(
@@ -90,7 +114,7 @@ class TestSchedulingDomainService:
             )
         assert exc.value.error_code == "APPOINTMENT_CONFLICT"
 
-    def test_conflict_message_contains_times(self):
+    def test_conflict_message_contains_times(self) -> None:
         existing = make_appointment(dt(14), 90)  # 14:00–15:30
         with pytest.raises(AppointmentConflictException) as exc:
             self.svc.validate_availability(
@@ -102,7 +126,7 @@ class TestSchedulingDomainService:
         assert "14:00" in exc.value.message
         assert "15:30" in exc.value.message
 
-    def test_conflict_includes_suggestion_when_provided(self):
+    def test_conflict_includes_suggestion_when_provided(self) -> None:
         existing = make_appointment(dt(10), 60)
         suggestion = dt(11)
         with pytest.raises(AppointmentConflictException) as exc:
@@ -118,7 +142,7 @@ class TestSchedulingDomainService:
 
     # --- Bloqueo manual ---
 
-    def test_raises_blocked_when_block_present(self):
+    def test_raises_blocked_when_block_present(self) -> None:
         block = make_block(dt(9), dt(12), note="Vacaciones")
         with pytest.raises(BlockedScheduleException) as exc:
             self.svc.validate_availability(
@@ -129,7 +153,7 @@ class TestSchedulingDomainService:
             )
         assert exc.value.error_code == "SCHEDULE_BLOCKED"
 
-    def test_block_has_priority_over_appointment_conflict(self):
+    def test_block_has_priority_over_appointment_conflict(self) -> None:
         """Un bloqueo manual tiene mayor prioridad que un turno conflictivo."""
         existing = make_appointment(dt(10), 60)
         block = make_block(dt(9), dt(13), note="Capacitación")
@@ -141,7 +165,7 @@ class TestSchedulingDomainService:
                 overlapping_block=block,
             )
 
-    def test_block_message_contains_reason(self):
+    def test_block_message_contains_reason(self) -> None:
         block = make_block(dt(8), dt(12), note="Mantenimiento")
         with pytest.raises(BlockedScheduleException) as exc:
             self.svc.validate_availability(
@@ -152,7 +176,7 @@ class TestSchedulingDomainService:
             )
         assert "Mantenimiento" in exc.value.message
 
-    def test_block_detail_contains_start_end(self):
+    def test_block_detail_contains_start_end(self) -> None:
         block = make_block(dt(8), dt(12))
         with pytest.raises(BlockedScheduleException) as exc:
             self.svc.validate_availability(
@@ -186,37 +210,37 @@ def overlaps(
 class TestOverlapFormula:
     """Tests de la fórmula de solapamiento usada en el repositorio."""
 
-    def test_exact_same_slot_overlaps(self):
+    def test_exact_same_slot_overlaps(self) -> None:
         assert overlaps(dt(10), dt(11), dt(10), dt(11))
 
-    def test_partial_overlap_start(self):
+    def test_partial_overlap_start(self) -> None:
         # existente 10-11, nuevo 10:30-11:30 → solapa
         assert overlaps(dt(10), dt(11), dt(10, 30), dt(11, 30))
 
-    def test_partial_overlap_end(self):
+    def test_partial_overlap_end(self) -> None:
         # existente 11-12, nuevo 10:30-11:30 → solapa
         assert overlaps(dt(11), dt(12), dt(10, 30), dt(11, 30))
 
-    def test_contained_slot_overlaps(self):
+    def test_contained_slot_overlaps(self) -> None:
         # nuevo está dentro del existente
         assert overlaps(dt(10), dt(12), dt(10, 30), dt(11))
 
-    def test_containing_slot_overlaps(self):
+    def test_containing_slot_overlaps(self) -> None:
         # existente está dentro del nuevo
         assert overlaps(dt(10, 30), dt(11), dt(10), dt(12))
 
-    def test_adjacent_after_does_not_overlap(self):
+    def test_adjacent_after_does_not_overlap(self) -> None:
         # existente 10-11, nuevo 11-12 → no solapa (extremo exacto)
         assert not overlaps(dt(10), dt(11), dt(11), dt(12))
 
-    def test_adjacent_before_does_not_overlap(self):
+    def test_adjacent_before_does_not_overlap(self) -> None:
         # existente 11-12, nuevo 10-11 → no solapa
         assert not overlaps(dt(11), dt(12), dt(10), dt(11))
 
-    def test_completely_before_does_not_overlap(self):
+    def test_completely_before_does_not_overlap(self) -> None:
         assert not overlaps(dt(8), dt(9), dt(10), dt(11))
 
-    def test_completely_after_does_not_overlap(self):
+    def test_completely_after_does_not_overlap(self) -> None:
         assert not overlaps(dt(13), dt(14), dt(10), dt(11))
 
 
@@ -229,12 +253,12 @@ def compute_slots_for_schedule(
     schedule_start: time,
     schedule_end: time,
     duration_minutes: int,
-    booked_appointments: list,
-    blocks: list,
+    booked_appointments: list[AppointmentStub],
+    blocks: list[BlockStub],
     search_date: date,
     granularity_minutes: int = 15,
     notice_hours: int = 0,
-) -> list[dict]:
+) -> list[Slot]:
     """
     Réplica fiel de la lógica de AvailabilityService.get_available_slots()
     para poder testearla sin base de datos.
@@ -246,7 +270,7 @@ def compute_slots_for_schedule(
     current = datetime.combine(search_date, schedule_start, tzinfo=timezone.utc)
     end = datetime.combine(search_date, schedule_end, tzinfo=timezone.utc)
 
-    slots = []
+    slots: list[Slot] = []
     while current + duration <= end:
         slot_end = current + duration
 
@@ -300,10 +324,10 @@ class TestSlotCalculation:
         start: str = "09:00",
         end: str = "17:00",
         duration: int = 60,
-        appointments: list | None = None,
-        blocks: list | None = None,
+        appointments: list[AppointmentStub] | None = None,
+        blocks: list[BlockStub] | None = None,
         notice_hours: int = 0,
-    ) -> list[dict]:
+    ) -> list[Slot]:
         h, m = map(int, start.split(":"))
         eh, em = map(int, end.split(":"))
         return compute_slots_for_schedule(
@@ -317,13 +341,13 @@ class TestSlotCalculation:
             notice_hours=notice_hours,
         )
 
-    def test_no_appointments_all_available(self):
+    def test_no_appointments_all_available(self) -> None:
         slots = self._run(start="09:00", end="11:00", duration=60)
         # 09:00–10:00, 09:15–10:15, 09:30–10:30, 09:45–10:45 → 4 slots
         assert len(slots) == 5
         assert all(s["status"] == "available" for s in slots)
 
-    def test_booked_appointment_marks_slots(self):
+    def test_booked_appointment_marks_slots(self) -> None:
         appt = make_appointment(
             datetime(2030, 6, 15, 10, 0, tzinfo=timezone.utc), duration_minutes=60
         )
@@ -332,7 +356,7 @@ class TestSlotCalculation:
         # El slot de 10:00 y los que solapan (09:15, 09:30, 09:45, 10:00) deben ser booked
         assert len(booked) > 0
 
-    def test_slot_exactly_before_appointment_is_available(self):
+    def test_slot_exactly_before_appointment_is_available(self) -> None:
         appt = make_appointment(
             datetime(2030, 6, 15, 10, 0, tzinfo=timezone.utc), duration_minutes=60
         )
@@ -343,7 +367,7 @@ class TestSlotCalculation:
         assert first["starts_at"].startswith("2030-06-15T09:00")
         assert first["status"] == "available"
 
-    def test_slot_exactly_after_appointment_is_available(self):
+    def test_slot_exactly_after_appointment_is_available(self) -> None:
         appt = make_appointment(
             datetime(2030, 6, 15, 9, 0, tzinfo=timezone.utc), duration_minutes=60
         )
@@ -354,7 +378,7 @@ class TestSlotCalculation:
         )
         assert slot_10["status"] == "available"
 
-    def test_staff_block_marks_slots_as_blocked(self):
+    def test_staff_block_marks_slots_as_blocked(self) -> None:
         block = make_block(
             datetime(2030, 6, 15, 10, 0, tzinfo=timezone.utc),
             datetime(2030, 6, 15, 12, 0, tzinfo=timezone.utc),
@@ -365,7 +389,7 @@ class TestSlotCalculation:
         assert len(blocked_slots) > 0
         assert all(s["reason"] == "Vacaciones" for s in blocked_slots)
 
-    def test_block_does_not_affect_earlier_slots(self):
+    def test_block_does_not_affect_earlier_slots(self) -> None:
         block = make_block(
             datetime(2030, 6, 15, 11, 0, tzinfo=timezone.utc),
             datetime(2030, 6, 15, 13, 0, tzinfo=timezone.utc),
@@ -380,17 +404,17 @@ class TestSlotCalculation:
         assert slot_09["status"] == "available"
         assert slot_10["status"] == "available"
 
-    def test_duration_longer_than_gap_produces_no_slot(self):
+    def test_duration_longer_than_gap_produces_no_slot(self) -> None:
         # Schedule solo 30 minutos, duración 60 → ningún slot generado
         slots = self._run(start="10:00", end="10:30", duration=60)
         assert len(slots) == 0
 
-    def test_slot_count_matches_granularity(self):
+    def test_slot_count_matches_granularity(self) -> None:
         # Schedule 09:00-11:00 (2h) con duración 60 y granularidad 15 → 4 slots
         slots = self._run(start="09:00", end="11:00", duration=60)
         assert len(slots) == 5
 
-    def test_notice_hours_blocks_imminent_slots(self):
+    def test_notice_hours_blocks_imminent_slots(self) -> None:
         # Con notice_hours=999, todos los slots en futuro lejano deberían ser blocked
         # (hoy a las 09:00 del 2030 no está dentro de 999h desde now si now < 2030)
         # Usamos fecha casi real: date.today()
@@ -408,7 +432,7 @@ class TestSlotCalculation:
         )
         assert all(s["status"] == "blocked" for s in slots)
 
-    def test_cancelled_appointment_does_not_block_slot(self):
+    def test_cancelled_appointment_does_not_block_slot(self) -> None:
         """
         Un turno cancelado no debe bloquear slots.
         El repositorio filtra status != CANCELLED antes de cargar los booked,

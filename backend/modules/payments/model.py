@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 import enum
+from typing import TypeAlias
 
 from sqlalchemy import (
     DateTime,
@@ -14,6 +15,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
+
+JsonPrimitive: TypeAlias = str | int | float | bool | None
+JsonValue: TypeAlias = JsonPrimitive | dict[str, "JsonValue"] | list["JsonValue"]
 
 
 class PaymentStatus(str, enum.Enum):
@@ -72,7 +76,9 @@ class Payment(BaseEntity):
     paid_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    raw_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    raw_payload: Mapped[dict[str, JsonValue] | None] = mapped_column(
+        JSON, nullable=True
+    )
 
 
 class WebhookInbox(BaseEntity):
@@ -82,7 +88,7 @@ class WebhookInbox(BaseEntity):
     provider: Mapped[str] = mapped_column(String(50), default="mercadopago")
     event_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     event_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    payload: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict[str, JsonValue]] = mapped_column(JSON)
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -98,8 +104,19 @@ class OutboxMessage(BaseEntity):
 
     store_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
     event_type: Mapped[str] = mapped_column(String(100), index=True)
-    payload: Mapped[dict] = mapped_column(JSON)
+    payload: Mapped[dict[str, JsonValue]] = mapped_column(JSON)
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+__all__ = [
+    "JsonPrimitive",
+    "JsonValue",
+    "OutboxMessage",
+    "Payment",
+    "PaymentGatewayConfig",
+    "PaymentStatus",
+    "WebhookInbox",
+]

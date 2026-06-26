@@ -28,7 +28,9 @@ class OtpService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def request_code(self, *, store_id: str, phone: str, channel: str) -> dict:
+    async def request_code(
+        self, *, store_id: str, phone: str, channel: str
+    ) -> dict[str, object]:
         normalized_phone = normalize_phone(phone)
         if channel not in {"whatsapp", "sms"}:
             raise ValidationException("Canal invalido")
@@ -66,7 +68,9 @@ class OtpService:
             response["debug_code"] = code
         return response
 
-    async def verify_code(self, *, store_id: str, phone: str, code: str) -> dict:
+    async def verify_code(
+        self, *, store_id: str, phone: str, code: str
+    ) -> dict[str, object]:
         normalized_phone = normalize_phone(phone)
         now = datetime.now(timezone.utc)
         result = await self.db.execute(

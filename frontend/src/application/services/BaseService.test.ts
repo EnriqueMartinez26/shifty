@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { BaseService } from './BaseService'
 
 // Concrete subclass of BaseService to test the abstract class logic
-class TestService extends BaseService<any> {
+class TestService extends BaseService<unknown> {
   protected repository = {
     fetchData: jest.fn()
   }
@@ -31,7 +31,7 @@ class TestService extends BaseService<any> {
 
   async runTypeErrorOperation(): Promise<void> {
     return await this.execute(async () => {
-      const obj: any = null
+      const obj = null as unknown as { invalidProperty: never }
       return obj.invalidProperty
     }, 'runTypeErrorOperation')
   }
@@ -53,7 +53,7 @@ class TestService extends BaseService<any> {
     }, 'runValidationOperation')
   }
 
-  public triggerLog(level: string, message: string, data?: any): void {
+  public triggerLog(level: string, message: string, data?: unknown): void {
     this.log(level, message, data)
   }
 }

@@ -2,13 +2,14 @@ import asyncio
 import os
 import random
 import sys
+from collections.abc import Sequence
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from sqlalchemy import delete, insert, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 backend_dir = Path(__file__).resolve().parent.parent
@@ -44,6 +45,7 @@ from modules.auth.session_model import AuthSession
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not defined.")
+DATABASE_URL = str(DATABASE_URL)
 
 PASSWORDS = {
     "global_admin": "global123",
@@ -347,7 +349,7 @@ STORE_SCENARIOS = [
 SIMULATION_STORE_SLUGS = {scenario["slug"] for scenario in STORE_SCENARIOS}
 
 
-async def get_by(session: AsyncSession, model, *filters):
+async def get_by(session: AsyncSession, model: Any, *filters: Any) -> Any | None:
     result = await session.execute(select(model).where(*filters))
     return result.scalar_one_or_none()
 
@@ -476,7 +478,7 @@ async def cleanup_seed(session: AsyncSession) -> None:
     await session.execute(delete(Store).where(Store.id.in_(store_ids)))
 
 
-def apply_attrs(instance, **attrs):
+def apply_attrs(instance: Any, **attrs: Any) -> None:
     for key, value in attrs.items():
         setattr(instance, key, value)
 
@@ -493,7 +495,7 @@ async def ensure_user(
     full_name: str | None = None,
     phone: str | None = None,
     is_global_admin: bool = False,
-):
+) -> User:
     user = await get_by(session, User, User.email == email)
     attrs = {
         "email": email,
@@ -516,7 +518,7 @@ async def ensure_user(
     return user
 
 
-async def ensure_store(session: AsyncSession, scenario: dict):
+async def ensure_store(session: AsyncSession, scenario: dict[str, Any]) -> Store:
     store = await get_by(session, Store, Store.slug == scenario["slug"])
     attrs = {
         "name": scenario["name"],
@@ -548,7 +550,7 @@ async def ensure_store_schedule(
     day_of_week: int,
     open_time: time,
     close_time: time,
-):
+) -> StoreSchedule:
     schedule = await get_by(
         session,
         StoreSchedule,
@@ -571,7 +573,9 @@ async def ensure_store_schedule(
     return schedule
 
 
-async def ensure_service(session: AsyncSession, store_id: str, service_data: dict):
+async def ensure_service(
+    session: AsyncSession, store_id: str, service_data: dict[str, Any]
+) -> Service:
     service = await get_by(
         session,
         Service,
@@ -598,8 +602,11 @@ async def ensure_service(session: AsyncSession, store_id: str, service_data: dic
 
 
 async def ensure_staff(
-    session: AsyncSession, store_id: str, staff_data: dict, service_ids: list[str]
-):
+    session: AsyncSession,
+    store_id: str,
+    staff_data: dict[str, Any],
+    service_ids: list[str],
+) -> Staff:
     staff = await get_by(
         session,
         Staff,
@@ -625,7 +632,7 @@ async def ensure_staff(
 
 async def ensure_staff_service_links(
     session: AsyncSession, staff_id: str, service_ids: list[str]
-):
+) -> None:
     desired = set(service_ids)
     existing_result = await session.execute(
         select(staff_services.c.service_id).where(staff_services.c.staff_id == staff_id)
@@ -656,7 +663,7 @@ async def ensure_staff_schedule(
     day_of_week: int,
     start_hour: int,
     end_hour: int,
-):
+) -> Schedule:
     schedule = await get_by(
         session,
         Schedule,
@@ -697,7 +704,7 @@ async def ensure_appointment(
     status: str,
     notes: str,
     notes_staff: str | None = None,
-):
+) -> Appointment:
     appointment = await get_by(session, Appointment, Appointment.idempotency_key == key)
     ends_at = starts_at + timedelta(minutes=duration_minutes)
     attrs = {
@@ -732,7 +739,7 @@ async def ensure_block(
     start_time: datetime,
     end_time: datetime,
     reason: str,
-):
+) -> StaffBlock:
     block = await get_by(
         session,
         StaffBlock,
@@ -757,7 +764,9 @@ async def ensure_block(
     return block
 
 
-async def ensure_budget(session: AsyncSession, store_id: str, budget_data: dict):
+async def ensure_budget(
+    session: AsyncSession, store_id: str, budget_data: dict[str, Any]
+) -> Budget:
     budget = await get_by(
         session,
         Budget,
@@ -781,10 +790,10 @@ async def ensure_audit_log(
     resource_type: str,
     resource_id: str,
     action: str,
-    payload_before,
-    payload_after,
+    payload_before: dict[str, Any] | None,
+    payload_after: dict[str, Any] | Sequence[Any] | None,
     context: str,
-):
+) -> AuditLog:
     log = await get_by(session, AuditLog, AuditLog.context == context)
     attrs = {
         "actor_id": actor.id if actor else None,
@@ -806,7 +815,7 @@ async def ensure_audit_log(
     return log
 
 
-async def seed_store(session: AsyncSession, scenario: dict):
+async def seed_store(session: AsyncSession, scenario: dict[str, Any]) -> dict[str, Any]:
     store = await ensure_store(session, scenario)
     for day_of_week, (open_time, close_time) in scenario["hours"].items():
         await ensure_store_schedule(
@@ -981,7 +990,7 @@ async def seed_store(session: AsyncSession, scenario: dict):
     }
 
 
-async def seed_global_admin(session: AsyncSession, default_store_id: str):
+async def seed_global_admin(session: AsyncSession, default_store_id: str) -> User:
     return await ensure_user(
         session,
         email="global-admin@shifty.com",
@@ -996,7 +1005,7 @@ async def seed_global_admin(session: AsyncSession, default_store_id: str):
     )
 
 
-async def summarize_counts(session: AsyncSession):
+async def summarize_counts(session: AsyncSession) -> dict[str, int]:
     models = [
         ("stores", Store),
         ("store_schedules", StoreSchedule),
@@ -1019,10 +1028,10 @@ async def summarize_counts(session: AsyncSession):
     return summary
 
 
-async def seed_simulation():
+async def seed_simulation() -> None:
     print(f"[CONN] Seeding database at: {DATABASE_URL}")
-    engine = create_async_engine(DATABASE_URL, echo=False)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    engine = create_async_engine(cast(str, DATABASE_URL), echo=False)
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     async with async_session() as session:
         await cleanup_seed(session)

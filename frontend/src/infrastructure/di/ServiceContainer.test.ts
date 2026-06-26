@@ -68,9 +68,9 @@ describe('ServiceContainer', () => {
     })
 
     it('should throw error when factory is not a function', () => {
-      expect(() => container.register('testService', 'not a function' as any)).toThrow(
-        'Factory for key "testService" must be a function'
-      )
+      expect(() =>
+        container.register('testService', 'not a function' as unknown as () => unknown)
+      ).toThrow('Factory for key "testService" must be a function')
     })
 
     it('should allow re-registration of same key', () => {

@@ -1,28 +1,60 @@
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Any
+
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from modules.staff.model import Staff, Schedule
-from modules.services.model import Service
-from modules.users.model import User, UserRole
+
 from core.security import hash_password
+from modules.services.model import Service
+from modules.staff.model import Schedule, Staff
+from modules.users.model import User, UserRole
 import ulid
 
 
 class StaffRepository:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
+    async def _get_services_for_store(
+        self, service_public_ids: list[str], store_id: str
+    ) -> list[Service]:
+        if not service_public_ids:
+            return []
+
+        result = await self.db.execute(
+            select(Service).where(
+                Service.public_id.in_(service_public_ids),
+                Service.store_id == store_id,
+                Service.is_active == True,
+            )
+        )
+        services = list(result.scalars().all())
+        if len(services) != len(set(service_public_ids)):
+            raise ValueError(
+                "Uno o m?s servicios no existen o no pertenecen al negocio"
+            )
+        return services
+
+    async def _hydrate_services(self, member: Staff) -> None:
+        if member.service_ids:
+            member.services = await self._get_services_for_store(
+                member.service_ids,
+                member.store_id,
+            )
+        else:
+            member.services = []
+
     async def create(
-        self, data: dict, store_id: int, service_public_ids: list[str]
+        self, data: dict[str, Any], store_id: str, service_public_ids: list[str]
     ) -> Staff:
-        # 1. Evitar duplicar usuario por email dentro del store
         user_res = await self.db.execute(
             select(User).where(User.email == data["email"])
         )
         if user_res.scalar_one_or_none():
             raise ValueError("Ya existe un usuario con ese email")
 
-        # 2. Crear usuario asociado al profesional
+        services = await self._get_services_for_store(service_public_ids, store_id)
+
         user = User(
             email=data["email"],
             hashed_password=hash_password(str(ulid.ULID())),
@@ -34,21 +66,14 @@ class StaffRepository:
         self.db.add(user)
         await self.db.flush()
 
-        # 3. Buscar servicios por public_ids
-        services_res = await self.db.execute(
-            select(Service).where(Service.public_id.in_(service_public_ids))
-        )
-        services = list(services_res.scalars().all())
-
-        # 4. Crear Staff
         new_staff = Staff(
-            id=user.id,  # Synchronize the staff ID with the user ID for simplicity
+            id=user.id,
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=data["email"],
             display_name=data["display_name"],
             store_id=store_id,
-            service_ids=[s.public_id for s in services],
+            service_ids=[service.public_id for service in services],
         )
         new_staff.services = services
         self.db.add(new_staff)
@@ -56,10 +81,13 @@ class StaffRepository:
         await self.db.refresh(new_staff)
         return new_staff
 
-    async def get_all(self) -> list[Staff]:
+    async def get_all(self, store_id: str) -> list[Staff]:
         result = await self.db.execute(
             select(Staff)
-            .where(Staff.is_active == True)
+            .where(
+                Staff.store_id == store_id,
+                Staff.is_active == True,
+            )
             .options(
                 selectinload(Staff.schedules),
                 selectinload(Staff.services),
@@ -67,19 +95,16 @@ class StaffRepository:
         )
         staff_members = list(result.scalars().all())
         for member in staff_members:
-            if member.service_ids:
-                services_res = await self.db.execute(
-                    select(Service).where(Service.public_id.in_(member.service_ids))
-                )
-                member.services = list(services_res.scalars().all())
-            else:
-                member.services = []
+            await self._hydrate_services(member)
         return staff_members
 
-    async def get_by_id(self, public_id: str) -> Staff | None:
+    async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:
         result = await self.db.execute(
             select(Staff)
-            .where(Staff.id == public_id)
+            .where(
+                Staff.id == public_id,
+                Staff.store_id == store_id,
+            )
             .options(
                 selectinload(Staff.schedules),
                 selectinload(Staff.services),
@@ -87,17 +112,11 @@ class StaffRepository:
         )
         member = result.scalar_one_or_none()
         if member:
-            if member.service_ids:
-                services_res = await self.db.execute(
-                    select(Service).where(Service.public_id.in_(member.service_ids))
-                )
-                member.services = list(services_res.scalars().all())
-            else:
-                member.services = []
+            await self._hydrate_services(member)
         return member
 
     async def add_schedule(
-        self, staff: Staff, schedule_data: dict, store_id: int
+        self, staff: Staff, schedule_data: dict[str, Any], store_id: str
     ) -> Schedule:
         new_schedule = Schedule(**schedule_data, staff_id=staff.id, store_id=store_id)
         self.db.add(new_schedule)
@@ -105,12 +124,14 @@ class StaffRepository:
         await self.db.refresh(new_schedule)
         return new_schedule
 
-    async def update_services(self, staff: Staff, service_public_ids: list[str]):
-        services_res = await self.db.execute(
-            select(Service).where(Service.public_id.in_(service_public_ids))
+    async def update_services(
+        self, staff: Staff, service_public_ids: list[str]
+    ) -> Staff:
+        services_list = await self._get_services_for_store(
+            service_public_ids,
+            staff.store_id,
         )
-        services_list = list(services_res.scalars().all())
-        staff.service_ids = [s.public_id for s in services_list]
+        staff.service_ids = [service.public_id for service in services_list]
         staff.services = services_list
         await self.db.commit()
         await self.db.refresh(staff)
@@ -145,11 +166,11 @@ class StaffRepository:
         if is_active is not None:
             staff.is_active = is_active
         if service_public_ids is not None:
-            services_res = await self.db.execute(
-                select(Service).where(Service.public_id.in_(service_public_ids))
+            services_list = await self._get_services_for_store(
+                service_public_ids,
+                staff.store_id,
             )
-            services_list = list(services_res.scalars().all())
-            staff.service_ids = [s.public_id for s in services_list]
+            staff.service_ids = [service.public_id for service in services_list]
             staff.services = services_list
 
         user_res = await self.db.execute(select(User).where(User.id == staff.id))

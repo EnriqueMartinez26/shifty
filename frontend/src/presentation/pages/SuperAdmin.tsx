@@ -23,7 +23,9 @@ import {
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { SuperAdminAuditTimeline } from '../components/organisms/SuperAdminAuditTimeline'
 import { SuperAdminFormModal } from '../components/organisms/SuperAdminFormModal'
+import { SuperAdminHealthPanel } from '../components/organisms/SuperAdminHealthPanel'
 import { useAuth } from '../context/AuthContext'
 import {
   useAssignSuperAdminSubscription,
@@ -34,6 +36,7 @@ import {
   useRedeemSuperAdminCoupon,
   useSetSuperAdminGlobalAdmin,
   useSuperAdminCoupons,
+  useSuperAdminStoreAudit,
   useSuperAdminOverview,
   useSuperAdminPlans,
   useSuperAdminStores,
@@ -471,6 +474,7 @@ const SuperAdminPage: React.FC = () => {
 
   const storesQuery = useSuperAdminStores(storeParams)
   const overviewQuery = useSuperAdminOverview(selectedStoreId)
+  const auditQuery = useSuperAdminStoreAudit(selectedStoreId)
   const plansQuery = useSuperAdminPlans(true)
   const couponsQuery = useSuperAdminCoupons(true)
 
@@ -1682,6 +1686,22 @@ const SuperAdminPage: React.FC = () => {
         </div>
 
         <aside className="space-y-6 xl:sticky xl:top-8 xl:self-start">
+          <SuperAdminHealthPanel
+            selectedStore={selectedStore}
+            overview={overview}
+            onCreateAdmin={openCreateAdminModal}
+            onAssignPlan={openAssignPlanModal}
+            onRedeemCoupon={openRedeemCouponModal}
+            onEditStore={openEditStoreModal}
+            activePlansCount={activePlans.length}
+            activeCouponsCount={activeCoupons.length}
+          />
+
+          <SuperAdminAuditTimeline
+            entries={auditQuery.data}
+            isLoading={auditQuery.isLoading || auditQuery.isFetching}
+          />
+
           <section className="rounded-[2rem] p-6" style={panelStyle}>
             <div className="mb-4 flex items-center justify-between">
               <div>

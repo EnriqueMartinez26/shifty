@@ -81,7 +81,7 @@ async def list_promotions(
     include_inactive: bool = Query(default=True),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[PromotionResponse]:
     _require_admin(user)
     statement = select(StorePromotion).where(StorePromotion.store_id == user.store_id)
     if not include_inactive:
@@ -95,7 +95,7 @@ async def create_promotion(
     data: PromotionCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> PromotionResponse:
     _require_admin(user)
     duplicate = await db.execute(
         select(StorePromotion).where(
@@ -123,7 +123,7 @@ async def update_promotion(
     data: PromotionUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> PromotionResponse:
     _require_admin(user)
     promotion = await _get_store_promotion_or_404(
         db, promotion_public_id, user.store_id
@@ -178,7 +178,7 @@ async def preview_promotion(
     code: Annotated[str, Query(min_length=3, max_length=30)],
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> PromotionQuoteResponse:
     result = await db.execute(
         select(Service).where(
             Service.public_id == service_id,

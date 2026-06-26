@@ -15,15 +15,20 @@ describe('BookingService', () => {
       confirm: jest.fn(),
       complete: jest.fn(),
       cancel: jest.fn(),
-      markAbsent: jest.fn()
-    } as any
+      markAbsent: jest.fn(),
+      searchByDateRange: jest.fn()
+    } as unknown as jest.Mocked<IBookingRepository>
 
     service = new BookingService(mockRepository)
   })
 
   describe('getAppointmentsByDate', () => {
     it('should query appointments by date', async () => {
-      const appointments = [{ id: 'appt-1' }] as Appointment[]
+      const appointments = [
+        {
+          id: 'appt-1'
+        } as Appointment
+      ]
       mockRepository.findByDate.mockResolvedValue(appointments)
 
       const result = await service.getAppointmentsByDate('2026-05-18')
@@ -57,7 +62,9 @@ describe('BookingService', () => {
         notes: 'Some note'
       }
 
-      const expectedAppt = { id: 'appt-uuid-1', ...input } as any as Appointment
+      const expectedAppt = {
+        id: 'appt-uuid-1'
+      } as Appointment
       mockRepository.create.mockResolvedValue(expectedAppt)
 
       const result = await service.createAppointment(input)
@@ -85,9 +92,9 @@ describe('BookingService', () => {
         client_phone: ''
       }
 
-      await expect(service.createAppointment(invalidInput as any)).rejects.toThrow(
-        'Error de validación: Verifique los datos ingresados.'
-      )
+      await expect(
+        service.createAppointment(invalidInput as unknown as CreateBookingRequestDTO)
+      ).rejects.toThrow('Error de validaciÃ³n: Verifique los datos ingresados.')
       expect(mockRepository.create).not.toHaveBeenCalled()
     })
   })

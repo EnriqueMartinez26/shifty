@@ -65,6 +65,50 @@ PublicIdPath = Annotated[
 ]
 
 
+def _gateway_config_response(
+    config: PaymentGatewayConfig | None,
+) -> GatewayConfigResponse:
+    if not config:
+        return GatewayConfigResponse(provider="mercadopago", configured=False)
+    return GatewayConfigResponse(
+        provider=config.provider,
+        configured=True,
+        public_key=config.public_key,
+        access_token_masked="********",
+    )
+
+
+def _payment_preference_response(payment: Payment) -> PaymentPreferenceResponse:
+    return PaymentPreferenceResponse(
+        payment_public_id=payment.id,
+        appointment_id=payment.appointment_id,
+        amount=payment.amount,
+        currency=payment.currency,
+        preference_id=payment.preference_id,
+        payment_link=payment.payment_link,
+        status=payment.status,
+    )
+
+
+def _payment_response(payment: Payment) -> PaymentResponse:
+    return PaymentResponse(
+        public_id=payment.id,
+        appointment_id=payment.appointment_id,
+        amount=payment.amount,
+        currency=payment.currency,
+        status=payment.status,
+        paid_at=payment.paid_at,
+    )
+
+
+def _payment_amount_for_service(
+    service: Service, requested_amount: Decimal | None = None
+) -> Decimal:
+    if requested_amount is not None:
+        return requested_amount
+    return calculate_service_payment_amount(service) or Decimal(str(service.price))
+
+
 def _require_payment_manager(user: User) -> None:
     if user.role not in (UserRole.ADMIN, UserRole.STAFF) and not user.is_global_admin:
         raise PermissionDeniedException(action="No tenes permiso para gestionar pagos")
@@ -117,6 +161,18 @@ def _resolve_webhook_data_id(payload: dict[str, Any], query_data_id: str | None)
     payload_data_id = raw_data.get("id") if isinstance(raw_data, dict) else None
     candidate = payload_data_id or query_data_id or payload.get("id")
     return str(candidate or "").strip()
+
+
+def _webhook_event_id(payload: dict[str, Any]) -> str:
+    event_id = str(
+        payload.get("id")
+        or payload.get("data", {}).get("id")
+        or payload.get("resource")
+        or ""
+    ).strip()
+    if not event_id:
+        raise WebhookException(message="Webhook sin identificador")
+    return f"mercadopago:{event_id}"
 
 
 async def _resolve_store_for_webhook(
@@ -208,14 +264,40 @@ async def _get_appointment_with_service(
     row = result.first()
     if not row:
         raise AppointmentNotFoundException(public_id=appointment_id)
-    return row
+    return row[0], row[1]
+
+
+async def _count_store_rows(
+    db: AsyncSession,
+    selectable: type[Payment] | type[WebhookInbox] | type[OutboxMessage],
+    *conditions: Any,
+) -> int:
+    total = await db.scalar(
+        select(func.count()).select_from(selectable).where(*conditions)
+    )
+    return int(total or 0)
+
+
+def _payment_status_count_query(store_id: str, status_value: str) -> Any:
+    return (
+        select(func.count())
+        .select_from(Payment)
+        .where(Payment.store_id == store_id, Payment.status == status_value)
+    )
+
+
+def _payment_status_sum_query(store_id: str, status_value: str) -> Any:
+    return select(func.coalesce(func.sum(Payment.amount), 0)).where(
+        Payment.store_id == store_id,
+        Payment.status == status_value,
+    )
 
 
 @router.get("/gateway-config", response_model=GatewayConfigResponse)
 async def get_gateway_config(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> GatewayConfigResponse:
     _require_payment_manager(user)
     await _ensure_payments_feature_enabled(db, user)
     result = await db.execute(
@@ -224,14 +306,7 @@ async def get_gateway_config(
         .limit(1)
     )
     config = result.scalar_one_or_none()
-    if not config:
-        return GatewayConfigResponse(provider="mercadopago", configured=False)
-    return GatewayConfigResponse(
-        provider=config.provider,
-        configured=True,
-        public_key=config.public_key,
-        access_token_masked="********",
-    )
+    return _gateway_config_response(config)
 
 
 @router.put("/gateway-config", response_model=GatewayConfigResponse)
@@ -239,7 +314,7 @@ async def upsert_gateway_config(
     data: GatewayConfigUpsert,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> GatewayConfigResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
     result = await db.execute(
@@ -272,12 +347,7 @@ async def upsert_gateway_config(
         config.webhook_secret = data.webhook_secret
     await db.commit()
     await db.refresh(config)
-    return GatewayConfigResponse(
-        provider=config.provider,
-        configured=True,
-        public_key=config.public_key,
-        access_token_masked="********",
-    )
+    return _gateway_config_response(config)
 
 
 @router.post("/preferences/{appointment_id}", response_model=PaymentPreferenceResponse)
@@ -285,7 +355,7 @@ async def create_payment_preference(
     appointment_id: PublicIdPath,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> PaymentPreferenceResponse:
     _require_payment_manager(user)
     await _ensure_payments_feature_enabled(db, user)
     appointment, service = await _get_appointment_with_service(
@@ -297,8 +367,7 @@ async def create_payment_preference(
             appointment=appointment,
             service=service,
             store_id=user.store_id,
-            amount_override=calculate_service_payment_amount(service)
-            or Decimal(str(service.price)),
+            amount_override=_payment_amount_for_service(service),
         )
     except CircuitBreakerOpenError as exc:
         raise AppException(
@@ -314,16 +383,7 @@ async def create_payment_preference(
         )
     await db.commit()
     await db.refresh(payment)
-
-    return PaymentPreferenceResponse(
-        payment_public_id=payment.id,
-        appointment_id=payment.appointment_id,
-        amount=payment.amount,
-        currency=payment.currency,
-        preference_id=payment.preference_id,
-        payment_link=payment.payment_link,
-        status=payment.status,
-    )
+    return _payment_preference_response(payment)
 
 
 @router.post("/{appointment_id}/manual-confirm", response_model=PaymentResponse)
@@ -332,17 +392,13 @@ async def manual_confirm_payment(
     data: ManualPaymentRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> PaymentResponse:
     _require_payment_manager(user)
     await _ensure_payments_feature_enabled(db, user)
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
     )
-    amount = (
-        data.amount
-        if data.amount is not None
-        else calculate_service_payment_amount(service) or Decimal(str(service.price))
-    )
+    amount = _payment_amount_for_service(service, data.amount)
     payment = await ensure_payment_preference(
         db,
         appointment=appointment,
@@ -367,14 +423,7 @@ async def manual_confirm_payment(
     )
     await db.commit()
     await db.refresh(payment)
-    return PaymentResponse(
-        public_id=payment.id,
-        appointment_id=payment.appointment_id,
-        amount=payment.amount,
-        currency=payment.currency,
-        status=payment.status,
-        paid_at=payment.paid_at,
-    )
+    return _payment_response(payment)
 
 
 @router.post("/{payment_id}/refund", response_model=PaymentResponse)
@@ -383,7 +432,7 @@ async def refund_payment(
     data: RefundRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> PaymentResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
     payment = await _get_payment_by_id(db, payment_id, user.store_id)
@@ -412,14 +461,7 @@ async def refund_payment(
     )
     await db.commit()
     await db.refresh(payment)
-    return PaymentResponse(
-        public_id=payment.id,
-        appointment_id=payment.appointment_id,
-        amount=payment.amount,
-        currency=payment.currency,
-        status=payment.status,
-        paid_at=payment.paid_at,
-    )
+    return _payment_response(payment)
 
 
 @router.post("/webhooks/mercadopago")
@@ -427,7 +469,7 @@ async def mercadopago_webhook(
     request: Request,
     store_id: Annotated[str | None, Query(max_length=64)] = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, Any]:
     set_tenant_context(None, True)
     try:
         await _apply_tenant_context(db)
@@ -444,15 +486,7 @@ async def mercadopago_webhook(
             payload=payload,
         )
 
-        event_id = str(
-            payload.get("id")
-            or payload.get("data", {}).get("id")
-            or payload.get("resource")
-            or ""
-        )
-        if not event_id:
-            raise WebhookException(message="Webhook sin identificador")
-        event_id = f"mercadopago:{event_id}"
+        event_id = _webhook_event_id(payload)
 
         existing = await db.execute(
             select(WebhookInbox).where(WebhookInbox.event_id == event_id)
@@ -460,7 +494,7 @@ async def mercadopago_webhook(
         inbox = existing.scalar_one_or_none()
         if inbox:
             if inbox.processed_at is not None:
-                return {"success": True, "status": "already_processed"}
+                return {"success": True, "data": {"status": "already_processed"}}
             await apply_mercadopago_webhook_payload(
                 db, store_id=resolved_store_id, payload=payload
             )
@@ -479,7 +513,7 @@ async def mercadopago_webhook(
             )
             inbox.mark_processed()
         await db.commit()
-        return {"success": True}
+        return {"success": True, "data": {"received": True}}
     finally:
         set_tenant_context(None, False)
 
@@ -488,39 +522,33 @@ async def mercadopago_webhook(
 async def outbox_stats(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> OutboxStatsResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
-    pending = await db.scalar(
-        select(func.count())
-        .select_from(OutboxMessage)
-        .where(
-            OutboxMessage.store_id == user.store_id,
-            OutboxMessage.processed_at.is_(None),
-            OutboxMessage.error.is_(None),
-        )
+    pending = await _count_store_rows(
+        db,
+        OutboxMessage,
+        OutboxMessage.store_id == user.store_id,
+        OutboxMessage.processed_at.is_(None),
+        OutboxMessage.error.is_(None),
     )
-    pending_with_error = await db.scalar(
-        select(func.count())
-        .select_from(OutboxMessage)
-        .where(
-            OutboxMessage.store_id == user.store_id,
-            OutboxMessage.processed_at.is_(None),
-            OutboxMessage.error.is_not(None),
-        )
+    pending_with_error = await _count_store_rows(
+        db,
+        OutboxMessage,
+        OutboxMessage.store_id == user.store_id,
+        OutboxMessage.processed_at.is_(None),
+        OutboxMessage.error.is_not(None),
     )
-    processed = await db.scalar(
-        select(func.count())
-        .select_from(OutboxMessage)
-        .where(
-            OutboxMessage.store_id == user.store_id,
-            OutboxMessage.processed_at.is_not(None),
-        )
+    processed = await _count_store_rows(
+        db,
+        OutboxMessage,
+        OutboxMessage.store_id == user.store_id,
+        OutboxMessage.processed_at.is_not(None),
     )
     return OutboxStatsResponse(
-        pending=int(pending or 0),
-        pending_with_error=int(pending_with_error or 0),
-        processed=int(processed or 0),
+        pending=pending,
+        pending_with_error=pending_with_error,
+        processed=processed,
     )
 
 
@@ -528,87 +556,102 @@ async def outbox_stats(
 async def reconciliation_summary(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> ReconciliationSummaryResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
 
-    def _count(status_value: str):
-        return (
-            select(func.count())
-            .select_from(Payment)
-            .where(
-                Payment.store_id == user.store_id,
-                Payment.status == status_value,
+    pending_payments = int(
+        (
+            await db.scalar(
+                _payment_status_count_query(user.store_id, PaymentStatus.PENDING.value)
             )
         )
-
-    def _sum(status_value: str):
-        return select(func.coalesce(func.sum(Payment.amount), 0)).where(
-            Payment.store_id == user.store_id,
-            Payment.status == status_value,
-        )
-
-    pending_payments = int((await db.scalar(_count(PaymentStatus.PENDING.value))) or 0)
+        or 0
+    )
     approved_payments = int(
-        (await db.scalar(_count(PaymentStatus.APPROVED.value))) or 0
+        (
+            await db.scalar(
+                _payment_status_count_query(user.store_id, PaymentStatus.APPROVED.value)
+            )
+        )
+        or 0
     )
     rejected_payments = int(
-        (await db.scalar(_count(PaymentStatus.REJECTED.value))) or 0
+        (
+            await db.scalar(
+                _payment_status_count_query(user.store_id, PaymentStatus.REJECTED.value)
+            )
+        )
+        or 0
     )
     manual_confirmed_payments = int(
-        (await db.scalar(_count(PaymentStatus.MANUAL_CONFIRMED.value))) or 0
+        (
+            await db.scalar(
+                _payment_status_count_query(
+                    user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
+                )
+            )
+        )
+        or 0
     )
     refunded_payments = int(
-        (await db.scalar(_count(PaymentStatus.REFUNDED.value))) or 0
+        (
+            await db.scalar(
+                _payment_status_count_query(user.store_id, PaymentStatus.REFUNDED.value)
+            )
+        )
+        or 0
     )
     total_pending_amount = Decimal(
-        str((await db.scalar(_sum(PaymentStatus.PENDING.value))) or 0)
+        str(
+            (
+                await db.scalar(
+                    _payment_status_sum_query(
+                        user.store_id, PaymentStatus.PENDING.value
+                    )
+                )
+            )
+            or 0
+        )
     )
     total_approved_amount = Decimal(
         str(
-            ((await db.scalar(_sum(PaymentStatus.APPROVED.value))) or 0)
-            + ((await db.scalar(_sum(PaymentStatus.MANUAL_CONFIRMED.value))) or 0)
-        )
-    )
-    pending_webhooks = int(
-        (
-            await db.scalar(
-                select(func.count())
-                .select_from(WebhookInbox)
-                .where(
-                    WebhookInbox.store_id == user.store_id,
-                    WebhookInbox.processed_at.is_(None),
-                    WebhookInbox.error.is_(None),
+            (
+                await db.scalar(
+                    _payment_status_sum_query(
+                        user.store_id, PaymentStatus.APPROVED.value
+                    )
                 )
             )
-        )
-        or 0
-    )
-    failed_webhooks = int(
-        (
-            await db.scalar(
-                select(func.count())
-                .select_from(WebhookInbox)
-                .where(
-                    WebhookInbox.store_id == user.store_id,
-                    WebhookInbox.error.is_not(None),
+            or 0
+            + (
+                await db.scalar(
+                    _payment_status_sum_query(
+                        user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
+                    )
                 )
             )
+            or 0
         )
-        or 0
     )
-    pending_outbox = int(
-        (
-            await db.scalar(
-                select(func.count())
-                .select_from(OutboxMessage)
-                .where(
-                    OutboxMessage.store_id == user.store_id,
-                    OutboxMessage.processed_at.is_(None),
-                )
-            )
-        )
-        or 0
+    pending_webhooks = await _count_store_rows(
+        db,
+        WebhookInbox,
+        WebhookInbox.store_id == user.store_id,
+        WebhookInbox.processed_at.is_(None),
+        WebhookInbox.error.is_(None),
+    )
+    failed_webhooks = await _count_store_rows(
+        db,
+        WebhookInbox,
+        WebhookInbox.store_id == user.store_id,
+        WebhookInbox.error.is_not(None),
+    )
+    pending_outbox = await _count_store_rows(
+        db,
+        OutboxMessage,
+        OutboxMessage.store_id == user.store_id,
+        OutboxMessage.processed_at.is_(None),
     )
 
     return ReconciliationSummaryResponse(
@@ -630,7 +673,7 @@ async def process_outbox(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
-):
+) -> OutboxProcessResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
     result = await process_outbox_batch(db, store_id=user.store_id, limit=limit)

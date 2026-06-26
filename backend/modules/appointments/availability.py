@@ -10,6 +10,7 @@ un slot es libre solo si:
 
 import json
 from datetime import date, datetime, timedelta, time
+from typing import TypedDict, cast
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,17 @@ from modules.staff.model import Staff, Schedule, StaffBlock
 from modules.stores.model import Store
 
 
+class AvailabilitySlot(TypedDict):
+    staff_id: str
+    staff_name: str
+    starts_at: str
+    ends_at: str
+    start_time: str
+    end_time: str
+    status: str
+    reason: str | None
+
+
 class AvailabilityService:
     def __init__(self, db: AsyncSession, redis: Redis) -> None:
         self.db = db
@@ -30,12 +42,12 @@ class AvailabilityService:
 
     async def get_available_slots(
         self,
-        store_id: int,
+        store_id: str,
         service_public_id: str,
         search_date: date,
         force_all: bool = False,
         hide_private_reasons: bool = False,
-    ) -> list[dict]:
+    ) -> list[AvailabilitySlot]:
         """
         Calcula los slots disponibles para un servicio en una fecha dada,
         respetando horarios, turnos ocupados y bloqueos de agenda.
@@ -44,7 +56,7 @@ class AvailabilityService:
         cache_key = f"availability:{store_id}:{service_public_id}:{search_date.isoformat()}:{int(force_all)}:{int(hide_private_reasons)}"
         cached = await self.redis.get(cache_key)
         if cached:
-            return json.loads(cached)
+            return cast(list[AvailabilitySlot], json.loads(cached))
 
         # 2. Resolver servicio -----------------------------------------------
         svc_res = await self.db.execute(
@@ -94,7 +106,7 @@ class AvailabilityService:
 
         min_bookable_time = now_utc() + timedelta(hours=notice_hours)
 
-        all_slots: list[dict] = []
+        all_slots: list[AvailabilitySlot] = []
         day_of_week = search_date.weekday()
 
         schedules_res = await self.db.execute(
@@ -213,7 +225,7 @@ class AvailabilityService:
         # Apply strict gap filtering unless force_all is True
         if not force_all:
             # Build mapping per staff for quick adjacency checks
-            slots_by_staff = {}
+            slots_by_staff: dict[str, list[AvailabilitySlot]] = {}
             for slot in all_slots:
                 slots_by_staff.setdefault(slot["staff_id"], []).append(slot)
             filtered_slots = []

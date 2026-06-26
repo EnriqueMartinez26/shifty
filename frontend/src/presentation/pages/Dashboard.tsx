@@ -1293,7 +1293,7 @@ function HealthPill({ item }: { item: HealthItem }) {
     <div
       style={{
         padding: '14px 16px',
-        borderRadius: 18,
+        borderRadius: 8,
         border: `1px solid ${tone.border}`,
         background: tone.background,
         boxShadow: colors2000s.shadows.insetLight,

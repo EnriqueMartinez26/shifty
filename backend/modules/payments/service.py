@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from json import JSONDecodeError
 from urllib.parse import urlencode
+from typing import cast
 
 import httpx
 from sqlalchemy import select
@@ -13,6 +15,7 @@ from core.config import Environment, settings
 from core.crypto import decrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
+    JsonValue,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -53,7 +56,7 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _clean_payload(value):
+def _clean_payload(value: JsonValue) -> JsonValue:
     if isinstance(value, dict):
         return {
             key: _clean_payload(item) for key, item in value.items() if item is not None
@@ -113,10 +116,12 @@ def _notification_url(store: Store) -> str:
     return f"{base_url}/payments/webhooks/mercadopago?store_id={store.public_id}"
 
 
-def _resolve_checkout_link(payload: dict) -> str | None:
+def _resolve_checkout_link(payload: dict[str, JsonValue]) -> str | None:
     if settings.ENV == Environment.PRODUCTION:
-        return payload.get("init_point") or payload.get("sandbox_init_point")
-    return payload.get("sandbox_init_point") or payload.get("init_point")
+        value = payload.get("init_point") or payload.get("sandbox_init_point")
+    else:
+        value = payload.get("sandbox_init_point") or payload.get("init_point")
+    return str(value) if isinstance(value, str) else None
 
 
 def calculate_service_payment_amount(
@@ -156,9 +161,9 @@ async def _mercadopago_api_request(
     *,
     method: str,
     path: str,
-    json_body: dict | None = None,
-) -> dict:
-    return await _mercadopago_breaker.call(
+    json_body: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
+    result = await _mercadopago_breaker.call(
         lambda: _perform_mercadopago_request(
             access_token,
             method=method,
@@ -167,6 +172,7 @@ async def _mercadopago_api_request(
         ),
         should_record_failure=_should_trip_mercadopago_breaker,
     )
+    return cast(dict[str, JsonValue], result)
 
 
 def _should_trip_mercadopago_breaker(exc: Exception) -> bool:
@@ -178,8 +184,8 @@ async def _perform_mercadopago_request(
     *,
     method: str,
     path: str,
-    json_body: dict | None = None,
-) -> dict:
+    json_body: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
@@ -218,8 +224,8 @@ async def _perform_mercadopago_request(
     if not response.content:
         return {}
     try:
-        return response.json()
-    except ValueError as exc:
+        return cast(dict[str, JsonValue], response.json())
+    except (ValueError, JSONDecodeError) as exc:
         raise MercadoPagoAPIError(
             "Mercado Pago devolvio una respuesta invalida", transient=True
         ) from exc
@@ -259,7 +265,7 @@ async def create_mercadopago_preference(
     service: Service,
     store_id: str,
     amount: Decimal,
-) -> dict | None:
+) -> dict[str, JsonValue] | None:
     config = await _get_gateway_config(db, store_id)
     access_token = _resolve_access_token(config)
     if not access_token:
@@ -271,38 +277,41 @@ async def create_mercadopago_preference(
 
     payer_name, payer_email = await _resolve_appointment_payer(db, appointment)
 
-    payload = _clean_payload(
-        {
-            "items": [
-                {
-                    "id": service.public_id,
-                    "title": service.name,
-                    "description": service.description,
-                    "picture_url": service.image_url,
-                    "quantity": 1,
-                    "currency_id": payment.currency or "ARS",
-                    "unit_price": float(amount),
-                }
-            ],
-            "payer": {
-                "name": payer_name,
-                "email": _normalize_payer_email(payer_email),
+    payload = cast(
+        dict[str, JsonValue],
+        _clean_payload(
+            {
+                "items": [
+                    {
+                        "id": service.public_id,
+                        "title": service.name,
+                        "description": service.description,
+                        "picture_url": service.image_url,
+                        "quantity": 1,
+                        "currency_id": payment.currency or "ARS",
+                        "unit_price": float(amount),
+                    }
+                ],
+                "payer": {
+                    "name": payer_name,
+                    "email": _normalize_payer_email(payer_email),
+                },
+                "external_reference": appointment.id,
+                "notification_url": _notification_url(store),
+                "back_urls": {
+                    "success": _booking_return_url(store, appointment, "approved"),
+                    "failure": _booking_return_url(store, appointment, "rejected"),
+                    "pending": _booking_return_url(store, appointment, "pending"),
+                },
+                "auto_return": "approved",
+                "metadata": {
+                    "appointment_id": appointment.id,
+                    "store_id": store.id,
+                    "store_public_id": store.public_id,
+                    "payment_id": payment.id,
+                },
             },
-            "external_reference": appointment.id,
-            "notification_url": _notification_url(store),
-            "back_urls": {
-                "success": _booking_return_url(store, appointment, "approved"),
-                "failure": _booking_return_url(store, appointment, "rejected"),
-                "pending": _booking_return_url(store, appointment, "pending"),
-            },
-            "auto_return": "approved",
-            "metadata": {
-                "appointment_id": appointment.id,
-                "store_id": store.id,
-                "store_public_id": store.public_id,
-                "payment_id": payment.id,
-            },
-        }
+        ),
     )
     return await _mercadopago_api_request(
         access_token, method="POST", path="/checkout/preferences", json_body=payload
@@ -311,7 +320,7 @@ async def create_mercadopago_preference(
 
 async def fetch_mercadopago_payment(
     db: AsyncSession, *, store_id: str, payment_id: str
-) -> dict | None:
+) -> dict[str, JsonValue] | None:
     config = await _get_gateway_config(db, store_id)
     access_token = _resolve_access_token(config)
     if not access_token:
@@ -443,7 +452,10 @@ def sync_appointment_with_payment(
 
 
 def stamp_payment_from_status(
-    payment: Payment, payment_status: str, *, payload: dict | None = None
+    payment: Payment,
+    payment_status: str,
+    *,
+    payload: dict[str, JsonValue] | None = None,
 ) -> None:
     payment.status = payment_status
     payment.raw_payload = payload or payment.raw_payload

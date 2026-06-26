@@ -311,9 +311,7 @@ class PublicRepository:
     ) -> Appointment | None:
         result = await self.db.execute(
             select(Appointment)
-            .where(
-                Appointment.public_id == public_id, Appointment.client_id == client_id
-            )
+            .where(Appointment.id == public_id, Appointment.client_id == client_id)
             .options(selectinload(Appointment.service), selectinload(Appointment.staff))
         )
         return result.scalar_one_or_none()

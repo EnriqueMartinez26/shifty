@@ -60,6 +60,8 @@ from modules.public_api.schemas import (
 )
 from modules.services.model import Service
 from modules.staff.model import Staff
+from modules.stores.model import Store
+from modules.stores.schemas import StoreCustomField
 
 router = CanonicalAPIRouter(prefix="/public", tags=["Public Booking"])
 PublicIdPath = Annotated[
@@ -95,7 +97,7 @@ def _normalize_custom_field_value(value: object) -> str:
 
 
 def _validate_custom_fields(
-    store, custom_fields: dict[str, str] | None
+    store: Store, custom_fields: dict[str, str] | None
 ) -> dict[str, str]:
     configured_fields = store.custom_client_fields or []
     configured_by_key = {
@@ -133,7 +135,7 @@ def _validate_custom_fields(
         normalized[key] = value
 
     missing_required = [
-        field.get("label") or field.get("key")
+        str(field.get("label") or field.get("key") or "")
         for field in configured_fields
         if field.get("required")
         and not normalized.get(field.get("key", ""), "").strip()
@@ -166,7 +168,9 @@ def _now_compatible_with(value: datetime) -> datetime:
 
 
 @router.get("/stores/{slug}", response_model=PublicStoreResponse)
-async def get_store_by_slug(slug: SlugPath, db: AsyncSession = Depends(get_db)):
+async def get_store_by_slug(
+    slug: SlugPath, db: AsyncSession = Depends(get_db)
+) -> PublicStoreResponse:
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
@@ -185,7 +189,10 @@ async def get_store_by_slug(slug: SlugPath, db: AsyncSession = Depends(get_db)):
             cover_url=store.cover_url,
             whatsapp_number=store.whatsapp_number,
             website_url=store.website_url,
-            custom_client_fields=store.custom_client_fields,
+            custom_client_fields=[
+                StoreCustomField.model_validate(field)
+                for field in (store.custom_client_fields or [])
+            ],
             feature_flags=store.normalized_feature_flags,
         )
     finally:
@@ -196,7 +203,7 @@ async def get_store_by_slug(slug: SlugPath, db: AsyncSession = Depends(get_db)):
 async def get_public_services(
     store_public_id: PublicIdQuery,
     db: AsyncSession = Depends(get_db),
-):
+) -> list[PublicServiceResponse]:
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
@@ -214,7 +221,7 @@ async def get_public_services(
                 deposit_mode=getattr(service, "deposit_mode", "none") or "none",
                 deposit_type=getattr(service, "deposit_type", "percent") or "percent",
                 deposit_amount=float(service.deposit_amount)
-                if getattr(service, "deposit_amount", None) is not None
+                if service.deposit_amount is not None
                 else None,
                 color=service.color,
                 image_url=service.image_url,
@@ -234,7 +241,7 @@ async def get_public_staff(
         str | None, Query(max_length=64, pattern=PUBLIC_ID_PATTERN)
     ] = None,
     db: AsyncSession = Depends(get_db),
-):
+) -> list[PublicStaffResponse]:
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
@@ -281,7 +288,7 @@ async def get_public_availability(
     force_all: Annotated[bool, Query()] = False,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-):
+) -> list[object]:
     from datetime import date as date_type
 
     await _bypass_rls(db)
@@ -294,12 +301,14 @@ async def get_public_availability(
             search_date = date_type.fromisoformat(date)
         except ValueError:
             raise ValidationException("Fecha inválida")
-        return await AvailabilityService(db, redis).get_available_slots(
-            store.id,
-            service_id,
-            search_date,
-            force_all=force_all,
-            hide_private_reasons=True,
+        return list(
+            await AvailabilityService(db, redis).get_available_slots(
+                store.id,
+                service_id,
+                search_date,
+                force_all=force_all,
+                hide_private_reasons=True,
+            )
         )
     finally:
         set_tenant_context(None, False)
@@ -311,7 +320,7 @@ async def preview_public_promotion(
     service_id: PublicIdQuery,
     code: Annotated[str, Query(min_length=3, max_length=30)],
     db: AsyncSession = Depends(get_db),
-):
+) -> PublicPromotionPreviewResponse:
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
@@ -348,7 +357,7 @@ async def request_public_otp(
     request: Request,
     data: OtpRequestPayload,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, object]:
     await enforce_rate_limit(
         request,
         "public:otp:request",
@@ -373,7 +382,7 @@ async def verify_public_otp(
     request: Request,
     data: OtpVerifyPayload,
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, object]:
     await enforce_rate_limit(
         request,
         "public:otp:verify",
@@ -403,7 +412,7 @@ async def create_public_booking(
     data: PublicBookingCreate,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-):
+) -> PublicBookingResponse:
     await enforce_rate_limit(
         request,
         "public:booking:create",
@@ -416,7 +425,7 @@ async def create_public_booking(
         idempotency_key = data.idempotency_key or _public_booking_idempotency_key(data)
         cached = await idempotency_guard(idempotency_key, redis)
         if cached:
-            return cached
+            return PublicBookingResponse.model_validate(cached)
 
         repo = PublicRepository(db)
         service = await repo.get_service_by_public_id(data.service_id)
@@ -560,15 +569,16 @@ async def create_public_booking(
             )
 
         await db.commit()
-        await enqueue_confirmation_email(
-            email=appointment.client_email,
-            details={
-                "public_id": appointment.public_id,
-                "service": service.name,
-                "staff": staff.display_name,
-                "date": appointment.starts_at.isoformat(),
-            },
-        )
+        if appointment.client_email:
+            await enqueue_confirmation_email(
+                email=appointment.client_email,
+                details={
+                    "public_id": appointment.public_id,
+                    "service": service.name,
+                    "staff": staff.display_name,
+                    "date": appointment.starts_at.isoformat(),
+                },
+            )
         response = PublicBookingResponse(
             public_id=appointment.public_id,
             service_id=service.public_id,
@@ -615,7 +625,7 @@ async def get_client_appointments(
     store_public_id: PublicIdPath,
     phone: Annotated[str, Path(min_length=6, max_length=30)],
     db: AsyncSession = Depends(get_db),
-):
+) -> ClientAppointmentsResponse:
     import re
 
     phone = re.sub(r"[\s\-\(\)\+]", "", phone)
@@ -693,7 +703,7 @@ async def client_cancel_appointment(
     data: ClientCancelRequest,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-):
+) -> PublicBookingResponse:
     await enforce_rate_limit(
         request,
         "public:client:cancel",
@@ -775,7 +785,7 @@ async def client_reschedule_appointment(
     data: ClientRescheduleRequest,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-):
+) -> PublicBookingResponse:
     await enforce_rate_limit(
         request,
         "public:client:reschedule",
@@ -787,7 +797,7 @@ async def client_reschedule_appointment(
         repo = PublicRepository(db)
         cached = await idempotency_guard(data.idempotency_key, redis)
         if cached:
-            return cached
+            return PublicBookingResponse.model_validate(cached)
 
         appt_res = await db.execute(
             select(Appointment).where(Appointment.id == public_id)

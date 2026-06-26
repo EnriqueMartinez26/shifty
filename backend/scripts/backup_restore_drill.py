@@ -6,6 +6,7 @@ import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 def _run(
@@ -54,14 +55,15 @@ def main() -> int:
     backup_dir = Path(args.backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    evidence: dict[str, object] = {
+    steps: list[dict[str, Any]] = []
+    evidence: dict[str, Any] = {
         "started_at": started_at.isoformat(),
         "status": "ok",
-        "steps": [],
+        "steps": steps,
     }
 
     def add_step(name: str, ok: bool, stdout: str = "", stderr: str = "") -> None:
-        evidence["steps"].append(
+        steps.append(
             {
                 "name": name,
                 "ok": ok,

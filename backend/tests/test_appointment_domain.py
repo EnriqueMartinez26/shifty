@@ -84,47 +84,47 @@ def past() -> datetime:
 
 
 class TestAppointmentStatusGraph:
-    def test_pending_to_confirmed(self):
+    def test_pending_to_confirmed(self) -> None:
         assert AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.CONFIRMED)
 
-    def test_pending_to_cancelled(self):
+    def test_pending_to_cancelled(self) -> None:
         assert AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.CANCELLED)
 
-    def test_pending_cannot_go_to_completed(self):
+    def test_pending_cannot_go_to_completed(self) -> None:
         assert not AppointmentStatus.PENDING.can_transition_to(
             AppointmentStatus.COMPLETED
         )
 
-    def test_pending_cannot_go_to_absent(self):
+    def test_pending_cannot_go_to_absent(self) -> None:
         assert not AppointmentStatus.PENDING.can_transition_to(AppointmentStatus.ABSENT)
 
-    def test_confirmed_to_completed(self):
+    def test_confirmed_to_completed(self) -> None:
         assert AppointmentStatus.CONFIRMED.can_transition_to(
             AppointmentStatus.COMPLETED
         )
 
-    def test_confirmed_to_cancelled(self):
+    def test_confirmed_to_cancelled(self) -> None:
         assert AppointmentStatus.CONFIRMED.can_transition_to(
             AppointmentStatus.CANCELLED
         )
 
-    def test_confirmed_to_absent(self):
+    def test_confirmed_to_absent(self) -> None:
         assert AppointmentStatus.CONFIRMED.can_transition_to(AppointmentStatus.ABSENT)
 
-    def test_confirmed_cannot_go_to_pending(self):
+    def test_confirmed_cannot_go_to_pending(self) -> None:
         assert not AppointmentStatus.CONFIRMED.can_transition_to(
             AppointmentStatus.PENDING
         )
 
-    def test_completed_is_terminal(self):
+    def test_completed_is_terminal(self) -> None:
         for status in AppointmentStatus:
             assert not AppointmentStatus.COMPLETED.can_transition_to(status)
 
-    def test_cancelled_is_terminal(self):
+    def test_cancelled_is_terminal(self) -> None:
         for status in AppointmentStatus:
             assert not AppointmentStatus.CANCELLED.can_transition_to(status)
 
-    def test_absent_is_terminal(self):
+    def test_absent_is_terminal(self) -> None:
         for status in AppointmentStatus:
             assert not AppointmentStatus.ABSENT.can_transition_to(status)
 
@@ -135,78 +135,78 @@ class TestAppointmentStatusGraph:
 
 
 class TestAppointmentDomainMethods:
-    def test_can_be_cancelled_from_pending(self):
+    def test_can_be_cancelled_from_pending(self) -> None:
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         assert stub.can_be_cancelled() is True
 
-    def test_can_be_cancelled_from_confirmed(self):
+    def test_can_be_cancelled_from_confirmed(self) -> None:
         stub = AppointmentStub(AppointmentStatus.CONFIRMED, future())
         assert stub.can_be_cancelled() is True
 
-    def test_cannot_cancel_completed(self):
+    def test_cannot_cancel_completed(self) -> None:
         stub = AppointmentStub(AppointmentStatus.COMPLETED, future())
         assert stub.can_be_cancelled() is False
 
-    def test_cannot_cancel_already_cancelled(self):
+    def test_cannot_cancel_already_cancelled(self) -> None:
         stub = AppointmentStub(AppointmentStatus.CANCELLED, future())
         assert stub.can_be_cancelled() is False
 
-    def test_can_confirm_from_pending(self):
+    def test_can_confirm_from_pending(self) -> None:
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         assert stub.can_be_confirmed() is True
 
-    def test_cannot_confirm_again(self):
+    def test_cannot_confirm_again(self) -> None:
         stub = AppointmentStub(AppointmentStatus.CONFIRMED, future())
         assert stub.can_be_confirmed() is False
 
-    def test_can_mark_absent_from_confirmed(self):
+    def test_can_mark_absent_from_confirmed(self) -> None:
         stub = AppointmentStub(AppointmentStatus.CONFIRMED, future())
         assert stub.can_be_marked_absent() is True
 
-    def test_cannot_mark_absent_from_pending(self):
+    def test_cannot_mark_absent_from_pending(self) -> None:
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         assert stub.can_be_marked_absent() is False
 
-    def test_is_upcoming_future_appointment(self):
+    def test_is_upcoming_future_appointment(self) -> None:
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         assert stub.is_upcoming() is True
 
-    def test_is_not_upcoming_past_appointment(self):
+    def test_is_not_upcoming_past_appointment(self) -> None:
         stub = AppointmentStub(AppointmentStatus.PENDING, past())
         assert stub.is_upcoming() is False
 
-    def test_cancel_sets_cancelled_at_timestamp(self):
+    def test_cancel_sets_cancelled_at_timestamp(self) -> None:
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         stub.apply_status_transition(AppointmentStatus.CANCELLED)
         assert stub.status == AppointmentStatus.CANCELLED.value
         assert stub.cancelled_at is not None
 
-    def test_complete_sets_completed_at_timestamp(self):
+    def test_complete_sets_completed_at_timestamp(self) -> None:
         stub = AppointmentStub(AppointmentStatus.CONFIRMED, future())
         stub.apply_status_transition(AppointmentStatus.COMPLETED)
         assert stub.status == AppointmentStatus.COMPLETED.value
         assert stub.completed_at is not None
 
-    def test_absent_does_not_set_cancelled_at(self):
+    def test_absent_does_not_set_cancelled_at(self) -> None:
         stub = AppointmentStub(AppointmentStatus.CONFIRMED, future())
         stub.apply_status_transition(AppointmentStatus.ABSENT)
         assert stub.status == AppointmentStatus.ABSENT.value
         assert stub.cancelled_at is None
 
-    def test_invalid_transition_raises_exception(self):
+    def test_invalid_transition_raises_exception(self) -> None:
         """No se puede completar un turno cancelado."""
         stub = AppointmentStub(AppointmentStatus.CANCELLED, future())
         with pytest.raises(InvalidStatusTransitionException) as exc_info:
             stub.apply_status_transition(AppointmentStatus.COMPLETED)
         assert exc_info.value.error_code == "INVALID_STATUS_TRANSITION"
 
-    def test_skip_pending_to_completed_raises(self):
+    def test_skip_pending_to_completed_raises(self) -> None:
         """No se puede ir de PENDING directo a COMPLETED."""
         stub = AppointmentStub(AppointmentStatus.PENDING, future())
         with pytest.raises(InvalidStatusTransitionException):
             stub.apply_status_transition(AppointmentStatus.COMPLETED)
 
-    def test_absent_to_any_raises(self):
+    def test_absent_to_any_raises(self) -> None:
         """ABSENT es terminal: ninguna transición es válida."""
         stub = AppointmentStub(AppointmentStatus.ABSENT, future())
         for status in AppointmentStatus:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -10,9 +11,9 @@ import modules.notifications.tasks as notification_tasks
 
 @pytest.mark.asyncio
 async def test_confirmation_enqueue_returns_failed_when_smtp_send_fails(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def smtp_failure(*args, **kwargs) -> bool:
+    async def smtp_failure(*args: Any, **kwargs: Any) -> bool:
         return False
 
     monkeypatch.setattr(notification_tasks, "_send_email", smtp_failure)
@@ -27,7 +28,7 @@ async def test_confirmation_enqueue_returns_failed_when_smtp_send_fails(
 
 @pytest.mark.asyncio
 async def test_process_due_appointment_reminders_counts_due_messages(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = datetime.now(timezone.utc)
     appointment = SimpleNamespace(
@@ -40,27 +41,31 @@ async def test_process_due_appointment_reminders_counts_due_messages(
     store = SimpleNamespace(send_email_reminders=True)
 
     class _FakeRepo:
-        def __init__(self, db) -> None:
+        def __init__(self, db: Any) -> None:
             self.db = db
 
-        async def get_upcoming_for_reminders(self, starts_after, starts_before):
+        async def get_upcoming_for_reminders(
+            self, starts_after: datetime, starts_before: datetime
+        ) -> list[tuple[Any, Any, Any, Any, Any]]:
             return [(appointment, service, staff, client, store)]
 
     class _FakeSessionFactory:
-        async def __aenter__(self):
+        async def __aenter__(self) -> SimpleNamespace:
             return SimpleNamespace()
 
-        async def __aexit__(self, exc_type, exc, tb):
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
             return False
 
     class _FakeRedis:
-        async def set(self, *args, **kwargs):
+        async def set(self, *args: Any, **kwargs: Any) -> bool:
             return True
 
-        async def delete(self, *args, **kwargs):
+        async def delete(self, *args: Any, **kwargs: Any) -> int:
             return 1
 
-    async def fake_send_appointment_reminder(email: str, details: dict) -> dict:
+    async def fake_send_appointment_reminder(
+        email: str, details: dict[str, Any]
+    ) -> dict[str, str]:
         return {"status": "sent", "to": email}
 
     async def fake_get_redis() -> _FakeRedis:

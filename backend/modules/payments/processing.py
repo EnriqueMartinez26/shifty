@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment
 from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import JsonValue
 from modules.payments.service import (
     fetch_mercadopago_payment,
     stamp_payment_from_status,
@@ -15,7 +16,8 @@ from modules.payments.service import (
 
 
 def resolve_payment_status(payload: dict[str, Any]) -> str | None:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     candidate = (
         data.get("status")
         or payload.get("status")
@@ -51,7 +53,8 @@ async def enrich_mercadopago_webhook_payload(
     store_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
     if not payment_id:
         return payload
@@ -94,8 +97,10 @@ async def enrich_mercadopago_webhook_payload(
 async def find_payment_for_webhook(
     db: AsyncSession, store_id: str, payload: dict[str, Any]
 ) -> Payment | None:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
-    metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    raw_metadata = data.get("metadata")
+    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
 
     appointment_id = (
         metadata.get("appointment_id")
@@ -150,12 +155,17 @@ async def apply_mercadopago_webhook_payload(
     if not payment or not payment_status:
         return False
 
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
     if external_payment_id:
         payment.external_payment_id = external_payment_id
 
-    stamp_payment_from_status(payment, payment_status, payload=payload)
+    stamp_payment_from_status(
+        payment,
+        payment_status,
+        payload=cast(dict[str, JsonValue], payload),
+    )
     appointment_result = await db.execute(
         select(Appointment).where(
             Appointment.id == payment.appointment_id, Appointment.store_id == store_id

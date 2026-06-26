@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +25,7 @@ def _utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
-def _json_safe(value):
+def _json_safe(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
@@ -39,7 +40,7 @@ def _json_safe(value):
 
 
 class SuperAdminRepository:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
     def _audit(
@@ -48,8 +49,8 @@ class SuperAdminRepository:
         resource_type: str,
         resource_id: str,
         action: str,
-        before=None,
-        after=None,
+        before: Any = None,
+        after: Any = None,
     ) -> None:
         self.db.add(
             AuditLog(
@@ -72,7 +73,7 @@ class SuperAdminRepository:
         has_subscription: bool | None,
         limit: int,
         offset: int,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         admin_roles = (UserRole.ADMIN.value,)
         admins_count = (
             select(func.count())
@@ -173,7 +174,7 @@ class SuperAdminRepository:
             query = query.where(has_subscription_query == 0)
         query = query.order_by(Store.created_at.desc()).offset(offset).limit(limit)
         result = await self.db.execute(query)
-        rows: list[dict] = []
+        rows: list[dict[str, Any]] = []
         for row in result.all():
             store = row[0]
             rows.append(
@@ -208,7 +209,7 @@ class SuperAdminRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_store_overview(self, public_id: str) -> dict | None:
+    async def get_store_overview(self, public_id: str) -> dict[str, Any] | None:
         store = await self.get_store(public_id)
         if store is None:
             return None
@@ -247,7 +248,7 @@ class SuperAdminRepository:
             "recent_redemptions": await self.list_store_redemptions(store.id, limit=5),
         }
 
-    async def create_store(self, payload: dict, actor: User) -> Store:
+    async def create_store(self, payload: dict[str, Any], actor: User) -> Store:
         store = Store(**payload)
         store.public_id = store.id
         self.db.add(store)
@@ -267,7 +268,9 @@ class SuperAdminRepository:
             await self.db.rollback()
             raise ValueError("Ya existe una tienda con ese slug")
 
-    async def update_store(self, store: Store, payload: dict, actor: User) -> Store:
+    async def update_store(
+        self, store: Store, payload: dict[str, Any], actor: User
+    ) -> Store:
         before = {"name": store.name, "slug": store.slug, "is_active": store.is_active}
         for key, value in payload.items():
             if value is not None:
@@ -306,7 +309,7 @@ class SuperAdminRepository:
         return result.scalar_one_or_none()
 
     async def create_store_admin(
-        self, store: Store, payload: dict, actor: User
+        self, store: Store, payload: dict[str, Any], actor: User
     ) -> User:
         data = payload.copy()
         password = data.pop("password")
@@ -337,7 +340,9 @@ class SuperAdminRepository:
             await self.db.rollback()
             raise ValueError("Ya existe un usuario con ese email")
 
-    async def update_user(self, user: User, payload: dict, actor: User) -> User:
+    async def update_user(
+        self, user: User, payload: dict[str, Any], actor: User
+    ) -> User:
         data = payload.copy()
         password = data.pop("password", None)
         before = {
@@ -412,7 +417,7 @@ class SuperAdminRepository:
         result = await self.db.execute(select(Plan).where(Plan.id == public_id))
         return result.scalar_one_or_none()
 
-    async def create_plan(self, payload: dict, actor: User) -> Plan:
+    async def create_plan(self, payload: dict[str, Any], actor: User) -> Plan:
         plan = Plan(**payload)
         self.db.add(plan)
         try:
@@ -431,7 +436,9 @@ class SuperAdminRepository:
             await self.db.rollback()
             raise ValueError("Ya existe un plan con ese nombre")
 
-    async def update_plan(self, plan: Plan, payload: dict, actor: User) -> Plan:
+    async def update_plan(
+        self, plan: Plan, payload: dict[str, Any], actor: User
+    ) -> Plan:
         before = {
             "name": plan.name,
             "price": str(plan.price),
@@ -470,7 +477,7 @@ class SuperAdminRepository:
         return result.scalar_one_or_none()
 
     async def set_store_subscription(
-        self, store: Store, plan: Plan, payload: dict, actor: User
+        self, store: Store, plan: Plan, payload: dict[str, Any], actor: User
     ) -> StoreSubscription:
         if not store.is_active:
             raise ValueError(
@@ -551,7 +558,7 @@ class SuperAdminRepository:
         )
         return result.scalar_one_or_none()
 
-    async def create_coupon(self, payload: dict, actor: User) -> SaaSCoupon:
+    async def create_coupon(self, payload: dict[str, Any], actor: User) -> SaaSCoupon:
         coupon = SaaSCoupon(**payload, created_by_id=actor.id)
         self.db.add(coupon)
         try:
@@ -571,7 +578,7 @@ class SuperAdminRepository:
             raise ValueError("Ya existe un cupón con ese código")
 
     async def update_coupon(
-        self, coupon: SaaSCoupon, payload: dict, actor: User
+        self, coupon: SaaSCoupon, payload: dict[str, Any], actor: User
     ) -> SaaSCoupon:
         before = {
             "code": coupon.code,
@@ -718,3 +725,42 @@ class SuperAdminRepository:
             query = query.limit(limit)
         result = await self.db.execute(query)
         return list(result.scalars().all())
+
+    async def list_store_audit_logs(self, store: Store, limit: int) -> list[AuditLog]:
+        user_ids_result = await self.db.execute(
+            select(User.id).where(User.store_id == store.id)
+        )
+        user_public_ids = set(user_ids_result.scalars().all())
+
+        logs_result = await self.db.execute(
+            select(AuditLog)
+            .where(AuditLog.context == "superadmin")
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+            .limit(max(limit * 4, limit))
+        )
+        logs = list(logs_result.scalars().all())
+
+        relevant: list[AuditLog] = []
+        for log in logs:
+            payload_after = (
+                log.payload_after if isinstance(log.payload_after, dict) else {}
+            )
+            payload_before = (
+                log.payload_before if isinstance(log.payload_before, dict) else {}
+            )
+            linked_store_ids = {
+                payload_after.get("store_id"),
+                payload_before.get("store_id"),
+            }
+            is_store_log = (
+                log.resource_type == "Store" and log.resource_id == store.public_id
+            )
+            is_user_log = (
+                log.resource_type == "User" and log.resource_id in user_public_ids
+            )
+            is_store_scoped_payload = store.id in linked_store_ids
+            if is_store_log or is_user_log or is_store_scoped_payload:
+                relevant.append(log)
+            if len(relevant) >= limit:
+                break
+        return relevant

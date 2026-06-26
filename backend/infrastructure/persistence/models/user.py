@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Any
 
 import ulid
 from sqlalchemy import Boolean, DateTime, String
@@ -47,7 +48,7 @@ class UserModel(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         full_name = kwargs.pop("full_name", None)
         super().__init__(**kwargs)
         if full_name:

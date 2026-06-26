@@ -1,3 +1,6 @@
+from datetime import time
+from typing import Any
+
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import (
     String,
@@ -9,19 +12,26 @@ from sqlalchemy import (
     UniqueConstraint,
     CheckConstraint,
 )
-from core.business_types import normalize_business_type
+
+from core.business_types import BusinessType, normalize_business_type
 from core.feature_flags import normalize_store_feature_flags
 from core.models import BaseEntity
 import ulid
+
+ThemeConfig = dict[str, Any]
+FeatureFlags = dict[str, bool]
+BusinessHoursPeriod = dict[str, str]
+BusinessHours = dict[str, list[BusinessHoursPeriod]]
+CustomClientFieldData = dict[str, Any]
 
 
 class StoreSchedule(BaseEntity):
     __tablename__ = "store_schedules"
 
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
-    day_of_week: Mapped[int] = mapped_column(Integer)  # 0=Lunes … 6=Domingo
-    open_time: Mapped[str] = mapped_column(Time)
-    close_time: Mapped[str] = mapped_column(Time)
+    day_of_week: Mapped[int] = mapped_column(Integer)
+    open_time: Mapped[time] = mapped_column(Time)
+    close_time: Mapped[time] = mapped_column(Time)
 
     store: Mapped["Store"] = relationship(back_populates="schedules")
 
@@ -42,29 +52,25 @@ class Store(BaseEntity):
     logo_url: Mapped[str | None] = mapped_column(String(500))
     primary_color: Mapped[str] = mapped_column(String(20), default="#000000")
 
-    # Reglas de negocio
     requires_deposit: Mapped[bool] = mapped_column(Boolean, default=False)
     deposit_percentage: Mapped[int] = mapped_column(Integer, default=0)
     cancellation_hours: Mapped[int] = mapped_column(Integer, default=24)
     min_booking_notice_hours: Mapped[int] = mapped_column(Integer, default=2)
     buffer_minutes: Mapped[int] = mapped_column(Integer, default=0)
 
-    # Horarios y Disponibilidad
     schedules: Mapped[list["StoreSchedule"]] = relationship(
         back_populates="store", cascade="all, delete-orphan", lazy="selectin"
     )
 
-    # Notificaciones
     send_email_confirmation: Mapped[bool] = mapped_column(Boolean, default=True)
     send_email_reminders: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # Configuración visual dinámica
-    theme_config: Mapped[dict] = mapped_column(JSON, default=dict)
-    feature_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    theme_config: Mapped[ThemeConfig] = mapped_column(JSON, default=dict)
+    feature_flags: Mapped[FeatureFlags] = mapped_column(JSON, default=dict)
 
     @property
-    def business_hours(self) -> dict:
-        hours = {
+    def business_hours(self) -> BusinessHours:
+        hours: BusinessHours = {
             "mon": [],
             "tue": [],
             "wed": [],
@@ -84,12 +90,12 @@ class Store(BaseEntity):
         }
         if not getattr(self, "schedules", None):
             return hours
-        for s in self.schedules:
-            if s.open_time and s.close_time:
-                hours[days_map[s.day_of_week]].append(
+        for schedule in self.schedules:
+            if schedule.open_time and schedule.close_time:
+                hours[days_map[schedule.day_of_week]].append(
                     {
-                        "open": s.open_time.strftime("%H:%M"),
-                        "close": s.close_time.strftime("%H:%M"),
+                        "open": schedule.open_time.strftime("%H:%M"),
+                        "close": schedule.close_time.strftime("%H:%M"),
                     }
                 )
         return hours
@@ -119,13 +125,13 @@ class Store(BaseEntity):
         return (self.theme_config or {}).get("website_url")
 
     @property
-    def business_type(self) -> str:
+    def business_type(self) -> BusinessType:
         return normalize_business_type((self.theme_config or {}).get("business_type"))
 
     @property
-    def custom_client_fields(self) -> list[dict]:
+    def custom_client_fields(self) -> list[CustomClientFieldData]:
         return (self.theme_config or {}).get("custom_client_fields") or []
 
     @property
-    def normalized_feature_flags(self) -> dict:
+    def normalized_feature_flags(self) -> FeatureFlags:
         return normalize_store_feature_flags(self.feature_flags)

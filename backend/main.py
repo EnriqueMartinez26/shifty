@@ -1,10 +1,14 @@
-from fastapi import FastAPI, Depends, Request
-from fastapi.responses import JSONResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
 import json
+from typing import Any, AsyncIterator
+
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import engine
 from core.middleware import TenantMiddleware
@@ -37,10 +41,10 @@ logger = structlog.get_logger()
 
 
 class BootErrorMiddleware:
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or SETTINGS_BOOT_ERROR is None:
             await self.app(scope, receive, send)
             return
@@ -58,22 +62,25 @@ class BootErrorMiddleware:
             },
             separators=(",", ":"),
         ).encode("utf-8")
+        response_start: Message = {
+            "type": "http.response.start",
+            "status": 503,
+            "headers": [
+                (b"content-type", b"application/json; charset=utf-8"),
+                (b"content-length", str(len(body)).encode("ascii")),
+                (b"cache-control", b"no-store"),
+            ],
+        }
         await send(
             {
-                "type": "http.response.start",
-                "status": 503,
-                "headers": [
-                    (b"content-type", b"application/json; charset=utf-8"),
-                    (b"content-length", str(len(body)).encode("ascii")),
-                    (b"cache-control", b"no-store"),
-                ],
+                **response_start,
             }
         )
         await send({"type": "http.response.body", "body": body})
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
         await ensure_runtime_contracts(engine)
     yield
@@ -228,7 +235,7 @@ app.include_router(public_router)
 
 
 @app.get("/")
-async def root():
+async def root() -> dict[str, str]:
     return {
         "app": settings.PROJECT_NAME,
         "version": settings.VERSION,
@@ -237,7 +244,7 @@ async def root():
 
 
 @app.get("/me", tags=["Users"])
-async def get_me(user: User = Depends(get_current_user)):
+async def get_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
     """Ruta protegida para validar el token y el contexto del usuario."""
     return {
         "email": user.email,

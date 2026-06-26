@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -41,7 +41,7 @@ async def idempotency_guard(key: str, redis: Redis) -> dict[str, Any] | None:
             if cached and cached != PROCESSING_VALUE:
                 if isinstance(cached, bytes):
                     cached = cached.decode("utf-8")
-                return json.loads(cached)
+                return cast(dict[str, Any], json.loads(cached))
 
             if not cached:
                 acquired = await redis.set(
@@ -59,7 +59,7 @@ async def idempotency_guard(key: str, redis: Redis) -> dict[str, Any] | None:
     raise IdempotencyInProgressException()
 
 
-async def idempotency_save(key: str, result: Any, redis: Redis):
+async def idempotency_save(key: str, result: Any, redis: Redis) -> None:
     """Guarda el resultado exitoso para futuras peticiones idempotentes."""
     cache_key = f"idempotency:{key}"
     try:

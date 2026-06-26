@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable
 from datetime import datetime, timezone
+from typing import Any, cast
 
 from fastapi import Depends
 from core.router import CanonicalAPIRouter
@@ -22,7 +24,7 @@ router = CanonicalAPIRouter(prefix="/ops", tags=["Operations"])
 
 
 @router.get("/health/live")
-async def liveness():
+async def liveness() -> dict[str, str]:
     if not settings.OPS_ENABLE_PUBLIC_HEALTH:
         return {"status": "disabled"}
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
@@ -32,7 +34,7 @@ async def liveness():
 async def readiness(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-):
+) -> dict[str, object]:
     now = datetime.now(timezone.utc).isoformat()
     db_ok = True
     redis_ok = True
@@ -45,7 +47,7 @@ async def readiness(
         errors.append(f"db:{type(exc).__name__}")
 
     try:
-        await redis.ping()
+        await cast(Awaitable[bool], redis.ping())
     except Exception as exc:  # pragma: no cover
         redis_ok = False
         errors.append(f"redis:{type(exc).__name__}")
@@ -62,7 +64,7 @@ async def readiness(
 async def slo_status(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> dict[str, Any]:
     role = canonical_role(user)
     if role != ROLE_SUPER_ADMIN and not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("ver SLO")

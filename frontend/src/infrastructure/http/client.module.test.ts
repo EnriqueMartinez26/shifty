@@ -32,8 +32,6 @@ jest.mock('./runtime-env', () => ({
   })
 }))
 
-declare const require: any
-
 describe('api client module wiring', () => {
   beforeEach(() => {
     jest.resetModules()
@@ -45,9 +43,8 @@ describe('api client module wiring', () => {
   })
 
   it('registers axios interceptors, attaches the auth token, and normalizes auth failures', async () => {
-    const { UnauthorizedError } = require('@shared/errors')
-
-    const clientModule = require('./client')
+    const { UnauthorizedError } = await import('@shared/errors')
+    const clientModule = await import('./client')
 
     expect(mockAxiosCreate).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -19,6 +19,9 @@ node_modules/
 dist/
 build/
 .npm
+.npm-cache/
+coverage/
+frontend/coverage/
 .eslintcache
 frontend/.env.production
 frontend/.env.local

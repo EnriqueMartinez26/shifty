@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, Path, status
@@ -58,7 +58,7 @@ def _recurrence_step(recurrence: str) -> timedelta:
 async def list_blocks(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[AppointmentBlockResponse]:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para ver bloqueos")
     result = await db.execute(
@@ -76,7 +76,7 @@ async def create_block(
     data: AppointmentBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> AppointmentBlockResponse:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
     staff_result = await db.execute(
@@ -111,7 +111,7 @@ async def create_block_batch(
     data: RecurringAppointmentBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> AppointmentBlockBatchResponse:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
 
@@ -126,7 +126,7 @@ async def create_block_batch(
     if not staff:
         raise StaffNotFoundException(identifier=data.staff_id)
 
-    ranges: list[tuple] = [(data.starts_at, data.ends_at)]
+    ranges: list[tuple[datetime, datetime]] = [(data.starts_at, data.ends_at)]
     if data.recurrence != "none":
         current_start = data.starts_at
         current_end = data.ends_at
@@ -159,7 +159,9 @@ async def create_block_batch(
 
 
 @router.get("/templates", response_model=list[BlockTemplateResponse])
-async def list_block_templates(user: User = Depends(get_current_user)):
+async def list_block_templates(
+    user: User = Depends(get_current_user),
+) -> list[BlockTemplateResponse]:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para ver plantillas")
     return [
@@ -184,7 +186,7 @@ async def update_block(
     data: AppointmentBlockUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> AppointmentBlockResponse:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para editar bloqueos")
     result = await db.execute(
@@ -215,7 +217,7 @@ async def delete_block(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> None:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(
             action="No tenés permiso para eliminar bloqueos"

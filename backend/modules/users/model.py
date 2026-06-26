@@ -7,3 +7,6 @@ class UserRole(str, enum.Enum):
     STAFF = "staff"
     RECEPTIONIST = "receptionist"
     CLIENT = "client"
+
+
+__all__ = ["User", "UserRole"]

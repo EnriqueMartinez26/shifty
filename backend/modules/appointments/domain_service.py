@@ -1,6 +1,16 @@
 from datetime import datetime
-from typing import Any
+from typing import Protocol
+
 from core.exceptions import AppointmentConflictException, BlockedScheduleException
+
+
+class _AppointmentWindow(Protocol):
+    starts_at: datetime
+    ends_at: datetime
+
+
+class _BlockedWindow(_AppointmentWindow, Protocol):
+    note: str
 
 
 class SchedulingDomainService:
@@ -14,8 +24,8 @@ class SchedulingDomainService:
         *,
         requested_start: datetime,
         requested_end: datetime,
-        conflicting_appointment: Any | None = None,
-        overlapping_block: Any | None = None,
+        conflicting_appointment: _AppointmentWindow | None = None,
+        overlapping_block: _BlockedWindow | None = None,
         suggestion: datetime | None = None,
     ) -> None:
         """
@@ -25,7 +35,7 @@ class SchedulingDomainService:
         # 1. Prioridad: Bloqueos manuales de agenda (Constraints de Don Norman)
         if overlapping_block:
             raise BlockedScheduleException(
-                reason=getattr(overlapping_block, "note", "Bloqueo de agenda"),
+                reason=overlapping_block.note,
                 block_start=overlapping_block.starts_at,
                 block_end=overlapping_block.ends_at,
                 suggestion=suggestion,

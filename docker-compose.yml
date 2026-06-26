@@ -64,7 +64,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}

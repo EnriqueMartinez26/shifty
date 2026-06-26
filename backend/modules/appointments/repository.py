@@ -10,6 +10,7 @@ El commit siempre lo realiza la capa de Servicios.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from typing import TypeAlias
 
 from sqlalchemy import and_, or_, select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,9 @@ from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.stores.model import Store
 from modules.users.model import User
+
+AppointmentAgendaRow: TypeAlias = tuple[Appointment, Service, Staff, User]
+AppointmentReminderRow: TypeAlias = tuple[Appointment, Service, Staff, User, Store]
 
 
 class AppointmentRepository:
@@ -37,7 +41,7 @@ class AppointmentRepository:
         )
         return res.scalar_one_or_none()
 
-    async def get_service_by_id(self, service_id: int) -> Service | None:
+    async def get_service_by_id(self, service_id: str) -> Service | None:
         res = await self.db.execute(select(Service).where(Service.id == service_id))
         return res.scalar_one_or_none()
 
@@ -45,11 +49,11 @@ class AppointmentRepository:
         res = await self.db.execute(select(Staff).where(Staff.id == public_id))
         return res.scalar_one_or_none()
 
-    async def get_staff_by_id(self, staff_id: int) -> Staff | None:
+    async def get_staff_by_id(self, staff_id: str) -> Staff | None:
         res = await self.db.execute(select(Staff).where(Staff.id == staff_id))
         return res.scalar_one_or_none()
 
-    async def get_store_by_id(self, store_id: int) -> Store | None:
+    async def get_store_by_id(self, store_id: str) -> Store | None:
         res = await self.db.execute(select(Store).where(Store.id == store_id))
         return res.scalar_one_or_none()
 
@@ -63,7 +67,7 @@ class AppointmentRepository:
                 joinedload(Appointment.staff),
                 joinedload(Appointment.client),
             )
-            .where(Appointment.public_id == public_id)
+            .where(Appointment.id == public_id)
         )
         return res.scalar_one_or_none()
 
@@ -78,7 +82,7 @@ class AppointmentRepository:
     # Verificaciones de concurrencia y conflictos
     # ------------------------------------------------------------------
 
-    async def lock_staff_row(self, staff_id: int) -> None:
+    async def lock_staff_row(self, staff_id: str) -> None:
         """
         Bloqueo pesimista (SELECT … FOR UPDATE) sobre la fila del staff.
         Previene overbooking en escenarios de alta concurrencia.
@@ -90,10 +94,10 @@ class AppointmentRepository:
 
     async def get_conflicting_appointment(
         self,
-        staff_id: int,
+        staff_id: str,
         starts_at: datetime,
         ends_at: datetime,
-        exclude_appointment_id: int | None = None,
+        exclude_appointment_id: str | None = None,
     ) -> Appointment | None:
         """
         Retorna el primer turno que solape con el rango [starts_at, ends_at).
@@ -131,7 +135,7 @@ class AppointmentRepository:
         return res.scalar_one_or_none()
 
     async def get_overlapping_block(
-        self, staff_id: int, starts_at: datetime, ends_at: datetime
+        self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> StaffBlock | None:
         """Retorna el primer StaffBlock que solape con el rango dado."""
         res = await self.db.execute(
@@ -150,9 +154,7 @@ class AppointmentRepository:
     # Listados
     # ------------------------------------------------------------------
 
-    async def get_by_date(
-        self, target_date: date
-    ) -> list[tuple[Appointment, Service, Staff, User]]:
+    async def get_by_date(self, target_date: date) -> list[AppointmentAgendaRow]:
         """Lista turnos de una fecha para la agenda diaria."""
         from datetime import timezone
 
@@ -170,7 +172,7 @@ class AppointmentRepository:
             )
             .order_by(Appointment.starts_at.asc())
         )
-        return list(result.all())
+        return [(row[0], row[1], row[2], row[3]) for row in result.all()]
 
     # ------------------------------------------------------------------
     # Búsqueda avanzada con filtros dinámicos
@@ -179,7 +181,7 @@ class AppointmentRepository:
     async def search_appointments(
         self,
         filters: AppointmentFilterParams,
-    ) -> tuple[int, list[tuple[Appointment, Service, Staff, User]]]:
+    ) -> tuple[int, list[AppointmentAgendaRow]]:
         """
         Búsqueda avanzada con filtros dinámicos y paginación.
         Solo construye la query; no interpreta resultados.
@@ -241,7 +243,8 @@ class AppointmentRepository:
         )
 
         result = await self.db.execute(data_query)
-        return total, list(result.all())
+        rows = [(row[0], row[1], row[2], row[3]) for row in result.all()]
+        return total, rows
 
     # ------------------------------------------------------------------
     # Consulta para recordatorios automáticos (Celery Beat)
@@ -249,7 +252,7 @@ class AppointmentRepository:
 
     async def get_upcoming_for_reminders(
         self, starts_after: datetime, starts_before: datetime
-    ) -> list[tuple[Appointment, Service, Staff, User, Store]]:
+    ) -> list[AppointmentReminderRow]:
         """
         Devuelve turnos CONFIRMED o PENDING en el rango horario indicado.
         Usado por la tarea de recordatorios 24h antes.
@@ -273,4 +276,4 @@ class AppointmentRepository:
             )
             .order_by(Appointment.starts_at.asc())
         )
-        return list(result.all())
+        return [(row[0], row[1], row[2], row[3], row[4]) for row in result.all()]

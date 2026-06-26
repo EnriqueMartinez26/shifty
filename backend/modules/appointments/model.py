@@ -37,3 +37,6 @@ class AppointmentStatus(str, enum.Enum):
             AppointmentStatus.EXPIRED: set(),
         }
         return next_status in allowed.get(self, set())
+
+
+__all__ = ["Appointment", "AppointmentStatus"]
