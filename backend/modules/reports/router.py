@@ -37,7 +37,7 @@ async def get_report_summary(
     to_date: date | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> ReportSummaryResponse:
     service = ReportService(db)
     staff_scope = _report_scope_for(user)
     try:
@@ -52,7 +52,7 @@ async def get_professional_reports(
     to_date: date | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> ProfessionalReportsResponse:
     service = ReportService(db)
     staff_scope = _report_scope_for(user)
     try:
@@ -68,7 +68,7 @@ async def export_report(
     payload: ReportExportRequest,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> StreamingResponse:
     service = ReportService(db)
     staff_scope = _report_scope_for(user)
     try:

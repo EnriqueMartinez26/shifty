@@ -1,11 +1,18 @@
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from typing import AsyncIterator
+
+from core.config import settings
 from core.database import get_db
 from core.models import Base
-from core.config import settings
 from main import app
 from core.security import hash_password_reset_token
 
@@ -25,7 +32,7 @@ TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_engine():
+async def test_engine() -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -36,7 +43,7 @@ async def test_engine():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_session(test_engine):
+async def test_session(test_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     SessionLocal = async_sessionmaker(
         bind=test_engine, expire_on_commit=False, autoflush=False
     )
@@ -45,12 +52,12 @@ async def test_session(test_engine):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def client(test_session):
+async def client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     """
     Crea el cliente HTTP con override de la dependencia de base de datos.
     """
 
-    async def override_get_db():
+    async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield test_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -67,7 +74,7 @@ async def client(test_session):
 
 
 @pytest.mark.asyncio
-async def test_cross_tenant_isolation(client: AsyncClient):
+async def test_cross_tenant_isolation(client: AsyncClient) -> None:
     # 1. Registrar Tienda A
     res_a = await client.post(
         "/auth/register",
@@ -116,15 +123,19 @@ async def test_cross_tenant_isolation(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_password_reset_flow(client: AsyncClient, test_session, monkeypatch):
+async def test_password_reset_flow(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     reset_token = "test-reset-token-1234567890"
 
     # Evitamos dependencia SMTP en tests y fijamos token determinístico.
     monkeypatch.setattr(
-        "modules.auth.router.generate_password_reset_token", lambda: reset_token
+        "modules.auth.service.generate_password_reset_token", lambda: reset_token
     )
     monkeypatch.setattr(
-        "modules.auth.router._send_password_reset_email", lambda *_args, **_kwargs: None
+        "modules.auth.router.send_password_reset_email", lambda *_args, **_kwargs: None
     )
 
     register_response = await client.post(
@@ -144,6 +155,9 @@ async def test_password_reset_flow(client: AsyncClient, test_session, monkeypatc
         "/auth/forgot-password", json={"email": "reset@demo.com"}
     )
     assert forgot_response.status_code == 200
+    assert forgot_response.json()["message"] == (
+        "Si el email existe, recibiras un enlace para restablecer la contraseña."
+    )
 
     # Verifica que el token se haya persistido hasheado.
     result = await test_session.execute(
@@ -171,7 +185,9 @@ async def test_password_reset_flow(client: AsyncClient, test_session, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_login_normalizes_email_whitespace_and_case(client: AsyncClient):
+async def test_login_normalizes_email_whitespace_and_case(
+    client: AsyncClient,
+) -> None:
     register_response = await client.post(
         "/auth/register",
         json={
@@ -193,7 +209,7 @@ async def test_login_normalizes_email_whitespace_and_case(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_reset_password_with_invalid_token_fails(client: AsyncClient):
+async def test_reset_password_with_invalid_token_fails(client: AsyncClient) -> None:
     response = await client.post(
         "/auth/reset-password",
         json={"token": "invalid-token-1234567890", "new_password": "cambioSeguro123"},
@@ -202,7 +218,7 @@ async def test_reset_password_with_invalid_token_fails(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_users_crud_flow_for_admin(client: AsyncClient):
+async def test_users_crud_flow_for_admin(client: AsyncClient) -> None:
     register = await client.post(
         "/auth/register",
         json={

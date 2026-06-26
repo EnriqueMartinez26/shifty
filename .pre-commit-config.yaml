@@ -1,3 +1,5 @@
+minimum_pre_commit_version: "4.6.0"
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -8,6 +10,11 @@ repos:
       - id: trailing-whitespace
   - repo: local
     hooks:
+      - id: frontend-format-check
+        name: frontend prettier check
+        entry: npm --prefix frontend run format:check
+        language: system
+        pass_filenames: false
       - id: backend-ruff-format-check
         name: backend ruff format check
         entry: uv run --project backend ruff format --check backend
@@ -24,7 +31,17 @@ repos:
         language: system
         pass_filenames: false
       - id: frontend-lint
-        name: frontend eslint
-        entry: npm --prefix frontend run lint
+        name: frontend eslint strict
+        entry: npm --prefix frontend run lint:strict
+        language: system
+        pass_filenames: false
+      - id: frontend-dead-code
+        name: frontend dead code
+        entry: npm --prefix frontend run dead-code
+        language: system
+        pass_filenames: false
+      - id: backend-mypy
+        name: backend mypy
+        entry: bash -lc 'cd backend && uv run mypy .'
         language: system
         pass_filenames: false

@@ -4,6 +4,7 @@ import asyncio
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from typing import Any, cast
 
 import structlog
 
@@ -38,11 +39,11 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
     return await asyncio.to_thread(_send)
 
 
-def _confirmation_subject(details: dict) -> str:
+def _confirmation_subject(details: dict[str, Any]) -> str:
     return f"Turno confirmado - {details.get('service', '')}"
 
 
-def _confirmation_body(details: dict) -> str:
+def _confirmation_body(details: dict[str, Any]) -> str:
     return (
         "Hola,\n\n"
         f'Tu turno para "{details.get("service")}" con {details.get("staff")} '
@@ -53,11 +54,11 @@ def _confirmation_body(details: dict) -> str:
     )
 
 
-def _reminder_subject(details: dict) -> str:
+def _reminder_subject(details: dict[str, Any]) -> str:
     return f"Recordatorio: turno manana - {details.get('service', '')}"
 
 
-def _reminder_body(details: dict) -> str:
+def _reminder_body(details: dict[str, Any]) -> str:
     return (
         "Hola,\n\n"
         f'Te recordamos que manana tenes turno para "{details.get("service")}" '
@@ -68,7 +69,9 @@ def _reminder_body(details: dict) -> str:
     )
 
 
-async def send_appointment_confirmation(email: str, details: dict) -> dict:
+async def send_appointment_confirmation(
+    email: str, details: dict[str, Any]
+) -> dict[str, str]:
     logger.info(
         "sending_confirmation_email", email=email, appointment=details.get("public_id")
     )
@@ -81,7 +84,9 @@ async def send_appointment_confirmation(email: str, details: dict) -> dict:
     return {"status": "sent", "to": email}
 
 
-async def send_appointment_reminder(email: str, details: dict) -> dict:
+async def send_appointment_reminder(
+    email: str, details: dict[str, Any]
+) -> dict[str, str]:
     logger.info(
         "sending_reminder_email", email=email, appointment=details.get("public_id")
     )
@@ -94,7 +99,9 @@ async def send_appointment_reminder(email: str, details: dict) -> dict:
     return {"status": "sent", "to": email}
 
 
-async def enqueue_confirmation_email(*, email: str, details: dict) -> dict:
+async def enqueue_confirmation_email(
+    *, email: str, details: dict[str, Any]
+) -> dict[str, str]:
     try:
         return await send_appointment_confirmation(email, details)
     except Exception as exc:
@@ -114,7 +121,7 @@ async def enqueue_confirmation_email(*, email: str, details: dict) -> dict:
 
 async def process_due_appointment_reminders(
     *, now: datetime | None = None, lookahead_hours: int = 48
-) -> dict:
+) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     window_start = now
     window_end = now + timedelta(hours=lookahead_hours)
@@ -191,8 +198,9 @@ async def process_due_appointment_reminders(
     }
 
 
-@celery_app.task(name="process_appointment_reminders", bind=True, max_retries=3)
-def process_appointment_reminders(self, lookahead_hours: int = 48) -> dict[str, int]:
+def process_appointment_reminders(
+    self: Any, lookahead_hours: int = 48
+) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         result = await process_due_appointment_reminders(
             now=datetime.now(timezone.utc),
@@ -207,3 +215,11 @@ def process_appointment_reminders(self, lookahead_hours: int = 48) -> dict[str, 
         return asyncio.run(_run())
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
+
+
+process_appointment_reminders = cast(
+    Any,
+    celery_app.task(name="process_appointment_reminders", bind=True, max_retries=3)(
+        process_appointment_reminders
+    ),
+)

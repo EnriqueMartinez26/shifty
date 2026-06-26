@@ -83,7 +83,7 @@ class PublicAvailabilityUser(HttpUser):
     wait_time = between(0.2, 1.2)
 
     @task(3)
-    def public_availability(self):
+    def public_availability(self) -> None:
         tenant = _tenant()
         if not tenant:
             return
@@ -99,7 +99,7 @@ class PublicAvailabilityUser(HttpUser):
         )
 
     @task(1)
-    def public_booking(self):
+    def public_booking(self) -> None:
         tenant = _tenant()
         if not tenant:
             return
@@ -126,7 +126,7 @@ class PublicAbuseUser(HttpUser):
     wait_time = between(0.05, 0.4)
 
     @task(2)
-    def otp_spam_same_subject(self):
+    def otp_spam_same_subject(self) -> None:
         tenant = _tenant()
         if not tenant:
             return
@@ -142,7 +142,7 @@ class PublicAbuseUser(HttpUser):
         )
 
     @task(1)
-    def self_service_without_otp(self):
+    def self_service_without_otp(self) -> None:
         tenant = _tenant()
         if not tenant:
             return
@@ -157,7 +157,7 @@ class PaymentsWebhookUser(HttpUser):
     wait_time = between(0.5, 2.0)
 
     @task
-    def webhook_ping(self):
+    def webhook_ping(self) -> None:
         tenant = _tenant()
         if not tenant:
             return

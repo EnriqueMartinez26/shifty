@@ -5,59 +5,66 @@
 
 import './jest-dom'
 
-declare const require: any
-
-// Setup global crypto polyfill for Node.js / JSDOM test environments
-const customGlobal = globalThis as any
+const customGlobal = globalThis as typeof globalThis & {
+  crypto?: Crypto
+  TextEncoder?: typeof TextEncoder
+  TextDecoder?: typeof TextDecoder
+}
 
 if (typeof customGlobal.crypto === 'undefined') {
   try {
-    const nodeCrypto = require('crypto')
     Object.defineProperty(customGlobal, 'crypto', {
-      value: nodeCrypto.webcrypto || nodeCrypto,
+      value: {
+        getRandomValues: <T extends ArrayBufferView>(array: T) => array,
+        randomUUID: () =>
+          `test-uuid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+      } as Crypto,
       writable: true
     })
-  } catch (_e) {
-    // Fail-safe fallback if not in a Node environment
+  } catch (_error) {
+    // Fail-safe fallback if the environment disallows redefining globals.
   }
 }
 
-if (customGlobal.crypto && typeof customGlobal.crypto.randomUUID === 'undefined') {
+if (typeof customGlobal.TextEncoder === 'undefined') {
+  class SimpleTextEncoder {
+    encode(input = ''): Uint8Array {
+      return new Uint8Array(Array.from(input).map((char) => char.charCodeAt(0)))
+    }
+  }
+
   try {
-    const nodeCrypto = require('crypto')
-    Object.defineProperty(customGlobal.crypto, 'randomUUID', {
-      value: () => {
-        const crypt = nodeCrypto.webcrypto || nodeCrypto
-        return crypt.randomUUID ? crypt.randomUUID() : 'test-uuid-random-fallback'
-      },
+    Object.defineProperty(customGlobal, 'TextEncoder', {
+      value: SimpleTextEncoder,
       writable: true
     })
-  } catch (_e) {
-    // Fail-safe fallback if not in a Node environment
+  } catch (_error) {
+    // Fail-safe fallback if the environment disallows redefining globals.
   }
 }
 
-if (
-  typeof customGlobal.TextEncoder === 'undefined' ||
-  typeof customGlobal.TextDecoder === 'undefined'
-) {
+if (typeof customGlobal.TextDecoder === 'undefined') {
+  class SimpleTextDecoder {
+    decode(input?: ArrayBufferView | ArrayBuffer | null): string {
+      if (!input) return ''
+
+      const view =
+        input instanceof ArrayBuffer
+          ? new Uint8Array(input)
+          : new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
+
+      return Array.from(view)
+        .map((code) => String.fromCharCode(code))
+        .join('')
+    }
+  }
+
   try {
-    const { TextEncoder, TextDecoder } = require('util')
-
-    if (typeof customGlobal.TextEncoder === 'undefined') {
-      Object.defineProperty(customGlobal, 'TextEncoder', {
-        value: TextEncoder,
-        writable: true
-      })
-    }
-
-    if (typeof customGlobal.TextDecoder === 'undefined') {
-      Object.defineProperty(customGlobal, 'TextDecoder', {
-        value: TextDecoder,
-        writable: true
-      })
-    }
-  } catch (_e) {
-    // Fail-safe fallback if util is unavailable.
+    Object.defineProperty(customGlobal, 'TextDecoder', {
+      value: SimpleTextDecoder,
+      writable: true
+    })
+  } catch (_error) {
+    // Fail-safe fallback if the environment disallows redefining globals.
   }
 }

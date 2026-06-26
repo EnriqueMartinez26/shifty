@@ -13,7 +13,7 @@ describe('StaffService', () => {
       create: jest.fn(),
       update: jest.fn(),
       delete: jest.fn()
-    } as any
+    } as jest.Mocked<IStaffRepository>
 
     service = new StaffService(mockRepository)
   })

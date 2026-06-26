@@ -33,6 +33,10 @@ class AppointmentBlockModel(Base):
     def note(self) -> str:
         return self.reason
 
+    @note.setter
+    def note(self, value: str) -> None:
+        self.reason = value
+
     def overlaps_with(self, starts_at: datetime, ends_at: datetime) -> bool:
         block_start = self.start_time
         block_end = self.end_time

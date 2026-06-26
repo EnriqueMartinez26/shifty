@@ -6,18 +6,20 @@ y serializar la respuesta. Sin lógica de negocio.
 """
 
 from datetime import date as date_type
-from typing import Annotated, Optional, List
+from typing import Annotated, AsyncGenerator, List, Optional, cast
 
 from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.cache import CacheInvalidator
 from core.router import CanonicalAPIRouter
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
+from modules.appointments.model import Appointment
 from modules.appointments.schemas import (
     AppointmentCreate,
     AppointmentFilterParams,
@@ -28,7 +30,7 @@ from modules.appointments.schemas import (
     AppointmentSearchResponse,
     AppointmentSearchResult,
 )
-from modules.appointments.service import AppointmentService
+from modules.appointments.service import AppointmentBookPayload, AppointmentService
 from modules.auth.dependencies import get_current_user, get_optional_current_user
 
 # AI AGENT NOTE: use public_api as the stable runtime import path for public booking data access.
@@ -50,8 +52,6 @@ PublicIdQuery = Annotated[
 
 from core.uow import AsyncSqlAlchemyUnitOfWork
 
-from typing import AsyncGenerator
-
 
 async def get_uow(
     db: AsyncSession = Depends(get_db),
@@ -65,12 +65,12 @@ def get_appointment_service(
     uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
     redis: Redis = Depends(get_redis),
 ) -> AppointmentService:
-    return AppointmentService(uow=uow, cache=redis)
+    return AppointmentService(uow=uow, cache=cast(CacheInvalidator, redis))
 
 
-def _to_appointment_response(appointment) -> AppointmentResponse:
-    service = getattr(appointment, "service", None)
-    staff = getattr(appointment, "staff", None)
+def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:
+    service = appointment.service
+    staff = appointment.staff
     return AppointmentResponse(
         public_id=appointment.public_id,
         service_id=service.public_id if service else str(appointment.service_id),
@@ -96,7 +96,7 @@ async def list_appointments_by_date(
     date: date_type,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[AppointmentListItem]:
     """Lista turnos por fecha para la agenda del día."""
     from modules.appointments.repository import AppointmentRepository
 
@@ -131,7 +131,7 @@ async def get_availability(
     user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-):
+) -> list[object]:
     """Consulta slots disponibles para un servicio en una fecha."""
     svc = AvailabilityService(db, redis)
     if user is None:
@@ -142,11 +142,13 @@ async def get_availability(
             service = await repo.get_service_by_public_id(service_id)
             if not service:
                 return []
-            return await svc.get_available_slots(service.store_id, service_id, date)
+            return list(
+                await svc.get_available_slots(service.store_id, service_id, date)
+            )
         finally:
             set_tenant_context(None, False)
 
-    return await svc.get_available_slots(user.store_id, service_id, date)
+    return list(await svc.get_available_slots(user.store_id, service_id, date))
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +164,7 @@ async def book_appointment(
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
     redis: Redis = Depends(get_redis),
-):
+) -> AppointmentResponse:
     """
     Reserva un turno con:
     - Idempotencia (X-Idempotency-Key).
@@ -174,11 +176,11 @@ async def book_appointment(
     # Idempotencia
     cached_res = await idempotency_guard(data.idempotency_key, redis)
     if cached_res:
-        return cached_res
+        return AppointmentResponse.model_validate(cached_res)
 
     try:
         appointment, service, staff = await svc.book(
-            data=data.model_dump(),
+            data=cast(AppointmentBookPayload, data.model_dump()),
             store_id=user.store_id,
             actor=user,
         )
@@ -211,7 +213,7 @@ async def cancel_appointment(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
-):
+) -> AppointmentResponse:
     """Cancela un turno. Disponible para el cliente dueño, staff y admin."""
     appointment = await svc.cancel(public_id=public_id, actor=user)
     return _to_appointment_response(appointment)
@@ -222,7 +224,7 @@ async def confirm_appointment(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
-):
+) -> AppointmentResponse:
     """Confirma un turno. Solo ADMIN o STAFF."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
@@ -238,7 +240,7 @@ async def complete_appointment(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
-):
+) -> AppointmentResponse:
     """Marca un turno como completado. Solo ADMIN o STAFF."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
@@ -254,7 +256,7 @@ async def mark_absent(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
-):
+) -> AppointmentResponse:
     """Registra que el cliente no se presentó (AUSENTE). Solo ADMIN o STAFF."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
@@ -272,7 +274,7 @@ async def reschedule_appointment(
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
     redis: Redis = Depends(get_redis),
-):
+) -> AppointmentResponse:
     """
     Reprograma un turno a una nueva fecha/hora.
     - Cancela el original de forma atómica (con timestamp cancelled_at).
@@ -281,7 +283,7 @@ async def reschedule_appointment(
     """
     cached = await idempotency_guard(data.idempotency_key, redis)
     if cached:
-        return cached
+        return AppointmentResponse.model_validate(cached)
 
     try:
         new_appointment, service, staff = await svc.reschedule(
@@ -314,7 +316,7 @@ async def update_staff_notes(
     data: AppointmentNotesStaffUpdate,
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
-):
+) -> AppointmentResponse:
     """Agrega o edita las notas del profesional sobre el turno. Solo STAFF o ADMIN."""
     if user.role not in (UserRole.ADMIN, UserRole.STAFF):
         from core.exceptions import PermissionDeniedException
@@ -364,7 +366,7 @@ async def search_appointments(
     page_size: int = Query(default=20, ge=1, le=100),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> AppointmentSearchResponse:
     """
     Búsqueda avanzada de turnos con filtros dinámicos y paginación.
     Todos los parámetros son opcionales y combinables.

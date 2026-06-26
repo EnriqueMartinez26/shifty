@@ -1,3 +1,5 @@
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,10 +9,10 @@ from modules.users.model import User
 
 
 class UserRepository:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
-    async def create(self, data: dict, store_id: int | None) -> User:
+    async def create(self, data: dict[str, Any], store_id: str | None) -> User:
         if store_id is None:
             raise ValueError("No se pudo determinar el store del administrador")
 
@@ -37,7 +39,7 @@ class UserRepository:
 
     async def get_all(
         self,
-        store_id: int,
+        store_id: str,
         only_active: bool = True,
         email: str | None = None,
         role: str | None = None,
@@ -56,7 +58,7 @@ class UserRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_public_id(self, public_id: str, store_id: int) -> User | None:
+    async def get_by_public_id(self, public_id: str, store_id: str) -> User | None:
         result = await self.db.execute(
             select(User).where(
                 User.id == public_id,
@@ -65,7 +67,7 @@ class UserRepository:
         )
         return result.scalar_one_or_none()
 
-    async def update(self, user: User, data: dict) -> User:
+    async def update(self, user: User, data: dict[str, Any]) -> User:
         payload = data.copy()
         password = payload.pop("password", None)
 

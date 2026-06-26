@@ -11,6 +11,7 @@ psycopg2 en Windows con codificación regional española.
 import sys
 import os
 from urllib.parse import parse_qs, unquote, urlparse
+from typing import Any
 
 backend_dir = os.path.dirname(__file__)
 if sys.path and os.path.abspath(sys.path[0]) == os.path.abspath(backend_dir):
@@ -27,7 +28,7 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(backend_dir, "..", ".env"))
 
 
-def parse_db_url(url: str) -> dict:
+def parse_db_url(url: str) -> dict[str, Any]:
     parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
     if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
         raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
@@ -42,7 +43,7 @@ def parse_db_url(url: str) -> dict:
     }
 
 
-def main():
+def main() -> None:
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url:
         print("ERROR: DATABASE_URL no está definida en el .env")

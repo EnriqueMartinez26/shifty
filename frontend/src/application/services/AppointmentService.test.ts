@@ -1,5 +1,5 @@
 import { AppointmentService } from './AppointmentService'
-import type { Appointment } from '../../domain/entities/Appointment'
+import { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 
 describe('AppointmentService', () => {
@@ -16,14 +16,26 @@ describe('AppointmentService', () => {
       complete: jest.fn(),
       cancel: jest.fn(),
       markAbsent: jest.fn()
-    } as any
+    } as unknown as jest.Mocked<IBookingRepository>
 
     service = new AppointmentService(mockRepository)
   })
 
   describe('getCalendarRange', () => {
     it('should retrieve list of appointments for a date range', async () => {
-      const appointments = [{ id: 'appt-2' }] as Appointment[]
+      const appointments = [
+        Appointment.fromPrimitives({
+          public_id: 'appt-2',
+          service_id: 'service-1',
+          service_name: 'Haircut',
+          staff_id: 'staff-1',
+          client_name: 'Alice',
+          starts_at: '2026-05-18T10:00:00Z',
+          ends_at: '2026-05-18T10:30:00Z',
+          status: 'confirmed',
+          notes: null
+        })
+      ]
       mockRepository.searchByDateRange.mockResolvedValue(appointments)
 
       const result = await service.getCalendarRange('2026-05-18', '2026-05-25')
@@ -44,7 +56,17 @@ describe('AppointmentService', () => {
         notes: 'Happy little trees'
       }
 
-      const mockAppt = { id: 'appt-2', ...input } as any as Appointment
+      const mockAppt = Appointment.fromPrimitives({
+        public_id: 'appt-2',
+        service_id: input.service_id,
+        service_name: 'Haircut',
+        staff_id: input.staff_id,
+        client_name: input.client_name,
+        starts_at: input.starts_at,
+        ends_at: '2026-05-18T10:30:00Z',
+        status: 'pending',
+        notes: input.notes ?? null
+      })
       mockRepository.create.mockResolvedValue(mockAppt)
 
       const result = await service.bookAppointment(input)

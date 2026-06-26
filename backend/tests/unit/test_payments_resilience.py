@@ -1,4 +1,6 @@
 import pytest
+from pytest import MonkeyPatch
+from typing import Any
 
 from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 import modules.payments.service as payments_service
@@ -14,7 +16,7 @@ class FakeClock:
 
 @pytest.mark.asyncio
 async def test_mercadopago_circuit_breaker_opens_for_transient_failures(
-    monkeypatch,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     breaker = AsyncCircuitBreaker(
         name="mercadopago-test",
@@ -24,7 +26,7 @@ async def test_mercadopago_circuit_breaker_opens_for_transient_failures(
     )
     monkeypatch.setattr(payments_service, "_mercadopago_breaker", breaker)
 
-    async def transient_failure(*args, **kwargs):
+    async def transient_failure(*args: Any, **kwargs: Any) -> object:
         raise payments_service.MercadoPagoAPIError(
             "timeout",
             status_code=504,
@@ -62,7 +64,7 @@ async def test_mercadopago_circuit_breaker_opens_for_transient_failures(
 
 @pytest.mark.asyncio
 async def test_mercadopago_circuit_breaker_ignores_non_transient_failures(
-    monkeypatch,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     breaker = AsyncCircuitBreaker(
         name="mercadopago-test",
@@ -72,7 +74,7 @@ async def test_mercadopago_circuit_breaker_ignores_non_transient_failures(
     )
     monkeypatch.setattr(payments_service, "_mercadopago_breaker", breaker)
 
-    async def auth_failure(*args, **kwargs):
+    async def auth_failure(*args: Any, **kwargs: Any) -> object:
         raise payments_service.MercadoPagoAPIError(
             "bad token",
             status_code=401,

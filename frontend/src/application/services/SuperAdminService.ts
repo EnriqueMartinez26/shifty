@@ -92,6 +92,17 @@ export interface SuperAdminCouponRedemption {
   created_at: string
 }
 
+export interface SuperAdminAuditLog {
+  public_id: string
+  created_at: string
+  actor_email: string | null
+  resource_type: string
+  action: string
+  payload_before: Record<string, unknown> | unknown[] | string | number | boolean | null
+  payload_after: Record<string, unknown> | unknown[] | string | number | boolean | null
+  context: string | null
+}
+
 export interface SuperAdminStoreOverview {
   store: Omit<
     SuperAdminStoreRow,
@@ -261,6 +272,13 @@ export class SuperAdminService {
   async getStoreOverview(storePublicId: string): Promise<SuperAdminStoreOverview> {
     const { data } = await apiClient.get<SuperAdminStoreOverview>(
       `/superadmin/stores/${storePublicId}/overview`
+    )
+    return data
+  }
+
+  async getStoreAuditLogs(storePublicId: string, limit = 15): Promise<SuperAdminAuditLog[]> {
+    const { data } = await apiClient.get<SuperAdminAuditLog[]>(
+      `/superadmin/stores/${storePublicId}/audit-logs?limit=${limit}`
     )
     return data
   }

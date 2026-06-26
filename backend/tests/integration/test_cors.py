@@ -5,7 +5,7 @@ from main import app
 
 
 @pytest.mark.asyncio
-async def test_login_preflight_returns_cors_headers_for_allowed_origin():
+async def test_login_preflight_returns_cors_headers_for_allowed_origin() -> None:
     origin = "http://localhost:5173"
     transport = ASGITransport(app=app)
 

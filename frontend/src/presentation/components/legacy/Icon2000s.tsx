@@ -1,5 +1,7 @@
 import React from 'react'
 
+import type { LucideProps } from 'lucide-react'
+
 /**
  * Icon2000s — Wrapper de íconos con acabado skeuomórfico "Early Smartphone 2000s"
  *
@@ -105,8 +107,7 @@ export const Icon2000s: React.FC<Icon2000sProps> = ({
  *   <LucideIcon2000s icon={Settings} size={20} variant="active" />
  */
 interface LucideIcon2000sProps {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  icon: React.ComponentType<any>
+  icon: React.ComponentType<LucideProps>
   size?: number
   variant?: IconVariant
   color?: string

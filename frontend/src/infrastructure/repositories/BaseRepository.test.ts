@@ -2,19 +2,20 @@ import { BaseRepository } from './BaseRepository'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import { InternalServerError } from '../../shared/errors/InternalServerError'
 
-class TestRepository extends BaseRepository<any, any, any> {
-  public mockFindAll = jest.fn()
+class TestRepository extends BaseRepository<unknown, unknown, unknown> {
+  public mockFindAll: jest.Mock<Promise<unknown[]>, [QueryOptions | boolean | undefined]> =
+    jest.fn()
 
-  protected async findAllImpl(options?: QueryOptions | boolean): Promise<any[]> {
+  protected async findAllImpl(options?: QueryOptions | boolean): Promise<unknown[]> {
     return this.mockFindAll(options)
   }
-  protected async findByIdImpl(_id: string): Promise<any> {
+  protected async findByIdImpl(_id: string): Promise<unknown> {
     return null
   }
-  protected async createImpl(_data: any, _extra?: any): Promise<any> {
+  protected async createImpl(_data: unknown, _extra?: unknown): Promise<unknown> {
     return null
   }
-  protected async updateImpl(_id: string, _data: any): Promise<any> {
+  protected async updateImpl(_id: string, _data: unknown): Promise<unknown> {
     return null
   }
   protected async deleteImpl(_id: string): Promise<void> {}

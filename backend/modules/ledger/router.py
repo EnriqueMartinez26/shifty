@@ -71,7 +71,7 @@ def _client_display_name(user: User | None, *, fallback_id: str) -> str:
 async def get_ledger_summary(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> LedgerSummaryResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
     result = await db.execute(
@@ -131,7 +131,7 @@ async def get_customer_ledger(
     client_id: PublicIdPath,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> CustomerLedgerResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
     result = await db.execute(
@@ -168,7 +168,7 @@ async def add_customer_ledger_movement(
     data: LedgerMovementCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> LedgerMovementResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
     result = await db.execute(

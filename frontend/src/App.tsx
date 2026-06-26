@@ -2,6 +2,8 @@ import React, { Suspense, lazy } from 'react'
 
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 
+import { Sentry } from './infrastructure/observability/sentry'
+import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
 import { AuthProvider, useAuth } from './presentation/context/AuthContext'
 import {
   ROLE_PROFESSIONAL,
@@ -30,6 +32,19 @@ const SuperAdminPage = lazy(() => import('./presentation/pages/SuperAdmin'))
 const UsersPage = lazy(() => import('./presentation/pages/Users'))
 const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
 const SettingsPage = lazy(() => import('./presentation/pages/Settings'))
+
+const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
+  <Sentry.ErrorBoundary
+    fallback={
+      <ErrorBoundaryFallback
+        title={title}
+        description="This section could not be loaded safely. Please refresh and try again."
+      />
+    }
+  >
+    {children}
+  </Sentry.ErrorBoundary>
+)
 
 const ProtectedRoute = ({
   children,
@@ -94,7 +109,9 @@ function App() {
               path="/dashboard"
               element={
                 <ProtectedRoute>
-                  <AdminLayout />
+                  <ModuleBoundary title="The admin area is temporarily unavailable">
+                    <AdminLayout />
+                  </ModuleBoundary>
                 </ProtectedRoute>
               }
             >
@@ -116,7 +133,9 @@ function App() {
                   <ProtectedRoute
                     allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
                   >
-                    <PaymentsPage />
+                    <ModuleBoundary title="Payments are temporarily unavailable">
+                      <PaymentsPage />
+                    </ModuleBoundary>
                   </ProtectedRoute>
                 }
               />
@@ -189,13 +208,29 @@ function App() {
                 }
               />
             </Route>
-            <Route path="/booking/:slug" element={<PublicBookingPage />} />
-            <Route path="/b/:slug" element={<PublicBookingPage />} />
+            <Route
+              path="/booking/:slug"
+              element={
+                <ModuleBoundary title="Booking is temporarily unavailable">
+                  <PublicBookingPage />
+                </ModuleBoundary>
+              }
+            />
+            <Route
+              path="/b/:slug"
+              element={
+                <ModuleBoundary title="Booking is temporarily unavailable">
+                  <PublicBookingPage />
+                </ModuleBoundary>
+              }
+            />
             <Route
               path="/control-global"
               element={
                 <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
-                  <SuperAdminLayout />
+                  <ModuleBoundary title="Global control is temporarily unavailable">
+                    <SuperAdminLayout />
+                  </ModuleBoundary>
                 </ProtectedRoute>
               }
             >

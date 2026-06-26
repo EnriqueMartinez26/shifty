@@ -18,7 +18,7 @@ async def get_redis() -> Redis:
     return _redis
 
 
-async def close_redis():
+async def close_redis() -> None:
     global _redis
     if _redis:
         await _redis.close()

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.reports.schemas import ReportDebtSummary
 from modules.reports.service import ReportService
@@ -12,7 +14,7 @@ from modules.reports.service import ReportService
 @pytest.mark.asyncio
 async def test_report_summary_uses_safe_client_name_fallback() -> None:
     fake_db = SimpleNamespace()
-    service = ReportService(db=fake_db)
+    service = ReportService(db=cast(AsyncSession, fake_db))
     appointment = SimpleNamespace(
         public_id="appt-1",
         starts_at=datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
@@ -31,7 +33,7 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
     staff_model = SimpleNamespace(display_name="Pro Demo")
 
     async def fake_fetch_rows(
-        *, from_date, to_date, staff_id=None
+        *, from_date: Any, to_date: Any, staff_id: Any = None
     ) -> list[tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]]:
         return [(appointment, service_model, staff_model)]
 
@@ -43,12 +45,13 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
             top_debtors=[],
         )
 
-    async def fake_execute(*args, **kwargs):
+    async def fake_execute(*args: Any, **kwargs: Any) -> SimpleNamespace:
         return SimpleNamespace(all=lambda: [])
 
     fake_db.execute = fake_execute
-    service._fetch_rows = fake_fetch_rows  # type: ignore[method-assign]
-    service._build_debt_summary = fake_empty_debt_summary  # type: ignore[method-assign]
+    service_any = cast(Any, service)
+    service_any._fetch_rows = fake_fetch_rows
+    service_any._build_debt_summary = fake_empty_debt_summary
 
     summary = await service.get_summary(None, None)
 

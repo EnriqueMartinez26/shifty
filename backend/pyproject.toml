@@ -76,32 +76,6 @@ strict = true
 ignore_missing_imports = true
 explicit_package_bases = true
 
-# GRADUAL ADOPTION STRATEGY FOR AI AGENTS:
-# We enforce `strict = true` globally for any new code, but legacy packages
-# are bypassed using `ignore_errors = true` to keep CI green. As modules
-# are refactored to be type-safe, remove them from this override list.
-[[tool.mypy.overrides]]
-module = [
-    "modules.*",
-    "infrastructure.*",
-    "tests.*",
-    "alembic.*",
-    "main",
-    "scripts.*",
-    "core.runtime_contracts",
-    "core.roles",
-    "core.uow",
-    "core.config",
-    "core.security",
-    "core.redis",
-    "core.database",
-    "core.middleware",
-    "core.idempotency",
-    "loadtests.*",
-    "run_migrations",
-]
-ignore_errors = true
-
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that exercise API or database integration boundaries",

@@ -1,6 +1,7 @@
 import { UserService } from './UserService'
 import { User } from '../../domain/entities/User'
 import type { IUserRepository } from '../../domain/repositories/IUserRepository'
+import type { CreateUserInput } from '../../domain/use-cases/user/CreateUserUseCase'
 
 describe('UserService', () => {
   let mockRepository: jest.Mocked<IUserRepository>
@@ -12,15 +13,17 @@ describe('UserService', () => {
       findAll: jest.fn(),
       findById: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn()
-    } as any
+      delete: jest.fn(),
+      findByEmail: jest.fn(),
+      findByRole: jest.fn()
+    } as unknown as jest.Mocked<IUserRepository>
 
     service = new UserService(mockRepository)
   })
 
   describe('createUser', () => {
     it('should successfully validate input, trigger CreateUserUseCase, and create a user', async () => {
-      const input = {
+      const input: CreateUserInput = {
         email: 'test@example.com',
         password: 'securePassword123',
         firstName: 'John',
@@ -32,9 +35,9 @@ describe('UserService', () => {
       const expectedUser = User.fromPrimitives({
         id: 'user-id-123',
         email: input.email,
-        firstName: input.firstName,
-        lastName: input.lastName,
-        phone: input.phone,
+        firstName: input.firstName ?? null,
+        lastName: input.lastName ?? null,
+        phone: input.phone ?? null,
         role: input.role,
         isActive: true,
         createdAt: new Date().toISOString()
@@ -52,13 +55,13 @@ describe('UserService', () => {
     it('should throw validation error when email is invalid', async () => {
       const input = {
         email: 'invalid-email',
-        password: '123', // password too short
+        password: '123',
         firstName: 'John',
         lastName: 'Doe',
         role: 'client'
       }
 
-      await expect(service.createUser(input as any)).rejects.toThrow(
+      await expect(service.createUser(input as unknown as CreateUserInput)).rejects.toThrow(
         'Error de validación: Verifique los datos ingresados.'
       )
       expect(mockRepository.create).not.toHaveBeenCalled()
@@ -115,7 +118,7 @@ describe('UserService', () => {
 
       const result = await service.updateUser('user-id', {
         firstName: 'John'
-      } as any)
+      } as Partial<User>)
 
       expect(result).toBe(updatedUser)
       expect(mockRepository.update).toHaveBeenCalledWith('user-id', {

@@ -10,6 +10,7 @@ import {
   type ListStoresParams,
   type SuperAdminCoupon,
   type SuperAdminCouponRedemption,
+  type SuperAdminAuditLog,
   type SuperAdminPlan,
   type SuperAdminStoreOverview,
   type SuperAdminStoreRow,
@@ -32,6 +33,13 @@ export const useSuperAdminOverview = (storePublicId: string | null) =>
     queryKey: ['superadmin', 'overview', storePublicId],
     enabled: Boolean(storePublicId),
     queryFn: () => superAdminService.getStoreOverview(storePublicId as string)
+  })
+
+export const useSuperAdminStoreAudit = (storePublicId: string | null, limit = 15) =>
+  useQuery<SuperAdminAuditLog[]>({
+    queryKey: ['superadmin', 'audit', storePublicId, limit],
+    enabled: Boolean(storePublicId),
+    queryFn: () => superAdminService.getStoreAuditLogs(storePublicId as string, limit)
   })
 
 export const useSuperAdminPlans = (includeInactive = true) =>

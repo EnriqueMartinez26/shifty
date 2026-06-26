@@ -1,21 +1,23 @@
 from datetime import time
+from typing import Any
 
 from fastapi import Depends
 from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.database import get_db
 from core.exceptions import (
     AppException,
     PermissionDeniedException,
     StoreNotFoundException,
 )
-
-from core.database import get_db
-from core.feature_flags import merge_store_feature_flags, normalize_store_feature_flags
+from core.feature_flags import merge_store_feature_flags
 from modules.auth.dependencies import get_current_user
+from modules.stores.mappers import to_store_response
 from modules.stores.model import Store, StoreSchedule
 from modules.stores.schemas import (
+    StoreFeatureFlags,
     StoreFeatureFlagsResponse,
     StoreFeatureFlagsUpdate,
     StoreResponse,
@@ -25,29 +27,7 @@ from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
 
-
-def _serialize_store(store: Store) -> StoreResponse:
-    return StoreResponse(
-        public_id=store.public_id,
-        name=store.name,
-        slug=store.slug,
-        business_type=store.business_type,
-        logo_url=store.logo_url,
-        primary_color=store.primary_color,
-        cover_url=store.cover_url,
-        description=store.description,
-        whatsapp_number=store.whatsapp_number,
-        instagram_url=store.instagram_url,
-        facebook_url=store.facebook_url,
-        website_url=store.website_url,
-        custom_client_fields=store.custom_client_fields,
-        cancellation_hours=store.cancellation_hours,
-        buffer_minutes=store.buffer_minutes,
-        business_hours=store.business_hours,
-        send_email_confirmation=store.send_email_confirmation,
-        send_email_reminders=store.send_email_reminders,
-        feature_flags=normalize_store_feature_flags(store.feature_flags),
-    )
+BusinessHoursPayload = dict[str, list[dict[str, str]]]
 
 
 async def _get_current_store(user: User, db: AsyncSession) -> Store:
@@ -58,7 +38,9 @@ async def _get_current_store(user: User, db: AsyncSession) -> Store:
     return store
 
 
-def _replace_business_hours(store: Store, business_hours: dict | None) -> None:
+def _replace_business_hours(
+    store: Store, business_hours: BusinessHoursPayload | None
+) -> None:
     if business_hours is None:
         return
 
@@ -70,7 +52,6 @@ def _replace_business_hours(store: Store, business_hours: dict | None) -> None:
         if day_of_week is None or not periods:
             continue
 
-        # The current table only supports one period per day without a destructive migration.
         period = periods[0]
         store.schedules.append(
             StoreSchedule(
@@ -86,9 +67,9 @@ def _replace_business_hours(store: Store, business_hours: dict | None) -> None:
 async def get_my_store(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> StoreResponse:
     store = await _get_current_store(user, db)
-    return _serialize_store(store)
+    return to_store_response(store)
 
 
 @router.patch("/me", response_model=StoreResponse)
@@ -96,25 +77,27 @@ async def update_my_store(
     data: StoreUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> StoreResponse:
     if user.role != UserRole.ADMIN:
-        raise PermissionDeniedException("cambiar la configuración del negocio")
+        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
 
     store = await _get_current_store(user, db)
     update_data = data.model_dump(exclude_unset=True)
 
-    if "slug" in update_data and update_data["slug"] != store.slug:
-        slug_check = await db.execute(
-            select(Store).where(Store.slug == update_data["slug"])
-        )
+    slug = update_data.get("slug")
+    if isinstance(slug, str) and slug != store.slug:
+        slug_check = await db.execute(select(Store).where(Store.slug == slug))
         if slug_check.scalar_one_or_none():
             raise AppException(
-                "El slug ya está en uso",
+                "El slug ya est? en uso",
                 http_status=400,
                 error_code="SLUG_ALREADY_IN_USE",
             )
 
-    business_hours = update_data.pop("business_hours", None)
+    raw_business_hours = update_data.pop("business_hours", None)
+    business_hours = (
+        raw_business_hours if isinstance(raw_business_hours, dict) else None
+    )
     theme_keys = (
         "business_type",
         "cover_url",
@@ -125,7 +108,7 @@ async def update_my_store(
         "website_url",
         "custom_client_fields",
     )
-    theme_config = dict(store.theme_config or {})
+    theme_config: dict[str, Any] = dict(store.theme_config or {})
     for key in theme_keys:
         if key in update_data:
             theme_config[key] = update_data.pop(key)
@@ -137,17 +120,17 @@ async def update_my_store(
     _replace_business_hours(store, business_hours)
     await db.commit()
     await db.refresh(store)
-    return _serialize_store(store)
+    return to_store_response(store)
 
 
 @router.get("/me/feature-flags", response_model=StoreFeatureFlagsResponse)
 async def get_my_store_feature_flags(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> StoreFeatureFlagsResponse:
     store = await _get_current_store(user, db)
     return StoreFeatureFlagsResponse(
-        flags=normalize_store_feature_flags(store.feature_flags)
+        flags=StoreFeatureFlags.model_validate(store.normalized_feature_flags)
     )
 
 
@@ -156,9 +139,9 @@ async def update_my_store_feature_flags(
     data: StoreFeatureFlagsUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> StoreFeatureFlagsResponse:
     if user.role != UserRole.ADMIN:
-        raise PermissionDeniedException("cambiar la configuración del negocio")
+        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
 
     store = await _get_current_store(user, db)
     store.feature_flags = merge_store_feature_flags(
@@ -168,5 +151,5 @@ async def update_my_store_feature_flags(
     await db.commit()
     await db.refresh(store)
     return StoreFeatureFlagsResponse(
-        flags=normalize_store_feature_flags(store.feature_flags)
+        flags=StoreFeatureFlags.model_validate(store.normalized_feature_flags)
     )

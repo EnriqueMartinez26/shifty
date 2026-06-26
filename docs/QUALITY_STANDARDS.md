@@ -22,6 +22,7 @@ These standards apply to every change in the repo. A PR is not acceptable if it 
 - Use semantic HTML first, then ARIA only when native semantics are not enough.
 - Every form field must have a real label association.
 - Loading, success, and error states must be announced with `role="status"` or `role="alert"` when appropriate.
+- ESLint warnings are release-blocking; the enforced frontend baseline is zero warnings.
 
 Acceptance:
 
@@ -39,7 +40,7 @@ Acceptance:
 Acceptance:
 
 - `npm run typecheck`
-- `npm run lint`
+- `npm run lint:strict`
 - `npm run dead-code`
 
 ### Infrastructure
@@ -51,7 +52,7 @@ Acceptance:
 Acceptance:
 
 - `npm run typecheck`
-- `npm run lint`
+- `npm run lint:strict`
 
 ### Shared
 
@@ -125,6 +126,7 @@ The pipeline must fail on:
 ## Commit Policy
 
 - Commits are blocked locally by the Git hook in `.githooks/pre-commit`.
-- The hook mirrors the standard checks instead of relying on manual discipline.
+- The hook enforces the fast gate: frontend format, strict lint, and typecheck; backend format, lint, and mypy.
+- CI enforces the heavier gate: tests, build, dead-code, OpenAPI import, and Alembic graph validation.
 - In a fresh clone, enable it with `git config core.hooksPath .githooks`.
 - If the hook fails, fix the code or update the standard explicitly before committing.

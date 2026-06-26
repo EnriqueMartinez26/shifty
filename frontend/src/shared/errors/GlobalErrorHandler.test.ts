@@ -4,9 +4,9 @@ import { UnauthorizedError } from './UnauthorizedError'
 import { ValidationError } from './ValidationError'
 
 class MockHandler extends ErrorHandler {
-  private readonly targetClass: any
+  private readonly targetClass: Function
 
-  constructor(targetClass: any) {
+  constructor(targetClass: Function) {
     super()
     this.targetClass = targetClass
   }

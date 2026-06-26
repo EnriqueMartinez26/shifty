@@ -7,7 +7,9 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { registerDependencies } from './infrastructure/di/dependencies'
+import { initSentry, Sentry } from './infrastructure/observability/sentry'
 import { setupEventHandlers } from './infrastructure/setup/setupEventHandlers'
+import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
 import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 import {
   ValidationErrorHandler,
@@ -19,6 +21,8 @@ import {
   NetworkErrorHandler
 } from './shared/errors/handlers/SpecificHandlers'
 import { EventBus } from './shared/events/EventBus'
+
+initSentry()
 
 // 1. Initialize Dependency Injection Container
 const container = registerDependencies()
@@ -69,8 +73,10 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
+    <Sentry.ErrorBoundary fallback={<ErrorBoundaryFallback />}>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </Sentry.ErrorBoundary>
   </StrictMode>
 )

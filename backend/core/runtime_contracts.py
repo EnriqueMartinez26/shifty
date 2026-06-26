@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -10,7 +12,7 @@ async def ensure_runtime_contracts(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         dialect_name = conn.dialect.name
 
-        def sync_check(sync_conn) -> dict[str, set[str]]:
+        def sync_check(sync_conn: Any) -> dict[str, set[str]]:
             inspector = inspect(sync_conn)
             tables = inspector.get_table_names()
             return {

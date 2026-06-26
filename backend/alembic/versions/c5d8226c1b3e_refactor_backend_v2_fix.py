@@ -175,7 +175,9 @@ def downgrade() -> None:
             "public_id", sa.VARCHAR(length=26), autoincrement=False, nullable=False
         ),
     )
-    op.drop_constraint(None, "store_schedules", type_="foreignkey")
+    op.drop_constraint(
+        "store_schedules_store_id_fkey", "store_schedules", type_="foreignkey"
+    )
     op.create_index(
         op.f("ix_store_schedules_public_id"),
         "store_schedules",
@@ -203,8 +205,12 @@ def downgrade() -> None:
         type_=sa.BIGINT(),
         existing_nullable=False,
     )
-    op.drop_constraint(None, "staff_services", type_="foreignkey")
-    op.drop_constraint(None, "staff_services", type_="foreignkey")
+    op.drop_constraint(
+        "staff_services_staff_id_fkey", "staff_services", type_="foreignkey"
+    )
+    op.drop_constraint(
+        "staff_services_service_id_fkey", "staff_services", type_="foreignkey"
+    )
     op.add_column(
         "staff", sa.Column("user_id", sa.BIGINT(), autoincrement=False, nullable=False)
     )
@@ -216,7 +222,7 @@ def downgrade() -> None:
         ["user_id"],
         postgresql_nulls_not_distinct=False,
     )
-    op.drop_constraint(None, "services", type_="foreignkey")
+    op.drop_constraint("services_store_id_fkey", "services", type_="foreignkey")
     op.alter_column(
         "services",
         "updated_at",
@@ -231,7 +237,7 @@ def downgrade() -> None:
         type_=postgresql.TIMESTAMP(timezone=True),
         existing_nullable=False,
     )
-    op.drop_constraint(None, "schedules", type_="foreignkey")
+    op.drop_constraint("schedules_staff_id_fkey", "schedules", type_="foreignkey")
     op.drop_index(op.f("ix_schedules_id"), table_name="schedules")
     op.create_unique_constraint(
         op.f("uq_staff_day_schedule"),
@@ -259,7 +265,7 @@ def downgrade() -> None:
             "public_id", sa.VARCHAR(length=26), autoincrement=False, nullable=False
         ),
     )
-    op.drop_constraint(None, "budgets", type_="foreignkey")
+    op.drop_constraint("budgets_store_id_fkey", "budgets", type_="foreignkey")
     op.create_index(op.f("ix_budgets_public_id"), "budgets", ["public_id"], unique=True)
     op.alter_column(
         "budgets",
@@ -282,7 +288,7 @@ def downgrade() -> None:
         type_=sa.BIGINT(),
         existing_nullable=False,
     )
-    op.drop_constraint(None, "audit_logs", type_="foreignkey")
+    op.drop_constraint("audit_logs_actor_id_fkey", "audit_logs", type_="foreignkey")
     op.drop_index(op.f("ix_appointments_id"), table_name="appointments")
     op.create_unique_constraint(
         op.f("uq_staff_appointment_time"),

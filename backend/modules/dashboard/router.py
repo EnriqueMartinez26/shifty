@@ -24,7 +24,7 @@ router = CanonicalAPIRouter(prefix="/dashboard", tags=["Dashboard"])
 async def get_dashboard_summary(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-):
+) -> DashboardSummaryResponse:
     """Devuelve métricas resumidas y próximos turnos para el dashboard."""
     now = datetime.now(timezone.utc)
     start_today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)

@@ -4,7 +4,7 @@ This guide explains how to set up the development environment for Shifty on Wind
 
 ## 📋 Prerequisites
 
-- **Python 3.13+**
+- **Python 3.12+**
 - **Node.js 18+**
 - **PostgreSQL 16+**
 - **Memurai** (Native Redis for Windows)
@@ -50,7 +50,7 @@ This guide explains how to set up the development environment for Shifty on Wind
 ## 🛠️ Common Commands
 
 - **Run Tests**: `pytest` inside the `backend` folder.
-- **Check Linting**: `npm run lint` inside the `frontend` folder.
+- **Check Linting**: `npm run lint:strict` inside the `frontend` folder.
 - **Build Frontend**: `npm run build`.
 
 ## ⚠️ Windows Specific Notes

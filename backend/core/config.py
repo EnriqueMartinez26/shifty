@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     SMTP_PASS: str
     EMAILS_FROM_EMAIL: str
 
-    FRONTEND_URL: str = "http://localhost:5173"
+    FRONTEND_URL: str = "http://localhost:3000"
     FRONTEND_RESET_PASSWORD_PATH: str = "/reset-password"
     PUBLIC_API_URL: str = "http://localhost:8000"
 
@@ -257,7 +257,7 @@ def _fallback_settings() -> Settings:
         EMAILS_FROM_EMAIL="no-reply@example.com",
         FRONTEND_URL=os.getenv(
             "FRONTEND_URL",
-            "http://localhost",
+            "http://localhost:3000",
         ),
         FRONTEND_RESET_PASSWORD_PATH="/reset-password",
         PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "http://localhost/api"),
@@ -267,8 +267,15 @@ def _fallback_settings() -> Settings:
 
 SETTINGS_BOOT_ERROR: str | None = None
 
+
+def _load_settings() -> Settings:
+    # Pydantic Settings resolves required fields from environment at runtime,
+    # but static typing cannot model that constructor contract precisely.
+    return Settings()  # type: ignore[call-arg]
+
+
 try:
-    settings = Settings()
+    settings = _load_settings()
 except Exception as exc:
     SETTINGS_BOOT_ERROR = _sanitize_settings_error(str(exc))
     settings = _fallback_settings()

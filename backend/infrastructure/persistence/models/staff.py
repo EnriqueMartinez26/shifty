@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+from typing import Any
 
 import ulid
 from sqlalchemy import Boolean, DateTime, String
@@ -45,7 +46,7 @@ class StaffModel(Base):
         lazy="selectin",
     )
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         service_ids = kwargs.pop("service_ids", None)
         super().__init__(**kwargs)
         if service_ids is not None:

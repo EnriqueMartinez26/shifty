@@ -1,10 +1,17 @@
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from core.database import get_db
 from core.models import Base
@@ -20,10 +27,11 @@ from modules.users.model import User
 
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
+JsonDict = dict[str, Any]
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_engine():
+async def test_engine() -> AsyncGenerator[AsyncEngine, None]:
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -34,7 +42,9 @@ async def test_engine():
 
 
 @pytest_asyncio.fixture(scope="function")
-async def test_session(test_engine):
+async def test_session(
+    test_engine: AsyncEngine,
+) -> AsyncGenerator[AsyncSession, None]:
     session_local = async_sessionmaker(
         bind=test_engine, expire_on_commit=False, autoflush=False
     )
@@ -43,8 +53,8 @@ async def test_session(test_engine):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def client(test_session):
-    async def override_get_db():
+async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield test_session
 
     app.dependency_overrides[get_db] = override_get_db
@@ -58,7 +68,7 @@ async def client(test_session):
     app.dependency_overrides.pop(get_db, None)
 
 
-async def _register_store(client: AsyncClient, slug: str, email: str):
+async def _register_store(client: AsyncClient, slug: str, email: str) -> JsonDict:
     response = await client.post(
         "/auth/register",
         json={
@@ -71,22 +81,22 @@ async def _register_store(client: AsyncClient, slug: str, email: str):
         },
     )
     assert response.status_code == 201
-    return response.json()
+    return cast(JsonDict, response.json())
 
 
-async def _login(client: AsyncClient, email: str):
+async def _login(client: AsyncClient, email: str) -> str:
     response = await client.post(
         "/auth/login",
         json={"email": email, "password": "password123"},
     )
     assert response.status_code == 200
-    return response.json()["access_token"]
+    return str(cast(JsonDict, response.json())["access_token"])
 
 
 @pytest.mark.asyncio
 async def test_superadmin_store_list_and_overview_include_operational_summaries(
-    client: AsyncClient, test_session
-):
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     await _register_store(client, "uno", "admin-uno@demo.com")
     await _register_store(client, "dos", "admin-dos@demo.com")
 
@@ -104,7 +114,7 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
         "/superadmin/stores?is_active=true", headers=headers
     )
     assert stores_response.status_code == 200
-    stores = stores_response.json()
+    stores = cast(list[JsonDict], stores_response.json())
     assert len(stores) == 2
     assert all("admins_count" in item for item in stores)
     target_store = next(item for item in stores if item["slug"] == "uno")
@@ -126,7 +136,7 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
         },
     )
     assert plan_response.status_code == 201
-    plan = plan_response.json()
+    plan = cast(JsonDict, plan_response.json())
 
     subscription_response = await client.post(
         f"/superadmin/stores/{target_store['public_id']}/subscription",
@@ -148,7 +158,7 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
         "/superadmin/stores?has_subscription=true", headers=headers
     )
     assert updated_list.status_code == 200
-    filtered = updated_list.json()
+    filtered = cast(list[JsonDict], updated_list.json())
     assert len(filtered) == 1
     assert filtered[0]["slug"] == "uno"
     assert filtered[0]["current_plan_name"] == "Plan Oro"
@@ -159,7 +169,7 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
         headers=headers,
     )
     assert overview_response.status_code == 200
-    overview = overview_response.json()
+    overview = cast(JsonDict, overview_response.json())
     assert overview["store"]["slug"] == "uno"
     assert overview["users"]["admins_count"] == 1
     assert overview["users"]["users_count"] == 1
@@ -169,8 +179,8 @@ async def test_superadmin_store_list_and_overview_include_operational_summaries(
 
 @pytest.mark.asyncio
 async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscription_to_inactive_store(
-    client: AsyncClient, test_session
-):
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     await _register_store(client, "central", "admin-central@demo.com")
 
     result = await test_session.execute(
@@ -184,7 +194,7 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
     headers = {"Authorization": f"Bearer {token}"}
 
     stores_response = await client.get("/superadmin/stores", headers=headers)
-    store = stores_response.json()[0]
+    store = cast(list[JsonDict], stores_response.json())[0]
 
     admin_response = await client.post(
         f"/superadmin/stores/{store['public_id']}/admins",
@@ -198,7 +208,7 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
         },
     )
     assert admin_response.status_code == 201
-    created_user = admin_response.json()
+    created_user = cast(JsonDict, admin_response.json())
 
     role_response = await client.patch(
         f"/superadmin/users/{created_user['public_id']}",
@@ -206,7 +216,7 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
         json={"role": "receptionist"},
     )
     assert role_response.status_code == 200
-    assert role_response.json()["role"] == "receptionist"
+    assert cast(JsonDict, role_response.json())["role"] == "receptionist"
 
     store_update = await client.patch(
         f"/superadmin/stores/{store['public_id']}",
@@ -227,7 +237,7 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
         },
     )
     assert plan_response.status_code == 201
-    plan = plan_response.json()
+    plan = cast(JsonDict, plan_response.json())
 
     subscription_response = await client.post(
         f"/superadmin/stores/{store['public_id']}/subscription",
@@ -235,15 +245,15 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
         json={"plan_id": plan["public_id"]},
     )
     assert subscription_response.status_code == 400
-    res_json = subscription_response.json()
+    res_json = cast(JsonDict, subscription_response.json())
     err_msg = res_json.get("detail") or res_json.get("message") or ""
     assert "tienda inactiva" in err_msg.lower()
 
 
 @pytest.mark.asyncio
 async def test_superadmin_coupon_redeem_rejects_expired_subscription(
-    client: AsyncClient, test_session
-):
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
     await _register_store(client, "sur", "admin-sur@demo.com")
 
     result = await test_session.execute(
@@ -257,7 +267,7 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(
     headers = {"Authorization": f"Bearer {token}"}
 
     stores_response = await client.get("/superadmin/stores", headers=headers)
-    store = stores_response.json()[0]
+    store = cast(list[JsonDict], stores_response.json())[0]
 
     plan_response = await client.post(
         "/superadmin/plans",
@@ -270,7 +280,7 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(
             "billing_interval": "monthly",
         },
     )
-    plan = plan_response.json()
+    plan = cast(JsonDict, plan_response.json())
 
     subscription_response = await client.post(
         f"/superadmin/stores/{store['public_id']}/subscription",
@@ -315,6 +325,6 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(
         json={"coupon_code": "WELCOME10"},
     )
     assert redeem_response.status_code == 400
-    res_json = redeem_response.json()
+    res_json = cast(JsonDict, redeem_response.json())
     err_msg = res_json.get("detail") or res_json.get("message") or ""
     assert "vencida" in err_msg.lower()

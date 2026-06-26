@@ -10,7 +10,7 @@ Responsabilidades:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import ulid
 
@@ -35,6 +35,15 @@ if TYPE_CHECKING:
     pass
 
 
+class AppointmentBookPayload(TypedDict, total=False):
+    service_id: str
+    staff_id: str
+    starts_at: datetime
+    notes: str | None
+    intake_answers: dict[str, str]
+    idempotency_key: str
+
+
 class AppointmentService:
     """
     Servicio principal de turnos.
@@ -53,8 +62,8 @@ class AppointmentService:
     async def book(
         self,
         *,
-        data: dict,
-        store_id: int,
+        data: AppointmentBookPayload,
+        store_id: str,
         actor: User,
     ) -> tuple[Appointment, Service, Staff]:
         """
@@ -108,23 +117,32 @@ class AppointmentService:
         except (AppointmentConflictException, BlockedScheduleException) as e:
             # Don Norman: Si hay error, busca una alternativa inmediata
             # Buscamos desde el fin del conflicto o bloqueo
-            search_start = conflict.ends_at if conflict else block.ends_at
+            assert conflict is not None or block is not None
+            blocked_conflict = conflict
+            blocked_block = block
+            if blocked_conflict is not None:
+                search_start = blocked_conflict.ends_at
+            else:
+                assert blocked_block is not None
+                search_start = blocked_block.ends_at
             suggestion = await self._find_suggestion(
                 staff.id, search_start, service.duration_minutes
             )
 
             # Re-lanzar con la sugerencia
             if isinstance(e, AppointmentConflictException):
+                assert blocked_conflict is not None
                 raise AppointmentConflictException(
-                    conflict_start=conflict.starts_at,
-                    conflict_end=conflict.ends_at,
+                    conflict_start=blocked_conflict.starts_at,
+                    conflict_end=blocked_conflict.ends_at,
                     suggestion=suggestion,
                 )
             else:
+                assert blocked_block is not None
                 raise BlockedScheduleException(
-                    reason=block.note,
-                    block_start=block.starts_at,
-                    block_end=block.ends_at,
+                    reason=blocked_block.note,
+                    block_start=blocked_block.starts_at,
+                    block_end=blocked_block.ends_at,
                     suggestion=suggestion,
                 )
 
@@ -381,22 +399,31 @@ class AppointmentService:
                 overlapping_block=block,
             )
         except (AppointmentConflictException, BlockedScheduleException) as e:
-            search_start = conflict.ends_at if conflict else block.ends_at
+            assert conflict is not None or block is not None
+            blocked_conflict = conflict
+            blocked_block = block
+            if blocked_conflict is not None:
+                search_start = blocked_conflict.ends_at
+            else:
+                assert blocked_block is not None
+                search_start = blocked_block.ends_at
             suggestion = await self._find_suggestion(
                 staff_id, search_start, service.duration_minutes
             )
 
             if isinstance(e, AppointmentConflictException):
+                assert blocked_conflict is not None
                 raise AppointmentConflictException(
-                    conflict_start=conflict.starts_at,
-                    conflict_end=conflict.ends_at,
+                    conflict_start=blocked_conflict.starts_at,
+                    conflict_end=blocked_conflict.ends_at,
                     suggestion=suggestion,
                 )
             else:
+                assert blocked_block is not None
                 raise BlockedScheduleException(
-                    reason=block.note,
-                    block_start=block.starts_at,
-                    block_end=block.ends_at,
+                    reason=blocked_block.note,
+                    block_start=blocked_block.starts_at,
+                    block_end=blocked_block.ends_at,
                     suggestion=suggestion,
                 )
 
@@ -459,7 +486,7 @@ class AppointmentService:
         return new_appointment, service, staff
 
     async def _find_suggestion(
-        self, staff_id: int, start_from: datetime, duration_mins: int
+        self, staff_id: str, start_from: datetime, duration_mins: int
     ) -> datetime | None:
         """
         Encuentra el próximo hueco disponible (max 6 horas adelante).
