@@ -1,3 +1,4 @@
+import { createUuid } from '../../shared/utils/uuid'
 import { Email } from '../value-objects/Email'
 import { UserId } from '../value-objects/UserId'
 import { UserRole } from '../value-objects/UserRole'
@@ -23,7 +24,7 @@ export class User {
   static create(props: Omit<UserProps, 'id' | 'createdAt'>): User {
     return new User({
       ...props,
-      id: UserId.create(crypto.randomUUID()),
+      id: UserId.create(createUuid()),
       createdAt: new Date()
     })
   }

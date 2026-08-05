@@ -12,7 +12,7 @@ backend/.env.production.local
 *.log
 *.db
 shifty_dev.db
-backend/celerybeat-schedule
+backend/celerybeat-schedule*
 
 # Node
 node_modules/

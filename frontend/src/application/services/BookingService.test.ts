@@ -94,7 +94,7 @@ describe('BookingService', () => {
 
       await expect(
         service.createAppointment(invalidInput as unknown as CreateBookingRequestDTO)
-      ).rejects.toThrow('Error de validaciÃ³n: Verifique los datos ingresados.')
+      ).rejects.toThrow('Error de validación: Verifique los datos ingresados.')
       expect(mockRepository.create).not.toHaveBeenCalled()
     })
   })

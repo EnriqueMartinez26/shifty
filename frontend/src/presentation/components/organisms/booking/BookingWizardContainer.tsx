@@ -10,6 +10,7 @@ import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
 import { BookingStepStaff } from './BookingStepStaff'
 import type { BookingWizardState } from './types'
+import { createUuid } from '../../../../shared/utils/uuid'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
@@ -65,7 +66,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
       customFields: initialCustomFields
     },
     promotionCode: '',
-    idempotencyKey: crypto.randomUUID()
+    idempotencyKey: createUuid()
   })
 
   useEffect(() => {

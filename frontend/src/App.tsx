@@ -1,6 +1,6 @@
 import React, { Suspense, lazy } from 'react'
 
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 
 import { Sentry } from './infrastructure/observability/sentry'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'

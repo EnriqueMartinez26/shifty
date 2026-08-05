@@ -10,6 +10,11 @@ repos:
       - id: trailing-whitespace
   - repo: local
     hooks:
+      - id: verify-toolchain
+        name: verify exact development toolchain
+        entry: sh .githooks/verify-toolchain
+        language: system
+        pass_filenames: false
       - id: frontend-format-check
         name: frontend prettier check
         entry: npm --prefix frontend run format:check
