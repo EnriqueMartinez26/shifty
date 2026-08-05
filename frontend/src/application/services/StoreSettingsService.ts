@@ -48,6 +48,8 @@ export interface StoreSettings {
   custom_client_fields: StoreCustomField[]
   cancellation_hours: number
   buffer_minutes: number
+  allow_manual_coordination: boolean
+  deposit_policy?: string | null
   business_hours: Record<string, BusinessHourPeriod[]>
   send_email_confirmation: boolean
   send_email_reminders: boolean
@@ -69,6 +71,8 @@ export interface StoreUpdatePayload {
   custom_client_fields?: StoreCustomField[]
   cancellation_hours?: number
   buffer_minutes?: number
+  allow_manual_coordination?: boolean
+  deposit_policy?: string | null
   business_hours?: Record<string, BusinessHourPeriod[]>
   send_email_confirmation?: boolean
   send_email_reminders?: boolean

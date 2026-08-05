@@ -6,6 +6,7 @@ from typing import TypeAlias
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Integer,
     JSON,
     Numeric,
     String,
@@ -18,6 +19,9 @@ from core.models import BaseEntity
 
 JsonPrimitive: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonPrimitive | dict[str, "JsonValue"] | list["JsonValue"]
+
+# Reintentos antes de dar por perdido un webhook que no pudimos resolver.
+WEBHOOK_INBOX_MAX_ATTEMPTS = 10
 
 
 class PaymentStatus(str, enum.Enum):
@@ -35,8 +39,15 @@ class PaymentGatewayConfig(BaseEntity):
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
     provider: Mapped[str] = mapped_column(String(50), default="mercadopago")
     encrypted_access_token: Mapped[str] = mapped_column(Text)
+    encrypted_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     public_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     webhook_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    connection_mode: Mapped[str] = mapped_column(String(20), default="manual")
+    oauth_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    oauth_scope: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    oauth_connected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -80,6 +91,12 @@ class Payment(BaseEntity):
         JSON, nullable=True
     )
 
+    __table_args__ = (
+        UniqueConstraint(
+            "store_id", "appointment_id", name="uq_payments_store_appointment"
+        ),
+    )
+
 
 class WebhookInbox(BaseEntity):
     __tablename__ = "webhook_inbox"
@@ -92,11 +109,24 @@ class WebhookInbox(BaseEntity):
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     def mark_processed(self) -> None:
         self.processed_at = datetime.now(timezone.utc)
         self.error = None
+
+    def register_failure(self, reason: str) -> None:
+        """Cuenta un intento fallido y abandona el evento al agotar los reintentos.
+
+        No marcamos ``processed_at`` mientras queden intentos: el worker del inbox
+        vuelve a tomar la fila y reintenta. Al agotarlos la damos por vencida para
+        que deje de reprocesarse y quede visible en ``failed_webhooks``.
+        """
+        self.attempts = (self.attempts or 0) + 1
+        self.error = reason[:1000]
+        if self.attempts >= WEBHOOK_INBOX_MAX_ATTEMPTS:
+            self.processed_at = datetime.now(timezone.utc)
 
 
 class OutboxMessage(BaseEntity):
@@ -112,6 +142,7 @@ class OutboxMessage(BaseEntity):
 
 
 __all__ = [
+    "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "JsonPrimitive",
     "JsonValue",
     "OutboxMessage",

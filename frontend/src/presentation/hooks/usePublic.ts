@@ -9,6 +9,7 @@ import {
   type OtpVerifyPayload,
   type OtpVerifyResponse,
   type PublicBookingPayload,
+  type PublicPaymentStatus,
   type PromotionPreview,
   type PublicService,
   type PublicStaff,
@@ -23,6 +24,7 @@ export type {
   OtpVerifyPayload,
   OtpVerifyResponse,
   PublicBookingPayload,
+  PublicPaymentStatus,
   PromotionPreview,
   PublicService,
   PublicStaff,
@@ -72,6 +74,22 @@ export const usePublicAvailability = (
 export const useCreatePublicBooking = () =>
   useMutation<BookingConfirmation, Error, PublicBookingPayload>({
     mutationFn: (payload) => publicBookingService.createBooking(payload)
+  })
+
+export const usePublicPaymentStatus = (
+  storePublicId: string | undefined,
+  paymentPublicId: string | undefined
+) =>
+  useQuery<PublicPaymentStatus>({
+    queryKey: ['public-payment-status', storePublicId, paymentPublicId],
+    queryFn: () =>
+      publicBookingService.getPaymentStatus(storePublicId as string, paymentPublicId as string),
+    enabled: Boolean(storePublicId && paymentPublicId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.payment_status
+      return status === 'pending' ? 2000 : false
+    },
+    retry: 2
   })
 
 export const usePreviewPublicPromotion = () =>

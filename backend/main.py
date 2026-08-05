@@ -32,6 +32,7 @@ from modules.public_api.router import router as public_router
 from modules.reports.router import router as reports_router
 from modules.ledger.router import router as ledger_router
 from modules.ops.router import router as ops_router
+from modules.notifications.router import router as notifications_router
 from modules.payments.router import router as payments_router
 from modules.promotions.router import router as promotions_router
 from modules.stores.router import router as stores_router
@@ -227,6 +228,7 @@ app.include_router(reports_router)
 app.include_router(stores_router)
 app.include_router(appointment_blocks_router)
 app.include_router(payments_router)
+app.include_router(notifications_router)
 app.include_router(promotions_router)
 app.include_router(ledger_router)
 app.include_router(ops_router)

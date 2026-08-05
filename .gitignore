@@ -22,6 +22,7 @@ build/
 .npm-cache/
 coverage/
 frontend/coverage/
+.coverage
 .eslintcache
 frontend/.env.production
 frontend/.env.local

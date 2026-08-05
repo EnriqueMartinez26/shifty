@@ -27,6 +27,8 @@ def to_store_response(store: Store) -> StoreResponse:
         ],
         cancellation_hours=store.cancellation_hours,
         buffer_minutes=store.buffer_minutes,
+        allow_manual_coordination=store.allow_manual_coordination,
+        deposit_policy=store.deposit_policy,
         business_hours={
             day: [BusinessHourPeriod.model_validate(period) for period in periods]
             for day, periods in store.business_hours.items()

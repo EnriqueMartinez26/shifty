@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     Boolean,
     ForeignKey,
+    Text,
     Time,
     UniqueConstraint,
     CheckConstraint,
@@ -54,6 +55,14 @@ class Store(BaseEntity):
 
     requires_deposit: Mapped[bool] = mapped_column(Boolean, default=False)
     deposit_percentage: Mapped[int] = mapped_column(Integer, default=0)
+    # Si esta en False, los servicios con sena obligatoria solo se pueden reservar
+    # pagando online: se bloquea la coordinacion por fuera de la plataforma.
+    allow_manual_coordination: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1"
+    )
+    # Politica de sena, cancelacion y reembolso propia de la tienda. Es la que ve
+    # el cliente final antes de pagar y la que respalda a Shifty ante un reclamo.
+    deposit_policy: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancellation_hours: Mapped[int] = mapped_column(Integer, default=24)
     min_booking_notice_hours: Mapped[int] = mapped_column(Integer, default=2)
     buffer_minutes: Mapped[int] = mapped_column(Integer, default=0)

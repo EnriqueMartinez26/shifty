@@ -8,7 +8,9 @@ import {
   Clock,
   ExternalLink,
   Loader2,
-  Tag
+  Phone,
+  Tag,
+  WalletCards
 } from 'lucide-react'
 
 import type {
@@ -16,12 +18,12 @@ import type {
   PromotionPreview
 } from '@application/services/PublicBookingService'
 
-import { usePreviewPublicPromotion } from '@presentation/hooks/usePublic'
+import { usePreviewPublicPromotion, usePublicServices } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import type { BookingWizardState } from './types'
-import { colors2000s } from '../../../../theme/colors'
+import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
 import {
   createBookingBackButtonStyle,
@@ -33,26 +35,54 @@ import {
 interface BookingStepConfirmationProps {
   storePublicId: string
   serviceId: string
+  paymentsEnabled: boolean
+  storeName: string
+  whatsappNumber?: string | null
+  depositPolicy?: string | null
+  allowManualCoordination?: boolean
   bookingState: BookingWizardState
   onBack: () => void
   onPromotionCodeChange: (promotionCode: string) => void
-  onConfirm: () => Promise<BookingConfirmation>
+  onConfirm: (
+    paymentMethod: 'manual' | 'mercadopago',
+    acceptsTerms: boolean
+  ) => Promise<BookingConfirmation>
 }
 
 export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = ({
   storePublicId,
   serviceId,
+  paymentsEnabled,
+  storeName,
+  whatsappNumber,
+  depositPolicy,
+  allowManualCoordination = true,
   bookingState,
   onBack,
   onPromotionCodeChange,
   onConfirm
 }) => {
+  const [acceptsTerms, setAcceptsTerms] = useState(false)
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [confirmation, setConfirmation] = useState<BookingConfirmation | null>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [promotionCode, setPromotionCode] = useState(bookingState.promotionCode || '')
   const [promotionPreview, setPromotionPreview] = useState<PromotionPreview | null>(null)
   const previewPromotion = usePreviewPublicPromotion()
+  const servicesQuery = usePublicServices(storePublicId)
+  const selectedService = servicesQuery.data?.find((service) => service.public_id === serviceId)
+  const canPayDeposit = Boolean(
+    paymentsEnabled &&
+    selectedService &&
+    selectedService.deposit_mode !== 'none' &&
+    Number(selectedService.deposit_amount ?? (selectedService.deposit_type === 'full' ? 1 : 0)) > 0
+  )
+  // Con seña obligatoria y coordinación manual deshabilitada por la tienda, la
+  // única vía válida es pagar online. El backend lo rechaza igual, pero no tiene
+  // sentido ofrecer un botón que va a fallar.
+  const onlinePaymentMandatory = Boolean(
+    canPayDeposit && selectedService?.deposit_mode === 'required' && !allowManualCoordination
+  )
 
   useEffect(() => {
     setPromotionCode(bookingState.promotionCode || '')
@@ -84,11 +114,18 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     }
   }
 
-  const handleConfirm = async () => {
+  const handleConfirm = async (paymentMethod: 'manual' | 'mercadopago') => {
     setStatus('loading')
     setErrorMessage('')
     try {
-      const result = await onConfirm()
+      const result = await onConfirm(paymentMethod, acceptsTerms)
+      if (paymentMethod === 'mercadopago') {
+        if (!result.payment_link) {
+          throw new Error('Mercado Pago no devolvio un enlace de pago')
+        }
+        window.location.assign(result.payment_link)
+        return
+      }
       setConfirmation(result)
       setStatus('success')
     } catch (error: unknown) {
@@ -113,6 +150,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       </div>
     )
   }
+
+  const whatsappPhone = (whatsappNumber || '').replace(/\D/g, '')
 
   if (status === 'success') {
     const isPendingPayment = confirmation?.status === 'pending_payment'
@@ -279,6 +318,26 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </a>
         )}
 
+        {whatsappPhone && !confirmation?.payment_link && (
+          <a
+            href={`https://wa.me/${whatsappPhone}?text=${encodeURIComponent(
+              `Hola ${storeName}, reservé el turno ${confirmation?.public_id ?? ''} para el ${bookingState.date} a las ${bookingState.startTime}. Quiero coordinar el pago.`
+            )}`}
+            target="_blank"
+            rel="noreferrer"
+            className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
+            style={{
+              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+              borderColor: colors2000s.border.default,
+              color: colors2000s.orange.accent,
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
+            }}
+          >
+            Coordinar el pago por WhatsApp
+            <ExternalLink className="w-4 h-4" />
+          </a>
+        )}
+
         <button
           onClick={() => window.location.reload()}
           className="w-full mt-4 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none"
@@ -409,20 +468,97 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => {
-            void handleConfirm()
-          }}
-          className="w-full text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none"
-          style={{
-            background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-            borderColor: colors2000s.orange.accent,
-            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-          }}
+        {depositPolicy && (
+          <div
+            className="rounded-2xl p-4 text-xs leading-relaxed"
+            style={createBookingAccentBoxStyle('#f8fafc', '#e2e8f0', '#475569')}
+          >
+            <p className="font-black uppercase tracking-widest text-[10px] mb-1">
+              Politica de seña de {storeName}
+            </p>
+            <p className="font-medium whitespace-pre-line">{depositPolicy}</p>
+          </div>
+        )}
+
+        <label
+          className="flex items-start gap-3 text-xs font-bold cursor-pointer select-none"
+          style={{ color: colors2000s.text.secondary }}
         >
-          Confirmar reserva
-        </button>
+          <input
+            type="checkbox"
+            checked={acceptsTerms}
+            onChange={(event) => setAcceptsTerms(event.target.checked)}
+            className="mt-0.5 w-4 h-4 accent-orange-500 cursor-pointer"
+          />
+          <span>
+            Acepto los{' '}
+            <a
+              href="/legal/terminos"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+              style={{ color: colors2000s.orange.accent }}
+            >
+              terminos y condiciones
+            </a>
+            , la{' '}
+            <a
+              href="/legal/privacidad"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+              style={{ color: colors2000s.orange.accent }}
+            >
+              politica de privacidad
+            </a>
+            {depositPolicy ? ' y la politica de seña de la tienda.' : '.'}
+          </span>
+        </label>
+
+        {!onlinePaymentMandatory && (
+          <button
+            type="button"
+            disabled={!acceptsTerms}
+            onClick={() => {
+              void handleConfirm('manual')
+            }}
+            className="w-full text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none disabled:cursor-not-allowed"
+            style={
+              acceptsTerms
+                ? {
+                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    borderColor: colors2000s.orange.accent,
+                    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                  }
+                : buttonStyles2000s.disabled
+            }
+          >
+            <Phone className="w-4 h-4 inline mr-2" />
+            Reservar y pagar por WhatsApp
+          </button>
+        )}
+        {canPayDeposit && (
+          <button
+            type="button"
+            disabled={!acceptsTerms}
+            onClick={() => {
+              void handleConfirm('mercadopago')
+            }}
+            className="w-full text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none inline-flex items-center justify-center gap-2 disabled:cursor-not-allowed"
+            style={
+              acceptsTerms
+                ? {
+                    background: 'linear-gradient(180deg, #38bdf8 0%, #0284c7 100%)',
+                    borderColor: '#0369a1',
+                    boxShadow: `${colors2000s.shadows.insetLight}, 0 5px 12px rgba(2,132,199,0.25)`
+                  }
+                : buttonStyles2000s.disabled
+            }
+          >
+            <WalletCards className="w-4 h-4" />
+            Pagar seña con Mercado Pago
+          </button>
+        )}
       </div>
 
       {status === 'error' && (

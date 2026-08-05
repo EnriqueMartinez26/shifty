@@ -24,6 +24,8 @@ export interface PublicStore {
   cover_url?: string | null
   whatsapp_number?: string | null
   website_url?: string | null
+  allow_manual_coordination?: boolean
+  deposit_policy?: string | null
   custom_client_fields: StoreCustomField[]
   feature_flags: PublicStoreFeatureFlags
 }
@@ -72,6 +74,8 @@ export interface PublicBookingPayload {
   client_phone: string
   custom_fields?: Record<string, string>
   promotion_code?: string
+  payment_method?: 'manual' | 'mercadopago'
+  accepts_terms?: boolean
 }
 
 export interface BookingConfirmation {
@@ -105,6 +109,16 @@ export interface PromotionPreview {
   base_amount: number
   discount_amount: number
   final_amount: number
+}
+
+export interface PublicPaymentStatus {
+  payment_public_id: string
+  appointment_public_id: string
+  payment_status: string
+  appointment_status: string
+  amount: number
+  currency: string
+  starts_at: string
 }
 
 export interface OtpRequestPayload {
@@ -165,6 +179,17 @@ export class PublicBookingService {
 
   async createBooking(payload: PublicBookingPayload): Promise<BookingConfirmation> {
     const { data } = await apiClient.post<BookingConfirmation>('/public/appointments', payload)
+    return data
+  }
+
+  async getPaymentStatus(
+    storePublicId: string,
+    paymentPublicId: string
+  ): Promise<PublicPaymentStatus> {
+    const { data } = await apiClient.get<PublicPaymentStatus>(
+      `/public/payments/${paymentPublicId}/status`,
+      { params: { store_public_id: storePublicId } }
+    )
     return data
   }
 

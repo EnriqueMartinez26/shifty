@@ -96,6 +96,14 @@ export class HttpBookingRepository
     }
   }
 
+  async release(id: string): Promise<void> {
+    try {
+      await this.client.patch(`/appointments/${id}/release`)
+    } catch (error) {
+      this.handleRepositoryError('release', error)
+    }
+  }
+
   async markAbsent(id: string): Promise<void> {
     try {
       await this.client.patch(`/appointments/${id}/absent`)

@@ -5,6 +5,7 @@ import {
   type AppointmentSearchItem,
   type GatewayConfig,
   type GatewayConfigUpsertPayload,
+  type MercadoPagoOAuthStart,
   type OutboxStats,
   type PaymentPreference,
   type PaymentRecord,
@@ -24,6 +25,31 @@ export const useUpsertGatewayConfig = () => {
   const queryClient = useQueryClient()
   return useMutation<GatewayConfig, Error, GatewayConfigUpsertPayload>({
     mutationFn: (payload) => paymentsService.upsertGatewayConfig(payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['payments-gateway-config'] })
+    }
+  })
+}
+
+export const useStartMercadoPagoOAuth = () =>
+  useMutation<MercadoPagoOAuthStart, Error>({
+    mutationFn: () => paymentsService.startMercadoPagoOAuth()
+  })
+
+export const useRefreshMercadoPagoOAuth = () => {
+  const queryClient = useQueryClient()
+  return useMutation<GatewayConfig, Error>({
+    mutationFn: () => paymentsService.refreshMercadoPagoOAuth(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['payments-gateway-config'] })
+    }
+  })
+}
+
+export const useDisconnectMercadoPagoOAuth = () => {
+  const queryClient = useQueryClient()
+  return useMutation<{ success: boolean; disconnected: boolean }, Error>({
+    mutationFn: () => paymentsService.disconnectMercadoPagoOAuth(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['payments-gateway-config'] })
     }

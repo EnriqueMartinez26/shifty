@@ -12,8 +12,12 @@ import {
   Calendar,
   Plus,
   Trash2,
-  SlidersHorizontal
+  SlidersHorizontal,
+  CreditCard,
+  RefreshCcw,
+  Unplug
 } from 'lucide-react'
+import { useSearchParams } from 'react-router'
 
 import type {
   StoreCustomField,
@@ -26,6 +30,12 @@ import type { BusinessType } from '@shared/types/business'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { useChangePassword } from '../hooks/useChangePassword'
+import {
+  useDisconnectMercadoPagoOAuth,
+  useGatewayConfig,
+  useRefreshMercadoPagoOAuth,
+  useStartMercadoPagoOAuth
+} from '../hooks/usePayments'
 import {
   useStoreFeatureFlags,
   useStoreSettings,
@@ -41,6 +51,7 @@ const TABS = [
   { id: 'policies', label: 'Políticas', icon: <SettingsIcon className="w-4 h-4" /> },
   { id: 'notifications', label: 'Notificaciones', icon: <Bell className="w-4 h-4" /> },
   { id: 'features', label: 'Funciones', icon: <SlidersHorizontal className="w-4 h-4" /> },
+  { id: 'payments', label: 'Mercado Pago', icon: <CreditCard className="w-4 h-4" /> },
   { id: 'security', label: 'Seguridad', icon: <Lock className="w-4 h-4" /> }
 ]
 
@@ -82,6 +93,8 @@ type SettingsFormData = {
   primary_color: string
   cancellation_hours: number
   buffer_minutes: number
+  allow_manual_coordination: boolean
+  deposit_policy: string
   business_hours: Record<string, BusinessHoursPeriod[]>
   send_email_confirmation: boolean
   send_email_reminders: boolean
@@ -155,12 +168,17 @@ const parseFieldOptions = (rawValue: string): StoreCustomFieldOption[] =>
     })
 
 const SettingsPage: React.FC = () => {
-  const [activeTab, setActiveTab] = useState('identity')
+  const [searchParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'identity')
   const { data: store, isLoading } = useStoreSettings()
   const featureFlagsQuery = useStoreFeatureFlags()
   const updateStore = useUpdateStoreSettings()
   const updateFeatureFlags = useUpdateStoreFeatureFlags()
   const changePassword = useChangePassword()
+  const gatewayQuery = useGatewayConfig()
+  const startMercadoPagoOAuth = useStartMercadoPagoOAuth()
+  const refreshMercadoPagoOAuth = useRefreshMercadoPagoOAuth()
+  const disconnectMercadoPagoOAuth = useDisconnectMercadoPagoOAuth()
 
   const [formData, setFormData] = useState<SettingsFormData | null>(null)
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' })
@@ -184,6 +202,8 @@ const SettingsPage: React.FC = () => {
         primary_color: store.primary_color,
         cancellation_hours: store.cancellation_hours,
         buffer_minutes: store.buffer_minutes,
+        allow_manual_coordination: store.allow_manual_coordination ?? true,
+        deposit_policy: store.deposit_policy || '',
         business_hours: store.business_hours,
         send_email_confirmation: store.send_email_confirmation,
         send_email_reminders: store.send_email_reminders,
@@ -233,6 +253,34 @@ const SettingsPage: React.FC = () => {
     }
   }
 
+  const handleConnectMercadoPago = async () => {
+    setErrorMessage('')
+    try {
+      const connection = await startMercadoPagoOAuth.mutateAsync()
+      window.location.assign(connection.auth_url)
+    } catch (error: unknown) {
+      setErrorMessage(getErrorMessage(error, 'No se pudo iniciar la conexión con Mercado Pago'))
+    }
+  }
+
+  const handleRefreshMercadoPago = async () => {
+    setErrorMessage('')
+    try {
+      await refreshMercadoPagoOAuth.mutateAsync()
+    } catch (error: unknown) {
+      setErrorMessage(getErrorMessage(error, 'No se pudo renovar el acceso de Mercado Pago'))
+    }
+  }
+
+  const handleDisconnectMercadoPago = async () => {
+    setErrorMessage('')
+    try {
+      await disconnectMercadoPagoOAuth.mutateAsync()
+    } catch (error: unknown) {
+      setErrorMessage(getErrorMessage(error, 'No se pudo desconectar Mercado Pago'))
+    }
+  }
+
   if (isLoading || !formData) {
     return (
       <div
@@ -256,7 +304,7 @@ const SettingsPage: React.FC = () => {
         >
           Configuración
         </h1>
-        {activeTab !== 'security' && (
+        {!['security', 'payments'].includes(activeTab) && (
           <button
             onClick={() => {
               void handleSave()
@@ -1108,6 +1156,175 @@ const SettingsPage: React.FC = () => {
                 </div>
               )
             })}
+          </div>
+        )}
+
+        {activeTab === 'payments' && (
+          <div className="space-y-6">
+            <div>
+              <h3
+                className="text-lg font-black uppercase tracking-tight"
+                style={{ color: colors2000s.orange.accent }}
+              >
+                Mercado Pago de la tienda
+              </h3>
+              <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+                La tienda autoriza su propia cuenta. Shifty nunca solicita ni muestra el token
+                privado.
+              </p>
+            </div>
+
+            <div
+              className="rounded-[2rem] p-6 space-y-4"
+              style={{
+                background: 'white',
+                border: `1px solid ${colors2000s.border.light}`,
+                boxShadow: colors2000s.shadows.outer
+              }}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <p className="font-black uppercase tracking-tight">
+                    {gatewayQuery.data?.configured ? 'Cuenta conectada' : 'Cuenta no conectada'}
+                  </p>
+                  <p className="text-xs font-bold text-gray-500 mt-1">
+                    {gatewayQuery.data?.oauth_user_id
+                      ? `Cuenta Mercado Pago ${gatewayQuery.data.oauth_user_id}`
+                      : 'Conectá la cuenta que recibirá las señas de esta tienda.'}
+                  </p>
+                </div>
+                <span
+                  className="px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest"
+                  style={{
+                    background: gatewayQuery.data?.configured ? '#dcfce7' : '#fef3c7',
+                    color: gatewayQuery.data?.configured ? '#166534' : '#92400e'
+                  }}
+                >
+                  {gatewayQuery.data?.configured ? 'Activa' : 'Pendiente'}
+                </span>
+              </div>
+
+              {!gatewayQuery.data?.configured ? (
+                <button
+                  type="button"
+                  onClick={() => void handleConnectMercadoPago()}
+                  disabled={startMercadoPagoOAuth.isPending || !gatewayQuery.data?.oauth_supported}
+                  className="w-full py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs disabled:opacity-50"
+                  style={buttonStyles2000s.selected}
+                >
+                  {startMercadoPagoOAuth.isPending ? 'Conectando...' : 'Conectar con Mercado Pago'}
+                </button>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void handleRefreshMercadoPago()}
+                    disabled={refreshMercadoPagoOAuth.isPending}
+                    className="py-3 rounded-xl font-black uppercase tracking-widest text-xs"
+                    style={buttonStyles2000s.default}
+                  >
+                    <RefreshCcw className="w-4 h-4 inline mr-2" />
+                    Renovar acceso
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDisconnectMercadoPago()}
+                    disabled={disconnectMercadoPagoOAuth.isPending}
+                    className="py-3 rounded-xl font-black uppercase tracking-widest text-xs text-red-700 border border-red-200 bg-red-50"
+                  >
+                    <Unplug className="w-4 h-4 inline mr-2" />
+                    Desconectar
+                  </button>
+                </div>
+              )}
+
+              {!gatewayQuery.data?.oauth_supported && (
+                <p role="alert" className="text-xs font-bold text-red-600">
+                  El servidor todavía no tiene configuradas las credenciales OAuth de la aplicación
+                  Shifty.
+                </p>
+              )}
+              {searchParams.get('mercadopago') === 'connected' && (
+                <p className="text-xs font-bold text-green-700">
+                  La cuenta quedó conectada correctamente.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-4 pt-2">
+              <h4
+                className="text-sm font-black uppercase tracking-tight"
+                style={{ color: colors2000s.orange.accent }}
+              >
+                Condiciones de la seña
+              </h4>
+
+              <label className="flex items-start gap-3 text-xs font-bold cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={formData.allow_manual_coordination}
+                  onChange={(e) =>
+                    setFormData({ ...formData, allow_manual_coordination: e.target.checked })
+                  }
+                  className="mt-0.5 w-4 h-4 accent-orange-500 cursor-pointer"
+                />
+                <span style={{ color: colors2000s.text.secondary }}>
+                  Permitir coordinar el pago por fuera (WhatsApp).
+                  <span className="block font-medium mt-1" style={{ color: colors2000s.text.disabled }}>
+                    Si lo desactivás, los servicios con seña obligatoria solo se van a poder
+                    reservar pagando con Mercado Pago.
+                  </span>
+                </span>
+              </label>
+
+              <div className="space-y-2">
+                <label
+                  className="text-[10px] font-black uppercase tracking-widest"
+                  style={{ color: colors2000s.text.secondary }}
+                >
+                  Política de seña, cancelación y reembolso
+                </label>
+                <textarea
+                  rows={5}
+                  maxLength={2000}
+                  value={formData.deposit_policy}
+                  onChange={(e) => setFormData({ ...formData, deposit_policy: e.target.value })}
+                  placeholder="Ej: La seña equivale al 30% del servicio y se descuenta del total. Se devuelve si cancelás con 24 horas de anticipación."
+                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
+                  style={createSettingsInputStyle()}
+                />
+                <p className="text-[11px] font-medium" style={{ color: colors2000s.text.disabled }}>
+                  Se le muestra al cliente antes de reservar y queda registrada su aceptación. Es
+                  tu respaldo ante un reclamo, así que conviene ser concreto.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void handleSave()
+                }}
+                disabled={saveStatus === 'saving'}
+                className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                style={{
+                  background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                  border: `1px solid ${colors2000s.orange.accent}`,
+                  color: colors2000s.text.onOrange,
+                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
+                }}
+              >
+                {saveStatus === 'success' ? (
+                  <Check className="w-4 h-4" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                {saveStatus === 'saving'
+                  ? 'Guardando...'
+                  : saveStatus === 'success'
+                    ? 'Guardado'
+                    : 'Guardar condiciones'}
+              </button>
+            </div>
           </div>
         )}
 

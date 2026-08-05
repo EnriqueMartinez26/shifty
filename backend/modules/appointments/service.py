@@ -17,6 +17,7 @@ import ulid
 from core.cache import CacheInvalidator
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
+    AppException,
     AppointmentConflictException,
     AppointmentNotFoundException,
     BlockedScheduleException,
@@ -210,6 +211,15 @@ class AppointmentService:
         appointment = await self.uow.appointments.get_by_public_id(public_id)
         if not appointment:
             raise AppointmentNotFoundException(public_id)
+        if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
+            raise AppException(
+                message=(
+                    "Los turnos con un pago pendiente deben liberarse desde "
+                    "la accion protegida para administradores"
+                ),
+                http_status=409,
+                error_code="PAYMENT_APPOINTMENT_REQUIRES_RELEASE",
+            )
 
         payload_before = {"status": appointment.status}
 

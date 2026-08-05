@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 
-import { AlertCircle, Loader2, RefreshCcw, Save, Settings2 } from 'lucide-react'
+import { AlertCircle, Loader2, RefreshCcw, Settings2 } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -10,8 +10,7 @@ import {
   useOutboxStats,
   useProcessOutbox,
   useReconciliationSummary,
-  useRefundPayment,
-  useUpsertGatewayConfig
+  useRefundPayment
 } from '../hooks/usePayments'
 import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
 import {
@@ -24,32 +23,15 @@ const PaymentsPage: React.FC = () => {
   const gatewayQuery = useGatewayConfig()
   const summaryQuery = useReconciliationSummary()
   const outboxStatsQuery = useOutboxStats()
-  const upsertGateway = useUpsertGatewayConfig()
   const refundPayment = useRefundPayment()
   const processOutbox = useProcessOutbox()
 
-  const [gatewayForm, setGatewayForm] = useState({
-    provider: 'mercadopago' as 'mercadopago' | 'stripe',
-    access_token: '',
-    public_key: '',
-    webhook_secret: ''
-  })
   const [refundForm, setRefundForm] = useState({
     paymentId: '',
     amount: '',
     reason: ''
   })
   const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    if (gatewayQuery.data) {
-      setGatewayForm((prev) => ({
-        ...prev,
-        provider: (gatewayQuery.data.provider as 'mercadopago' | 'stripe') || 'mercadopago',
-        public_key: gatewayQuery.data.public_key || ''
-      }))
-    }
-  }, [gatewayQuery.data])
 
   const summaryCards = useMemo(() => {
     const summary = summaryQuery.data
@@ -63,18 +45,6 @@ const PaymentsPage: React.FC = () => {
       }
     ]
   }, [summaryQuery.data])
-
-  const handleSaveGateway = async () => {
-    try {
-      const response = await upsertGateway.mutateAsync({
-        ...gatewayForm,
-        access_token: gatewayForm.access_token.trim() || undefined
-      })
-      setMessage(`Cobros online configurados: ${response.provider}`)
-    } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo guardar la configuracion'))
-    }
-  }
 
   const handleRefund = async () => {
     try {
@@ -158,111 +128,36 @@ const PaymentsPage: React.FC = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-6">
         <div className="p-6 rounded-3xl space-y-5" style={cardStyle}>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <h3
               className="text-lg font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
               Integracion de cobros
             </h3>
-            <button
-              type="button"
-              onClick={() => {
-                void handleSaveGateway()
+            <span
+              className="px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest"
+              style={{
+                background: gatewayQuery.data?.configured ? '#dcfce7' : '#fef3c7',
+                color: gatewayQuery.data?.configured ? '#166534' : '#92400e'
               }}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
-              style={buttonStyles2000s.selected}
             >
-              <Save className="w-4 h-4 inline mr-2" />
-              Guardar
-            </button>
+              {gatewayQuery.data?.configured ? 'Conectada' : 'Sin conectar'}
+            </span>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label
-                className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Proveedor
-              </label>
-              <select
-                value={gatewayForm.provider}
-                onChange={(e) =>
-                  setGatewayForm((prev) => ({
-                    ...prev,
-                    provider: e.target.value as 'mercadopago' | 'stripe'
-                  }))
-                }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                style={inputStyle}
-              >
-                <option value="mercadopago">Mercado Pago</option>
-                <option value="stripe">Stripe</option>
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label
-                className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Clave publica
-              </label>
-              <input
-                value={gatewayForm.public_key}
-                onChange={(e) =>
-                  setGatewayForm((prev) => ({ ...prev, public_key: e.target.value }))
-                }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                style={inputStyle}
-                placeholder="APP_USR..."
-              />
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label
-                className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Token privado
-              </label>
-              <input
-                value={gatewayForm.access_token}
-                onChange={(e) =>
-                  setGatewayForm((prev) => ({ ...prev, access_token: e.target.value }))
-                }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                style={inputStyle}
-                placeholder={gatewayQuery.data?.configured ? '********' : 'Ingresa el token'}
-              />
-            </div>
-            <div className="space-y-2">
-              <label
-                className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Clave de notificaciones
-              </label>
-              <input
-                value={gatewayForm.webhook_secret}
-                onChange={(e) =>
-                  setGatewayForm((prev) => ({ ...prev, webhook_secret: e.target.value }))
-                }
-                className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                style={inputStyle}
-                placeholder="Opcional"
-              />
-            </div>
-          </div>
-
-          <p
-            className="text-[10px] font-black uppercase tracking-widest"
-            style={{ color: colors2000s.text.secondary }}
-          >
-            Estado actual: {gatewayQuery.data?.configured ? 'listo para cobrar' : 'sin configurar'}
+          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+            Las credenciales se administran mediante OAuth desde Configuración de tienda. Los tokens
+            privados nunca se ingresan ni se muestran en el frontend.
           </p>
+          <button
+            type="button"
+            onClick={() => window.location.assign('/dashboard/settings?tab=payments')}
+            className="w-full py-3 rounded-xl text-xs font-black uppercase tracking-widest"
+            style={buttonStyles2000s.default}
+          >
+            Abrir configuración de Mercado Pago
+          </button>
         </div>
 
         <div className="p-6 rounded-3xl space-y-5" style={cardStyle}>

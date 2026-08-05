@@ -38,6 +38,15 @@ celery_app.conf.update(
             "task": "process_payment_webhook_inbox",
             "schedule": crontab(),
         },
+        "expire-unpaid-appointment-holds-every-minute": {
+            "task": "expire_unpaid_appointments",
+            "schedule": crontab(),
+        },
+        # Red de contencion por si un webhook de Mercado Pago nunca llego.
+        "reconcile-pending-payments-every-5-minutes": {
+            "task": "reconcile_pending_payments",
+            "schedule": crontab(minute="*/5"),
+        },
         "process-appointment-reminders-every-15-minutes": {
             "task": "process_appointment_reminders",
             "schedule": crontab(minute="*/15"),

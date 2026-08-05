@@ -32,6 +32,7 @@ const SuperAdminPage = lazy(() => import('./presentation/pages/SuperAdmin'))
 const UsersPage = lazy(() => import('./presentation/pages/Users'))
 const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
 const SettingsPage = lazy(() => import('./presentation/pages/Settings'))
+const LegalPage = lazy(() => import('./presentation/pages/Legal'))
 
 const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
   <Sentry.ErrorBoundary
@@ -105,6 +106,8 @@ function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/legal/:document" element={<LegalPage />} />
+            <Route path="/legal" element={<Navigate to="/legal/terminos" replace />} />
             <Route
               path="/dashboard"
               element={

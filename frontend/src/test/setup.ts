@@ -11,14 +11,27 @@ const customGlobal = globalThis as typeof globalThis & {
   TextDecoder?: typeof TextDecoder
 }
 
+const createTestUuid = (): `${string}-${string}-${string}-${string}-${string}` =>
+  `00000000-0000-4000-8000-${Math.random().toString(16).slice(2).padEnd(12, '0').slice(0, 12)}`
+
 if (typeof customGlobal.crypto === 'undefined') {
   try {
     Object.defineProperty(customGlobal, 'crypto', {
       value: {
         getRandomValues: <T extends ArrayBufferView>(array: T) => array,
-        randomUUID: () =>
-          `test-uuid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+        randomUUID: createTestUuid
       } as Crypto,
+      writable: true
+    })
+  } catch (_error) {
+    // Fail-safe fallback if the environment disallows redefining globals.
+  }
+}
+
+if (typeof customGlobal.crypto?.randomUUID !== 'function') {
+  try {
+    Object.defineProperty(customGlobal.crypto, 'randomUUID', {
+      value: createTestUuid,
       writable: true
     })
   } catch (_error) {

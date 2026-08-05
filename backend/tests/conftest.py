@@ -90,12 +90,23 @@ class MockRedis:
         return self.store.get(key)
 
     async def set(
-        self, key: str, value: object, nx: bool | None = None, px: int | None = None
+        self,
+        key: str,
+        value: object,
+        nx: bool | None = None,
+        px: int | None = None,
+        ex: int | None = None,
     ) -> bool | None:
         if nx and key in self.store:
             return None
         self.store[key] = str(value)
         return True
+
+    async def getdel(self, key: str) -> str | None:
+        value = self.store.get(key)
+        if key in self.store:
+            del self.store[key]
+        return value
 
     async def setex(self, key: str, seconds: int, value: object) -> bool:
         self.store[key] = str(value)

@@ -98,6 +98,12 @@ export class BookingService extends BaseService<Appointment> {
     }, 'cancelAppointment')
   }
 
+  async releaseAppointment(id: string): Promise<void> {
+    await this.execute(async () => {
+      await this.repository.release(id)
+    }, 'releaseAppointment')
+  }
+
   /**
    * Marks a client booking as absent.
    *

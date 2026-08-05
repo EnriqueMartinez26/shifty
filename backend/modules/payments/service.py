@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 from typing import cast
 
 import httpx
@@ -11,8 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.circuit_breaker import AsyncCircuitBreaker
-from core.config import Environment, settings
-from core.crypto import decrypt_secret
+from core.config import settings
+from core.crypto import decrypt_secret, encrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
@@ -97,14 +97,11 @@ async def _resolve_appointment_payer(
     return resolved_name or None, client.email
 
 
-def _booking_return_url(
-    store: Store, appointment: Appointment, payment_status: str
-) -> str:
+def _booking_return_url(store: Store, payment: Payment) -> str:
     base_url = settings.FRONTEND_URL.rstrip("/")
     query = urlencode(
         {
-            "payment_status": payment_status,
-            "appointment_id": appointment.public_id,
+            "payment_id": payment.id,
             "store_id": store.public_id,
         }
     )
@@ -117,11 +114,22 @@ def _notification_url(store: Store) -> str:
 
 
 def _resolve_checkout_link(payload: dict[str, JsonValue]) -> str | None:
-    if settings.ENV == Environment.PRODUCTION:
-        value = payload.get("init_point") or payload.get("sandbox_init_point")
-    else:
-        value = payload.get("sandbox_init_point") or payload.get("init_point")
-    return str(value) if isinstance(value, str) else None
+    # Checkout Pro test purchases use test seller/buyer accounts with the
+    # regular init_point. Forcing sandbox_init_point in non-production mixes
+    # environments and Mercado Pago rejects otherwise valid test payments.
+    value = payload.get("init_point") or payload.get("sandbox_init_point")
+    if not isinstance(value, str):
+        return None
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not (
+        hostname == "mercadopago.com"
+        or hostname.endswith(".mercadopago.com")
+        or hostname == "mercadopago.com.ar"
+        or hostname.endswith(".mercadopago.com.ar")
+    ):
+        return None
+    return value
 
 
 def calculate_service_payment_amount(
@@ -254,7 +262,190 @@ def _resolve_access_token(config: PaymentGatewayConfig | None) -> str | None:
     try:
         return decrypt_secret(config.encrypted_access_token)
     except Exception:
-        return config.encrypted_access_token
+        return None
+
+
+def _resolve_refresh_token(config: PaymentGatewayConfig | None) -> str | None:
+    if not config or not config.encrypted_refresh_token:
+        return None
+    try:
+        return decrypt_secret(config.encrypted_refresh_token)
+    except Exception:
+        return None
+
+
+def mercadopago_oauth_is_configured() -> bool:
+    return bool(
+        settings.MERCADOPAGO_OAUTH_CLIENT_ID
+        and settings.MERCADOPAGO_OAUTH_CLIENT_SECRET
+        and settings.MERCADOPAGO_OAUTH_REDIRECT_URI
+    )
+
+
+def build_mercadopago_oauth_authorization_url(
+    *, state: str, code_challenge: str
+) -> str:
+    if not mercadopago_oauth_is_configured():
+        raise RuntimeError("Mercado Pago OAuth no esta configurado")
+    query = urlencode(
+        {
+            "client_id": settings.MERCADOPAGO_OAUTH_CLIENT_ID,
+            "response_type": "code",
+            "platform_id": "mp",
+            "state": state,
+            "redirect_uri": settings.MERCADOPAGO_OAUTH_REDIRECT_URI,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "scope": "read write offline_access",
+        }
+    )
+    return f"{settings.MERCADOPAGO_OAUTH_AUTH_URL}?{query}"
+
+
+async def _mercadopago_oauth_token_request(
+    form_data: dict[str, str],
+) -> dict[str, JsonValue]:
+    if not mercadopago_oauth_is_configured():
+        raise RuntimeError("Mercado Pago OAuth no esta configurado")
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                f"{MERCADOPAGO_API_BASE_URL}/oauth/token",
+                data=form_data,
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+            )
+    except httpx.TimeoutException as exc:
+        raise RuntimeError("Mercado Pago no respondio a tiempo durante OAuth") from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(
+            "Mercado Pago no esta disponible para completar OAuth"
+        ) from exc
+
+    if response.status_code >= 400:
+        detail = response.text[:400] or f"HTTP {response.status_code}"
+        raise RuntimeError(f"Mercado Pago rechazo OAuth: {detail}")
+
+    try:
+        return cast(dict[str, JsonValue], response.json())
+    except ValueError as exc:
+        raise RuntimeError(
+            "Mercado Pago devolvio una respuesta OAuth invalida"
+        ) from exc
+
+
+async def exchange_mercadopago_oauth_code(
+    *, code: str, code_verifier: str
+) -> dict[str, JsonValue]:
+    return await _mercadopago_oauth_token_request(
+        {
+            "client_id": settings.MERCADOPAGO_OAUTH_CLIENT_ID or "",
+            "client_secret": settings.MERCADOPAGO_OAUTH_CLIENT_SECRET or "",
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": settings.MERCADOPAGO_OAUTH_REDIRECT_URI or "",
+            "code_verifier": code_verifier,
+        }
+    )
+
+
+async def refresh_mercadopago_oauth_connection(
+    db: AsyncSession,
+    *,
+    config: PaymentGatewayConfig,
+) -> PaymentGatewayConfig:
+    refresh_token = _resolve_refresh_token(config)
+    if not refresh_token:
+        raise RuntimeError("La conexion OAuth de Mercado Pago no tiene refresh token")
+
+    token_payload = await _mercadopago_oauth_token_request(
+        {
+            "client_id": settings.MERCADOPAGO_OAUTH_CLIENT_ID or "",
+            "client_secret": settings.MERCADOPAGO_OAUTH_CLIENT_SECRET or "",
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
+    )
+    apply_mercadopago_oauth_payload(config, token_payload)
+    await db.flush()
+    return config
+
+
+def apply_mercadopago_oauth_payload(
+    config: PaymentGatewayConfig, token_payload: dict[str, JsonValue]
+) -> None:
+    access_token = str(token_payload.get("access_token") or "").strip()
+    if not access_token:
+        raise RuntimeError("Mercado Pago no devolvio access_token")
+
+    config.encrypted_access_token = encrypt_secret(access_token) or ""
+
+    refresh_token = str(token_payload.get("refresh_token") or "").strip()
+    if refresh_token:
+        config.encrypted_refresh_token = encrypt_secret(refresh_token)
+
+    public_key = str(token_payload.get("public_key") or "").strip()
+    if public_key:
+        config.public_key = public_key
+
+    oauth_user_id = str(token_payload.get("user_id") or "").strip()
+    if oauth_user_id:
+        config.oauth_user_id = oauth_user_id
+
+    oauth_scope = str(token_payload.get("scope") or "").strip()
+    if oauth_scope:
+        config.oauth_scope = oauth_scope
+
+    config.connection_mode = "oauth"
+    config.oauth_connected_at = datetime.now(timezone.utc)
+
+
+async def _mercadopago_api_request_for_store(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    method: str,
+    path: str,
+    json_body: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue] | None:
+    config = await _get_gateway_config(db, store_id)
+    access_token = _resolve_access_token(config)
+    if not access_token:
+        return None
+
+    try:
+        return await _mercadopago_api_request(
+            access_token,
+            method=method,
+            path=path,
+            json_body=json_body,
+        )
+    except MercadoPagoAPIError as exc:
+        if (
+            exc.status_code == 401
+            and config is not None
+            and config.connection_mode == "oauth"
+            and _resolve_refresh_token(config)
+            and mercadopago_oauth_is_configured()
+        ):
+            refreshed_config = await refresh_mercadopago_oauth_connection(
+                db, config=config
+            )
+            refreshed_access_token = _resolve_access_token(refreshed_config)
+            if not refreshed_access_token:
+                raise RuntimeError(
+                    "No se pudo renovar la conexion OAuth de Mercado Pago"
+                )
+            return await _mercadopago_api_request(
+                refreshed_access_token,
+                method=method,
+                path=path,
+                json_body=json_body,
+            )
+        raise
 
 
 async def create_mercadopago_preference(
@@ -267,8 +458,7 @@ async def create_mercadopago_preference(
     amount: Decimal,
 ) -> dict[str, JsonValue] | None:
     config = await _get_gateway_config(db, store_id)
-    access_token = _resolve_access_token(config)
-    if not access_token:
+    if not _resolve_access_token(config):
         return None
 
     store = await _get_store(db, store_id)
@@ -299,11 +489,18 @@ async def create_mercadopago_preference(
                 "external_reference": appointment.id,
                 "notification_url": _notification_url(store),
                 "back_urls": {
-                    "success": _booking_return_url(store, appointment, "approved"),
-                    "failure": _booking_return_url(store, appointment, "rejected"),
-                    "pending": _booking_return_url(store, appointment, "pending"),
+                    "success": _booking_return_url(store, payment),
+                    "failure": _booking_return_url(store, payment),
+                    "pending": _booking_return_url(store, payment),
                 },
                 "auto_return": "approved",
+                "binary_mode": True,
+                "expires": True,
+                # El checkout vence junto con la retencion del slot, para que
+                # nadie pague una seña de un turno que ya se libero.
+                "expiration_date_to": (
+                    appointment.expires_at or appointment.starts_at
+                ).isoformat(),
                 "metadata": {
                     "appointment_id": appointment.id,
                     "store_id": store.id,
@@ -313,23 +510,79 @@ async def create_mercadopago_preference(
             },
         ),
     )
-    return await _mercadopago_api_request(
-        access_token, method="POST", path="/checkout/preferences", json_body=payload
+    return await _mercadopago_api_request_for_store(
+        db,
+        store_id=store_id,
+        method="POST",
+        path="/checkout/preferences",
+        json_body=payload,
     )
+
+
+async def expire_mercadopago_preference(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    preference_id: str,
+) -> None:
+    if _is_placeholder_preference(preference_id):
+        return
+    expiration = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    response = await _mercadopago_api_request_for_store(
+        db,
+        store_id=store_id,
+        method="PUT",
+        path=f"/checkout/preferences/{preference_id}",
+        json_body={
+            "expires": True,
+            "expiration_date_to": expiration,
+        },
+    )
+    if response is None:
+        raise RuntimeError(
+            "No se pudo vencer la preferencia porque la tienda no tiene una conexion activa"
+        )
 
 
 async def fetch_mercadopago_payment(
     db: AsyncSession, *, store_id: str, payment_id: str
 ) -> dict[str, JsonValue] | None:
-    config = await _get_gateway_config(db, store_id)
-    access_token = _resolve_access_token(config)
-    if not access_token:
-        return None
-    return await _mercadopago_api_request(
-        access_token,
+    return await _mercadopago_api_request_for_store(
+        db,
+        store_id=store_id,
         method="GET",
         path=f"/v1/payments/{payment_id}",
     )
+
+
+async def search_mercadopago_payments(
+    db: AsyncSession, *, store_id: str, external_reference: str
+) -> list[dict[str, JsonValue]]:
+    """Busca en Mercado Pago los pagos asociados a un turno.
+
+    Se usa para conciliar cuando nunca llego el webhook o no pudimos aplicarlo:
+    el ``external_reference`` es el id del turno, asi que alcanza para recuperar
+    el cobro sin depender de la notificacion.
+    """
+    query = urlencode(
+        {
+            "external_reference": external_reference,
+            "sort": "date_created",
+            "criteria": "desc",
+        }
+    )
+    response = await _mercadopago_api_request_for_store(
+        db,
+        store_id=store_id,
+        method="GET",
+        path=f"/v1/payments/search?{query}",
+    )
+    if not response:
+        return []
+    results = response.get("results")
+    if not isinstance(results, list):
+        return []
+    return [item for item in results if isinstance(item, dict)]
 
 
 async def ensure_payment_preference(
@@ -423,6 +676,10 @@ async def ensure_payment_preference(
             payment.preference_id = preference_id
             payment.payment_link = payment_link
             payment.raw_payload = preference_payload
+        else:
+            raise RuntimeError(
+                "La tienda debe conectar su cuenta de Mercado Pago antes de cobrar"
+            )
 
     return payment
 
@@ -457,6 +714,16 @@ def stamp_payment_from_status(
     *,
     payload: dict[str, JsonValue] | None = None,
 ) -> None:
+    if payment.status in {
+        PaymentStatus.APPROVED.value,
+        PaymentStatus.MANUAL_CONFIRMED.value,
+        PaymentStatus.REFUNDED.value,
+    } and payment_status in {
+        PaymentStatus.PENDING.value,
+        PaymentStatus.REJECTED.value,
+        PaymentStatus.EXPIRED.value,
+    }:
+        return
     payment.status = payment_status
     payment.raw_payload = payload or payment.raw_payload
     if payment_status in {

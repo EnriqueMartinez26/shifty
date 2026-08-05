@@ -16,6 +16,16 @@ class GatewayConfigResponse(BaseModel):
     configured: bool
     public_key: str | None = None
     access_token_masked: str | None = None
+    connection_mode: str | None = None
+    oauth_user_id: str | None = None
+    oauth_connected_at: datetime | None = None
+    oauth_supported: bool = False
+
+
+class MercadoPagoOAuthStartResponse(BaseModel):
+    auth_url: str
+    qr_url: str
+    expires_at: datetime
 
 
 class PaymentPreferenceResponse(BaseModel):

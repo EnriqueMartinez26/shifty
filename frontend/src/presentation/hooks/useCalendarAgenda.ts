@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { Appointment } from '@domain/entities/Appointment'
 
@@ -13,5 +13,17 @@ export const useCalendarAgenda = (fromDate: string, toDate: string) => {
     queryKey: ['calendar-agenda', fromDate, toDate],
     enabled: Boolean(fromDate && toDate),
     queryFn: () => appointmentService.getCalendarRange(fromDate, toDate)
+  })
+}
+
+export const useReleaseAppointment = () => {
+  const queryClient = useQueryClient()
+  const appointmentService = resolveService<AppointmentService>('appointmentService')
+
+  return useMutation({
+    mutationFn: (appointmentId: string) => appointmentService.release(appointmentId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['calendar-agenda'] })
+    }
   })
 }
