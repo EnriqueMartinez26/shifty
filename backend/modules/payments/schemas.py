@@ -38,13 +38,19 @@ class PaymentPreferenceResponse(BaseModel):
     status: str
 
 
+# Techo alineado con services.price (le=10_000_000) y con Numeric(12, 2) en la
+# base: un monto sin limite superior desborda la columna y termina en un 500.
 class ManualPaymentRequest(BaseModel):
-    amount: Decimal | None = Field(None, ge=0)
+    amount: Decimal | None = Field(
+        None, ge=0, le=10_000_000, max_digits=12, decimal_places=2
+    )
     notes: str | None = Field(None, max_length=500)
 
 
 class RefundRequest(BaseModel):
-    amount: Decimal | None = Field(None, ge=0)
+    amount: Decimal | None = Field(
+        None, ge=0, le=10_000_000, max_digits=12, decimal_places=2
+    )
     reason: str | None = Field(None, max_length=500)
     manual: bool = False
 

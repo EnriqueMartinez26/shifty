@@ -32,11 +32,9 @@ export class EventBus {
     eventName: string,
     handler: EventHandler<T>
   ): Unsubscribe {
-    if (!this.subscribers.has(eventName)) {
-      this.subscribers.set(eventName, new Set())
-    }
-
-    this.subscribers.get(eventName)!.add(handler as EventHandler<DomainEvent>)
+    const handlers = this.subscribers.get(eventName) ?? new Set<EventHandler<DomainEvent>>()
+    this.subscribers.set(eventName, handlers)
+    handlers.add(handler as EventHandler<DomainEvent>)
 
     return () => {
       const handlers = this.subscribers.get(eventName)

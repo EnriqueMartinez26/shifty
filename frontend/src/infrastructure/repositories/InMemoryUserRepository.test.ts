@@ -53,7 +53,7 @@ describe('InMemoryUserRepository', () => {
     const foundUsers = await repository.findByRole(roleVO)
 
     expect(foundUsers.length).toBe(1)
-    expect(foundUsers[0].id).toBe('user_1')
+    expect(foundUsers[0]?.id).toBe('user_1')
   })
 
   it('should throw NotFoundError when updating non-existent user', async () => {

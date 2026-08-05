@@ -699,12 +699,29 @@ async def refund_payment(
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
     payment = await _get_payment_by_id(db, payment_id, user.store_id)
-    if data.amount is not None:
-        payment.amount = data.amount
+    # Solo se puede devolver plata que efectivamente entro. Reembolsar un pago
+    # pendiente marcaria como devuelto un cobro que nunca existio.
+    if payment.status not in {
+        PaymentStatus.APPROVED.value,
+        PaymentStatus.MANUAL_CONFIRMED.value,
+    }:
+        raise ValidationException(
+            "Solo se pueden reembolsar pagos acreditados o confirmados manualmente"
+        )
+    refund_amount = data.amount if data.amount is not None else payment.amount
+    if refund_amount <= 0 or refund_amount > payment.amount:
+        raise ValidationException(
+            "El importe a reembolsar debe ser mayor a cero y no superar lo cobrado"
+        )
+    # El monto historico del pago no se pisa: el reembolso queda en el payload.
     stamp_payment_from_status(
         payment,
         PaymentStatus.REFUNDED.value,
-        payload={"reason": data.reason, "manual": data.manual},
+        payload={
+            "reason": data.reason,
+            "manual": data.manual,
+            "refunded_amount": str(refund_amount),
+        },
     )
     appointment_result = await db.execute(
         select(Appointment).where(
@@ -736,7 +753,13 @@ async def mercadopago_webhook(
     set_tenant_context(None, True)
     try:
         await _apply_tenant_context(db)
-        payload = await request.json()
+        # Un body invalido no puede tirar un 500: es trafico externo no confiable.
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise WebhookException(message="Body de webhook invalido") from exc
+        if not isinstance(payload, dict):
+            raise WebhookException(message="Body de webhook invalido")
         resolved_store_id = await _validate_mercadopago_signature(
             db,
             payload=payload,

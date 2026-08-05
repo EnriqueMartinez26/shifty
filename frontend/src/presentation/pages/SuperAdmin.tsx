@@ -491,13 +491,16 @@ const SuperAdminPage: React.FC = () => {
   const redeemCouponMutation = useRedeemSuperAdminCoupon()
 
   useEffect(() => {
-    if (!storesQuery.data?.length) {
+    const firstStore = storesQuery.data?.[0]
+    if (!firstStore) {
       setSelectedStoreId(null)
       return
     }
-    const selectedExists = storesQuery.data.some((store) => store.public_id === selectedStoreId)
+    const selectedExists = storesQuery.data?.some(
+      (store) => store.public_id === selectedStoreId
+    )
     if (!selectedExists) {
-      setSelectedStoreId(storesQuery.data[0].public_id)
+      setSelectedStoreId(firstStore.public_id)
     }
   }, [selectedStoreId, storesQuery.data])
 

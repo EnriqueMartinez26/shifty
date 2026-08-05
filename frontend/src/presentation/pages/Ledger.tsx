@@ -36,8 +36,9 @@ const LedgerPage: React.FC = () => {
   const [message, setMessage] = useState('')
 
   useEffect(() => {
-    if (!selectedClientId && clients.length > 0) {
-      setSelectedClientId(clients[0].public_id)
+    const firstClient = clients[0]
+    if (!selectedClientId && firstClient) {
+      setSelectedClientId(firstClient.public_id)
     }
   }, [clients, selectedClientId])
 

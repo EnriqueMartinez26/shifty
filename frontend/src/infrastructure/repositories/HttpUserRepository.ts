@@ -29,7 +29,8 @@ export class HttpUserRepository
   public async findByEmail(email: Email): Promise<User | null> {
     try {
       const { data } = await this.client.get<UserResponseDTO[]>(`/users/?email=${email.getValue()}`)
-      return data.length > 0 ? UserMapper.toDomain(data[0]) : null
+      const first = data[0]
+      return first ? UserMapper.toDomain(first) : null
     } catch (error) {
       this.handleRepositoryError('findByEmail', error)
     }

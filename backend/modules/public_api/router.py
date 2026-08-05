@@ -33,7 +33,7 @@ from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_redis
-from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN
+from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
@@ -73,7 +73,11 @@ PublicIdPath = Annotated[
 PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
-SlugPath = Annotated[str, Path(min_length=2, max_length=100, pattern=SLUG_PATTERN)]
+# El slug canonico es minuscula, pero la URL publica la tipean humanos:
+# "MiBarberia" tiene que resolver a "mibarberia", no dar 422.
+SlugPath = Annotated[
+    str, Path(min_length=2, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,98}$")
+]
 
 
 def _payment_hold_deadline(starts_at: datetime) -> datetime:
@@ -192,7 +196,7 @@ async def get_store_by_slug(
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
-        store = await repo.get_store_by_slug(slug)
+        store = await repo.get_store_by_slug(slug.lower())
         if not store:
             raise StoreNotFoundException(identifier=slug)
         return PublicStoreResponse(

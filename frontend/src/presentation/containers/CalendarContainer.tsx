@@ -187,8 +187,9 @@ export const CalendarContainer: React.FC = () => {
   const releaseAppointment = useReleaseAppointment()
 
   useEffect(() => {
-    if (staffMembers?.length && !blockForm.staff_id) {
-      setBlockForm((prev) => ({ ...prev, staff_id: staffMembers[0].id }))
+    const firstStaff = staffMembers?.[0]
+    if (firstStaff && !blockForm.staff_id) {
+      setBlockForm((prev) => ({ ...prev, staff_id: firstStaff.id }))
     }
   }, [blockForm.staff_id, staffMembers])
 

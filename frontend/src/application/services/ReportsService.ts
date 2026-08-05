@@ -140,8 +140,9 @@ export class ReportsService {
 
     const contentDisposition = headers['content-disposition'] as string | undefined
     let filename = `reporte-turnos.${params.format === 'excel' ? 'xlsx' : params.format}`
-    if (contentDisposition?.includes('filename=')) {
-      filename = contentDisposition.split('filename=')[1].replace(/"/g, '').trim()
+    const dispositionFilename = contentDisposition?.split('filename=')[1]
+    if (dispositionFilename) {
+      filename = dispositionFilename.replace(/"/g, '').trim()
     }
 
     return { blob, filename }

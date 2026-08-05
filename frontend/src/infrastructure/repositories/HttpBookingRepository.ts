@@ -68,7 +68,7 @@ export class HttpBookingRepository
     }
   }
 
-  async create(payload: CreateBookingRequestDTO): Promise<Appointment> {
+  override async create(payload: CreateBookingRequestDTO): Promise<Appointment> {
     return await super.create(payload)
   }
 
