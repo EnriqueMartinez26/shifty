@@ -1,3 +1,4 @@
+import { createUuid } from '../../shared/utils/uuid'
 import { Email } from '../value-objects/Email'
 import { UserId } from '../value-objects/UserId'
 
@@ -21,7 +22,7 @@ export class Staff {
   static create(props: Omit<StaffProps, 'id' | 'isActive'>): Staff {
     return new Staff({
       ...props,
-      id: UserId.create(crypto.randomUUID()),
+      id: UserId.create(createUuid()),
       isActive: true
     })
   }

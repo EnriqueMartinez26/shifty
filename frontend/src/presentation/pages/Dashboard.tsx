@@ -15,7 +15,7 @@ import {
   UserRoundPlus,
   Wallet
 } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 
 import type { UpcomingAppointment } from '@application/services/DashboardService'
 import type {

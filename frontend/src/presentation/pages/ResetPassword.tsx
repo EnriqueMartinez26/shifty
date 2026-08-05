@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react'
 
 import { ArrowLeft, KeyRound } from 'lucide-react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
