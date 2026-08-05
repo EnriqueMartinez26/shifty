@@ -14,7 +14,10 @@ import sqlalchemy as sa
 revision: str = "9d1a7b2c3e4f"
 down_revision: Union[str, Sequence[str], None] = "f6a1b2c3d4e5"
 branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+# ix_appointments_store_client_phone se crea en la rama paralela e8a1b3c5d7f9;
+# sin esta dependencia explicita, Alembic puede aplicar esta migracion antes
+# de que ese indice exista y el drop_index falla en una base nueva.
+depends_on: Union[str, Sequence[str], None] = "e8a1b3c5d7f9"
 
 
 def upgrade() -> None:
