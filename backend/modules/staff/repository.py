@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -47,8 +47,12 @@ class StaffRepository:
     async def create(
         self, data: dict[str, Any], store_id: str, service_public_ids: list[str]
     ) -> Staff:
+        # Normalizamos el email igual que el login (lower). Sin esto, "Pro@x.com"
+        # y "pro@x.com" conviven como dos usuarios y el login case-insensitive
+        # encuentra ambos y explota con MultipleResultsFound.
+        email = str(data["email"]).strip().lower()
         user_res = await self.db.execute(
-            select(User).where(User.email == data["email"])
+            select(User).where(func.lower(User.email) == email)
         )
         if user_res.scalar_one_or_none():
             raise ValueError("Ya existe un usuario con ese email")
@@ -56,7 +60,7 @@ class StaffRepository:
         services = await self._get_services_for_store(service_public_ids, store_id)
 
         user = User(
-            email=data["email"],
+            email=email,
             hashed_password=hash_password(str(ulid.ULID())),
             first_name=data["first_name"],
             last_name=data["last_name"],
@@ -70,7 +74,7 @@ class StaffRepository:
             id=user.id,
             first_name=data["first_name"],
             last_name=data["last_name"],
-            email=data["email"],
+            email=email,
             display_name=data["display_name"],
             store_id=store_id,
             service_ids=[service.public_id for service in services],
@@ -148,9 +152,11 @@ class StaffRepository:
         service_public_ids: list[str] | None = None,
         is_active: bool | None = None,
     ) -> Staff:
+        if email is not None:
+            email = email.strip().lower()
         if email is not None and email != staff.email:
             existing_res = await self.db.execute(
-                select(User).where(User.email == email, User.id != staff.id)
+                select(User).where(func.lower(User.email) == email, User.id != staff.id)
             )
             if existing_res.scalar_one_or_none():
                 raise ValueError("Ya existe un usuario con ese email")

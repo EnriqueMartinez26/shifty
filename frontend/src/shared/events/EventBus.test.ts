@@ -43,8 +43,8 @@ describe('EventBus', () => {
 
     const history = eventBus.getHistory()
     expect(history.length).toBe(1)
-    expect(history[0].aggregateId).toBe('user_123')
-    expect(history[0].eventName).toBe('user.created')
+    expect(history[0]?.aggregateId).toBe('user_123')
+    expect(history[0]?.eventName).toBe('user.created')
   })
 
   it('should allow unsubscribing from event notifications', async () => {

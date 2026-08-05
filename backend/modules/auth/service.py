@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+import secrets
 import smtplib
 from typing import TypedDict
 
@@ -109,6 +110,12 @@ class PasswordResetEmail:
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+# Hash de sacrificio para igualar el tiempo de respuesta cuando el email no
+# existe. Sin esto, la diferencia entre "no hay usuario" (respuesta rapida) y
+# "password incorrecta" (bcrypt lento) permite enumerar cuentas por timing.
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(24))
 
 
 def access_token_for_user(user: User) -> str:
@@ -255,11 +262,11 @@ async def login_user(
         )
         user = result.scalar_one_or_none()
 
-        if (
-            not user
-            or not user.is_active
-            or not verify_password(password, user.hashed_password)
-        ):
+        # Se verifica SIEMPRE una password (real o de sacrificio) para que el
+        # tiempo de respuesta no revele si el email existe.
+        hashed = user.hashed_password if user else _DUMMY_PASSWORD_HASH
+        password_ok = verify_password(password, hashed)
+        if not user or not user.is_active or not password_ok:
             raise AuthenticationException(message="Credenciales incorrectas")
 
         access_token = access_token_for_user(user)

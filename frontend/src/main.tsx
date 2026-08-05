@@ -71,7 +71,12 @@ const queryClient = new QueryClient({
   }
 })
 
-createRoot(document.getElementById('root')!).render(
+const rootElement = document.getElementById('root')
+if (!rootElement) {
+  throw new Error('No se encontró el elemento #root en el documento')
+}
+
+createRoot(rootElement).render(
   <StrictMode>
     <Sentry.ErrorBoundary fallback={<ErrorBoundaryFallback />}>
       <QueryClientProvider client={queryClient}>

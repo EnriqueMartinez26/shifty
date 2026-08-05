@@ -39,7 +39,7 @@ export class BookingTimeSpan {
   }
 
   formatDate(): string {
-    return this.startsAt.toISOString().split('T')[0]
+    return this.startsAt.toISOString().slice(0, 10)
   }
 
   formatStartTime(): string {

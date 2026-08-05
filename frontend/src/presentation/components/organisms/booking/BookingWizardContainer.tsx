@@ -320,6 +320,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
 
   const confirmationIndex = steps.length - 1
   const otpIndex = requiresOtp ? confirmationIndex - 1 : -1
+  // Todos los pasos posteriores al primero requieren un servicio elegido. La
+  // guarda en el JSX convierte esa invariante en un chequeo del compilador en
+  // lugar de un "!" que promete sin verificar.
+  const selectedServiceId = bookingState.serviceId
 
   return (
     <div
@@ -366,10 +370,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           />
         )}
 
-        {currentStep === 1 && (
+        {currentStep === 1 && selectedServiceId && (
           <BookingStepStaff
             storePublicId={store.public_id}
-            serviceId={bookingState.serviceId!}
+            serviceId={selectedServiceId}
             selectedId={bookingState.requestedStaffId}
             onBack={prevStep}
             onSelect={(id) => {
@@ -384,10 +388,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           />
         )}
 
-        {currentStep === 2 && (
+        {currentStep === 2 && selectedServiceId && (
           <BookingStepDateTime
             storePublicId={store.public_id}
-            serviceId={bookingState.serviceId!}
+            serviceId={selectedServiceId}
             staffId={bookingState.requestedStaffId}
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
@@ -422,10 +426,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
 
         {requiresOtp && currentStep === otpIndex && renderOtpStep()}
 
-        {currentStep === confirmationIndex && (
+        {currentStep === confirmationIndex && selectedServiceId && (
           <BookingStepConfirmation
             storePublicId={store.public_id}
-            serviceId={bookingState.serviceId!}
+            serviceId={selectedServiceId}
             paymentsEnabled={Boolean(store.feature_flags?.payments)}
             storeName={store.name}
             whatsappNumber={store.whatsapp_number}
@@ -437,7 +441,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             onConfirm={async (paymentMethod, acceptsTerms) =>
               await createBooking.mutateAsync({
                 store_public_id: store.public_id,
-                service_id: bookingState.serviceId!,
+                service_id: selectedServiceId,
                 staff_id:
                   bookingState.assignedStaffId || bookingState.requestedStaffId || undefined,
                 starts_at: `${bookingState.date}T${bookingState.startTime}:00Z`,

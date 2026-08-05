@@ -879,7 +879,9 @@ const SettingsPage: React.FC = () => {
                               value={period.open}
                               onChange={(e) => {
                                 const newHours = { ...formData.business_hours }
-                                newHours[day.id][idx].open = e.target.value
+                                newHours[day.id] = (newHours[day.id] ?? []).map((p, i) =>
+                                  i === idx ? { ...p, open: e.target.value } : p
+                                )
                                 setFormData({ ...formData, business_hours: newHours })
                               }}
                               className="rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none"
@@ -896,7 +898,9 @@ const SettingsPage: React.FC = () => {
                               value={period.close}
                               onChange={(e) => {
                                 const newHours = { ...formData.business_hours }
-                                newHours[day.id][idx].close = e.target.value
+                                newHours[day.id] = (newHours[day.id] ?? []).map((p, i) =>
+                                  i === idx ? { ...p, close: e.target.value } : p
+                                )
                                 setFormData({ ...formData, business_hours: newHours })
                               }}
                               className="rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none"
@@ -905,7 +909,9 @@ const SettingsPage: React.FC = () => {
                             <button
                               onClick={() => {
                                 const newHours = { ...formData.business_hours }
-                                newHours[day.id].splice(idx, 1)
+                                newHours[day.id] = (newHours[day.id] ?? []).filter(
+                                  (_, i) => i !== idx
+                                )
                                 setFormData({ ...formData, business_hours: newHours })
                               }}
                               className="p-1.5 transition-all"
@@ -921,8 +927,10 @@ const SettingsPage: React.FC = () => {
                     <button
                       onClick={() => {
                         const newHours = { ...formData.business_hours }
-                        if (!newHours[day.id]) newHours[day.id] = []
-                        newHours[day.id].push({ open: '09:00', close: '18:00' })
+                        newHours[day.id] = [
+                          ...(newHours[day.id] ?? []),
+                          { open: '09:00', close: '18:00' }
+                        ]
                         setFormData({ ...formData, business_hours: newHours })
                       }}
                       className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"

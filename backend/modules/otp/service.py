@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import random
+import hmac
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
@@ -35,7 +36,8 @@ class OtpService:
         if channel not in {"whatsapp", "sms"}:
             raise ValidationException("Canal invalido")
 
-        code = f"{random.randint(0, 999999):06d}"
+        # secrets, no random: un OTP con PRNG predecible se puede adivinar.
+        code = f"{secrets.randbelow(1_000_000):06d}"
         expires_at = datetime.now(timezone.utc) + timedelta(
             minutes=settings.OTP_CODE_EXPIRE_MINUTES
         )
@@ -89,7 +91,7 @@ class OtpService:
             raise OTPRateLimitedException()
 
         otp.attempts += 1
-        if otp.code_hash != hash_token(code):
+        if not hmac.compare_digest(otp.code_hash, hash_token(code)):
             await self.db.commit()
             raise OTPException(
                 message="Codigo OTP incorrecto.",

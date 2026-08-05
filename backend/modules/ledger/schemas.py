@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 class LedgerMovementCreate(BaseModel):
     movement_type: str = Field(..., pattern=r"^(charge|payment|adjustment|refund)$")
-    amount: Decimal = Field(..., ge=0)
+    amount: Decimal = Field(..., ge=0, le=10_000_000, max_digits=12, decimal_places=2)
     appointment_id: str | None = Field(None, max_length=64)
     notes: str | None = Field(None, max_length=500)
 
