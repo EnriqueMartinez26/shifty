@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 
 import Sidebar from '@presentation/components/navigation/Sidebar'
 import ForgotPasswordPage from '@presentation/pages/ForgotPassword'

@@ -16,7 +16,7 @@ import {
   mdiViewDashboard,
   mdiWalletOutline
 } from '@mdi/js'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation } from 'react-router'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { useAuth } from '../../context/AuthContext'

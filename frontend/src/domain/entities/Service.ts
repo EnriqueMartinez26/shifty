@@ -1,3 +1,4 @@
+import { createUuid } from '../../shared/utils/uuid'
 import { Duration } from '../value-objects/Duration'
 import { Price } from '../value-objects/Price'
 import { ServiceColor } from '../value-objects/ServiceColor'
@@ -25,7 +26,7 @@ export class Service {
   static create(props: Omit<ServiceProps, 'id'>): Service {
     return new Service({
       ...props,
-      id: UserId.create(crypto.randomUUID())
+      id: UserId.create(createUuid())
     })
   }
 

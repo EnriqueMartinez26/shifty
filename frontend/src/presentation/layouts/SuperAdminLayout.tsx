@@ -1,7 +1,7 @@
 import React from 'react'
 
 import { ArrowLeftRight, LogOut, ShieldCheck } from 'lucide-react'
-import { Outlet } from 'react-router-dom'
+import { Outlet } from 'react-router'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'

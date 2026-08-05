@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Outlet } from 'react-router-dom'
+import { Outlet } from 'react-router'
 
 import { colors2000s } from '../../theme/colors'
 import Sidebar from '../components/navigation/Sidebar'

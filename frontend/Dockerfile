@@ -1,9 +1,11 @@
-FROM node:20-alpine AS build
+FROM node:26.5.0-trixie-slim AS build
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci
+COPY package*.json .npmrc ./
+RUN npm install --global npm@11.17.0 \
+    && npm --version \
+    && npm ci
 
 COPY . .
 

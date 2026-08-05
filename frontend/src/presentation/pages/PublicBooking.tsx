@@ -1,7 +1,7 @@
 import React from 'react'
 
 import { Store, MapPin, Phone } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { useParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
 
