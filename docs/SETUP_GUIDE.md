@@ -4,8 +4,10 @@ This guide explains how to set up the development environment for Shifty on Wind
 
 ## 📋 Prerequisites
 
-- **Python 3.12+**
-- **Node.js 18+**
+- **Python 3.14.6**
+- **Node.js 26.5.0**
+- **npm 11.17.0**
+- **uv 0.11.29**
 - **PostgreSQL 16+**
 - **Memurai** (Native Redis for Windows)
 
@@ -38,7 +40,7 @@ This guide explains how to set up the development environment for Shifty on Wind
 1. **Installation**:
    ```bash
    cd frontend
-   npm install
+   npm ci
    ```
 
 2. **Development Mode**:
@@ -46,6 +48,8 @@ This guide explains how to set up the development environment for Shifty on Wind
    npm run dev
    ```
    The application will be available at `http://localhost:3000`.
+
+   CI also keeps a temporary Node.js 24.18.0/npm 11.16.0 compatibility lane until Node.js 26 reaches LTS in October 2026.
 
 ## 🛠️ Common Commands
 

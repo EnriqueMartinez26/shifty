@@ -1,6 +1,7 @@
 import { BaseService } from './BaseService'
 import { Staff } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
+import { createUuid } from '../../shared/utils/uuid'
 import type { CreateStaffSchema } from '../validators/staff.validators'
 import { createStaffSchema } from '../validators/staff.validators'
 
@@ -44,7 +45,7 @@ export class StaffService extends BaseService<Staff> {
       const validated = createStaffSchema.parse(data)
 
       const staff = Staff.fromPrimitives({
-        public_id: crypto.randomUUID(),
+        public_id: createUuid(),
         first_name: validated.first_name,
         last_name: validated.last_name,
         email: validated.email,

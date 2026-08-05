@@ -3,6 +3,9 @@ set -eu
 
 repo_root="$(git rev-parse --show-toplevel)"
 
+printf '\n[pre-commit] Toolchain\n'
+sh "$repo_root/.githooks/verify-toolchain"
+
 printf '\n[pre-commit] Frontend checks\n'
 (
   cd "$repo_root/frontend"
@@ -10,11 +13,15 @@ printf '\n[pre-commit] Frontend checks\n'
 )
 
 printf '\n[pre-commit] Backend checks\n'
-(
-  cd "$repo_root/backend"
-  uv run ruff format --check .
-  uv run ruff check .
-  uv run mypy .
-)
+if command -v uv >/dev/null 2>&1; then
+  (
+    cd "$repo_root/backend"
+    uv run ruff format --check .
+    uv run ruff check .
+    uv run mypy .
+  )
+else
+  printf '[pre-commit] uv no esta en el PATH local; se omiten los checks de backend (corren en Docker/CI)\n'
+fi
 
 printf '\n[pre-commit] OK\n'

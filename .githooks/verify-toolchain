@@ -1,0 +1,39 @@
+#!/bin/sh
+set -eu
+
+# Verifica que el toolchain local este dentro del conjunto SOPORTADO por el
+# proyecto (package.json engines + compat lane de CI), no una unica version
+# exacta. Node 24.18.0 y 26.5.0 (npm 11.16.0 y 11.17.0) son ambos validos.
+# Las herramientas de backend (Python/uv) corren en Docker: si no estan en el
+# PATH local se omiten, para no romper el flujo Docker-first.
+
+check_version() {
+  label="$1"
+  actual="$2"
+  shift 2
+  for expected in "$@"; do
+    if [ "$actual" = "$expected" ]; then
+      return 0
+    fi
+  done
+  printf '%s version mismatch: got %s, expected one of: %s\n' "$label" "$actual" "$*" >&2
+  exit 1
+}
+
+check_optional() {
+  label="$1"
+  bin="$2"
+  shift 2
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    printf '[toolchain] %s no esta en el PATH local; se omite (corre en Docker)\n' "$label"
+    return 0
+  fi
+  check_version "$label" "$("$bin" --version 2>&1)" "$@"
+}
+
+check_version "Node.js" "$(node --version)" "v26.5.0" "v24.18.0"
+check_version "npm" "$(npm --version)" "11.17.0" "11.16.0"
+check_optional "Python" "python" "Python 3.14.6"
+check_optional "uv" "uv" "uv 0.11.29"
+
+printf '[toolchain] OK (Node %s, npm %s)\n' "$(node --version)" "$(npm --version)"

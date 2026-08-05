@@ -96,6 +96,7 @@ def test_backup_restore_drill_writes_success_evidence_for_existing_backup(
 def test_backup_restore_drill_records_failed_backup_without_database(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     drill = load_script("backup_restore_drill")
     evidence_dir = tmp_path / "evidence"
 

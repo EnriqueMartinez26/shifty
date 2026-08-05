@@ -1,11 +1,5 @@
 export type BookingStatusValue =
-  | 'pending'
-  | 'pending_payment'
-  | 'confirmed'
-  | 'completed'
-  | 'cancelled'
-  | 'absent'
-  | 'expired'
+  'pending' | 'pending_payment' | 'confirmed' | 'completed' | 'cancelled' | 'absent' | 'expired'
 
 export class BookingStatus {
   private readonly value: BookingStatusValue

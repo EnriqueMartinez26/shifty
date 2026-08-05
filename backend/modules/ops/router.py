@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
 from datetime import datetime, timezone
-from typing import Any, cast
+from typing import Any
 
 from fastapi import Depends
 from core.router import CanonicalAPIRouter
@@ -47,7 +46,7 @@ async def readiness(
         errors.append(f"db:{type(exc).__name__}")
 
     try:
-        await cast(Awaitable[bool], redis.ping())
+        await redis.ping()
     except Exception as exc:  # pragma: no cover
         redis_ok = False
         errors.append(f"redis:{type(exc).__name__}")

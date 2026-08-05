@@ -30,19 +30,14 @@ export default {
       statements: 70
     }
   },
-  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json'],
+  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'mjs', 'json'],
   transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        tsconfig: {
-          module: 'esnext',
-          moduleResolution: 'bundler',
-          jsx: 'react-jsx',
-          esModuleInterop: true,
-          allowSyntheticDefaultImports: true
-        }
-      }
-    ]
-  }
+    // Wrapper de ts-jest (allowJs + neutraliza import.meta) para poder
+    // transpilar a CJS las dependencias ESM-only como react-router v8 (.js)
+    // y cookie-es (.mjs).
+    '^.+\\.(mjs|[jt]sx?)$': '<rootDir>/jest.ts-transformer.cjs'
+  },
+  // Por defecto Jest ignora node_modules. react-router v8 (+cookie-es) son ESM
+  // puros, asi que hay que exceptuarlos para que el transform de arriba los tome.
+  transformIgnorePatterns: ['/node_modules/(?!(react-router|cookie-es)/)']
 }

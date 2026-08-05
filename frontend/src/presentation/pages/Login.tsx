@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 
 import { mdiShieldAlert, mdiStore } from '@mdi/js'
 import { ArrowRight } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
