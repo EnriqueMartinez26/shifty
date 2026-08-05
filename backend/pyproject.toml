@@ -3,7 +3,7 @@ name = "shifty-backend"
 version = "0.1.0"
 description = "Backend for Shifty v2 - Appointment Management SaaS"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -17,7 +17,7 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     "bcrypt>=4.0.1,<4.1",
-    "redis>=5.0.0",
+    "redis>=8.0.1",
     "celery>=5.3.0",
     "python-ulid>=3.0.0",
     "structlog>=24.1.0",
@@ -34,7 +34,7 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "factory-boy>=3.3.0",
     "ruff>=0.3.0",
-    "mypy>=1.9.0",
+    "mypy>=2.3.0",
     "locust>=2.24.0",
     "ipython>=8.22.0",
     "pre-commit>=4.6.0",
@@ -42,7 +42,7 @@ dev = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 extend-select = [
@@ -71,12 +71,18 @@ ignore = [
 "tests/**/*.py" = ["F401"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 ignore_missing_imports = true
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
+# El proyecto no declara [build-system], por lo que uv no instala `core`/`main`
+# como paquete importable. Sin esto, `uv run pytest` (invocacion usada por CI)
+# falla con ModuleNotFoundError al importar el conftest. `pythonpath` agrega la
+# raiz del backend al sys.path de forma explicita e independiente del cwd.
+pythonpath = ["."]
+addopts = "--strict-markers --strict-config"
 markers = [
     "integration: tests that exercise API or database integration boundaries",
 ]
