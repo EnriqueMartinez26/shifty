@@ -36,6 +36,14 @@ class AppointmentModel(Base):
     intake_answers: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    # Momento en que el cliente acepto los terminos y la politica de sena de la
+    # tienda. Queda registrado como respaldo ante un reclamo.
+    terms_accepted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -127,7 +135,7 @@ class AppointmentModel(Base):
         )
         current = self.status
         allowed_transitions = {
-            "pending": {"confirmed", "cancelled", "pending_payment"},
+            "pending": {"confirmed", "cancelled", "pending_payment", "expired"},
             "pending_payment": {"confirmed", "cancelled", "expired"},
             "confirmed": {"completed", "cancelled", "absent"},
             "cancelled": set(),

@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     OTP_DEBUG_EXPOSE_CODE: bool = True
     PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
     PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS: int = 30
+    MERCADOPAGO_OAUTH_CLIENT_ID: str | None = None
+    MERCADOPAGO_OAUTH_CLIENT_SECRET: str | None = None
+    MERCADOPAGO_OAUTH_REDIRECT_URI: str | None = None
+    MERCADOPAGO_OAUTH_AUTH_URL: str = "https://auth.mercadopago.com/authorization"
+    MERCADOPAGO_OAUTH_STATE_TTL_SECONDS: int = 900
+    MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS: int = 300
+    # Minutos que un turno queda reservado esperando el pago de la seña. Al
+    # vencer, el slot vuelve a estar disponible para otro cliente.
+    PAYMENT_HOLD_MINUTES: int = 30
     TWILIO_ACCOUNT_SID: str | None = None
     TWILIO_AUTH_TOKEN: str | None = None
     TWILIO_SMS_FROM: str | None = None
@@ -151,10 +160,18 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "PUBLIC_API_URL no puede apuntar a localhost en produccion"
                 )
+            if not self.FIELD_ENCRYPTION_KEY:
+                raise ValueError("FIELD_ENCRYPTION_KEY es obligatorio en produccion")
         if self.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1:
             raise ValueError("PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1")
         if self.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS < 1:
             raise ValueError("PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS debe ser >= 1")
+        if self.MERCADOPAGO_OAUTH_STATE_TTL_SECONDS < 60:
+            raise ValueError("MERCADOPAGO_OAUTH_STATE_TTL_SECONDS debe ser >= 60")
+        if self.MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS < 60:
+            raise ValueError("MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS debe ser >= 60")
+        if self.PAYMENT_HOLD_MINUTES < 5:
+            raise ValueError("PAYMENT_HOLD_MINUTES debe ser >= 5")
         if self.REDIS_MAX_CONNECTIONS < 1:
             raise ValueError("REDIS_MAX_CONNECTIONS debe ser >= 1")
         if self.CELERY_WORKER_PREFETCH_MULTIPLIER < 1:
@@ -216,6 +233,13 @@ def _fallback_settings() -> Settings:
         OTP_DEBUG_EXPOSE_CODE=False,
         PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD=5,
         PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS=30,
+        MERCADOPAGO_OAUTH_CLIENT_ID=None,
+        MERCADOPAGO_OAUTH_CLIENT_SECRET=None,
+        MERCADOPAGO_OAUTH_REDIRECT_URI=None,
+        MERCADOPAGO_OAUTH_AUTH_URL="https://auth.mercadopago.com/authorization",
+        MERCADOPAGO_OAUTH_STATE_TTL_SECONDS=900,
+        MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS=300,
+        PAYMENT_HOLD_MINUTES=30,
         TWILIO_ACCOUNT_SID=None,
         TWILIO_AUTH_TOKEN=None,
         TWILIO_SMS_FROM=None,

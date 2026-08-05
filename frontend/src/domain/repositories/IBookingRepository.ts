@@ -9,5 +9,6 @@ export interface IBookingRepository {
   confirm(id: string): Promise<void>
   complete(id: string): Promise<void>
   cancel(id: string): Promise<void>
+  release(id: string): Promise<void>
   markAbsent(id: string): Promise<void>
 }

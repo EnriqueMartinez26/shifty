@@ -3,6 +3,8 @@ import React from 'react'
 import { Outlet } from 'react-router'
 
 import { colors2000s } from '../../theme/colors'
+import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
+import NotificationsBell from '../components/navigation/NotificationsBell'
 import Sidebar from '../components/navigation/Sidebar'
 
 const AdminLayout: React.FC = () => {
@@ -31,6 +33,7 @@ const AdminLayout: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-4">
+            <NotificationsBell />
             <div
               className="rounded-xl px-4 py-2 text-sm font-bold"
               style={{
@@ -48,6 +51,13 @@ const AdminLayout: React.FC = () => {
         <div className="relative animate-in fade-in duration-500">
           <Outlet />
         </div>
+
+        <footer
+          className="mt-12 pt-6"
+          style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
+        >
+          <LegalFooterLinks />
+        </footer>
       </main>
     </div>
   )

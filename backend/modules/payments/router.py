@@ -1,17 +1,21 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
 from typing import Annotated, Any
 
-from fastapi import Depends, Path, Query, Request, status
 from core.router import CanonicalAPIRouter
+from fastapi import Depends, Path, Query, Request, status
+from fastapi.responses import RedirectResponse
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.circuit_breaker import CircuitBreakerOpenError
-from core.config import settings
+from core.config import Environment, settings
 from core.crypto import encrypt_secret
 from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.redis import get_redis
 from core.exceptions import (
     AppException,
     AppointmentNotFoundException,
@@ -38,9 +42,20 @@ from modules.payments.processing import (
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
+from modules.payments.oauth_state import (
+    InvalidOAuthStateError,
+    create_mercadopago_oauth_state,
+    mercadopago_oauth_state_cache_key,
+    parse_mercadopago_oauth_state,
+)
 from modules.payments.service import (
+    apply_mercadopago_oauth_payload,
+    build_mercadopago_oauth_authorization_url,
     calculate_service_payment_amount,
+    exchange_mercadopago_oauth_code,
     ensure_payment_preference,
+    mercadopago_oauth_is_configured,
+    refresh_mercadopago_oauth_connection,
     stamp_payment_from_status,
     sync_appointment_with_payment,
 )
@@ -48,6 +63,7 @@ from modules.payments.schemas import (
     GatewayConfigResponse,
     GatewayConfigUpsert,
     ManualPaymentRequest,
+    MercadoPagoOAuthStartResponse,
     OutboxProcessResponse,
     OutboxStatsResponse,
     PaymentPreferenceResponse,
@@ -217,8 +233,10 @@ async def _validate_mercadopago_signature(
     request: Request,
     store_reference: str | None,
 ) -> str:
-    resolved_store_id, config = await _resolve_store_for_webhook(db, store_reference)
-    secret = config.webhook_secret or settings.MERCADOPAGO_WEBHOOK_SECRET
+    resolved_store_id, _config = await _resolve_store_for_webhook(db, store_reference)
+    secret = settings.MERCADOPAGO_WEBHOOK_SECRET
+    if not secret and settings.ENV != "production":
+        secret = _config.webhook_secret
     if not secret:
         raise WebhookException(message="Webhook secret no configurado")
 
@@ -232,6 +250,20 @@ async def _validate_mercadopago_signature(
         raise WebhookException(message="Header x-signature invalido")
 
     ts, received_v1 = parsed
+    try:
+        webhook_timestamp = int(ts)
+    except ValueError as exc:
+        raise WebhookException(message="Timestamp de webhook invalido") from exc
+    now_timestamp = int(datetime.now(timezone.utc).timestamp())
+    if (
+        abs(now_timestamp - webhook_timestamp)
+        > settings.MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS
+    ):
+        raise WebhookException(
+            message="Webhook vencido",
+            http_status=status.HTTP_401_UNAUTHORIZED,
+            error_code="STALE_WEBHOOK",
+        )
     data_id = _resolve_webhook_data_id(payload, request.query_params.get("data.id"))
     if not data_id:
         raise WebhookException(message="No se pudo resolver data.id del webhook")
@@ -293,6 +325,23 @@ def _payment_status_sum_query(store_id: str, status_value: str) -> Any:
     )
 
 
+def _mercadopago_oauth_required() -> None:
+    if not mercadopago_oauth_is_configured():
+        raise AppException(
+            message="Mercado Pago OAuth no esta configurado en el backend",
+            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code="MERCADOPAGO_OAUTH_NOT_CONFIGURED",
+        )
+
+
+def _oauth_frontend_redirect(result: str) -> RedirectResponse:
+    target = (
+        f"{settings.FRONTEND_URL.rstrip('/')}/dashboard/settings"
+        f"?tab=payments&mercadopago={result}"
+    )
+    return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.get("/gateway-config", response_model=GatewayConfigResponse)
 async def get_gateway_config(
     user: User = Depends(get_current_user),
@@ -306,7 +355,22 @@ async def get_gateway_config(
         .limit(1)
     )
     config = result.scalar_one_or_none()
-    return _gateway_config_response(config)
+    if not config:
+        return GatewayConfigResponse(
+            provider="mercadopago",
+            configured=False,
+            oauth_supported=mercadopago_oauth_is_configured(),
+        )
+    return GatewayConfigResponse(
+        provider=config.provider,
+        configured=True,
+        public_key=config.public_key,
+        access_token_masked="********",
+        connection_mode=config.connection_mode,
+        oauth_user_id=config.oauth_user_id,
+        oauth_connected_at=config.oauth_connected_at,
+        oauth_supported=mercadopago_oauth_is_configured(),
+    )
 
 
 @router.put("/gateway-config", response_model=GatewayConfigResponse)
@@ -317,6 +381,10 @@ async def upsert_gateway_config(
 ) -> GatewayConfigResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
+    if settings.ENV == Environment.PRODUCTION:
+        raise ValidationException(
+            "En produccion, la cuenta de Mercado Pago se configura exclusivamente mediante OAuth"
+        )
     result = await db.execute(
         select(PaymentGatewayConfig).where(
             PaymentGatewayConfig.store_id == user.store_id,
@@ -327,6 +395,7 @@ async def upsert_gateway_config(
     encrypted_access_token = (
         encrypt_secret(data.access_token) if data.access_token else None
     )
+    provided_fields = data.model_fields_set
     if not config and not encrypted_access_token:
         raise ValidationException(
             "Debes ingresar un access token para configurar el gateway"
@@ -338,16 +407,210 @@ async def upsert_gateway_config(
             encrypted_access_token=encrypted_access_token or "",
             public_key=data.public_key,
             webhook_secret=data.webhook_secret,
+            connection_mode="manual",
         )
         db.add(config)
     else:
         if encrypted_access_token:
             config.encrypted_access_token = encrypted_access_token
-        config.public_key = data.public_key
-        config.webhook_secret = data.webhook_secret
+            config.connection_mode = "manual"
+            config.encrypted_refresh_token = None
+            config.oauth_user_id = None
+            config.oauth_scope = None
+            config.oauth_connected_at = None
+        if "public_key" in provided_fields:
+            config.public_key = data.public_key
+        if "webhook_secret" in provided_fields:
+            config.webhook_secret = data.webhook_secret
     await db.commit()
     await db.refresh(config)
-    return _gateway_config_response(config)
+    return GatewayConfigResponse(
+        provider=config.provider,
+        configured=True,
+        public_key=config.public_key,
+        access_token_masked="********",
+        connection_mode=config.connection_mode,
+        oauth_user_id=config.oauth_user_id,
+        oauth_connected_at=config.oauth_connected_at,
+        oauth_supported=mercadopago_oauth_is_configured(),
+    )
+
+
+@router.post("/mercadopago/oauth/start", response_model=MercadoPagoOAuthStartResponse)
+async def start_mercadopago_oauth(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> MercadoPagoOAuthStartResponse:
+    _require_payment_admin(user)
+    await _ensure_payments_feature_enabled(db, user)
+    _mercadopago_oauth_required()
+
+    state, expires_at, code_verifier, code_challenge = create_mercadopago_oauth_state(
+        store_id=user.store_id,
+        actor_id=user.id,
+        ttl_seconds=settings.MERCADOPAGO_OAUTH_STATE_TTL_SECONDS,
+    )
+    stored = await redis.set(
+        mercadopago_oauth_state_cache_key(state),
+        code_verifier,
+        ex=settings.MERCADOPAGO_OAUTH_STATE_TTL_SECONDS,
+        nx=True,
+    )
+    if not stored:
+        raise AppException(
+            message="No se pudo iniciar la conexion segura con Mercado Pago",
+            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error_code="OAUTH_STATE_STORAGE_FAILED",
+        )
+    auth_url = build_mercadopago_oauth_authorization_url(
+        state=state, code_challenge=code_challenge
+    )
+    return MercadoPagoOAuthStartResponse(
+        auth_url=auth_url,
+        qr_url=auth_url,
+        expires_at=datetime.fromtimestamp(expires_at, tz=timezone.utc),
+    )
+
+
+@router.get("/mercadopago/oauth/callback", response_class=RedirectResponse)
+async def mercadopago_oauth_callback(
+    code: Annotated[str | None, Query(min_length=3, max_length=500)] = None,
+    state: Annotated[str | None, Query(min_length=10, max_length=4000)] = None,
+    error: Annotated[str | None, Query(max_length=120)] = None,
+    error_description: Annotated[str | None, Query(max_length=500)] = None,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> RedirectResponse:
+    _mercadopago_oauth_required()
+    set_tenant_context(None, True)
+    try:
+        await _apply_tenant_context(db)
+        if error:
+            return _oauth_frontend_redirect("denied")
+        if not code or not state:
+            return _oauth_frontend_redirect("invalid")
+
+        try:
+            state_payload = parse_mercadopago_oauth_state(state)
+        except InvalidOAuthStateError:
+            return _oauth_frontend_redirect("invalid")
+
+        cached_verifier = await redis.getdel(mercadopago_oauth_state_cache_key(state))
+        if not cached_verifier:
+            return _oauth_frontend_redirect("expired")
+        code_verifier = (
+            cached_verifier.decode("utf-8")
+            if isinstance(cached_verifier, bytes)
+            else str(cached_verifier)
+        )
+
+        actor_result = await db.execute(
+            select(User).where(
+                User.id == str(state_payload["actor_id"]),
+                User.store_id == str(state_payload["store_id"]),
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+            )
+        )
+        if actor_result.scalar_one_or_none() is None:
+            return _oauth_frontend_redirect("forbidden")
+
+        try:
+            token_payload = await exchange_mercadopago_oauth_code(
+                code=code, code_verifier=code_verifier
+            )
+        except RuntimeError:
+            return _oauth_frontend_redirect("exchange_failed")
+
+        result = await db.execute(
+            select(PaymentGatewayConfig).where(
+                PaymentGatewayConfig.store_id == state_payload["store_id"],
+                PaymentGatewayConfig.provider == "mercadopago",
+            )
+        )
+        config = result.scalar_one_or_none()
+        if not config:
+            config = PaymentGatewayConfig(
+                store_id=str(state_payload["store_id"]),
+                provider="mercadopago",
+                encrypted_access_token="pending",
+                connection_mode="oauth",
+            )
+            db.add(config)
+
+        apply_mercadopago_oauth_payload(config, token_payload)
+        await db.commit()
+
+        return _oauth_frontend_redirect("connected")
+    finally:
+        set_tenant_context(None, False)
+
+
+@router.post("/mercadopago/oauth/refresh", response_model=GatewayConfigResponse)
+async def refresh_mercadopago_oauth(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> GatewayConfigResponse:
+    _require_payment_admin(user)
+    await _ensure_payments_feature_enabled(db, user)
+    _mercadopago_oauth_required()
+
+    result = await db.execute(
+        select(PaymentGatewayConfig).where(
+            PaymentGatewayConfig.store_id == user.store_id,
+            PaymentGatewayConfig.provider == "mercadopago",
+        )
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        raise ResourceNotFoundException(
+            resource="Conexion de Mercado Pago", identifier=user.store_id
+        )
+
+    try:
+        config = await refresh_mercadopago_oauth_connection(db, config=config)
+    except RuntimeError as exc:
+        raise AppException(
+            message=str(exc),
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="MERCADOPAGO_REFRESH_FAILED",
+        )
+    await db.commit()
+    await db.refresh(config)
+    return GatewayConfigResponse(
+        provider=config.provider,
+        configured=True,
+        public_key=config.public_key,
+        access_token_masked="********",
+        connection_mode=config.connection_mode,
+        oauth_user_id=config.oauth_user_id,
+        oauth_connected_at=config.oauth_connected_at,
+        oauth_supported=mercadopago_oauth_is_configured(),
+    )
+
+
+@router.delete("/mercadopago/oauth/connection")
+async def disconnect_mercadopago_oauth(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, bool]:
+    _require_payment_admin(user)
+    await _ensure_payments_feature_enabled(db, user)
+
+    result = await db.execute(
+        select(PaymentGatewayConfig).where(
+            PaymentGatewayConfig.store_id == user.store_id,
+            PaymentGatewayConfig.provider == "mercadopago",
+        )
+    )
+    config = result.scalar_one_or_none()
+    if not config:
+        return {"success": True, "disconnected": False}
+
+    await db.delete(config)
+    await db.commit()
+    return {"success": True, "disconnected": True}
 
 
 @router.post("/preferences/{appointment_id}", response_model=PaymentPreferenceResponse)
@@ -495,10 +758,7 @@ async def mercadopago_webhook(
         if inbox:
             if inbox.processed_at is not None:
                 return {"success": True, "data": {"status": "already_processed"}}
-            await apply_mercadopago_webhook_payload(
-                db, store_id=resolved_store_id, payload=payload
-            )
-            inbox.mark_processed()
+            inbox.payload = payload
         else:
             inbox = WebhookInbox(
                 store_id=resolved_store_id,
@@ -508,12 +768,20 @@ async def mercadopago_webhook(
                 payload=payload,
             )
             db.add(inbox)
-            await apply_mercadopago_webhook_payload(
-                db, store_id=resolved_store_id, payload=payload
-            )
+
+        # Si no pudimos resolver el pago (por ejemplo, porque la consulta a Mercado
+        # Pago fallo y el webhook crudo no trae estado), dejamos el evento sin
+        # procesar para que el worker del inbox lo reintente. Marcarlo aca perderia
+        # el cobro de forma permanente.
+        applied = await apply_mercadopago_webhook_payload(
+            db, store_id=resolved_store_id, payload=payload
+        )
+        if applied:
             inbox.mark_processed()
+        else:
+            inbox.register_failure("No se pudo resolver el pago del webhook")
         await db.commit()
-        return {"success": True, "data": {"received": True}}
+        return {"success": True, "data": {"received": True, "applied": applied}}
     finally:
         set_tenant_context(None, False)
 
@@ -614,26 +882,25 @@ async def reconciliation_summary(
             or 0
         )
     )
-    total_approved_amount = Decimal(
+    approved_amount = Decimal(
         str(
-            (
-                await db.scalar(
-                    _payment_status_sum_query(
-                        user.store_id, PaymentStatus.APPROVED.value
-                    )
-                )
+            await db.scalar(
+                _payment_status_sum_query(user.store_id, PaymentStatus.APPROVED.value)
             )
             or 0
-            + (
-                await db.scalar(
-                    _payment_status_sum_query(
-                        user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
-                    )
+        )
+    )
+    manual_confirmed_amount = Decimal(
+        str(
+            await db.scalar(
+                _payment_status_sum_query(
+                    user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
                 )
             )
             or 0
         )
     )
+    total_approved_amount = approved_amount + manual_confirmed_amount
     pending_webhooks = await _count_store_rows(
         db,
         WebhookInbox,

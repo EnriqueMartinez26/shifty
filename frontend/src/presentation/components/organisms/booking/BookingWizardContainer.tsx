@@ -426,10 +426,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
           <BookingStepConfirmation
             storePublicId={store.public_id}
             serviceId={bookingState.serviceId!}
+            paymentsEnabled={Boolean(store.feature_flags?.payments)}
+            storeName={store.name}
+            whatsappNumber={store.whatsapp_number}
+            depositPolicy={store.deposit_policy}
+            allowManualCoordination={store.allow_manual_coordination}
             bookingState={bookingState}
             onBack={prevStep}
             onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
-            onConfirm={async () =>
+            onConfirm={async (paymentMethod, acceptsTerms) =>
               await createBooking.mutateAsync({
                 store_public_id: store.public_id,
                 service_id: bookingState.serviceId!,
@@ -442,6 +447,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                 notes: bookingState.client.notes,
                 custom_fields: bookingState.client.customFields,
                 promotion_code: bookingState.promotionCode || undefined,
+                payment_method: paymentMethod,
+                accepts_terms: acceptsTerms,
                 idempotency_key: bookingState.idempotencyKey
               })
             }

@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Clock,
   Loader2,
+  LockOpen,
   Plus,
   ShieldBan
 } from 'lucide-react'
@@ -25,6 +26,7 @@ import {
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { useAuth } from '../context/AuthContext'
 import {
   useAppointmentBlocks,
   useBlockTemplates,
@@ -33,7 +35,7 @@ import {
   useDeleteAppointmentBlock,
   useUpdateAppointmentBlock
 } from '../hooks/useAppointmentBlocks'
-import { useCalendarAgenda } from '../hooks/useCalendarAgenda'
+import { useCalendarAgenda, useReleaseAppointment } from '../hooks/useCalendarAgenda'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
@@ -140,6 +142,8 @@ const statusStyle = (status: string) => {
 }
 
 export const CalendarContainer: React.FC = () => {
+  const { user } = useAuth()
+  const canReleaseAppointments = user?.role === 'admin' || Boolean(user?.is_global_admin)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView] = useState<CalendarView>('day')
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
@@ -180,6 +184,7 @@ export const CalendarContainer: React.FC = () => {
   const createRecurringBlock = useCreateRecurringAppointmentBlock()
   const updateBlock = useUpdateAppointmentBlock()
   const deleteBlock = useDeleteAppointmentBlock()
+  const releaseAppointment = useReleaseAppointment()
 
   useEffect(() => {
     if (staffMembers?.length && !blockForm.staff_id) {
@@ -352,6 +357,20 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const handleReleaseAppointment = async (event: UnifiedCalendarEvent) => {
+    if (event.type === 'block') return
+    const confirmed = window.confirm(
+      `¿Liberar el turno de ${event.title}? El enlace de pago pendiente también será vencido.`
+    )
+    if (!confirmed) return
+    try {
+      await releaseAppointment.mutateAsync(event.id)
+      setMessage('Turno liberado correctamente')
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo liberar el turno'))
+    }
+  }
+
   const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => {
     const style =
       event.type === 'block'
@@ -364,7 +383,7 @@ export const CalendarContainer: React.FC = () => {
     return (
       <div
         key={`${event.type}-${event.id}`}
-        className={`rounded-2xl border ${compact ? 'p-2' : 'p-3'}`}
+        className={`relative rounded-2xl border ${compact ? 'p-2' : 'p-3'}`}
         style={{
           background: style.background,
           borderColor: style.accent,
@@ -386,6 +405,21 @@ export const CalendarContainer: React.FC = () => {
         <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
           {format(event.startsAt, 'HH:mm')} - {format(event.endsAt, 'HH:mm')} · {event.staffName}
         </p>
+        {canReleaseAppointments &&
+          event.type === 'appointment' &&
+          ['pending', 'pending_payment'].includes(event.status) && (
+            <button
+              type="button"
+              onClick={() => {
+                void handleReleaseAppointment(event)
+              }}
+              disabled={releaseAppointment.isPending}
+              className="mt-2 inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-700 border border-red-200 disabled:opacity-50"
+            >
+              <LockOpen className="w-3 h-3" />
+              Liberar
+            </button>
+          )}
       </div>
     )
   }
@@ -522,6 +556,21 @@ export const CalendarContainer: React.FC = () => {
                                 'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
                             }}
                           >
+                            {canReleaseAppointments &&
+                              ['pending', 'pending_payment'].includes(event.status) && (
+                                <button
+                                  type="button"
+                                  title="Liberar turno pendiente"
+                                  aria-label={`Liberar turno de ${event.title}`}
+                                  onClick={() => {
+                                    void handleReleaseAppointment(event)
+                                  }}
+                                  disabled={releaseAppointment.isPending}
+                                  className="absolute top-2 right-2 z-10 rounded-lg bg-white p-1.5 text-red-700 border border-red-200 disabled:opacity-50"
+                                >
+                                  <LockOpen className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             <div>
                               <p
                                 className="text-[8px] font-black uppercase tracking-widest mb-0.5"

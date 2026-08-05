@@ -5,6 +5,16 @@ export interface GatewayConfig {
   configured: boolean
   public_key?: string | null
   access_token_masked?: string | null
+  connection_mode?: string | null
+  oauth_user_id?: string | null
+  oauth_connected_at?: string | null
+  oauth_supported: boolean
+}
+
+export interface MercadoPagoOAuthStart {
+  auth_url: string
+  qr_url: string
+  expires_at: string
 }
 
 export interface GatewayConfigUpsertPayload {
@@ -112,6 +122,25 @@ export class PaymentsService {
 
   async upsertGatewayConfig(payload: GatewayConfigUpsertPayload): Promise<GatewayConfig> {
     const { data } = await apiClient.put<GatewayConfig>('/payments/gateway-config', payload)
+    return data
+  }
+
+  async startMercadoPagoOAuth(): Promise<MercadoPagoOAuthStart> {
+    const { data } = await apiClient.post<MercadoPagoOAuthStart>(
+      '/payments/mercadopago/oauth/start'
+    )
+    return data
+  }
+
+  async refreshMercadoPagoOAuth(): Promise<GatewayConfig> {
+    const { data } = await apiClient.post<GatewayConfig>('/payments/mercadopago/oauth/refresh')
+    return data
+  }
+
+  async disconnectMercadoPagoOAuth(): Promise<{ success: boolean; disconnected: boolean }> {
+    const { data } = await apiClient.delete<{ success: boolean; disconnected: boolean }>(
+      '/payments/mercadopago/oauth/connection'
+    )
     return data
   }
 

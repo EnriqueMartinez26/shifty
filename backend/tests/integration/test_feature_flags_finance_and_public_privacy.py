@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from core.config import settings
+from core.crypto import decrypt_secret
 from core.database import get_db
 from core.models import Base
 from core.security import hash_password
@@ -31,7 +32,12 @@ import modules.services.model
 import modules.staff.model
 import modules.stores.model
 import modules.users.model
-from modules.payments.model import OutboxMessage, Payment, WebhookInbox
+from modules.payments.model import (
+    OutboxMessage,
+    Payment,
+    PaymentGatewayConfig,
+    WebhookInbox,
+)
 from modules.users.model import User
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -110,6 +116,7 @@ def auth_headers(token: str) -> dict[str, str]:
 def webhook_signature_headers(
     *, secret: str, data_id: str, request_id: str, ts: str
 ) -> dict[str, str]:
+    ts = str(int(datetime.now(timezone.utc).timestamp()))
     manifest = f"id:{data_id};request-id:{request_id};ts:{ts};"
     digest = hmac.new(
         secret.encode("utf-8"),
@@ -238,6 +245,81 @@ async def test_payments_feature_flag_and_webhook_idempotency(
         select(func.count()).select_from(WebhookInbox)
     )
     assert count_result.scalar_one() == 1
+
+
+@pytest.mark.asyncio
+async def test_mercadopago_oauth_start_and_callback_store_credentials(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, token = await register_and_login(
+        client, slug="tienda-oauth", email="oauth@test.com"
+    )
+    settings.MERCADOPAGO_OAUTH_CLIENT_ID = "client-id-demo"
+    settings.MERCADOPAGO_OAUTH_CLIENT_SECRET = "client-secret-demo"
+    settings.MERCADOPAGO_OAUTH_REDIRECT_URI = (
+        "https://api.shifty.test/payments/mercadopago/oauth/callback"
+    )
+    settings.MERCADOPAGO_OAUTH_AUTH_URL = "https://auth.mercadopago.com/authorization"
+
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200
+
+    start = await client.post(
+        "/payments/mercadopago/oauth/start", headers=auth_headers(token)
+    )
+    assert start.status_code == 200, start.text
+    auth_url = start.json()["auth_url"]
+    assert "client_id=client-id-demo" in auth_url
+    assert "response_type=code" in auth_url
+    assert "code_challenge=" in auth_url
+    assert "code_challenge_method=S256" in auth_url
+    state = auth_url.split("state=")[1].split("&", 1)[0]
+
+    async def fake_exchange(*, code: str, code_verifier: str) -> dict[str, str]:
+        assert code == "oauth-code-demo"
+        assert code_verifier
+        return {
+            "access_token": "APP_USR-linked-access-token",
+            "refresh_token": "TG-linked-refresh-token",
+            "public_key": "APP_USR-linked-public-key",
+            "user_id": "123456789",
+            "scope": "offline_access payments write",
+        }
+
+    monkeypatch.setattr(
+        "modules.payments.router.exchange_mercadopago_oauth_code", fake_exchange
+    )
+
+    callback = await client.get(
+        f"/payments/mercadopago/oauth/callback?code=oauth-code-demo&state={state}"
+    )
+    assert callback.status_code == 303
+    assert "mercadopago=connected" in callback.headers["location"]
+
+    config_result = await test_session.execute(
+        select(PaymentGatewayConfig).where(PaymentGatewayConfig.store_id.is_not(None))
+    )
+    config = config_result.scalar_one()
+    assert config.provider == "mercadopago"
+    assert config.connection_mode == "oauth"
+    assert config.oauth_user_id == "123456789"
+    assert config.public_key == "APP_USR-linked-public-key"
+    assert (
+        decrypt_secret(config.encrypted_access_token) == "APP_USR-linked-access-token"
+    )
+    assert decrypt_secret(config.encrypted_refresh_token) == "TG-linked-refresh-token"
+
+    visible = await client.get("/payments/gateway-config", headers=auth_headers(token))
+    assert visible.status_code == 200
+    assert visible.json()["configured"] is True
+    assert visible.json()["connection_mode"] == "oauth"
+    assert visible.json()["oauth_user_id"] == "123456789"
 
 
 @pytest.mark.asyncio
@@ -498,7 +580,7 @@ async def test_public_booking_requires_otp_when_feature_enabled(
 
     allowed_booking = await client.post("/public/appointments", json=booking_payload)
     assert allowed_booking.status_code == 201, allowed_booking.text
-    assert allowed_booking.json()["status"] in {"confirmed", "pending_payment"}
+    assert allowed_booking.json()["status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -692,12 +774,13 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
             ).isoformat(),
             "client_name": "Cliente Pago Real",
             "client_phone": "+5491155511111",
+            "payment_method": "mercadopago",
             "idempotency_key": "real-link-booking-001",
         },
     )
     assert booking.status_code == 201, booking.text
     body = booking.json()
-    assert body["payment_link"].startswith("https://sandbox.mercadopago.com/")
+    assert body["payment_link"].startswith("https://www.mercadopago.com/")
     assert body["payment_status"] == "pending"
 
 
@@ -781,6 +864,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
             ).isoformat(),
             "client_name": "Cliente Webhook Fetch",
             "client_phone": "+5491144499999",
+            "payment_method": "mercadopago",
             "idempotency_key": "webhook-fetch-booking-001",
         },
     )
@@ -1077,7 +1161,7 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
         },
     )
     assert booking.status_code == 201, booking.text
-    assert booking.json()["status"] == "pending_payment"
+    assert booking.json()["status"] == "pending"
 
     manual_confirm = await client.post(
         f"/payments/{booking.json()['public_id']}/manual-confirm",
@@ -1167,6 +1251,7 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
             ).isoformat(),
             "client_name": "Cliente Webhook",
             "client_phone": "+5491122200011",
+            "payment_method": "mercadopago",
             "idempotency_key": "webhook-booking-001",
         },
     )
@@ -1210,6 +1295,14 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
         if item["public_id"] == booking.json()["public_id"]
     )
     assert refreshed["status"] == "confirmed"
+
+    public_status = await client.get(
+        f"/public/payments/{payment.id}/status",
+        params={"store_public_id": store_public_id},
+    )
+    assert public_status.status_code == 200, public_status.text
+    assert public_status.json()["payment_status"] == "approved"
+    assert public_status.json()["appointment_status"] == "confirmed"
 
 
 @pytest.mark.asyncio
@@ -1297,6 +1390,7 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
         ).isoformat(),
         "client_name": "Cliente Retry",
         "client_phone": "+5491122299988",
+        "payment_method": "mercadopago",
         "idempotency_key": "provider-failure-booking-001",
     }
 
@@ -1458,3 +1552,143 @@ async def test_report_summary_includes_client_service_and_debt_metrics(
     assert body["top_clients"][0]["client_id"] == client_id
     assert body["debt_summary"]["debtors_count"] == 1
     assert body["debt_summary"]["outstanding_balance"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_pending_whatsapp_booking_expires_when_hold_deadline_passes(
+    client: AsyncClient,
+    test_session: AsyncSession,
+) -> None:
+    from modules.payments.jobs import expire_unpaid_appointments
+
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-whatsapp-expiry", email="whatsapp-expiry@test.com"
+    )
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=2)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(
+                hour=10, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente WhatsApp",
+            "client_phone": "+5491112345678",
+            "payment_method": "manual",
+            "idempotency_key": "whatsapp-expiry-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    assert booking.json()["status"] == "pending"
+
+    result = await test_session.execute(
+        select(modules.appointments.model.Appointment).where(
+            modules.appointments.model.Appointment.id == booking.json()["public_id"]
+        )
+    )
+    appointment = result.scalar_one()
+    appointment.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    await test_session.commit()
+
+    expired = await expire_unpaid_appointments(test_session)
+    await test_session.refresh(appointment)
+    assert expired["expired"] == 1
+    assert appointment.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_store_owner_can_release_pending_mercadopago_booking(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import modules.payments.service as payments_service
+
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    async def fake_mp_request(
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert access_token
+        calls.append((method, path, json_body))
+        if method == "POST":
+            return {
+                "id": "pref-owner-release",
+                "sandbox_init_point": (
+                    "https://sandbox.mercadopago.com/checkout/v1/redirect"
+                    "?pref=owner-release"
+                ),
+            }
+        assert method == "PUT"
+        assert path == "/checkout/preferences/pref-owner-release"
+        assert json_body and json_body["expires"] is True
+        assert json_body["expiration_date_to"]
+        return {"id": "pref-owner-release", "expires": True}
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_mp_request)
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-owner-release", email="owner-release@test.com"
+    )
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert flags.status_code == 200, flags.text
+    gateway = await client.put(
+        "/payments/gateway-config",
+        headers=auth_headers(token),
+        json={"access_token": "TEST-OWNER-RELEASE-TOKEN"},
+    )
+    assert gateway.status_code == 200, gateway.text
+
+    service_public_id = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="fixed",
+        deposit_amount=2500,
+    )
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=3)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": starts_at.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente Release",
+            "client_phone": "+5491188877766",
+            "payment_method": "mercadopago",
+            "idempotency_key": "owner-release-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    assert booking.json()["status"] == "pending_payment"
+
+    release = await client.patch(
+        f"/appointments/{booking.json()['public_id']}/release",
+        headers=auth_headers(token),
+    )
+    assert release.status_code == 200, release.text
+    assert release.json()["status"] == "expired"
+    assert [call[0] for call in calls] == ["POST", "PUT"]
+
+    payment_result = await test_session.execute(
+        select(Payment).where(Payment.appointment_id == booking.json()["public_id"])
+    )
+    assert payment_result.scalar_one().status == "expired"

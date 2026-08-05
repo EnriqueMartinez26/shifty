@@ -20,6 +20,10 @@ class PublicStoreResponse(BaseModel):
     cover_url: Optional[str] = None
     whatsapp_number: Optional[str] = None
     website_url: Optional[str] = None
+    # La politica de seña y la posibilidad de coordinar por fuera se muestran al
+    # cliente antes de reservar, para que sepa a que se compromete.
+    allow_manual_coordination: bool = True
+    deposit_policy: Optional[str] = None
     custom_client_fields: list[StoreCustomField] = Field(default_factory=list)
     feature_flags: dict[str, bool] = Field(default_factory=dict)
 
@@ -81,6 +85,11 @@ class PublicBookingCreate(BaseModel):
     promotion_code: str | None = Field(
         default=None, min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_-]+$"
     )
+    payment_method: str = Field(
+        default="manual", pattern=r"^(auto|manual|mercadopago)$"
+    )
+    # Aceptacion de los terminos de Shifty y de la politica de seña de la tienda.
+    accepts_terms: bool = False
 
     @field_validator("client_phone")
     @classmethod
@@ -128,6 +137,16 @@ class PublicBookingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PublicPaymentStatusResponse(BaseModel):
+    payment_public_id: str
+    appointment_public_id: str
+    payment_status: str
+    appointment_status: str
+    amount: float
+    currency: str
+    starts_at: datetime
 
 
 class PublicPromotionPreviewResponse(BaseModel):

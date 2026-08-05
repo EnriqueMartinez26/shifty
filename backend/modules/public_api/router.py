@@ -41,6 +41,8 @@ from modules.payments.service import (
     calculate_service_payment_amount,
     ensure_payment_preference,
 )
+from modules.payments.model import OutboxMessage, Payment
+from modules.notifications.model import NotificationType
 from modules.notifications.tasks import enqueue_confirmation_email
 from modules.promotions.service import quote_promotion, redeem_promotion
 from modules.public_api.repository import PublicRepository
@@ -54,6 +56,7 @@ from modules.public_api.schemas import (
     PublicBookingCreate,
     PublicBookingResponse,
     PublicPromotionPreviewResponse,
+    PublicPaymentStatusResponse,
     PublicServiceResponse,
     PublicStaffResponse,
     PublicStoreResponse,
@@ -71,6 +74,21 @@ PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
 SlugPath = Annotated[str, Path(min_length=2, max_length=100, pattern=SLUG_PATTERN)]
+
+
+def _payment_hold_deadline(starts_at: datetime) -> datetime:
+    """Hasta cuando se retiene el slot de un turno que espera el pago de la seña.
+
+    Nunca mas alla del horario del turno. Devuelve el valor con la misma
+    conciencia de zona horaria que ``starts_at`` para no mezclar naive y aware.
+    """
+    is_naive = starts_at.tzinfo is None
+    reference = starts_at.replace(tzinfo=timezone.utc) if is_naive else starts_at
+    deadline = min(
+        datetime.now(timezone.utc) + timedelta(minutes=settings.PAYMENT_HOLD_MINUTES),
+        reference,
+    )
+    return deadline.replace(tzinfo=None) if is_naive else deadline
 
 
 def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
@@ -189,6 +207,8 @@ async def get_store_by_slug(
             cover_url=store.cover_url,
             whatsapp_number=store.whatsapp_number,
             website_url=store.website_url,
+            allow_manual_coordination=store.allow_manual_coordination,
+            deposit_policy=store.deposit_policy,
             custom_client_fields=[
                 StoreCustomField.model_validate(field)
                 for field in (store.custom_client_fields or [])
@@ -475,18 +495,48 @@ async def create_public_booking(
             if preview_promotion_quote
             else base_service_price
         )
-        payment_required = (
-            is_store_feature_enabled(store.feature_flags, "payments")
-            and calculate_service_payment_amount(
-                service, base_price=discounted_service_price
-            )
-            > 0
+        deposit_amount = calculate_service_payment_amount(
+            service, base_price=discounted_service_price
         )
+        payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+        payment_required = (
+            (
+                data.payment_method == "mercadopago"
+                or (
+                    data.payment_method == "auto"
+                    and payments_enabled
+                    and deposit_amount > 0
+                )
+            )
+            and payments_enabled
+            and deposit_amount > 0
+        )
+        if data.payment_method == "mercadopago" and deposit_amount <= 0:
+            raise ValidationException(
+                "Este servicio no tiene una seña configurada para Mercado Pago"
+            )
+        if data.payment_method == "mercadopago" and not payments_enabled:
+            raise ValidationException(
+                "La tienda no tiene habilitados los cobros con Mercado Pago"
+            )
+        # Una seña marcada como obligatoria solo se puede saltear si la tienda
+        # habilito explicitamente coordinar el pago por fuera de la plataforma.
+        # Sin esto, cualquiera reserva sin pagar mandando payment_method=manual.
+        online_payment_mandatory = (
+            payments_enabled
+            and deposit_amount > 0
+            and (getattr(service, "deposit_mode", "none") or "none") == "required"
+            and not store.allow_manual_coordination
+        )
+        if online_payment_mandatory and data.payment_method == "manual":
+            raise ValidationException(
+                "Este servicio requiere pagar la seña con Mercado Pago para reservar"
+            )
+        if online_payment_mandatory:
+            payment_required = True
         initial_status = (
             AppointmentStatus.PENDING_PAYMENT.value
             if payment_required
-            else AppointmentStatus.CONFIRMED.value
-            if is_store_feature_enabled(store.feature_flags, "otp_booking")
             else AppointmentStatus.PENDING.value
         )
 
@@ -511,6 +561,18 @@ async def create_public_booking(
                     idempotency_key=idempotency_key,
                     initial_status=initial_status,
                 )
+                # Un turno esperando la seña retiene el slot solo por una ventana
+                # corta: si no se paga, vuelve a estar disponible enseguida en vez
+                # de bloquear la agenda hasta la hora del turno. La coordinacion
+                # manual si retiene hasta el horario, porque la confirma la tienda.
+                if payment_required:
+                    appointment.expires_at = _payment_hold_deadline(
+                        appointment.starts_at
+                    )
+                else:
+                    appointment.expires_at = appointment.starts_at
+                if data.accepts_terms:
+                    appointment.terms_accepted_at = datetime.now(timezone.utc)
                 if data.promotion_code:
                     try:
                         promotion_quote = await redeem_promotion(
@@ -548,6 +610,20 @@ async def create_public_booking(
                         if promotion_quote
                         else None,
                     )
+                else:
+                    # El pago se coordina por fuera, asi que la tienda tiene que
+                    # confirmar el turno a mano cuando reciba la transferencia.
+                    db.add(
+                        OutboxMessage(
+                            store_id=store_id,
+                            event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
+                            payload={
+                                "appointment_id": appointment.id,
+                                "client_name": data.client_name,
+                                "service_name": service.name,
+                            },
+                        )
+                    )
         except ValueError as exc:
             await idempotency_release(idempotency_key, redis)
             raise AppException(
@@ -569,7 +645,10 @@ async def create_public_booking(
             )
 
         await db.commit()
-        if appointment.client_email:
+        if (
+            appointment.client_email
+            and appointment.status == AppointmentStatus.CONFIRMED.value
+        ):
             await enqueue_confirmation_email(
                 email=appointment.client_email,
                 details={
@@ -596,7 +675,16 @@ async def create_public_booking(
             payment_status=payment.status if payment else None,
             payment_link=payment.payment_link if payment else None,
             payment_public_id=payment.id if payment else None,
-            payment_amount=float(payment.amount) if payment else None,
+            payment_amount=float(
+                payment.amount
+                if payment
+                else calculate_service_payment_amount(
+                    service,
+                    base_price=promotion_quote.final_amount
+                    if promotion_quote
+                    else discounted_service_price,
+                )
+            ),
             promotion_code=promotion_quote.code if promotion_quote else None,
             service_price=float(base_service_price),
             discount_amount=float(promotion_quote.discount_amount)
@@ -612,6 +700,51 @@ async def create_public_booking(
         if idempotency_key:
             await idempotency_release(idempotency_key, redis)
         raise
+    finally:
+        set_tenant_context(None, False)
+
+
+@router.get(
+    "/payments/{payment_public_id}/status",
+    response_model=PublicPaymentStatusResponse,
+)
+async def get_public_payment_status(
+    payment_public_id: PublicIdPath,
+    request: Request,
+    store_public_id: PublicIdQuery,
+    db: AsyncSession = Depends(get_db),
+) -> PublicPaymentStatusResponse:
+    await enforce_rate_limit(
+        request,
+        "public:payment:status",
+        settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE,
+        subject=f"{store_public_id}:{payment_public_id}",
+    )
+    await _bypass_rls(db)
+    try:
+        result = await db.execute(
+            select(Payment, Appointment)
+            .join(Appointment, Appointment.id == Payment.appointment_id)
+            .join(Store, Store.id == Payment.store_id)
+            .where(
+                Payment.id == payment_public_id,
+                Store.public_id == store_public_id,
+                Payment.store_id == Appointment.store_id,
+            )
+        )
+        row = result.first()
+        if not row:
+            raise AppointmentNotFoundException(public_id=payment_public_id)
+        payment, appointment = row
+        return PublicPaymentStatusResponse(
+            payment_public_id=payment.id,
+            appointment_public_id=appointment.public_id,
+            payment_status=payment.status,
+            appointment_status=appointment.status,
+            amount=float(payment.amount),
+            currency=payment.currency,
+            starts_at=appointment.starts_at,
+        )
     finally:
         set_tenant_context(None, False)
 

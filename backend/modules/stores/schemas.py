@@ -52,6 +52,8 @@ class StoreUpdate(BaseModel):
 
     cancellation_hours: Optional[int] = Field(None, ge=0)
     buffer_minutes: Optional[int] = Field(None, ge=0)
+    allow_manual_coordination: Optional[bool] = None
+    deposit_policy: Optional[str] = Field(None, max_length=2000)
 
     business_hours: Optional[Dict[str, List[BusinessHourPeriod]]] = Field(
         None, max_length=7
@@ -104,6 +106,8 @@ class StoreResponse(BaseModel):
     custom_client_fields: List[StoreCustomField] = Field(default_factory=list)
     cancellation_hours: int
     buffer_minutes: int
+    allow_manual_coordination: bool = True
+    deposit_policy: Optional[str] = None
     business_hours: Dict[str, List[BusinessHourPeriod]]
     send_email_confirmation: bool
     send_email_reminders: bool

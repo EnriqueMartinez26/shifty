@@ -20,6 +20,7 @@ class AppointmentStatus(str, enum.Enum):
                 AppointmentStatus.CONFIRMED,
                 AppointmentStatus.CANCELLED,
                 AppointmentStatus.PENDING_PAYMENT,
+                AppointmentStatus.EXPIRED,
             },
             AppointmentStatus.PENDING_PAYMENT: {
                 AppointmentStatus.CONFIRMED,
