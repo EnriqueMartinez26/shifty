@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import structlog
 from sqlalchemy import or_, select
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
+from modules.notifications.tasks import send_store_notification_email
 from modules.payments.model import (
     OutboxMessage,
     Payment,
@@ -20,6 +22,7 @@ from modules.payments.processing import (
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
+from modules.users.model import User, UserRole
 from modules.payments.service import (
     fetch_mercadopago_payment,
     stamp_payment_from_status,
@@ -29,6 +32,8 @@ from modules.payments.service import (
 # Ventana hacia atras que revisa la conciliacion. Mas alla de esto un pago
 # pendiente ya se considera abandonado.
 RECONCILIATION_LOOKBACK_DAYS = 30
+
+logger = structlog.get_logger()
 
 
 async def process_outbox_batch(
@@ -60,6 +65,17 @@ async def process_outbox_batch(
             notification = _build_store_notification(message)
             if notification is not None:
                 db.add(notification)
+                # El mail es un efecto secundario: la notificacion in-app ya
+                # quedo persistida y es la fuente durable. Un SMTP caido no
+                # puede marcar el evento como fallido ni frenar el lote.
+                try:
+                    await _email_store_owners(db, notification)
+                except Exception as exc:
+                    logger.warning(
+                        "store_notification_email_skipped",
+                        store_id=notification.store_id,
+                        error_type=type(exc).__name__,
+                    )
             message.processed_at = now
             message.error = None
             processed += 1
@@ -112,6 +128,28 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
         )
 
     return None
+
+
+async def _email_store_owners(db: AsyncSession, notification: Notification) -> None:
+    """Replica la notificacion in-app por mail a los administradores de la tienda.
+
+    Es best-effort: si falla el envio no se pierde el evento, porque la
+    notificacion del panel ya quedo persistida.
+    """
+    result = await db.execute(
+        select(User.email).where(
+            User.store_id == notification.store_id,
+            User.role == UserRole.ADMIN,
+            User.is_active.is_(True),
+            User.email.is_not(None),
+        )
+    )
+    for email in result.scalars().all():
+        if not email:
+            continue
+        await send_store_notification_email(
+            email=email, title=notification.title, body=notification.body
+        )
 
 
 async def process_webhook_inbox_batch(

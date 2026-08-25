@@ -38,7 +38,7 @@ from modules.appointments.schemas import (
 from modules.appointments.service import AppointmentBookPayload, AppointmentService
 from modules.auth.dependencies import get_current_user, get_optional_current_user
 from modules.audit.model import AuditAction
-from modules.audit.service import AuditService
+from modules.audit.repository import AuditRepository
 from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.payments.service import (
     expire_mercadopago_preference,
@@ -317,7 +317,7 @@ async def release_pending_appointment(
 
     previous_status = appointment.status
     appointment.apply_status_transition(AppointmentStatus.EXPIRED)
-    await AuditService(db).log(
+    await AuditRepository(db).log(
         action=AuditAction.STATUS_CHANGE,
         resource_type="Appointment",
         resource_id=appointment.public_id,

@@ -1,8 +1,9 @@
 """
-Servicio de auditoría.
+Repositorio de auditoría.
 
-Responsabilidad única: insertar registros en audit_logs.
-Se inyecta en los servicios de negocio que necesiten rastrear cambios.
+Su unica responsabilidad es persistir filas en ``audit_logs``: no toma
+decisiones de negocio, no consulta y no commitea. Antes se llamaba
+``AuditService``, un nombre que sugeria logica que nunca tuvo.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from modules.audit.model import AuditAction, AuditLog
 from modules.users.model import User
 
 
-class AuditService:
+class AuditRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 

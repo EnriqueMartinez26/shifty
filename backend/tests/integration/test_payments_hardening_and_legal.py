@@ -707,3 +707,93 @@ async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
     assert appointment.status == AppointmentStatus.PENDING_PAYMENT.value, (
         "el turno original no debe quedar cancelado"
     )
+
+
+@pytest.mark.asyncio
+async def test_el_dueno_recibe_la_notificacion_tambien_por_mail(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La campanita solo sirve si el dueño entra al panel."""
+    import modules.payments.jobs as payments_jobs
+
+    enviados: list[dict[str, str | None]] = []
+
+    async def fake_send(
+        *, email: str, title: str, body: str | None = None
+    ) -> dict[str, str]:
+        enviados.append({"email": email, "title": title, "body": body})
+        return {"status": "sent"}
+
+    monkeypatch.setattr(payments_jobs, "send_store_notification_email", fake_send)
+
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-mail-dueno", email="mail-dueno@test.com"
+    )
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=2)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+    slot = starts_at.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": slot.isoformat(),
+            "client_name": "Cliente Mail",
+            "client_phone": "+5491155599999",
+            "payment_method": "manual",
+            "accepts_terms": True,
+            "idempotency_key": "mail-dueno-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+
+    await process_outbox_batch(test_session)
+
+    assert enviados, "el dueño no recibio mail de la notificacion"
+    assert enviados[0]["email"] == "mail-dueno@test.com"
+    assert "confirmar" in (enviados[0]["title"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_un_fallo_de_mail_no_frena_el_outbox(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El aviso es un efecto secundario: la notificacion in-app ya se persistio."""
+    import modules.payments.jobs as payments_jobs
+
+    async def fake_send(**_: object) -> dict[str, str]:
+        raise RuntimeError("SMTP caido")
+
+    monkeypatch.setattr(payments_jobs, "send_store_notification_email", fake_send)
+
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-mail-falla", email="mail-falla@test.com"
+    )
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+    starts_at = datetime.now(timezone.utc) + timedelta(days=2)
+    await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
+    slot = starts_at.replace(hour=17, minute=0, second=0, microsecond=0)
+
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": slot.isoformat(),
+            "client_name": "Cliente Falla",
+            "client_phone": "+5491155588777",
+            "payment_method": "manual",
+            "accepts_terms": True,
+            "idempotency_key": "mail-falla-booking-001",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+
+    stats = await process_outbox_batch(test_session)
+    assert stats["failed"] == 0, "un SMTP caido marco el evento como fallido"
