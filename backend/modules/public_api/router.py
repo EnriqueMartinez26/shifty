@@ -35,6 +35,9 @@ from core.rate_limit import enforce_rate_limit
 from core.redis import get_redis
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
+from modules.appointments.guards import (
+    reject_cancellation_while_awaiting_payment,
+)
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
 from modules.payments.service import (
@@ -850,8 +853,9 @@ async def client_cancel_appointment(
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
+        # Lock del turno antes de transicionarlo (TOCTOU).
         appt_res = await db.execute(
-            select(Appointment).where(Appointment.id == public_id)
+            select(Appointment).where(Appointment.id == public_id).with_for_update()
         )
         appointment = appt_res.scalar_one_or_none()
         if not appointment:
@@ -866,6 +870,10 @@ async def client_cancel_appointment(
         await _require_recent_client_otp(
             db, store_id=appointment.store_id, phone=data.phone
         )
+
+        # Mismo guard que la via administrativa: un turno con cobro vivo solo se
+        # suelta por release(), que vence antes la preferencia en Mercado Pago.
+        reject_cancellation_while_awaiting_payment(appointment)
 
         store = await repo.get_store_by_id(appointment.store_id)
         cancellation_hours = getattr(store, "cancellation_hours", 2) if store else 2
@@ -936,12 +944,16 @@ async def client_reschedule_appointment(
         if cached:
             return PublicBookingResponse.model_validate(cached)
 
+        # Lock del turno: reprogramar lo cancela, y sin lock dos requests
+        # concurrentes pueden partir del mismo estado origen.
         appt_res = await db.execute(
-            select(Appointment).where(Appointment.id == public_id)
+            select(Appointment).where(Appointment.id == public_id).with_for_update()
         )
         original = appt_res.scalar_one_or_none()
         if not original:
             raise AppointmentNotFoundException(public_id=public_id)
+        # Reprogramar cancela el turno original: le corresponde el mismo guard.
+        reject_cancellation_while_awaiting_payment(original)
 
         client = await repo.get_client_by_phone(original.store_id, data.phone)
         if not client or client.id != original.client_id:

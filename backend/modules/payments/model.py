@@ -33,6 +33,34 @@ class PaymentStatus(str, enum.Enum):
     MANUAL_CONFIRMED = "manual_confirmed"
 
 
+# Unica fuente de verdad del grafo de la region de facturacion.
+#
+# Invariante central: una vez que la plata se asento (approved /
+# manual_confirmed) o se devolvio (refunded), no puede degradarse en silencio
+# a un estado sin acreditar. `refunded` es terminal: antes el ratchet dejaba
+# pasar refunded -> approved porque solo bloqueaba las degradaciones, y un
+# webhook tardio podia revivir un pago ya devuelto.
+#
+# Los caminos de recuperacion si se mantienen: un cobro rechazado o vencido
+# puede terminar acreditado (reintento del cliente, o conciliacion que
+# encuentra en Mercado Pago un pago que nunca notifico).
+ALLOWED_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"approved", "rejected", "expired", "manual_confirmed"},
+    "rejected": {"approved", "manual_confirmed", "expired"},
+    "expired": {"approved", "manual_confirmed"},
+    "approved": {"refunded"},
+    "manual_confirmed": {"refunded"},
+    "refunded": set(),
+}
+
+
+def can_apply_payment_status(current: str, attempted: str) -> bool:
+    """Indica si el pago puede pasar de ``current`` a ``attempted``."""
+    if attempted == current:
+        return True
+    return attempted in ALLOWED_PAYMENT_TRANSITIONS.get(current, set())
+
+
 class PaymentGatewayConfig(BaseEntity):
     __tablename__ = "payment_gateway_configs"
 
@@ -90,6 +118,10 @@ class Payment(BaseEntity):
     raw_payload: Mapped[dict[str, JsonValue] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Optimistic locking, igual que en Appointment.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    __mapper_args__ = {"version_id_col": version}
 
     __table_args__ = (
         UniqueConstraint(
@@ -142,7 +174,9 @@ class OutboxMessage(BaseEntity):
 
 
 __all__ = [
+    "ALLOWED_PAYMENT_TRANSITIONS",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
+    "can_apply_payment_status",
     "JsonPrimitive",
     "JsonValue",
     "OutboxMessage",

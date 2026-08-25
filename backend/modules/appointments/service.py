@@ -17,7 +17,6 @@ import ulid
 from core.cache import CacheInvalidator
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
-    AppException,
     AppointmentConflictException,
     AppointmentNotFoundException,
     BlockedScheduleException,
@@ -25,6 +24,9 @@ from core.exceptions import (
     BookingNoticeException,
 )
 from modules.appointments.domain_service import SchedulingDomainService
+from modules.appointments.guards import (
+    reject_cancellation_while_awaiting_payment,
+)
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import enqueue_confirmation_email
@@ -206,26 +208,6 @@ class AppointmentService:
     # Cambios de estado
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _reject_if_awaiting_payment(appointment: Appointment) -> None:
-        """Impide cancelar un turno que espera un cobro.
-
-        El guard pertenece a la transicion ``pending_payment -> cancelled``, no
-        al endpoint: liberar uno de estos turnos exige vencer antes la
-        preferencia remota de Mercado Pago, cosa que solo hace ``release()``.
-        Cancelarlo por cualquier otra via dejaria el link de pago vivo y el
-        cliente podria pagar un turno que ya no existe.
-        """
-        if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
-            raise AppException(
-                message=(
-                    "Los turnos con un pago pendiente deben liberarse desde "
-                    "la accion protegida para administradores"
-                ),
-                http_status=409,
-                error_code="PAYMENT_APPOINTMENT_REQUIRES_RELEASE",
-            )
-
     async def cancel(self, *, public_id: str, actor: User) -> Appointment:
         """Cancela un turno verificando la transición de estado."""
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
@@ -234,7 +216,7 @@ class AppointmentService:
         appointment = await self.uow.appointments.get_by_public_id(public_id)
         if not appointment:
             raise AppointmentNotFoundException(public_id)
-        self._reject_if_awaiting_payment(appointment)
+        reject_cancellation_while_awaiting_payment(appointment)
 
         payload_before = {"status": appointment.status}
 
@@ -388,7 +370,7 @@ class AppointmentService:
             raise AppointmentNotFoundException(public_id)
         # Reprogramar cancela el turno original: le corresponde el mismo guard
         # que a cancel(). Sin esto la preferencia de pago quedaba viva.
-        self._reject_if_awaiting_payment(original)
+        reject_cancellation_while_awaiting_payment(original)
 
         # Guardar IDs antes de cancelar
         store_id = original.store_id

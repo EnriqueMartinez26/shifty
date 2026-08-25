@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from modules.appointments.model import AppointmentStatus
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,7 @@ class AppointmentResponse(BaseModel):
     staff_id: str
     starts_at: datetime
     ends_at: datetime
-    status: str
+    status: AppointmentStatus
     notes: Optional[str] = None
     notes_staff: Optional[str] = None  # Notas del profesional (nuevo)
     intake_answers: Dict[str, str] = Field(default_factory=dict)
@@ -65,7 +66,7 @@ class AppointmentListItem(BaseModel):
     client_name: str
     starts_at: datetime
     ends_at: datetime
-    status: str
+    status: AppointmentStatus
     notes: Optional[str] = None
     notes_staff: Optional[str] = None
     intake_answers: Dict[str, str] = Field(default_factory=dict)
@@ -136,7 +137,7 @@ class AppointmentSearchResult(BaseModel):
     public_id: str
     starts_at: datetime
     ends_at: datetime
-    status: str
+    status: AppointmentStatus
     notes: Optional[str] = None
     notes_staff: Optional[str] = None
     intake_answers: Dict[str, str] = Field(default_factory=dict)

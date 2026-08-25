@@ -16,6 +16,7 @@ from core.crypto import decrypt_secret, encrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
+    can_apply_payment_status,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -624,11 +625,9 @@ async def ensure_payment_preference(
         payment.original_amount = original_amount
         payment.discount_amount = discount_amount
         payment.promotion_code = promotion_code
-        if payment.status not in {
-            PaymentStatus.APPROVED.value,
-            PaymentStatus.MANUAL_CONFIRMED.value,
-            PaymentStatus.REFUNDED.value,
-        }:
+        # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o
+        # devuelto no vuelve a pendiente porque se recalcule el importe.
+        if can_apply_payment_status(payment.status, PaymentStatus.PENDING.value):
             payment.status = PaymentStatus.PENDING.value
         should_refresh_provider_link = (
             should_refresh_provider_link
@@ -714,15 +713,9 @@ def stamp_payment_from_status(
     *,
     payload: dict[str, JsonValue] | None = None,
 ) -> None:
-    if payment.status in {
-        PaymentStatus.APPROVED.value,
-        PaymentStatus.MANUAL_CONFIRMED.value,
-        PaymentStatus.REFUNDED.value,
-    } and payment_status in {
-        PaymentStatus.PENDING.value,
-        PaymentStatus.REJECTED.value,
-        PaymentStatus.EXPIRED.value,
-    }:
+    # El grafo decide: una transicion ilegal se ignora (el webhook se reentrega
+    # y no queremos romper por un duplicado), pero nunca se aplica.
+    if not can_apply_payment_status(payment.status, payment_status):
         return
     payment.status = payment_status
     payment.raw_payload = payload or payment.raw_payload
