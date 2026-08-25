@@ -83,7 +83,7 @@ class CanonicalJsonMiddleware(BaseHTTPMiddleware):
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response: Any = await call_next(request)
-        # AI AGENT NOTE: Allow clients (like integration tests) to request the raw
+        # NOTA: Allow clients (like integration tests) to request the raw
         # unwrapped response to maintain backwards compatibility without breaking
         # strict typing or requiring massive test rewrites.
         if request.headers.get("x-raw-response") == "true":

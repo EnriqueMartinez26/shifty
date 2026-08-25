@@ -100,3 +100,44 @@ def test_la_conciliacion_puede_recuperar_un_cobro_vencido() -> None:
     assert can_apply_payment_status(
         PaymentStatus.REJECTED.value, PaymentStatus.APPROVED.value
     )
+
+
+def test_reembolso_sobre_turno_confirmado_lo_mantiene_confirmado() -> None:
+    """Decision de negocio explicita, no comportamiento por omision.
+
+    Devolver la sena no implica que la tienda no vaya a atender. Si ademas
+    quiere soltar el horario, existe cancel().
+    """
+    from modules.payments.service import sync_appointment_with_payment
+
+    appointment = _appointment("confirmed")
+    sync_appointment_with_payment(appointment, PaymentStatus.REFUNDED.value)
+    assert appointment.status == "confirmed"
+
+
+def test_reembolso_sobre_turno_esperando_pago_lo_cancela() -> None:
+    from modules.payments.service import sync_appointment_with_payment
+
+    appointment = _appointment("pending_payment")
+    sync_appointment_with_payment(appointment, PaymentStatus.REFUNDED.value)
+    assert appointment.status == "cancelled"
+
+
+def test_el_conjunto_de_estados_terminales_es_el_documentado() -> None:
+    """Contrato cruzado con el frontend.
+
+    ``BookingStatus.isFinalized()`` en frontend/src/domain/value-objects/
+    replica esta lista. No hay forma de verificar la equivalencia entre
+    lenguajes en tiempo de compilacion, asi que este test la congela: si alguien
+    agrega un estado absorbente al backend, CI falla aca y el mensaje indica
+    que hay que actualizar el frontend.
+    """
+    terminales = {
+        origen
+        for origen, destinos in ALLOWED_STATUS_TRANSITIONS.items()
+        if not destinos
+    }
+    assert terminales == TERMINAL_APPOINTMENT, (
+        "Cambio el conjunto de estados terminales. Actualiza tambien "
+        "TERMINAL_STATUSES en frontend/src/domain/value-objects/BookingStatus.ts"
+    )

@@ -27,7 +27,7 @@ async def get_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
-    # AI AGENT NOTE: Using structured AppException subclasses instead of raw FastAPI HTTPException
+    # NOTA: Using structured AppException subclasses instead of raw FastAPI HTTPException
     # to enforce a unified response contract across the entire application.
     credentials_exception = AuthenticationException(
         message="No se pudo validar las credenciales"

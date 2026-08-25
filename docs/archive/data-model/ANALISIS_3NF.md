@@ -632,6 +632,5 @@ RESULTADO: Base de datos totalmente normalizada a 3FN
 
 ---
 
-**Analista**: GitHub Copilot  
 **Metodología**: Análisis sistemático de dependencias, 1NF/2NF/3NF  
 **Alcance**: 11 tablas, 43 campos de datos, 8 migraciones revisadas
