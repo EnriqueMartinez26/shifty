@@ -22,6 +22,7 @@ from modules.payments.processing import (
 )
 from modules.payments.service import (
     fetch_mercadopago_payment,
+    stamp_payment_from_status,
     search_mercadopago_payments,
 )
 
@@ -269,7 +270,9 @@ async def expire_unpaid_appointments(
             continue
         appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         if payment:
-            payment.status = PaymentStatus.EXPIRED.value
+            # Por el grafo, no por asignacion directa: si el cobro ya estaba
+            # acreditado no puede degradarse a expirado.
+            stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
         expired += 1
     await db.commit()
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}

@@ -79,17 +79,11 @@ export class Appointment {
     this.props.status = BookingStatus.create('pending')
   }
 
-  confirm(): void {
-    this.props.status = BookingStatus.create('confirmed')
-  }
-
-  markAbsent(): void {
-    this.props.status = BookingStatus.create('absent')
-  }
-
-  complete(): void {
-    this.props.status = BookingStatus.create('completed')
-  }
+  // Los mutadores confirm() / markAbsent() / complete() se eliminaron a
+  // proposito: mutaban el estado sin replicar el grafo de transiciones del
+  // backend, y eran una tercera fuente de verdad divergente esperando a que
+  // alguien la cableara a un boton. Las transiciones se piden a la API, que es
+  // la unica autoridad sobre el estado del turno.
 
   toPrimitives() {
     return {

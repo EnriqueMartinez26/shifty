@@ -4,13 +4,35 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 import ulid
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from infrastructure.persistence.models.base import Base
 
 if TYPE_CHECKING:
     from modules.appointments.model import AppointmentStatus
+
+
+# Unica fuente de verdad del grafo de transiciones del turno.
+# Los estados terminales mapean a conjuntos vacios: son absorbentes.
+ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    "pending": {"confirmed", "cancelled", "pending_payment", "expired"},
+    "pending_payment": {"confirmed", "cancelled", "expired"},
+    "confirmed": {"completed", "cancelled", "absent"},
+    "cancelled": set(),
+    "completed": set(),
+    "absent": set(),
+    "expired": set(),
+}
 
 
 class AppointmentModel(Base):
@@ -30,7 +52,11 @@ class AppointmentModel(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_minutes: Mapped[int] = mapped_column()
-    status: Mapped[str] = mapped_column(String(50), default="pending")
+    # Columna privada: la unica escritura legitima es apply_status_transition().
+    # Se expone como hybrid_property de solo lectura, asi que
+    # `appointment.status = "completed"` levanta AttributeError en vez de
+    # saltearse el grafo. A nivel clase sigue sirviendo para filtrar en queries.
+    _status: Mapped[str] = mapped_column("status", String(50), default="pending")
     notes: Mapped[Optional[str]] = mapped_column(Text)
     notes_staff: Mapped[Optional[str]] = mapped_column(Text)
     intake_answers: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
@@ -45,6 +71,10 @@ class AppointmentModel(Base):
         DateTime(timezone=True)
     )
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
+    # Optimistic locking: SQLAlchemy incrementa esta columna en cada UPDATE y
+    # falla con StaleDataError si otra transaccion la movio mientras tanto.
+    # Es la red donde el lock pesimista no llega.
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -62,6 +92,9 @@ class AppointmentModel(Base):
         client_name = kwargs.pop("client_name", None)
         client_email = kwargs.pop("client_email", None)
         client_phone = kwargs.pop("client_phone", None)
+        # `status=` es el nombre publico que usan los repositorios al crear.
+        if "status" in kwargs:
+            kwargs["_status"] = kwargs.pop("status")
         super().__init__(**kwargs)
         if client_name is not None:
             self.client_name = client_name
@@ -69,6 +102,15 @@ class AppointmentModel(Base):
             self.client_email = client_email
         if client_phone is not None:
             self.client_phone = client_phone
+
+    @hybrid_property
+    def status(self) -> str:
+        return self._status
+
+    @status.inplace.expression
+    @classmethod
+    def _status_expression(cls) -> Mapped[str]:
+        return cls._status
 
     @property
     def public_id(self) -> str:
@@ -134,23 +176,14 @@ class AppointmentModel(Base):
             new_status.value if hasattr(new_status, "value") else str(new_status)
         )
         current = self.status
-        allowed_transitions = {
-            "pending": {"confirmed", "cancelled", "pending_payment", "expired"},
-            "pending_payment": {"confirmed", "cancelled", "expired"},
-            "confirmed": {"completed", "cancelled", "absent"},
-            "cancelled": set(),
-            "completed": set(),
-            "absent": set(),
-            "expired": set(),
-        }
 
         if attempted == current:
             return
 
-        if attempted not in allowed_transitions.get(current, set()):
+        if attempted not in ALLOWED_STATUS_TRANSITIONS.get(current, set()):
             raise InvalidStatusTransitionException(current=current, attempted=attempted)
 
-        self.status = attempted
+        self._status = attempted
         now = datetime.now(timezone.utc)
         if attempted == "cancelled":
             self.cancelled_at = now
@@ -161,6 +194,8 @@ class AppointmentModel(Base):
     @property
     def ends_at_derived(self) -> datetime:
         return self.starts_at + timedelta(minutes=self.duration_minutes)
+
+    __mapper_args__ = {"version_id_col": version}
 
     __table_args__ = (
         CheckConstraint(

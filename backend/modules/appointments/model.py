@@ -15,29 +15,17 @@ class AppointmentStatus(str, enum.Enum):
     EXPIRED = "expired"
 
     def can_transition_to(self, next_status: "AppointmentStatus") -> bool:
-        allowed = {
-            AppointmentStatus.PENDING: {
-                AppointmentStatus.CONFIRMED,
-                AppointmentStatus.CANCELLED,
-                AppointmentStatus.PENDING_PAYMENT,
-                AppointmentStatus.EXPIRED,
-            },
-            AppointmentStatus.PENDING_PAYMENT: {
-                AppointmentStatus.CONFIRMED,
-                AppointmentStatus.CANCELLED,
-                AppointmentStatus.EXPIRED,
-            },
-            AppointmentStatus.CONFIRMED: {
-                AppointmentStatus.COMPLETED,
-                AppointmentStatus.CANCELLED,
-                AppointmentStatus.ABSENT,
-            },
-            AppointmentStatus.CANCELLED: set(),
-            AppointmentStatus.COMPLETED: set(),
-            AppointmentStatus.ABSENT: set(),
-            AppointmentStatus.EXPIRED: set(),
-        }
-        return next_status in allowed.get(self, set())
+        """Consulta si la transicion es legal, sin aplicarla.
+
+        Delega en ``ALLOWED_STATUS_TRANSITIONS``, la unica fuente de verdad del
+        grafo. Antes esto era una segunda copia del diccionario: coincidian por
+        disciplina y los tests validaban la copia que produccion nunca ejecuta.
+        """
+        from infrastructure.persistence.models.appointment import (
+            ALLOWED_STATUS_TRANSITIONS,
+        )
+
+        return next_status.value in ALLOWED_STATUS_TRANSITIONS.get(self.value, set())
 
 
 __all__ = ["Appointment", "AppointmentStatus"]
