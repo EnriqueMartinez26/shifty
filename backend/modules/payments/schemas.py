@@ -67,6 +67,17 @@ class PaymentResponse(BaseModel):
         from_attributes = True
 
 
+class OAuthDisconnectResponse(BaseModel):
+    """Resultado de dar de baja la conexion con Mercado Pago.
+
+    Devuelve un modelo, no un dict crudo: el router canonico envuelve la
+    respuesta en {success, data} y un dict con su propia clave 'success'
+    rompia la validacion, dejando el endpoint en 500.
+    """
+
+    disconnected: bool
+
+
 class OutboxProcessResponse(BaseModel):
     processed: int
     failed: int

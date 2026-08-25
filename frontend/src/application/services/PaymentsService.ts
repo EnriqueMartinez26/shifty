@@ -137,8 +137,8 @@ export class PaymentsService {
     return data
   }
 
-  async disconnectMercadoPagoOAuth(): Promise<{ success: boolean; disconnected: boolean }> {
-    const { data } = await apiClient.delete<{ success: boolean; disconnected: boolean }>(
+  async disconnectMercadoPagoOAuth(): Promise<{ disconnected: boolean }> {
+    const { data } = await apiClient.delete<{ disconnected: boolean }>(
       '/payments/mercadopago/oauth/connection'
     )
     return data

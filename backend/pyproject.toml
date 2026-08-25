@@ -77,6 +77,23 @@ strict = true
 ignore_missing_imports = true
 explicit_package_bases = true
 
+[tool.coverage.run]
+source = ["modules", "core", "infrastructure"]
+omit = ["*/__pycache__/*", "*/tests/*"]
+
+[tool.coverage.report]
+# Piso de cobertura: no es un objetivo a alcanzar sino un techo del que no se
+# baja. Subirlo cuando se agreguen tests; nunca bajarlo para que pase CI.
+fail_under = 80
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abc.abstractmethod",
+    "@abstractmethod",
+]
+
 [tool.pytest.ini_options]
 # El proyecto no declara [build-system], por lo que uv no instala `core`/`main`
 # como paquete importable. Sin esto, `uv run pytest` (invocacion usada por CI)

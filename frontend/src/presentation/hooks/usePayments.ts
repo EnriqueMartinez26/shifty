@@ -48,7 +48,7 @@ export const useRefreshMercadoPagoOAuth = () => {
 
 export const useDisconnectMercadoPagoOAuth = () => {
   const queryClient = useQueryClient()
-  return useMutation<{ success: boolean; disconnected: boolean }, Error>({
+  return useMutation<{ disconnected: boolean }, Error>({
     mutationFn: () => paymentsService.disconnectMercadoPagoOAuth(),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['payments-gateway-config'] })
