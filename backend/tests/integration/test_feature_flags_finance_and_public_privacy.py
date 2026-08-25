@@ -106,6 +106,19 @@ async def register_and_login(
     )
     assert login.status_code == 200, login.text
     token = cast(str, login.json()["access_token"])
+
+    # Publicar la politica de sena es requisito para activar cobros online, asi
+    # que las tiendas de prueba nacen con una.
+    policy = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={
+            "deposit_policy": (
+                "La sena se descuenta del total y se devuelve con 24hs de aviso."
+            )
+        },
+    )
+    assert policy.status_code == 200, policy.text
     return store_public_id, token
 
 

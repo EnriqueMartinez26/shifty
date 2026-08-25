@@ -1,6 +1,10 @@
 from celery import Celery
 from celery.schedules import crontab
 from core.config import settings
+from core.observability import init_observability
+
+# Los workers corren en procesos aparte: necesitan su propia inicializacion.
+init_observability("worker")
 
 celery_app = Celery(
     "shifty",

@@ -590,3 +590,73 @@ async def test_reconciliation_total_includes_manually_confirmed_payments(
 
     total = await test_session.execute(select(func.count()).select_from(Notification))
     assert total.scalar_one() >= 0
+
+
+@pytest.mark.asyncio
+async def test_payments_cannot_be_enabled_without_a_deposit_policy(
+    client: AsyncClient,
+) -> None:
+    """Sin politica publicada, el checkbox del cliente aceptaria un texto vacio."""
+    register = await client.post(
+        "/auth/register",
+        json={
+            "store_name": "Tienda Sin Politica",
+            "store_slug": "tienda-sin-politica",
+            "admin_email": "sinpolitica@test.com",
+            "admin_password": "Password123!",
+            "admin_first_name": "Sin",
+            "admin_last_name": "Politica",
+        },
+    )
+    assert register.status_code == 201, register.text
+    login = await client.post(
+        "/auth/login",
+        json={"email": "sinpolitica@test.com", "password": "Password123!"},
+    )
+    token = cast(str, login.json()["access_token"])
+
+    blocked = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert blocked.status_code == 422, blocked.text
+    assert "DEPOSIT_POLICY_REQUIRED" in blocked.text
+
+    saved = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"deposit_policy": "Se descuenta del total. Devolucion con 24hs."},
+    )
+    assert saved.status_code == 200, saved.text
+
+    allowed = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert allowed.status_code == 200, allowed.text
+
+
+@pytest.mark.asyncio
+async def test_deposit_policy_cannot_be_cleared_while_payments_are_active(
+    client: AsyncClient,
+) -> None:
+    """Borrar la politica con cobros activos dejaria el consentimiento sin contenido."""
+    _, token = await register_and_login(
+        client, slug="tienda-politica-viva", email="politica-viva@test.com"
+    )
+    enabled = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    for empty_value in ("", "   ", None):
+        cleared = await client.patch(
+            "/stores/me",
+            headers=auth_headers(token),
+            json={"deposit_policy": empty_value},
+        )
+        assert cleared.status_code == 422, f"{empty_value!r}: {cleared.text}"
