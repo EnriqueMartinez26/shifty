@@ -8,6 +8,7 @@ import {
   mdiChartBar,
   mdiChevronRight,
   mdiCog,
+  mdiHelpCircle,
   mdiCreditCardOutline,
   mdiLogout,
   mdiShieldCheck,
@@ -102,6 +103,12 @@ const menuItems: MenuItem[] = [
     label: 'Configuración',
     path: '/dashboard/settings',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+  },
+  {
+    iconPath: mdiHelpCircle,
+    label: 'Manual de uso',
+    path: '/dashboard/manual',
+    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
   }
 ]
 

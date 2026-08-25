@@ -61,6 +61,7 @@ from modules.payments.service import (
 )
 from modules.payments.schemas import (
     GatewayConfigResponse,
+    OAuthDisconnectResponse,
     GatewayConfigUpsert,
     ManualPaymentRequest,
     MercadoPagoOAuthStartResponse,
@@ -590,11 +591,11 @@ async def refresh_mercadopago_oauth(
     )
 
 
-@router.delete("/mercadopago/oauth/connection")
+@router.delete("/mercadopago/oauth/connection", response_model=OAuthDisconnectResponse)
 async def disconnect_mercadopago_oauth(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, bool]:
+) -> OAuthDisconnectResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
 
@@ -606,11 +607,11 @@ async def disconnect_mercadopago_oauth(
     )
     config = result.scalar_one_or_none()
     if not config:
-        return {"success": True, "disconnected": False}
+        return OAuthDisconnectResponse(disconnected=False)
 
     await db.delete(config)
     await db.commit()
-    return {"success": True, "disconnected": True}
+    return OAuthDisconnectResponse(disconnected=True)
 
 
 @router.post("/preferences/{appointment_id}", response_model=PaymentPreferenceResponse)

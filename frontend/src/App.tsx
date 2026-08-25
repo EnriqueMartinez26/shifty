@@ -33,6 +33,7 @@ const UsersPage = lazy(() => import('./presentation/pages/Users'))
 const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
 const SettingsPage = lazy(() => import('./presentation/pages/Settings'))
 const LegalPage = lazy(() => import('./presentation/pages/Legal'))
+const ManualPage = lazy(() => import('./presentation/pages/Manual'))
 
 const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
   <Sentry.ErrorBoundary
@@ -119,6 +120,7 @@ function App() {
               }
             >
               <Route index element={<Dashboard />} />
+              <Route path="manual" element={<ManualPage />} />
               <Route path="calendar" element={<CalendarPage />} />
               <Route
                 path="reports"
