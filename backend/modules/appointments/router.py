@@ -45,7 +45,7 @@ from modules.payments.service import (
     stamp_payment_from_status,
 )
 
-# AI AGENT NOTE: use public_api as the stable runtime import path for public booking data access.
+# NOTA: use public_api as the stable runtime import path for public booking data access.
 from modules.public_api.repository import PublicRepository
 from modules.users.model import User, UserRole
 

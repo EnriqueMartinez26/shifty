@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
+from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -28,7 +29,7 @@ from modules.auth.dependencies import get_current_user
 from modules.users.model import User
 from modules.users.router import router as users_router
 
-# AI AGENT NOTE: use public_api as the stable runtime import path for the public booking module.
+# NOTA: use public_api as the stable runtime import path for the public booking module.
 from modules.public_api.router import router as public_router
 from modules.reports.router import router as reports_router
 from modules.ledger.router import router as ledger_router
@@ -169,6 +170,30 @@ async def validation_exception_handler(
         message=readable_msg,
         detail=error_strings,
         # detail es lista de strings — nunca objetos — para que React pueda renderizar
+    )
+
+
+@app.exception_handler(StaleDataError)
+async def stale_data_exception_handler(
+    request: Request, exc: StaleDataError
+) -> JSONResponse:
+    """Conflicto de concurrencia detectado por el optimistic locking.
+
+    Otra transaccion modifico la fila entre que la leimos y la guardamos. No es
+    un fallo del servidor: es una carrera legitima entre dos actores. Se
+    responde 409 para que el cliente recargue y reintente, en vez de 500.
+    """
+    logger.info(
+        "stale_data_conflict", path=str(request.url.path), method=request.method
+    )
+    return error_response(
+        status_code=409,
+        error_code="CONCURRENT_MODIFICATION",
+        message=(
+            "Alguien mas modifico este registro mientras lo editabas. "
+            "Actualiza la vista y volve a intentar."
+        ),
+        headers={"Cache-Control": "no-store"},
     )
 
 

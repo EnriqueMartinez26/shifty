@@ -698,6 +698,14 @@ def sync_appointment_with_payment(
         return
 
     if payment_status == PaymentStatus.REFUNDED.value:
+        # Decision explicita, no omision:
+        #
+        # - Si el turno todavia esperaba el cobro, el reembolso lo deja sin
+        #   sustento y se cancela.
+        # - Si el turno YA estaba confirmado, se mantiene confirmado. La tienda
+        #   devolvio la sena pero eso no implica que no vaya a atender: cancelar
+        #   por su cuenta sorprenderia al cliente con un turno perdido. Si la
+        #   tienda tambien quiere soltar el horario, tiene cancel() para eso.
         if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
             appointment.apply_status_transition(AppointmentStatus.CANCELLED)
         return

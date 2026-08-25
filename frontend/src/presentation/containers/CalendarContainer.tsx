@@ -23,7 +23,7 @@ import {
   ShieldBan
 } from 'lucide-react'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'
@@ -369,6 +369,11 @@ export const CalendarContainer: React.FC = () => {
       setMessage('Turno liberado correctamente')
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo liberar el turno'))
+      // Un desfasaje de estado significa que la agenda en pantalla quedo vieja:
+      // recargarla es parte de la solucion, no algo que el usuario deba deducir.
+      if (isStateConflictError(error)) {
+        void agendaQuery.refetch()
+      }
     }
   }
 

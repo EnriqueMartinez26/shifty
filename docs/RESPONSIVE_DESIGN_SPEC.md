@@ -1,7 +1,4 @@
-# Tarea: Adaptar el frontend a diseño responsivo
-
-## Rol
-Actuás como ingeniero frontend senior especializado en React + Tailwind CSS, priorizando cambios mínimos y no invasivos sobre creatividad de diseño.
+# Especificación: diseño responsivo del frontend
 
 ## Estado actual (starting state)
 - Frontend: React 19 + TypeScript + Vite
