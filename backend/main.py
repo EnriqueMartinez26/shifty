@@ -12,6 +12,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import engine
 from core.middleware import TenantMiddleware
+from core.observability import init_observability
 from core.responses import CanonicalJsonMiddleware, error_response
 from core.runtime_contracts import ensure_runtime_contracts
 from core.exceptions import AppException
@@ -86,6 +87,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await ensure_runtime_contracts(engine)
     yield
 
+
+# Sentry se inicializa antes de construir la app para que sus integraciones
+# alcancen a instrumentar el ciclo de request.
+init_observability("api")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

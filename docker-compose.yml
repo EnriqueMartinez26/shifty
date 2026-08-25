@@ -58,6 +58,7 @@ services:
     restart: always
     environment:
       ENV: ${ENV:-development}
+      SENTRY_DSN: ${SENTRY_DSN:-}
       SECRET_KEY: ${SECRET_KEY:-generate_a_very_secret_key_here_for_production}
       FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-dev-field-key}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
@@ -115,6 +116,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+      SENTRY_DSN: ${SENTRY_DSN:-}
     volumes:
       - ./backend:/app
       - /app/.venv
@@ -141,6 +143,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
       CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+      SENTRY_DSN: ${SENTRY_DSN:-}
     volumes:
       - ./backend:/app
       - /app/.venv

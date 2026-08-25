@@ -12,7 +12,7 @@ from core.exceptions import (
     PermissionDeniedException,
     StoreNotFoundException,
 )
-from core.feature_flags import merge_store_feature_flags
+from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
 from modules.auth.dependencies import get_current_user
 from modules.stores.mappers import to_store_response
 from modules.stores.model import Store, StoreSchedule
@@ -94,6 +94,21 @@ async def update_my_store(
                 error_code="SLUG_ALREADY_IN_USE",
             )
 
+    # Contracara de la validacion en feature-flags: si los cobros ya estan
+    # activos, vaciar la politica dejaria al cliente aceptando un texto que ya
+    # no existe.
+    if "deposit_policy" in update_data:
+        policy = (update_data.get("deposit_policy") or "").strip()
+        payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+        if not policy and payments_enabled:
+            raise AppException(
+                "No podes dejar vacia la politica de sena mientras los cobros "
+                "online esten activos",
+                http_status=422,
+                error_code="DEPOSIT_POLICY_REQUIRED",
+            )
+        update_data["deposit_policy"] = policy or None
+
     raw_business_hours = update_data.pop("business_hours", None)
     business_hours = (
         raw_business_hours if isinstance(raw_business_hours, dict) else None
@@ -144,9 +159,20 @@ async def update_my_store_feature_flags(
         raise PermissionDeniedException("cambiar la configuraci?n del negocio")
 
     store = await _get_current_store(user, db)
+    updates = data.model_dump(exclude_unset=True)
+    # No se puede cobrar una sena sin publicar bajo que condiciones se cobra:
+    # el cliente acepta esa politica antes de pagar y es el respaldo ante un
+    # reclamo. Sin ella, el consentimiento no tiene contenido.
+    if updates.get("payments") and not (store.deposit_policy or "").strip():
+        raise AppException(
+            "Para activar los cobros online primero tenes que publicar tu "
+            "politica de sena, cancelacion y reembolso",
+            http_status=422,
+            error_code="DEPOSIT_POLICY_REQUIRED",
+        )
     store.feature_flags = merge_store_feature_flags(
         store.feature_flags,
-        data.model_dump(exclude_unset=True),
+        updates,
     )
     await db.commit()
     await db.refresh(store)

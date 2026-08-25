@@ -40,6 +40,9 @@ Pago para las notificaciones.
 
 ## Flujo por tienda
 
+0. La tienda publica su política de seña y reembolso. Sin ella el backend no deja
+   activar los cobros online (`DEPOSIT_POLICY_REQUIRED`), y tampoco permite vaciarla
+   mientras sigan activos.
 1. Un administrador abre **Configuración > Mercado Pago** y autoriza su cuenta.
 2. Shifty guarda access y refresh tokens cifrados, asociados exclusivamente a esa tienda.
 3. La tienda define en la misma pantalla si acepta coordinar el pago por fuera
