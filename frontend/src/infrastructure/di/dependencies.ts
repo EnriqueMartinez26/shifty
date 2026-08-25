@@ -19,7 +19,6 @@ import { StaffService } from '../../application/services/StaffService'
 import { UserService } from '../../application/services/UserService'
 import { EventBus } from '../../shared/events/EventBus'
 import apiClient from '../http/client'
-import { HttpAppointmentRepository } from '../repositories/HttpAppointmentRepository'
 import { HttpBookingRepository } from '../repositories/HttpBookingRepository'
 import { HttpServiceRepository } from '../repositories/HttpServiceRepository'
 import { HttpStaffRepository } from '../repositories/HttpStaffRepository'
@@ -66,8 +65,6 @@ export function registerDependencies(): ServiceContainer {
   container.register('userRepository', () => new HttpUserRepository(apiClient))
 
   container.register('staffRepository', () => new HttpStaffRepository(apiClient))
-
-  container.register('appointmentRepository', () => new HttpAppointmentRepository())
 
   container.register('bookingRepository', () => new HttpBookingRepository(apiClient))
 
@@ -130,7 +127,6 @@ export function createTestContainer(): ServiceContainer {
 
   // HTTP Implementations for other repositories
   container.register('staffRepository', () => new HttpStaffRepository(apiClient))
-  container.register('appointmentRepository', () => new HttpAppointmentRepository())
   container.register('bookingRepository', () => new HttpBookingRepository(apiClient))
   container.register('serviceRepository', () => new HttpServiceRepository(apiClient))
 

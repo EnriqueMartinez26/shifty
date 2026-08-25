@@ -223,3 +223,39 @@ process_appointment_reminders = cast(
         process_appointment_reminders
     ),
 )
+
+
+def _store_notification_body(title: str, body: str | None) -> str:
+    lines = [title]
+    if body:
+        lines.append("")
+        lines.append(body)
+    lines.append("")
+    lines.append("Ingresá a Shifty para verlo en tu panel.")
+    return "\n".join(lines)
+
+
+async def send_store_notification_email(
+    *, email: str, title: str, body: str | None = None
+) -> dict[str, str]:
+    """Avisa por mail al dueño de la tienda.
+
+    La campanita del panel solo sirve si el dueño entra. Un turno que espera
+    confirmacion manual o una seña acreditada necesitan llegarle aunque no
+    tenga Shifty abierto.
+
+    Nunca propaga errores: es un efecto secundario operativo y no puede
+    abortar el procesamiento del outbox.
+    """
+    try:
+        delivered = await _send_email(
+            email, f"Shifty - {title}", _store_notification_body(title, body)
+        )
+        return {"status": "sent" if delivered else "failed"}
+    except Exception as exc:
+        logger.warning(
+            "store_notification_email_failed",
+            email=email,
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "reason": type(exc).__name__}
