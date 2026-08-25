@@ -130,10 +130,12 @@ async def find_payment_for_webhook(
 
     if external_payment_id:
         result = await db.execute(
-            select(Payment).where(
+            select(Payment)
+            .where(
                 Payment.store_id == store_id,
                 Payment.external_payment_id == external_payment_id,
             )
+            .with_for_update()
         )
         payment = result.scalar_one_or_none()
         if payment:
@@ -141,10 +143,12 @@ async def find_payment_for_webhook(
 
     if preference_id:
         result = await db.execute(
-            select(Payment).where(
+            select(Payment)
+            .where(
                 Payment.store_id == store_id,
                 Payment.preference_id == str(preference_id),
             )
+            .with_for_update()
         )
         payment = result.scalar_one_or_none()
         if payment:
@@ -152,10 +156,12 @@ async def find_payment_for_webhook(
 
     if appointment_id:
         result = await db.execute(
-            select(Payment).where(
+            select(Payment)
+            .where(
                 Payment.store_id == store_id,
                 Payment.appointment_id == str(appointment_id),
             )
+            .with_for_update()
         )
         return result.scalar_one_or_none()
 
@@ -278,9 +284,11 @@ async def apply_mercadopago_webhook_payload(
     if not was_settled and payment.status == PaymentStatus.APPROVED.value:
         await _notify_payment_approved(db, store_id=store_id, payment=payment)
     appointment_result = await db.execute(
-        select(Appointment).where(
+        select(Appointment)
+        .where(
             Appointment.id == payment.appointment_id, Appointment.store_id == store_id
         )
+        .with_for_update()
     )
     appointment = appointment_result.scalar_one_or_none()
     if appointment:

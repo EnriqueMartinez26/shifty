@@ -660,3 +660,50 @@ async def test_deposit_policy_cannot_be_cleared_while_payments_are_active(
             json={"deposit_policy": empty_value},
         )
         assert cleared.status_code == 422, f"{empty_value!r}: {cleared.text}"
+
+
+@pytest.mark.asyncio
+async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reprogramar cancela el turno original: no puede saltear el guard de pago.
+
+    Sin este guard, el turno viejo quedaba cancelado pero la preferencia de
+    Mercado Pago seguia viva y el cliente podia pagar un turno inexistente.
+    """
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-reagenda", email="reagenda@test.com"
+    )
+    await _enable_payments(client, token)
+    await _configure_gateway(client, token)
+    appointment_id = await _book_with_mercadopago(
+        client, token, store_public_id, slug_suffix="reschedule-guard", hour=13
+    )
+
+    appointment = (
+        await test_session.execute(
+            select(Appointment).where(Appointment.id == appointment_id)
+        )
+    ).scalar_one()
+    assert appointment.status == AppointmentStatus.PENDING_PAYMENT.value
+
+    new_slot = appointment.starts_at + timedelta(hours=1)
+    if new_slot.tzinfo is None:
+        new_slot = new_slot.replace(tzinfo=timezone.utc)
+
+    blocked = await client.patch(
+        f"/appointments/{appointment_id}/reschedule",
+        headers=auth_headers(token),
+        json={
+            "new_starts_at": new_slot.isoformat(),
+            "idempotency_key": "reschedule-guard-attempt-001",
+        },
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert "PAYMENT_APPOINTMENT_REQUIRES_RELEASE" in blocked.text
+
+    await test_session.refresh(appointment)
+    assert appointment.status == AppointmentStatus.PENDING_PAYMENT.value, (
+        "el turno original no debe quedar cancelado"
+    )

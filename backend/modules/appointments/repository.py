@@ -71,6 +71,17 @@ class AppointmentRepository:
         )
         return res.scalar_one_or_none()
 
+    async def lock_by_public_id(self, public_id: str) -> None:
+        """Bloqueo pesimista (SELECT ... FOR UPDATE) sobre la fila del turno.
+
+        Se toma por separado y antes de ``get_by_public_id`` porque ese metodo
+        usa ``joinedload``, que arma OUTER JOINs, y Postgres rechaza FOR UPDATE
+        sobre el lado nullable de un outer join.
+        """
+        await self.db.execute(
+            select(Appointment.id).where(Appointment.id == public_id).with_for_update()
+        )
+
     def add(self, appointment: Appointment) -> None:
         """
         Agrega la entidad de turno a la sesión de persistencia actual.

@@ -206,11 +206,16 @@ class AppointmentService:
     # Cambios de estado
     # ------------------------------------------------------------------
 
-    async def cancel(self, *, public_id: str, actor: User) -> Appointment:
-        """Cancela un turno verificando la transición de estado."""
-        appointment = await self.uow.appointments.get_by_public_id(public_id)
-        if not appointment:
-            raise AppointmentNotFoundException(public_id)
+    @staticmethod
+    def _reject_if_awaiting_payment(appointment: Appointment) -> None:
+        """Impide cancelar un turno que espera un cobro.
+
+        El guard pertenece a la transicion ``pending_payment -> cancelled``, no
+        al endpoint: liberar uno de estos turnos exige vencer antes la
+        preferencia remota de Mercado Pago, cosa que solo hace ``release()``.
+        Cancelarlo por cualquier otra via dejaria el link de pago vivo y el
+        cliente podria pagar un turno que ya no existe.
+        """
         if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
             raise AppException(
                 message=(
@@ -220,6 +225,16 @@ class AppointmentService:
                 http_status=409,
                 error_code="PAYMENT_APPOINTMENT_REQUIRES_RELEASE",
             )
+
+    async def cancel(self, *, public_id: str, actor: User) -> Appointment:
+        """Cancela un turno verificando la transición de estado."""
+        # Lock pesimista antes de leer: sin esto, dos transiciones validas
+        # y distintas pueden partir del mismo estado origen (TOCTOU).
+        await self.uow.appointments.lock_by_public_id(public_id)
+        appointment = await self.uow.appointments.get_by_public_id(public_id)
+        if not appointment:
+            raise AppointmentNotFoundException(public_id)
+        self._reject_if_awaiting_payment(appointment)
 
         payload_before = {"status": appointment.status}
 
@@ -245,6 +260,9 @@ class AppointmentService:
 
     async def confirm(self, *, public_id: str, actor: User) -> Appointment:
         """Confirma un turno (solo ADMIN o STAFF)."""
+        # Lock pesimista antes de leer: sin esto, dos transiciones validas
+        # y distintas pueden partir del mismo estado origen (TOCTOU).
+        await self.uow.appointments.lock_by_public_id(public_id)
         appointment = await self.uow.appointments.get_by_public_id(public_id)
         if not appointment:
             raise AppointmentNotFoundException(public_id)
@@ -266,6 +284,9 @@ class AppointmentService:
 
     async def complete(self, *, public_id: str, actor: User) -> Appointment:
         """Marca un turno como completado."""
+        # Lock pesimista antes de leer: sin esto, dos transiciones validas
+        # y distintas pueden partir del mismo estado origen (TOCTOU).
+        await self.uow.appointments.lock_by_public_id(public_id)
         appointment = await self.uow.appointments.get_by_public_id(public_id)
         if not appointment:
             raise AppointmentNotFoundException(public_id)
@@ -295,6 +316,9 @@ class AppointmentService:
         Marca el turno como AUSENTE (cliente no se presentó).
         Solo aplicable desde CONFIRMED.
         """
+        # Lock pesimista antes de leer: sin esto, dos transiciones validas
+        # y distintas pueden partir del mismo estado origen (TOCTOU).
+        await self.uow.appointments.lock_by_public_id(public_id)
         appointment = await self.uow.appointments.get_by_public_id(public_id)
         if not appointment:
             raise AppointmentNotFoundException(public_id)
@@ -358,9 +382,13 @@ class AppointmentService:
           4. Todo en una única transacción atómica.
         """
         # 1. Buscar turno original
+        await self.uow.appointments.lock_by_public_id(public_id)
         original = await self.uow.appointments.get_by_public_id(public_id)
         if not original:
             raise AppointmentNotFoundException(public_id)
+        # Reprogramar cancela el turno original: le corresponde el mismo guard
+        # que a cancel(). Sin esto la preferencia de pago quedaba viva.
+        self._reject_if_awaiting_payment(original)
 
         # Guardar IDs antes de cancelar
         store_id = original.store_id
