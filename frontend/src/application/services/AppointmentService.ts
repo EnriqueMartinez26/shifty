@@ -20,7 +20,7 @@ export class AppointmentService extends BaseService<Appointment> {
     this.repository = repository
   }
 
-  async getCalendarRange(fromDate: string, toDate: string, pageSize = 500): Promise<Appointment[]> {
+  async getCalendarRange(fromDate: string, toDate: string, pageSize = 100): Promise<Appointment[]> {
     return await this.execute(async () => {
       return await this.repository.searchByDateRange(fromDate, toDate, pageSize)
     }, 'getCalendarRange')

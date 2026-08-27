@@ -41,3 +41,6 @@ run_validation.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Artefactos de Playwright MCP
+.playwright-mcp/
