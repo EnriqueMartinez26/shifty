@@ -5,6 +5,16 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from core.business_types import BusinessType, DEFAULT_BUSINESS_TYPE
 from core.validation import SLUG_PATTERN, reject_unsafe_url
 
+# Techos de los enteros expuestos por la API.
+#
+# Las columnas son INTEGER de PostgreSQL: cualquier valor por encima de 2^31-1
+# revienta al guardar y sale como 500. Ademas de evitar eso, los topes reflejan
+# maximos con sentido de negocio.
+MAX_HORAS_ANIO = 8760  # un anio
+MAX_MINUTOS_DIA = 1440  # un dia
+MAX_ELEMENTOS_PLAN = 10_000
+MAX_USOS_CUPON = 1_000_000
+
 
 CUSTOM_FIELD_KEY_PATTERN = r"^[a-z][a-z0-9_]{1,39}$"
 CustomClientFieldType = Literal["text", "textarea", "tel", "email", "date", "select"]
@@ -50,8 +60,8 @@ class StoreUpdate(BaseModel):
     website_url: Optional[str] = Field(None, max_length=500)
     custom_client_fields: Optional[List[StoreCustomField]] = Field(None, max_length=8)
 
-    cancellation_hours: Optional[int] = Field(None, ge=0)
-    buffer_minutes: Optional[int] = Field(None, ge=0)
+    cancellation_hours: Optional[int] = Field(None, ge=0, le=MAX_HORAS_ANIO)
+    buffer_minutes: Optional[int] = Field(None, ge=0, le=MAX_MINUTOS_DIA)
     allow_manual_coordination: Optional[bool] = None
     deposit_policy: Optional[str] = Field(None, max_length=2000)
 

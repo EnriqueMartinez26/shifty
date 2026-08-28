@@ -1,16 +1,19 @@
+from typing import Annotated, Any
+
 from fastapi import (
     BackgroundTasks,
     Depends,
+    Path,
     Request,
     Response,
     status,
 )
-from typing import Any
 
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
+from core.validation import PUBLIC_ID_PATTERN
 from core.database import get_db
 from core.rate_limit import enforce_rate_limit
 from modules.auth.dependencies import get_current_user
@@ -44,6 +47,9 @@ from modules.auth.service import (
 from modules.users.model import User
 
 router = CanonicalAPIRouter(prefix="/auth", tags=["Authentication"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 ACCESS_COOKIE = "access_token"
 REFRESH_COOKIE = "refresh_token"
@@ -160,7 +166,7 @@ async def revoke_store_sessions(
 
 @router.post("/sessions/revoke-user/{user_public_id}", status_code=status.HTTP_200_OK)
 async def revoke_user_sessions(
-    user_public_id: str,
+    user_public_id: PublicIdPath,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> RevokedSessionsResult:

@@ -7,6 +7,16 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN, reject_unsafe_url
 from modules.users.model import UserRole
 
+# Techos de los enteros expuestos por la API.
+#
+# Las columnas son INTEGER de PostgreSQL: cualquier valor por encima de 2^31-1
+# revienta al guardar y sale como 500. Ademas de evitar eso, los topes reflejan
+# maximos con sentido de negocio.
+MAX_HORAS_ANIO = 8760  # un anio
+MAX_MINUTOS_DIA = 1440  # un dia
+MAX_ELEMENTOS_PLAN = 10_000
+MAX_USOS_CUPON = 1_000_000
+
 
 CouponType = Literal["percent", "fixed"]
 
@@ -16,8 +26,8 @@ class StoreCreate(BaseModel):
     slug: str = Field(..., min_length=2, max_length=100, pattern=SLUG_PATTERN)
     logo_url: str | None = Field(None, max_length=500)
     primary_color: str = Field(default="#000000", max_length=20)
-    cancellation_hours: int = Field(default=24, ge=0)
-    buffer_minutes: int = Field(default=0, ge=0)
+    cancellation_hours: int = Field(default=24, ge=0, le=MAX_HORAS_ANIO)
+    buffer_minutes: int = Field(default=0, ge=0, le=MAX_MINUTOS_DIA)
     send_email_confirmation: bool = True
     send_email_reminders: bool = True
 
@@ -32,8 +42,8 @@ class StoreGlobalUpdate(BaseModel):
     slug: str | None = Field(None, min_length=2, max_length=100, pattern=SLUG_PATTERN)
     logo_url: str | None = Field(None, max_length=500)
     primary_color: str | None = Field(None, max_length=20)
-    cancellation_hours: int | None = Field(None, ge=0)
-    buffer_minutes: int | None = Field(None, ge=0)
+    cancellation_hours: int | None = Field(None, ge=0, le=MAX_HORAS_ANIO)
+    buffer_minutes: int | None = Field(None, ge=0, le=MAX_MINUTOS_DIA)
     send_email_confirmation: bool | None = None
     send_email_reminders: bool | None = None
     is_active: bool | None = None
@@ -117,8 +127,8 @@ class PlanCreate(BaseModel):
     price: Decimal = Field(..., ge=0, le=10_000_000)
     currency: str = Field(default="ARS", min_length=3, max_length=10)
     billing_interval: str = Field(default="monthly", min_length=3, max_length=20)
-    max_staff: int | None = Field(None, ge=0)
-    max_services: int | None = Field(None, ge=0)
+    max_staff: int | None = Field(None, ge=0, le=MAX_ELEMENTOS_PLAN)
+    max_services: int | None = Field(None, ge=0, le=MAX_ELEMENTOS_PLAN)
 
 
 class PlanUpdate(BaseModel):
@@ -127,8 +137,8 @@ class PlanUpdate(BaseModel):
     price: Decimal | None = Field(None, ge=0, le=10_000_000)
     currency: str | None = Field(None, min_length=3, max_length=10)
     billing_interval: str | None = Field(None, min_length=3, max_length=20)
-    max_staff: int | None = Field(None, ge=0)
-    max_services: int | None = Field(None, ge=0)
+    max_staff: int | None = Field(None, ge=0, le=MAX_ELEMENTOS_PLAN)
+    max_services: int | None = Field(None, ge=0, le=MAX_ELEMENTOS_PLAN)
     is_active: bool | None = None
 
 
@@ -196,7 +206,7 @@ class CouponCreate(BaseModel):
     coupon_type: CouponType
     value: Decimal = Field(..., gt=0, le=10_000_000)
     currency: str | None = Field(None, min_length=3, max_length=10)
-    max_uses: int | None = Field(None, ge=1)
+    max_uses: int | None = Field(None, ge=1, le=MAX_USOS_CUPON)
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     one_time_per_store: bool = True
@@ -221,7 +231,7 @@ class CouponUpdate(BaseModel):
     coupon_type: CouponType | None = None
     value: Decimal | None = Field(None, gt=0, le=10_000_000)
     currency: str | None = Field(None, min_length=3, max_length=10)
-    max_uses: int | None = Field(None, ge=1)
+    max_uses: int | None = Field(None, ge=1, le=MAX_USOS_CUPON)
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     one_time_per_store: bool | None = None

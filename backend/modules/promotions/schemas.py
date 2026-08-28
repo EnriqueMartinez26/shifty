@@ -5,6 +5,16 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# Techos de los enteros expuestos por la API.
+#
+# Las columnas son INTEGER de PostgreSQL: cualquier valor por encima de 2^31-1
+# revienta al guardar y sale como 500. Ademas de evitar eso, los topes reflejan
+# maximos con sentido de negocio.
+MAX_HORAS_ANIO = 8760  # un anio
+MAX_MINUTOS_DIA = 1440  # un dia
+MAX_ELEMENTOS_PLAN = 10_000
+MAX_USOS_CUPON = 1_000_000
+
 
 PROMOTION_CODE_PATTERN = r"^[A-Za-z0-9_-]{3,30}$"
 
@@ -22,7 +32,7 @@ class PromotionBase(BaseModel):
     min_service_amount: Decimal | None = Field(
         None, ge=0, max_digits=12, decimal_places=2
     )
-    max_uses: int | None = Field(None, gt=0)
+    max_uses: int | None = Field(None, gt=0, le=MAX_USOS_CUPON)
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     is_active: bool = True
@@ -56,7 +66,7 @@ class PromotionUpdate(BaseModel):
     min_service_amount: Decimal | None = Field(
         None, ge=0, max_digits=12, decimal_places=2
     )
-    max_uses: int | None = Field(None, gt=0)
+    max_uses: int | None = Field(None, gt=0, le=MAX_USOS_CUPON)
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     is_active: bool | None = None
