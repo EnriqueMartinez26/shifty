@@ -16,6 +16,33 @@ class AppointmentBlockBase(BaseModel):
         return self
 
 
+class StoreWideBlockCreate(BaseModel):
+    """Cierre de toda la tienda: un feriado, una mudanza, un dia de limpieza.
+
+    Sin esto habia que bloquear a cada profesional uno por uno, y con cinco
+    empleados cerrar un dia eran cinco operaciones.
+    """
+
+    starts_at: datetime
+    ends_at: datetime
+    reason: str = Field("Cerrado", max_length=255)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "StoreWideBlockCreate":
+        if self.starts_at >= self.ends_at:
+            raise ValueError("El inicio debe ser anterior al fin")
+        return self
+
+
+class StoreWideBlockResponse(BaseModel):
+    """Resultado del cierre: a cuantos profesionales alcanzo."""
+
+    blocked_staff: int
+    starts_at: datetime
+    ends_at: datetime
+    reason: str
+
+
 class AppointmentBlockCreate(AppointmentBlockBase):
     pass
 

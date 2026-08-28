@@ -54,7 +54,8 @@ const SECTIONS: ManualSection[] = [
       },
       {
         title: '4. Definí los horarios',
-        body: 'A cada persona cargale sus días y horas de trabajo. Fuera de ese horario, nadie va a poder reservar.'
+        body: 'A cada persona cargale sus días y horas de trabajo. Fuera de ese horario, nadie va a poder reservar.',
+        tip: 'Podés cargar dos franjas el mismo día (por ejemplo 9 a 13 y 16 a 20). Si te equivocaste, editá o borrá la franja: el sistema no te deja pisar una con otra.'
       }
     ]
   },
@@ -77,6 +78,10 @@ const SECTIONS: ManualSection[] = [
       {
         title: 'Bloquear horarios',
         body: 'Usá los bloqueos para vacaciones, un turno médico o cualquier rato en que no querés que te reserven. Un bloqueo le gana a cualquier reserva nueva en ese horario.'
+      },
+      {
+        title: 'Cerrar por un feriado',
+        body: 'Para cerrar todo el local usá el cierre de tienda: bloquea a todo el personal de una sola vez, en lugar de ir persona por persona.'
       },
       {
         title: 'Liberar un turno con pago pendiente',
@@ -132,6 +137,11 @@ const SECTIONS: ManualSection[] = [
       {
         title: 'El correo',
         body: 'Los mismos avisos te llegan por mail a la dirección con la que entrás a Shifty, así te enterás aunque no tengas el panel abierto.'
+      },
+      {
+        title: 'Y tus clientes',
+        body: 'A ellos les llega el recordatorio del turno por WhatsApp, que es lo que la gente realmente lee. Si no hay WhatsApp configurado, se envía por mail.',
+        tip: 'El teléfono es obligatorio al reservar y el mail no, así que WhatsApp llega a todos.'
       }
     ]
   },

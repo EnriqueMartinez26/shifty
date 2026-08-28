@@ -63,10 +63,11 @@ async def test_process_due_appointment_reminders_counts_due_messages(
         async def delete(self, *args: Any, **kwargs: Any) -> int:
             return 1
 
-    async def fake_send_appointment_reminder(
-        email: str, details: dict[str, Any]
+    async def fake_notify_client_reminder(
+        *, phone: str | None, email: str | None, details: dict[str, Any]
     ) -> dict[str, str]:
-        return {"status": "sent", "to": email}
+        # El recordatorio es multicanal: WhatsApp primero, mail como respaldo.
+        return {"status": "sent", "channel": "whatsapp", "to": phone or email or ""}
 
     async def fake_get_redis() -> _FakeRedis:
         return _FakeRedis()
@@ -76,7 +77,7 @@ async def test_process_due_appointment_reminders_counts_due_messages(
     )
     monkeypatch.setattr(notification_tasks, "get_redis", fake_get_redis)
     monkeypatch.setattr(
-        notification_tasks, "send_appointment_reminder", fake_send_appointment_reminder
+        notification_tasks, "notify_client_reminder", fake_notify_client_reminder
     )
     monkeypatch.setattr(
         "modules.appointments.repository.AppointmentRepository",

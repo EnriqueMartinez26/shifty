@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import httpx
 import smtplib
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -99,6 +100,74 @@ async def send_appointment_reminder(
     return {"status": "sent", "to": email}
 
 
+async def _send_whatsapp(to_phone: str, body: str) -> bool:
+    """Envia un WhatsApp por la API REST de Twilio.
+
+    Se usa httpx (ya es dependencia) en vez del SDK para no sumar un paquete
+    por tres lineas de HTTP. Si Twilio no esta configurado devuelve False sin
+    romper: el llamador cae al mail.
+    """
+    sid = settings.TWILIO_ACCOUNT_SID
+    token = settings.TWILIO_AUTH_TOKEN
+    origen = settings.TWILIO_WHATSAPP_FROM
+    if not (sid and token and origen):
+        return False
+
+    destino = to_phone if to_phone.startswith("whatsapp:") else f"whatsapp:{to_phone}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
+                auth=(sid, token),
+                data={"To": destino, "From": origen, "Body": body},
+            )
+    except httpx.RequestError as exc:
+        logger.warning("whatsapp_send_failed", error=str(exc))
+        return False
+
+    if resp.status_code >= 400:
+        logger.warning(
+            "whatsapp_send_rejected",
+            status=resp.status_code,
+            detail=resp.text[:200],
+        )
+        return False
+    return True
+
+
+async def notify_client_reminder(
+    *, phone: str | None, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    """Avisa al cliente por el mejor canal disponible.
+
+    WhatsApp primero: el telefono es obligatorio al reservar y el mail no, asi
+    que antes quien reservaba sin mail no recibia ningun recordatorio. Si
+    WhatsApp no esta configurado o falla, se cae al mail.
+    """
+    cuerpo = _reminder_body(details)
+
+    if phone and await _send_whatsapp(phone, cuerpo):
+        logger.info(
+            "reminder_sent", canal="whatsapp", appointment=details.get("public_id")
+        )
+        return {"status": "sent", "channel": "whatsapp", "to": phone}
+
+    if email:
+        if await _send_email(email, _reminder_subject(details), cuerpo):
+            logger.info(
+                "reminder_sent", canal="email", appointment=details.get("public_id")
+            )
+            return {"status": "sent", "channel": "email", "to": email}
+        raise RuntimeError("SMTP send failed")
+
+    logger.warning(
+        "reminder_sin_canal",
+        appointment=details.get("public_id"),
+        motivo="el cliente no tiene mail y WhatsApp no esta configurado",
+    )
+    return {"status": "skipped", "channel": "none"}
+
+
 async def enqueue_confirmation_email(
     *, email: str, details: dict[str, Any]
 ) -> dict[str, str]:
@@ -163,9 +232,10 @@ async def process_due_appointment_reminders(
                 continue
 
             try:
-                await send_appointment_reminder(
-                    client.email,
-                    {
+                await notify_client_reminder(
+                    phone=getattr(client, "phone", None),
+                    email=client.email,
+                    details={
                         "public_id": appointment.public_id,
                         "service": service.name,
                         "staff": staff.display_name,

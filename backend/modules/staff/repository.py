@@ -1,3 +1,4 @@
+from datetime import time
 from typing import Any
 
 from sqlalchemy import func, select
@@ -119,14 +120,81 @@ class StaffRepository:
             await self._hydrate_services(member)
         return member
 
+    async def _assert_no_overlap(
+        self,
+        staff: Staff,
+        *,
+        day_of_week: int,
+        start: time,
+        end: time,
+        exclude_id: str | None = None,
+    ) -> None:
+        """Impide franjas superpuestas o duplicadas para el mismo dia.
+
+        Antes se podia cargar dos veces el mismo rango y el booking publico
+        mostraba cada horario repetido: el cliente veia "09:00" dos veces.
+        Dos franjas separadas el mismo dia (manana y tarde) siguen siendo
+        validas mientras no se toquen.
+        """
+        filtros = [Schedule.staff_id == staff.id, Schedule.day_of_week == day_of_week]
+        if exclude_id:
+            filtros.append(Schedule.id != exclude_id)
+        existentes = (await self.db.execute(select(Schedule).where(*filtros))).scalars()
+
+        for otro in existentes:
+            if start < otro.end_time and end > otro.start_time:
+                raise ValueError(
+                    "El horario se superpone con otra franja de ese dia "
+                    f"({otro.start_time.strftime('%H:%M')}-"
+                    f"{otro.end_time.strftime('%H:%M')})"
+                )
+
     async def add_schedule(
         self, staff: Staff, schedule_data: dict[str, Any], store_id: str
     ) -> Schedule:
+        await self._assert_no_overlap(
+            staff,
+            day_of_week=schedule_data["day_of_week"],
+            start=schedule_data["start_time"],
+            end=schedule_data["end_time"],
+        )
         new_schedule = Schedule(**schedule_data, staff_id=staff.id, store_id=store_id)
         self.db.add(new_schedule)
         await self.db.commit()
         await self.db.refresh(new_schedule)
         return new_schedule
+
+    async def get_schedule(self, staff: Staff, schedule_id: str) -> Schedule | None:
+        result = await self.db.execute(
+            select(Schedule).where(
+                Schedule.id == schedule_id, Schedule.staff_id == staff.id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_schedule(
+        self, staff: Staff, schedule: Schedule, cambios: dict[str, Any]
+    ) -> Schedule:
+        day = cambios.get("day_of_week", schedule.day_of_week)
+        start = cambios.get("start_time", schedule.start_time)
+        end = cambios.get("end_time", schedule.end_time)
+        if start >= end:
+            raise ValueError("La hora de inicio debe ser anterior a la de fin")
+
+        await self._assert_no_overlap(
+            staff, day_of_week=day, start=start, end=end, exclude_id=schedule.id
+        )
+
+        schedule.day_of_week = day
+        schedule.start_time = start
+        schedule.end_time = end
+        await self.db.commit()
+        await self.db.refresh(schedule)
+        return schedule
+
+    async def delete_schedule(self, schedule: Schedule) -> None:
+        await self.db.delete(schedule)
+        await self.db.commit()
 
     async def update_services(
         self, staff: Staff, service_public_ids: list[str]
