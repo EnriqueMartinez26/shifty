@@ -112,9 +112,7 @@ def test_produccion_aplica_defaults_endurecidos(
     for clave in endurecidos:
         monkeypatch.delenv(clave, raising=False)
 
-    settings = Settings(
-        **{k: v for k, v in BASE.items() if k not in endurecidos}
-    )
+    settings = Settings(**{k: v for k, v in BASE.items() if k not in endurecidos})
     assert settings.ALLOW_PUBLIC_REGISTRATION is False
     assert settings.COOKIE_SECURE is True
     assert settings.EXPOSE_API_DOCS is False

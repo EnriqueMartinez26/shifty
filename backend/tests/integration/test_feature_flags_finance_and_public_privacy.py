@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 import hashlib
 import hmac
 from typing import Any, AsyncIterator, cast
@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from core.config import settings
+from core.utils import local_to_utc
 from core.crypto import decrypt_secret
 from core.database import get_db
 from core.models import Base
@@ -497,9 +498,10 @@ async def test_public_availability_hides_private_block_reasons(
     )
     assert schedule.status_code == 200, schedule.text
 
-    block_start = datetime(
-        future_date.year, future_date.month, future_date.day, 9, 0, tzinfo=timezone.utc
-    )
+    # El horario del staff (09:00-12:00) es hora local argentina. El bloqueo se
+    # expresa en UTC, asi que se convierte para que caiga dentro de esa franja:
+    # 09:00 ART equivale a 12:00 UTC.
+    block_start = local_to_utc(future_date, dt_time(9, 0))
     block_end = block_start + timedelta(hours=1)
     block = await client.post(
         "/appointment-blocks/",
