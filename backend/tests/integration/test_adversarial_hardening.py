@@ -394,3 +394,57 @@ async def test_refund_of_a_pending_payment_is_rejected(
     body = status_check.json()
     payload = body.get("data", body)
     assert payload["payment_status"] == "pending", "el refund invalido altero el pago"
+
+
+@pytest.mark.asyncio
+async def test_enteros_gigantes_no_desbordan_la_base(client: AsyncClient) -> None:
+    """Un entero por encima de 2^31 reventaba la columna INTEGER y salia 500.
+
+    Cualquier administrador autenticado podia dispararlo contra su propia
+    tienda. Ahora rebota en la validacion como 422.
+    """
+    _, token = await register_and_login(
+        client, slug="tienda-overflow", email="overflow@test.com"
+    )
+
+    for campo, valor in [
+        ("cancellation_hours", 2**31),
+        ("cancellation_hours", 10**15),
+        ("buffer_minutes", 2**31),
+        ("buffer_minutes", 10**18),
+    ]:
+        res = await client.patch(
+            "/stores/me", headers=auth_headers(token), json={campo: valor}
+        )
+        assert res.status_code == 422, f"{campo}={valor} respondio {res.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_los_topes_de_negocio_siguen_permitiendo_valores_razonables(
+    client: AsyncClient,
+) -> None:
+    """El techo no puede estorbar el uso normal."""
+    _, token = await register_and_login(
+        client, slug="tienda-topes", email="topes@test.com"
+    )
+    res = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"cancellation_hours": 48, "buffer_minutes": 15},
+    )
+    assert res.status_code == 200, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_parametro_de_ruta_de_sesiones_esta_acotado(
+    client: AsyncClient,
+) -> None:
+    """Era el unico parametro de ruta sin patron en toda la API."""
+    _, token = await register_and_login(
+        client, slug="tienda-param", email="param@test.com"
+    )
+    for hostil in ["../../etc/passwd", "A" * 500, "<script>alert(1)</script>"]:
+        res = await client.post(
+            f"/auth/sessions/revoke-user/{hostil}", headers=auth_headers(token)
+        )
+        assert res.status_code < 500, f"{hostil[:20]} produjo {res.status_code}"
