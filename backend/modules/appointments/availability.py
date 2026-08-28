@@ -9,7 +9,7 @@ un slot es libre solo si:
 """
 
 import json
-from datetime import date, datetime, timedelta, time
+from datetime import date, timedelta, time
 from typing import TypedDict, cast
 
 from redis.asyncio import Redis
@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
+from core.utils import local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
@@ -71,10 +72,11 @@ class AvailabilityService:
             return []
 
         duration = timedelta(minutes=service.duration_minutes)
-        from datetime import timezone as _tz
 
-        day_start = datetime.combine(search_date, time.min).replace(tzinfo=_tz.utc)
-        day_end = datetime.combine(search_date, time.max).replace(tzinfo=_tz.utc)
+        # La fecha que pide el cliente es un dia calendario argentino, no una
+        # ventana UTC: se traduce a sus limites reales en UTC.
+        day_start = local_to_utc(search_date, time.min)
+        day_end = local_to_utc(search_date, time.max)
 
         # 3. Staff que realiza el servicio ------------------------------------
         staff_res = await self.db.execute(
@@ -102,7 +104,6 @@ class AvailabilityService:
         notice_hours = getattr(store, "min_booking_notice_hours", 2)
 
         from core.utils import now_utc
-        from datetime import timezone
 
         min_bookable_time = now_utc() + timedelta(hours=notice_hours)
 
@@ -165,13 +166,9 @@ class AvailabilityService:
 
             # 7. Cálculo de slots (granularidad 15 min) -----------------------
             for sched in schedules:
-                # Forzamos que los datetimes generados de combine sean UTC aware
-                current = datetime.combine(search_date, sched.start_time).replace(
-                    tzinfo=timezone.utc
-                )
-                end = datetime.combine(search_date, sched.end_time).replace(
-                    tzinfo=timezone.utc
-                )
+                # El horario del staff esta cargado en hora local argentina.
+                current = local_to_utc(search_date, sched.start_time)
+                end = local_to_utc(search_date, sched.end_time)
 
                 while current + duration <= end:
                     slot_end = current + duration
