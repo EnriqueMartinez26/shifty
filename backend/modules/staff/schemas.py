@@ -24,6 +24,17 @@ class ScheduleCreate(ScheduleBase):
     pass
 
 
+class ScheduleUpdate(BaseModel):
+    """Edicion parcial de una franja horaria.
+
+    Sin esto, un horario mal cargado era irreversible: solo existia el alta.
+    """
+
+    day_of_week: int | None = Field(None, ge=0, le=6)
+    start_time: time | None = None
+    end_time: time | None = None
+
+
 class ScheduleResponse(ScheduleBase):
     public_id: str
 

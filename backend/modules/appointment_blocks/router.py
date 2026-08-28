@@ -16,6 +16,8 @@ from core.validation import PUBLIC_ID_PATTERN
 from modules.appointment_blocks.schemas import (
     AppointmentBlockBatchResponse,
     AppointmentBlockCreate,
+    StoreWideBlockCreate,
+    StoreWideBlockResponse,
     AppointmentBlockResponse,
     AppointmentBlockUpdate,
     BlockTemplateResponse,
@@ -67,6 +69,52 @@ async def list_blocks(
         .order_by(StaffBlock.start_time.asc())
     )
     return [_to_response(block) for block in result.scalars().all()]
+
+
+@router.post(
+    "/store-wide",
+    response_model=StoreWideBlockResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_store_wide_block(
+    data: StoreWideBlockCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StoreWideBlockResponse:
+    """Cierra la tienda entera en un rango: bloquea a todo el personal activo."""
+    if not _can_manage_blocks(user):
+        raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
+
+    staff_result = await db.execute(
+        select(Staff).where(
+            Staff.store_id == user.store_id,
+            Staff.is_active.is_(True),
+        )
+    )
+    equipo = list(staff_result.scalars().all())
+    if not equipo:
+        raise ValidationException(
+            "No hay personal activo para cerrar. Cargá al menos un profesional."
+        )
+
+    for miembro in equipo:
+        db.add(
+            StaffBlock(
+                store_id=user.store_id,
+                staff_id=miembro.id,
+                start_time=data.starts_at,
+                end_time=data.ends_at,
+                reason=data.reason,
+            )
+        )
+    await db.commit()
+
+    return StoreWideBlockResponse(
+        blocked_staff=len(equipo),
+        starts_at=data.starts_at,
+        ends_at=data.ends_at,
+        reason=data.reason,
+    )
 
 
 @router.post(

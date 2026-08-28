@@ -5,13 +5,19 @@ from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.exceptions import AppException, StaffNotFoundException, ValidationException
+from core.exceptions import (
+    AppException,
+    ResourceNotFoundException,
+    StaffNotFoundException,
+    ValidationException,
+)
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin, get_current_user
 from modules.staff.mappers import to_schedule_response, to_staff_response
 from modules.staff.repository import StaffRepository
 from modules.staff.schemas import (
     ScheduleCreate,
+    ScheduleUpdate,
     ScheduleResponse,
     StaffCreate,
     StaffResponse,
@@ -82,8 +88,64 @@ async def add_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.add_schedule(staff, data.model_dump(), admin.store_id)
+    try:
+        schedule = await repo.add_schedule(staff, data.model_dump(), admin.store_id)
+    except ValueError as exc:
+        raise ValidationException(str(exc))
     return to_schedule_response(schedule)
+
+
+@router.patch("/{public_id}/schedules/{schedule_id}", response_model=ScheduleResponse)
+async def update_staff_schedule(
+    public_id: PublicIdPath,
+    schedule_id: PublicIdPath,
+    data: ScheduleUpdate,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> ScheduleResponse:
+    """Corrige una franja horaria mal cargada."""
+    repo = StaffRepository(db)
+    staff = await repo.get_by_id(public_id, admin.store_id)
+    if not staff:
+        raise StaffNotFoundException(identifier=public_id)
+
+    schedule = await repo.get_schedule(staff, schedule_id)
+    if not schedule:
+        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
+
+    try:
+        actualizado = await repo.update_schedule(
+            staff, schedule, data.model_dump(exclude_unset=True)
+        )
+    except ValueError as exc:
+        raise ValidationException(str(exc))
+    return to_schedule_response(actualizado)
+
+
+@router.delete(
+    "/{public_id}/schedules/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_staff_schedule(
+    public_id: PublicIdPath,
+    schedule_id: PublicIdPath,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Elimina una franja horaria.
+
+    Sin esto un horario mal cargado era permanente y seguia generando turnos
+    reservables que la tienda no podia atender.
+    """
+    repo = StaffRepository(db)
+    staff = await repo.get_by_id(public_id, admin.store_id)
+    if not staff:
+        raise StaffNotFoundException(identifier=public_id)
+
+    schedule = await repo.get_schedule(staff, schedule_id)
+    if not schedule:
+        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
+
+    await repo.delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")
