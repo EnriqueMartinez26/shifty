@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     RUN_RUNTIME_CONTRACTS_ON_STARTUP: bool = False
 
     DATABASE_URL: str
+    # Las migraciones necesitan DDL y CREATE EXTENSION, asi que corren con el
+    # dueno de la base. La aplicacion se conecta con un rol restringido para
+    # que las politicas de RLS efectivamente la alcancen.
+    MIGRATION_DATABASE_URL: str | None = None
     REDIS_URL: str
     CELERY_BROKER_URL: str = "memory://"
     CELERY_RESULT_BACKEND_URL: str | None = None
@@ -267,6 +271,7 @@ def _fallback_settings() -> Settings:
         MERCADOPAGO_WEBHOOK_SECRET=None,
         RUN_RUNTIME_CONTRACTS_ON_STARTUP=False,
         DATABASE_URL="postgresql+asyncpg://invalid:invalid@localhost/invalid",
+        MIGRATION_DATABASE_URL=None,
         REDIS_URL="redis://localhost:6379/0",
         CELERY_BROKER_URL="memory://",
         CELERY_RESULT_BACKEND_URL=None,

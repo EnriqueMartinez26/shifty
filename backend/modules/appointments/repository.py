@@ -35,29 +35,45 @@ class AppointmentRepository:
     # Lookups de recursos relacionados
     # ------------------------------------------------------------------
 
-    async def get_service_by_public_id(self, public_id: str) -> Service | None:
+    async def get_service_by_public_id(
+        self, public_id: str, store_id: str
+    ) -> Service | None:
         res = await self.db.execute(
-            select(Service).where(Service.public_id == public_id)
+            select(Service).where(
+                Service.public_id == public_id, Service.store_id == store_id
+            )
         )
         return res.scalar_one_or_none()
 
-    async def get_service_by_id(self, service_id: str) -> Service | None:
-        res = await self.db.execute(select(Service).where(Service.id == service_id))
+    async def get_service_by_id(self, service_id: str, store_id: str) -> Service | None:
+        res = await self.db.execute(
+            select(Service).where(
+                Service.id == service_id, Service.store_id == store_id
+            )
+        )
         return res.scalar_one_or_none()
 
-    async def get_staff_by_public_id(self, public_id: str) -> Staff | None:
-        res = await self.db.execute(select(Staff).where(Staff.id == public_id))
+    async def get_staff_by_public_id(
+        self, public_id: str, store_id: str
+    ) -> Staff | None:
+        res = await self.db.execute(
+            select(Staff).where(Staff.id == public_id, Staff.store_id == store_id)
+        )
         return res.scalar_one_or_none()
 
-    async def get_staff_by_id(self, staff_id: str) -> Staff | None:
-        res = await self.db.execute(select(Staff).where(Staff.id == staff_id))
+    async def get_staff_by_id(self, staff_id: str, store_id: str) -> Staff | None:
+        res = await self.db.execute(
+            select(Staff).where(Staff.id == staff_id, Staff.store_id == store_id)
+        )
         return res.scalar_one_or_none()
 
     async def get_store_by_id(self, store_id: str) -> Store | None:
         res = await self.db.execute(select(Store).where(Store.id == store_id))
         return res.scalar_one_or_none()
 
-    async def get_by_public_id(self, public_id: str) -> Appointment | None:
+    async def get_by_public_id(
+        self, public_id: str, store_id: str
+    ) -> Appointment | None:
         from sqlalchemy.orm import joinedload
 
         res = await self.db.execute(
@@ -67,11 +83,11 @@ class AppointmentRepository:
                 joinedload(Appointment.staff),
                 joinedload(Appointment.client),
             )
-            .where(Appointment.id == public_id)
+            .where(Appointment.id == public_id, Appointment.store_id == store_id)
         )
         return res.scalar_one_or_none()
 
-    async def lock_by_public_id(self, public_id: str) -> None:
+    async def lock_by_public_id(self, public_id: str, store_id: str) -> None:
         """Bloqueo pesimista (SELECT ... FOR UPDATE) sobre la fila del turno.
 
         Se toma por separado y antes de ``get_by_public_id`` porque ese metodo
@@ -192,10 +208,14 @@ class AppointmentRepository:
     async def search_appointments(
         self,
         filters: AppointmentFilterParams,
+        store_id: str,
     ) -> tuple[int, list[AppointmentAgendaRow]]:
         """
         Búsqueda avanzada con filtros dinámicos y paginación.
         Solo construye la query; no interpreta resultados.
+
+        ``store_id`` es obligatorio: sin el, la busqueda devolvia turnos de
+        todas las tiendas de la instalacion.
         """
         base = (
             select(Appointment, Service, Staff, User)
@@ -204,7 +224,7 @@ class AppointmentRepository:
             .join(User, Appointment.client_id == User.id)
         )
 
-        conditions = []
+        conditions = [Appointment.store_id == store_id]
 
         if filters.client_name:
             term = f"%{filters.client_name.strip()}%"

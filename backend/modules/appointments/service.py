@@ -78,13 +78,19 @@ class AppointmentService:
           5. Disparo de notificación por email (Celery, fuera de la transacción).
         """
         # 1. Resolver entidades -----------------------------------------
+        #
+        # Se resuelven acotadas a la tienda del turno: sin esto, un admin podia
+        # mandar el id de un servicio o de un profesional de OTRA tienda y el
+        # turno se creaba igual, apareciendo en la agenda ajena.
         service = await self.uow.appointments.get_service_by_public_id(
-            data["service_id"]
+            data["service_id"], store_id
         )
         if not service:
             raise ResourceNotFoundException("Servicio", data["service_id"])
 
-        staff = await self.uow.appointments.get_staff_by_public_id(data["staff_id"])
+        staff = await self.uow.appointments.get_staff_by_public_id(
+            data["staff_id"], store_id
+        )
         if not staff:
             raise ResourceNotFoundException("Profesional", data["staff_id"])
 
@@ -212,8 +218,10 @@ class AppointmentService:
         """Cancela un turno verificando la transición de estado."""
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
-        await self.uow.appointments.lock_by_public_id(public_id)
-        appointment = await self.uow.appointments.get_by_public_id(public_id)
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
         reject_cancellation_while_awaiting_payment(appointment)
@@ -244,8 +252,10 @@ class AppointmentService:
         """Confirma un turno (solo ADMIN o STAFF)."""
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
-        await self.uow.appointments.lock_by_public_id(public_id)
-        appointment = await self.uow.appointments.get_by_public_id(public_id)
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
 
@@ -268,8 +278,10 @@ class AppointmentService:
         """Marca un turno como completado."""
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
-        await self.uow.appointments.lock_by_public_id(public_id)
-        appointment = await self.uow.appointments.get_by_public_id(public_id)
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
 
@@ -300,8 +312,10 @@ class AppointmentService:
         """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
-        await self.uow.appointments.lock_by_public_id(public_id)
-        appointment = await self.uow.appointments.get_by_public_id(public_id)
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
 
@@ -327,7 +341,9 @@ class AppointmentService:
         Actualiza las notas del profesional sobre el turno.
         Solo STAFF o ADMIN pueden editar estas notas.
         """
-        appointment = await self.uow.appointments.get_by_public_id(public_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
 
@@ -364,8 +380,10 @@ class AppointmentService:
           4. Todo en una única transacción atómica.
         """
         # 1. Buscar turno original
-        await self.uow.appointments.lock_by_public_id(public_id)
-        original = await self.uow.appointments.get_by_public_id(public_id)
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        original = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
         if not original:
             raise AppointmentNotFoundException(public_id)
         # Reprogramar cancela el turno original: le corresponde el mismo guard
@@ -381,11 +399,13 @@ class AppointmentService:
         orig_intake_answers = original.intake_answers or {}
 
         # 2. Resolver servicio para calcular duración
-        service = await self.uow.appointments.get_service_by_id(service_id)
+        service = await self.uow.appointments.get_service_by_id(
+            service_id, actor.store_id
+        )
         if not service:
             raise ResourceNotFoundException("Servicio", str(service_id))
 
-        staff = await self.uow.appointments.get_staff_by_id(staff_id)
+        staff = await self.uow.appointments.get_staff_by_id(staff_id, actor.store_id)
         if not staff:
             raise ResourceNotFoundException("Profesional", str(staff_id))
 
