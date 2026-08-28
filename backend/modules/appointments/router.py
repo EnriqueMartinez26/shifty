@@ -522,7 +522,7 @@ async def search_appointments(
     )
 
     repo = AppointmentRepository(db)
-    total, rows = await repo.search_appointments(filters)
+    total, rows = await repo.search_appointments(filters, user.store_id)
 
     results = [
         AppointmentSearchResult(

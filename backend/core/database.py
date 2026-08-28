@@ -19,10 +19,25 @@ def set_tenant_context(store_id: str | None, is_admin: bool = False) -> None:
 
 
 class TenantSession(AsyncSession):
+    """Sesion que mantiene vivo el contexto de tenant entre transacciones.
+
+    ``set_config(..., is_local => true)`` vive dentro de la transaccion actual:
+    al hacer commit se pierde. Como despues del commit suele venir un refresh o
+    una lectura, esa consulta abria una transaccion nueva sin ``store_id`` y las
+    politicas de RLS la filtraban entera.
+
+    Mientras el rol de base era superusuario con BYPASSRLS esto no se notaba,
+    porque RLS no se aplicaba a nadie. Con un rol restringido, reaplicar el
+    contexto despues de cada commit y rollback es lo que sostiene la sesion.
     """
-    Sesión estándar de SQLAlchemy. El contexto de tenant se aplica
-    en get_db() para evitar reconexiones y efectos laterales por query.
-    """
+
+    async def commit(self) -> None:
+        await super().commit()
+        await _apply_tenant_context(self)
+
+    async def rollback(self) -> None:
+        await super().rollback()
+        await _apply_tenant_context(self)
 
 
 async def _apply_tenant_context(session: AsyncSession) -> None:

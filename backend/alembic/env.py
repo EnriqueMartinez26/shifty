@@ -66,7 +66,7 @@ def get_sync_engine() -> Engine:
     Crea un engine síncrono con psycopg2 usando parámetros explícitos.
     Evita el UnicodeDecodeError al no construir un DSN string.
     """
-    params = parse_db_url(settings.DATABASE_URL)
+    params = parse_db_url(settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL)
 
     engine = create_engine(
         "postgresql+psycopg2://",
@@ -86,7 +86,7 @@ def get_sync_engine() -> Engine:
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    params = parse_db_url(settings.DATABASE_URL)
+    params = parse_db_url(settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL)
     url = (
         f"postgresql+psycopg2://{params['user']}:{params['password']}"
         f"@{params['host']}:{params['port']}/{params['dbname']}"
