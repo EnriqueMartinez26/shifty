@@ -16,6 +16,7 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
     fake_db = SimpleNamespace()
     service = ReportService(db=cast(AsyncSession, fake_db))
     appointment = SimpleNamespace(
+        id="appt-1",
         public_id="appt-1",
         starts_at=datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
         ends_at=datetime(2026, 6, 15, 10, 30, tzinfo=timezone.utc),
@@ -24,6 +25,7 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
         client_name=None,
         duration_minutes=30,
         intake_answers=None,
+        price_amount=None,
     )
     service_model = SimpleNamespace(
         public_id="svc-1",

@@ -26,3 +26,8 @@ class CustomerLedger(BaseEntity):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     balance_after: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Si este movimiento anula a otro, apunta al id del movimiento original.
+    # Sirve de candado: un movimiento no puede revertirse dos veces.
+    reverses_id: Mapped[str | None] = mapped_column(
+        ForeignKey("customer_ledger.id"), nullable=True, index=True
+    )

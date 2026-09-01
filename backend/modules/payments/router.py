@@ -662,7 +662,14 @@ async def manual_confirm_payment(
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
     )
-    amount = _payment_amount_for_service(service, data.amount)
+    # El cobro manual (efectivo/WhatsApp) es por el precio que se congelo al
+    # reservar, no por el precio de lista de hoy. Si el dueno indica un monto
+    # explicito, manda ese; si no, cae al snapshot del turno y recien despues al
+    # calculo por servicio (turnos historicos sin snapshot).
+    amount = data.amount
+    if amount is None and appointment.price_amount is not None:
+        amount = appointment.price_amount
+    amount = _payment_amount_for_service(service, amount)
     payment = await ensure_payment_preference(
         db,
         appointment=appointment,

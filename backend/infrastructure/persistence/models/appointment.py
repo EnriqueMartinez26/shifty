@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 import ulid
@@ -10,6 +11,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
+    Numeric,
     String,
     Text,
 )
@@ -52,6 +54,14 @@ class AppointmentModel(Base):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_minutes: Mapped[int] = mapped_column()
+    # Precio congelado al momento de reservar (precio de lista de ese momento).
+    # El precio del servicio puede cambiar despues; el turno tiene que valer lo
+    # que valia cuando se reservo, no lo que sale hoy. Es el monto que se cobra
+    # y el que usa el reporte de ingresos. Nullable por los turnos historicos
+    # anteriores a esta columna.
+    price_amount: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     # Columna privada: la unica escritura legitima es apply_status_transition().
     # Se expone como hybrid_property de solo lectura, asi que
     # `appointment.status = "completed"` levanta AttributeError en vez de
