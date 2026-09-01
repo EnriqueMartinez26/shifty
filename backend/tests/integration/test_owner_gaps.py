@@ -357,3 +357,122 @@ async def test_sin_credenciales_de_twilio_whatsapp_no_intenta_enviar(
     monkeypatch.setattr("modules.notifications.tasks.httpx.AsyncClient", explotar)
 
     assert await tasks._send_whatsapp("+5491155512345", "hola") is False
+
+
+# ---------------------------------------------------------------------------
+# Carga del dueno: sin antelacion minima, pero nunca en el pasado
+# ---------------------------------------------------------------------------
+
+
+async def _staff_disponible_hoy(client: AsyncClient, token: str) -> tuple[str, str]:
+    """Servicio + staff con horario amplio para HOY, para probar la carga admin."""
+    servicio = await create_service(client, token)
+    alta = await client.post(
+        "/staff/",
+        headers=auth_headers(token),
+        json={
+            "display_name": "Pro Hoy",
+            "first_name": "Pro",
+            "last_name": "Hoy",
+            "email": f"prohoy-{token[-8:]}@test.com",
+            "service_ids": [servicio],
+        },
+    )
+    staff = cast(str, alta.json()["public_id"])
+    hoy = datetime.now(timezone.utc)
+    await client.post(
+        f"/staff/{staff}/schedules",
+        headers=auth_headers(token),
+        json={
+            "day_of_week": hoy.weekday(),
+            "start_time": "00:00:00",
+            "end_time": "23:59:00",
+        },
+    )
+    return servicio, staff
+
+
+@pytest.mark.asyncio
+async def test_el_dueno_puede_cargar_saltando_la_antelacion_minima(
+    client: AsyncClient,
+) -> None:
+    """Un walk-in que llega ahora: el dueño lo carga aunque la tienda pida 2hs.
+
+    La antelacion minima es una regla para el cliente, no para la tienda.
+    """
+    _, token = await register_and_login(
+        client, slug="admin-walkin", email="admin-walkin@test.com"
+    )
+    # Antelacion minima alta: 24hs. Aun asi el dueño debe poder cargar ya mismo.
+    await client.patch(
+        "/stores/me", headers=auth_headers(token), json={"min_booking_notice_hours": 24}
+    )
+    servicio, staff = await _staff_disponible_hoy(client, token)
+
+    dentro_de_10_min = datetime.now(timezone.utc) + timedelta(minutes=10)
+    res = await client.post(
+        "/appointments/",
+        headers=auth_headers(token),
+        json={
+            "service_id": servicio,
+            "staff_id": staff,
+            "starts_at": dentro_de_10_min.isoformat(),
+            "idempotency_key": "admin-walkin-0001",
+        },
+    )
+    assert res.status_code == 201, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_dueno_no_puede_cargar_en_el_pasado(client: AsyncClient) -> None:
+    """El piso es 'ahora': no tiene sentido agendar para una hora ya pasada."""
+    _, token = await register_and_login(
+        client, slug="admin-pasado", email="admin-pasado@test.com"
+    )
+    servicio, staff = await _staff_disponible_hoy(client, token)
+
+    hace_una_hora = datetime.now(timezone.utc) - timedelta(hours=1)
+    res = await client.post(
+        "/appointments/",
+        headers=auth_headers(token),
+        json={
+            "service_id": servicio,
+            "staff_id": staff,
+            "starts_at": hace_una_hora.isoformat(),
+            "idempotency_key": "admin-pasado-0001",
+        },
+    )
+    assert res.status_code == 422, res.text
+    assert "pasado" in res.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_el_cliente_sigue_respetando_la_antelacion_de_la_tienda(
+    client: AsyncClient,
+) -> None:
+    """La flexibilidad es solo del panel: el booking publico mantiene la regla."""
+    store_public_id, token = await register_and_login(
+        client, slug="cliente-antelacion", email="cli-ant@test.com"
+    )
+    await client.patch(
+        "/stores/me", headers=auth_headers(token), json={"min_booking_notice_hours": 24}
+    )
+    servicio, staff = await _staff_disponible_hoy(client, token)
+
+    # El cliente intenta reservar dentro de 10 min, con la tienda pidiendo 24hs.
+    dentro_de_10_min = datetime.now(timezone.utc) + timedelta(minutes=10)
+    res = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": servicio,
+            "staff_id": staff,
+            "starts_at": dentro_de_10_min.isoformat(),
+            "client_name": "Cliente Apurado",
+            "client_phone": "+5491155500222",
+            "accepts_terms": True,
+            "idempotency_key": "cliente-antelacion-0001",
+        },
+    )
+    assert res.status_code == 400, res.text
+    assert "BOOKING_NOTICE_REQUIRED" in res.text
