@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.ledger.model import CustomerLedger
+from modules.payments.model import Payment, PaymentStatus
 from modules.reports.schemas import (
     ReportClientStats,
     ReportDebtClientItem,
@@ -159,6 +160,32 @@ class ReportService:
             result.all(),
         )
 
+    async def _accredited_payments_by_appointment(
+        self, appointment_ids: list[str]
+    ) -> dict[str, Decimal]:
+        """Suma, por turno, la plata acreditada (aprobada o confirmada manual).
+
+        Se acota a los ids de turnos ya cargados (propios del tenant), asi que
+        no puede sumar cobros de otra tienda.
+        """
+        if not appointment_ids:
+            return {}
+        result = await self.db.execute(
+            select(Payment.appointment_id, Payment.amount).where(
+                Payment.appointment_id.in_(appointment_ids),
+                Payment.status.in_(
+                    [
+                        PaymentStatus.APPROVED.value,
+                        PaymentStatus.MANUAL_CONFIRMED.value,
+                    ]
+                ),
+            )
+        )
+        acumulado: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
+        for appointment_id, amount in result.all():
+            acumulado[appointment_id] += amount or Decimal("0.00")
+        return acumulado
+
     async def get_summary(
         self,
         from_date: date | None,
@@ -170,6 +197,15 @@ class ReportService:
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
         rows = await self._fetch_rows(
             from_date=resolved_from, to_date=resolved_to, staff_id=staff_id
+        )
+        # Ingreso = plata efectivamente cobrada, no turnos agendados. La fuente
+        # de verdad es el pago acreditado (Mercado Pago aprobado, o cobro manual
+        # que el dueno confirma por efectivo/WhatsApp). Un turno confirmado pero
+        # sin pago acreditado es una reserva, no un ingreso. El monto ya viene
+        # con el descuento de la promo aplicado y al precio historico, asi que
+        # esto tambien resuelve el precio de lista y las promociones.
+        paid_by_appt = await self._accredited_payments_by_appointment(
+            [appointment.id for appointment, *_ in rows]
         )
         historical_clients_query = (
             select(
@@ -257,7 +293,8 @@ class ReportService:
                 appointment, service, staff = row
                 client = None
             status = appointment.status
-            price = float(service.price)
+            # Ingreso real de este turno: lo acreditado, no el precio de lista.
+            paid = float(paid_by_appt.get(appointment.id, Decimal("0.00")))
             status_upper = status.upper() if status else ""
             client_id = appointment.client_id
             client_key = client_id or ""
@@ -269,14 +306,14 @@ class ReportService:
 
             if status_upper == "COMPLETED":
                 completed += 1
-                total_revenue += price
             elif status_upper == "CANCELLED":
                 cancelled += 1
             elif status_upper in {"PENDING", "PENDING_PAYMENT"}:
                 pending += 1
             elif status_upper == "CONFIRMED":
                 confirmed += 1
-                total_revenue += price
+            # El ingreso no depende del estado del turno sino de si se cobro.
+            total_revenue += paid
 
             if status not in {
                 AppointmentStatus.CANCELLED.value,
@@ -288,11 +325,7 @@ class ReportService:
                 service_bucket["appointments"] += 1
                 if status == AppointmentStatus.COMPLETED.value:
                     service_bucket["completed_appointments"] += 1
-                if status in {
-                    AppointmentStatus.COMPLETED.value,
-                    AppointmentStatus.CONFIRMED.value,
-                }:
-                    service_bucket["revenue"] += price
+                service_bucket["revenue"] += paid
 
                 if client_id:
                     client_bucket = client_metrics[client_key]
@@ -305,11 +338,7 @@ class ReportService:
                     client_bucket["appointments"] += 1
                     if status == AppointmentStatus.COMPLETED.value:
                         client_bucket["completed_appointments"] += 1
-                    if status in {
-                        AppointmentStatus.COMPLETED.value,
-                        AppointmentStatus.CONFIRMED.value,
-                    }:
-                        client_bucket["revenue"] += price
+                    client_bucket["revenue"] += paid
 
             resolved_client_name = (
                 _client_display_name(client, appointment.client_name)
@@ -326,7 +355,13 @@ class ReportService:
                     service_name=service.name,
                     staff_name=staff.display_name,
                     client_name=resolved_client_name,
-                    service_price=price,
+                    # Precio del turno: el congelado al reservar; si es un turno
+                    # viejo sin snapshot, el precio de lista actual.
+                    service_price=float(
+                        appointment.price_amount
+                        if appointment.price_amount is not None
+                        else service.price
+                    ),
                 )
             )
 
@@ -449,6 +484,11 @@ class ReportService:
             appointment, service, staff = row[:3]
             appointments_by_staff[staff.id].append((appointment, service, staff))
 
+        # Mismo criterio que el resumen: ingreso = plata acreditada por turno.
+        paid_by_appt = await self._accredited_payments_by_appointment(
+            [appointment.id for appointment, *_ in rows]
+        )
+
         items: list[ProfessionalReportItem] = []
         total_days = (resolved_to - resolved_from).days + 1
 
@@ -496,14 +536,14 @@ class ReportService:
                     used_minutes += int(appointment.duration_minutes)
                 if appointment.status == AppointmentStatus.COMPLETED.value:
                     completed += 1
-                    revenue += float(service.price)
                 elif appointment.status == AppointmentStatus.CONFIRMED.value:
                     confirmed += 1
-                    revenue += float(service.price)
                 elif appointment.status == AppointmentStatus.ABSENT.value:
                     absent += 1
                 elif appointment.status == AppointmentStatus.CANCELLED.value:
                     cancelled += 1
+                # El ingreso del profesional es lo cobrado, no lo agendado.
+                revenue += float(paid_by_appt.get(appointment.id, Decimal("0.00")))
 
             effective_minutes = max(available_minutes - blocked_minutes, 0)
             occupancy_rate = (

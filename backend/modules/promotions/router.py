@@ -172,6 +172,26 @@ async def update_promotion(
     return _serialize_promotion(promotion)
 
 
+@router.delete("/{promotion_public_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_promotion(
+    promotion_public_id: PublicIdPath,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Da de baja una promocion.
+
+    Es un borrado logico (is_active=False): la promocion puede tener canjes
+    historicos asociados a turnos, y un borrado fisico romperia esa trazabilidad.
+    Deja de estar disponible para nuevos canjes de inmediato.
+    """
+    _require_admin(user)
+    promotion = await _get_store_promotion_or_404(
+        db, promotion_public_id, user.store_id
+    )
+    promotion.is_active = False
+    await db.commit()
+
+
 @router.get("/preview", response_model=PromotionQuoteResponse)
 async def preview_promotion(
     service_id: PublicIdQuery,

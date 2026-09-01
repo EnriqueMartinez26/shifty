@@ -10,6 +10,7 @@ Responsabilidades:
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, TypedDict
 
 import ulid
@@ -107,8 +108,9 @@ class AppointmentService:
 
         # 3. Bloqueo pesimista + verificación de conflictos --------------
         await self.uow.appointments.lock_staff_row(staff.id)
+        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
         conflict = await self.uow.appointments.get_conflicting_appointment(
-            staff.id, starts_at, ends_at
+            staff.id, starts_at, ends_at, buffer_minutes=buffer_minutes
         )
 
         # Delegar validación al Domain Service (DDD + UX Feedback)
@@ -131,7 +133,7 @@ class AppointmentService:
                 assert blocked_block is not None
                 search_start = blocked_block.ends_at
             suggestion = await self._find_suggestion(
-                staff.id, search_start, service.duration_minutes
+                staff.id, search_start, service.duration_minutes, buffer_minutes
             )
 
             # Re-lanzar con la sugerencia
@@ -161,6 +163,9 @@ class AppointmentService:
             starts_at=starts_at,
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
+            # Congelamos el precio de lista del momento: el reporte de ingresos y
+            # el cobro manual usan este valor, no el precio actual del servicio.
+            price_amount=Decimal(str(service.price or 0)),
             client_name=(
                 f"{actor.first_name or ''} {actor.last_name or ''}".strip()
                 or actor.email
@@ -393,6 +398,9 @@ class AppointmentService:
         client_id = original.client_id
         orig_notes = original.notes
         orig_intake_answers = original.intake_answers or {}
+        # El precio quedo congelado en la reserva original: reprogramar cambia
+        # el horario, no re-tarifa al precio de lista de hoy.
+        orig_price_amount = original.price_amount
 
         # 2. Resolver servicio para calcular duración
         service = await self.uow.appointments.get_service_by_id(
@@ -418,8 +426,13 @@ class AppointmentService:
         # 4. Bloqueo pesimista + verificar conflictos (excluyendo el turno original)
         await self.uow.appointments.lock_staff_row(staff_id)
 
+        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
         conflict = await self.uow.appointments.get_conflicting_appointment(
-            staff_id, new_starts_at, ends_at, exclude_appointment_id=original.id
+            staff_id,
+            new_starts_at,
+            ends_at,
+            exclude_appointment_id=original.id,
+            buffer_minutes=buffer_minutes,
         )
 
         # Delegar validación al Domain Service (DDD + UX Feedback)
@@ -440,7 +453,7 @@ class AppointmentService:
                 assert blocked_block is not None
                 search_start = blocked_block.ends_at
             suggestion = await self._find_suggestion(
-                staff_id, search_start, service.duration_minutes
+                staff_id, search_start, service.duration_minutes, buffer_minutes
             )
 
             if isinstance(e, AppointmentConflictException):
@@ -483,6 +496,11 @@ class AppointmentService:
             starts_at=new_starts_at,
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
+            price_amount=(
+                orig_price_amount
+                if orig_price_amount is not None
+                else Decimal(str(service.price or 0))
+            ),
             client_name=(
                 f"{actor.first_name or ''} {actor.last_name or ''}".strip()
                 or actor.email
@@ -518,11 +536,18 @@ class AppointmentService:
         return new_appointment, service, staff
 
     async def _find_suggestion(
-        self, staff_id: str, start_from: datetime, duration_mins: int
+        self,
+        staff_id: str,
+        start_from: datetime,
+        duration_mins: int,
+        buffer_minutes: int = 0,
     ) -> datetime | None:
         """
         Encuentra el próximo hueco disponible (max 6 horas adelante).
         Implementa el principio de Don Norman de ofrecer salidas claras al error.
+
+        Respeta el mismo ``buffer_minutes`` que la validación de conflictos, para
+        no sugerir un horario que después el alta rechazaría.
         """
         from datetime import timedelta
 
@@ -542,10 +567,14 @@ class AppointmentService:
 
             # 2. Verificar conflictos
             conflict = await self.uow.appointments.get_conflicting_appointment(
-                staff_id, current, end
+                staff_id, current, end, buffer_minutes=buffer_minutes
             )
             if conflict:
-                current = conflict.ends_at
+                # Saltar hasta despues del turno MAS el buffer: si solo saltaramos
+                # a ends_at, con buffer > 0 el mismo turno seguiria en conflicto
+                # (se extiende 'buffer' mas alla) y current no avanzaria -> loop
+                # infinito.
+                current = conflict.ends_at + timedelta(minutes=buffer_minutes)
                 continue
 
             # Si llegamos aquí, el hueco está libre

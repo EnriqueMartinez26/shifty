@@ -102,6 +102,11 @@ class AvailabilityService:
         store_res = await self.db.execute(select(Store).where(Store.id == store_id))
         store = store_res.scalar_one_or_none()
         notice_hours = getattr(store, "min_booking_notice_hours", 2)
+        # Hueco obligatorio entre turnos: un slot no se ofrece si queda a menos
+        # de 'buffer' de un turno vecino. Debe coincidir con la regla que aplica
+        # el alta (get_conflicting_appointment), o el cliente veria horarios que
+        # despues se rechazan.
+        buffer = timedelta(minutes=getattr(store, "buffer_minutes", 0) or 0)
 
         from core.utils import now_utc
 
@@ -173,9 +178,13 @@ class AvailabilityService:
                 while current + duration <= end:
                     slot_end = current + duration
 
-                    # Verificar conflicto con turnos
+                    # Verificar conflicto con turnos (ensanchando el turno
+                    # vecino por el buffer a cada lado).
                     blocked_by_appt = any(
-                        not (slot_end <= appt.starts_at or current >= appt.ends_at)
+                        not (
+                            slot_end <= appt.starts_at - buffer
+                            or current >= appt.ends_at + buffer
+                        )
                         for appt in booked
                     )
 

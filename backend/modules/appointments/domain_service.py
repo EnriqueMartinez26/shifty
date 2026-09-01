@@ -49,7 +49,10 @@ class SchedulingDomainService:
                 suggestion=suggestion,
             )
 
+        # El hueco obligatorio entre turnos (buffer_minutes) se aplica al armar
+        # la consulta de conflictos (get_conflicting_appointment): el turno
+        # vecino ya llega ensanchado, asi que aca no hace falta re-chequearlo.
+        #
         # Aquí se podrían añadir más reglas, como:
         # - Verificar si está dentro del horario laboral del staff.
         # - Verificar si el staff tiene la especialidad necesaria.
-        # - Verificar si el tiempo de buffer se respeta.

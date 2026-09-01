@@ -71,6 +71,13 @@ class AppointmentRepository:
         res = await self.db.execute(select(Store).where(Store.id == store_id))
         return res.scalar_one_or_none()
 
+    async def get_store_buffer_minutes(self, store_id: str) -> int:
+        """Hueco obligatorio entre turnos de la tienda (0 si no aplica)."""
+        res = await self.db.execute(
+            select(Store.buffer_minutes).where(Store.id == store_id)
+        )
+        return res.scalar_one_or_none() or 0
+
     async def get_by_public_id(
         self, public_id: str, store_id: str
     ) -> Appointment | None:
@@ -125,10 +132,16 @@ class AppointmentRepository:
         starts_at: datetime,
         ends_at: datetime,
         exclude_appointment_id: str | None = None,
+        buffer_minutes: int = 0,
     ) -> Appointment | None:
         """
         Retorna el primer turno que solape con el rango [starts_at, ends_at).
         Implementa la fórmula oficial de Sentinel: starts_at < :nuevo.ends_at AND ends_at > :nuevo.starts_at
+
+        ``buffer_minutes`` es el hueco obligatorio entre turnos (limpieza,
+        preparación): se ensancha la ventana del turno nuevo ese tanto a cada
+        lado, de modo que quede al menos ``buffer`` de separación con cualquier
+        turno vecino.
         """
         from sqlalchemy.orm import joinedload
 
@@ -138,12 +151,14 @@ class AppointmentRepository:
             Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
         ]
 
-        # Fórmula de solapamiento (Sentinel 2.2):
-        # existente.starts_at < nuevo.ends_at  AND  existente.ends_at > nuevo.starts_at
+        # Fórmula de solapamiento (Sentinel 2.2), ensanchada por el buffer:
+        # existente.starts_at < nuevo.ends_at + buffer
+        # existente.ends_at   > nuevo.starts_at - buffer
         # Usamos la columna ends_at almacenada directamente — no hace falta JOIN con Service.
+        buffer = timedelta(minutes=buffer_minutes)
         overlap_condition = and_(
-            Appointment.starts_at < ends_at,
-            Appointment.ends_at > starts_at,
+            Appointment.starts_at < ends_at + buffer,
+            Appointment.ends_at > starts_at - buffer,
         )
         conditions.append(overlap_condition)
 
