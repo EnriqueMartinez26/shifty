@@ -448,3 +448,79 @@ async def test_el_parametro_de_ruta_de_sesiones_esta_acotado(
             f"/auth/sessions/revoke-user/{hostil}", headers=auth_headers(token)
         )
         assert res.status_code < 500, f"{hostil[:20]} produjo {res.status_code}"
+
+
+@pytest.mark.asyncio
+async def test_no_se_puede_reservar_en_el_pasado_por_la_api_publica(
+    client: AsyncClient,
+) -> None:
+    """El guard de antelacion vivia solo en la vista de slots, no en el POST.
+
+    Un cliente sin autenticar podia agendar en una fecha ya pasada mientras
+    cayera en el day_of_week del horario del profesional.
+    """
+    store_public_id, token = await register_and_login(
+        client, slug="tienda-pasado", email="pasado@test.com"
+    )
+    service_public_id = await create_service(client, token)
+    staff_public_id = await create_staff(client, token, service_public_id)
+
+    # Horario para el dia de semana de AYER, y reserva en el pasado.
+    ayer = datetime.now(timezone.utc) - timedelta(days=1)
+    await add_staff_schedule(client, token, staff_public_id, target_date=ayer)
+    slot_pasado = ayer.replace(hour=10, minute=0, second=0, microsecond=0)
+
+    res = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store_public_id,
+            "service_id": service_public_id,
+            "staff_id": staff_public_id,
+            "starts_at": slot_pasado.isoformat(),
+            "client_name": "Viajero del Tiempo",
+            "client_phone": "+5491155500123",
+            "accepts_terms": True,
+            "idempotency_key": "reserva-pasado-001",
+        },
+    )
+    assert res.status_code >= 400, f"se agendo en el pasado ({res.status_code})"
+
+
+@pytest.mark.asyncio
+async def test_password_debil_se_rechaza_en_el_registro(client: AsyncClient) -> None:
+    """Antes solo se validaba la longitud: 'aaaaaaaa' pasaba."""
+    for password, caso in [
+        ("aaaaaaaa", "solo letras"),
+        ("12345678", "solo numeros"),
+    ]:
+        res = await client.post(
+            "/auth/register",
+            json={
+                "store_name": "Tienda Debil",
+                "store_slug": f"debil-{caso.replace(' ', '-')}",
+                "business_type": "generic",
+                "admin_email": f"debil-{caso.replace(' ', '')}@test.com",
+                "admin_password": password,
+                "admin_first_name": "Ana",
+                "admin_last_name": "Perez",
+            },
+        )
+        assert res.status_code == 422, f"'{password}' ({caso}) aceptada"
+
+
+@pytest.mark.asyncio
+async def test_una_password_con_letra_y_numero_es_valida(client: AsyncClient) -> None:
+    """La politica no puede estorbar una contrasena razonable."""
+    res = await client.post(
+        "/auth/register",
+        json={
+            "store_name": "Tienda OK",
+            "store_slug": "pass-ok",
+            "business_type": "generic",
+            "admin_email": "pass-ok@test.com",
+            "admin_password": "shifty2026",
+            "admin_first_name": "Ana",
+            "admin_last_name": "Perez",
+        },
+    )
+    assert res.status_code == 201, res.text

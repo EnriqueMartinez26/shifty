@@ -99,8 +99,11 @@ class StaffRepository:
             )
         )
         staff_members = list(result.scalars().all())
+        # ``services`` ya viene cargado por selectinload en una sola query.
+        # Antes esto re-consultaba por cada miembro (N+1); ahora se filtra en
+        # memoria a los activos, que es lo unico que agregaba la re-consulta.
         for member in staff_members:
-            await self._hydrate_services(member)
+            member.services = [s for s in member.services if s.is_active]
         return staff_members
 
     async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:

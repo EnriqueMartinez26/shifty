@@ -20,6 +20,7 @@ from core.config import settings
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.exceptions import (
     AppException,
+    BookingNoticeException,
     AppointmentConflictException,
     AppointmentNotFoundException,
     OTPException,
@@ -471,6 +472,18 @@ async def create_public_booking(
             store = await repo.get_store_by_id(store_id)
             if not store:
                 raise StoreNotFoundException(identifier=str(store_id))
+
+        # Antelacion minima. El flujo admin ya la validaba, pero el booking
+        # publico solo la aplicaba al *mostrar* slots, no al crearlos: un POST
+        # directo podia agendar en el pasado o dentro de la ventana bloqueada.
+        notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
+        starts_at_utc = (
+            data.starts_at
+            if data.starts_at.tzinfo
+            else data.starts_at.replace(tzinfo=timezone.utc)
+        )
+        if starts_at_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
+            raise BookingNoticeException(notice_hours)
 
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
             is_verified = await OtpService(db).is_recently_verified(

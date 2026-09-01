@@ -163,7 +163,7 @@ async def test_change_password_rejects_wrong_current_password(
     with pytest.raises(AppException) as exc:
         await service.change_password(
             ChangePasswordRequest(
-                current_password="wrong-password", new_password="new-password"
+                current_password="wrong-password", new_password="new-password9"
             ),
             cast(User, user),
             cast(AsyncSession, db),
@@ -185,14 +185,14 @@ async def test_change_password_hashes_new_password(
 
     result = await service.change_password(
         ChangePasswordRequest(
-            current_password="old-password", new_password="new-password"
+            current_password="old-password", new_password="new-password9"
         ),
         cast(User, user),
         cast(AsyncSession, db),
     )
 
     assert result == {"message": "Contraseña actualizada correctamente"}
-    assert user.hashed_password == "hashed:new-password"
+    assert user.hashed_password == "hashed:new-password9"
     assert db.commit_count == 1
 
 

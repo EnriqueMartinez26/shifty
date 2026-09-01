@@ -51,3 +51,18 @@ def reject_payload_control_chars(value: Any) -> Any:
     if isinstance(value, set):
         return {reject_payload_control_chars(item) for item in value}
     return value
+
+
+def validate_password_strength(password: str) -> str:
+    """Politica minima de contrasena para cuentas nuevas o cambiadas.
+
+    Un piso razonable sin friccion excesiva: al menos una letra y un numero.
+    Rechaza los casos debiles obvios ("aaaaaaaa", "12345678") sin exigir
+    simbolos ni mayusculas. No se aplica al login para no invalidar
+    contrasenas ya existentes.
+    """
+    if not any(c.isalpha() for c in password):
+        raise ValueError("La contrasena debe incluir al menos una letra")
+    if not any(c.isdigit() for c in password):
+        raise ValueError("La contrasena debe incluir al menos un numero")
+    return password
