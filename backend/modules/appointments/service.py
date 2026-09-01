@@ -9,7 +9,7 @@ Responsabilidades:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, TypedDict
 
 import ulid
@@ -21,7 +21,6 @@ from core.exceptions import (
     AppointmentNotFoundException,
     BlockedScheduleException,
     ResourceNotFoundException,
-    BookingNoticeException,
 )
 from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
@@ -97,12 +96,9 @@ class AppointmentService:
         starts_at: datetime = data["starts_at"]
         ends_at: datetime = starts_at + timedelta(minutes=service.duration_minutes)
 
-        # 1.5. Verificar Forcing Function: min_booking_notice_hours
-        store = await self.uow.appointments.get_store_by_id(store_id)
-        notice_hours = getattr(store, "min_booking_notice_hours", 2)
-        now_utc = datetime.now(timezone.utc)
-        if starts_at < now_utc + timedelta(hours=notice_hours):
-            raise BookingNoticeException(notice_hours)
+        # Nota: el dueno NO esta sujeto a min_booking_notice_hours (esa regla
+        # es para el cliente). Puede cargar un walk-in del momento. El "no
+        # agendar en el pasado" lo garantiza el schema AppointmentCreate.
 
         # 2. Verificar bloqueos de agenda --------------------------------
         block = await self.uow.appointments.get_overlapping_block(
@@ -411,12 +407,8 @@ class AppointmentService:
 
         ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
 
-        # 2.5. Verificar Forcing Function: min_booking_notice_hours
-        store = await self.uow.appointments.get_store_by_id(store_id)
-        notice_hours = getattr(store, "min_booking_notice_hours", 2)
-        now_utc = datetime.now(timezone.utc)
-        if new_starts_at < now_utc + timedelta(hours=notice_hours):
-            raise BookingNoticeException(notice_hours)
+        # El dueno reprograma sin la antelacion minima; el "no pasado" lo
+        # valida el schema AppointmentReschedule.
 
         # 3. Verificar bloqueos de agenda en la nueva fecha
         block = await self.uow.appointments.get_overlapping_block(
