@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     # dueno de la base. La aplicacion se conecta con un rol restringido para
     # que las politicas de RLS efectivamente la alcancen.
     MIGRATION_DATABASE_URL: str | None = None
+    # Dimensionamiento del pool de conexiones. Por defecto SQLAlchemy usa
+    # 5 + 10 = 15 por proceso; con varios workers de Uvicorn mas Celery eso
+    # agota el max_connections de Postgres. Se expone para ajustarlo al deploy.
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 5
+    DB_POOL_RECYCLE_SECONDS: int = 1800
     REDIS_URL: str
     CELERY_BROKER_URL: str = "memory://"
     CELERY_RESULT_BACKEND_URL: str | None = None
@@ -272,6 +278,9 @@ def _fallback_settings() -> Settings:
         RUN_RUNTIME_CONTRACTS_ON_STARTUP=False,
         DATABASE_URL="postgresql+asyncpg://invalid:invalid@localhost/invalid",
         MIGRATION_DATABASE_URL=None,
+        DB_POOL_SIZE=10,
+        DB_MAX_OVERFLOW=5,
+        DB_POOL_RECYCLE_SECONDS=1800,
         REDIS_URL="redis://localhost:6379/0",
         CELERY_BROKER_URL="memory://",
         CELERY_RESULT_BACKEND_URL=None,

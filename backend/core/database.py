@@ -64,7 +64,17 @@ async def _apply_tenant_context(session: AsyncSession) -> None:
     )
 
 
-engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+# El pool solo se dimensiona para PostgreSQL. SQLite (tests) usa StaticPool,
+# que no acepta pool_size ni max_overflow.
+_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+if settings.DATABASE_URL.startswith("postgresql"):
+    _engine_kwargs.update(
+        pool_size=settings.DB_POOL_SIZE,
+        max_overflow=settings.DB_MAX_OVERFLOW,
+        pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
+    )
+
+engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
 SessionLocal = async_sessionmaker(
     class_=TenantSession,

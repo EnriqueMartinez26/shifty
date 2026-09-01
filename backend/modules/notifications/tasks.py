@@ -17,6 +17,15 @@ from core.redis import get_redis
 logger = structlog.get_logger()
 
 
+def _mask_email(email: str | None) -> str:
+    """Enmascara el email para no dejar PII de clientes en los logs."""
+    if not email or "@" not in email:
+        return "***"
+    nombre, dominio = email.split("@", 1)
+    visible = nombre[0] if nombre else ""
+    return f"{visible}***@{dominio}"
+
+
 async def _send_email(to: str, subject: str, body: str) -> bool:
     def _send() -> bool:
         message = EmailMessage()
@@ -81,7 +90,7 @@ async def send_appointment_confirmation(
     )
     if not success:
         raise RuntimeError("SMTP send failed")
-    logger.info("confirmation_email_sent", email=email)
+    logger.info("confirmation_email_sent", email=_mask_email(email))
     return {"status": "sent", "to": email}
 
 
@@ -96,7 +105,7 @@ async def send_appointment_reminder(
     )
     if not success:
         raise RuntimeError("SMTP send failed")
-    logger.info("reminder_email_sent", email=email)
+    logger.info("reminder_email_sent", email=_mask_email(email))
     return {"status": "sent", "to": email}
 
 
