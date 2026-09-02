@@ -722,13 +722,7 @@ def stamp_payment_from_status(
     payload: dict[str, JsonValue] | None = None,
 ) -> None:
     # El grafo decide: una transicion ilegal se ignora (el webhook se reentrega
-    # y no queremos romper por un duplicado), pero nunca se aplica.
-    if not can_apply_payment_status(payment.status, payment_status):
-        return
-    payment.status = payment_status
-    payment.raw_payload = payload or payment.raw_payload
-    if payment_status in {
-        PaymentStatus.APPROVED.value,
-        PaymentStatus.MANUAL_CONFIRMED.value,
-    }:
-        payment.paid_at = payment.paid_at or datetime.now(timezone.utc)
+    # y no queremos romper por un duplicado), pero nunca se aplica. La regla y la
+    # mutacion viven en la entidad (Payment.apply_status); esto es solo el wrapper
+    # que conservan los llamadores (router, webhook, conciliacion).
+    payment.apply_status(payment_status, payload=payload)

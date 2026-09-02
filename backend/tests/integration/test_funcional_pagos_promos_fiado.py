@@ -90,6 +90,37 @@ async def test_turno_sin_pago_no_cuenta_como_ingreso(client: AsyncClient) -> Non
 
 
 @pytest.mark.asyncio
+async def test_dashboard_cuenta_pendientes_y_proximos(client: AsyncClient) -> None:
+    """Regresion del bug de casing: el dashboard filtraba estados en MAYUSCULAS
+    y el dominio los guarda en minusculas, asi que pendientes y proximos daban
+    siempre 0/vacio. Estos dos no dependen de la ventana semanal."""
+    store, token = await register_and_login(
+        client, slug="dash-casing", email="dash-casing@test.com"
+    )
+    servicio = await create_service(client, token)
+    staff = await create_staff(client, token, servicio)
+    dia = datetime.now(timezone.utc) + timedelta(days=3)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+
+    code, _ = await _book_admin(
+        client,
+        token,
+        service_id=servicio,
+        staff_id=staff,
+        starts_at=_at(dia, 10),
+        clave="dash-pendiente-1",
+    )
+    assert code == 201
+
+    summary = await client.get("/dashboard/summary", headers=auth_headers(token))
+    assert summary.status_code == 200, summary.text
+    stats = summary.json()["stats"]
+    # Antes del fix ambos eran siempre 0/vacio por el casing.
+    assert stats["pending_confirmations"] >= 1
+    assert len(summary.json()["upcoming_appointments"]) >= 1
+
+
+@pytest.mark.asyncio
 async def test_cobro_manual_convierte_reserva_en_ingreso(client: AsyncClient) -> None:
     store, token = await register_and_login(
         client, slug="rev-cobro", email="rev-cobro@test.com"

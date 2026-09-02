@@ -17,7 +17,7 @@ from core.exceptions import (
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user
-from modules.ledger.model import CustomerLedger, LedgerMovementType
+from modules.ledger.model import CustomerLedger
 from modules.ledger.schemas import (
     CustomerLedgerResponse,
     LedgerMovementCreate,
@@ -64,10 +64,8 @@ async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -
         )
 
 
-async def _reduce_new_balance(
-    db: AsyncSession, store_id: str, client_id: str, movement_type: str, amount: Decimal
-) -> Decimal:
-    """Devuelve el balance_after resultante, ya con el lock tomado."""
+async def _previous_balance(db: AsyncSession, store_id: str, client_id: str) -> Decimal:
+    """Ultimo saldo del cliente (0 si no tiene movimientos). Con el lock tomado."""
     result = await db.execute(
         select(CustomerLedger)
         .where(
@@ -78,17 +76,15 @@ async def _reduce_new_balance(
         .limit(1)
     )
     previous = result.scalar_one_or_none()
-    previous_balance = previous.balance_after if previous else Decimal("0.00")
-    return previous_balance + _signed_amount(movement_type, amount)
+    return previous.balance_after if previous else Decimal("0.00")
 
 
-def _signed_amount(movement_type: str, amount: Decimal) -> Decimal:
-    if movement_type in {
-        LedgerMovementType.PAYMENT.value,
-        LedgerMovementType.REFUND.value,
-    }:
-        return -amount
-    return amount
+async def _reduce_new_balance(
+    db: AsyncSession, store_id: str, client_id: str, movement_type: str, amount: Decimal
+) -> Decimal:
+    """Saldo resultante de aplicar el movimiento. El signo lo decide la entidad."""
+    previous_balance = await _previous_balance(db, store_id, client_id)
+    return previous_balance + CustomerLedger.signed(movement_type, amount)
 
 
 def _client_display_name(user: User | None, *, fallback_id: str) -> str:
@@ -269,7 +265,7 @@ async def reverse_customer_ledger_movement(
     if original is None:
         raise ResourceNotFoundException("Movimiento de fiado", movement_id)
 
-    if original.reverses_id is not None:
+    if original.is_reversal:
         raise ValidationException(
             "Un movimiento de reversa no se puede volver a revertir."
         )
@@ -285,25 +281,11 @@ async def reverse_customer_ledger_movement(
     if already is not None:
         raise ValidationException("Ese movimiento ya fue revertido.")
 
-    # El ajuste niega el efecto con signo del original. _signed_amount respeta
-    # el signo del monto para 'adjustment', asi que el saldo recalculado cierra.
-    reversal_amount = -_signed_amount(original.movement_type, original.amount)
-    balance_after = await _reduce_new_balance(
-        db,
-        user.store_id,
-        client_id,
-        LedgerMovementType.ADJUSTMENT.value,
-        reversal_amount,
-    )
-    reversal = CustomerLedger(
-        store_id=user.store_id,
-        client_id=client_id,
-        appointment_id=original.appointment_id,
-        movement_type=LedgerMovementType.ADJUSTMENT.value,
-        amount=reversal_amount,
-        balance_after=balance_after,
-        notes=f"Reversa de movimiento {original.id}",
-        reverses_id=original.id,
+    # La entidad decide como se compensa (ajuste con signo opuesto) y marca el
+    # candado reverses_id; aca solo calculamos el saldo resultante y persistimos.
+    previous_balance = await _previous_balance(db, user.store_id, client_id)
+    reversal = original.build_reversal(
+        balance_after=previous_balance - original.signed_amount
     )
     db.add(reversal)
     await db.commit()

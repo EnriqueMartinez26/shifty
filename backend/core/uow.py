@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Imports for typing and implementations
 from modules.appointments.repository import AppointmentRepository
 from modules.audit.repository import AuditRepository
+from modules.payments.repository import OutboxRepository, PaymentRepository
 
 
 class AbstractUnitOfWork(abc.ABC):
@@ -17,6 +18,13 @@ class AbstractUnitOfWork(abc.ABC):
 
     appointments: AppointmentRepository
     audit: AuditRepository
+    payments: PaymentRepository
+    outbox: OutboxRepository
+    # Sesion cruda. La exponemos a proposito: algunos casos de uso (liberar un
+    # turno, confirmar un pago) invocan adaptadores del gateway de pagos que
+    # operan sobre la AsyncSession. Tenerla aca permite que esa orquestacion
+    # viva en la capa de servicio en vez de filtrarse al router.
+    session: AsyncSession
 
     async def __aenter__(self) -> "AbstractUnitOfWork":
         return self
@@ -55,6 +63,8 @@ class AsyncSqlAlchemyUnitOfWork(AbstractUnitOfWork):
         # Inicializamos los repositorios inyectando la sesión.
         self.appointments = AppointmentRepository(self.session)
         self.audit = AuditRepository(self.session)
+        self.payments = PaymentRepository(self.session)
+        self.outbox = OutboxRepository(self.session)
         if not self.session.in_transaction():
             self._transaction = await self.session.begin()
         return await super().__aenter__()

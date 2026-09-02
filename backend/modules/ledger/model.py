@@ -31,3 +31,44 @@ class CustomerLedger(BaseEntity):
     reverses_id: Mapped[str | None] = mapped_column(
         ForeignKey("customer_ledger.id"), nullable=True, index=True
     )
+
+    @staticmethod
+    def signed(movement_type: str, amount: Decimal) -> Decimal:
+        """Efecto con signo sobre el saldo: cobros suman, pagos/devoluciones restan.
+
+        Un 'adjustment' respeta el signo del monto (puede ser negativo), lo que
+        permite que una reversa reste sin inventar un tipo nuevo.
+        """
+        if movement_type in {
+            LedgerMovementType.PAYMENT.value,
+            LedgerMovementType.REFUND.value,
+        }:
+            return -amount
+        return amount
+
+    @property
+    def signed_amount(self) -> Decimal:
+        return self.signed(self.movement_type, self.amount)
+
+    @property
+    def is_reversal(self) -> bool:
+        return self.reverses_id is not None
+
+    def build_reversal(self, *, balance_after: Decimal) -> "CustomerLedger":
+        """Crea el movimiento que anula a este.
+
+        El ajuste niega el efecto del original (mismo modulo, signo opuesto) y
+        deja ``reverses_id`` apuntando al origen: ese es el candado que impide
+        revertirlo dos veces. No borra el original: preserva la trazabilidad del
+        saldo.
+        """
+        return CustomerLedger(
+            store_id=self.store_id,
+            client_id=self.client_id,
+            appointment_id=self.appointment_id,
+            movement_type=LedgerMovementType.ADJUSTMENT.value,
+            amount=-self.signed_amount,
+            balance_after=balance_after,
+            notes=f"Reversa de movimiento {self.id}",
+            reverses_id=self.id,
+        )
