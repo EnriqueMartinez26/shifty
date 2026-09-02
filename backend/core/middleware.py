@@ -1,17 +1,21 @@
 from starlette.types import ASGIApp, Receive, Scope, Send
-from core.database import set_tenant_context
-from core.security import decode_token
-from jose import JWTError
-import structlog
 
-logger = structlog.get_logger()
+from core.database import set_tenant_context
 
 
 class TenantMiddleware:
-    """
-    Middleware ASGI puro que extrae el contexto del tenant del JWT
-    e inyecta la configuración en la base de datos (RLS) para el request actual.
-    Evita conflictos con CORSMiddleware al no usar BaseHTTPMiddleware.
+    """Aísla el contexto de tenant entre requests.
+
+    Antes este middleware decodificaba el JWT y seteaba el contexto RLS con los
+    claims (``store_id`` / ``is_global_admin``). Eso convertía a un claim del
+    token en la llave maestra de la base: un token viejo de superadmin seguía
+    bypasseando RLS aunque el flag ya estuviera revocado en la DB, y un secreto
+    filtrado permitía forjar el bypass.
+
+    Ahora el contexto real lo establece ``get_current_user`` DESPUÉS de
+    recargar al usuario desde la base (modules/auth/dependencies.py): la fuente
+    de verdad es la DB, nunca el token. Acá solo se garantiza que cada request
+    arranque y termine con el contexto limpio.
     """
 
     def __init__(self, app: ASGIApp):
@@ -22,36 +26,8 @@ class TenantMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # 1. Obtener el token del Header
-        headers = dict(scope.get("headers", []))
-        auth_header = headers.get(b"authorization", b"").decode("utf-8")
-
-        # Seteamos contexto inicial
         set_tenant_context(None, False)
-
-        if auth_header.startswith("Bearer "):
-            token = auth_header.replace("Bearer ", "")
-            try:
-                # 2. Decodificar Token
-                payload = decode_token(token)
-                store_id = payload.get("store_id")
-                is_global_admin = payload.get("is_global_admin", False)
-
-                # 3. Establecer Contexto
-                set_tenant_context(store_id, is_global_admin)
-
-                # Guardamos info en el scope para uso en dependencias
-                if "state" not in scope:
-                    scope["state"] = {}
-                scope["state"]["user"] = payload
-
-            except JWTError:
-                pass
-            except Exception as e:
-                logger.error("error_injecting_tenant_context", error=str(e))
-
         try:
             await self.app(scope, receive, send)
         finally:
-            # 4. Limpiar Contexto al terminar el request
             set_tenant_context(None, False)

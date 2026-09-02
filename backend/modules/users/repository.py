@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
+from modules.auth.service import revoke_sessions_for_user
 from modules.users.model import User
 
 
@@ -84,6 +85,16 @@ class UserRepository:
         if password:
             user.hashed_password = hash_password(password)
 
+        # Una desactivacion, un cambio de rol o una clave impuesta por el admin
+        # deben cortar las sesiones vivas: sin esto, los refresh tokens del
+        # usuario siguen operando 30 dias con los permisos viejos.
+        if (
+            payload.get("is_active") is False
+            or payload.get("role") is not None
+            or password
+        ):
+            await revoke_sessions_for_user(self.db, user.id)
+
         try:
             await self.db.commit()
             await self.db.refresh(user)
@@ -96,4 +107,7 @@ class UserRepository:
         user.is_active = False
         user.password_reset_token_hash = None
         user.password_reset_expires_at = None
+        # La baja revoca las sesiones: si el usuario se reactiva mas adelante,
+        # sus refresh tokens viejos no deben revivir con el.
+        await revoke_sessions_for_user(self.db, user.id)
         await self.db.commit()

@@ -26,6 +26,7 @@ BASE: dict[str, Any] = {
     "PUBLIC_API_URL": "https://api.example.com",
     "FIELD_ENCRYPTION_KEY": "clave_de_cifrado_de_campos_de_32_o_mas",
     "RATE_LIMIT_ENABLED": True,
+    "RATE_LIMIT_FAIL_CLOSED": True,
     "COOKIE_SECURE": True,
     "ALLOW_PUBLIC_REGISTRATION": False,
     "OTP_PROVIDER": "twilio",
@@ -64,6 +65,9 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
         ({"FRONTEND_URL": "http://localhost:3000"}, "FRONTEND_URL"),
         ({"PUBLIC_API_URL": "http://127.0.0.1:8000"}, "PUBLIC_API_URL"),
         ({"COOKIE_SAMESITE": "invalido"}, "COOKIE_SAMESITE"),
+        ({"CORS_ORIGINS": "*"}, "CORS_ORIGINS"),
+        ({"RATE_LIMIT_FAIL_CLOSED": False}, "RATE_LIMIT_FAIL_CLOSED"),
+        ({"ACCESS_TOKEN_EXPIRE_MINUTES": 120}, "ACCESS_TOKEN_EXPIRE_MINUTES"),
     ],
 )
 def test_produccion_rechaza_configuraciones_inseguras(
@@ -116,4 +120,4 @@ def test_produccion_aplica_defaults_endurecidos(
     assert settings.ALLOW_PUBLIC_REGISTRATION is False
     assert settings.COOKIE_SECURE is True
     assert settings.EXPOSE_API_DOCS is False
-    assert settings.COOKIE_SAMESITE == "none"
+    assert settings.COOKIE_SAMESITE == "lax"

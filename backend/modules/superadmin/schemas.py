@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
+from core.validation import validate_password_strength
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN, reject_unsafe_url
@@ -85,10 +86,12 @@ class StoreTableResponse(StoreGlobalResponse):
 
 class StoreAdminCreate(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=12, max_length=128)
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
+
+    _validar_password = field_validator("password")(validate_password_strength)
 
 
 class UserGlobalUpdate(BaseModel):
@@ -96,8 +99,15 @@ class UserGlobalUpdate(BaseModel):
     last_name: str | None = Field(None, min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
     role: UserRole | None = None
-    password: str | None = Field(None, min_length=8, max_length=128)
+    password: str | None = Field(None, min_length=12, max_length=128)
     is_active: bool | None = None
+
+    @field_validator("password")
+    @classmethod
+    def _validar_password(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_password_strength(value)
 
 
 class GlobalAdminUpdate(BaseModel):

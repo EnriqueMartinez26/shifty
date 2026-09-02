@@ -18,6 +18,13 @@ class OtpVerification(BaseEntity):
     consumed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # SOLO se setea cuando el cliente demostro conocer el codigo. consumed_at
+    # tambien se usa para invalidar codigos al emitir uno nuevo, asi que NO
+    # sirve como prueba de verificacion: usarlo permitia "verificar" un
+    # telefono pidiendo dos codigos seguidos, sin conocer ninguno.
+    verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     @property

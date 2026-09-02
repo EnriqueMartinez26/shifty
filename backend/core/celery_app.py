@@ -26,6 +26,7 @@ celery_app.conf.update(
     task_time_limit=settings.CELERY_TASK_TIME_LIMIT_SECONDS,
     # Auto-descubrimiento de tareas en los módulos
     imports=[
+        "modules.auth.tasks",
         "modules.payments.tasks",
         "modules.notifications.tasks",
     ],
@@ -54,6 +55,12 @@ celery_app.conf.update(
         "process-appointment-reminders-every-15-minutes": {
             "task": "process_appointment_reminders",
             "schedule": crontab(minute="*/15"),
+        },
+        # Higiene de la tabla de sesiones: las expiradas/revocadas viejas se
+        # purgan a diario (es material de credenciales, no un historico).
+        "purge-expired-auth-sessions-daily": {
+            "task": "purge_expired_auth_sessions",
+            "schedule": crontab(minute=0, hour=4),
         },
     },
 )

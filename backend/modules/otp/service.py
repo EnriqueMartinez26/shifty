@@ -1,17 +1,28 @@
 from __future__ import annotations
 
+import hashlib
 import hmac
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
+import structlog
+from redis.exceptions import RedisError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
-from core.security import hash_token
+from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
+from core.redis import get_redis
+from core.security import hash_otp_code
 from modules.otp.model import OtpVerification
+
+logger = structlog.get_logger()
+
+# Un solo mensaje/codigo para TODO fallo de verificacion: distinguir
+# "incorrecto" de "expirado/inexistente" le decia a un atacante si un telefono
+# tiene un OTP vivo en esa tienda.
+_OTP_INVALID = OTPException
 
 
 def normalize_phone(raw_phone: str) -> str:
@@ -25,6 +36,35 @@ def normalize_phone(raw_phone: str) -> str:
     return cleaned
 
 
+def _budget_key(kind: str, store_id: str, phone: str) -> str:
+    material = f"{store_id}:{phone}".encode("utf-8")
+    return f"otp:{kind}:{hashlib.sha256(material).hexdigest()[:32]}"
+
+
+async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> None:
+    """Presupuesto ACUMULADO por telefono en ventana de 1 hora.
+
+    Independiente de la IP (que se puede rotar) y del registro OTP (que antes
+    se renovaba con cada codigo nuevo, reseteando los intentos). Corta tanto la
+    fuerza bruta del espacio de 10^6 como el SMS-bombing al titular del numero.
+    """
+    if not settings.RATE_LIMIT_ENABLED:
+        return
+    try:
+        redis = await get_redis()
+        key = _budget_key(kind, store_id, phone)
+        pipe = redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 3600)
+        current, _ = await pipe.execute()
+        if int(current) > limit:
+            raise OTPRateLimitedException()
+    except (RedisError, OSError) as exc:
+        logger.warning("otp_budget_redis_unavailable", error=str(exc))
+        if settings.RATE_LIMIT_FAIL_CLOSED:
+            raise OTPRateLimitedException() from exc
+
+
 class OtpService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -35,6 +75,10 @@ class OtpService:
         normalized_phone = normalize_phone(phone)
         if channel not in {"whatsapp", "sms"}:
             raise ValidationException("Canal invalido")
+
+        await _consume_budget(
+            "req", store_id, normalized_phone, settings.OTP_MAX_REQUESTS_PER_HOUR
+        )
 
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
@@ -57,7 +101,10 @@ class OtpService:
             store_id=store_id,
             phone=normalized_phone,
             channel=channel,
-            code_hash=hash_token(code),
+            # HMAC con pepper y contexto: un SHA-256 pelado de 6 digitos se
+            # invierte con una tabla de 10^6 entradas ante cualquier lectura
+            # de la tabla (backup, replica).
+            code_hash=hash_otp_code(store_id, normalized_phone, code),
             expires_at=expires_at,
             provider_message_id="console-dispatch",
         )
@@ -74,6 +121,11 @@ class OtpService:
         self, *, store_id: str, phone: str, code: str
     ) -> dict[str, object]:
         normalized_phone = normalize_phone(phone)
+
+        await _consume_budget(
+            "fail", store_id, normalized_phone, settings.OTP_MAX_FAILURES_PER_HOUR
+        )
+
         now = datetime.now(timezone.utc)
         result = await self.db.execute(
             select(OtpVerification)
@@ -86,20 +138,19 @@ class OtpService:
         )
         otp = result.scalar_one_or_none()
         if not otp or otp.is_consumed or otp.is_expired:
-            raise OTPException()
+            raise _OTP_INVALID()
         if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
             raise OTPRateLimitedException()
 
         otp.attempts += 1
-        if not hmac.compare_digest(otp.code_hash, hash_token(code)):
+        expected = hash_otp_code(store_id, normalized_phone, code)
+        if not hmac.compare_digest(otp.code_hash, expected):
             await self.db.commit()
-            raise OTPException(
-                message="Codigo OTP incorrecto.",
-                error_code="OTP_INCORRECT",
-                http_status=400,
-            )
+            raise _OTP_INVALID()
 
         otp.consumed_at = now
+        # La UNICA marca valida de "este telefono demostro posesion".
+        otp.verified_at = now
         await self.db.commit()
         return {"ok": True, "verified_at": now.isoformat(), "phone": normalized_phone}
 
@@ -113,10 +164,10 @@ class OtpService:
             .where(
                 OtpVerification.store_id == store_id,
                 OtpVerification.phone == normalized_phone,
-                OtpVerification.consumed_at.is_not(None),
-                OtpVerification.consumed_at >= cutoff,
+                OtpVerification.verified_at.is_not(None),
+                OtpVerification.verified_at >= cutoff,
             )
-            .order_by(OtpVerification.consumed_at.desc())
+            .order_by(OtpVerification.verified_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none() is not None

@@ -75,7 +75,7 @@ async def _register_store(client: AsyncClient, slug: str, email: str) -> JsonDic
             "store_name": f"Tienda {slug}",
             "store_slug": slug,
             "admin_email": email,
-            "admin_password": "password123",
+            "admin_password": "Password123!",
             "admin_first_name": "Admin",
             "admin_last_name": slug,
         },
@@ -87,7 +87,7 @@ async def _register_store(client: AsyncClient, slug: str, email: str) -> JsonDic
 async def _login(client: AsyncClient, email: str) -> str:
     response = await client.post(
         "/auth/login",
-        json={"email": email, "password": "password123"},
+        json={"email": email, "password": "Password123!"},
     )
     assert response.status_code == 200
     return str(cast(JsonDict, response.json())["access_token"])
@@ -201,7 +201,7 @@ async def test_superadmin_can_set_receptionist_role_and_cannot_assign_subscripti
         headers=headers,
         json={
             "email": "ops@demo.com",
-            "password": "password123",
+            "password": "Password123!",
             "first_name": "Ops",
             "last_name": "Desk",
             "phone": "+5491100000000",

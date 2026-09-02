@@ -37,10 +37,16 @@ class FakeDb:
         self.commit_count = 0
 
     async def execute(self, _statement: object) -> ScalarResult:
-        return self.execute_results.pop(0)
+        if self.execute_results:
+            return self.execute_results.pop(0)
+        # Consultas auxiliares (p. ej. revocacion de sesiones): vacio.
+        return ScalarResult(values=[])
 
     def add(self, item: object) -> None:
         self.added.append(item)
+
+    async def flush(self) -> None:
+        return None
 
     async def commit(self) -> None:
         self.commit_count += 1
@@ -51,7 +57,16 @@ def skip_tenant_sql(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, No
     async def noop(_db: object) -> None:
         return None
 
+    async def sin_fallos(_key: str) -> int:
+        return 0
+
+    async def registrar_noop(_key: str) -> None:
+        return None
+
     monkeypatch.setattr(service, "_apply_tenant_context", noop)
+    monkeypatch.setattr(service, "_login_failures", sin_fallos)
+    monkeypatch.setattr(service, "_register_login_failure", registrar_noop)
+    monkeypatch.setattr(service, "_clear_login_failures", registrar_noop)
     yield
 
 
@@ -102,7 +117,9 @@ async def test_login_creates_refresh_session_and_returns_access_token(
     user = make_user()
     db = FakeDb(ScalarResult(value=user))
     monkeypatch.setattr(service, "verify_password", lambda *_args: True)
-    monkeypatch.setattr(service, "access_token_for_user", lambda _user: "access-token")
+    monkeypatch.setattr(
+        service, "access_token_for_user", lambda _user, _sid: "access-token"
+    )
     monkeypatch.setattr(service, "generate_refresh_token", lambda: "refresh-token")
 
     tokens = await service.login_user(
@@ -135,7 +152,9 @@ async def test_refresh_revokes_existing_session_and_creates_replacement(
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
     )
     db = FakeDb(ScalarResult(value=existing_session), ScalarResult(value=user))
-    monkeypatch.setattr(service, "access_token_for_user", lambda _user: "new-access")
+    monkeypatch.setattr(
+        service, "access_token_for_user", lambda _user, _sid: "new-access"
+    )
     monkeypatch.setattr(service, "generate_refresh_token", lambda: "new-refresh")
 
     tokens = await service.refresh_session(
@@ -180,7 +199,13 @@ async def test_change_password_hashes_new_password(
 ) -> None:
     user = make_user()
     db = FakeDb()
-    monkeypatch.setattr(service, "verify_password", lambda *_args: True)
+    # La actual verifica bien; la nueva NO coincide con el hash vigente (el
+    # servicio ahora rechaza reutilizar la misma contraseña).
+    monkeypatch.setattr(
+        service,
+        "verify_password",
+        lambda password, _hashed: password == "old-password",
+    )
     monkeypatch.setattr(service, "hash_password", lambda password: f"hashed:{password}")
 
     result = await service.change_password(

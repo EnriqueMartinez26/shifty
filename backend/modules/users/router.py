@@ -71,6 +71,16 @@ async def update_user(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
+    # La propia contraseña se cambia SOLO por /auth/change-password, que exige
+    # la actual: sin este bloqueo, una sesion secuestrada podia fijarse una
+    # clave nueva sin conocer la anterior.
+    if admin.public_id == public_id and data.password is not None:
+        raise AppException(
+            message="Para cambiar tu propia contraseña usá /auth/change-password",
+            http_status=400,
+            error_code="SELF_PASSWORD_CHANGE_DENIED",
+        )
+
     repo = UserRepository(db)
     user = await repo.get_by_public_id(public_id, admin.store_id)
     if not user:

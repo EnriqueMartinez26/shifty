@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
+from modules.auth.service import revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.stores.model import Store
@@ -363,6 +364,8 @@ class UserAdminRepository(_BaseAdminRepository):
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if password:
             user.hashed_password = hash_password(password)
+        if data.get("is_active") is False or data.get("role") is not None or password:
+            await revoke_sessions_for_user(self.db, user.id)
         try:
             await self.db.flush()
             self._audit(
@@ -399,6 +402,9 @@ class UserAdminRepository(_BaseAdminRepository):
         if enabled:
             user.role = UserRole.ADMIN
             user.is_active = True
+        # Cambiar el poder global exige re-login: las sesiones (y con ellas los
+        # access tokens atados por sid) mueren aca mismo, en ambas direcciones.
+        await revoke_sessions_for_user(self.db, user.id)
         await self.db.flush()
         self._audit(
             actor,

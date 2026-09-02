@@ -15,7 +15,7 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=8, max_length=128)
+    password: str = Field(..., min_length=12, max_length=128)
 
     _validar_password = field_validator("password")(validate_password_strength)
 
@@ -25,7 +25,7 @@ class UserUpdate(BaseModel):
     last_name: str | None = Field(None, min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
     role: UserRole | None = None
-    password: str | None = Field(None, min_length=8, max_length=128)
+    password: str | None = Field(None, min_length=12, max_length=128)
 
     @field_validator("password")
     @classmethod

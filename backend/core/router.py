@@ -102,16 +102,19 @@ class CanonicalRoute(APIRoute):
                             and payload.get("success") is True
                             and "data" in payload
                         ):
-                            filtered_headers = {
-                                k: v
-                                for k, v in response.headers.items()
-                                if k.lower() not in ("content-length", "content-type")
-                            }
-                            return JSONResponse(
+                            unwrapped = JSONResponse(
                                 content=payload["data"],
                                 status_code=response.status_code,
-                                headers=filtered_headers,
                             )
+                            # Anexar los headers originales en crudo (sin
+                            # content-type/length, que ya puso JSONResponse):
+                            # un dict colapsaria Set-Cookie duplicados.
+                            unwrapped.raw_headers = list(unwrapped.raw_headers) + [
+                                (k, v)
+                                for k, v in response.raw_headers
+                                if k not in (b"content-length", b"content-type")
+                            ]
+                            return unwrapped
                     except Exception:
                         pass
 
