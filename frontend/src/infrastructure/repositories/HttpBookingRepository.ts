@@ -9,6 +9,7 @@ import { BookingMapper } from '../../application/mappers/BookingMapper'
 import { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import { QueryOptions } from '../../domain/repositories/IRepository'
+import { createUuid } from '../../shared/utils/uuid'
 
 type BookingUpdatePayload = {
   notes_staff?: string
@@ -132,6 +133,19 @@ export class HttpBookingRepository
       await this.client.patch(`/appointments/${id}/absent`)
     } catch (error) {
       this.handleRepositoryError('markAbsent', error)
+    }
+  }
+
+  async reschedule(id: string, newStartTime: string): Promise<void> {
+    try {
+      // El backend recalcula el fin a partir de la duracion del servicio, asi
+      // que solo manda el nuevo inicio + una clave de idempotencia.
+      await this.client.patch(`/appointments/${id}/reschedule`, {
+        new_starts_at: newStartTime,
+        idempotency_key: createUuid()
+      })
+    } catch (error) {
+      this.handleRepositoryError('reschedule', error)
     }
   }
 

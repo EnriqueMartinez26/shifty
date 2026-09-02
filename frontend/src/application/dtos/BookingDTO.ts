@@ -10,14 +10,6 @@ export interface AppointmentResponseDTO {
   notes: string | null
 }
 
-export interface CreateBookingRequestDTO {
-  store_public_id?: string
-  service_id: string
-  staff_id?: string
-  starts_at: string
-  client_name: string
-  client_email?: string
-  client_phone: string
-  notes?: string
-  idempotency_key?: string
-}
+// El input de creacion vive en el dominio (IBookingRepository) para no invertir
+// la direccion de dependencias; aca se reexporta con el nombre historico.
+export type { CreateBookingInput as CreateBookingRequestDTO } from '../../domain/repositories/IBookingRepository'
