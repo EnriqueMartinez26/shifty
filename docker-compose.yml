@@ -59,8 +59,10 @@ services:
     environment:
       ENV: ${ENV:-development}
       SENTRY_DSN: ${SENTRY_DSN:-}
-      SECRET_KEY: ${SECRET_KEY:-generate_a_very_secret_key_here_for_production}
-      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-dev-field-key}
+      # Sin default: un secreto de firma publicado en el repo permite forjar
+      # tokens. Genera uno con: openssl rand -hex 32 (ver .env.example).
+      SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
       # La app usa un rol sin superusuario para que RLS la alcance.
       DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
       # Las migraciones necesitan DDL: van con el dueno de la base.
@@ -198,7 +200,9 @@ services:
     restart: always
     ports:
       - "80:80"
-      - "443:443"
+      # 443 se publica desde el override de produccion, junto con los
+      # certificados TLS (nginx/nginx.prod.conf). Publicarlo sin TLS detras
+      # era un puerto muerto que aparentaba HTTPS.
     depends_on:
       - backend
       - frontend

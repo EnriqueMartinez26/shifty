@@ -1,3 +1,5 @@
+import { setAuthToken } from '@infrastructure/http/client'
+
 import { ErrorHandler } from '../ErrorHandler'
 import {
   ValidationError,
@@ -43,7 +45,9 @@ export class UnauthorizedErrorHandler extends ErrorHandler {
 
   public async handle(_error: UnauthorizedError): Promise<void> {
     showToast('Sesión expirada. Redirigiendo...', 'info')
-    localStorage.removeItem('token') // Limpiar sesión
+    // Limpieza real de la sesion local (la clave vieja 'token' no existia).
+    setAuthToken(null)
+    localStorage.removeItem('shifty_user')
     window.location.href = '/login' // Redireccionar
   }
 }

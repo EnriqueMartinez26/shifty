@@ -8,7 +8,7 @@ import { getRuntimeEnv } from './runtime-env'
 
 const { apiUrl, dev } = getRuntimeEnv()
 const API_URL = resolveApiBaseUrl(apiUrl, dev)
-const TOKEN_KEY = 'shifty_token'
+const LEGACY_TOKEN_KEY = 'shifty_token'
 
 const apiClient = axios.create({
   baseURL: API_URL,
@@ -18,15 +18,23 @@ const apiClient = axios.create({
   }
 })
 
+// El access token vive SOLO en memoria: en localStorage cualquier XSS lo
+// exfiltra. La sesion persistente es la cookie HttpOnly de refresh, que el
+// navegador guarda pero el JS no puede leer; al recargar la pagina se
+// rehidrata con POST /auth/refresh (ver AuthContext).
+let inMemoryToken: string | null = null
+
 export const setAuthToken = (token: string | null) => {
-  if (token) {
-    localStorage.setItem(TOKEN_KEY, token)
-  } else {
-    localStorage.removeItem(TOKEN_KEY)
+  inMemoryToken = token
+  // Limpieza del esquema viejo: si quedo un token persistido, se elimina.
+  try {
+    localStorage.removeItem(LEGACY_TOKEN_KEY)
+  } catch {
+    /* almacenamiento no disponible */
   }
 }
 
-export const getAuthToken = () => localStorage.getItem(TOKEN_KEY)
+export const getAuthToken = () => inMemoryToken
 
 apiClient.interceptors.request.use((config) => {
   const token = getAuthToken()
@@ -57,17 +65,68 @@ axiosRetry(apiClient, {
   }
 })
 
+// Refresh single-flight: muchos requests pueden caer en 401 a la vez cuando el
+// access token (15 min) vence; todos esperan el MISMO refresh en vez de
+// dispararlo N veces (la rotacion invalidaria los refresh de los demas).
+let refreshInFlight: Promise<string | null> | null = null
+
+const refreshAccessToken = async (): Promise<string | null> => {
+  if (!refreshInFlight) {
+    refreshInFlight = axios
+      .post<{ access_token?: string; data?: { access_token?: string } }>(
+        `${API_URL}/auth/refresh`,
+        undefined,
+        { withCredentials: true }
+      )
+      .then((response) => {
+        const payload = response.data
+        const token = payload?.access_token ?? payload?.data?.access_token ?? null
+        setAuthToken(token)
+        return token
+      })
+      .catch(() => {
+        setAuthToken(null)
+        return null
+      })
+      .finally(() => {
+        refreshInFlight = null
+      })
+  }
+  return refreshInFlight
+}
+
+const isAuthPath = (url: string | undefined) =>
+  Boolean(url && (url.includes('/auth/login') || url.includes('/auth/refresh')))
+
 apiClient.interceptors.response.use(
   (response) => {
     response.data = unwrapApiEnvelope(response.data, response.status)
     return response
   },
   async (error) => {
+    const statusCode: number | undefined = error.response?.status
+    const originalRequest = error.config ?? {}
+
+    // Un 401 fuera del propio login/refresh: intentar UNA rehidratacion via
+    // cookie de refresh y reintentar el request original.
+    if (
+      statusCode === 401 &&
+      !originalRequest.__shiftyRetried &&
+      !isAuthPath(originalRequest.url)
+    ) {
+      const token = await refreshAccessToken()
+      if (token) {
+        originalRequest.__shiftyRetried = true
+        originalRequest.headers = originalRequest.headers ?? {}
+        originalRequest.headers.Authorization = `Bearer ${token}`
+        return apiClient.request(originalRequest)
+      }
+    }
+
     const normalizedError = normalizeApiError(error)
     const payload = error.response?.data
 
     if (isApiEnvelope(payload) && !payload.success) {
-      const statusCode = error.response.status
       if (statusCode === 401) {
         setAuthToken(null)
       }

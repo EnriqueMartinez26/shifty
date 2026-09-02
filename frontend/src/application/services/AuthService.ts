@@ -64,6 +64,17 @@ export class AuthService {
     return data
   }
 
+  /** Rehidrata el access token desde la cookie HttpOnly de refresh. */
+  async refreshSession(): Promise<LoginResponse> {
+    const { data } = await apiClient.post<LoginResponse>('/auth/refresh')
+    return data
+  }
+
+  /** Revoca la sesion en el servidor y limpia la cookie de refresh. */
+  async logout(): Promise<void> {
+    await apiClient.post('/auth/logout')
+  }
+
   async registerBusiness(payload: RegisterBusinessPayload): Promise<void> {
     await apiClient.post('/auth/register', payload)
   }
