@@ -15,7 +15,9 @@ describe('AppointmentService', () => {
       confirm: jest.fn(),
       complete: jest.fn(),
       cancel: jest.fn(),
-      markAbsent: jest.fn()
+      release: jest.fn(),
+      markAbsent: jest.fn(),
+      reschedule: jest.fn()
     } as unknown as jest.Mocked<IBookingRepository>
 
     service = new AppointmentService(mockRepository)
@@ -118,16 +120,16 @@ describe('AppointmentService', () => {
   })
 
   describe('reschedule', () => {
-    it('should output reschedule trace', async () => {
-      const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    it('should delegate rescheduling to the repository', async () => {
+      mockRepository.reschedule.mockResolvedValue(undefined)
 
       await service.reschedule('appt-id', '2026-05-18T12:00:00Z', '2026-05-18T13:00:00Z')
 
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Rescheduling appt-id to 2026-05-18T12:00:00Z')
+      expect(mockRepository.reschedule).toHaveBeenCalledWith(
+        'appt-id',
+        '2026-05-18T12:00:00Z',
+        '2026-05-18T13:00:00Z'
       )
-
-      consoleWarnSpy.mockRestore()
     })
   })
 })

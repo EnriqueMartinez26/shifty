@@ -99,12 +99,13 @@ export class AppointmentService extends BaseService<Appointment> {
    *
    * @param id The unique identifier of the appointment.
    * @param newStartTime New start time ISO string.
-   * @param _newEndTime Optional new end time ISO string.
+   * @param newEndTime Optional new end time (the backend derives it from the
+   *   service duration, so it is not sent).
    * @returns A promise resolving to void.
    */
-  async reschedule(id: string, newStartTime: string, _newEndTime: string): Promise<void> {
+  async reschedule(id: string, newStartTime: string, newEndTime?: string): Promise<void> {
     await this.execute(async () => {
-      console.warn(`Rescheduling ${id} to ${newStartTime}`)
+      await this.repository.reschedule(id, newStartTime, newEndTime)
     }, 'reschedule')
   }
 }
