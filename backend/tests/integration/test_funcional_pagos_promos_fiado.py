@@ -166,6 +166,62 @@ async def test_cobro_manual_convierte_reserva_en_ingreso(client: AsyncClient) ->
 
 
 @pytest.mark.asyncio
+async def test_resumen_agrega_ingresos_conteos_y_servicios(client: AsyncClient) -> None:
+    """Caracteriza la agregacion de get_summary: fija ingresos (solo cobrados),
+    conteos por estado y el bucket de servicio. Blinda el refactor del metodo."""
+    store, token = await register_and_login(
+        client, slug="rev-agg", email="rev-agg@test.com"
+    )
+    await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(token),
+        json={"payments": True},
+    )
+    servicio = await create_service(client, token)  # price 10000
+    staff = await create_staff(client, token, servicio)
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+
+    ids = []
+    for i, hora in enumerate((9, 10, 11)):
+        code, body = await _book_admin(
+            client,
+            token,
+            service_id=servicio,
+            staff_id=staff,
+            starts_at=_at(dia, hora),
+            clave=f"rev-agg-slot-{i}",
+        )
+        assert code == 201, body
+        ids.append(body["public_id"])
+
+    # Se cobran 2 de 3: el ingreso debe ser 20000, no 30000 (el tercero es reserva).
+    for public_id in ids[:2]:
+        manual = await client.post(
+            f"/payments/{public_id}/manual-confirm",
+            headers=auth_headers(token),
+            json={},
+        )
+        assert manual.status_code == 200, manual.text
+
+    fecha = dia.date().isoformat()
+    summary = await client.get(
+        f"/reports/summary?from_date={fecha}&to_date={fecha}",
+        headers=auth_headers(token),
+    )
+    assert summary.status_code == 200, summary.text
+    body = summary.json()
+    assert body["stats"]["total_appointments"] == 3
+    assert body["stats"]["total_revenue"] == 20000.0
+    assert body["stats"]["confirmed_appointments"] == 2
+    assert body["stats"]["pending_appointments"] == 1
+    top = body["top_services"][0]
+    assert top["service_id"] == servicio
+    assert top["appointments"] == 3
+    assert top["revenue"] == 20000.0
+
+
+@pytest.mark.asyncio
 async def test_el_cobro_usa_el_precio_congelado_no_el_de_lista(
     client: AsyncClient,
 ) -> None:

@@ -93,7 +93,9 @@ async def list_stores(
     db: AsyncSession = Depends(get_db),
 ) -> list[StoreTableResponse]:
     repo = SuperAdminRepository(db)
-    stores = await repo.list_stores(search, is_active, has_subscription, limit, offset)
+    stores = await repo.stores.list_stores(
+        search, is_active, has_subscription, limit, offset
+    )
     return [StoreTableResponse.model_validate(store) for store in stores]
 
 
@@ -107,7 +109,7 @@ async def create_store(
 ) -> StoreGlobalResponse:
     repo = SuperAdminRepository(db)
     try:
-        store = await repo.create_store(data.model_dump(), actor)
+        store = await repo.stores.create_store(data.model_dump(), actor)
         return _store_response(store)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -120,7 +122,7 @@ async def get_store(
     db: AsyncSession = Depends(get_db),
 ) -> StoreGlobalResponse:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
     return _store_response(store)
@@ -200,10 +202,10 @@ async def list_store_audit_logs(
     db: AsyncSession = Depends(get_db),
 ) -> list[AuditLogResponse]:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    logs = await repo.list_store_audit_logs(store, limit)
+    logs = await repo.stores.list_store_audit_logs(store, limit)
     return [
         AuditLogResponse(
             public_id=str(log.id),
@@ -227,11 +229,11 @@ async def update_store(
     db: AsyncSession = Depends(get_db),
 ) -> StoreGlobalResponse:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
     try:
-        updated = await repo.update_store(
+        updated = await repo.stores.update_store(
             store, data.model_dump(exclude_unset=True), actor
         )
         return _store_response(updated)
@@ -251,11 +253,11 @@ async def create_store_admin(
     db: AsyncSession = Depends(get_db),
 ) -> UserGlobalResponse:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
     try:
-        user = await repo.create_store_admin(store, data.model_dump(), actor)
+        user = await repo.users.create_store_admin(store, data.model_dump(), actor)
         return _user_response(user)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -269,10 +271,10 @@ async def list_store_users(
     db: AsyncSession = Depends(get_db),
 ) -> list[UserGlobalResponse]:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    users = await repo.list_store_users(store.id, include_inactive)
+    users = await repo.users.list_store_users(store.id, include_inactive)
     return [_user_response(user) for user in users]
 
 
@@ -284,11 +286,11 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
 ) -> UserGlobalResponse:
     repo = SuperAdminRepository(db)
-    user = await repo.get_user(user_public_id)
+    user = await repo.users.get_user(user_public_id)
     if not user:
         raise UserNotFoundException(identifier=user_public_id)
     try:
-        updated = await repo.update_user(
+        updated = await repo.users.update_user(
             user, data.model_dump(exclude_unset=True), actor
         )
         return _user_response(updated)
@@ -304,11 +306,11 @@ async def set_global_admin(
     db: AsyncSession = Depends(get_db),
 ) -> UserGlobalResponse:
     repo = SuperAdminRepository(db)
-    user = await repo.get_user(user_public_id)
+    user = await repo.users.get_user(user_public_id)
     if not user:
         raise UserNotFoundException(identifier=user_public_id)
     try:
-        updated = await repo.set_global_admin(user, data.is_global_admin, actor)
+        updated = await repo.users.set_global_admin(user, data.is_global_admin, actor)
         return _user_response(updated)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -321,7 +323,7 @@ async def list_plans(
     db: AsyncSession = Depends(get_db),
 ) -> list[PlanResponse]:
     repo = SuperAdminRepository(db)
-    plans = await repo.list_plans(include_inactive)
+    plans = await repo.plans.list_plans(include_inactive)
     return [PlanResponse.model_validate(plan) for plan in plans]
 
 
@@ -333,7 +335,7 @@ async def create_plan(
 ) -> PlanResponse:
     repo = SuperAdminRepository(db)
     try:
-        plan = await repo.create_plan(data.model_dump(), actor)
+        plan = await repo.plans.create_plan(data.model_dump(), actor)
         return PlanResponse.model_validate(plan)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -347,11 +349,11 @@ async def update_plan(
     db: AsyncSession = Depends(get_db),
 ) -> PlanResponse:
     repo = SuperAdminRepository(db)
-    plan = await repo.get_plan(plan_public_id)
+    plan = await repo.plans.get_plan(plan_public_id)
     if not plan:
         raise ResourceNotFoundException(resource="Plan", identifier=plan_public_id)
     try:
-        updated = await repo.update_plan(
+        updated = await repo.plans.update_plan(
             plan, data.model_dump(exclude_unset=True), actor
         )
         return PlanResponse.model_validate(updated)
@@ -368,10 +370,10 @@ async def get_store_subscription(
     db: AsyncSession = Depends(get_db),
 ) -> StoreSubscriptionResponse:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise ResourceNotFoundException(resource="Tienda", identifier=store_public_id)
-    subscription = await repo.get_store_subscription(store.id)
+    subscription = await repo.subscriptions.get_store_subscription(store.id)
     if not subscription:
         raise ResourceNotFoundException(
             resource="Suscripción", identifier=store_public_id
@@ -389,14 +391,14 @@ async def set_store_subscription(
     db: AsyncSession = Depends(get_db),
 ) -> StoreSubscriptionResponse:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    plan = await repo.get_plan(data.plan_id)
+    plan = await repo.plans.get_plan(data.plan_id)
     if not plan:
         raise ResourceNotFoundException(resource="Plan", identifier=data.plan_id)
     try:
-        subscription = await repo.set_store_subscription(
+        subscription = await repo.subscriptions.set_store_subscription(
             store, plan, data.model_dump(), actor
         )
         return StoreSubscriptionResponse.model_validate(subscription)
@@ -411,7 +413,7 @@ async def list_coupons(
     db: AsyncSession = Depends(get_db),
 ) -> list[CouponResponse]:
     repo = SuperAdminRepository(db)
-    coupons = await repo.list_coupons(include_inactive)
+    coupons = await repo.coupons.list_coupons(include_inactive)
     return [CouponResponse.model_validate(coupon) for coupon in coupons]
 
 
@@ -425,7 +427,7 @@ async def create_coupon(
 ) -> CouponResponse:
     repo = SuperAdminRepository(db)
     try:
-        coupon = await repo.create_coupon(data.model_dump(), actor)
+        coupon = await repo.coupons.create_coupon(data.model_dump(), actor)
         return CouponResponse.model_validate(coupon)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -438,7 +440,7 @@ async def get_coupon(
     db: AsyncSession = Depends(get_db),
 ) -> CouponResponse:
     repo = SuperAdminRepository(db)
-    coupon = await repo.get_coupon(coupon_public_id)
+    coupon = await repo.coupons.get_coupon(coupon_public_id)
     if not coupon:
         raise ResourceNotFoundException(resource="Cupón", identifier=coupon_public_id)
     return CouponResponse.model_validate(coupon)
@@ -452,11 +454,11 @@ async def update_coupon(
     db: AsyncSession = Depends(get_db),
 ) -> CouponResponse:
     repo = SuperAdminRepository(db)
-    coupon = await repo.get_coupon(coupon_public_id)
+    coupon = await repo.coupons.get_coupon(coupon_public_id)
     if not coupon:
         raise ResourceNotFoundException(resource="Cupón", identifier=coupon_public_id)
     try:
-        updated = await repo.update_coupon(
+        updated = await repo.coupons.update_coupon(
             coupon, data.model_dump(exclude_unset=True), actor
         )
         return CouponResponse.model_validate(updated)
@@ -474,21 +476,23 @@ async def redeem_store_coupon(
     db: AsyncSession = Depends(get_db),
 ) -> CouponRedemptionResponse:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    subscription = await repo.get_store_subscription(store.id)
+    subscription = await repo.subscriptions.get_store_subscription(store.id)
     if not subscription:
         raise AppException(
             message="La tienda no tiene suscripción activa",
             http_status=404,
             error_code="SUBSCRIPTION_NOT_FOUND",
         )
-    coupon = await repo.get_coupon_by_code(data.coupon_code)
+    coupon = await repo.coupons.get_coupon_by_code(data.coupon_code)
     if not coupon:
         raise ResourceNotFoundException(resource="Cupón", identifier=data.coupon_code)
     try:
-        redemption = await repo.redeem_coupon(store, subscription, coupon, actor)
+        redemption = await repo.coupons.redeem_coupon(
+            store, subscription, coupon, actor
+        )
         return CouponRedemptionResponse.model_validate(redemption)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -504,10 +508,10 @@ async def list_store_redemptions(
     db: AsyncSession = Depends(get_db),
 ) -> list[CouponRedemptionResponse]:
     repo = SuperAdminRepository(db)
-    store = await repo.get_store(store_public_id)
+    store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    redemptions = await repo.list_store_redemptions(store.id)
+    redemptions = await repo.coupons.list_store_redemptions(store.id)
     return [
         CouponRedemptionResponse.model_validate(redemption)
         for redemption in redemptions
