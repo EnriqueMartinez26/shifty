@@ -6,18 +6,26 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from modules.appointments.model import Appointment
+from modules.appointments.model import Appointment, AppointmentStatus
 from modules.auth.dependencies import get_current_user
 from modules.dashboard.schemas import (
     DashboardStatSummary,
     DashboardSummaryResponse,
     UpcomingAppointmentItem,
 )
+from modules.payments.model import Payment, PaymentStatus
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/dashboard", tags=["Dashboard"])
+
+# Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
+# cobro manual confirmado). Mismo criterio que modules/reports/service.py.
+_ACCREDITED_PAYMENT_STATUSES = [
+    PaymentStatus.APPROVED.value,
+    PaymentStatus.MANUAL_CONFIRMED.value,
+]
 
 
 @router.get("/summary", response_model=DashboardSummaryResponse)
@@ -40,13 +48,15 @@ async def get_dashboard_summary(
         select(func.count(Appointment.id)).where(
             Appointment.starts_at >= start_today.replace(tzinfo=None),
             Appointment.starts_at < end_today.replace(tzinfo=None),
-            Appointment.status != "CANCELLED",
+            Appointment.status != AppointmentStatus.CANCELLED.value,
         )
     )
     appointments_today = int(appointments_today_q.scalar() or 0)
 
     pending_q = await db.execute(
-        select(func.count(Appointment.id)).where(Appointment.status == "PENDING")
+        select(func.count(Appointment.id)).where(
+            Appointment.status == AppointmentStatus.PENDING.value
+        )
     )
     pending_confirmations = int(pending_q.scalar() or 0)
 
@@ -58,7 +68,7 @@ async def get_dashboard_summary(
         .where(
             Appointment.starts_at >= start_today.replace(tzinfo=None),
             Appointment.starts_at < end_today.replace(tzinfo=None),
-            Appointment.status != "CANCELLED",
+            Appointment.status != AppointmentStatus.CANCELLED.value,
         )
     )
     booked_mins = float(booked_mins_q.scalar() or 0)
@@ -90,32 +100,31 @@ async def get_dashboard_summary(
     )
     new_clients_last_30d = int(new_clients_q.scalar() or 0)
 
-    weekly_revenue_q = await db.execute(
-        select(func.coalesce(func.sum(Service.price), 0))
-        .select_from(Appointment)
-        .join(Service, Appointment.service_id == Service.id)
-        .where(
-            Appointment.starts_at >= week_start.replace(tzinfo=None),
-            Appointment.starts_at < week_end.replace(tzinfo=None),
-            Appointment.status.in_(["CONFIRMED", "COMPLETED"]),
+    async def _accredited_revenue(desde: datetime, hasta: datetime) -> float:
+        """Ingreso = plata acreditada de turnos cuyo inicio cae en el rango.
+
+        Antes sumaba Service.price (precio de lista actual) de turnos CONFIRMED/
+        COMPLETED, lo que contaba turnos sin cobrar y a precio equivocado. Ahora
+        es consistente con el reporte de ingresos: solo pagos acreditados.
+        """
+        query = await db.execute(
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .select_from(Payment)
+            .join(Appointment, Payment.appointment_id == Appointment.id)
+            .where(
+                Appointment.starts_at >= desde.replace(tzinfo=None),
+                Appointment.starts_at < hasta.replace(tzinfo=None),
+                Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
+            )
         )
-    )
-    weekly_revenue = float(weekly_revenue_q.scalar() or 0)
+        return float(query.scalar() or 0)
+
+    weekly_revenue = await _accredited_revenue(week_start, week_end)
 
     # 3. Tendencia (Semana pasada)
     last_week_start = week_start - timedelta(days=7)
     last_week_end = week_start
-    last_week_revenue_q = await db.execute(
-        select(func.coalesce(func.sum(Service.price), 0))
-        .select_from(Appointment)
-        .join(Service, Appointment.service_id == Service.id)
-        .where(
-            Appointment.starts_at >= last_week_start.replace(tzinfo=None),
-            Appointment.starts_at < last_week_end.replace(tzinfo=None),
-            Appointment.status.in_(["CONFIRMED", "COMPLETED"]),
-        )
-    )
-    last_week_revenue = float(last_week_revenue_q.scalar() or 0)
+    last_week_revenue = await _accredited_revenue(last_week_start, last_week_end)
 
     revenue_trend = 0.0
     if last_week_revenue > 0:
@@ -132,7 +141,7 @@ async def get_dashboard_summary(
         .where(
             Appointment.starts_at >= week_start.replace(tzinfo=None),
             Appointment.starts_at < week_end.replace(tzinfo=None),
-            Appointment.status != "CANCELLED",
+            Appointment.status != AppointmentStatus.CANCELLED.value,
         )
     )
     average_appointment_minutes = int(round(float(avg_duration_q.scalar() or 0)))
@@ -144,7 +153,12 @@ async def get_dashboard_summary(
         .join(User, Appointment.client_id == User.id)
         .where(
             Appointment.starts_at >= now.replace(tzinfo=None),
-            Appointment.status.in_(["PENDING", "CONFIRMED"]),
+            Appointment.status.in_(
+                [
+                    AppointmentStatus.PENDING.value,
+                    AppointmentStatus.CONFIRMED.value,
+                ]
+            ),
         )
         .order_by(Appointment.starts_at.asc())
         .limit(5)

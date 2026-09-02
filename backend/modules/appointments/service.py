@@ -16,13 +16,17 @@ from typing import TYPE_CHECKING, TypedDict
 import ulid
 
 from core.cache import CacheInvalidator
+from core.circuit_breaker import CircuitBreakerOpenError
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
+    AppException,
     AppointmentConflictException,
     AppointmentNotFoundException,
     BlockedScheduleException,
     ResourceNotFoundException,
 )
+from http import HTTPStatus
+
 from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
     reject_cancellation_while_awaiting_payment,
@@ -30,8 +34,10 @@ from modules.appointments.guards import (
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import enqueue_confirmation_email
+from modules.payments.model import PaymentStatus
+from modules.payments.service import expire_mercadopago_preference
 from modules.services.model import Service
-from modules.staff.model import Staff
+from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
 
 if TYPE_CHECKING:
@@ -114,44 +120,15 @@ class AppointmentService:
         )
 
         # Delegar validación al Domain Service (DDD + UX Feedback)
-        try:
-            self.scheduler.validate_availability(
-                requested_start=starts_at,
-                requested_end=ends_at,
-                conflicting_appointment=conflict,
-                overlapping_block=block,
-            )
-        except (AppointmentConflictException, BlockedScheduleException) as e:
-            # Don Norman: Si hay error, busca una alternativa inmediata
-            # Buscamos desde el fin del conflicto o bloqueo
-            assert conflict is not None or block is not None
-            blocked_conflict = conflict
-            blocked_block = block
-            if blocked_conflict is not None:
-                search_start = blocked_conflict.ends_at
-            else:
-                assert blocked_block is not None
-                search_start = blocked_block.ends_at
-            suggestion = await self._find_suggestion(
-                staff.id, search_start, service.duration_minutes, buffer_minutes
-            )
-
-            # Re-lanzar con la sugerencia
-            if isinstance(e, AppointmentConflictException):
-                assert blocked_conflict is not None
-                raise AppointmentConflictException(
-                    conflict_start=blocked_conflict.starts_at,
-                    conflict_end=blocked_conflict.ends_at,
-                    suggestion=suggestion,
-                )
-            else:
-                assert blocked_block is not None
-                raise BlockedScheduleException(
-                    reason=blocked_block.note,
-                    block_start=blocked_block.starts_at,
-                    block_end=blocked_block.ends_at,
-                    suggestion=suggestion,
-                )
+        await self._validate_or_suggest(
+            staff_id=staff.id,
+            requested_start=starts_at,
+            requested_end=ends_at,
+            conflict=conflict,
+            block=block,
+            duration_minutes=service.duration_minutes,
+            buffer_minutes=buffer_minutes,
+        )
 
         # 4. Creación atómica con auditoría ------------------------------
         appointment = Appointment(
@@ -335,6 +312,96 @@ class AppointmentService:
         await self.uow.commit()
         return appointment
 
+    async def release_pending(self, *, public_id: str, actor: User) -> Appointment:
+        """Libera un turno pendiente y vence su pago en curso.
+
+        Cruza dos agregados (turno + pago) y toca el gateway de Mercado Pago;
+        por eso es un caso de uso de servicio y no del router. Un turno con pago
+        ya acreditado no se libera: primero hay que reembolsar.
+        """
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
+        if not appointment:
+            raise AppointmentNotFoundException(public_id)
+        if appointment.status not in {
+            AppointmentStatus.PENDING.value,
+            AppointmentStatus.PENDING_PAYMENT.value,
+        }:
+            raise AppException(
+                message="Solo se pueden liberar turnos pendientes",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="APPOINTMENT_NOT_RELEASABLE",
+            )
+
+        payment = await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+        if payment and (
+            payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
+        ):
+            raise AppException(
+                message="No se puede liberar un turno que ya tiene un pago acreditado",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
+            )
+        if payment and payment.status == PaymentStatus.PENDING.value:
+            if payment.preference_id:
+                try:
+                    await expire_mercadopago_preference(
+                        self.uow.session,
+                        store_id=actor.store_id,
+                        preference_id=payment.preference_id,
+                    )
+                except (RuntimeError, CircuitBreakerOpenError) as exc:
+                    raise AppException(
+                        message=(
+                            "No se libero el turno porque Mercado Pago no pudo "
+                            "vencer el enlace de pago"
+                        ),
+                        http_status=HTTPStatus.BAD_GATEWAY,
+                        error_code="PAYMENT_PREFERENCE_EXPIRATION_FAILED",
+                    ) from exc
+            payment.apply_status(
+                PaymentStatus.EXPIRED.value,
+                payload={
+                    "reason": "manual_store_release",
+                    "released_by": actor.public_id,
+                },
+            )
+
+        previous_status = appointment.status
+        appointment.apply_status_transition(AppointmentStatus.EXPIRED)
+        await self.uow.audit.log(
+            action=AuditAction.STATUS_CHANGE,
+            resource_type="Appointment",
+            resource_id=appointment.public_id,
+            actor=actor,
+            payload_before={"status": previous_status},
+            payload_after={
+                "status": appointment.status,
+                "reason": "manual_store_release",
+            },
+        )
+        self.uow.outbox.publish(
+            store_id=actor.store_id,
+            event_type="appointment.released",
+            payload={
+                "appointment_id": appointment.id,
+                "payment_id": payment.id if payment else None,
+                "released_by": actor.public_id,
+            },
+        )
+        await self.uow.commit()
+
+        cache_key = (
+            f"availability:{appointment.store_id}:*:"
+            f"{appointment.starts_at.date().isoformat()}"
+        )
+        await self.cache.delete(cache_key)
+        return appointment
+
     async def update_staff_notes(
         self, *, public_id: str, notes_staff: str, actor: User
     ) -> Appointment:
@@ -436,41 +503,15 @@ class AppointmentService:
         )
 
         # Delegar validación al Domain Service (DDD + UX Feedback)
-        try:
-            self.scheduler.validate_availability(
-                requested_start=new_starts_at,
-                requested_end=ends_at,
-                conflicting_appointment=conflict,
-                overlapping_block=block,
-            )
-        except (AppointmentConflictException, BlockedScheduleException) as e:
-            assert conflict is not None or block is not None
-            blocked_conflict = conflict
-            blocked_block = block
-            if blocked_conflict is not None:
-                search_start = blocked_conflict.ends_at
-            else:
-                assert blocked_block is not None
-                search_start = blocked_block.ends_at
-            suggestion = await self._find_suggestion(
-                staff_id, search_start, service.duration_minutes, buffer_minutes
-            )
-
-            if isinstance(e, AppointmentConflictException):
-                assert blocked_conflict is not None
-                raise AppointmentConflictException(
-                    conflict_start=blocked_conflict.starts_at,
-                    conflict_end=blocked_conflict.ends_at,
-                    suggestion=suggestion,
-                )
-            else:
-                assert blocked_block is not None
-                raise BlockedScheduleException(
-                    reason=blocked_block.note,
-                    block_start=blocked_block.starts_at,
-                    block_end=blocked_block.ends_at,
-                    suggestion=suggestion,
-                )
+        await self._validate_or_suggest(
+            staff_id=staff_id,
+            requested_start=new_starts_at,
+            requested_end=ends_at,
+            conflict=conflict,
+            block=block,
+            duration_minutes=service.duration_minutes,
+            buffer_minutes=buffer_minutes,
+        )
 
         # 5. Cancelar original (con timestamp y auditoría)
         original.apply_status_transition(AppointmentStatus.CANCELLED)
@@ -534,6 +575,52 @@ class AppointmentService:
             )
 
         return new_appointment, service, staff
+
+    async def _validate_or_suggest(
+        self,
+        *,
+        staff_id: str,
+        requested_start: datetime,
+        requested_end: datetime,
+        conflict: Appointment | None,
+        block: StaffBlock | None,
+        duration_minutes: int,
+        buffer_minutes: int,
+    ) -> None:
+        """Valida disponibilidad y, si choca, re-lanza con una sugerencia de
+        horario (Don Norman: ofrecer una salida al error). Lo comparten ``book``
+        y ``reschedule``, que antes duplicaban este bloque casi textual."""
+        try:
+            self.scheduler.validate_availability(
+                requested_start=requested_start,
+                requested_end=requested_end,
+                conflicting_appointment=conflict,
+                overlapping_block=block,
+            )
+        except (AppointmentConflictException, BlockedScheduleException) as e:
+            assert conflict is not None or block is not None
+            if conflict is not None:
+                search_start = conflict.ends_at
+            else:
+                assert block is not None
+                search_start = block.ends_at
+            suggestion = await self._find_suggestion(
+                staff_id, search_start, duration_minutes, buffer_minutes
+            )
+            if isinstance(e, AppointmentConflictException):
+                assert conflict is not None
+                raise AppointmentConflictException(
+                    conflict_start=conflict.starts_at,
+                    conflict_end=conflict.ends_at,
+                    suggestion=suggestion,
+                )
+            assert block is not None
+            raise BlockedScheduleException(
+                reason=block.note,
+                block_start=block.starts_at,
+                block_end=block.ends_at,
+                suggestion=suggestion,
+            )
 
     async def _find_suggestion(
         self,

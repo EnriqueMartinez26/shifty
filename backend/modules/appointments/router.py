@@ -10,13 +10,9 @@ from typing import Annotated, AsyncGenerator, List, Optional, cast
 
 from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
 
 from core.cache import CacheInvalidator
-from core.circuit_breaker import CircuitBreakerOpenError
-from core.exceptions import AppException, AppointmentNotFoundException
 from core.router import CanonicalAPIRouter
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
@@ -37,13 +33,6 @@ from modules.appointments.schemas import (
 )
 from modules.appointments.service import AppointmentBookPayload, AppointmentService
 from modules.auth.dependencies import get_current_user, get_optional_current_user
-from modules.audit.model import AuditAction
-from modules.audit.repository import AuditRepository
-from modules.payments.model import OutboxMessage, Payment, PaymentStatus
-from modules.payments.service import (
-    expire_mercadopago_preference,
-    stamp_payment_from_status,
-)
 
 # NOTA: use public_api as the stable runtime import path for public booking data access.
 from modules.public_api.repository import PublicRepository
@@ -235,124 +224,15 @@ async def cancel_appointment(
 async def release_pending_appointment(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    svc: AppointmentService = Depends(get_appointment_service),
 ) -> AppointmentResponse:
-    """Libera un turno pendiente. Solo el dueÃ±o/administrador de la tienda."""
+    """Libera un turno pendiente. Solo el dueno/administrador de la tienda."""
     require_roles(
         user,
         STORE_MANAGERS,
-        "Solo el dueÃ±o o administrador de la tienda puede liberar un turno",
+        "Solo el dueno o administrador de la tienda puede liberar un turno",
     )
-    result = await db.execute(
-        select(Appointment)
-        .options(
-            joinedload(Appointment.service),
-            joinedload(Appointment.staff),
-            joinedload(Appointment.client),
-        )
-        .where(
-            Appointment.id == public_id,
-            Appointment.store_id == user.store_id,
-        )
-        .with_for_update()
-    )
-    appointment = result.scalar_one_or_none()
-    if not appointment:
-        raise AppointmentNotFoundException(public_id)
-    if appointment.status not in {
-        AppointmentStatus.PENDING.value,
-        AppointmentStatus.PENDING_PAYMENT.value,
-    }:
-        raise AppException(
-            message="Solo se pueden liberar turnos pendientes",
-            http_status=status.HTTP_409_CONFLICT,
-            error_code="APPOINTMENT_NOT_RELEASABLE",
-        )
-
-    payment_result = await db.execute(
-        select(Payment)
-        .where(
-            Payment.appointment_id == appointment.id,
-            Payment.store_id == user.store_id,
-        )
-        .with_for_update()
-    )
-    payment = payment_result.scalar_one_or_none()
-    if payment and payment.status in {
-        PaymentStatus.APPROVED.value,
-        PaymentStatus.MANUAL_CONFIRMED.value,
-        PaymentStatus.REFUNDED.value,
-    }:
-        raise AppException(
-            message="No se puede liberar un turno que ya tiene un pago acreditado",
-            http_status=status.HTTP_409_CONFLICT,
-            error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
-        )
-    if payment and payment.status == PaymentStatus.PENDING.value:
-        if payment.preference_id:
-            try:
-                await expire_mercadopago_preference(
-                    db,
-                    store_id=user.store_id,
-                    preference_id=payment.preference_id,
-                )
-            except (RuntimeError, CircuitBreakerOpenError) as exc:
-                raise AppException(
-                    message=(
-                        "No se liberÃ³ el turno porque Mercado Pago no pudo "
-                        "vencer el enlace de pago"
-                    ),
-                    http_status=status.HTTP_502_BAD_GATEWAY,
-                    error_code="PAYMENT_PREFERENCE_EXPIRATION_FAILED",
-                ) from exc
-        stamp_payment_from_status(
-            payment,
-            PaymentStatus.EXPIRED.value,
-            payload={
-                "reason": "manual_store_release",
-                "released_by": user.public_id,
-            },
-        )
-
-    previous_status = appointment.status
-    appointment.apply_status_transition(AppointmentStatus.EXPIRED)
-    await AuditRepository(db).log(
-        action=AuditAction.STATUS_CHANGE,
-        resource_type="Appointment",
-        resource_id=appointment.public_id,
-        actor=user,
-        payload_before={"status": previous_status},
-        payload_after={
-            "status": appointment.status,
-            "reason": "manual_store_release",
-        },
-    )
-    db.add(
-        OutboxMessage(
-            store_id=user.store_id,
-            event_type="appointment.released",
-            payload={
-                "appointment_id": appointment.id,
-                "payment_id": payment.id if payment else None,
-                "released_by": user.public_id,
-            },
-        )
-    )
-    await db.commit()
-
-    cache_prefix = (
-        f"availability:{appointment.store_id}:"
-        f"{appointment.service.public_id}:{appointment.starts_at.date().isoformat()}"
-    )
-    for cache_key in (
-        cache_prefix,
-        f"{cache_prefix}:0:0",
-        f"{cache_prefix}:0:1",
-        f"{cache_prefix}:1:0",
-        f"{cache_prefix}:1:1",
-    ):
-        await redis.delete(cache_key)
+    appointment = await svc.release_pending(public_id=public_id, actor=user)
     return _to_appointment_response(appointment)
 
 

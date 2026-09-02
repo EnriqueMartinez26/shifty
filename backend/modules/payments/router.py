@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
-from typing import Annotated, Any
+from typing import Annotated, Any, AsyncGenerator
 
 from core.router import CanonicalAPIRouter
 from fastapi import Depends, Path, Query, Request, status
@@ -10,6 +10,9 @@ from fastapi.responses import RedirectResponse
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from core.uow import AsyncSqlAlchemyUnitOfWork
+from modules.payments.application import PaymentService
 
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
@@ -56,8 +59,6 @@ from modules.payments.service import (
     ensure_payment_preference,
     mercadopago_oauth_is_configured,
     refresh_mercadopago_oauth_connection,
-    stamp_payment_from_status,
-    sync_appointment_with_payment,
 )
 from modules.payments.schemas import (
     GatewayConfigResponse,
@@ -80,6 +81,20 @@ router = CanonicalAPIRouter(prefix="/payments", tags=["Payments"])
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+
+
+async def get_uow(
+    db: AsyncSession = Depends(get_db),
+) -> AsyncGenerator[AsyncSqlAlchemyUnitOfWork, None]:
+    uow = AsyncSqlAlchemyUnitOfWork(db)
+    async with uow:
+        yield uow
+
+
+def get_payment_service(
+    uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
+) -> PaymentService:
+    return PaymentService(uow=uow)
 
 
 def _gateway_config_response(
@@ -655,44 +670,21 @@ async def manual_confirm_payment(
     appointment_id: PublicIdPath,
     data: ManualPaymentRequest,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    svc: PaymentService = Depends(get_payment_service),
 ) -> PaymentResponse:
     _require_payment_manager(user)
+    db = svc.uow.session
     await _ensure_payments_feature_enabled(db, user)
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
     )
-    # El cobro manual (efectivo/WhatsApp) es por el precio que se congelo al
-    # reservar, no por el precio de lista de hoy. Si el dueno indica un monto
-    # explicito, manda ese; si no, cae al snapshot del turno y recien despues al
-    # calculo por servicio (turnos historicos sin snapshot).
-    amount = data.amount
-    if amount is None and appointment.price_amount is not None:
-        amount = appointment.price_amount
-    amount = _payment_amount_for_service(service, amount)
-    payment = await ensure_payment_preference(
-        db,
+    payment = await svc.manual_confirm(
         appointment=appointment,
         service=service,
-        store_id=user.store_id,
-        amount_override=amount,
-        create_provider_link=False,
+        actor=user,
+        amount=data.amount,
+        notes=data.notes,
     )
-    stamp_payment_from_status(
-        payment,
-        PaymentStatus.MANUAL_CONFIRMED.value,
-        payload={"notes": data.notes} if data.notes else None,
-    )
-    sync_appointment_with_payment(appointment, payment.status)
-
-    db.add(
-        OutboxMessage(
-            store_id=user.store_id,
-            event_type="payment.manual_confirmed",
-            payload={"appointment_id": appointment_id, "payment_id": payment.id},
-        )
-    )
-    await db.commit()
     await db.refresh(payment)
     return _payment_response(payment)
 
@@ -702,52 +694,19 @@ async def refund_payment(
     payment_id: PublicIdPath,
     data: RefundRequest,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    svc: PaymentService = Depends(get_payment_service),
 ) -> PaymentResponse:
     _require_payment_admin(user)
+    db = svc.uow.session
     await _ensure_payments_feature_enabled(db, user)
     payment = await _get_payment_by_id(db, payment_id, user.store_id)
-    # Solo se puede devolver plata que efectivamente entro. Reembolsar un pago
-    # pendiente marcaria como devuelto un cobro que nunca existio.
-    if payment.status not in {
-        PaymentStatus.APPROVED.value,
-        PaymentStatus.MANUAL_CONFIRMED.value,
-    }:
-        raise ValidationException(
-            "Solo se pueden reembolsar pagos acreditados o confirmados manualmente"
-        )
-    refund_amount = data.amount if data.amount is not None else payment.amount
-    if refund_amount <= 0 or refund_amount > payment.amount:
-        raise ValidationException(
-            "El importe a reembolsar debe ser mayor a cero y no superar lo cobrado"
-        )
-    # El monto historico del pago no se pisa: el reembolso queda en el payload.
-    stamp_payment_from_status(
-        payment,
-        PaymentStatus.REFUNDED.value,
-        payload={
-            "reason": data.reason,
-            "manual": data.manual,
-            "refunded_amount": str(refund_amount),
-        },
+    payment = await svc.refund(
+        payment=payment,
+        actor=user,
+        amount=data.amount,
+        reason=data.reason,
+        manual=data.manual,
     )
-    appointment_result = await db.execute(
-        select(Appointment).where(
-            Appointment.id == payment.appointment_id,
-            Appointment.store_id == user.store_id,
-        )
-    )
-    appointment = appointment_result.scalar_one_or_none()
-    if appointment:
-        sync_appointment_with_payment(appointment, payment.status)
-    db.add(
-        OutboxMessage(
-            store_id=user.store_id,
-            event_type="payment.refunded",
-            payload={"payment_id": payment.id, "reason": data.reason},
-        )
-    )
-    await db.commit()
     await db.refresh(payment)
     return _payment_response(payment)
 

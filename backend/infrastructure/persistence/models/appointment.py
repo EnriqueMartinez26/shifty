@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, cast
 
@@ -200,10 +200,6 @@ class AppointmentModel(Base):
         elif attempted == "completed":
             self.completed_at = now
         self.updated_at = now
-
-    @property
-    def ends_at_derived(self) -> datetime:
-        return self.starts_at + timedelta(minutes=self.duration_minutes)
 
     __mapper_args__ = {"version_id_col": version}
 

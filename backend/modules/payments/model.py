@@ -129,6 +129,36 @@ class Payment(BaseEntity):
         ),
     )
 
+    @property
+    def is_accredited(self) -> bool:
+        """La plata efectivamente entro (aprobada o confirmada manual)."""
+        return self.status in {
+            PaymentStatus.APPROVED.value,
+            PaymentStatus.MANUAL_CONFIRMED.value,
+        }
+
+    def apply_status(
+        self, new_status: str, *, payload: dict[str, JsonValue] | None = None
+    ) -> bool:
+        """Aplica una transicion de estado validada por el grafo del pago.
+
+        La entidad es la unica que muta su propio estado (Tell-Don't-Ask): antes
+        el estado se asignaba a mano desde el service y cualquier lugar podia
+        escribir ``payment.status = 'approved'`` salteando el grafo. Devuelve
+        False si la transicion es ilegal (se ignora, para tolerar la reentrega
+        de webhooks) y sella ``paid_at`` al acreditar.
+        """
+        if not can_apply_payment_status(self.status, new_status):
+            return False
+        self.status = new_status
+        self.raw_payload = payload or self.raw_payload
+        if self.status in {
+            PaymentStatus.APPROVED.value,
+            PaymentStatus.MANUAL_CONFIRMED.value,
+        }:
+            self.paid_at = self.paid_at or datetime.now(timezone.utc)
+        return True
+
 
 class WebhookInbox(BaseEntity):
     __tablename__ = "webhook_inbox"
