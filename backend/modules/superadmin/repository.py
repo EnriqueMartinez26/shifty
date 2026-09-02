@@ -39,7 +39,9 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-class SuperAdminRepository:
+class _BaseAdminRepository:
+    """Base de los repositorios de superadmin: sesión + auditoría común."""
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
@@ -66,6 +68,8 @@ class SuperAdminRepository:
             )
         )
 
+
+class StoreAdminRepository(_BaseAdminRepository):
     async def list_stores(
         self,
         search: str | None,
@@ -209,45 +213,6 @@ class SuperAdminRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_store_overview(self, public_id: str) -> dict[str, Any] | None:
-        store = await self.get_store(public_id)
-        if store is None:
-            return None
-
-        users = await self.list_store_users(store.id, include_inactive=True)
-        admins = [
-            user
-            for user in users
-            if user.is_global_admin or str(user.role) == UserRole.ADMIN.value
-        ]
-        subscription = await self.get_store_subscription(store.id)
-        plan = (
-            await self.db.get(Plan, subscription.plan_id)
-            if subscription is not None
-            else None
-        )
-        coupon = (
-            await self.db.get(SaaSCoupon, subscription.coupon_id)
-            if subscription and subscription.coupon_id
-            else None
-        )
-
-        return {
-            "store": store,
-            "admins": admins,
-            "users": users,
-            "admins_count": len(admins),
-            "users_count": len(users),
-            "active_users_count": sum(1 for user in users if user.is_active),
-            "subscription": subscription,
-            "plan_name": getattr(plan, "name", None),
-            "billing_interval": getattr(plan, "billing_interval", None),
-            "max_staff": getattr(plan, "max_staff", None),
-            "max_services": getattr(plan, "max_services", None),
-            "coupon": coupon,
-            "recent_redemptions": await self.list_store_redemptions(store.id, limit=5),
-        }
-
     async def create_store(self, payload: dict[str, Any], actor: User) -> Store:
         store = Store(**payload)
         store.public_id = store.id
@@ -294,6 +259,47 @@ class SuperAdminRepository:
                 "No se pudo actualizar la tienda; revisá slug único y datos enviados"
             )
 
+    async def list_store_audit_logs(self, store: Store, limit: int) -> list[AuditLog]:
+        user_ids_result = await self.db.execute(
+            select(User.id).where(User.store_id == store.id)
+        )
+        user_public_ids = set(user_ids_result.scalars().all())
+
+        logs_result = await self.db.execute(
+            select(AuditLog)
+            .where(AuditLog.context == "superadmin")
+            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+            .limit(max(limit * 4, limit))
+        )
+        logs = list(logs_result.scalars().all())
+
+        relevant: list[AuditLog] = []
+        for log in logs:
+            payload_after = (
+                log.payload_after if isinstance(log.payload_after, dict) else {}
+            )
+            payload_before = (
+                log.payload_before if isinstance(log.payload_before, dict) else {}
+            )
+            linked_store_ids = {
+                payload_after.get("store_id"),
+                payload_before.get("store_id"),
+            }
+            is_store_log = (
+                log.resource_type == "Store" and log.resource_id == store.public_id
+            )
+            is_user_log = (
+                log.resource_type == "User" and log.resource_id in user_public_ids
+            )
+            is_store_scoped_payload = store.id in linked_store_ids
+            if is_store_log or is_user_log or is_store_scoped_payload:
+                relevant.append(log)
+            if len(relevant) >= limit:
+                break
+        return relevant
+
+
+class UserAdminRepository(_BaseAdminRepository):
     async def list_store_users(
         self, store_id: str, include_inactive: bool
     ) -> list[User]:
@@ -406,6 +412,8 @@ class SuperAdminRepository:
         await self.db.refresh(user)
         return user
 
+
+class PlanAdminRepository(_BaseAdminRepository):
     async def list_plans(self, include_inactive: bool) -> list[Plan]:
         query = select(Plan)
         if not include_inactive:
@@ -464,6 +472,8 @@ class SuperAdminRepository:
             await self.db.rollback()
             raise ValueError("No se pudo actualizar el plan")
 
+
+class SubscriptionAdminRepository(_BaseAdminRepository):
     async def get_store_subscription(self, store_id: str) -> StoreSubscription | None:
         result = await self.db.execute(
             select(StoreSubscription)
@@ -539,6 +549,8 @@ class SuperAdminRepository:
         await self.db.refresh(subscription)
         return subscription
 
+
+class CouponAdminRepository(_BaseAdminRepository):
     async def list_coupons(self, include_inactive: bool) -> list[SaaSCoupon]:
         query = select(SaaSCoupon)
         if not include_inactive:
@@ -726,41 +738,59 @@ class SuperAdminRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def list_store_audit_logs(self, store: Store, limit: int) -> list[AuditLog]:
-        user_ids_result = await self.db.execute(
-            select(User.id).where(User.store_id == store.id)
-        )
-        user_public_ids = set(user_ids_result.scalars().all())
 
-        logs_result = await self.db.execute(
-            select(AuditLog)
-            .where(AuditLog.context == "superadmin")
-            .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-            .limit(max(limit * 4, limit))
-        )
-        logs = list(logs_result.scalars().all())
+class SuperAdminRepository:
+    """Fachada de los repositorios de superadmin, agrupados por agregado.
 
-        relevant: list[AuditLog] = []
-        for log in logs:
-            payload_after = (
-                log.payload_after if isinstance(log.payload_after, dict) else {}
-            )
-            payload_before = (
-                log.payload_before if isinstance(log.payload_before, dict) else {}
-            )
-            linked_store_ids = {
-                payload_after.get("store_id"),
-                payload_before.get("store_id"),
-            }
-            is_store_log = (
-                log.resource_type == "Store" and log.resource_id == store.public_id
-            )
-            is_user_log = (
-                log.resource_type == "User" and log.resource_id in user_public_ids
-            )
-            is_store_scoped_payload = store.id in linked_store_ids
-            if is_store_log or is_user_log or is_store_scoped_payload:
-                relevant.append(log)
-            if len(relevant) >= limit:
-                break
-        return relevant
+    Cada sub-repo tiene una sola razon para cambiar (SRP). El overview compone
+    varios agregados a la vez, asi que vive en la fachada y no en un sub-repo.
+    """
+
+    def __init__(self, db: AsyncSession) -> None:
+        self.db = db
+        self.stores = StoreAdminRepository(db)
+        self.users = UserAdminRepository(db)
+        self.plans = PlanAdminRepository(db)
+        self.subscriptions = SubscriptionAdminRepository(db)
+        self.coupons = CouponAdminRepository(db)
+
+    async def get_store_overview(self, public_id: str) -> dict[str, Any] | None:
+        store = await self.stores.get_store(public_id)
+        if store is None:
+            return None
+
+        users = await self.users.list_store_users(store.id, include_inactive=True)
+        admins = [
+            user
+            for user in users
+            if user.is_global_admin or str(user.role) == UserRole.ADMIN.value
+        ]
+        subscription = await self.subscriptions.get_store_subscription(store.id)
+        plan = (
+            await self.db.get(Plan, subscription.plan_id)
+            if subscription is not None
+            else None
+        )
+        coupon = (
+            await self.db.get(SaaSCoupon, subscription.coupon_id)
+            if subscription and subscription.coupon_id
+            else None
+        )
+
+        return {
+            "store": store,
+            "admins": admins,
+            "users": users,
+            "admins_count": len(admins),
+            "users_count": len(users),
+            "active_users_count": sum(1 for user in users if user.is_active),
+            "subscription": subscription,
+            "plan_name": getattr(plan, "name", None),
+            "billing_interval": getattr(plan, "billing_interval", None),
+            "max_staff": getattr(plan, "max_staff", None),
+            "max_services": getattr(plan, "max_services", None),
+            "coupon": coupon,
+            "recent_redemptions": await self.coupons.list_store_redemptions(
+                store.id, limit=5
+            ),
+        }

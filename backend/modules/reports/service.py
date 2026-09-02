@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
@@ -28,6 +29,34 @@ from modules.staff.model import Schedule, Staff, StaffBlock
 from modules.users.model import User
 
 MetricBucket = dict[str, Any]
+
+
+def _report_client_name(client: User | None, fallback: str | None = None) -> str:
+    """Nombre a mostrar de un cliente en el reporte (o el fallback ya limpio)."""
+    if client is None:
+        return (fallback or "").strip()
+    return client.full_name or client.email or (fallback or "").strip()
+
+
+@dataclass
+class _SummaryAggregation:
+    """Resultado puro de agregar los turnos del rango. Sin I/O: se calcula a
+    partir de lo ya traido de la base, y por eso se puede testear aislado."""
+
+    items: list[ReportAppointmentItem] = field(default_factory=list)
+    total_appointments: int = 0
+    completed: int = 0
+    cancelled: int = 0
+    pending: int = 0
+    confirmed: int = 0
+    total_revenue: float = 0.0
+    average_ticket: float = 0.0
+    total_clients: int = 0
+    new_clients: int = 0
+    returning_clients: int = 0
+    inactive_clients: int = 0
+    top_services: list[MetricBucket] = field(default_factory=list)
+    top_clients: list[MetricBucket] = field(default_factory=list)
 
 
 class ReportService:
@@ -226,6 +255,77 @@ class ReportService:
             historical_clients_query.order_by(Appointment.starts_at.asc())
         )
 
+        aggregation = self._aggregate_summary(
+            rows=rows,
+            paid_by_appt=paid_by_appt,
+            historical_rows=list(historical_clients_result.all()),
+            start_dt=start_dt,
+            end_dt=end_dt,
+        )
+
+        stats = ReportSummaryStats(
+            total_appointments=aggregation.total_appointments,
+            completed_appointments=aggregation.completed,
+            cancelled_appointments=aggregation.cancelled,
+            pending_appointments=aggregation.pending,
+            confirmed_appointments=aggregation.confirmed,
+            total_revenue=round(aggregation.total_revenue, 2),
+            average_ticket=round(aggregation.average_ticket, 2),
+        )
+        client_stats = ReportClientStats(
+            total_clients=aggregation.total_clients,
+            new_clients=aggregation.new_clients,
+            returning_clients=aggregation.returning_clients,
+            inactive_clients=aggregation.inactive_clients,
+        )
+        debt_summary = (
+            self._empty_debt_summary() if staff_id else await self._build_debt_summary()
+        )
+
+        return ReportSummaryResponse(
+            from_date=resolved_from,
+            to_date=resolved_to,
+            stats=stats,
+            client_stats=client_stats,
+            top_services=[
+                ReportTopServiceItem(
+                    service_id=item["service_id"],
+                    service_name=item["service_name"],
+                    appointments=item["appointments"],
+                    completed_appointments=item["completed_appointments"],
+                    revenue=round(item["revenue"], 2),
+                )
+                for item in aggregation.top_services
+            ],
+            top_clients=[
+                ReportTopClientItem(
+                    client_id=item["client_id"],
+                    client_name=item["client_name"],
+                    appointments=item["appointments"],
+                    completed_appointments=item["completed_appointments"],
+                    revenue=round(item["revenue"], 2),
+                )
+                for item in aggregation.top_clients
+            ],
+            debt_summary=debt_summary,
+            appointments=aggregation.items,
+        )
+
+    def _aggregate_summary(
+        self,
+        *,
+        rows: list[Any],
+        paid_by_appt: dict[str, Decimal],
+        historical_rows: list[Any],
+        start_dt: datetime,
+        end_dt: datetime,
+    ) -> _SummaryAggregation:
+        """Agrega los turnos del rango en metricas puras (sin tocar la base).
+
+        Separado de get_summary para que la lógica de conteo/ingreso/cohortes
+        se pueda leer y testear sin montar queries: recibe lo ya traido y
+        devuelve el resultado listo para envolver en DTOs.
+        """
         items: list[ReportAppointmentItem] = []
         total_revenue = 0.0
         completed = 0
@@ -255,26 +355,19 @@ class ReportService:
             }
         )
 
-        def _client_display_name(
-            client: User | None, fallback: str | None = None
-        ) -> str:
-            if client is None:
-                return (fallback or "").strip()
-            return client.full_name or client.email or (fallback or "").strip()
-
         for (
             client_id,
             first_name,
             last_name,
             email,
             starts_at,
-        ) in historical_clients_result.all():
+        ) in historical_rows:
             if not client_id:
                 continue
             first_seen_by_client.setdefault(client_id, starts_at)
             if starts_at < start_dt:
                 clients_seen_before_range.add(client_id)
-            resolved_name = _client_display_name(
+            resolved_name = _report_client_name(
                 None,
                 fallback=(
                     f"{first_name or ''} {last_name or ''}".strip()
@@ -300,7 +393,7 @@ class ReportService:
             client_key = client_id or ""
             if client_id:
                 clients_in_range.add(client_id)
-                current_name = _client_display_name(client, appointment.client_name)
+                current_name = _report_client_name(client, appointment.client_name)
                 if current_name:
                     known_client_names[client_id] = current_name
 
@@ -332,7 +425,7 @@ class ReportService:
                     client_bucket["client_id"] = client_key
                     client_bucket["client_name"] = (
                         known_client_names.get(client_key)
-                        or _client_display_name(client, appointment.client_name)
+                        or _report_client_name(client, appointment.client_name)
                         or client_key
                     )
                     client_bucket["appointments"] += 1
@@ -341,7 +434,7 @@ class ReportService:
                     client_bucket["revenue"] += paid
 
             resolved_client_name = (
-                _client_display_name(client, appointment.client_name)
+                _report_client_name(client, appointment.client_name)
                 or known_client_names.get(client_key, "")
                 or "Cliente"
             )
@@ -383,52 +476,21 @@ class ReportService:
             reverse=True,
         )[:5]
 
-        stats = ReportSummaryStats(
+        return _SummaryAggregation(
+            items=items,
             total_appointments=total,
-            completed_appointments=completed,
-            cancelled_appointments=cancelled,
-            pending_appointments=pending,
-            confirmed_appointments=confirmed,
-            total_revenue=round(total_revenue, 2),
-            average_ticket=round(average_ticket, 2),
-        )
-        client_stats = ReportClientStats(
+            completed=completed,
+            cancelled=cancelled,
+            pending=pending,
+            confirmed=confirmed,
+            total_revenue=total_revenue,
+            average_ticket=average_ticket,
             total_clients=len(clients_in_range),
             new_clients=new_clients,
             returning_clients=max(len(clients_in_range) - new_clients, 0),
             inactive_clients=len(clients_seen_before_range - clients_in_range),
-        )
-        debt_summary = (
-            self._empty_debt_summary() if staff_id else await self._build_debt_summary()
-        )
-
-        return ReportSummaryResponse(
-            from_date=resolved_from,
-            to_date=resolved_to,
-            stats=stats,
-            client_stats=client_stats,
-            top_services=[
-                ReportTopServiceItem(
-                    service_id=item["service_id"],
-                    service_name=item["service_name"],
-                    appointments=item["appointments"],
-                    completed_appointments=item["completed_appointments"],
-                    revenue=round(item["revenue"], 2),
-                )
-                for item in top_services
-            ],
-            top_clients=[
-                ReportTopClientItem(
-                    client_id=item["client_id"],
-                    client_name=item["client_name"],
-                    appointments=item["appointments"],
-                    completed_appointments=item["completed_appointments"],
-                    revenue=round(item["revenue"], 2),
-                )
-                for item in top_clients
-            ],
-            debt_summary=debt_summary,
-            appointments=items,
+            top_services=top_services,
+            top_clients=top_clients,
         )
 
     async def get_professionals(
