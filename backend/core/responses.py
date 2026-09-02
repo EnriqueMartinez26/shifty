@@ -7,7 +7,6 @@ from typing import Any, Generic, TypeVar, cast
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
@@ -130,12 +129,19 @@ def _should_wrap_response(response: Response) -> bool:
 
 
 def _clone_response(response: Response, body: bytes) -> Response:
-    headers = MutableHeaders(response.headers)
-    headers["content-length"] = str(len(body))
-    return Response(
+    clone = Response(
         content=body,
         status_code=response.status_code,
-        headers=dict(headers),
         media_type=response.media_type,
         background=response.background,
     )
+    # Se preservan los raw_headers ORIGINALES: `dict(headers)` colapsa las
+    # claves repetidas y una respuesta con dos Set-Cookie (p. ej. login con
+    # access + refresh) perdia una de las cookies en silencio. Solo se ajusta
+    # content-length al nuevo body.
+    raw = [
+        (key, value) for key, value in response.raw_headers if key != b"content-length"
+    ]
+    raw.append((b"content-length", str(len(body)).encode("latin-1")))
+    clone.raw_headers = raw
+    return clone

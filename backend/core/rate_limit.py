@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import json
 import time
 
@@ -25,14 +26,33 @@ def _scope_headers(scope: Scope) -> dict[str, str]:
     }
 
 
+def _valid_ip(value: str) -> str | None:
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
 def _client_ip(headers: dict[str, str], fallback: str = "unknown") -> str:
+    """IP real del cliente detras del proxy.
+
+    Se toma el ULTIMO elemento de X-Forwarded-For: es el unico que agrega
+    nuestro nginx (que ademas reescribe el header). El primero lo controla el
+    cliente — usarlo permitia elegir la "IP" rotandola por request y evadir
+    todo el rate limiting. Cualquier valor que no parsee como IP se descarta.
+    """
     if settings.TRUST_PROXY_HEADERS:
         forwarded_for = headers.get("x-forwarded-for")
         if forwarded_for:
-            return forwarded_for.split(",", 1)[0].strip() or fallback
+            last_hop = forwarded_for.rsplit(",", 1)[-1].strip()
+            ip = _valid_ip(last_hop)
+            if ip:
+                return ip
         real_ip = headers.get("x-real-ip")
         if real_ip:
-            return real_ip.strip() or fallback
+            ip = _valid_ip(real_ip.strip())
+            if ip:
+                return ip
     return fallback
 
 
@@ -52,10 +72,13 @@ async def _hit_rate_limit(
     key = f"rate-limit:{action}:{_hash_identifier(identifier)}:{bucket}"
 
     redis = await get_redis()
-    current = await redis.incr(key)
-    if current == 1:
-        await redis.expire(key, window_seconds + 5)
-    if current > limit:
+    # Pipeline: INCR y EXPIRE viajan juntos; sin esto, si el proceso muere en
+    # el medio la clave queda sin TTL.
+    pipe = redis.pipeline()
+    pipe.incr(key)
+    pipe.expire(key, window_seconds + 5)
+    current, _ = await pipe.execute()
+    if int(current) > limit:
         return max(1, retry_after)
     return None
 
@@ -72,10 +95,17 @@ async def enforce_rate_limit(
 
     window = window_seconds or settings.RATE_LIMIT_WINDOW_SECONDS
     ip = client_ip_from_request(request)
-    identifier = f"{ip}:{subject.lower()}" if subject else ip
     try:
-        retry_after = await _hit_rate_limit(identifier, action, limit, window)
-    except RedisError as exc:
+        # Dos cubetas independientes: por IP y, si hay sujeto (email, telefono,
+        # cuenta), por sujeto SOLO. Antes la clave era "ip:sujeto", que en la
+        # practica era un limite por IP disfrazado: distribuyendo IPs habia
+        # intentos ilimitados contra la misma cuenta.
+        retry_after = await _hit_rate_limit(f"ip:{ip}", action, limit, window)
+        if retry_after is None and subject:
+            retry_after = await _hit_rate_limit(
+                f"subject:{subject.lower()}", action, limit, window
+            )
+    except (RedisError, OSError) as exc:
         logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
@@ -149,7 +179,7 @@ class RedisRateLimitMiddleware:
             retry_after = await _hit_rate_limit(
                 ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS
             )
-        except RedisError as exc:
+        except (RedisError, OSError) as exc:
             logger.warning(
                 "rate_limit_middleware_redis_unavailable", action=action, error=str(exc)
             )

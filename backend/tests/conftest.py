@@ -12,6 +12,9 @@ _TEST_ENV = {
     "ACCESS_TOKEN_EXPIRE_MINUTES": "30",
     "REFRESH_TOKEN_EXPIRE_DAYS": "30",
     "PASSWORD_RESET_TOKEN_EXPIRE_MINUTES": "30",
+    # Cost bajo SOLO en tests: cada register/login hace bcrypt y con 12 rounds
+    # la suite tarda minutos extra. Produccion usa el default 12.
+    "BCRYPT_ROUNDS": "4",
     "ALLOW_PUBLIC_REGISTRATION": "true",
     "COOKIE_SECURE": "false",
     "COOKIE_SAMESITE": "lax",

@@ -41,12 +41,14 @@ class TenantSession(AsyncSession):
 
 
 async def _apply_tenant_context(session: AsyncSession) -> None:
-    """Aplica el contexto del tenant a la conexión activa de PostgreSQL."""
+    """Aplica el contexto del tenant a la conexión activa de PostgreSQL.
+
+    Siempre escribe ambos settings, incluso vacíos. Antes, con contexto
+    (None, False) se salteaba el set_config: un "reset" no reseteaba nada y un
+    contexto admin previo podía quedar pegado en la transacción.
+    """
     store_id = _current_store_id.get()
     is_admin = _is_global_admin.get()
-
-    if store_id is None and not is_admin:
-        return
 
     connection = await session.connection()
     if connection.dialect.name != "postgresql":

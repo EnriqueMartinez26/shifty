@@ -53,16 +53,49 @@ def reject_payload_control_chars(value: Any) -> Any:
     return value
 
 
-def validate_password_strength(password: str) -> str:
-    """Politica minima de contrasena para cuentas nuevas o cambiadas.
+# Claves mas usadas del mundo real (rankings de brechas publicas), normalizadas
+# a minusculas. No pretende ser un corpus completo: corta lo que un atacante
+# prueba primero en un password spraying. ASVS 2.1.7.
+_PASSWORDS_PROHIBIDAS = {
+    "123456789012",
+    "contraseña123",
+    "contrasena123",
+    "password1234",
+    "password12345",
+    "passw0rd1234",
+    "qwerty123456",
+    "111111111111",
+    "123456789abc",
+    "abc123456789",
+    "1234567890ab",
+    "administrador1",
+    "admin1234567",
+    "shifty123456",
+    "bienvenido123",
+    "welcome12345",
+    "iloveyou1234",
+    "dragon123456",
+    "futbol123456",
+    "argentina123",
+    "boca12345678",
+    "river1234567",
+}
 
-    Un piso razonable sin friccion excesiva: al menos una letra y un numero.
-    Rechaza los casos debiles obvios ("aaaaaaaa", "12345678") sin exigir
-    simbolos ni mayusculas. No se aplica al login para no invalidar
-    contrasenas ya existentes.
+
+def validate_password_strength(password: str) -> str:
+    """Politica de contrasena para cuentas nuevas o cambiadas (ASVS 2.1).
+
+    Piso de 12 caracteres (el largo es la defensa real), al menos una letra y
+    un numero para cortar los casos triviales, y una denylist de claves
+    quemadas en brechas. No se aplica al login para no invalidar contrasenas
+    ya existentes.
     """
+    if len(password) < 12:
+        raise ValueError("La contrasena debe tener al menos 12 caracteres")
     if not any(c.isalpha() for c in password):
         raise ValueError("La contrasena debe incluir al menos una letra")
     if not any(c.isdigit() for c in password):
         raise ValueError("La contrasena debe incluir al menos un numero")
+    if password.lower() in _PASSWORDS_PROHIBIDAS:
+        raise ValueError("Esa contrasena es demasiado comun; elegi otra")
     return password

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import secrets
 import sys
 from collections.abc import Sequence
 from datetime import datetime, time, timedelta, timezone
@@ -47,11 +48,23 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not defined.")
 DATABASE_URL = str(DATABASE_URL)
 
+def _seed_password(role: str) -> str:
+    """Sin credenciales quemadas en el repo: o vienen por env, o se generan
+    aleatorias y se imprimen una unica vez. Un seed con 'admin123' que toque
+    staging es una cuenta admin publica."""
+    env_value = os.environ.get(f"SEED_PASSWORD_{role.upper()}")
+    if env_value:
+        return env_value
+    generated = secrets.token_urlsafe(12) + "9a"
+    print(f"[seed] password {role}: {generated}")
+    return generated
+
+
 PASSWORDS = {
-    "global_admin": "global123",
-    "admin": "admin123",
-    "staff": "staff123",
-    "client": "client123",
+    "global_admin": _seed_password("global_admin"),
+    "admin": _seed_password("admin"),
+    "staff": _seed_password("staff"),
+    "client": _seed_password("client"),
 }
 
 SIMULATION_CONTEXT_PREFIX = "simulation:v2"

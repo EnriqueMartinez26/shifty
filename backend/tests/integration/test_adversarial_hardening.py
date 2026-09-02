@@ -518,7 +518,7 @@ async def test_una_password_con_letra_y_numero_es_valida(client: AsyncClient) ->
             "store_slug": "pass-ok",
             "business_type": "generic",
             "admin_email": "pass-ok@test.com",
-            "admin_password": "shifty2026",
+            "admin_password": "shifty2026-ok",
             "admin_first_name": "Ana",
             "admin_last_name": "Perez",
         },

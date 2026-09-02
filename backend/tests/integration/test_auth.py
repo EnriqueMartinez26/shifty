@@ -82,7 +82,7 @@ async def test_cross_tenant_isolation(client: AsyncClient) -> None:
             "store_name": "Tienda A",
             "store_slug": "tienda-a",
             "admin_email": "admin@a.com",
-            "admin_password": "password123",
+            "admin_password": "Password123!",
             "admin_first_name": "Admin",
             "admin_last_name": "A",
         },
@@ -96,7 +96,7 @@ async def test_cross_tenant_isolation(client: AsyncClient) -> None:
             "store_name": "Tienda B",
             "store_slug": "tienda-b",
             "admin_email": "admin@b.com",
-            "admin_password": "password123",
+            "admin_password": "Password123!",
             "admin_first_name": "Admin",
             "admin_last_name": "B",
         },
@@ -105,13 +105,13 @@ async def test_cross_tenant_isolation(client: AsyncClient) -> None:
 
     # 3. Login en Tienda A
     login_a = await client.post(
-        "/auth/login", json={"email": "admin@a.com", "password": "password123"}
+        "/auth/login", json={"email": "admin@a.com", "password": "Password123!"}
     )
     token_a = login_a.json()["access_token"]
 
     # 4. Login en Tienda B
     login_b = await client.post(
-        "/auth/login", json={"email": "admin@b.com", "password": "password123"}
+        "/auth/login", json={"email": "admin@b.com", "password": "Password123!"}
     )
     _token_b = login_b.json()["access_token"]
 
@@ -144,7 +144,7 @@ async def test_password_reset_flow(
             "store_name": "Tienda Reset",
             "store_slug": "tienda-reset",
             "admin_email": "reset@demo.com",
-            "admin_password": "password123",
+            "admin_password": "Password123!",
             "admin_first_name": "Admin",
             "admin_last_name": "Reset",
         },
@@ -174,7 +174,7 @@ async def test_password_reset_flow(
     assert reset_response.status_code == 200
 
     login_old = await client.post(
-        "/auth/login", json={"email": "reset@demo.com", "password": "password123"}
+        "/auth/login", json={"email": "reset@demo.com", "password": "Password123!"}
     )
     assert login_old.status_code == 401
 
@@ -194,7 +194,7 @@ async def test_login_normalizes_email_whitespace_and_case(
             "store_name": "Tienda Normalize",
             "store_slug": "tienda-normalize",
             "admin_email": "normalize@demo.com",
-            "admin_password": "password123",
+            "admin_password": "Password123!",
             "admin_first_name": "Admin",
             "admin_last_name": "Normalize",
         },
@@ -203,7 +203,7 @@ async def test_login_normalizes_email_whitespace_and_case(
 
     login_response = await client.post(
         "/auth/login",
-        json={"email": "  NORMALIZE@DEMO.COM  ", "password": "password123"},
+        json={"email": "  NORMALIZE@DEMO.COM  ", "password": "Password123!"},
     )
     assert login_response.status_code == 200
 
@@ -225,7 +225,7 @@ async def test_users_crud_flow_for_admin(client: AsyncClient) -> None:
             "store_name": "Tienda Users",
             "store_slug": "tienda-users",
             "admin_email": "admin-users@demo.com",
-            "admin_password": "password123",
+            "admin_password": "Password123!",
             "admin_first_name": "Admin",
             "admin_last_name": "Users",
         },
@@ -234,7 +234,7 @@ async def test_users_crud_flow_for_admin(client: AsyncClient) -> None:
 
     login = await client.post(
         "/auth/login",
-        json={"email": "admin-users@demo.com", "password": "password123"},
+        json={"email": "admin-users@demo.com", "password": "Password123!"},
     )
     assert login.status_code == 200
     token = login.json()["access_token"]

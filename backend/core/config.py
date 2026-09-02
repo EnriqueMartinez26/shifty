@@ -1,5 +1,6 @@
 import os
 import re
+import secrets
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -30,17 +31,33 @@ class Settings(BaseSettings):
 
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Claims estandar del JWT: permiten denylist por jti y evitan que un token
+    # emitido para otro sistema que comparta el secreto sea aceptado aca.
+    JWT_ISSUER: str = "shifty-api"
+    JWT_AUDIENCE: str = "shifty"
+    # Corto a proposito: el access token no es revocable hasta su exp, asi que
+    # su vida define la ventana de un token robado.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+    BCRYPT_ROUNDS: int = 12
+    # Bloqueo por cuenta ante fuerza bruta de login (ASVS 2.2.1). El contador
+    # vive en Redis, por email normalizado, independiente de la IP.
+    LOGIN_LOCKOUT_MAX_ATTEMPTS: int = 5
+    LOGIN_LOCKOUT_WINDOW_SECONDS: int = 900
     ALLOW_PUBLIC_REGISTRATION: bool = True
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
     FIELD_ENCRYPTION_KEY: str | None = None
     OTP_CODE_EXPIRE_MINUTES: int = 10
     OTP_MAX_ATTEMPTS: int = 5
+    # Tope acumulado por telefono (ventana 1h): pedir codigos nuevos ya no
+    # resetea el presupuesto de intentos.
+    OTP_MAX_FAILURES_PER_HOUR: int = 10
+    OTP_MAX_REQUESTS_PER_HOUR: int = 5
     OTP_PROVIDER: str = "console"
-    OTP_DEBUG_EXPOSE_CODE: bool = True
+    # Nunca exponer el codigo en la respuesta salvo opt-in explicito (tests).
+    OTP_DEBUG_EXPOSE_CODE: bool = False
     PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
     PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS: int = 30
     MERCADOPAGO_OAUTH_CLIENT_ID: str | None = None
@@ -58,9 +75,10 @@ class Settings(BaseSettings):
     TWILIO_WHATSAPP_FROM: str | None = None
     EXPOSE_API_DOCS: bool = True
     MAX_REQUEST_BODY_BYTES: int = 32 * 1024
-    ALLOWED_WRITE_CONTENT_TYPES: str = (
-        "application/json,application/x-www-form-urlencoded"
-    )
+    # Solo JSON: la API no tiene endpoints con formularios, y aceptar
+    # x-www-form-urlencoded habilitaba CSRF via <form> cross-site (los POST de
+    # formulario son "simple requests" y no pasan por preflight de CORS).
+    ALLOWED_WRITE_CONTENT_TYPES: str = "application/json"
     TRUST_PROXY_HEADERS: bool = True
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_FAIL_CLOSED: bool = False
@@ -125,20 +143,41 @@ class Settings(BaseSettings):
         production_data = dict(data)
         production_data.setdefault("ALLOW_PUBLIC_REGISTRATION", False)
         production_data.setdefault("COOKIE_SECURE", True)
-        production_data.setdefault("COOKIE_SAMESITE", "none")
+        # Lax y no None: la cookie es credencial y SameSite=None la mandaba en
+        # requests cross-site (CSRF). El frontend comparte site via nginx.
+        production_data.setdefault("COOKIE_SAMESITE", "lax")
         production_data.setdefault("EXPOSE_API_DOCS", False)
+        production_data.setdefault("RATE_LIMIT_FAIL_CLOSED", True)
         return production_data
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
-        if self.ENV == Environment.PRODUCTION:
+        # El secreto de firma se valida en TODO entorno que no sea desarrollo:
+        # un staging con el placeholder del repo firma tokens forjables.
+        if self.ENV != Environment.DEVELOPMENT:
             if (
                 self.SECRET_KEY == "generate_a_very_secret_key_here_for_production"
                 or len(self.SECRET_KEY) < 32
             ):
-                raise ValueError("SECRET_KEY debe ser fuerte y unico en produccion")
+                raise ValueError(
+                    "SECRET_KEY debe ser fuerte y unico fuera de desarrollo"
+                )
+        if self.ENV == Environment.PRODUCTION:
             if "localhost" in self.CORS_ORIGINS or "127.0.0.1" in self.CORS_ORIGINS:
                 raise ValueError("CORS_ORIGINS no debe incluir localhost en produccion")
+            if "*" in self.CORS_ORIGINS:
+                raise ValueError(
+                    "CORS_ORIGINS no puede ser * con credenciales habilitadas"
+                )
+            if not self.RATE_LIMIT_FAIL_CLOSED:
+                raise ValueError(
+                    "RATE_LIMIT_FAIL_CLOSED debe ser true en produccion: sin Redis "
+                    "no puede quedar todo sin limite"
+                )
+            if self.ACCESS_TOKEN_EXPIRE_MINUTES > 30:
+                raise ValueError(
+                    "ACCESS_TOKEN_EXPIRE_MINUTES no debe superar 30 en produccion"
+                )
             if self.EXPOSE_API_DOCS:
                 raise ValueError("EXPOSE_API_DOCS debe ser false en produccion")
             if not self.RATE_LIMIT_ENABLED:
@@ -228,17 +267,27 @@ def _fallback_settings() -> Settings:
         PROJECT_NAME="Shifty v2",
         VERSION="0.1.0",
         ENV=Environment.DEVELOPMENT,
-        SECRET_KEY="backend-boot-failed-placeholder-secret",
+        # Aleatorio por proceso: aunque el BootErrorMiddleware responda 503 a
+        # todo, ningun componente (Celery, scripts) debe poder firmar tokens
+        # con un secreto conocido publicado en el repo.
+        SECRET_KEY="boot-failed-" + secrets.token_urlsafe(32),
         ALGORITHM="HS256",
-        ACCESS_TOKEN_EXPIRE_MINUTES=30,
+        JWT_ISSUER="shifty-api",
+        JWT_AUDIENCE="shifty",
+        ACCESS_TOKEN_EXPIRE_MINUTES=15,
         REFRESH_TOKEN_EXPIRE_DAYS=30,
         PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30,
+        BCRYPT_ROUNDS=12,
+        LOGIN_LOCKOUT_MAX_ATTEMPTS=5,
+        LOGIN_LOCKOUT_WINDOW_SECONDS=900,
         ALLOW_PUBLIC_REGISTRATION=False,
         COOKIE_SECURE=True,
-        COOKIE_SAMESITE="none",
-        FIELD_ENCRYPTION_KEY="backend-boot-failed-placeholder-field-key",
+        COOKIE_SAMESITE="lax",
+        FIELD_ENCRYPTION_KEY="boot-failed-" + secrets.token_urlsafe(32),
         OTP_CODE_EXPIRE_MINUTES=10,
         OTP_MAX_ATTEMPTS=5,
+        OTP_MAX_FAILURES_PER_HOUR=10,
+        OTP_MAX_REQUESTS_PER_HOUR=5,
         OTP_PROVIDER="console",
         OTP_DEBUG_EXPOSE_CODE=False,
         PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD=5,
@@ -256,7 +305,7 @@ def _fallback_settings() -> Settings:
         TWILIO_WHATSAPP_FROM=None,
         EXPOSE_API_DOCS=False,
         MAX_REQUEST_BODY_BYTES=32 * 1024,
-        ALLOWED_WRITE_CONTENT_TYPES="application/json,application/x-www-form-urlencoded",
+        ALLOWED_WRITE_CONTENT_TYPES="application/json",
         TRUST_PROXY_HEADERS=True,
         RATE_LIMIT_ENABLED=False,
         RATE_LIMIT_FAIL_CLOSED=False,
