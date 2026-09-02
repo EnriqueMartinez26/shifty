@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from core.security import hash_password
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff
+from modules.auth.service import revoke_sessions_for_user
 from modules.users.model import User, UserRole
 import ulid
 
@@ -259,6 +260,11 @@ class StaffRepository:
             user.full_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip()
             if is_active is not None:
                 user.is_active = is_active
+                # Desactivar al profesional corta sus sesiones vivas, igual que
+                # en users/superadmin: sin esto, al reactivarlo sus refresh
+                # tokens de 30 dias volverian a funcionar.
+                if not is_active:
+                    await revoke_sessions_for_user(self.db, user.id)
 
         await self.db.commit()
         await self.db.refresh(staff)
@@ -270,4 +276,5 @@ class StaffRepository:
         user = user_res.scalar_one_or_none()
         if user:
             user.is_active = False
+            await revoke_sessions_for_user(self.db, user.id)
         await self.db.commit()

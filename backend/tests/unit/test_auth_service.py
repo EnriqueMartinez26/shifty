@@ -16,9 +16,13 @@ class ScalarResult:
         self,
         value: SimpleNamespace | None = None,
         values: list[SimpleNamespace] | None = None,
+        rowcount: int = 1,
     ) -> None:
         self.value = value
         self.values = values or []
+        # La rotacion atomica del refresh usa UPDATE ... WHERE revoked_at IS
+        # NULL y chequea rowcount==1. Por defecto simulamos "1 fila afectada".
+        self.rowcount = rowcount
 
     def scalar_one_or_none(self) -> SimpleNamespace | None:
         return self.value
@@ -147,6 +151,7 @@ async def test_refresh_revokes_existing_session_and_creates_replacement(
 ) -> None:
     user = make_user(id="user-1")
     existing_session = SimpleNamespace(
+        id="session-old-1",
         user_id=user.id,
         revoked_at=None,
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -165,7 +170,8 @@ async def test_refresh_revokes_existing_session_and_creates_replacement(
 
     assert tokens.access_token == "new-access"
     assert tokens.refresh_token == "new-refresh"
-    assert existing_session.revoked_at is not None
+    # La sesion vieja se revoca via UPDATE atomico (WHERE revoked_at IS NULL),
+    # no mutando el objeto; la rotacion se evidencia por la sesion nueva.
     assert db.commit_count == 1
     assert len(db.added) == 1
     assert db.added[0].refresh_token_hash == service.hash_token("new-refresh")

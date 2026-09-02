@@ -23,6 +23,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
+from core.validation import validate_password_strength
 from core.security import hash_password
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -38,8 +39,12 @@ def _required_env(name: str) -> str:
 async def bootstrap() -> None:
     email = _required_env("SUPERADMIN_EMAIL").lower()
     password = _required_env("SUPERADMIN_PASSWORD")
-    if len(password) < 8:
-        raise RuntimeError("SUPERADMIN_PASSWORD debe tener al menos 8 caracteres")
+    # La cuenta mas privilegiada del sistema pasa por la MISMA politica que el
+    # resto (min 12 + denylist), no un piso mas debil.
+    try:
+        validate_password_strength(password)
+    except ValueError as exc:
+        raise RuntimeError(f"SUPERADMIN_PASSWORD invalida: {exc}") from exc
 
     first_name = os.getenv("SUPERADMIN_FIRST_NAME", "Shifty").strip() or "Shifty"
     last_name = os.getenv("SUPERADMIN_LAST_NAME", "SuperAdmin").strip() or "SuperAdmin"

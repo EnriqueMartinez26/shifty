@@ -48,6 +48,7 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not defined.")
 DATABASE_URL = str(DATABASE_URL)
 
+
 def _seed_password(role: str) -> str:
     """Sin credenciales quemadas en el repo: o vienen por env, o se generan
     aleatorias y se imprimen una unica vez. Un seed con 'admin123' que toque

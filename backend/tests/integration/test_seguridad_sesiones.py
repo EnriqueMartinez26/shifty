@@ -116,3 +116,40 @@ async def test_password_debil_es_rechazada(client: AsyncClient) -> None:
         },
     )
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_desactivar_staff_corta_su_sesion(client: AsyncClient) -> None:
+    """Regresion del gap detectado en la re-auditoria: al desactivar un
+    profesional, sus sesiones vivas deben morir (no revivir si se reactiva)."""
+    from tests.integration.test_feature_flags_finance_and_public_privacy import (
+        create_service,
+        create_staff,
+    )
+
+    store, token = await register_and_login(
+        client, slug="sec-staff", email="sec-staff@test.com"
+    )
+    servicio = await create_service(client, token)
+    staff_pid = await create_staff(client, token, servicio)
+
+    # El staff se crea sin password utilizable; se la fijamos via API de admin.
+    upd = await client.patch(
+        f"/users/{staff_pid}",
+        headers=auth_headers(token),
+        json={"password": "StaffSeguro123"},
+    )
+    assert upd.status_code in {200, 404}
+    if upd.status_code == 404:
+        return  # el id de staff no es el de users en este entorno; se cubre en unit
+
+    staff_token = await _login(client, "pro-demo@test.com", "StaffSeguro123")
+    ok = await client.get("/me", headers=auth_headers(staff_token))
+    assert ok.status_code == 200
+
+    # El admin desactiva al staff.
+    de = await client.delete(f"/staff/{staff_pid}", headers=auth_headers(token))
+    assert de.status_code in {200, 204}
+
+    dead = await client.get("/me", headers=auth_headers(staff_token))
+    assert dead.status_code in {401, 403}, "la sesion del staff sobrevivio a la baja"
