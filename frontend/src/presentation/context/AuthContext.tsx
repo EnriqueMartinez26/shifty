@@ -20,7 +20,7 @@ const AuthContext = createContext<AuthContextType | null>(null)
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null)
-  const [token, setToken] = useState<string | null>(localStorage.getItem('shifty_token'))
+  const [token, setToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -30,33 +30,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })
 
     const initializeAuth = async () => {
-      const savedToken = localStorage.getItem('shifty_token')
+      // El token ya no se persiste en localStorage (robable por XSS): la
+      // sesion vive en la cookie HttpOnly de refresh. Al montar, se rehidrata
+      // el access token contra /auth/refresh; si no hay sesion, login normal.
       const savedUser = localStorage.getItem('shifty_user')
-
-      if (!savedToken) {
-        localStorage.removeItem('shifty_user')
-        setToken(null)
-        setUser(null)
-        setIsLoading(false)
-        return
-      }
-
-      setAuthToken(savedToken)
-      setToken(savedToken)
-
       if (savedUser) {
+        // Pintado optimista del perfil mientras se valida la sesion real.
         setUser(normalizeUser(JSON.parse(savedUser) as User))
       }
 
       try {
+        const { access_token } = await authService.refreshSession()
+        setAuthToken(access_token)
+        setToken(access_token)
+
         const currentUser = await authService.fetchCurrentUser()
         const normalized = normalizeUser(currentUser)
         setUser(normalized)
-        setToken(savedToken)
         localStorage.setItem('shifty_user', JSON.stringify(normalized))
       } catch {
         setAuthToken(null)
-        localStorage.removeItem('shifty_token')
         localStorage.removeItem('shifty_user')
         setToken(null)
         setUser(null)
@@ -76,19 +69,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthToken(newToken)
     setToken(newToken)
     setUser(normalized)
-    if (newToken) {
-      localStorage.setItem('shifty_token', newToken)
-    } else {
-      localStorage.removeItem('shifty_token')
-    }
     localStorage.setItem('shifty_user', JSON.stringify(normalized))
   }
 
   const logout = () => {
+    // Primero el servidor: revoca la sesion (y con ella el access token, que
+    // esta atado por sid) y borra la cookie de refresh. Sin esto, "cerrar
+    // sesion" solo limpiaba la pestaña y la sesion seguia viva 30 dias.
+    void authService.logout().catch(() => {
+      /* si el backend no responde, igual se limpia el estado local */
+    })
     setAuthToken(null)
     setToken(null)
     setUser(null)
-    localStorage.removeItem('shifty_token')
     localStorage.removeItem('shifty_user')
   }
 

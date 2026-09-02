@@ -1,0 +1,16 @@
+# Override de PRODUCCION:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Agrega el 443 con TLS real. Los certificados van montados desde el host
+# (p. ej. los de certbot/Let's Encrypt) en ./nginx/certs:
+#   nginx/certs/fullchain.pem
+#   nginx/certs/privkey.pem
+
+services:
+  nginx:
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro

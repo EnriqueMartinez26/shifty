@@ -11,11 +11,16 @@ const mockAxiosCreate = jest.fn(() => ({
   }
 }))
 const mockAxiosRetry = jest.fn()
+// El interceptor de 401 intenta una rehidratacion via POST /auth/refresh; en
+// estos tests no hay sesion, asi que el refresh "falla" y el flujo debe caer
+// al error normalizado original.
+const mockAxiosPost = jest.fn(() => Promise.reject(new Error('sin sesion')))
 
 jest.mock('axios', () => ({
   __esModule: true,
   default: {
-    create: mockAxiosCreate
+    create: mockAxiosCreate,
+    post: mockAxiosPost
   }
 }))
 
@@ -40,6 +45,7 @@ describe('api client module wiring', () => {
     mockResponseUse.mockClear()
     mockAxiosCreate.mockClear()
     mockAxiosRetry.mockClear()
+    mockAxiosPost.mockClear()
   })
 
   it('registers axios interceptors, attaches the auth token, and normalizes auth failures', async () => {
