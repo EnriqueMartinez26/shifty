@@ -59,7 +59,12 @@ def decode_token(token: str) -> dict[str, Any]:
             algorithms=[settings.ALGORITHM],
             issuer=settings.JWT_ISSUER,
             audience=settings.JWT_AUDIENCE,
-            options={"require_exp": True, "require_iat": True},
+            options={
+                "require_exp": True,
+                "require_iat": True,
+                "require_aud": True,
+                "require_sub": True,
+            },
         ),
     )
 

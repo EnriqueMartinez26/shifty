@@ -82,8 +82,37 @@ class BootErrorMiddleware:
         await send({"type": "http.response.body", "body": body})
 
 
+async def _assert_rls_capable_role() -> None:
+    """Aborta el arranque si la app se conecta con un rol que saltea RLS.
+
+    Todo el aislamiento multi-tenant depende de que ``DATABASE_URL`` use un rol
+    NOSUPERUSER/NOBYPASSRLS (shifty_app). Un superusuario ignora FORCE ROW LEVEL
+    SECURITY y desactiva el aislamiento en silencio. Este chequeo lo convierte
+    en un fallo de arranque ruidoso en vez de una fuga invisible.
+    """
+    from sqlalchemy import text
+
+    async with engine.connect() as conn:
+        if conn.dialect.name != "postgresql":
+            return
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles "
+                    "WHERE rolname = current_user"
+                )
+            )
+        ).one_or_none()
+    if row is not None and (row[0] or row[1]):
+        raise RuntimeError(
+            "La app NO puede conectarse con un rol superusuario o con BYPASSRLS: "
+            "eso desactiva el aislamiento multi-tenant (RLS). Usa el rol shifty_app."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    await _assert_rls_capable_role()
     if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
         await ensure_runtime_contracts(engine)
     yield

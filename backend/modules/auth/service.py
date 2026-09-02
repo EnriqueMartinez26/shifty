@@ -11,7 +11,7 @@ from typing import TypedDict
 import structlog
 from fastapi import status
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
@@ -483,7 +483,31 @@ async def refresh_session(
         if not user:
             raise AuthenticationException(message="Sesion expirada")
 
-        session.revoked_at = datetime.now(timezone.utc)
+        # Rotacion ATOMICA: revocar la sesion condicionado a que siga viva. Si
+        # dos requests concurrentes traen el mismo refresh, solo uno logra el
+        # UPDATE (rowcount==1); el otro ve rowcount==0 y se trata como reuso
+        # (revoca la familia). Sin esto, ambos rotaban y quedaban dos sesiones
+        # vivas de un mismo refresh.
+        now = datetime.now(timezone.utc)
+        claim = await db.execute(
+            update(AuthSession)
+            .where(
+                AuthSession.id == session.id,
+                AuthSession.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+        if (getattr(claim, "rowcount", 0) or 0) != 1:
+            revoked = await revoke_sessions_for_user(db, session.user_id)
+            await db.commit()
+            logger.warning(
+                "refresh_token_reuse_detected",
+                user_id=session.user_id,
+                revoked_sessions=revoked,
+                ip=context.ip_address,
+            )
+            raise AuthenticationException(message="Sesion expirada")
+
         new_refresh_token = generate_refresh_token()
         new_session = _new_auth_session(user, new_refresh_token, context)
         db.add(new_session)
