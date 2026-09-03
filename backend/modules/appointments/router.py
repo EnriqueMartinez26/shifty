@@ -417,6 +417,8 @@ async def search_appointments(
             notes=appointment.notes,
             notes_staff=appointment.notes_staff,
             intake_answers=appointment.intake_answers or {},
+            cancelled_at=appointment.cancelled_at,
+            completed_at=appointment.completed_at,
             service_name=service.name,
             service_id=service.public_id,
             staff_name=staff.display_name,

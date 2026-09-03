@@ -51,7 +51,9 @@ class StoreUpdate(BaseModel):
     slug: Optional[str] = Field(None, max_length=100, pattern=SLUG_PATTERN)
     business_type: Optional[BusinessType] = None
     logo_url: Optional[str] = Field(None, max_length=500)
-    primary_color: Optional[str] = Field(None, max_length=20)
+    primary_color: Optional[str] = Field(
+        None, pattern=r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
+    )
     cover_url: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = Field(None, max_length=2000)
     whatsapp_number: Optional[str] = Field(None, max_length=50)
