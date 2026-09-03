@@ -45,7 +45,7 @@ from modules.payments.service import (
     calculate_service_payment_amount,
     ensure_payment_preference,
 )
-from modules.payments.model import OutboxMessage, Payment
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import enqueue_confirmation_email
 from modules.promotions.service import quote_promotion, redeem_promotion
@@ -221,7 +221,13 @@ async def get_store_by_slug(
                 StoreCustomField.model_validate(field)
                 for field in (store.custom_client_fields or [])
             ],
-            feature_flags=store.normalized_feature_flags,
+            # Solo los flags que la vitrina publica necesita (pago online y si
+            # exige OTP). No exponer a anonimos capacidades internas de la
+            # tienda (ledger, reportes avanzados, calendario nuevo).
+            feature_flags={
+                flag: bool(store.normalized_feature_flags.get(flag, False))
+                for flag in ("payments", "otp_booking")
+            },
         )
     finally:
         set_tenant_context(None, False)
@@ -965,9 +971,10 @@ async def client_reschedule_appointment(
         original = appt_res.scalar_one_or_none()
         if not original:
             raise AppointmentNotFoundException(public_id=public_id)
-        # Reprogramar cancela el turno original: le corresponde el mismo guard.
-        reject_cancellation_while_awaiting_payment(original)
 
+        # Titularidad + OTP ANTES de cualquier chequeo que revele estado del
+        # turno: sin esto, quien solo conozca el public_id sabria si esta
+        # esperando pago (fuga menor de estado).
         client = await repo.get_client_by_phone(original.store_id, data.phone)
         if not client or client.id != original.client_id:
             raise PermissionDeniedException(
@@ -977,6 +984,33 @@ async def client_reschedule_appointment(
         await _require_recent_client_otp(
             db, store_id=original.store_id, phone=data.phone
         )
+
+        # Reprogramar cancela el turno original: le corresponde el mismo guard.
+        reject_cancellation_while_awaiting_payment(original)
+
+        # Un turno con pago acreditado no se reprograma desde el cliente: el
+        # Payment quedaria huerfano apuntando al turno cancelado y el nuevo
+        # apareceria como impago. Que lo maneje la tienda.
+        paid_res = await db.execute(
+            select(Payment.id).where(
+                Payment.appointment_id == original.id,
+                Payment.status.in_(
+                    [
+                        PaymentStatus.APPROVED.value,
+                        PaymentStatus.MANUAL_CONFIRMED.value,
+                    ]
+                ),
+            )
+        )
+        if paid_res.scalar_one_or_none() is not None:
+            raise AppException(
+                message=(
+                    "Este turno ya tiene un pago registrado; contactá a la tienda "
+                    "para reprogramarlo."
+                ),
+                http_status=status.HTTP_409_CONFLICT,
+                error_code="PAID_APPOINTMENT_RESCHEDULE_DENIED",
+            )
 
         svc_res = await db.execute(
             select(Service).where(Service.id == original.service_id)
@@ -990,7 +1024,37 @@ async def client_reschedule_appointment(
         if not staff:
             raise StaffNotFoundException(identifier=str(original.staff_id))
 
+        new_starts_utc = (
+            data.new_starts_at
+            if data.new_starts_at.tzinfo
+            else data.new_starts_at.replace(tzinfo=timezone.utc)
+        )
         new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
+
+        # El nuevo horario debe respetar las MISMAS reglas que una reserva nueva:
+        # antelacion minima, agenda del profesional y bloqueos. Antes solo se
+        # validaba el solapamiento, asi que un cliente podia moverse a un horario
+        # fuera de agenda, sobre un franco, o dentro de la ventana de antelacion.
+        store = await repo.get_store_by_id(original.store_id)
+        notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
+        if new_starts_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
+            raise BookingNoticeException(notice_hours)
+        if not await repo._staff_has_schedule_for_slot(
+            staff.id, data.new_starts_at, new_ends_at
+        ):
+            raise AppException(
+                message="El profesional no atiende en ese horario",
+                http_status=status.HTTP_409_CONFLICT,
+                error_code="OUT_OF_SCHEDULE",
+            )
+        if await repo._staff_has_overlapping_block(
+            staff.id, data.new_starts_at, new_ends_at
+        ):
+            raise AppException(
+                message="Ese horario esta bloqueado en la agenda",
+                http_status=status.HTTP_409_CONFLICT,
+                error_code="SCHEDULE_BLOCKED",
+            )
 
         try:
             async with db.begin_nested():
@@ -1026,6 +1090,8 @@ async def client_reschedule_appointment(
                     starts_at=data.new_starts_at,
                     ends_at=new_ends_at,
                     duration_minutes=service.duration_minutes,
+                    # Preservar el precio congelado del turno original.
+                    price_amount=original.price_amount,
                     client_name=client.full_name or client.email,
                     client_email=client.email,
                     client_phone=client.phone,

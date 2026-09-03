@@ -37,7 +37,40 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
             for header in ("authorization", "cookie", "x-signature"):
                 headers.pop(header, None)
                 headers.pop(header.title(), None)
+
+    # extra/contexts pueden traer PII o secretos si algun logger los adjunta.
+    # Se recortan por clave sensible en vez de confiar en que nadie los ponga.
+    _scrub_mapping(event.get("extra"))
+    for context in (event.get("contexts") or {}).values():
+        _scrub_mapping(context)
     return event
+
+
+_SENSITIVE_KEYS = (
+    "password",
+    "token",
+    "secret",
+    "authorization",
+    "cookie",
+    "email",
+    "phone",
+    "telefono",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "signature",
+)
+
+
+def _scrub_mapping(mapping: Any) -> None:
+    """Redacta valores de claves sensibles en un dict (recursivo, en sitio)."""
+    if not isinstance(mapping, dict):
+        return
+    for key, value in list(mapping.items()):
+        if isinstance(key, str) and any(s in key.lower() for s in _SENSITIVE_KEYS):
+            mapping[key] = "[redacted]"
+        elif isinstance(value, dict):
+            _scrub_mapping(value)
 
 
 def init_observability(component: str) -> bool:
