@@ -8,6 +8,7 @@ from sqlalchemy import (
     Integer,
     Boolean,
     ForeignKey,
+    LargeBinary,
     Text,
     Time,
     UniqueConstraint,
@@ -144,3 +145,22 @@ class Store(BaseEntity):
     @property
     def normalized_feature_flags(self) -> FeatureFlags:
         return normalize_store_feature_flags(self.feature_flags)
+
+
+class StoreMedia(BaseEntity):
+    """Imagenes subidas por la tienda (logo/portada), guardadas en la DB.
+
+    Se guardan en bytea (no en disco) para no depender de un volumen compartido
+    ni de object storage en esta etapa: persisten con el backup de la DB y viven
+    bajo RLS por tienda. El acceso de lectura publico se sirve por id via una
+    ruta dedicada. Swappable a S3 detras del helper de subida si hace falta.
+    """
+
+    __tablename__ = "store_media"
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    # 'logo' | 'cover'.
+    kind: Mapped[str] = mapped_column(String(20))
+    content_type: Mapped[str] = mapped_column(String(50))
+    byte_size: Mapped[int] = mapped_column(Integer)
+    data: Mapped[bytes] = mapped_column(LargeBinary)

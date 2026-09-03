@@ -1,12 +1,13 @@
 from datetime import time
 from typing import Any
 
-from fastapi import Depends
+from fastapi import Depends, File, Form, UploadFile
+from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.database import get_db
+from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.exceptions import (
     AppException,
     PermissionDeniedException,
@@ -15,11 +16,13 @@ from core.exceptions import (
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
 from modules.auth.dependencies import get_current_user
 from modules.stores.mappers import to_store_response
-from modules.stores.model import Store, StoreSchedule
+from modules.stores.media import ALLOWED_KINDS, MAX_IMAGE_BYTES, detect_image_type
+from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.stores.schemas import (
     StoreFeatureFlags,
     StoreFeatureFlagsResponse,
     StoreFeatureFlagsUpdate,
+    StoreMediaUploadResponse,
     StoreResponse,
     StoreUpdate,
 )
@@ -178,4 +181,105 @@ async def update_my_store_feature_flags(
     await db.refresh(store)
     return StoreFeatureFlagsResponse(
         flags=StoreFeatureFlags.model_validate(store.normalized_feature_flags)
+    )
+
+
+@router.post("/me/media", response_model=StoreMediaUploadResponse)
+async def upload_store_media(
+    kind: str = Form(...),
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StoreMediaUploadResponse:
+    if user.role != UserRole.ADMIN:
+        raise PermissionDeniedException("cambiar la imagen del negocio")
+    if kind not in ALLOWED_KINDS:
+        raise AppException(
+            "Tipo de imagen invalido",
+            http_status=422,
+            error_code="INVALID_MEDIA_KIND",
+        )
+
+    # Cota de tamano antes de materializar: se leen a lo sumo MAX+1 bytes para
+    # distinguir "justo en el limite" de "se paso" sin cargar un blob gigante.
+    data = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise AppException(
+            "La imagen supera el maximo de 2 MB",
+            http_status=413,
+            error_code="MEDIA_TOO_LARGE",
+        )
+    if not data:
+        raise AppException("Archivo vacio", http_status=422, error_code="EMPTY_MEDIA")
+
+    # Validacion por MAGIC BYTES, no por el Content-Type declarado (falsificable).
+    # SVG queda excluido: puede ejecutar JS y volverse XSS al servirse inline.
+    content_type = detect_image_type(data)
+    if content_type is None:
+        raise AppException(
+            "Formato no permitido. Solo PNG, JPEG o WebP.",
+            http_status=422,
+            error_code="UNSUPPORTED_MEDIA_TYPE",
+        )
+
+    store = await _get_current_store(user, db)
+
+    # Una imagen por tipo y tienda: se borran las anteriores del mismo kind para
+    # no acumular huerfanos en la tabla.
+    await db.execute(
+        delete(StoreMedia).where(
+            StoreMedia.store_id == store.id, StoreMedia.kind == kind
+        )
+    )
+    media = StoreMedia(
+        store_id=store.id,
+        kind=kind,
+        content_type=content_type,
+        byte_size=len(data),
+        data=data,
+    )
+    db.add(media)
+    await db.flush()
+
+    url = f"/api/stores/media/{media.id}"
+    if kind == "logo":
+        store.logo_url = url
+    else:
+        # cover vive en theme_config, como el resto de los campos de tema.
+        theme_config = dict(store.theme_config or {})
+        theme_config["cover_url"] = url
+        store.theme_config = theme_config
+
+    await db.commit()
+    return StoreMediaUploadResponse(url=url, media_id=media.id, kind=kind)
+
+
+@router.get("/media/{media_id}")
+async def serve_store_media(
+    media_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    # Publico: el portal de reservas muestra el logo sin login. Se lee por id
+    # bajando el filtro RLS por tienda (como el resto de las lecturas publicas);
+    # el id es un ULID no adivinable y la imagen es publica por naturaleza.
+    set_tenant_context(None, is_admin=True)
+    try:
+        await _apply_tenant_context(db)
+        result = await db.execute(select(StoreMedia).where(StoreMedia.id == media_id))
+        media = result.scalar_one_or_none()
+    finally:
+        set_tenant_context(None, False)
+
+    if media is None:
+        raise AppException(
+            "Imagen no encontrada", http_status=404, error_code="MEDIA_NOT_FOUND"
+        )
+
+    return Response(
+        content=media.data,
+        media_type=media.content_type,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "Content-Disposition": "inline",
+        },
     )

@@ -78,6 +78,12 @@ export interface StoreUpdatePayload {
   send_email_reminders?: boolean
 }
 
+export interface StoreMediaUploadResult {
+  url: string
+  media_id: string
+  kind: string
+}
+
 export interface StoreFeatureFlagsResponse {
   flags: StoreFeatureFlags
 }
@@ -105,6 +111,18 @@ export class StoreSettingsService {
       '/stores/me/feature-flags',
       payload
     )
+    return data
+  }
+
+  async uploadMedia(kind: 'logo' | 'cover', file: File): Promise<StoreMediaUploadResult> {
+    const form = new FormData()
+    form.append('kind', kind)
+    form.append('file', file)
+    // Se fuerza multipart (el cliente por defecto manda application/json) para
+    // que axios/el navegador arme el boundary; el backend valida por magic bytes.
+    const { data } = await apiClient.post<StoreMediaUploadResult>('/stores/me/media', form, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
     return data
   }
 }

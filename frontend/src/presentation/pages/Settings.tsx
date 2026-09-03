@@ -42,7 +42,8 @@ import {
   useStoreFeatureFlags,
   useStoreSettings,
   useUpdateStoreFeatureFlags,
-  useUpdateStoreSettings
+  useUpdateStoreSettings,
+  useUploadStoreMedia
 } from '../hooks/useStores'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
 import { create2000sPanelStyle, createSettingsInputStyle } from '../lib/surfaceStyles'
@@ -175,6 +176,8 @@ const SettingsPage: React.FC = () => {
   const { data: store, isLoading } = useStoreSettings()
   const featureFlagsQuery = useStoreFeatureFlags()
   const updateStore = useUpdateStoreSettings()
+  const uploadMedia = useUploadStoreMedia()
+  const [logoError, setLogoError] = useState<string | null>(null)
   const updateFeatureFlags = useUpdateStoreFeatureFlags()
   const changePassword = useChangePassword()
   const gatewayQuery = useGatewayConfig()
@@ -215,6 +218,37 @@ const SettingsPage: React.FC = () => {
   }, [store, featureFlagsQuery.data])
 
   const labels = getBusinessLabels(formData?.business_type)
+
+  const handleMediaUpload = async (
+    kind: 'logo' | 'cover',
+    event: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = event.target.files?.[0]
+    event.target.value = '' // permite volver a elegir el mismo archivo
+    if (!file) return
+    setLogoError(null)
+    // Validacion cliente para feedback rapido; el backend igual valida por
+    // magic bytes y tamano (no se confia en esto).
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setLogoError('Formato no permitido. Usá PNG, JPEG o WebP.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setLogoError('La imagen supera el máximo de 2 MB.')
+      return
+    }
+    try {
+      const result = await uploadMedia.mutateAsync({ kind, file })
+      setFormData((prev) => {
+        if (!prev) return prev
+        return kind === 'logo'
+          ? { ...prev, logo_url: result.url }
+          : { ...prev, cover_url: result.url }
+      })
+    } catch (err) {
+      setLogoError(getErrorMessage(err, 'No se pudo subir la imagen'))
+    }
+  }
 
   const handleSave = async () => {
     if (!formData) return
@@ -451,14 +485,65 @@ const SettingsPage: React.FC = () => {
                   className="block text-[10px] font-black uppercase tracking-widest"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  URL del Logo
+                  Logo del negocio
                 </label>
+                <div className="flex items-center gap-4">
+                  <div
+                    className="w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden shrink-0"
+                    style={{
+                      background: 'white',
+                      border: `1px solid ${colors2000s.border.default}`
+                    }}
+                  >
+                    {formData.logo_url ? (
+                      <img
+                        src={formData.logo_url}
+                        alt="Logo"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <Store className="w-8 h-8" style={{ color: colors2000s.text.secondary }} />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <label
+                      className="inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
+                      style={buttonStyles2000s.default}
+                    >
+                      {uploadMedia.isPending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Store className="w-4 h-4" />
+                      )}
+                      {uploadMedia.isPending ? 'Subiendo...' : 'Subir imagen'}
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        disabled={uploadMedia.isPending}
+                        onChange={(e) => void handleMediaUpload('logo', e)}
+                      />
+                    </label>
+                    <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
+                      PNG, JPEG o WebP · máx 2 MB
+                    </p>
+                  </div>
+                </div>
+                {logoError && (
+                  <div
+                    role="alert"
+                    className="rounded-2xl px-4 py-2.5 text-xs font-bold"
+                    style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+                  >
+                    {logoError}
+                  </div>
+                )}
                 <input
                   value={formData.logo_url}
                   onChange={(e) => setFormData({ ...formData, logo_url: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
+                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none text-xs"
                   style={createSettingsInputStyle()}
-                  placeholder="https://..."
+                  placeholder="…o pegá una URL https://"
                 />
               </div>
               <div className="space-y-3">

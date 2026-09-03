@@ -4,6 +4,7 @@ import {
   storeSettingsService,
   type StoreFeatureFlags,
   type StoreFeatureFlagsResponse,
+  type StoreMediaUploadResult,
   type StoreSettings,
   type StoreUpdatePayload
 } from '@application/services/StoreSettingsService'
@@ -36,6 +37,16 @@ export const useUpdateStoreFeatureFlags = () => {
     mutationFn: (payload) => storeSettingsService.updateFeatureFlags(payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['store-feature-flags'] })
+      void queryClient.invalidateQueries({ queryKey: ['store-settings'] })
+    }
+  })
+}
+
+export const useUploadStoreMedia = () => {
+  const queryClient = useQueryClient()
+  return useMutation<StoreMediaUploadResult, Error, { kind: 'logo' | 'cover'; file: File }>({
+    mutationFn: ({ kind, file }) => storeSettingsService.uploadMedia(kind, file),
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['store-settings'] })
     }
   })

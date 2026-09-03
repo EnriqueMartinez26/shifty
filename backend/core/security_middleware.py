@@ -8,6 +8,12 @@ from core.config import Environment, settings
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# Rutas que aceptan multipart (subida de imagenes de tienda) con su propio
+# limite de tamano. El path que ve el ASGI NO trae el prefijo /api (lo reescribe
+# nginx). Van con Bearer, no cookie: no alcanzables por CSRF de formulario.
+UPLOAD_PATHS = ("/stores/me/media",)
+UPLOAD_CONTENT_TYPES = {"multipart/form-data"}
+
 
 class _RejectedRequest(Exception):
     def __init__(self, status_code: int, error_code: str, message: str) -> None:
@@ -57,13 +63,22 @@ class RequestGuardMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
         self.max_body_bytes = settings.MAX_REQUEST_BODY_BYTES
+        self.max_upload_bytes = settings.MAX_UPLOAD_BODY_BYTES
         self.allowed_write_content_types = {
             value.strip().lower()
             for value in settings.ALLOWED_WRITE_CONTENT_TYPES.split(",")
             if value.strip()
         }
 
-    def _validate_headers(self, method: str, headers: dict[str, str]) -> None:
+    def _limits_for(self, path: str) -> tuple[int, set[str]]:
+        if path in UPLOAD_PATHS:
+            return self.max_upload_bytes, UPLOAD_CONTENT_TYPES
+        return self.max_body_bytes, self.allowed_write_content_types
+
+    def _validate_headers(
+        self, method: str, headers: dict[str, str], path: str
+    ) -> None:
+        max_bytes, allowed_content_types = self._limits_for(path)
         raw_content_length = headers.get("content-length")
         if raw_content_length:
             try:
@@ -72,7 +87,7 @@ class RequestGuardMiddleware:
                 raise _RejectedRequest(
                     400, "INVALID_CONTENT_LENGTH", "Content-Length inválido"
                 ) from exc
-            if content_length > self.max_body_bytes:
+            if content_length > max_bytes:
                 raise _RejectedRequest(
                     413,
                     "REQUEST_TOO_LARGE",
@@ -90,7 +105,7 @@ class RequestGuardMiddleware:
         )
         if (
             has_declared_body or content_type
-        ) and content_type not in self.allowed_write_content_types:
+        ) and content_type not in allowed_content_types:
             raise _RejectedRequest(
                 415,
                 "UNSUPPORTED_MEDIA_TYPE",
@@ -108,10 +123,12 @@ class RequestGuardMiddleware:
             return
 
         headers = _headers_to_dict(scope)
+        path = str(scope.get("path", ""))
+        max_bytes, allowed_content_types = self._limits_for(path)
         response_started = False
 
         try:
-            self._validate_headers(method, headers)
+            self._validate_headers(method, headers, path)
         except _RejectedRequest as exc:
             await _send_json(send, exc.status_code, exc.error_code, exc.message)
             return
@@ -125,14 +142,14 @@ class RequestGuardMiddleware:
                 body = message.get("body", b"") or b""
                 if body and method in WRITE_METHODS:
                     content_type = _media_type(headers.get("content-type"))
-                    if content_type not in self.allowed_write_content_types:
+                    if content_type not in allowed_content_types:
                         raise _RejectedRequest(
                             415,
                             "UNSUPPORTED_MEDIA_TYPE",
                             "Content-Type no permitido para escritura",
                         )
                 received += len(body)
-                if received > self.max_body_bytes:
+                if received > max_bytes:
                     raise _RejectedRequest(
                         413,
                         "REQUEST_TOO_LARGE",

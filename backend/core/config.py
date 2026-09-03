@@ -75,9 +75,14 @@ class Settings(BaseSettings):
     TWILIO_WHATSAPP_FROM: str | None = None
     EXPOSE_API_DOCS: bool = True
     MAX_REQUEST_BODY_BYTES: int = 32 * 1024
+    # Limite mayor SOLO para las rutas de subida de imagenes (logo/portada), que
+    # aceptan multipart. El resto sigue con el tope de 32KB.
+    MAX_UPLOAD_BODY_BYTES: int = 3 * 1024 * 1024
     # Solo JSON: la API no tiene endpoints con formularios, y aceptar
     # x-www-form-urlencoded habilitaba CSRF via <form> cross-site (los POST de
     # formulario son "simple requests" y no pasan por preflight de CORS).
+    # Excepcion acotada: las rutas de subida de imagenes aceptan multipart (van
+    # con Bearer, no cookie, asi que no son alcanzables por CSRF de formulario).
     ALLOWED_WRITE_CONTENT_TYPES: str = "application/json"
     TRUST_PROXY_HEADERS: bool = True
     RATE_LIMIT_ENABLED: bool = True

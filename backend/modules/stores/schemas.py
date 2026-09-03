@@ -80,6 +80,12 @@ class StoreUpdate(BaseModel):
         return reject_unsafe_url(value)
 
 
+class StoreMediaUploadResponse(BaseModel):
+    url: str
+    media_id: str
+    kind: str
+
+
 class StoreFeatureFlags(BaseModel):
     payments: bool = False
     ledger: bool = False
