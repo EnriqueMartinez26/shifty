@@ -51,7 +51,14 @@ async def test_process_due_appointment_reminders_counts_due_messages(
 
     class _FakeSessionFactory:
         async def __aenter__(self) -> SimpleNamespace:
-            return SimpleNamespace()
+            # El task ahora fija el contexto RLS (set_tenant_context +
+            # _apply_tenant_context), que consulta el dialecto de la conexion.
+            # Se expone una connection() fake que reporta sqlite para que
+            # _apply_tenant_context haga no-op.
+            async def _connection() -> SimpleNamespace:
+                return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
+            return SimpleNamespace(connection=_connection)
 
         async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
             return False
