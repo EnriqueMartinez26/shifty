@@ -66,7 +66,11 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 1,
-      refetchOnWindowFocus: false
+      refetchOnWindowFocus: false,
+      // Sin esto (default 0) cada navegacion re-dispara TODAS las queries de la
+      // pantalla. 30s de frescura corta el refetch redundante sin mostrar datos
+      // viejos; las mutaciones ya invalidan lo que corresponde.
+      staleTime: 30_000
     }
   }
 })
