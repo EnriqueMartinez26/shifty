@@ -11,7 +11,11 @@ import structlog
 
 from core.celery_app import celery_app
 from core.config import settings
-from core.database import AsyncSessionFactory
+from core.database import (
+    AsyncSessionFactory,
+    _apply_tenant_context,
+    set_tenant_context,
+)
 from core.redis import get_redis
 
 logger = structlog.get_logger()
@@ -209,11 +213,19 @@ async def process_due_appointment_reminders(
     published = 0
     skipped = 0
     async with AsyncSessionFactory() as db:
-        repo = AppointmentRepository(db)
-        rows = await repo.get_upcoming_for_reminders(
-            starts_after=window_start,
-            starts_before=window_end,
-        )
+        # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
+        # ver los turnos de TODAS las tiendas (shifty_app es NOBYPASSRLS). Las
+        # filas quedan materializadas, asi que el resto del loop no toca la DB.
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(db)
+            repo = AppointmentRepository(db)
+            rows = await repo.get_upcoming_for_reminders(
+                starts_after=window_start,
+                starts_before=window_end,
+            )
+        finally:
+            set_tenant_context(None, False)
         redis = await get_redis()
         for appointment, service, staff, client, store in rows:
             if not getattr(store, "send_email_reminders", True):

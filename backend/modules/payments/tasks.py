@@ -5,7 +5,11 @@ import asyncio
 from celery.app.task import Task
 
 from core.celery_app import celery_app
-from core.database import AsyncSessionFactory
+from core.database import (
+    AsyncSessionFactory,
+    _apply_tenant_context,
+    set_tenant_context,
+)
 from modules.payments.jobs import (
     expire_unpaid_appointments,
     process_outbox_batch,
@@ -18,7 +22,12 @@ from modules.payments.jobs import (
 def process_payment_outbox(self: Task, limit: int = 100) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         async with AsyncSessionFactory() as db:
-            return await process_outbox_batch(db, limit=limit)
+            set_tenant_context(None, True)
+            try:
+                await _apply_tenant_context(db)
+                return await process_outbox_batch(db, limit=limit)
+            finally:
+                set_tenant_context(None, False)
 
     try:
         return asyncio.run(_run())
@@ -30,7 +39,12 @@ def process_payment_outbox(self: Task, limit: int = 100) -> dict[str, int]:
 def process_payment_webhook_inbox(self: Task, limit: int = 100) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         async with AsyncSessionFactory() as db:
-            return await process_webhook_inbox_batch(db, limit=limit)
+            set_tenant_context(None, True)
+            try:
+                await _apply_tenant_context(db)
+                return await process_webhook_inbox_batch(db, limit=limit)
+            finally:
+                set_tenant_context(None, False)
 
     try:
         return asyncio.run(_run())
@@ -42,7 +56,12 @@ def process_payment_webhook_inbox(self: Task, limit: int = 100) -> dict[str, int
 def reconcile_pending_payment_holds(self: Task, limit: int = 100) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         async with AsyncSessionFactory() as db:
-            return await reconcile_pending_payments(db, limit=limit)
+            set_tenant_context(None, True)
+            try:
+                await _apply_tenant_context(db)
+                return await reconcile_pending_payments(db, limit=limit)
+            finally:
+                set_tenant_context(None, False)
 
     try:
         return asyncio.run(_run())
@@ -54,7 +73,12 @@ def reconcile_pending_payment_holds(self: Task, limit: int = 100) -> dict[str, i
 def expire_unpaid_appointment_holds(self: Task, limit: int = 100) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         async with AsyncSessionFactory() as db:
-            return await expire_unpaid_appointments(db, limit=limit)
+            set_tenant_context(None, True)
+            try:
+                await _apply_tenant_context(db)
+                return await expire_unpaid_appointments(db, limit=limit)
+            finally:
+                set_tenant_context(None, False)
 
     try:
         return asyncio.run(_run())
