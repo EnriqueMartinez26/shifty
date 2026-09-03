@@ -38,7 +38,7 @@ async def _book_admin(
     staff_id: str,
     starts_at: str,
     clave: str,
-) -> "tuple[int, dict]":
+) -> "tuple[int, dict[str, object]]":
     res = await client.post(
         "/appointments/",
         headers=auth_headers(token),

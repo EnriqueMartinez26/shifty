@@ -3,6 +3,18 @@ from io import BytesIO, StringIO
 
 from modules.reports.schemas import ReportSummaryResponse
 
+# Caracteres con los que Excel/Sheets arrancan una FORMULA. client_name lo
+# controla un atacante anonimo via la reserva publica: una celda que empieza con
+# alguno de estos puede exfiltrar datos o ejecutar DDE al abrir el export.
+_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_cell(value: object) -> object:
+    """Prefija con apostrofo el texto que empieza con un trigger de formula."""
+    if isinstance(value, str) and value and value[0] in _FORMULA_TRIGGERS:
+        return "'" + value
+    return value
+
 
 def export_to_csv(summary: ReportSummaryResponse) -> bytes:
     buffer = StringIO()
@@ -40,10 +52,10 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
                 item.public_id,
                 item.starts_at.isoformat(),
                 item.ends_at.isoformat(),
-                item.status,
-                item.service_name,
-                item.staff_name,
-                item.client_name,
+                _neutralize_cell(item.status),
+                _neutralize_cell(item.service_name),
+                _neutralize_cell(item.staff_name),
+                _neutralize_cell(item.client_name),
                 item.service_price,
             ]
         )
@@ -98,10 +110,10 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
                 item.public_id,
                 item.starts_at.isoformat(),
                 item.ends_at.isoformat(),
-                item.status,
-                item.service_name,
-                item.staff_name,
-                item.client_name,
+                _neutralize_cell(item.status),
+                _neutralize_cell(item.service_name),
+                _neutralize_cell(item.staff_name),
+                _neutralize_cell(item.client_name),
                 item.service_price,
             ]
         )

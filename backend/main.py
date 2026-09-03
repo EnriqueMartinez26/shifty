@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -222,6 +223,28 @@ async def stale_data_exception_handler(
             "Alguien mas modifico este registro mientras lo editabas. "
             "Actualiza la vista y volve a intentar."
         ),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.exception_handler(IntegrityError)
+async def integrity_error_handler(
+    request: Request, exc: IntegrityError
+) -> JSONResponse:
+    """Violacion de una constraint de la DB (unico, FK, check).
+
+    Suele ser una carrera concurrente (dos altas con el mismo email/slug/
+    idempotency_key/solape) que el pre-chequeo no puede evitar de forma atomica
+    -y bajo RLS a veces ni siquiera ve la fila en conflicto-. Se responde 409
+    neutro (sin revelar que fila colisiono ni exponer el SQL) en vez de un 500.
+    """
+    logger.warning(
+        "integrity_conflict", path=str(request.url.path), method=request.method
+    )
+    return error_response(
+        status_code=409,
+        error_code="RESOURCE_CONFLICT",
+        message="El registro entra en conflicto con uno existente.",
         headers={"Cache-Control": "no-store"},
     )
 

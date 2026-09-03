@@ -100,6 +100,18 @@ def test_csv_incluye_los_datos_del_resumen() -> None:
     assert "48500.5" in contenido or "48500,5" in contenido
 
 
+def test_csv_neutraliza_inyeccion_de_formula() -> None:
+    # client_name lo controla un atacante via la reserva publica.
+    resumen = _summary()
+    resumen.appointments[0].client_name = "=cmd|'/c calc'!A1"
+    resumen.appointments[0].service_name = "+SUM(1+1)"
+    contenido = export_to_csv(resumen).decode("utf-8-sig")
+    # La celda peligrosa queda prefijada con apostrofo, no arranca con =/+.
+    assert "'=cmd" in contenido
+    assert "'+SUM(1+1)" in contenido
+    assert ",=cmd" not in contenido
+
+
 def test_excel_produce_un_xlsx_valido() -> None:
     """Un .xlsx es un ZIP: si no abre, el archivo esta corrupto."""
     contenido = export_to_excel(_summary())

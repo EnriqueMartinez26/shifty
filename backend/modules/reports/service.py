@@ -9,6 +9,8 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
+
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.ledger.model import CustomerLedger
 from modules.payments.model import Payment, PaymentStatus
@@ -72,6 +74,14 @@ class ReportService:
 
         if resolved_from > resolved_to:
             raise ValueError("from_date no puede ser mayor a to_date")
+
+        # Cota del rango: un reporte de anios agrega y serializa sin techo. El
+        # limite estaba definido en config pero no se aplicaba (codigo muerto).
+        if (resolved_to - resolved_from).days > settings.REPORT_MAX_RANGE_DAYS:
+            raise ValueError(
+                "El rango del reporte no puede superar "
+                f"{settings.REPORT_MAX_RANGE_DAYS} dias"
+            )
 
         return resolved_from, resolved_to
 
