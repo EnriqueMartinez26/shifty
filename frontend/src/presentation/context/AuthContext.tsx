@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react'
 
 import { authService, type AuthenticatedUser } from '@application/services/AuthService'
 
-import { setAuthToken } from '@infrastructure/http/client'
+import { setAuthToken, SESSION_EXPIRED_EVENT } from '@infrastructure/http/client'
 
 import { canonicalRole } from './roles'
 
@@ -59,6 +59,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     void initializeAuth()
+  }, [])
+
+  useEffect(() => {
+    // La sesion murio del lado del servidor (refresh via cookie fallo). El
+    // cliente HTTP ya limpio el access token; aca se limpia el perfil para que
+    // los route guards manden a login en vez de mostrar un cascaron logueado.
+    const handleSessionExpired = () => {
+      setToken(null)
+      setUser(null)
+      try {
+        localStorage.removeItem('shifty_user')
+      } catch {
+        /* almacenamiento no disponible */
+      }
+    }
+    window.addEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handleSessionExpired)
   }, [])
 
   const login = (newToken: string | null, newUser: User) => {

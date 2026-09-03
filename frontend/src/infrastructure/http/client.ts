@@ -36,6 +36,21 @@ export const setAuthToken = (token: string | null) => {
 
 export const getAuthToken = () => inMemoryToken
 
+// Nombre del evento que avisa a la capa de UI que la sesion murio de verdad
+// (el refresh via cookie fallo). AuthContext lo escucha para limpiar el user
+// y disparar la redireccion a login, en vez de dejar un cascaron logueado que
+// vuelve a dar 401 en cada request.
+export const SESSION_EXPIRED_EVENT = 'shifty:session-expired'
+
+const notifySessionExpired = () => {
+  setAuthToken(null)
+  try {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+  } catch {
+    /* entorno sin window (SSR/tests): el token ya quedo limpio */
+  }
+}
+
 apiClient.interceptors.request.use((config) => {
   const token = getAuthToken()
   if (token) {
@@ -126,15 +141,17 @@ apiClient.interceptors.response.use(
     const normalizedError = normalizeApiError(error)
     const payload = error.response?.data
 
+    // Llegar aca con 401 significa que la rehidratacion no ocurrio o fallo:
+    // sesion muerta. Se avisa a la UI para que cierre sesion de verdad.
     if (isApiEnvelope(payload) && !payload.success) {
       if (statusCode === 401) {
-        setAuthToken(null)
+        notifySessionExpired()
       }
       return Promise.reject(normalizedError)
     }
 
     if (normalizedError.statusCode === 401) {
-      setAuthToken(null)
+      notifySessionExpired()
     }
     return Promise.reject(normalizedError)
   }

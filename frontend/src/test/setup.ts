@@ -5,6 +5,14 @@
 
 import './jest-dom'
 
+// El helper de entorno usa import.meta (solo-ESM), que rompe la compilacion CJS
+// de ts-jest. Se mockea globalmente para que el archivo real nunca se transpile
+// en tests; por defecto se comporta como entorno de desarrollo.
+jest.mock('@shared/utils/env', () => ({
+  isProduction: () => false,
+  isDevelopment: () => true
+}))
+
 const customGlobal = globalThis as typeof globalThis & {
   crypto?: Crypto
   TextEncoder?: typeof TextEncoder

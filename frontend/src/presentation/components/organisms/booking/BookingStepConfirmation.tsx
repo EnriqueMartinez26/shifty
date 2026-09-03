@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 
+
 import {
   AlertCircle,
   Calendar,
@@ -21,6 +22,7 @@ import type {
 import { usePreviewPublicPromotion, usePublicServices } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { asSafeHttpsUrl, navigateExternal, sanitizePhoneForUrl } from '@shared/utils/safeUrl'
 
 import type { BookingWizardState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
@@ -120,10 +122,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     try {
       const result = await onConfirm(paymentMethod, acceptsTerms)
       if (paymentMethod === 'mercadopago') {
-        if (!result.payment_link) {
-          throw new Error('Mercado Pago no devolvio un enlace de pago')
+        if (!navigateExternal(result.payment_link)) {
+          throw new Error('Mercado Pago no devolvio un enlace de pago valido')
         }
-        window.location.assign(result.payment_link)
         return
       }
       setConfirmation(result)
@@ -303,7 +304,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         {confirmation?.payment_link && (
           <a
-            href={confirmation.payment_link}
+            href={asSafeHttpsUrl(confirmation.payment_link) ?? '#'}
             target="_blank"
             rel="noreferrer"
             className="w-full mt-6 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
@@ -320,7 +321,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         {whatsappPhone && !confirmation?.payment_link && (
           <a
-            href={`https://wa.me/${whatsappPhone}?text=${encodeURIComponent(
+            href={`https://wa.me/${sanitizePhoneForUrl(whatsappPhone)}?text=${encodeURIComponent(
               `Hola ${storeName}, reservé el turno ${confirmation?.public_id ?? ''} para el ${bookingState.date} a las ${bookingState.startTime}. Quiero coordinar el pago.`
             )}`}
             target="_blank"

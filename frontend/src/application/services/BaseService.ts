@@ -1,5 +1,7 @@
 import { z, type ZodTypeAny } from 'zod'
 
+import { isProduction } from '@shared/utils/env'
+
 /**
  * Base abstract class defining standard operations, validation,
  * automatic logging, performance tracing, retry mechanisms, and error boundaries for all domain services.
@@ -163,14 +165,20 @@ export abstract class BaseService<T> {
   protected log(level: string, message: string, data?: unknown): void {
     const formattedMessage = `[${level}] ${message}`
 
+    // El payload (`data`) puede traer datos de cliente/pagos (email, telefono,
+    // montos). Volcarlo a la consola en produccion lo deja al alcance de
+    // cualquier script y de los breadcrumbs de Sentry. En prod se loguea solo
+    // el mensaje; el objeto completo queda para desarrollo.
+    const includeData = data !== undefined && !isProduction()
+
     if (level === 'ERROR') {
-      if (data !== undefined) {
+      if (includeData) {
         console.error(formattedMessage, data)
       } else {
         console.error(formattedMessage)
       }
     } else {
-      if (data !== undefined) {
+      if (includeData) {
         console.warn(formattedMessage, data)
       } else {
         console.warn(formattedMessage)

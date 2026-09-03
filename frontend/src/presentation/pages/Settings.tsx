@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 
+
 import {
   Store,
   Settings as SettingsIcon,
@@ -27,6 +28,7 @@ import type {
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import type { BusinessType } from '@shared/types/business'
+import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { useChangePassword } from '../hooks/useChangePassword'
@@ -257,7 +259,9 @@ const SettingsPage: React.FC = () => {
     setErrorMessage('')
     try {
       const connection = await startMercadoPagoOAuth.mutateAsync()
-      window.location.assign(connection.auth_url)
+      if (!navigateExternal(connection.auth_url)) {
+        throw new Error('Mercado Pago devolvió un enlace de conexión inválido')
+      }
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error, 'No se pudo iniciar la conexión con Mercado Pago'))
     }
@@ -873,7 +877,10 @@ const SettingsPage: React.FC = () => {
                         </span>
                       ) : (
                         dayHours.map((period: BusinessHoursPeriod, idx: number) => (
-                          <div key={idx} className="flex items-center gap-2">
+                          <div
+                            key={`${day.id}-${idx}-${period.open}-${period.close}`}
+                            className="flex items-center gap-2"
+                          >
                             <input
                               type="time"
                               value={period.open}
