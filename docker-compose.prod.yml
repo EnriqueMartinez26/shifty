@@ -1,12 +1,39 @@
 # Override de PRODUCCION:
 #   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
-# Agrega el 443 con TLS real. Los certificados van montados desde el host
-# (p. ej. los de certbot/Let's Encrypt) en ./nginx/certs:
-#   nginx/certs/fullchain.pem
-#   nginx/certs/privkey.pem
+# Endurece respecto del compose base (que es de desarrollo):
+#   - Quita los bind-mounts de codigo (./backend, ./frontend): en prod corre la
+#     imagen construida, no el arbol del host.
+#   - Despublica del host los puertos internos (db/redis/rabbitmq/backend): los
+#     servicios se hablan por la red interna. Publicar backend:8000 en loopback
+#     permitia, desde el host, saltear nginx y spoofear X-Forwarded-For para
+#     evadir el rate limiting.
+#   - Agrega el 443 con TLS real (certs montados desde ./nginx/certs).
 
 services:
+  backend:
+    volumes: []
+    ports: []
+
+  celery_worker:
+    volumes: []
+
+  celery_beat:
+    volumes: []
+
+  frontend:
+    volumes: []
+    ports: []
+
+  db:
+    ports: []
+
+  redis:
+    ports: []
+
+  rabbitmq:
+    ports: []
+
   nginx:
     ports:
       - "80:80"

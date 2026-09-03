@@ -19,6 +19,12 @@ RUN uv sync --frozen --no-dev
 # Copy application code
 COPY . .
 
+# Usuario no-root: si un atacante logra ejecucion, no arranca como root dentro
+# del contenedor. Se le da la propiedad de /app (incluye el .venv).
+RUN useradd --system --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 # Environment variables
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONDONTWRITEBYTECODE=1
