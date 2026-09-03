@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.exceptions import AuthenticationException, PermissionDeniedException
-from core.roles import ROLE_SUPER_ADMIN, STORE_MANAGERS, has_any_role
+from core.roles import (
+    APPOINTMENT_MANAGERS,
+    ROLE_SUPER_ADMIN,
+    STORE_MANAGERS,
+    has_any_role,
+)
 from core.security import decode_token
 from modules.auth.session_model import AuthSession
 from modules.users.model import User
@@ -119,6 +124,21 @@ async def get_current_admin(
 ) -> User:
     if not has_any_role(current_user, STORE_MANAGERS):
         raise PermissionDeniedException("administrador de tienda")
+    return current_user
+
+
+async def get_current_staff(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Exige rol de PERSONAL de la tienda (no un cliente).
+
+    RLS aisla entre tiendas pero NO entre roles: sin esta guarda, un usuario con
+    rol 'client' (que existe como usuario de primera clase y puede autenticarse)
+    leeria la agenda y la PII de toda la tienda. Se aplica a los endpoints de
+    lectura/gestion de turnos, dashboard y datos operativos.
+    """
+    if not has_any_role(current_user, APPOINTMENT_MANAGERS):
+        raise PermissionDeniedException("personal de la tienda")
     return current_user
 
 

@@ -32,7 +32,11 @@ from modules.appointments.schemas import (
     AppointmentSearchResult,
 )
 from modules.appointments.service import AppointmentBookPayload, AppointmentService
-from modules.auth.dependencies import get_current_user, get_optional_current_user
+from modules.auth.dependencies import (
+    get_current_staff,
+    get_current_user,
+    get_optional_current_user,
+)
 
 # NOTA: use public_api as the stable runtime import path for public booking data access.
 from modules.public_api.repository import PublicRepository
@@ -95,7 +99,7 @@ def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:
 @router.get("/", response_model=list[AppointmentListItem])
 async def list_appointments_by_date(
     date: date_type,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> list[AppointmentListItem]:
     """Lista turnos por fecha para la agenda del día."""
@@ -162,7 +166,7 @@ async def get_availability(
 )
 async def book_appointment(
     data: AppointmentCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     svc: AppointmentService = Depends(get_appointment_service),
     redis: Redis = Depends(get_redis),
 ) -> AppointmentResponse:
@@ -381,7 +385,7 @@ async def search_appointments(
     ),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> AppointmentSearchResponse:
     """

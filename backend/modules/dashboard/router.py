@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.auth.dependencies import get_current_user
+from modules.auth.dependencies import get_current_staff
 from modules.dashboard.schemas import (
     DashboardStatSummary,
     DashboardSummaryResponse,
@@ -30,7 +30,7 @@ _ACCREDITED_PAYMENT_STATUSES = [
 
 @router.get("/summary", response_model=DashboardSummaryResponse)
 async def get_dashboard_summary(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardSummaryResponse:
     """Devuelve métricas resumidas y próximos turnos para el dashboard."""

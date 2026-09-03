@@ -27,7 +27,13 @@ from core.exceptions import (
     UserNotFoundException,
 )
 from core.redis import get_redis
-from core.roles import ROLE_SUPER_ADMIN, STORE_MANAGERS, canonical_role, require_roles
+from core.roles import (
+    ROLE_CLIENT,
+    ROLE_SUPER_ADMIN,
+    STORE_MANAGERS,
+    canonical_role,
+    require_roles,
+)
 from core.security import (
     create_access_token,
     generate_password_reset_token,
@@ -411,10 +417,15 @@ async def login_user(
         # NULL (fila corrupta/migrada) sin romper el timing ni delatar el caso.
         hashed = (user.hashed_password if user else None) or _DUMMY_PASSWORD_HASH
         password_ok = await verify_password_async(password, hashed)
+        # Los clientes NO inician sesion en el panel: reservan por el flujo
+        # publico. Negarles el login cierra la escalada intra-tenant (RLS aisla
+        # entre tiendas, no entre roles) sin depender solo de las guardas por
+        # endpoint. Mismo mensaje generico para no revelar el rol.
         if (
             not user
             or not user.is_active
             or not user.hashed_password
+            or canonical_role(user) == ROLE_CLIENT
             or not password_ok
         ):
             await _register_login_failure(email_key)
@@ -697,7 +708,9 @@ async def request_password_reset(
         token = generate_password_reset_token()
         token_hash = hash_password_reset_token(token)
 
-        if not user:
+        # Igual que el login: los clientes no acceden al panel, asi que tampoco
+        # reciben reset (esto ademas corta el puente del cliente hacia un token).
+        if not user or canonical_role(user) == ROLE_CLIENT:
             return None
 
         user.password_reset_token_hash = token_hash
