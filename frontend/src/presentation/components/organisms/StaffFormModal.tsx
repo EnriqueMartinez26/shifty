@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react'
 
+
 import { X, Loader2, User, Mail, Briefcase, Check } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
 import { useServicesCatalog } from '@presentation/hooks/useServicesCatalog'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
@@ -24,6 +27,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
   editingStaff
 }) => {
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     first_name: '',
     last_name: '',
@@ -60,11 +64,12 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
+    setError(null)
     try {
       await onSubmit(formData)
       onClose()
-    } catch (error) {
-      console.error(error)
+    } catch (err) {
+      setError(getErrorMessage(err, 'No se pudo guardar'))
     } finally {
       setLoading(false)
     }
@@ -119,6 +124,11 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
           }}
           className="flex-1 overflow-y-auto p-8 lg:p-10"
         >
+          {error && (
+            <div role="alert" className="rounded-2xl px-4 py-3 text-xs font-bold mb-4" style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}>
+              {error}
+            </div>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
             {/* Columna Izquierda: Datos Personales */}
             <div className="space-y-6">

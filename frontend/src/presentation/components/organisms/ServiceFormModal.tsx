@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 
+
 import {
   X,
   Loader2,
@@ -13,6 +14,8 @@ import {
 } from 'lucide-react'
 
 import { Service } from '@domain/entities/Service'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
@@ -43,6 +46,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   editingService
 }) => {
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -83,11 +87,12 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
+    setError(null)
     try {
       await onSubmit(formData)
       onClose()
-    } catch (error) {
-      console.error(error)
+    } catch (err) {
+      setError(getErrorMessage(err, 'No se pudo guardar'))
     } finally {
       setLoading(false)
     }
@@ -135,6 +140,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             }}
             className="space-y-6"
           >
+            {error && (
+              <div role="alert" className="rounded-2xl px-4 py-3 text-xs font-bold mb-4" style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}>
+                {error}
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                 Nombre del Servicio

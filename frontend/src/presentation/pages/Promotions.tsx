@@ -33,6 +33,8 @@ const PromotionsPage: React.FC = () => {
   const promotionsQuery = usePromotions(true, true)
   const createPromotion = useCreatePromotion()
   const updatePromotion = useUpdatePromotion()
+  // Evita el doble alta/actualizacion si se clickea mientras la mutacion vuela.
+  const isSaving = createPromotion.isPending || updatePromotion.isPending
 
   const [promotionForm, setPromotionForm] = useState(createEmptyPromotionForm())
   const [editingPromotionId, setEditingPromotionId] = useState<string | null>(null)
@@ -54,6 +56,7 @@ const PromotionsPage: React.FC = () => {
   }, [promotionsQuery.data])
 
   const handleSavePromotion = async () => {
+    if (isSaving) return
     try {
       const payload: PromotionPayload = {
         code: promotionForm.code.trim().toUpperCase(),
@@ -190,13 +193,18 @@ const PromotionsPage: React.FC = () => {
             </div>
             <button
               type="button"
+              disabled={isSaving}
               onClick={() => {
                 void handleSavePromotion()
               }}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
-              <Save className="w-4 h-4 inline mr-2" />
+              {isSaving ? (
+                <Loader2 className="w-4 h-4 inline mr-2 animate-spin" />
+              ) : (
+                <Save className="w-4 h-4 inline mr-2" />
+              )}
               {editingPromotionId ? 'Actualizar' : 'Crear'}
             </button>
           </div>

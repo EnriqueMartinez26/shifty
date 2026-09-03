@@ -88,12 +88,24 @@ export class HttpUserRepository
   }
 
   protected async updateImpl(id: string, data: Partial<User>): Promise<User> {
+    // El formulario envia snake_case (first_name, password), pero antes esto
+    // solo leia camelCase (data.firstName) y NO manejaba password: editar el
+    // nombre o la clave de un usuario se descartaba en silencio. Se aceptan
+    // ambas convenciones y se incluye password (solo si no viene vacio).
+    const raw = data as unknown as Record<string, unknown>
     const updateData: Record<string, unknown> = {}
-    if (data.firstName !== undefined) updateData.first_name = data.firstName
-    if (data.lastName !== undefined) updateData.last_name = data.lastName
-    if (data.phone !== undefined) updateData.phone = data.phone
-    if (data.role !== undefined) updateData.role = data.role
-    if (data.isActive !== undefined) updateData.is_active = data.isActive
+    const firstName = raw.firstName ?? raw.first_name
+    if (firstName !== undefined) updateData.first_name = firstName
+    const lastName = raw.lastName ?? raw.last_name
+    if (lastName !== undefined) updateData.last_name = lastName
+    if (raw.phone !== undefined) updateData.phone = raw.phone
+    if (raw.role !== undefined) updateData.role = raw.role
+    const isActive = raw.isActive ?? raw.is_active
+    if (isActive !== undefined) updateData.is_active = isActive
+    const password = raw.password
+    if (typeof password === 'string' && password.length > 0) {
+      updateData.password = password
+    }
 
     const { data: responseData } = await this.client.patch<UserResponseDTO>(
       `/users/${id}`,

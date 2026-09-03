@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react'
 
+
 import { X, Loader2 } from 'lucide-react'
 
 import { User } from '@domain/entities/User'
+
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
@@ -22,6 +25,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
   editingUser
 }) => {
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -59,11 +63,14 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
+    setError(null)
     try {
       await onSubmit(formData)
       onClose()
-    } catch (error) {
-      console.error(error)
+    } catch (err) {
+      // Antes el error solo iba a console y el modal quedaba sin feedback: el
+      // usuario no sabia si guardo. Ahora se muestra y el modal no se cierra.
+      setError(getErrorMessage(err, 'No se pudo guardar el usuario'))
     } finally {
       setLoading(false)
     }
@@ -92,6 +99,8 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             </p>
           </div>
           <button
+            type="button"
+            aria-label="Cerrar"
             onClick={onClose}
             className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90"
             style={buttonStyles2000s.default}
@@ -106,6 +115,15 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
           }}
           className="space-y-5"
         >
+          {error && (
+            <div
+              role="alert"
+              className="rounded-2xl px-4 py-3 text-xs font-bold"
+              style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+            >
+              {error}
+            </div>
+          )}
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
               Email de Acceso
