@@ -33,9 +33,10 @@ from core.security import (
     generate_password_reset_token,
     generate_refresh_token,
     hash_password,
+    hash_password_async,
     hash_password_reset_token,
     hash_token,
-    verify_password,
+    verify_password_async,
 )
 from modules.auth.schemas import (
     ChangePasswordRequest,
@@ -333,7 +334,7 @@ async def register_store_and_admin(
 
             new_admin = User(
                 email=admin_email,
-                hashed_password=hash_password(data.admin_password),
+                hashed_password=await hash_password_async(data.admin_password),
                 first_name=data.admin_first_name,
                 last_name=data.admin_last_name,
                 full_name=f"{data.admin_first_name} {data.admin_last_name}".strip(),
@@ -409,7 +410,7 @@ async def login_user(
         # tiempo de respuesta no revele si el email existe. Se tolera un hash
         # NULL (fila corrupta/migrada) sin romper el timing ni delatar el caso.
         hashed = (user.hashed_password if user else None) or _DUMMY_PASSWORD_HASH
-        password_ok = verify_password(password, hashed)
+        password_ok = await verify_password_async(password, hashed)
         if (
             not user
             or not user.is_active
@@ -737,7 +738,7 @@ async def reset_password(
         if not user:
             raise InvalidTokenException()
 
-        user.hashed_password = hash_password(data.new_password)
+        user.hashed_password = await hash_password_async(data.new_password)
         user.password_reset_token_hash = None
         user.password_reset_expires_at = None
         # Un reset suele venir despues de un compromiso: si no se cierran las
@@ -760,20 +761,20 @@ async def change_password(
     *,
     preserve_refresh_token: str | None = None,
 ) -> MessageResult:
-    if not verify_password(data.current_password, user.hashed_password):
+    if not await verify_password_async(data.current_password, user.hashed_password):
         raise AppException(
             message="La contraseña actual es incorrecta",
             http_status=status.HTTP_400_BAD_REQUEST,
             error_code="INCORRECT_PASSWORD",
         )
-    if verify_password(data.new_password, user.hashed_password):
+    if await verify_password_async(data.new_password, user.hashed_password):
         raise AppException(
             message="La nueva contraseña no puede ser igual a la actual",
             http_status=status.HTTP_400_BAD_REQUEST,
             error_code="PASSWORD_UNCHANGED",
         )
 
-    user.hashed_password = hash_password(data.new_password)
+    user.hashed_password = await hash_password_async(data.new_password)
     # Un token de reset pendiente (quiza disparado por un atacante) no debe
     # sobrevivir al cambio de contraseña.
     user.password_reset_token_hash = None

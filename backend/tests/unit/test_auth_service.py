@@ -11,6 +11,16 @@ from modules.auth.schemas import ChangePasswordRequest, ForgotPasswordRequest
 from modules.users.model import User
 
 
+def _async_returns(fn: Any) -> Any:
+    """Envuelve una func sync en una async, para parchear las variantes
+    hash_password_async/verify_password_async (bcrypt ahora corre off-loop)."""
+
+    async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        return fn(*args, **kwargs)
+
+    return _wrapper
+
+
 class ScalarResult:
     def __init__(
         self,
@@ -100,7 +110,9 @@ async def test_login_rejects_invalid_credentials_without_creating_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = FakeDb(ScalarResult(value=make_user()))
-    monkeypatch.setattr(service, "verify_password", lambda *_args: False)
+    monkeypatch.setattr(
+        service, "verify_password_async", _async_returns(lambda *_args: False)
+    )
 
     with pytest.raises(AuthenticationException):
         await service.login_user(
@@ -120,7 +132,9 @@ async def test_login_creates_refresh_session_and_returns_access_token(
 ) -> None:
     user = make_user()
     db = FakeDb(ScalarResult(value=user))
-    monkeypatch.setattr(service, "verify_password", lambda *_args: True)
+    monkeypatch.setattr(
+        service, "verify_password_async", _async_returns(lambda *_args: True)
+    )
     monkeypatch.setattr(
         service, "access_token_for_user", lambda _user, _sid: "access-token"
     )
@@ -183,7 +197,9 @@ async def test_change_password_rejects_wrong_current_password(
 ) -> None:
     user = make_user()
     db = FakeDb()
-    monkeypatch.setattr(service, "verify_password", lambda *_args: False)
+    monkeypatch.setattr(
+        service, "verify_password_async", _async_returns(lambda *_args: False)
+    )
 
     with pytest.raises(AppException) as exc:
         await service.change_password(
@@ -209,10 +225,14 @@ async def test_change_password_hashes_new_password(
     # servicio ahora rechaza reutilizar la misma contraseña).
     monkeypatch.setattr(
         service,
-        "verify_password",
-        lambda password, _hashed: password == "old-password",
+        "verify_password_async",
+        _async_returns(lambda password, _hashed: password == "old-password"),
     )
-    monkeypatch.setattr(service, "hash_password", lambda password: f"hashed:{password}")
+    monkeypatch.setattr(
+        service,
+        "hash_password_async",
+        _async_returns(lambda password: f"hashed:{password}"),
+    )
 
     result = await service.change_password(
         ChangePasswordRequest(

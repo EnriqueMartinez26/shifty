@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
@@ -22,6 +23,17 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     password_bytes = plain_password.encode("utf-8")[:72]
     return bcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
+
+
+# bcrypt con 12 rounds cuesta ~200-300ms de CPU. En un handler async eso bloquea
+# el event loop y serializa TODOS los requests concurrentes detras del login/
+# registro. Las variantes async lo empujan al threadpool para no frenar el loop.
+async def hash_password_async(password: str) -> str:
+    return await asyncio.to_thread(hash_password, password)
+
+
+async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
+    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
 
 
 def create_access_token(
