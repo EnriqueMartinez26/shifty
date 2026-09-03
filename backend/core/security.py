@@ -1,7 +1,9 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+import os
 import secrets
 import uuid
 from typing import Any, cast
@@ -27,13 +29,30 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 # bcrypt con 12 rounds cuesta ~200-300ms de CPU. En un handler async eso bloquea
 # el event loop y serializa TODOS los requests concurrentes detras del login/
-# registro. Las variantes async lo empujan al threadpool para no frenar el loop.
+# registro. Las variantes async lo empujan a un threadpool para no frenar el loop.
+#
+# El executor es a nivel MODULO (compartido) a proposito: asyncio.to_thread usa
+# el executor por-loop, que se crea y destruye con cada event loop. En los tests
+# (pytest-asyncio abre un loop nuevo por test) eso agregaba ~6x de overhead por
+# el spin-up de threads. Un executor compartido persiste entre loops. bcrypt
+# libera el GIL, asi que los hilos hashean en paralelo real hasta la cantidad de
+# CPUs.
+_PW_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(2, min(8, (os.cpu_count() or 2))),
+    thread_name_prefix="pw-hash",
+)
+
+
 async def hash_password_async(password: str) -> str:
-    return await asyncio.to_thread(hash_password, password)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_PW_EXECUTOR, hash_password, password)
 
 
 async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
-    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        _PW_EXECUTOR, verify_password, plain_password, hashed_password
+    )
 
 
 def create_access_token(
