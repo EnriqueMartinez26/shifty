@@ -39,7 +39,10 @@ async def list_users(
     email: str | None = Query(None, max_length=255),
     role: str | None = Query(None, max_length=50),
     limit: int = Query(200, ge=1, le=500),
-    offset: int = Query(0, ge=0),
+    # Tope superior: sin el, un offset por encima del bigint de Postgres
+    # (2^63-1) desbordaba la query y salia 500. Un millon ya es absurdo para
+    # el listado de una tienda.
+    offset: int = Query(0, ge=0, le=1_000_000),
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserResponse]:

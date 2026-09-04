@@ -105,6 +105,26 @@ async def test_listado_del_dia_indica_el_profesional_de_una_reserva_de_cliente(
 
 
 @pytest.mark.asyncio
+async def test_paginacion_de_usuarios_acota_offset_y_limit(client: AsyncClient) -> None:
+    # Hallazgo del pentest de regresion: offset sin tope superior desbordaba el
+    # bigint de la query (2^63) y salia 500. Debe ser 422, nunca 500.
+    _, token = await register_and_login(
+        client, slug="pag-users", email="pag-users@example.com"
+    )
+    desborde = await client.get(
+        "/users/?offset=9223372036854775808", headers=auth_headers(token)
+    )
+    assert desborde.status_code == 422, desborde.text
+    demasiado = await client.get("/users/?offset=1000001", headers=auth_headers(token))
+    assert demasiado.status_code == 422, demasiado.text
+    cero = await client.get("/users/?limit=0", headers=auth_headers(token))
+    assert cero.status_code == 422, cero.text
+    # Los valores validos siguen funcionando.
+    ok = await client.get("/users/?limit=50&offset=0", headers=auth_headers(token))
+    assert ok.status_code == 200, ok.text
+
+
+@pytest.mark.asyncio
 async def test_primary_color_rechaza_no_hex(client: AsyncClient) -> None:
     _, token = await register_and_login(
         client, slug="color-val", email="color-val@example.com"
