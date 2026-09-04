@@ -12,7 +12,7 @@ from typing import Annotated
 from fastapi import Depends, Path, Query, Request, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.circuit_breaker import CircuitBreakerOpenError
@@ -48,6 +48,7 @@ from modules.payments.service import (
 from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import enqueue_confirmation_email
+from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import quote_promotion, redeem_promotion
 from modules.public_api.repository import PublicRepository
 from modules.public_api.schemas import (
@@ -114,6 +115,25 @@ def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
 async def _bypass_rls(db: AsyncSession) -> None:
     set_tenant_context(None, is_admin=True)
     await _apply_tenant_context(db)
+
+
+async def _revert_failed_booking(db: AsyncSession, appointment_id: str) -> None:
+    """Compensa un booking cuyo link de pago fallo DESPUES del commit.
+
+    Como el link de Mercado Pago se genera fuera de la transaccion que sostiene
+    el lock (fix del DoS), el turno + Payment ya estan persistidos cuando MP
+    falla. Se revierten para no dejar el slot retenido ni un pago sin link, y
+    para que un reintento pueda crear el turno limpio. Reemplaza al rollback del
+    savepoint que existia cuando el HTTP corria dentro de la transaccion.
+    """
+    await db.execute(
+        delete(PromotionRedemption).where(
+            PromotionRedemption.appointment_id == appointment_id
+        )
+    )
+    await db.execute(delete(Payment).where(Payment.appointment_id == appointment_id))
+    await db.execute(delete(Appointment).where(Appointment.id == appointment_id))
+    await db.commit()
 
 
 def _normalize_custom_field_value(value: object) -> str:
@@ -699,6 +719,7 @@ async def create_public_booking(
                 )
                 await db.commit()
             except CircuitBreakerOpenError as exc:
+                await _revert_failed_booking(db, appointment.id)
                 await idempotency_release(idempotency_key, redis)
                 raise AppException(
                     message=f"Proveedor de pagos temporalmente no disponible: {exc}",
@@ -706,6 +727,7 @@ async def create_public_booking(
                     error_code="PAYMENT_PROVIDER_UNAVAILABLE",
                 )
             except RuntimeError as exc:
+                await _revert_failed_booking(db, appointment.id)
                 await idempotency_release(idempotency_key, redis)
                 raise AppException(
                     message=f"No se pudo iniciar el cobro online: {exc}",

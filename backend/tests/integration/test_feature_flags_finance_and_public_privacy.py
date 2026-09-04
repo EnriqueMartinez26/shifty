@@ -1412,6 +1412,11 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
     failed_booking = await client.post("/public/appointments", json=booking_payload)
     assert failed_booking.status_code == 502, failed_booking.text
 
+    # El link de MP se genera FUERA de la transaccion (fix del DoS del pool), por
+    # lo que el turno + Payment se persisten antes del HTTP. Ante un fallo de MP
+    # se COMPENSA borrandolos (ver _revert_failed_booking): en vez del rollback
+    # del savepoint que existia cuando el HTTP corria dentro de la transaccion.
+    # El resultado neto es el mismo: nada persiste y la idempotency se libera.
     appointment_count = await test_session.scalar(
         select(func.count()).select_from(modules.appointments.model.Appointment)
     )
