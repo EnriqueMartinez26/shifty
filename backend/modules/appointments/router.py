@@ -113,6 +113,7 @@ async def list_appointments_by_date(
             service_id=service.public_id,
             service_name=service.name,
             staff_id=staff.public_id,
+            staff_name=staff.display_name,
             client_name=client.full_name or client.email,
             starts_at=appointment.starts_at,
             ends_at=appointment.ends_at,

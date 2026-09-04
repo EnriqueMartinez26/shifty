@@ -63,6 +63,9 @@ class AppointmentListItem(BaseModel):
     service_id: str
     service_name: str
     staff_id: str
+    # El repo joinea Staff pero el DTO nunca exponia el nombre: la agenda del dia
+    # mostraba al cliente sin indicar el profesional (search si lo traia).
+    staff_name: str
     client_name: str
     starts_at: datetime
     ends_at: datetime

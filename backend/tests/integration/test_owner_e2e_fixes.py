@@ -64,6 +64,47 @@ async def test_search_expone_completed_at(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_listado_del_dia_indica_el_profesional_de_una_reserva_de_cliente(
+    client: AsyncClient,
+) -> None:
+    # Un cliente reserva por el flujo publico; el dueno debe ver en la agenda
+    # del dia al cliente Y al profesional. AppointmentListItem no exponia
+    # staff_name (search si), asi que la agenda mostraba el turno sin decir con
+    # quien era.
+    store, token = await register_and_login(
+        client, slug="agenda-pro", email="agenda-pro@example.com"
+    )
+    service = await create_service(client, token)
+    staff = await create_staff(client, token, service)  # display_name "Pro Demo"
+    dia = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+
+    slot = dia.replace(hour=14, minute=0, second=0, microsecond=0)
+    reserva = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store,
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": slot.isoformat(),
+            "client_name": "Carla Ruiz",
+            "client_phone": "+5491155550001",
+            "idempotency_key": "agenda-pro-cliente-1",
+        },
+    )
+    assert reserva.status_code == 201, reserva.text
+
+    fecha = dia.date().isoformat()
+    agenda = await client.get(f"/appointments/?date={fecha}", headers=auth_headers(token))
+    assert agenda.status_code == 200, agenda.text
+    items = agenda.json()
+    assert len(items) == 1
+    assert items[0]["client_name"] == "Carla Ruiz"
+    assert items[0]["staff_name"] == "Pro Demo"
+    assert items[0]["staff_id"] == staff
+
+
+@pytest.mark.asyncio
 async def test_primary_color_rechaza_no_hex(client: AsyncClient) -> None:
     _, token = await register_and_login(
         client, slug="color-val", email="color-val@example.com"
