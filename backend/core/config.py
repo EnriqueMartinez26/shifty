@@ -24,6 +24,28 @@ def _env_files() -> tuple[str, ...] | None:
     return None
 
 
+# Marcadores tipicos de los placeholders del repo (.env.example, plantillas).
+# Un secreto que los contenga NO fue reemplazado por uno real.
+_PLACEHOLDER_MARKERS = (
+    "replace",
+    "change_this",
+    "change-me",
+    "changeme",
+    "placeholder",
+    "at_least_32",
+    "minimum_secret",
+    "your_secret",
+    "example",
+    "generate_a_very_secret",
+    "xxxx",
+)
+
+
+def _looks_like_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shifty v2"
     VERSION: str = "0.1.0"
@@ -163,9 +185,19 @@ class Settings(BaseSettings):
             if (
                 self.SECRET_KEY == "generate_a_very_secret_key_here_for_production"
                 or len(self.SECRET_KEY) < 32
+                or _looks_like_placeholder(self.SECRET_KEY)
             ):
                 raise ValueError(
-                    "SECRET_KEY debe ser fuerte y unico fuera de desarrollo"
+                    "SECRET_KEY debe ser fuerte y unico fuera de desarrollo "
+                    "(parece un placeholder del repo)"
+                )
+            # Misma vara para la clave de cifrado de campos: un placeholder deja
+            # el cifrado de los tokens de MP como un no-op reversible.
+            if self.FIELD_ENCRYPTION_KEY and _looks_like_placeholder(
+                self.FIELD_ENCRYPTION_KEY
+            ):
+                raise ValueError(
+                    "FIELD_ENCRYPTION_KEY parece un placeholder del repo"
                 )
         if self.ENV == Environment.PRODUCTION:
             if "localhost" in self.CORS_ORIGINS or "127.0.0.1" in self.CORS_ORIGINS:
