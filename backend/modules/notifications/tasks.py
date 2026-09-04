@@ -30,12 +30,19 @@ def _mask_email(email: str | None) -> str:
     return f"{visible}***@{dominio}"
 
 
+def _header_safe(value: str) -> str:
+    """Colapsa CR/LF/TAB a espacio: el Subject interpola nombres de servicio/
+    tienda controlados por el usuario, y un CRLF ahi inyecta cabeceras (Bcc,
+    asunto multiple). Se sanea en el sink para cubrir todos los callers."""
+    return " ".join(value.split()) if value else value
+
+
 async def _send_email(to: str, subject: str, body: str) -> bool:
     def _send() -> bool:
         message = EmailMessage()
-        message["Subject"] = subject
+        message["Subject"] = _header_safe(subject)
         message["From"] = settings.EMAILS_FROM_EMAIL
-        message["To"] = to
+        message["To"] = _header_safe(to)
         message.set_content(body)
 
         try:

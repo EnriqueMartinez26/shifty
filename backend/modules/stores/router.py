@@ -16,7 +16,12 @@ from core.exceptions import (
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
 from modules.auth.dependencies import get_current_user
 from modules.stores.mappers import to_store_response
-from modules.stores.media import ALLOWED_KINDS, MAX_IMAGE_BYTES, detect_image_type
+from modules.stores.media import (
+    ALLOWED_KINDS,
+    MAX_IMAGE_BYTES,
+    detect_image_type,
+    exceeds_pixel_budget,
+)
 from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.stores.schemas import (
     StoreFeatureFlags,
@@ -220,6 +225,15 @@ async def upload_store_media(
             "Formato no permitido. Solo PNG, JPEG o WebP.",
             http_status=422,
             error_code="UNSUPPORTED_MEDIA_TYPE",
+        )
+
+    # Dentro de 2MB entra una imagen que declara dimensiones enormes (bomba de
+    # pixeles): rechaza el navegador del visitante al decodificarla.
+    if exceeds_pixel_budget(data, content_type):
+        raise AppException(
+            "La imagen tiene demasiados pixeles (maximo 25 megapixeles).",
+            http_status=422,
+            error_code="IMAGE_TOO_LARGE_DIMENSIONS",
         )
 
     store = await _get_current_store(user, db)

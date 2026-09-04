@@ -37,25 +37,30 @@ async def readiness(
     now = datetime.now(timezone.utc).isoformat()
     db_ok = True
     redis_ok = True
-    errors: list[str] = []
 
     try:
         await db.execute(text("SELECT 1"))
-    except Exception as exc:  # pragma: no cover
+    except Exception:  # pragma: no cover
         db_ok = False
-        errors.append(f"db:{type(exc).__name__}")
 
     try:
         await redis.ping()
-    except Exception as exc:  # pragma: no cover
+    except Exception:  # pragma: no cover
         redis_ok = False
-        errors.append(f"redis:{type(exc).__name__}")
+
+    status_value = "ok" if db_ok and redis_ok else "degraded"
+
+    # Con el flag apagado se devuelve SOLO el estado agregado: ni el detalle de
+    # componentes ni -antes- el nombre de clase de la excepcion (info util para
+    # un atacante anonimo que sondea la infra). El nombre de clase se elimino en
+    # ambos casos.
+    if not settings.OPS_ENABLE_PUBLIC_HEALTH:
+        return {"status": status_value, "time": now}
 
     return {
-        "status": "ok" if db_ok and redis_ok else "degraded",
+        "status": status_value,
         "time": now,
         "components": {"db": db_ok, "redis": redis_ok},
-        "errors": errors,
     }
 
 

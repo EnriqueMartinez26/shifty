@@ -26,11 +26,28 @@ def reject_unsafe_url(value: str | None) -> str | None:
     return normalized
 
 
+# Invisibles que permiten spoofing visual (mostrar algo distinto a lo guardado),
+# ataques de bidireccionalidad (Trojan Source) o romper el renderizado: bidi
+# embeddings/overrides/isolates, zero-width y BOM.
+_FORBIDDEN_UNICODE = frozenset(
+    chr(cp)
+    for cp in (
+        0x200B, 0x200C, 0x200D, 0x200E, 0x200F,  # zero-width + LRM/RLM
+        0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embeddings/overrides
+        0x2066, 0x2067, 0x2068, 0x2069,  # bidi isolates (Trojan Source)
+        0xFEFF,  # BOM / zero-width no-break space
+    )
+)
+
+
 def reject_control_chars(value: str | None) -> str | None:
     if value is None:
         return None
-    if any(ord(char) < 32 and char not in "\t\n\r" for char in value):
-        raise ValueError("El texto contiene caracteres de control no permitidos")
+    for char in value:
+        if (ord(char) < 32 and char not in "\t\n\r") or char in _FORBIDDEN_UNICODE:
+            raise ValueError(
+                "El texto contiene caracteres de control no permitidos"
+            )
     return value
 
 

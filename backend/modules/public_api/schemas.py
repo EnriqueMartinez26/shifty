@@ -2,9 +2,9 @@ from datetime import datetime
 from typing import Optional
 import re
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
 from modules.stores.schemas import StoreCustomField
 
 
@@ -110,6 +110,16 @@ class PublicBookingCreate(BaseModel):
         if value <= now:
             raise ValueError("No se puede agendar un turno en el pasado")
         return value
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_text(self) -> "PublicBookingCreate":
+        # Campos de texto libre controlados por un atacante ANONIMO: se rechazan
+        # control chars, bidi-overrides y zero-width antes de persistirlos y
+        # mostrarlos (panel/portal) o exportarlos.
+        self.client_name = reject_payload_control_chars(self.client_name)
+        self.notes = reject_payload_control_chars(self.notes)
+        self.custom_fields = reject_payload_control_chars(self.custom_fields)
+        return self
 
 
 class PublicBookingResponse(BaseModel):
