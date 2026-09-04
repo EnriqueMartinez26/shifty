@@ -44,6 +44,8 @@ class UserRepository:
         only_active: bool = True,
         email: str | None = None,
         role: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
     ) -> list[User]:
         query = select(User).where(
             User.store_id == store_id,
@@ -55,7 +57,10 @@ class UserRepository:
         if role:
             query = query.where(User.role == role)
 
-        query = query.order_by(User.created_at.desc())
+        # Cota: la tabla crece con cada reserva publica (un User CLIENT por
+        # cliente nuevo), asi que un listado sin techo escalaba mal. El default
+        # de 200 preserva el contrato actual para tiendas chicas.
+        query = query.order_by(User.created_at.desc()).limit(limit).offset(offset)
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

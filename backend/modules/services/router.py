@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
 from core.exceptions import ServiceNotFoundException
 from core.validation import PUBLIC_ID_PATTERN
-from modules.auth.dependencies import get_current_admin, get_current_user
+from modules.auth.dependencies import get_current_admin
+from modules.auth.dependencies import get_current_staff
 from modules.services.mappers import to_service_response
 from modules.services.repository import ServiceRepository
 from modules.services.schemas import ServiceCreate, ServiceResponse, ServiceUpdate
@@ -32,7 +33,7 @@ async def create_service(
 
 @router.get("/", response_model=list[ServiceResponse])
 async def list_services(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    user: User = Depends(get_current_staff), db: AsyncSession = Depends(get_db)
 ) -> list[ServiceResponse]:
     repo = ServiceRepository(db)
     services = await repo.get_all(user.store_id)
@@ -42,7 +43,7 @@ async def list_services(
 @router.get("/{public_id}", response_model=ServiceResponse)
 async def get_service(
     public_id: PublicIdPath,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> ServiceResponse:
     repo = ServiceRepository(db)

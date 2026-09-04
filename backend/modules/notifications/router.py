@@ -8,7 +8,7 @@ from core.database import get_db
 from core.exceptions import ResourceNotFoundException
 from core.router import CanonicalAPIRouter
 from core.validation import PUBLIC_ID_PATTERN
-from modules.auth.dependencies import get_current_user
+from modules.auth.dependencies import get_current_staff
 from modules.notifications.model import Notification
 from modules.notifications.schemas import (
     NotificationListResponse,
@@ -52,7 +52,7 @@ async def _unread_count(db: AsyncSession, store_id: str) -> int:
 async def list_notifications(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     unread_only: bool = False,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationListResponse:
     filters = [
@@ -77,7 +77,7 @@ async def list_notifications(
 @router.post("/{notification_id}/read", response_model=NotificationMarkReadResponse)
 async def mark_notification_read(
     notification_id: PublicIdPath,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationMarkReadResponse:
     result = await db.execute(
@@ -103,7 +103,7 @@ async def mark_notification_read(
 
 @router.post("/read-all", response_model=NotificationMarkReadResponse)
 async def mark_all_notifications_read(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationMarkReadResponse:
     result = await db.execute(

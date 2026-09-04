@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
@@ -120,18 +120,27 @@ class ReportService:
         return client_id or "Cliente"
 
     async def _build_debt_summary(self) -> ReportDebtSummary:
-        result = await self.db.execute(
-            select(CustomerLedger).order_by(
-                CustomerLedger.client_id.asc(), CustomerLedger.created_at.asc()
+        # Solo el ultimo movimiento por cliente, resuelto en la DB (row_number
+        # sobre la particion por client_id) en vez de traer todo el ledger y
+        # deduplicar en Python: ese barrido crecia sin techo por cada cargo.
+        ultimo_por_cliente = select(
+            CustomerLedger.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=CustomerLedger.client_id,
+                order_by=CustomerLedger.created_at.desc(),
             )
+            .label("rn"),
+        ).subquery()
+        result = await self.db.execute(
+            select(CustomerLedger)
+            .join(ultimo_por_cliente, CustomerLedger.id == ultimo_por_cliente.c.id)
+            .where(ultimo_por_cliente.c.rn == 1)
         )
-        latest_by_client: dict[str, CustomerLedger] = {}
-        for movement in result.scalars().all():
-            latest_by_client[movement.client_id] = movement
 
         debt_rows = [
             movement
-            for movement in latest_by_client.values()
+            for movement in result.scalars().all()
             if Decimal(str(movement.balance_after or 0)) > 0
         ]
         if not debt_rows:
@@ -246,24 +255,33 @@ class ReportService:
         paid_by_appt = await self._accredited_payments_by_appointment(
             [appointment.id for appointment, *_ in rows]
         )
+        # Antes se traia TODO el historial de turnos de la tienda (sin cota
+        # inferior) para calcular cohortes en Python. El loop solo necesita, por
+        # cliente, la PRIMERA visita (MIN(starts_at)) y sus datos de contacto:
+        # eso es una agregacion, asi que se resuelve en la DB y vuelven O(clientes)
+        # filas en vez de O(turnos). La forma de la fila se mantiene para que
+        # _aggregate_summary no cambie ("visto antes del rango" == min < inicio).
         historical_clients_query = (
             select(
                 Appointment.client_id,
                 User.first_name,
                 User.last_name,
                 User.email,
-                Appointment.starts_at,
+                func.min(Appointment.starts_at),
             )
             .join(User, Appointment.client_id == User.id)
             .where(Appointment.client_id.is_not(None), Appointment.starts_at < end_dt)
+            .group_by(
+                Appointment.client_id, User.first_name, User.last_name, User.email
+            )
         )
         if staff_id:
             historical_clients_query = historical_clients_query.where(
                 Appointment.staff_id == staff_id
             )
-        historical_clients_result = await self.db.execute(
-            historical_clients_query.order_by(Appointment.starts_at.asc())
-        )
+        # Con GROUP BY cada cliente aparece una sola vez, asi que el orden ya no
+        # importa (el loop usa setdefault sobre la primera visita).
+        historical_clients_result = await self.db.execute(historical_clients_query)
 
         aggregation = self._aggregate_summary(
             rows=rows,

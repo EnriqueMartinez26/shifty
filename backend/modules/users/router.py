@@ -38,6 +38,8 @@ async def list_users(
     include_inactive: bool = Query(False),
     email: str | None = Query(None, max_length=255),
     role: str | None = Query(None, max_length=50),
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserResponse]:
@@ -47,6 +49,8 @@ async def list_users(
         only_active=not include_inactive,
         email=email,
         role=role,
+        limit=limit,
+        offset=offset,
     )
     return [UserResponse.model_validate(user) for user in users]
 

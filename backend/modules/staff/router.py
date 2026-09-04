@@ -12,7 +12,8 @@ from core.exceptions import (
     ValidationException,
 )
 from core.validation import PUBLIC_ID_PATTERN
-from modules.auth.dependencies import get_current_admin, get_current_user
+from modules.auth.dependencies import get_current_admin
+from modules.auth.dependencies import get_current_staff
 from modules.staff.mappers import to_schedule_response, to_staff_response
 from modules.staff.repository import StaffRepository
 from modules.staff.schemas import (
@@ -56,7 +57,7 @@ async def create_staff(
 
 @router.get("/", response_model=list[StaffResponse])
 async def list_staff(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    user: User = Depends(get_current_staff), db: AsyncSession = Depends(get_db)
 ) -> list[StaffResponse]:
     repo = StaffRepository(db)
     members = await repo.get_all(user.store_id)
@@ -66,7 +67,7 @@ async def list_staff(
 @router.get("/{public_id}", response_model=StaffResponse)
 async def get_staff(
     public_id: PublicIdPath,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StaffResponse:
     repo = StaffRepository(db)

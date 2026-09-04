@@ -3,7 +3,7 @@ from typing import Annotated
 
 from fastapi import Depends, Path
 from core.router import CanonicalAPIRouter
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -106,19 +106,41 @@ async def get_ledger_summary(
 ) -> LedgerSummaryResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
+    # Antes se traia TODO el ledger de la tienda y se deduplicaba en Python para
+    # quedarse con el ultimo movimiento por cliente: crecia sin techo con cada
+    # cargo. Ahora la DB devuelve solo el ultimo por cliente (row_number sobre
+    # la particion por client_id), y el total se cuenta con COUNT.
+    ultimo_por_cliente = (
+        select(
+            CustomerLedger.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=CustomerLedger.client_id,
+                order_by=CustomerLedger.created_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(CustomerLedger.store_id == user.store_id)
+        .subquery()
+    )
     result = await db.execute(
         select(CustomerLedger)
-        .where(CustomerLedger.store_id == user.store_id)
-        .order_by(CustomerLedger.client_id.asc(), CustomerLedger.created_at.asc())
+        .join(ultimo_por_cliente, CustomerLedger.id == ultimo_por_cliente.c.id)
+        .where(ultimo_por_cliente.c.rn == 1)
     )
-    movements = list(result.scalars().all())
-    latest_by_client: dict[str, CustomerLedger] = {}
-    for movement in movements:
-        latest_by_client[movement.client_id] = movement
+    latest_rows = list(result.scalars().all())
+    total_movements = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(CustomerLedger)
+            .where(CustomerLedger.store_id == user.store_id)
+        )
+        or 0
+    )
 
     debt_rows = [
         movement
-        for movement in latest_by_client.values()
+        for movement in latest_rows
         if Decimal(str(movement.balance_after or 0)) > 0
     ]
     client_ids = [movement.client_id for movement in debt_rows]
@@ -143,7 +165,7 @@ async def get_ledger_summary(
         total_balance=total_balance,
         debtors_count=len(debt_rows),
         average_balance=average_balance.quantize(Decimal("0.01")),
-        total_movements=len(movements),
+        total_movements=total_movements,
         top_debtors=[
             LedgerSummaryClientItem(
                 client_id=item.client_id,

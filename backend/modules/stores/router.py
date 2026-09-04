@@ -14,7 +14,7 @@ from core.exceptions import (
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
-from modules.auth.dependencies import get_current_user
+from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
 from modules.stores.media import (
     ALLOWED_KINDS,
@@ -73,7 +73,7 @@ def _replace_business_hours(
 
 @router.get("/me", response_model=StoreResponse)
 async def get_my_store(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreResponse:
     store = await _get_current_store(user, db)
@@ -83,7 +83,7 @@ async def get_my_store(
 @router.patch("/me", response_model=StoreResponse)
 async def update_my_store(
     data: StoreUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreResponse:
     if user.role != UserRole.ADMIN:
@@ -148,7 +148,7 @@ async def update_my_store(
 
 @router.get("/me/feature-flags", response_model=StoreFeatureFlagsResponse)
 async def get_my_store_feature_flags(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreFeatureFlagsResponse:
     store = await _get_current_store(user, db)
@@ -160,7 +160,7 @@ async def get_my_store_feature_flags(
 @router.put("/me/feature-flags", response_model=StoreFeatureFlagsResponse)
 async def update_my_store_feature_flags(
     data: StoreFeatureFlagsUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreFeatureFlagsResponse:
     if user.role != UserRole.ADMIN:
@@ -193,7 +193,7 @@ async def update_my_store_feature_flags(
 async def upload_store_media(
     kind: str = Form(...),
     file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreMediaUploadResponse:
     if user.role != UserRole.ADMIN:
