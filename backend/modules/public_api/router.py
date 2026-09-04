@@ -621,6 +621,11 @@ async def create_public_booking(
                         if promotion_quote
                         else discounted_service_price,
                     )
+                    # Dentro de la transaccion (que sostiene el lock FOR UPDATE
+                    # del staff) solo se crea el Payment PENDING con link
+                    # placeholder: la llamada HTTP a Mercado Pago se hace DESPUES
+                    # del commit, con el lock ya soltado (ver mas abajo), para no
+                    # serializar reservas ni agotar el pool ante latencia de MP.
                     payment = await ensure_payment_preference(
                         db,
                         appointment=appointment,
@@ -635,6 +640,7 @@ async def create_public_booking(
                         promotion_code=promotion_quote.code
                         if promotion_quote
                         else None,
+                        create_provider_link=False,
                     )
                 else:
                     # El pago se coordina por fuera, asi que la tienda tiene que
@@ -671,6 +677,42 @@ async def create_public_booking(
             )
 
         await db.commit()
+
+        # El turno y el Payment PENDING ya estan persistidos y el lock FOR UPDATE
+        # del staff quedo soltado. Recien ahora se hace la llamada HTTP a Mercado
+        # Pago para el link real: fuera de la transaccion, sin retener el lock ni
+        # serializar otras reservas. Si MP falla, el turno queda en
+        # PENDING_PAYMENT y su hold expira solo; un reintento (misma idempotency)
+        # reusa el turno y reintenta el link.
+        if payment_required and payment is not None:
+            try:
+                await ensure_payment_preference(
+                    db,
+                    appointment=appointment,
+                    service=service,
+                    store_id=store_id,
+                    amount_override=payment.amount,
+                    original_amount=payment.original_amount,
+                    discount_amount=payment.discount_amount,
+                    promotion_code=payment.promotion_code,
+                    create_provider_link=True,
+                )
+                await db.commit()
+            except CircuitBreakerOpenError as exc:
+                await idempotency_release(idempotency_key, redis)
+                raise AppException(
+                    message=f"Proveedor de pagos temporalmente no disponible: {exc}",
+                    http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    error_code="PAYMENT_PROVIDER_UNAVAILABLE",
+                )
+            except RuntimeError as exc:
+                await idempotency_release(idempotency_key, redis)
+                raise AppException(
+                    message=f"No se pudo iniciar el cobro online: {exc}",
+                    http_status=status.HTTP_502_BAD_GATEWAY,
+                    error_code="PAYMENT_LINK_CREATION_FAILED",
+                )
+
         if (
             appointment.client_email
             and appointment.status == AppointmentStatus.CONFIRMED.value
