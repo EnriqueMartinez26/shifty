@@ -135,6 +135,10 @@ class OtpService:
             )
             .order_by(OtpVerification.created_at.desc())
             .limit(1)
+            # Lock de fila: sin esto, dos verify concurrentes leen el mismo
+            # attempts y ambos incrementan a N+1 (read-modify-write), dejando
+            # exceder OTP_MAX_ATTEMPTS. No-op en SQLite (tests).
+            .with_for_update()
         )
         otp = result.scalar_one_or_none()
         if not otp or otp.is_consumed or otp.is_expired:
