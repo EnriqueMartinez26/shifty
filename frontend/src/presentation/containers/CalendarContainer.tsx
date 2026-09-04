@@ -214,7 +214,11 @@ export const CalendarContainer: React.FC = () => {
         id: appointment.id,
         type: appointment.status === 'absent' ? 'absence' : 'appointment',
         staffId: appointment.staffId,
+        // Primero el nombre autoritativo que manda el backend (del join, vale
+        // aunque el profesional este dado de baja o el listado de staff no
+        // haya cargado); el cruce por id queda como respaldo.
         staffName:
+          appointment.staffName ||
           staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
           'Profesional',
         title: appointment.clientName,

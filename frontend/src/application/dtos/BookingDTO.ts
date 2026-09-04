@@ -3,6 +3,9 @@ export interface AppointmentResponseDTO {
   service_id: string
   service_name: string
   staff_id: string
+  // Nombre autoritativo del profesional (viene del join en el backend). Opcional
+  // para tolerar payloads que aun no lo traigan.
+  staff_name?: string | null
   client_name: string
   starts_at: string
   ends_at: string

@@ -7,6 +7,7 @@ export interface AppointmentProps {
   serviceId: string
   serviceName: string
   staffId: string
+  staffName: string | null
   clientName: string
   timeSpan: BookingTimeSpan
   status: BookingStatus
@@ -25,6 +26,7 @@ export class Appointment {
     service_id: string
     service_name: string
     staff_id: string
+    staff_name?: string | null
     client_name: string
     starts_at: string
     ends_at: string
@@ -36,6 +38,7 @@ export class Appointment {
       serviceId: props.service_id,
       serviceName: props.service_name,
       staffId: props.staff_id,
+      staffName: props.staff_name ?? null,
       clientName: props.client_name,
       timeSpan: BookingTimeSpan.create(props.starts_at, props.ends_at),
       status: BookingStatus.create(props.status),
@@ -55,6 +58,9 @@ export class Appointment {
   }
   get staffId() {
     return this.props.staffId
+  }
+  get staffName() {
+    return this.props.staffName
   }
   get clientName() {
     return this.props.clientName
@@ -91,6 +97,7 @@ export class Appointment {
       service_id: this.props.serviceId,
       service_name: this.props.serviceName,
       staff_id: this.props.staffId,
+      staff_name: this.props.staffName,
       client_name: this.props.clientName,
       starts_at: this.props.timeSpan.getStartsAt().toISOString(),
       ends_at: this.props.timeSpan.getEndsAt().toISOString(),
