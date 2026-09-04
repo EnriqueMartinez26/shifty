@@ -11,7 +11,6 @@ from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.exceptions import AuthenticationException, PermissionDeniedException
 from core.roles import (
     APPOINTMENT_MANAGERS,
-    ROLE_SUPER_ADMIN,
     STORE_MANAGERS,
     has_any_role,
 )
@@ -145,6 +144,10 @@ async def get_current_staff(
 async def get_current_global_admin(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    if not current_user.is_global_admin and str(current_user.role) != ROLE_SUPER_ADMIN:
+    # La autorizacion global depende SOLO de is_global_admin, el mismo flag que
+    # gobierna el contexto RLS. Se elimino la segunda llave role=='super_admin':
+    # desacoplada de RLS, dejaba pasar al panel una cuenta cuyo poder efectivo
+    # quedaba acotado a su tienda (invariante fragil ante un role mal seteado).
+    if not current_user.is_global_admin:
         raise PermissionDeniedException("soporte global")
     return current_user

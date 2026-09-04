@@ -22,6 +22,14 @@ from modules.staff.model import Schedule, Staff, StaffBlock
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
+# Los clientes creados en el booking publico NO inician sesion (login/reset les
+# esta negado), asi que su hash de password nunca se verifica. Se computa UNA
+# sola vez al importar y se reusa, en vez de correr bcrypt (sincrono, 12 rounds,
+# ~250ms) en el event loop por cada alta anonima: era un vector de DoS. Sigue
+# siendo un hash bcrypt valido, asi que un verify eventual devuelve False sin
+# romper (no un formato invalido que lance excepcion).
+_UNUSABLE_CLIENT_PASSWORD_HASH = hash_password(str(ulid.ULID()))
+
 
 class PublicRepository:
     def __init__(self, db: AsyncSession):
@@ -152,7 +160,7 @@ class PublicRepository:
         technical_email = email or f"{phone}@store{store_id}.noreply"
         new_client = User(
             email=technical_email,
-            hashed_password=hash_password(str(ulid.ULID())),
+            hashed_password=_UNUSABLE_CLIENT_PASSWORD_HASH,
             full_name=name,
             phone=phone,
             role=UserRole.CLIENT,
