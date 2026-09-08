@@ -2,9 +2,6 @@ import React from 'react'
 
 import type { SuperAdminPlan, SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
-import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
-import { formatCurrencyEsAr } from '../../lib/formatters'
-import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
 import {
   formGridClass,
   scopeBadgeStyle,
@@ -13,6 +10,9 @@ import {
   type SubscriptionFormState,
   type SuperAdminModalKey
 } from './shared'
+import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
+import { formatCurrencyEsAr } from '../../lib/formatters'
+import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
 
 /**
  * Modales del panel SuperAdmin, agrupados por dominio.

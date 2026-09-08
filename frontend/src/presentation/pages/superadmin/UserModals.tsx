@@ -1,8 +1,5 @@
 import React from 'react'
 
-import { colors2000s } from '../../../theme/colors'
-import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
-import { FieldLabel, SelectInput, TextInput, ToggleRow } from '../SuperAdminUi'
 import {
   formGridClass,
   innerCardStyle,
@@ -10,6 +7,9 @@ import {
   type SuperAdminModalKey,
   type UserFormState
 } from './shared'
+import { colors2000s } from '../../../theme/colors'
+import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
+import { FieldLabel, SelectInput, TextInput, ToggleRow } from '../SuperAdminUi'
 
 /**
  * Modales del panel SuperAdmin, agrupados por dominio.

@@ -2,10 +2,6 @@ import React from 'react'
 
 import type { SuperAdminCoupon, SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
-import { colors2000s } from '../../../theme/colors'
-import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
-import { formatCurrencyEsAr } from '../../lib/formatters'
-import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
 import {
   formGridClass,
   innerCardStyle,
@@ -15,6 +11,10 @@ import {
   type RedeemFormState,
   type SuperAdminModalKey
 } from './shared'
+import { colors2000s } from '../../../theme/colors'
+import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
+import { formatCurrencyEsAr } from '../../lib/formatters'
+import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
 
 /**
  * Modales del panel SuperAdmin, agrupados por dominio.

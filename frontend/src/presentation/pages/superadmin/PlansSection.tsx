@@ -2,10 +2,10 @@ import React from 'react'
 
 import type { SuperAdminPlan } from '@application/services/SuperAdminService'
 
+import { innerCardStyle, panelStyle, scopeBadgeStyle, type QueryState } from './shared'
 import { colors2000s } from '../../../theme/colors'
 import { formatCurrencyEsAr } from '../../lib/formatters'
 import { ActionButton, MiniButton } from '../SuperAdminUi'
-import { innerCardStyle, panelStyle, scopeBadgeStyle, type QueryState } from './shared'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).

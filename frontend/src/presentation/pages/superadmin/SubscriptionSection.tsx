@@ -8,10 +8,10 @@ import type {
   SuperAdminStoreRow
 } from '@application/services/SuperAdminService'
 
+import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
 import { colors2000s } from '../../../theme/colors'
 import { formatCurrencyEsAr, formatDateEsAr } from '../../lib/formatters'
 import { ActionButton } from '../SuperAdminUi'
-import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).

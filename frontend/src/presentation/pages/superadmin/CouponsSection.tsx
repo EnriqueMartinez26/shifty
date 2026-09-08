@@ -4,9 +4,6 @@ import { Tag } from 'lucide-react'
 
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
-import { colors2000s } from '../../../theme/colors'
-import { formatCurrencyEsAr, formatDateEsAr } from '../../lib/formatters'
-import { ActionButton, MiniButton } from '../SuperAdminUi'
 import {
   emptyStateStyle,
   innerCardStyle,
@@ -16,6 +13,9 @@ import {
   scopeBadgeStyle,
   type QueryState
 } from './shared'
+import { colors2000s } from '../../../theme/colors'
+import { formatCurrencyEsAr, formatDateEsAr } from '../../lib/formatters'
+import { ActionButton, MiniButton } from '../SuperAdminUi'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).

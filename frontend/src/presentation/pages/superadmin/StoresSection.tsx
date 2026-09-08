@@ -4,10 +4,6 @@ import { Building2, Filter, Loader2, Search } from 'lucide-react'
 
 import type { SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
-import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
-import { formatDateEsAr } from '../../lib/formatters'
-import { create2000sInputStyle } from '../../lib/surfaceStyles'
-import { MiniButton } from '../SuperAdminUi'
 import {
   emptyStateStyle,
   innerCardStyle,
@@ -18,6 +14,10 @@ import {
   type QueryState,
   type SubscriptionFilter
 } from './shared'
+import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { formatDateEsAr } from '../../lib/formatters'
+import { create2000sInputStyle } from '../../lib/surfaceStyles'
+import { MiniButton } from '../SuperAdminUi'
 
 /**
  * Seccion del panel SuperAdmin (descompuesto por dominio).
