@@ -95,7 +95,9 @@ async def test_listado_del_dia_indica_el_profesional_de_una_reserva_de_cliente(
     assert reserva.status_code == 201, reserva.text
 
     fecha = dia.date().isoformat()
-    agenda = await client.get(f"/appointments/?date={fecha}", headers=auth_headers(token))
+    agenda = await client.get(
+        f"/appointments/?date={fecha}", headers=auth_headers(token)
+    )
     assert agenda.status_code == 200, agenda.text
     items = agenda.json()
     assert len(items) == 1

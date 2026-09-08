@@ -196,9 +196,7 @@ class Settings(BaseSettings):
             if self.FIELD_ENCRYPTION_KEY and _looks_like_placeholder(
                 self.FIELD_ENCRYPTION_KEY
             ):
-                raise ValueError(
-                    "FIELD_ENCRYPTION_KEY parece un placeholder del repo"
-                )
+                raise ValueError("FIELD_ENCRYPTION_KEY parece un placeholder del repo")
         if self.ENV == Environment.PRODUCTION:
             if "localhost" in self.CORS_ORIGINS or "127.0.0.1" in self.CORS_ORIGINS:
                 raise ValueError("CORS_ORIGINS no debe incluir localhost en produccion")

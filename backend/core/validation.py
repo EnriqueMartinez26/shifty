@@ -32,9 +32,20 @@ def reject_unsafe_url(value: str | None) -> str | None:
 _FORBIDDEN_UNICODE = frozenset(
     chr(cp)
     for cp in (
-        0x200B, 0x200C, 0x200D, 0x200E, 0x200F,  # zero-width + LRM/RLM
-        0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embeddings/overrides
-        0x2066, 0x2067, 0x2068, 0x2069,  # bidi isolates (Trojan Source)
+        0x200B,
+        0x200C,
+        0x200D,
+        0x200E,
+        0x200F,  # zero-width + LRM/RLM
+        0x202A,
+        0x202B,
+        0x202C,
+        0x202D,
+        0x202E,  # bidi embeddings/overrides
+        0x2066,
+        0x2067,
+        0x2068,
+        0x2069,  # bidi isolates (Trojan Source)
         0xFEFF,  # BOM / zero-width no-break space
     )
 )
@@ -45,9 +56,7 @@ def reject_control_chars(value: str | None) -> str | None:
         return None
     for char in value:
         if (ord(char) < 32 and char not in "\t\n\r") or char in _FORBIDDEN_UNICODE:
-            raise ValueError(
-                "El texto contiene caracteres de control no permitidos"
-            )
+            raise ValueError("El texto contiene caracteres de control no permitidos")
     return value
 
 

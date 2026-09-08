@@ -157,7 +157,7 @@ async def _login_failures(email_key: str) -> int:
         redis = await get_redis()
         value = await redis.get(f"login:fail:{email_key}")
         return int(value) if value else 0
-    except (RedisError, OSError, ValueError):
+    except RedisError, OSError, ValueError:
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
                 message="Servicio temporalmente no disponible",
@@ -177,7 +177,7 @@ async def _register_login_failure(email_key: str) -> None:
         pipe.incr(key)
         pipe.expire(key, settings.LOGIN_LOCKOUT_WINDOW_SECONDS)
         await pipe.execute()
-    except (RedisError, OSError):
+    except RedisError, OSError:
         logger.warning("login_lockout_redis_unavailable")
 
 
@@ -187,7 +187,7 @@ async def _clear_login_failures(email_key: str) -> None:
     try:
         redis = await get_redis()
         await redis.delete(f"login:fail:{email_key}")
-    except (RedisError, OSError):
+    except RedisError, OSError:
         logger.warning("login_lockout_redis_unavailable")
 
 
