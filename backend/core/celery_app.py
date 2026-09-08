@@ -1,10 +1,45 @@
+import logging
+import os
+import tempfile
+
 from celery import Celery
 from celery.schedules import crontab
-from core.config import settings
+from celery.signals import beat_init, worker_init
+from core.config import SETTINGS_BOOT_ERROR, settings
+from core.model_registry import load_all_models
 from core.observability import init_observability
+
+logger = logging.getLogger(__name__)
 
 # Los workers corren en procesos aparte: necesitan su propia inicializacion.
 init_observability("worker")
+# ...y su registro de modelos completo: las tasks importan Appointment pero
+# no Staff, y las relaciones por nombre fallan al configurar los mappers.
+load_all_models()
+
+
+@worker_init.connect  # type: ignore[untyped-decorator]
+@beat_init.connect  # type: ignore[untyped-decorator]
+def _abort_if_settings_are_fallback(**_: object) -> None:
+    """Ni el worker ni beat deben correr con la configuracion de respaldo.
+
+    La API tolera un Settings() invalido para responder 503 con el detalle;
+    un proceso de Celery con settings de respaldo apunta a una base
+    inexistente y a un Redis en localhost, se declara "ready" y no procesa
+    nada (beat ni siquiera puede encolar). Mejor morir a la vista: con
+    restart:always queda en crash-loop con este mensaje en el log.
+    SystemExit no es Exception, asi que el despachador de signals de Celery
+    no lo traga.
+    """
+    if SETTINGS_BOOT_ERROR is None:
+        return
+    logger.critical(
+        "Configuracion invalida, Celery no arranca: %s", SETTINGS_BOOT_ERROR
+    )
+    raise SystemExit(
+        f"Configuracion invalida, Celery no arranca: {SETTINGS_BOOT_ERROR}"
+    )
+
 
 celery_app = Celery(
     "shifty",
@@ -19,6 +54,13 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     broker_connection_retry_on_startup=True,
+    # Beat persiste "ultima corrida" en un archivo. Va al tmp del sistema:
+    # dentro del directorio del codigo dejaba archivos de root en el repo
+    # montado y en la imagen (usuario no-root) podia no ser escribible.
+    # Perderlo en un reinicio es inocuo: los crontab se recalculan.
+    beat_schedule_filename=os.path.join(
+        tempfile.gettempdir(), "shifty-celerybeat-schedule"
+    ),
     worker_prefetch_multiplier=settings.CELERY_WORKER_PREFETCH_MULTIPLIER,
     task_acks_late=settings.CELERY_TASK_ACKS_LATE,
     task_reject_on_worker_lost=True,

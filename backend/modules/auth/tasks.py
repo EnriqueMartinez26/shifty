@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 from celery.app.task import Task
 from sqlalchemy import delete, or_
 
 from core.celery_app import celery_app
+from core.worker_loop import run_in_worker_loop
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
 from modules.auth.session_model import AuthSession
 
@@ -42,4 +42,4 @@ def purge_expired_auth_sessions(
             finally:
                 set_tenant_context(None, False)
 
-    return asyncio.run(_run())
+    return run_in_worker_loop(_run())

@@ -10,6 +10,7 @@ from typing import Any, cast
 import structlog
 
 from core.celery_app import celery_app
+from core.worker_loop import run_in_worker_loop
 from core.config import settings
 from core.database import (
     AsyncSessionFactory,
@@ -310,7 +311,7 @@ def process_appointment_reminders(
         }
 
     try:
-        return asyncio.run(_run())
+        return run_in_worker_loop(_run())
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 

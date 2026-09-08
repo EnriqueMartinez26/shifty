@@ -1,3 +1,45 @@
+# Entorno compartido por la API y los procesos de Celery (worker y beat).
+# Los tres construyen Settings() con las MISMAS variables: si Celery recibe
+# menos, Settings() falla, cae al respaldo y los jobs no procesan nada.
+x-app-environment: &app_environment
+  ENV: ${ENV:-development}
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  # Sin default: un secreto de firma publicado en el repo permite forjar
+  # tokens. Genera uno con: openssl rand -hex 32 (ver .env.example).
+  SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
+  # La app usa un rol sin superusuario para que RLS la alcance.
+  DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
+  # Las migraciones necesitan DDL: van con el dueno de la base.
+  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-shifty_app_password}
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
+  CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
+  MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:-}
+  MERCADOPAGO_OAUTH_CLIENT_SECRET: ${MERCADOPAGO_OAUTH_CLIENT_SECRET:-}
+  MERCADOPAGO_OAUTH_REDIRECT_URI: ${MERCADOPAGO_OAUTH_REDIRECT_URI:-}
+  MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET:-}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-true}
+  EXPOSE_API_DOCS: ${EXPOSE_API_DOCS:-true}
+  OTP_PROVIDER: ${OTP_PROVIDER:-console}
+  OTP_DEBUG_EXPOSE_CODE: ${OTP_DEBUG_EXPOSE_CODE:-true}
+  SMTP_HOST: ${SMTP_HOST:-localhost}
+  SMTP_PORT: ${SMTP_PORT:-25}
+  SMTP_USER: ${SMTP_USER:-user}
+  SMTP_PASS: ${SMTP_PASS:-pass}
+  EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL:-no-reply@localhost}
+  MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-32768}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-240}
+  RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-12}
+  RATE_LIMIT_PUBLIC_READ_PER_MINUTE: ${RATE_LIMIT_PUBLIC_READ_PER_MINUTE:-120}
+  RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE: ${RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE:-20}
+
 services:
   db:
     image: postgres:16-alpine
@@ -56,44 +98,7 @@ services:
       dockerfile: Dockerfile
     container_name: shifty_backend
     restart: always
-    environment:
-      ENV: ${ENV:-development}
-      SENTRY_DSN: ${SENTRY_DSN:-}
-      # Sin default: un secreto de firma publicado en el repo permite forjar
-      # tokens. Genera uno con: openssl rand -hex 32 (ver .env.example).
-      SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
-      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
-      # La app usa un rol sin superusuario para que RLS la alcance.
-      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
-      # Las migraciones necesitan DDL: van con el dueno de la base.
-      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-shifty_app_password}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
-      CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
-      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
-      MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:-}
-      MERCADOPAGO_OAUTH_CLIENT_SECRET: ${MERCADOPAGO_OAUTH_CLIENT_SECRET:-}
-      MERCADOPAGO_OAUTH_REDIRECT_URI: ${MERCADOPAGO_OAUTH_REDIRECT_URI:-}
-      MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET:-}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://127.0.0.1}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-true}
-      EXPOSE_API_DOCS: ${EXPOSE_API_DOCS:-true}
-      OTP_PROVIDER: ${OTP_PROVIDER:-console}
-      OTP_DEBUG_EXPOSE_CODE: ${OTP_DEBUG_EXPOSE_CODE:-true}
-      SMTP_HOST: ${SMTP_HOST:-localhost}
-      SMTP_PORT: ${SMTP_PORT:-25}
-      SMTP_USER: ${SMTP_USER:-user}
-      SMTP_PASS: ${SMTP_PASS:-pass}
-      EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL:-no-reply@localhost}
-      MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-32768}
-      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
-      RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-240}
-      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-12}
-      RATE_LIMIT_PUBLIC_READ_PER_MINUTE: ${RATE_LIMIT_PUBLIC_READ_PER_MINUTE:-120}
-      RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE: ${RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE:-20}
+    environment: *app_environment
     volumes:
       - ./backend:/app
       - /app/.venv
@@ -117,16 +122,7 @@ services:
     command: uv run celery -A core.celery_app worker --loglevel=info
     container_name: shifty_celery
     restart: always
-    environment:
-      # La app usa un rol sin superusuario para que RLS la alcance.
-      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
-      # Las migraciones necesitan DDL: van con el dueno de la base.
-      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-shifty_app_password}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
-      CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
-      SENTRY_DSN: ${SENTRY_DSN:-}
+    environment: *app_environment
     volumes:
       - ./backend:/app
       - /app/.venv
@@ -148,16 +144,7 @@ services:
     command: uv run celery -A core.celery_app beat --loglevel=info
     container_name: shifty_celery_beat
     restart: always
-    environment:
-      # La app usa un rol sin superusuario para que RLS la alcance.
-      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
-      # Las migraciones necesitan DDL: van con el dueno de la base.
-      MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
-      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-shifty_app_password}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
-      CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
-      SENTRY_DSN: ${SENTRY_DSN:-}
+    environment: *app_environment
     volumes:
       - ./backend:/app
       - /app/.venv

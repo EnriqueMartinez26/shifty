@@ -11,25 +11,13 @@ from typing import Any
 from sqlalchemy import Engine, create_engine, pool
 from alembic import context
 
-# Importar Base y modelos para autogenerate
+# Base + TODOS los modelos, desde el registro unico: una lista parcial hace
+# que autogenerate proponga borrar las tablas que no vio.
+from core.config import settings
+from core.model_registry import load_all_models
 from core.models import Base
 
-# from modules.users.model import User
-from modules.stores.model import Store
-from modules.services.model import Service
-
-# from modules.staff.model import Staff, Schedule, StaffBlock
-# from modules.appointments.model import Appointment
-from modules.budget.model import Budget
-from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
-from modules.audit.model import AuditLog
-from infrastructure.persistence.models.appointment import AppointmentModel
-from infrastructure.persistence.models.staff import StaffModel
-from infrastructure.persistence.models.user import UserModel
-from infrastructure.persistence.models.appointment_block import AppointmentBlockModel
-from infrastructure.persistence.models.staff_service import StaffServiceModel
-from infrastructure.persistence.models.schedule import ScheduleModel
-from core.config import settings
+load_all_models()
 
 # Alembic Config object
 config = context.config
