@@ -240,6 +240,9 @@ function App() {
               <Route index element={<SuperAdminPage />} />
             </Route>
             <Route path="/" element={<RootRedirect />} />
+            {/* Cualquier ruta desconocida (p.ej. el viejo /register) vuelve al
+                inicio: sin sesion va al login, con sesion a su panel. */}
+            <Route path="*" element={<RootRedirect />} />
           </Routes>
         </Suspense>
       </BrowserRouter>
