@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy import select
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -36,8 +37,33 @@ def _required_env(name: str) -> str:
     return value
 
 
+_EMAIL = TypeAdapter(EmailStr)
+
+
+def validate_superadmin_email(raw: str) -> str:
+    """Valida el email con el MISMO criterio que el login (EmailStr).
+
+    Sin esto se podia crear el primer superadmin con un email que el login
+    rechaza (p.ej. admin@shifty.local: dominio reservado, 422), dejando la
+    plataforma sin ningun superadmin capaz de entrar y sin forma de
+    arreglarlo desde la UI. Mejor fallar aca, antes de escribir nada.
+    """
+    try:
+        return str(_EMAIL.validate_python(raw.strip())).lower()
+    except ValidationError as exc:
+        detail = (
+            exc.errors()[0].get("msg", "email invalido")
+            if exc.errors()
+            else "email invalido"
+        )
+        raise RuntimeError(
+            f"SUPERADMIN_EMAIL invalido ({detail}). Usa un email real con dominio "
+            "publico: es el que vas a usar para entrar al panel."
+        ) from exc
+
+
 async def bootstrap() -> None:
-    email = _required_env("SUPERADMIN_EMAIL").lower()
+    email = validate_superadmin_email(_required_env("SUPERADMIN_EMAIL"))
     password = _required_env("SUPERADMIN_PASSWORD")
     # La cuenta mas privilegiada del sistema pasa por la MISMA politica que el
     # resto (min 12 + denylist), no un piso mas debil.
