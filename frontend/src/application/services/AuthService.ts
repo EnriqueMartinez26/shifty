@@ -1,7 +1,5 @@
 import apiClient from '@infrastructure/http/client'
 
-import type { BusinessType } from '@shared/types/business'
-
 export interface AuthenticatedUser {
   email: string
   role: string
@@ -19,16 +17,6 @@ export interface LoginPayload {
 
 export interface LoginResponse {
   access_token: string
-}
-
-export interface RegisterBusinessPayload {
-  store_name: string
-  store_slug: string
-  business_type: BusinessType
-  admin_email: string
-  admin_password: string
-  admin_first_name: string
-  admin_last_name: string
 }
 
 export interface ForgotPasswordPayload {
@@ -73,10 +61,6 @@ export class AuthService {
   /** Revoca la sesion en el servidor y limpia la cookie de refresh. */
   async logout(): Promise<void> {
     await apiClient.post('/auth/logout')
-  }
-
-  async registerBusiness(payload: RegisterBusinessPayload): Promise<void> {
-    await apiClient.post('/auth/register', payload)
   }
 
   async forgotPassword(payload: ForgotPasswordPayload): Promise<ForgotPasswordResponse> {

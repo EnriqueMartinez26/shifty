@@ -14,7 +14,6 @@ import {
 } from './presentation/context/roles'
 
 const LoginPage = lazy(() => import('./presentation/pages/Login'))
-const RegisterPage = lazy(() => import('./presentation/pages/Register'))
 const ForgotPasswordPage = lazy(() => import('./presentation/pages/ForgotPassword'))
 const ResetPasswordPage = lazy(() => import('./presentation/pages/ResetPassword'))
 const AdminLayout = lazy(() => import('./presentation/layouts/AdminLayout'))
@@ -104,7 +103,6 @@ function App() {
         >
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/legal/:document" element={<LegalPage />} />

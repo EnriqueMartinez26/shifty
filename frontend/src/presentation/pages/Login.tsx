@@ -173,22 +173,6 @@ const LoginPage: React.FC = () => {
               )}
             </button>
           </form>
-
-          <div
-            className="mt-8 pt-8 text-center"
-            style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
-          >
-            <p className="text-sm" style={{ color: colors2000s.text.secondary }}>
-              ¿No tenés una cuenta?{' '}
-              <Link
-                to="/register"
-                className="font-bold transition-colors"
-                style={{ color: colors2000s.orange.accent }}
-              >
-                Registra tu negocio
-              </Link>
-            </p>
-          </div>
         </div>
 
         <p className="mt-8 text-center text-xs" style={{ color: colors2000s.text.disabled }}>
