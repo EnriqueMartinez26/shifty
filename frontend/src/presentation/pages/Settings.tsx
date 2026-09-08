@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 
-
 import {
   Store,
   Settings as SettingsIcon,
@@ -524,7 +523,10 @@ const SettingsPage: React.FC = () => {
                         onChange={(e) => void handleMediaUpload('logo', e)}
                       />
                     </label>
-                    <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
+                    <p
+                      className="text-[10px] font-bold"
+                      style={{ color: colors2000s.text.secondary }}
+                    >
                       PNG, JPEG o WebP · máx 2 MB
                     </p>
                   </div>
@@ -1370,7 +1372,10 @@ const SettingsPage: React.FC = () => {
                 />
                 <span style={{ color: colors2000s.text.secondary }}>
                   Permitir coordinar el pago por fuera (WhatsApp).
-                  <span className="block font-medium mt-1" style={{ color: colors2000s.text.disabled }}>
+                  <span
+                    className="block font-medium mt-1"
+                    style={{ color: colors2000s.text.disabled }}
+                  >
                     Si lo desactivás, los servicios con seña obligatoria solo se van a poder
                     reservar pagando con Mercado Pago.
                   </span>
@@ -1394,8 +1399,8 @@ const SettingsPage: React.FC = () => {
                   style={createSettingsInputStyle()}
                 />
                 <p className="text-[11px] font-medium" style={{ color: colors2000s.text.disabled }}>
-                  Se le muestra al cliente antes de reservar y queda registrada su aceptación. Es
-                  tu respaldo ante un reclamo, así que conviene ser concreto.
+                  Se le muestra al cliente antes de reservar y queda registrada su aceptación. Es tu
+                  respaldo ante un reclamo, así que conviene ser concreto.
                 </p>
               </div>
 

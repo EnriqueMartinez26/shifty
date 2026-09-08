@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 
-
 import { X, Loader2, User, Mail, Briefcase, Check } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
@@ -125,7 +124,11 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
           className="flex-1 overflow-y-auto p-8 lg:p-10"
         >
           {error && (
-            <div role="alert" className="rounded-2xl px-4 py-3 text-xs font-bold mb-4" style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}>
+            <div
+              role="alert"
+              className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
+              style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+            >
               {error}
             </div>
           )}

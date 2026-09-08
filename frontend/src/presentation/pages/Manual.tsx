@@ -211,8 +211,8 @@ const Manual: React.FC = () => {
               className="text-sm font-bold mt-2 max-w-2xl"
               style={{ color: colors2000s.text.secondary }}
             >
-              Todo lo que necesitás para poner tu negocio en marcha y manejarlo día a día.
-              Si recién empezás, seguí las secciones en orden.
+              Todo lo que necesitás para poner tu negocio en marcha y manejarlo día a día. Si recién
+              empezás, seguí las secciones en orden.
             </p>
           </div>
         </div>

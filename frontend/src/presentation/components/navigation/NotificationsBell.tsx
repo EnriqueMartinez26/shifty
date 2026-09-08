@@ -47,9 +47,7 @@ const NotificationsBell: React.FC = () => {
       <button
         type="button"
         onClick={() => setIsOpen((open) => !open)}
-        aria-label={
-          unreadCount > 0 ? `Notificaciones, ${unreadCount} sin leer` : 'Notificaciones'
-        }
+        aria-label={unreadCount > 0 ? `Notificaciones, ${unreadCount} sin leer` : 'Notificaciones'}
         aria-expanded={isOpen}
         className="relative rounded-xl px-3 py-2 transition-all active:scale-95 cursor-pointer"
         style={{
@@ -110,7 +108,10 @@ const NotificationsBell: React.FC = () => {
 
           <div className="max-h-80 overflow-y-auto">
             {items.length === 0 && (
-              <p className="px-4 py-6 text-xs text-center" style={{ color: colors2000s.text.disabled }}>
+              <p
+                className="px-4 py-6 text-xs text-center"
+                style={{ color: colors2000s.text.disabled }}
+              >
                 No tenés novedades por ahora.
               </p>
             )}
@@ -131,7 +132,10 @@ const NotificationsBell: React.FC = () => {
                   {item.title}
                 </p>
                 {item.body && (
-                  <p className="text-[11px] leading-snug" style={{ color: colors2000s.text.secondary }}>
+                  <p
+                    className="text-[11px] leading-snug"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
                     {item.body}
                   </p>
                 )}

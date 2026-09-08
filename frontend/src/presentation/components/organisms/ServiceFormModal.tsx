@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 
-
 import {
   X,
   Loader2,
@@ -141,7 +140,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             className="space-y-6"
           >
             {error && (
-              <div role="alert" className="rounded-2xl px-4 py-3 text-xs font-bold mb-4" style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}>
+              <div
+                role="alert"
+                className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
+                style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+              >
                 {error}
               </div>
             )}

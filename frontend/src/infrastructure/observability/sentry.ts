@@ -21,8 +21,7 @@ export const initSentry = (): boolean => {
     sendDefaultPii: false,
     // Los breadcrumbs de consola arrastran lo que se loguea (datos de cliente,
     // respuestas del server): se descartan para no filtrar PII a la telemetria.
-    beforeBreadcrumb: (breadcrumb) =>
-      breadcrumb.category === 'console' ? null : breadcrumb,
+    beforeBreadcrumb: (breadcrumb) => (breadcrumb.category === 'console' ? null : breadcrumb),
     // Recorte de datos sensibles del evento antes de enviarlo.
     beforeSend: (event) => {
       if (event.request) {
