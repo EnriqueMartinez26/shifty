@@ -64,7 +64,6 @@ async def test_session(test_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture(scope="function")
 async def client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    settings.ALLOW_PUBLIC_REGISTRATION = True
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield test_session

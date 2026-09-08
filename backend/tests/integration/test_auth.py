@@ -14,6 +14,9 @@ from core.config import settings
 from core.database import get_db
 from core.models import Base
 from main import app
+from tests.integration.test_feature_flags_finance_and_public_privacy import (
+    seed_store_and_admin,
+)
 from core.security import hash_password_reset_token
 
 # Import all modules so Base.metadata knows about all tables for SQLite test database
@@ -76,32 +79,10 @@ async def client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 @pytest.mark.asyncio
 async def test_cross_tenant_isolation(client: AsyncClient) -> None:
     # 1. Registrar Tienda A
-    res_a = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda A",
-            "store_slug": "tienda-a",
-            "admin_email": "admin@a.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": "A",
-        },
-    )
-    assert res_a.status_code == 201
+    await seed_store_and_admin(slug="tienda-a", email="admin@a.com", last_name="A")
 
     # 2. Registrar Tienda B
-    res_b = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda B",
-            "store_slug": "tienda-b",
-            "admin_email": "admin@b.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": "B",
-        },
-    )
-    assert res_b.status_code == 201
+    await seed_store_and_admin(slug="tienda-b", email="admin@b.com", last_name="B")
 
     # 3. Login en Tienda A
     login_a = await client.post(
@@ -138,18 +119,9 @@ async def test_password_reset_flow(
         "modules.auth.router.send_password_reset_email", lambda *_args, **_kwargs: None
     )
 
-    register_response = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda Reset",
-            "store_slug": "tienda-reset",
-            "admin_email": "reset@demo.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": "Reset",
-        },
+    await seed_store_and_admin(
+        slug="tienda-reset", email="reset@demo.com", last_name="Reset"
     )
-    assert register_response.status_code == 201
 
     forgot_response = await client.post(
         "/auth/forgot-password", json={"email": "reset@demo.com"}
@@ -188,18 +160,9 @@ async def test_password_reset_flow(
 async def test_login_normalizes_email_whitespace_and_case(
     client: AsyncClient,
 ) -> None:
-    register_response = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda Normalize",
-            "store_slug": "tienda-normalize",
-            "admin_email": "normalize@demo.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": "Normalize",
-        },
+    await seed_store_and_admin(
+        slug="tienda-normalize", email="normalize@demo.com", last_name="Normalize"
     )
-    assert register_response.status_code == 201
 
     login_response = await client.post(
         "/auth/login",
@@ -219,18 +182,9 @@ async def test_reset_password_with_invalid_token_fails(client: AsyncClient) -> N
 
 @pytest.mark.asyncio
 async def test_users_crud_flow_for_admin(client: AsyncClient) -> None:
-    register = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda Users",
-            "store_slug": "tienda-users",
-            "admin_email": "admin-users@demo.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": "Users",
-        },
+    await seed_store_and_admin(
+        slug="tienda-users", email="admin-users@demo.com", last_name="Users"
     )
-    assert register.status_code == 201
 
     login = await client.post(
         "/auth/login",

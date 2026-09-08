@@ -102,23 +102,6 @@ async def test_cambiar_password_cierra_las_demas_sesiones(client: AsyncClient) -
 
 
 @pytest.mark.asyncio
-async def test_password_debil_es_rechazada(client: AsyncClient) -> None:
-    res = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Debil",
-            "store_slug": "sec-debil",
-            "business_type": "generic",
-            "admin_email": "debil@test.com",
-            "admin_password": "corta1",
-            "admin_first_name": "A",
-            "admin_last_name": "B",
-        },
-    )
-    assert res.status_code == 422
-
-
-@pytest.mark.asyncio
 async def test_desactivar_staff_corta_su_sesion(client: AsyncClient) -> None:
     """Regresion del gap detectado en la re-auditoria: al desactivar un
     profesional, sus sesiones vivas deben morir (no revivir si se reactiva)."""

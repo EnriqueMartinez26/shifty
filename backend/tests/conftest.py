@@ -15,7 +15,6 @@ _TEST_ENV = {
     # Cost bajo SOLO en tests: cada register/login hace bcrypt y con 12 rounds
     # la suite tarda minutos extra. Produccion usa el default 12.
     "BCRYPT_ROUNDS": "4",
-    "ALLOW_PUBLIC_REGISTRATION": "true",
     "COOKIE_SECURE": "false",
     "COOKIE_SAMESITE": "lax",
     "FIELD_ENCRYPTION_KEY": "",
@@ -82,7 +81,6 @@ from core.redis import get_redis  # noqa: E402
 # Disable rate limit globally during tests
 settings.RATE_LIMIT_ENABLED = False
 # Allow public registration in tests (may be False in prod/fallback config)
-settings.ALLOW_PUBLIC_REGISTRATION = True
 
 
 class MockRedis:

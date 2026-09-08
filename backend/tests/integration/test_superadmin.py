@@ -16,6 +16,9 @@ from sqlalchemy.ext.asyncio import (
 from core.database import get_db
 from core.models import Base
 from main import app
+from tests.integration.test_feature_flags_finance_and_public_privacy import (
+    seed_store_and_admin,
+)
 
 import modules.audit.model  # noqa: F401
 import modules.billing.model  # noqa: F401
@@ -69,19 +72,10 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
 
 
 async def _register_store(client: AsyncClient, slug: str, email: str) -> JsonDict:
-    response = await client.post(
-        "/auth/register",
-        json={
-            "store_name": f"Tienda {slug}",
-            "store_slug": slug,
-            "admin_email": email,
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": slug,
-        },
-    )
-    assert response.status_code == 201
-    return cast(JsonDict, response.json())
+    # El alta de tiendas ya no es publica; se siembra el tenant directo en la
+    # base (lo que en produccion hace el superadmin).
+    store_public_id = await seed_store_and_admin(slug=slug, email=email, last_name=slug)
+    return {"store_public_id": store_public_id}
 
 
 async def _login(client: AsyncClient, email: str) -> str:
@@ -328,3 +322,116 @@ async def test_superadmin_coupon_redeem_rejects_expired_subscription(
     res_json = cast(JsonDict, redeem_response.json())
     err_msg = res_json.get("detail") or res_json.get("message") or ""
     assert "vencida" in err_msg.lower()
+
+
+async def _bootstrap_global_admin(
+    client: AsyncClient, test_session: AsyncSession, *, slug: str, email: str
+) -> dict[str, str]:
+    """Siembra una tienda, promueve a su admin a global y devuelve headers."""
+    await _register_store(client, slug, email)
+    result = await test_session.execute(select(User).where(User.email == email))
+    admin = result.scalar_one()
+    admin.is_global_admin = True
+    await test_session.commit()
+    token = await _login(client, email)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.asyncio
+async def test_superadmin_create_store_rejects_duplicate_slug(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    # El alta de tiendas ahora es exclusiva del superadmin; el slug repetido
+    # debe dar 400, no un 500 por el indice unico.
+    headers = await _bootstrap_global_admin(
+        client, test_session, slug="raiz", email="raiz@demo.com"
+    )
+    primera = await client.post(
+        "/superadmin/stores",
+        headers=headers,
+        json={"name": "Sucursal Centro", "slug": "sucursal-centro"},
+    )
+    assert primera.status_code == 201, primera.text
+
+    repetida = await client.post(
+        "/superadmin/stores",
+        headers=headers,
+        json={"name": "Otra", "slug": "sucursal-centro"},
+    )
+    assert repetida.status_code == 400, repetida.text
+
+
+@pytest.mark.asyncio
+async def test_superadmin_create_admin_rejects_case_collision_email(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    # Login matchea con lower(email) y scalar_one_or_none: dos admins que solo
+    # difieran en mayusculas romperian el login con 500. El alta debe frenarlo.
+    headers = await _bootstrap_global_admin(
+        client, test_session, slug="colision", email="root@demo.com"
+    )
+    store = await client.post(
+        "/superadmin/stores",
+        headers=headers,
+        json={"name": "Tienda Colision", "slug": "tienda-colision"},
+    )
+    assert store.status_code == 201, store.text
+    store_pid = cast(JsonDict, store.json())["public_id"]
+
+    base = {
+        "email": "dup@demo.com",
+        "password": "Password123!",
+        "first_name": "Dup",
+        "last_name": "Uno",
+    }
+    primero = await client.post(
+        f"/superadmin/stores/{store_pid}/admins", headers=headers, json=base
+    )
+    assert primero.status_code == 201, primero.text
+
+    colision = await client.post(
+        f"/superadmin/stores/{store_pid}/admins",
+        headers=headers,
+        json={**base, "email": "DUP@demo.com"},
+    )
+    assert colision.status_code == 400, colision.text
+
+
+@pytest.mark.asyncio
+async def test_superadmin_create_admin_password_policy(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    headers = await _bootstrap_global_admin(
+        client, test_session, slug="pol", email="pol@demo.com"
+    )
+    store = await client.post(
+        "/superadmin/stores",
+        headers=headers,
+        json={"name": "Tienda Policy", "slug": "tienda-policy"},
+    )
+    store_pid = cast(JsonDict, store.json())["public_id"]
+
+    for password in ("aaaaaaaaaaaa", "123456789012", "corta1"):
+        debil = await client.post(
+            f"/superadmin/stores/{store_pid}/admins",
+            headers=headers,
+            json={
+                "email": f"x-{password}@demo.com",
+                "password": password,
+                "first_name": "Ana",
+                "last_name": "Perez",
+            },
+        )
+        assert debil.status_code == 422, f"'{password}' aceptada: {debil.text}"
+
+    valida = await client.post(
+        f"/superadmin/stores/{store_pid}/admins",
+        headers=headers,
+        json={
+            "email": "ok@demo.com",
+            "password": "shifty2026-ok",
+            "first_name": "Ana",
+            "last_name": "Perez",
+        },
+    )
+    assert valida.status_code == 201, valida.text

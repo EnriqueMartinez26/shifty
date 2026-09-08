@@ -19,11 +19,9 @@ from core.database import _apply_tenant_context, set_tenant_context
 from core.exceptions import (
     AppException,
     AuthenticationException,
-    DuplicateAccountException,
     InvalidTokenException,
     PermissionDeniedException,
     RateLimitedException,
-    RegistrationDisabledException,
     UserNotFoundException,
 )
 from core.redis import get_redis
@@ -47,19 +45,15 @@ from modules.auth.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
-    StoreRegisterRequest,
 )
 from modules.auth.session_model import AuthSession
-from modules.stores.model import Store
-from modules.users.model import User, UserRole
+from modules.users.model import User
 
 __all__ = [
     "AuthTokenPair",
     "MessageResult",
     "PasswordResetEmail",
     "PasswordResetOutcome",
-    "RegistrationAdminResult",
-    "RegistrationResult",
     "RevokedSessionsResult",
     "SessionClientContext",
     "access_token_for_user",
@@ -71,7 +65,6 @@ __all__ = [
     "logout_session",
     "normalize_email",
     "refresh_session",
-    "register_store_and_admin",
     "request_password_reset",
     "reset_password",
     "revoke_all_sessions",
@@ -83,19 +76,6 @@ __all__ = [
     "send_password_reset_email",
     "settings",
 ]
-
-
-class RegistrationAdminResult(TypedDict):
-    public_id: str
-    email: str
-    first_name: str | None
-    last_name: str | None
-    role: str
-
-
-class RegistrationResult(TypedDict):
-    store_public_id: str
-    admin: RegistrationAdminResult
 
 
 class RevokedSessionsResult(TypedDict):
@@ -298,92 +278,6 @@ def _new_auth_session(
         expires_at=datetime.now(timezone.utc)
         + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
     )
-
-
-async def register_store_and_admin(
-    data: StoreRegisterRequest, db: AsyncSession
-) -> RegistrationResult:
-    admin_email = normalize_email(str(data.admin_email))
-    if not settings.ALLOW_PUBLIC_REGISTRATION:
-        raise RegistrationDisabledException()
-
-    try:
-        set_tenant_context(None, True)
-        await _apply_tenant_context(db)
-
-        async with db.begin_nested():
-            result = await db.execute(
-                select(Store).where(Store.slug == data.store_slug)
-            )
-            if result.scalar_one_or_none():
-                raise AppException(
-                    message="El slug de la tienda ya esta en uso",
-                    http_status=400,
-                    error_code="DUPLICATE_STORE_SLUG",
-                )
-
-            result = await db.execute(
-                select(User).where(func.lower(User.email) == admin_email)
-            )
-            if result.scalar_one_or_none():
-                raise DuplicateAccountException(field="email")
-
-            new_store = Store(
-                name=data.store_name,
-                slug=data.store_slug,
-                theme_config={"business_type": data.business_type},
-            )
-            new_store.public_id = new_store.id
-            db.add(new_store)
-            await db.flush()
-
-            new_admin = User(
-                email=admin_email,
-                hashed_password=await hash_password_async(data.admin_password),
-                first_name=data.admin_first_name,
-                last_name=data.admin_last_name,
-                full_name=f"{data.admin_first_name} {data.admin_last_name}".strip(),
-                role=UserRole.ADMIN,
-                store_id=new_store.id,
-            )
-            db.add(new_admin)
-            await db.flush()
-
-            store_public_id = (
-                str(new_store.public_id)
-                if hasattr(new_store, "public_id")
-                else str(new_store.id)
-            )
-            admin_public_id = (
-                str(new_admin.public_id)
-                if hasattr(new_admin, "public_id")
-                else str(new_admin.id)
-            )
-
-        await db.commit()
-
-        return {
-            "store_public_id": store_public_id,
-            "admin": {
-                "public_id": admin_public_id,
-                "email": new_admin.email,
-                "first_name": new_admin.first_name,
-                "last_name": new_admin.last_name,
-                "role": str(new_admin.role),
-            },
-        }
-    except AppException:
-        await db.rollback()
-        raise
-    except Exception:
-        await db.rollback()
-        raise AppException(
-            message="No se pudo registrar el negocio",
-            http_status=500,
-            error_code="REGISTRATION_FAILED",
-        )
-    finally:
-        set_tenant_context(None, False)
 
 
 async def login_user(

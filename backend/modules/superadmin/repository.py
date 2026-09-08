@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
-from modules.auth.service import revoke_sessions_for_user
+from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.stores.model import Store
@@ -322,6 +322,16 @@ class UserAdminRepository(_BaseAdminRepository):
         password = data.pop("password")
         first_name = data.get("first_name") or ""
         last_name = data.get("last_name") or ""
+        # El email se guarda normalizado (minusculas): el login matchea con
+        # func.lower(email) y scalar_one_or_none. Dos admins que difieran solo
+        # en mayusculas romperian ese login con MultipleResultsFound (500). El
+        # indice unico es case-sensitive, asi que ademas se chequea a mano.
+        data["email"] = normalize_email(str(data["email"]))
+        existing = await self.db.execute(
+            select(User).where(func.lower(User.email) == data["email"])
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ValueError("Ya existe un usuario con ese email")
         user = User(
             **data,
             hashed_password=hash_password(password),

@@ -28,7 +28,6 @@ BASE: dict[str, Any] = {
     "RATE_LIMIT_ENABLED": True,
     "RATE_LIMIT_FAIL_CLOSED": True,
     "COOKIE_SECURE": True,
-    "ALLOW_PUBLIC_REGISTRATION": False,
     "OTP_PROVIDER": "twilio",
     "OTP_DEBUG_EXPOSE_CODE": False,
     "EXPOSE_API_DOCS": False,
@@ -57,7 +56,6 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
         ({"EXPOSE_API_DOCS": True}, "EXPOSE_API_DOCS"),
         ({"RATE_LIMIT_ENABLED": False}, "RATE_LIMIT_ENABLED"),
         ({"COOKIE_SECURE": False}, "COOKIE_SECURE"),
-        ({"ALLOW_PUBLIC_REGISTRATION": True}, "ALLOW_PUBLIC_REGISTRATION"),
         ({"OTP_PROVIDER": "console"}, "OTP_PROVIDER"),
         ({"OTP_DEBUG_EXPOSE_CODE": True}, "OTP_DEBUG_EXPOSE_CODE"),
         ({"FIELD_ENCRYPTION_KEY": None}, "FIELD_ENCRYPTION_KEY"),
@@ -106,7 +104,6 @@ def test_produccion_aplica_defaults_endurecidos(
 ) -> None:
     """Sin declararlos, produccion no puede quedar con los valores de desarrollo."""
     endurecidos = (
-        "ALLOW_PUBLIC_REGISTRATION",
         "COOKIE_SECURE",
         "EXPOSE_API_DOCS",
         "COOKIE_SAMESITE",
@@ -117,7 +114,6 @@ def test_produccion_aplica_defaults_endurecidos(
         monkeypatch.delenv(clave, raising=False)
 
     settings = Settings(**{k: v for k, v in BASE.items() if k not in endurecidos})
-    assert settings.ALLOW_PUBLIC_REGISTRATION is False
     assert settings.COOKIE_SECURE is True
     assert settings.EXPOSE_API_DOCS is False
     assert settings.COOKIE_SAMESITE == "lax"

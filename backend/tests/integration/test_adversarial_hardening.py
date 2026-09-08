@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from modules.users.model import User
 
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
+    seed_store_and_admin,
     add_staff_schedule,
     auth_headers,
     create_service,
@@ -99,19 +100,12 @@ async def test_huge_amounts_do_not_overflow_the_database(
 @pytest.mark.asyncio
 async def test_login_tolerates_email_case_differences(client: AsyncClient) -> None:
     """Registrarse con un email y loguearse con otra capitalizacion debe funcionar."""
-    register = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda Case",
-            "store_slug": "tienda-case",
-            "business_type": "generic",
-            "admin_email": "MiXeD.CaSe@Test.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Case",
-            "admin_last_name": "Sensitive",
-        },
+    await seed_store_and_admin(
+        slug="tienda-case",
+        email="MiXeD.CaSe@Test.com",
+        first_name="Case",
+        last_name="Sensitive",
     )
-    assert register.status_code == 201, register.text
 
     for attempt in ("mixed.case@test.com", "MIXED.CASE@TEST.COM"):
         login = await client.post(
@@ -119,30 +113,6 @@ async def test_login_tolerates_email_case_differences(client: AsyncClient) -> No
             json={"email": attempt, "password": "Password123!"},
         )
         assert login.status_code == 200, f"{attempt}: {login.text}"
-
-
-@pytest.mark.asyncio
-async def test_duplicate_registration_with_different_case_is_rejected(
-    client: AsyncClient,
-) -> None:
-    """El mismo email con otra capitalizacion no puede crear una segunda cuenta."""
-    payload = {
-        "store_name": "Tienda Dup",
-        "store_slug": "tienda-dup",
-        "business_type": "generic",
-        "admin_email": "dup@test.com",
-        "admin_password": "Password123!",
-        "admin_first_name": "Dup",
-        "admin_last_name": "Uno",
-    }
-    first = await client.post("/auth/register", json=payload)
-    assert first.status_code == 201, first.text
-
-    second = await client.post(
-        "/auth/register",
-        json={**payload, "store_slug": "tienda-dup-2", "admin_email": "DUP@test.com"},
-    )
-    assert second.status_code in {400, 409}, second.text
 
 
 @pytest.mark.asyncio
@@ -484,43 +454,3 @@ async def test_no_se_puede_reservar_en_el_pasado_por_la_api_publica(
         },
     )
     assert res.status_code >= 400, f"se agendo en el pasado ({res.status_code})"
-
-
-@pytest.mark.asyncio
-async def test_password_debil_se_rechaza_en_el_registro(client: AsyncClient) -> None:
-    """Antes solo se validaba la longitud: 'aaaaaaaa' pasaba."""
-    for password, caso in [
-        ("aaaaaaaa", "solo letras"),
-        ("12345678", "solo numeros"),
-    ]:
-        res = await client.post(
-            "/auth/register",
-            json={
-                "store_name": "Tienda Debil",
-                "store_slug": f"debil-{caso.replace(' ', '-')}",
-                "business_type": "generic",
-                "admin_email": f"debil-{caso.replace(' ', '')}@test.com",
-                "admin_password": password,
-                "admin_first_name": "Ana",
-                "admin_last_name": "Perez",
-            },
-        )
-        assert res.status_code == 422, f"'{password}' ({caso}) aceptada"
-
-
-@pytest.mark.asyncio
-async def test_una_password_con_letra_y_numero_es_valida(client: AsyncClient) -> None:
-    """La politica no puede estorbar una contrasena razonable."""
-    res = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda OK",
-            "store_slug": "pass-ok",
-            "business_type": "generic",
-            "admin_email": "pass-ok@test.com",
-            "admin_password": "shifty2026-ok",
-            "admin_first_name": "Ana",
-            "admin_last_name": "Perez",
-        },
-    )
-    assert res.status_code == 201, res.text

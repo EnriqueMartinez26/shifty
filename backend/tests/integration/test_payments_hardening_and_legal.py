@@ -34,6 +34,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
     create_staff,
     register_and_login,
+    seed_store_and_admin,
     webhook_signature_headers,
 )
 
@@ -597,18 +598,12 @@ async def test_payments_cannot_be_enabled_without_a_deposit_policy(
     client: AsyncClient,
 ) -> None:
     """Sin politica publicada, el checkbox del cliente aceptaria un texto vacio."""
-    register = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Tienda Sin Politica",
-            "store_slug": "tienda-sin-politica",
-            "admin_email": "sinpolitica@test.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Sin",
-            "admin_last_name": "Politica",
-        },
+    await seed_store_and_admin(
+        slug="tienda-sin-politica",
+        email="sinpolitica@test.com",
+        first_name="Sin",
+        last_name="Politica",
     )
-    assert register.status_code == 201, register.text
     login = await client.post(
         "/auth/login",
         json={"email": "sinpolitica@test.com", "password": "Password123!"},

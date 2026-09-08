@@ -67,7 +67,6 @@ class Settings(BaseSettings):
     # vive en Redis, por email normalizado, independiente de la IP.
     LOGIN_LOCKOUT_MAX_ATTEMPTS: int = 5
     LOGIN_LOCKOUT_WINDOW_SECONDS: int = 900
-    ALLOW_PUBLIC_REGISTRATION: bool = True
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
     FIELD_ENCRYPTION_KEY: str | None = None
@@ -168,7 +167,6 @@ class Settings(BaseSettings):
             return data
 
         production_data = dict(data)
-        production_data.setdefault("ALLOW_PUBLIC_REGISTRATION", False)
         production_data.setdefault("COOKIE_SECURE", True)
         # Lax y no None: la cookie es credencial y SameSite=None la mandaba en
         # requests cross-site (CSRF). El frontend comparte site via nginx.
@@ -225,10 +223,6 @@ class Settings(BaseSettings):
             ):
                 raise ValueError(
                     "FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion"
-                )
-            if self.ALLOW_PUBLIC_REGISTRATION:
-                raise ValueError(
-                    "ALLOW_PUBLIC_REGISTRATION debe ser false en produccion"
                 )
             if self.OTP_PROVIDER == "console":
                 raise ValueError("OTP_PROVIDER no puede ser console en produccion")
@@ -315,7 +309,6 @@ def _fallback_settings() -> Settings:
         BCRYPT_ROUNDS=12,
         LOGIN_LOCKOUT_MAX_ATTEMPTS=5,
         LOGIN_LOCKOUT_WINDOW_SECONDS=900,
-        ALLOW_PUBLIC_REGISTRATION=False,
         COOKIE_SECURE=True,
         COOKIE_SAMESITE="lax",
         FIELD_ENCRYPTION_KEY="boot-failed-" + secrets.token_urlsafe(32),

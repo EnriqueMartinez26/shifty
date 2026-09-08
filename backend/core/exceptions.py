@@ -223,17 +223,6 @@ class InvalidTokenException(AppException):
         )
 
 
-class RegistrationDisabledException(AppException):
-    """El registro público está deshabilitado para este tenant."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            message="El registro público no está habilitado.",
-            http_status=HTTPStatus.FORBIDDEN,
-            error_code="REGISTRATION_DISABLED",
-        )
-
-
 class DuplicateAccountException(AppException):
     """Ya existe una cuenta con ese email o teléfono."""
 

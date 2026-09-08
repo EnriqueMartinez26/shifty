@@ -30,6 +30,9 @@ from sqlalchemy.ext.asyncio import (
 
 from core.config import settings
 from core.models import Base
+from tests.integration.test_feature_flags_finance_and_public_privacy import (
+    seed_store_and_admin,
+)
 
 import modules.appointments.model  # noqa: F401
 import modules.audit.model  # noqa: F401
@@ -129,21 +132,12 @@ async def public_client(
 
 async def create_test_store_and_admin(client: AsyncClient) -> tuple[str, str]:
     """Registra un salón y retorna (store_public_id, access_token)."""
-    resp = await client.post(
-        "/auth/register",
-        json={
-            "store_name": "Barbería Test",
-            "store_slug": "barberia-test",
-            "admin_email": "admin@test.com",
-            "admin_password": "Password123!",
-            "admin_first_name": "Test",
-            "admin_last_name": "Admin",
-        },
+    store_public_id = await seed_store_and_admin(
+        slug="barberia-test",
+        email="admin@test.com",
+        first_name="Test",
+        last_name="Admin",
     )
-    assert resp.status_code == 201, f"Register failed: {resp.text}"
-    register_body = cast(JsonDict, resp.json())
-    register_data = cast(JsonDict, register_body.get("data", register_body))
-    store_public_id = str(register_data["store_public_id"])
 
     token_resp = await client.post(
         "/auth/login",
@@ -293,17 +287,13 @@ class TestAppointmentEndpoints:
         # Registrar como admin
         await create_test_store_and_admin(client)
 
-        # Crear usuario cliente
-        await client.post(
-            "/auth/register",
-            json={
-                "store_name": "Otro Salon",
-                "store_slug": "otro-salon-slug",
-                "admin_email": "cliente@test.com",
-                "admin_password": "ClientPass123!",
-                "admin_first_name": "Juan",
-                "admin_last_name": "Cliente",
-            },
+        # Segunda tienda con su propio admin
+        await seed_store_and_admin(
+            slug="otro-salon-slug",
+            email="cliente@test.com",
+            password="ClientPass123!",
+            first_name="Juan",
+            last_name="Cliente",
         )
         client_token_resp = await client.post(
             "/auth/login",

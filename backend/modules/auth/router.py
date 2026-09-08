@@ -23,12 +23,10 @@ from modules.auth.schemas import (
     ForgotPasswordResponse,
     LoginRequest,
     LogoutRequest,
-    RegistrationResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
     SessionItem,
     SessionListResponse,
-    StoreRegisterRequest,
     TokenResponse,
 )
 from modules.auth.service import (
@@ -39,7 +37,6 @@ from modules.auth.service import (
     logout_session,
     normalize_email,
     refresh_session as refresh_session_service,
-    register_store_and_admin as register_store_and_admin_service,
     request_password_reset,
     reset_password as reset_password_service,
     revoke_all_sessions as revoke_all_sessions_service,
@@ -94,27 +91,6 @@ def _session_context(request: Request) -> SessionClientContext:
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
-
-
-@router.post(
-    "/register",
-    response_model=RegistrationResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def register_store_and_admin(
-    request: Request,
-    data: StoreRegisterRequest,
-    db: AsyncSession = Depends(get_db),
-) -> RegistrationResponse:
-    admin_email = normalize_email(str(data.admin_email))
-    await enforce_rate_limit(
-        request,
-        "auth:register",
-        settings.RATE_LIMIT_AUTH_PER_MINUTE,
-        subject=admin_email,
-    )
-    result = await register_store_and_admin_service(data, db)
-    return RegistrationResponse.model_validate(result)
 
 
 @router.post("/login", response_model=TokenResponse)

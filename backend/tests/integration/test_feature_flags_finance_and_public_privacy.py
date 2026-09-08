@@ -20,6 +20,9 @@ from core.crypto import decrypt_secret
 from core.database import get_db
 from core.models import Base
 from core.security import hash_password
+from modules.auth.service import normalize_email
+from modules.stores.model import Store
+from modules.users.model import UserRole
 from main import app
 import modules.appointments.model
 import modules.audit.model
@@ -68,7 +71,6 @@ async def test_session(test_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture(scope="function")
 async def client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    settings.ALLOW_PUBLIC_REGISTRATION = True
 
     async def override_get_db() -> AsyncIterator[AsyncSession]:
         yield test_session
@@ -84,22 +86,56 @@ async def client(test_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides.pop(get_db, None)
 
 
+async def seed_store_and_admin(
+    *,
+    slug: str,
+    email: str,
+    password: str = "Password123!",
+    first_name: str = "Admin",
+    last_name: str = "Demo",
+    business_type: str = "general",
+) -> str:
+    """Da de alta una tienda + su admin escribiendo directo en la base.
+
+    El alta publica de tiendas se elimino del producto (se hace desde el
+    superadmin), asi que los tests siembran su tenant directamente. Reusa la
+    sesion compartida que el cliente HTTP inyecta via el override de get_db,
+    de modo que el request siguiente vea los datos.
+    """
+    override = app.dependency_overrides[get_db]
+    gen = override()
+    session = await gen.__anext__()
+    try:
+        store = Store(
+            name=f"Tienda {slug}",
+            slug=slug,
+            theme_config={"business_type": business_type},
+        )
+        store.public_id = store.id
+        session.add(store)
+        await session.flush()
+        admin = User(
+            email=normalize_email(email),
+            hashed_password=hash_password(password),
+            first_name=first_name,
+            last_name=last_name,
+            full_name=f"{first_name} {last_name}".strip(),
+            role=UserRole.ADMIN,
+            store_id=store.id,
+        )
+        session.add(admin)
+        await session.flush()
+        store_public_id = str(store.public_id)
+        await session.commit()
+        return store_public_id
+    finally:
+        await gen.aclose()
+
+
 async def register_and_login(
     client: AsyncClient, *, slug: str, email: str
 ) -> tuple[str, str]:
-    register = await client.post(
-        "/auth/register",
-        json={
-            "store_name": f"Tienda {slug}",
-            "store_slug": slug,
-            "admin_email": email,
-            "admin_password": "Password123!",
-            "admin_first_name": "Admin",
-            "admin_last_name": "Demo",
-        },
-    )
-    assert register.status_code == 201, register.text
-    store_public_id = cast(str, register.json()["store_public_id"])
+    store_public_id = await seed_store_and_admin(slug=slug, email=email)
 
     login = await client.post(
         "/auth/login",

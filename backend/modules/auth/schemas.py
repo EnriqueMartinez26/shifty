@@ -1,7 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from core.business_types import BusinessType, DEFAULT_BUSINESS_TYPE
-from core.validation import SLUG_PATTERN, validate_password_strength
+from core.validation import validate_password_strength
 
 
 class TokenResponse(BaseModel):
@@ -33,34 +32,6 @@ class ResetPasswordRequest(BaseModel):
 
 class ResetPasswordResponse(BaseModel):
     message: str
-
-
-class StoreRegisterRequest(BaseModel):
-    # Datos de la Tienda
-    store_name: str = Field(..., min_length=2, max_length=255)
-    store_slug: str = Field(..., min_length=2, max_length=100, pattern=SLUG_PATTERN)
-    business_type: BusinessType = DEFAULT_BUSINESS_TYPE
-
-    # Datos del Administrador
-    admin_email: EmailStr
-    admin_password: str = Field(..., min_length=12, max_length=128)
-    admin_first_name: str = Field(..., min_length=1, max_length=100)
-    admin_last_name: str = Field(..., min_length=1, max_length=100)
-
-    _validar_password = field_validator("admin_password")(validate_password_strength)
-
-
-class UserResponse(BaseModel):
-    public_id: str
-    email: EmailStr
-    first_name: str | None
-    last_name: str | None
-    role: str
-
-
-class RegistrationResponse(BaseModel):
-    store_public_id: str
-    admin: UserResponse
 
 
 class ChangePasswordRequest(BaseModel):
