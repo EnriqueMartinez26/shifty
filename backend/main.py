@@ -128,6 +128,12 @@ app = FastAPI(
     version=settings.VERSION,
     description="Sistema de gestión de turnos multi-tenant",
     lifespan=lifespan,
+    # Sin redirect por barra final: detras de nginx la app no conoce el
+    # prefijo /api, asi que el 307 apuntaba a http://host/promotions/ (sin
+    # /api), el navegador caia en el SPA y el front recibia HTML en vez de
+    # JSON (crash de Promociones). Un mismatch ahora es un 404 visible en
+    # tests y CI; tests/unit/test_frontend_routes_contract.py lo audita.
+    redirect_slashes=False,
     docs_url="/docs" if settings.EXPOSE_API_DOCS else None,
     redoc_url="/redoc" if settings.EXPOSE_API_DOCS else None,
     openapi_url="/openapi.json" if settings.EXPOSE_API_DOCS else None,

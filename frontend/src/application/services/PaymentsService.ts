@@ -162,14 +162,14 @@ export class PaymentsService {
   }
 
   async listPromotions(includeInactive = true): Promise<PromotionRecord[]> {
-    const { data } = await apiClient.get<PromotionRecord[]>('/promotions', {
+    const { data } = await apiClient.get<PromotionRecord[]>('/promotions/', {
       params: { include_inactive: includeInactive }
     })
     return data
   }
 
   async createPromotion(payload: PromotionPayload): Promise<PromotionRecord> {
-    const { data } = await apiClient.post<PromotionRecord>('/promotions', payload)
+    const { data } = await apiClient.post<PromotionRecord>('/promotions/', payload)
     return data
   }
 
