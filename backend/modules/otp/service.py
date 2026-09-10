@@ -65,16 +65,52 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
             raise OTPRateLimitedException() from exc
 
 
+async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> None:
+    from modules.notifications.tasks import _send_email
+
+    tienda = store_name or "Shifty"
+    asunto = f"Tu codigo de verificacion - {tienda}"
+    cuerpo = (
+        "Hola,\n\n"
+        f"Tu codigo para {tienda} es: {code}\n\n"
+        f"Vence en {settings.OTP_CODE_EXPIRE_MINUTES} minutos. "
+        "Si no pediste este codigo, ignora este mensaje.\n\n"
+        "- El equipo de Shifty"
+    )
+    try:
+        enviado = await _send_email(email, asunto, cuerpo)
+    except Exception as exc:  # nunca propaga: la respuesta debe ser neutra
+        logger.warning("otp_email_dispatch_error", error_type=type(exc).__name__)
+        return
+    if not enviado:
+        logger.warning("otp_email_dispatch_failed")
+
+
 class OtpService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
     async def request_code(
-        self, *, store_id: str, phone: str, channel: str
+        self,
+        *,
+        store_id: str,
+        phone: str,
+        channel: str,
+        email: str | None = None,
+        store_name: str = "",
     ) -> dict[str, object]:
         normalized_phone = normalize_phone(phone)
-        if channel not in {"whatsapp", "sms"}:
+        if channel not in {"email", "whatsapp", "sms"}:
             raise ValidationException("Canal invalido")
+        # Hasta 2026-09-10 NINGUN canal despachaba el codigo (solo se exponia
+        # en la respuesta en desarrollo). Email es el unico con envio real;
+        # whatsapp/sms quedan como canales de desarrollo con el codigo visible.
+        if channel != "email" and settings.OTP_PROVIDER != "console":
+            raise ValidationException(
+                "Ese canal no esta disponible; pedi el codigo por email"
+            )
+        if channel == "email" and not email:
+            raise ValidationException("Falta el email para enviar el codigo")
 
         await _consume_budget(
             "req", store_id, normalized_phone, settings.OTP_MAX_REQUESTS_PER_HOUR
@@ -106,11 +142,17 @@ class OtpService:
             # de la tabla (backup, replica).
             code_hash=hash_otp_code(store_id, normalized_phone, code),
             expires_at=expires_at,
-            provider_message_id="console-dispatch",
+            provider_message_id="email" if channel == "email" else "console-dispatch",
         )
         self.db.add(otp)
         await self.db.commit()
         await self.db.refresh(otp)
+
+        if channel == "email" and email:
+            # Fuera de la transaccion (ya commiteada) y best-effort: la
+            # respuesta es la misma haya salido o no, para no revelar si el
+            # telefono existe ni convertir el SMTP en un oraculo.
+            await _dispatch_code_by_email(email, code, store_name)
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:

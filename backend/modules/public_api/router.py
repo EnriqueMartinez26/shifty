@@ -430,7 +430,11 @@ async def request_public_otp(
         if not store:
             raise StoreNotFoundException(identifier=data.store_public_id)
         return await OtpService(db).request_code(
-            store_id=store.id, phone=data.phone, channel=data.channel
+            store_id=store.id,
+            phone=data.phone,
+            channel=data.channel,
+            email=str(data.email) if data.email else None,
+            store_name=store.name,
         )
     finally:
         set_tenant_context(None, False)

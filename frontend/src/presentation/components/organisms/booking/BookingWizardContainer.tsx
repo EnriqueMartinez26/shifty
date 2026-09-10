@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Check, ChevronLeft, ShieldCheck } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingStepClient } from './BookingStepClient'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
@@ -45,7 +46,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
   const [currentStep, setCurrentStep] = useState(0)
   const [otpState, setOtpState] = useState({
     code: '',
-    channel: 'whatsapp' as 'whatsapp' | 'sms',
+    email: '',
     verified: false,
     verifiedPhone: '',
     debugCode: '',
@@ -94,10 +95,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
   const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 0))
   const handleRequestOtp = async () => {
     try {
+      if (!otpState.email.trim()) {
+        setOtpState((prev) => ({ ...prev, error: 'Ingresa un email para recibir el codigo' }))
+        return
+      }
       const response = await requestOtp.mutateAsync({
         store_public_id: store.public_id,
         phone: bookingState.client.phone,
-        channel: otpState.channel
+        channel: 'email',
+        email: otpState.email.trim()
       })
       setOtpState((prev) => ({
         ...prev,
@@ -120,6 +126,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
         phone: bookingState.client.phone,
         code: otpState.code
       })
+      rememberOtpVerification(store.slug, response.phone, response.verified_at)
       setOtpState((prev) => ({
         ...prev,
         verified: true,
@@ -211,7 +218,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             Validacion OTP
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            Verificamos tu telefono antes de confirmar la reserva.
+            Verificamos tu telefono con un codigo que te mandamos por email.
           </p>
         </div>
       </div>
@@ -224,23 +231,23 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
               {bookingState.client.phone}
             </p>
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-              Canal: {otpState.channel === 'whatsapp' ? 'WhatsApp' : 'SMS'}
+              Te mandamos el codigo por email.
             </p>
           </div>
         </div>
 
         <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-          <select
-            value={otpState.channel}
-            onChange={(e) =>
-              setOtpState((prev) => ({ ...prev, channel: e.target.value as 'whatsapp' | 'sms' }))
-            }
+          <input
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            value={otpState.email}
+            onChange={(e) => setOtpState((prev) => ({ ...prev, email: e.target.value, error: '' }))}
+            placeholder="tu@email.com"
+            aria-label="Email para recibir el codigo"
             className="rounded-2xl px-4 py-3 font-bold outline-none"
             style={createBookingInputStyle()}
-          >
-            <option value="whatsapp">WhatsApp</option>
-            <option value="sms">SMS</option>
-          </select>
+          />
           <button
             type="button"
             onClick={() => {
@@ -413,15 +420,22 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             onBack={prevStep}
             onSubmit={(clientData) => {
               updateState({ client: clientData })
+              // Si este telefono ya se verifico en el dispositivo dentro de la
+              // ventana que acepta el backend, no se vuelve a pedir el codigo.
+              const yaVerificado = isOtpStillValid(store.slug, clientData.phone)
               setOtpState({
                 code: '',
-                channel: 'whatsapp',
-                verified: false,
-                verifiedPhone: '',
+                email: clientData.email,
+                verified: yaVerificado,
+                verifiedPhone: yaVerificado ? clientData.phone : '',
                 debugCode: '',
                 expiresAt: '',
                 error: ''
               })
+              if (yaVerificado && requiresOtp) {
+                setCurrentStep(steps.length - 1)
+                return
+              }
               nextStep()
             }}
           />

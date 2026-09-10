@@ -221,12 +221,24 @@ class OtpRequestPayload(BaseModel):
         ..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
     )
     phone: str = Field(..., min_length=6, max_length=30)
-    channel: str = Field(default="whatsapp", pattern=r"^(whatsapp|sms)$")
+    # email es el unico canal con despacho real (SMTP existente, costo cero).
+    # whatsapp/sms solo funcionan en desarrollo (OTP_PROVIDER=console, con el
+    # codigo expuesto en la respuesta); en produccion se rechazan.
+    channel: str = Field(default="email", pattern=r"^(email|whatsapp|sms)$")
+    email: Optional[EmailStr] = Field(default=None, max_length=255)
 
     @field_validator("phone")
     @classmethod
     def normalize_phone(cls, value: str) -> str:
         return re.sub(r"[\s\-\(\)]", "", value)
+
+    @model_validator(mode="after")
+    def email_required_for_email_channel(self) -> "OtpRequestPayload":
+        if self.channel == "email" and not self.email:
+            raise ValueError(
+                "Para recibir el codigo por email hay que indicar un email"
+            )
+        return self
 
 
 class OtpVerifyPayload(BaseModel):

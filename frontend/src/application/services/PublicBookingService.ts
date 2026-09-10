@@ -124,7 +124,8 @@ export interface PublicPaymentStatus {
 export interface OtpRequestPayload {
   store_public_id: string
   phone: string
-  channel: 'whatsapp' | 'sms'
+  channel: 'email' | 'whatsapp' | 'sms'
+  email?: string
 }
 
 export interface OtpRequestResponse {
