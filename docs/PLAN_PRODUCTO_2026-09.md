@@ -185,7 +185,13 @@ texto.
 
 ---
 
-## 4. Fase 1 — Bloqueos por vacaciones sobre turnos ya tomados (3 días)
+## 4. Fase 1 — Bloqueos por vacaciones sobre turnos ya tomados (3 días) — HECHA el 2026-09-10
+
+**Estado:** completa en `7ed6f17`. Cancelado en bloque solo para
+administradores; turnos con pago pendiente o seña acreditada se listan y no se
+cancelan solos. Hallazgo extra: la reserva pública leía bloqueos antes del lock
+del profesional (el test de carrera en Postgres lo atrapó). Verificado: backend
+347, Postgres 11, front 143.
 
 **Objetivo.** Que el dueño pueda bloquear días (vacaciones, feriado, avería
 de una cancha) viendo antes qué turnos quedan adentro, cancelándolos en
@@ -250,7 +256,14 @@ tres horas, inferida): arreglarlo junto con la Fase 0.1.
 
 ---
 
-## 5. Fase 2 — Recursos que no son personas (2,5 días)
+## 5. Fase 2 — Recursos que no son personas (2,5 días) — HECHA el 2026-09-10
+
+**Estado:** completa en `a478fb4` (migración `d3f5a7b9c1e2`). `kind` es
+inmutable desde el front (el formulario solo lo ofrece en el alta). Nota de
+implementación: zod 4 no aplica el default del discriminador cuando falta la
+clave, por eso el validador es objeto + `superRefine` y no una unión
+discriminada. Verificado: backend 351, Postgres 11 (migración ida y vuelta),
+front 150.
 
 **Objetivo.** Canchas, salas, boxes y sillones reservables sin inventar un
 email.
