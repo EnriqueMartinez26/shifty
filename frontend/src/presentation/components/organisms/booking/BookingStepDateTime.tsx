@@ -8,6 +8,7 @@ import { usePublicAvailability } from '@presentation/hooks/usePublic'
 
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
+import { WaitlistJoinForm } from './WaitlistJoinForm'
 import { colors2000s } from '../../../../theme/colors'
 import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
@@ -171,6 +172,14 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               No hay turnos disponibles.
             </p>
             <p className="text-xs text-gray-400 mt-2 font-medium">Proba seleccionando otro dia.</p>
+            <div className="px-4 text-left">
+              <WaitlistJoinForm
+                storePublicId={storePublicId}
+                serviceId={serviceId}
+                staffId={staffId}
+                date={dateStr}
+              />
+            </div>
           </div>
         ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
@@ -224,6 +233,16 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             })}
           </div>
         )}
+        {!isLoading &&
+          visibleSlots.length > 0 &&
+          !visibleSlots.some((slot) => slot.status === 'available') && (
+            <WaitlistJoinForm
+              storePublicId={storePublicId}
+              serviceId={serviceId}
+              staffId={staffId}
+              date={dateStr}
+            />
+          )}
       </div>
 
       <style

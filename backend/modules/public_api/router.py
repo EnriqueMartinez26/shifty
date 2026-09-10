@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
 
+import structlog
 from fastapi import Depends, Path, Query, Request, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
@@ -75,8 +76,11 @@ from modules.services.model import Service
 from modules.staff.model import Staff
 from modules.stores.model import Store
 from modules.stores.schemas import StoreCustomField
+from modules.waitlist.events import publish_slot_released
+from modules.waitlist.offers import mark_booked
 
 router = CanonicalAPIRouter(prefix="/public", tags=["Public Booking"])
+logger = structlog.get_logger()
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
@@ -713,6 +717,20 @@ async def create_public_booking(
         # (antes la reserva publica no invalidaba nada y el slot seguia
         # "available" hasta cinco minutos).
         await invalidate_availability(redis, store_id, appointment.starts_at)
+        # Si estaba en lista de espera para esto, la entrada se cierra sola.
+        # Best-effort: no puede deshacer una reserva ya hecha.
+        try:
+            if await mark_booked(
+                db,
+                store_id=store_id,
+                client_phone=data.client_phone,
+                service_id=service.id,
+                starts_at=appointment.starts_at,
+            ):
+                await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.warning("waitlist_mark_booked_failed", error_type=type(exc).__name__)
 
         # El turno y el Payment PENDING ya estan persistidos y el lock FOR UPDATE
         # del staff quedo soltado. Recien ahora se hace la llamada HTTP a Mercado
@@ -987,6 +1005,16 @@ async def client_cancel_appointment(
             )
 
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        publish_slot_released(
+            db,
+            store_id=appointment.store_id,
+            staff_id=appointment.staff_id,
+            service_id=appointment.service_id,
+            appointment_id=appointment.id,
+            starts_at=appointment.starts_at,
+            ends_at=appointment.ends_at,
+            reason="client_cancelled",
+        )
         await db.commit()
         await db.refresh(appointment)
 
@@ -1162,6 +1190,16 @@ async def client_reschedule_appointment(
                     raise AppointmentConflictException()
 
                 original.apply_status_transition(AppointmentStatus.CANCELLED)
+                publish_slot_released(
+                    db,
+                    store_id=original.store_id,
+                    staff_id=original.staff_id,
+                    service_id=original.service_id,
+                    appointment_id=original.id,
+                    starts_at=original.starts_at,
+                    ends_at=original.ends_at,
+                    reason="client_rescheduled",
+                )
                 new_appointment = Appointment(
                     store_id=original.store_id,
                     staff_id=original.staff_id,

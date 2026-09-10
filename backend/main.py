@@ -40,6 +40,8 @@ from modules.payments.router import router as payments_router
 from modules.promotions.router import router as promotions_router
 from modules.stores.router import router as stores_router
 from modules.superadmin.router import router as superadmin_router
+from modules.waitlist.public_router import router as public_waitlist_router
+from modules.waitlist.router import router as waitlist_router
 
 logger = structlog.get_logger()
 
@@ -322,6 +324,8 @@ app.include_router(ledger_router)
 app.include_router(ops_router)
 app.include_router(superadmin_router)
 app.include_router(public_router)
+app.include_router(waitlist_router)
+app.include_router(public_waitlist_router)
 
 
 @app.get("/")

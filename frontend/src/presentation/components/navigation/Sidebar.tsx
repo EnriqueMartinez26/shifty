@@ -1,6 +1,7 @@
 import React from 'react'
 
 import {
+  mdiAccountClock,
   mdiAccountGroup,
   mdiBriefcase,
   mdiCashClock,
@@ -48,6 +49,12 @@ const menuItems: MenuItem[] = [
     iconPath: mdiCalendar,
     label: 'Agenda',
     path: '/dashboard/calendar',
+    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
+  },
+  {
+    iconPath: mdiAccountClock,
+    label: 'Lista de espera',
+    path: '/dashboard/waitlist',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
   },
   {

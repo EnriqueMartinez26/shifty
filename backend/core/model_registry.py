@@ -34,6 +34,7 @@ MODEL_MODULES: tuple[str, ...] = (
     "modules.promotions.model",
     "modules.services.model",
     "modules.stores.model",
+    "modules.waitlist.model",
 )
 
 

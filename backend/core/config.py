@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     REDIS_SOCKET_TIMEOUT_SECONDS: float = 2.0
     REPORT_MAX_RANGE_DAYS: int = 370
     SENTRY_DSN: str | None = None
+    # Minutos que un cupo liberado se ofrece a UNA persona de la lista de
+    # espera antes de pasar a la siguiente (exclusividad blanda).
+    WAITLIST_OFFER_MINUTES: int = 10
     OPS_ENABLE_PUBLIC_HEALTH: bool = True
     SLO_MAX_PENDING_WEBHOOKS: int = 200
     SLO_MAX_FAILED_WEBHOOKS: int = 20

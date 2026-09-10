@@ -31,6 +31,8 @@ from modules.payments.processing import (
     enrich_mercadopago_webhook_payload,
 )
 from modules.users.model import User, UserRole
+from modules.waitlist.events import EVENT_SLOT_RELEASED, publish_slot_released
+from modules.waitlist.offers import ReleasedSlot, offer_released_slot
 from modules.payments.service import (
     fetch_mercadopago_payment,
     stamp_payment_from_status,
@@ -73,6 +75,19 @@ async def process_outbox_batch(
 
     for message in messages:
         try:
+            if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
+                # Lista de espera: aviso al dueno y oferta a una persona por vez.
+                await offer_released_slot(
+                    db,
+                    ReleasedSlot.from_payload(
+                        message.store_id, dict(message.payload or {})
+                    ),
+                    now=now,
+                )
+                message.processed_at = now
+                message.error = None
+                processed += 1
+                continue
             if message.event_type == "appointment.cancelled_by_block":
                 # Aviso al cliente (no al dueno, que fue quien bloqueo).
                 payload = dict(message.payload or {})
@@ -371,6 +386,16 @@ async def expire_unpaid_appointments(
             # Por el grafo, no por asignacion directa: si el cobro ya estaba
             # acreditado no puede degradarse a expirado.
             stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
+        publish_slot_released(
+            db,
+            store_id=appointment.store_id,
+            staff_id=appointment.staff_id,
+            service_id=appointment.service_id,
+            appointment_id=appointment.id,
+            starts_at=appointment.starts_at,
+            ends_at=appointment.ends_at,
+            reason="hold_expired",
+        )
         expired += 1
         liberados.append((appointment.store_id, appointment.starts_at))
     await db.commit()

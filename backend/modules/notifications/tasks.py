@@ -427,6 +427,49 @@ async def enqueue_rebook_email(
     return {"status": "sent", "to": email}
 
 
+def _waitlist_offer_subject(details: dict[str, Any]) -> str:
+    fecha, hora = format_local_datetime(details.get("starts_at"))
+    return f"Se libero un turno el {fecha} a las {hora} - {details.get('service', '')}"
+
+
+def _waitlist_offer_body(details: dict[str, Any]) -> str:
+    minutos = details.get("offer_minutes") or 10
+    link = details.get("offer_url") or details.get("booking_url") or ""
+    linea_link = f"\n\nReservalo aca: {link}" if link else ""
+    return (
+        f"{_saludo(details)}\n\n"
+        f'Se libero un turno para "{details.get("service")}" {_con_quien(details)} '
+        f"el {_cuando(details)}, como pediste en la lista de espera.{linea_link}\n\n"
+        f"Te lo reservamos durante {minutos} minutos; despues se lo ofrecemos a la "
+        "siguiente persona de la lista.\n\n"
+        f"{_contacto(details)}\n\n"
+        "- El equipo de Shifty"
+    )
+
+
+async def enqueue_waitlist_offer_email(
+    *, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    """Mail "se libero un turno" a quien esta en lista de espera. Nunca aborta."""
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
+    assert email is not None
+    try:
+        success = await _send_email(
+            email, _waitlist_offer_subject(details), _waitlist_offer_body(details)
+        )
+    except Exception as exc:
+        logger.warning(
+            "waitlist_offer_email_dispatch_failed",
+            entry=details.get("public_id"),
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "reason": type(exc).__name__}
+    if not success:
+        return {"status": "failed", "reason": "smtp"}
+    return {"status": "sent", "to": email}
+
+
 async def enqueue_confirmation_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:

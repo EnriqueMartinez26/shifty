@@ -13,7 +13,9 @@ import {
   type PromotionPreview,
   type PublicService,
   type PublicStaff,
-  type PublicStore
+  type PublicStore,
+  type PublicWaitlistEntry,
+  type WaitlistJoinPayload
 } from '@application/services/PublicBookingService'
 
 export type {
@@ -74,6 +76,11 @@ export const usePublicAvailability = (
 export const useCreatePublicBooking = () =>
   useMutation<BookingConfirmation, Error, PublicBookingPayload>({
     mutationFn: (payload) => publicBookingService.createBooking(payload)
+  })
+
+export const useJoinWaitlist = () =>
+  useMutation<PublicWaitlistEntry, Error, WaitlistJoinPayload>({
+    mutationFn: (payload) => publicBookingService.joinWaitlist(payload)
   })
 
 export const usePublicPaymentStatus = (

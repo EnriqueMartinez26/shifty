@@ -71,6 +71,7 @@ celery_app.conf.update(
         "modules.auth.tasks",
         "modules.payments.tasks",
         "modules.notifications.tasks",
+        "modules.waitlist.tasks",
     ],
     # ----------------------------------------------------------------
     # Celery Beat — Tareas periódicas
@@ -97,6 +98,11 @@ celery_app.conf.update(
         "process-appointment-reminders-every-15-minutes": {
             "task": "process_appointment_reminders",
             "schedule": crontab(minute="*/15"),
+        },
+        # Ofertas de lista de espera vencidas: pasan a la siguiente persona.
+        "process-waitlist-offers-every-5-minutes": {
+            "task": "process_waitlist_offers",
+            "schedule": crontab(minute="*/5"),
         },
         # Higiene de la tabla de sesiones: las expiradas/revocadas viejas se
         # purgan a diario (es material de credenciales, no un historico).

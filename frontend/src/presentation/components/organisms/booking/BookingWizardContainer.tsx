@@ -65,7 +65,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     serviceId: preselect.serviceId,
     requestedStaffId: preselect.staffId,
     assignedStaffId: null,
-    date: null,
+    date: preselect.date,
     startTime: null,
     startsAt: null,
     client: {

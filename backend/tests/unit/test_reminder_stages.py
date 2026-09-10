@@ -13,7 +13,9 @@ from modules.notifications.reminders import (
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
 
 
-def _turno(horas_hasta: float, *, reservado_hace_horas: float = 72.0, **marcas: object):
+def _turno(
+    horas_hasta: float, *, reservado_hace_horas: float = 72.0, **marcas: object
+) -> SimpleNamespace:
     starts_at = NOW + timedelta(hours=horas_hasta)
     campos: dict[str, object] = {
         "starts_at": starts_at,

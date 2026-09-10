@@ -147,7 +147,33 @@ export interface OtpVerifyResponse {
   phone: string
 }
 
+export interface WaitlistJoinPayload {
+  store_public_id: string
+  service_id: string
+  staff_id?: string | null
+  window_starts_at: string
+  window_ends_at: string
+  client_name: string
+  client_phone: string
+  client_email?: string | null
+  notes?: string | null
+}
+
+export interface PublicWaitlistEntry {
+  public_id: string
+  status: string
+  service_name: string
+  staff_name: string | null
+  window_starts_at: string
+  window_ends_at: string
+}
+
 export class PublicBookingService {
+  async joinWaitlist(payload: WaitlistJoinPayload): Promise<PublicWaitlistEntry> {
+    const { data } = await apiClient.post<PublicWaitlistEntry>('/public/waitlist', payload)
+    return data
+  }
+
   async getStore(slug: string): Promise<PublicStore> {
     const { data } = await apiClient.get<PublicStore>(`/public/stores/${slug}`)
     return data

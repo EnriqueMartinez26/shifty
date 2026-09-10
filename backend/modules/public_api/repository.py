@@ -125,14 +125,19 @@ class PublicRepository:
         name: str,
         email: str | None,
     ) -> User:
+        # Dos clientes con el mismo telefono (alta vieja sin unicidad) rompian
+        # con MultipleResultsFound -> 500. Se toma el mas reciente.
         result = await self.db.execute(
-            select(User).where(
+            select(User)
+            .where(
                 User.phone == phone,
                 User.store_id == store_id,
                 User.role == UserRole.CLIENT,
             )
+            .order_by(User.created_at.desc())
+            .limit(1)
         )
-        existing = result.scalar_one_or_none()
+        existing = result.scalars().first()
 
         if existing:
             if email and (not existing.email or existing.email.endswith(".noreply")):
@@ -331,13 +336,16 @@ class PublicRepository:
 
     async def get_client_by_phone(self, store_id: str, phone: str) -> User | None:
         result = await self.db.execute(
-            select(User).where(
+            select(User)
+            .where(
                 User.phone == phone,
                 User.store_id == store_id,
                 User.role == UserRole.CLIENT,
             )
+            .order_by(User.created_at.desc())
+            .limit(1)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def get_client_appointments(
         self, client_id: str, store_id: str

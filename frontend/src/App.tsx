@@ -27,6 +27,7 @@ const PromotionsPage = lazy(() => import('./presentation/pages/Promotions'))
 const LedgerPage = lazy(() => import('./presentation/pages/Ledger'))
 const ServicesPage = lazy(() => import('./presentation/pages/Services'))
 const StaffPage = lazy(() => import('./presentation/pages/Staff'))
+const WaitlistPage = lazy(() => import('./presentation/pages/Waitlist'))
 const SuperAdminPage = lazy(() => import('./presentation/pages/SuperAdmin'))
 const UsersPage = lazy(() => import('./presentation/pages/Users'))
 const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
@@ -120,6 +121,7 @@ function App() {
               <Route index element={<Dashboard />} />
               <Route path="manual" element={<ManualPage />} />
               <Route path="calendar" element={<CalendarPage />} />
+              <Route path="waitlist" element={<WaitlistPage />} />
               <Route
                 path="reports"
                 element={

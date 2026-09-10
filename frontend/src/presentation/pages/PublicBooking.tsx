@@ -24,7 +24,11 @@ const PublicBooking: React.FC = () => {
   // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
   // las listas publicas antes de montar el wizard. Sin parametros no se
   // consulta nada extra.
-  const wanted = { service: searchParams.get('service'), staff: searchParams.get('staff') }
+  const wanted = {
+    service: searchParams.get('service'),
+    staff: searchParams.get('staff'),
+    date: searchParams.get('date')
+  }
   const servicesQuery = usePublicServices(wanted.service ? store?.public_id : undefined)
   const staffQuery = usePublicStaff(
     wanted.service && wanted.staff ? store?.public_id : undefined,

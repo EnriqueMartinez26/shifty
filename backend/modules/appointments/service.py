@@ -44,6 +44,7 @@ from modules.payments.service import expire_mercadopago_preference
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
+from modules.waitlist.events import EVENT_SLOT_RELEASED, slot_released_payload
 
 if TYPE_CHECKING:
     pass
@@ -222,6 +223,7 @@ class AppointmentService:
             payload_before=payload_before,
             payload_after={"status": appointment.status},
         )
+        self._publish_slot_released(appointment, reason="cancelled")
 
         await self.uow.commit()
 
@@ -259,6 +261,21 @@ class AppointmentService:
         # best-effort: un SMTP caido no deshace la confirmacion.
         await self._notify_client_confirmation(appointment)
         return appointment
+
+    def _publish_slot_released(self, appointment: Appointment, *, reason: str) -> None:
+        """Lista de espera: el cupo vuelve a estar libre (misma transaccion)."""
+        self.uow.outbox.publish(
+            store_id=appointment.store_id,
+            event_type=EVENT_SLOT_RELEASED,
+            payload=slot_released_payload(
+                staff_id=appointment.staff_id,
+                service_id=appointment.service_id,
+                appointment_id=appointment.id,
+                starts_at=appointment.starts_at,
+                ends_at=appointment.ends_at,
+                reason=reason,
+            ),
+        )
 
     async def _notify_client_confirmation(self, appointment: Appointment) -> None:
         store = await self.uow.session.get(Store, appointment.store_id)
@@ -423,6 +440,7 @@ class AppointmentService:
                 "released_by": actor.public_id,
             },
         )
+        self._publish_slot_released(appointment, reason="released")
         await self.uow.commit()
 
         await invalidate_availability(
@@ -543,6 +561,7 @@ class AppointmentService:
 
         # 5. Cancelar original (con timestamp y auditoría)
         original.apply_status_transition(AppointmentStatus.CANCELLED)
+        self._publish_slot_released(original, reason="rescheduled")
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",

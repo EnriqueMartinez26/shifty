@@ -43,6 +43,7 @@ from modules.notifications.tasks import build_client_details, is_deliverable_ema
 from modules.staff.model import Staff, StaffBlock
 from modules.stores.model import Store
 from modules.users.model import User
+from modules.waitlist.events import EVENT_SLOT_RELEASED, slot_released_payload
 
 EVENT_CANCELLED_BY_BLOCK = "appointment.cancelled_by_block"
 
@@ -282,6 +283,17 @@ class AppointmentBlockService:
     async def delete_block(self, public_id: str) -> None:
         block = await self._get_block(public_id)
         block.is_active = False
+        # El rango bloqueado vuelve a estar libre: la lista de espera se entera.
+        self.uow.outbox.publish(
+            store_id=self.actor.store_id,
+            event_type=EVENT_SLOT_RELEASED,
+            payload=slot_released_payload(
+                staff_id=block.staff_id,
+                starts_at=block.start_time,
+                ends_at=block.end_time,
+                reason="block_deleted",
+            ),
+        )
         await self.uow.commit()
         await self._invalidate([(block.start_time, block.end_time)])
 

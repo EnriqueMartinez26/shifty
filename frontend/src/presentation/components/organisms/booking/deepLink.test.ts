@@ -5,28 +5,39 @@ const staff = [{ public_id: 'st-1' }]
 
 describe('deep-link de la reserva publica', () => {
   it('preselecciona servicio y profesional validos y arranca en el horario', () => {
-    const pre = resolveBookingPreselect({ service: 'svc-1', staff: 'st-1' }, services, staff)
-    expect(pre).toEqual({ serviceId: 'svc-1', staffId: 'st-1' })
+    const pre = resolveBookingPreselect(
+      { service: 'svc-1', staff: 'st-1', date: '2026-09-20' },
+      services,
+      staff
+    )
+    expect(pre).toEqual({ serviceId: 'svc-1', staffId: 'st-1', date: '2026-09-20' })
     expect(initialStepFor(pre)).toBe(2)
   })
 
   it('con solo el servicio arranca en el paso del profesional', () => {
     const pre = resolveBookingPreselect({ service: 'svc-2', staff: null }, services, staff)
-    expect(pre).toEqual({ serviceId: 'svc-2', staffId: null })
+    expect(pre).toEqual({ serviceId: 'svc-2', staffId: null, date: null })
     expect(initialStepFor(pre)).toBe(1)
   })
 
   it('ignora ids que no existen en las listas publicas', () => {
     expect(resolveBookingPreselect({ service: 'otro', staff: 'st-1' }, services, staff)).toEqual({
       serviceId: null,
-      staffId: null
+      staffId: null,
+      date: null
     })
     const soloServicio = resolveBookingPreselect(
       { service: 'svc-1', staff: 'ajeno' },
       services,
       staff
     )
-    expect(soloServicio).toEqual({ serviceId: 'svc-1', staffId: null })
+    expect(soloServicio).toEqual({ serviceId: 'svc-1', staffId: null, date: null })
+    const fechaRota = resolveBookingPreselect(
+      { service: 'svc-1', staff: null, date: '20/09/2026' },
+      services,
+      staff
+    )
+    expect(fechaRota.date).toBeNull()
   })
 
   it('sin parametros arranca desde el principio', () => {
