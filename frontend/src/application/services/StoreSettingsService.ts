@@ -47,9 +47,15 @@ export interface StoreSettings {
   website_url?: string | null
   custom_client_fields: StoreCustomField[]
   cancellation_hours: number
+  min_booking_notice_hours: number
   buffer_minutes: number
   allow_manual_coordination: boolean
   deposit_policy?: string | null
+  /** Recargos de seña en puntos porcentuales del precio; 0 apaga la regla. */
+  deposit_far_notice_days: number
+  deposit_far_notice_extra_percent: number
+  deposit_new_client_extra_percent: number
+  deposit_absent_client_extra_percent: number
   business_hours: Record<string, BusinessHourPeriod[]>
   send_email_confirmation: boolean
   send_email_reminders: boolean
@@ -70,9 +76,14 @@ export interface StoreUpdatePayload {
   website_url?: string | null
   custom_client_fields?: StoreCustomField[]
   cancellation_hours?: number
+  min_booking_notice_hours?: number
   buffer_minutes?: number
   allow_manual_coordination?: boolean
   deposit_policy?: string | null
+  deposit_far_notice_days?: number
+  deposit_far_notice_extra_percent?: number
+  deposit_new_client_extra_percent?: number
+  deposit_absent_client_extra_percent?: number
   business_hours?: Record<string, BusinessHourPeriod[]>
   send_email_confirmation?: boolean
   send_email_reminders?: boolean

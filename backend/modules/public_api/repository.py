@@ -11,7 +11,7 @@ from decimal import Decimal
 from core.utils import ARGENTINA_TZ
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -19,6 +19,7 @@ import ulid
 
 from core.security import hash_password
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.payments.deposit_rules import ClientHistory
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock
 from modules.stores.model import Store
@@ -333,6 +334,34 @@ class PublicRepository:
         await self.db.refresh(new_appointment)
 
         return new_appointment, service, selected_staff
+
+    async def get_client_history(self, store_id: str, phone: str) -> ClientHistory:
+        """Resumen del cliente en la tienda en UNA consulta agregada, antes del
+        lock. Cliente nuevo: historial vacio sin crear el usuario todavia."""
+        rows = await self.db.execute(
+            select(Appointment.status, func.count())
+            .join(User, Appointment.client_id == User.id)
+            .where(
+                Appointment.store_id == store_id,
+                User.store_id == store_id,
+                User.phone == phone,
+                User.role == UserRole.CLIENT,
+                Appointment.status.in_(
+                    [
+                        AppointmentStatus.COMPLETED.value,
+                        AppointmentStatus.ABSENT.value,
+                        AppointmentStatus.CANCELLED.value,
+                    ]
+                ),
+            )
+            .group_by(Appointment.status)
+        )
+        conteo = {str(estado): int(total) for estado, total in rows.all()}
+        return ClientHistory(
+            completed=conteo.get(AppointmentStatus.COMPLETED.value, 0),
+            absent=conteo.get(AppointmentStatus.ABSENT.value, 0),
+            cancelled=conteo.get(AppointmentStatus.CANCELLED.value, 0),
+        )
 
     async def get_client_by_phone(self, store_id: str, phone: str) -> User | None:
         result = await self.db.execute(

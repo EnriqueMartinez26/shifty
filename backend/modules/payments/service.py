@@ -597,6 +597,7 @@ async def ensure_payment_preference(
     discount_amount: Decimal | None = None,
     promotion_code: str | None = None,
     create_provider_link: bool = True,
+    deposit_rule: dict[str, JsonValue] | None = None,
 ) -> Payment:
     amount = (
         amount_override
@@ -625,6 +626,8 @@ async def ensure_payment_preference(
         payment.original_amount = original_amount
         payment.discount_amount = discount_amount
         payment.promotion_code = promotion_code
+        if deposit_rule is not None:
+            payment.deposit_rule = deposit_rule
         # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o
         # devuelto no vuelve a pendiente porque se recalcule el importe.
         if can_apply_payment_status(payment.status, PaymentStatus.PENDING.value):
@@ -646,6 +649,7 @@ async def ensure_payment_preference(
             preference_id=f"pref_{appointment.id}",
             payment_link=f"https://payments.shifty.local/pay/{appointment.id}",
             promotion_code=promotion_code,
+            deposit_rule=deposit_rule,
         )
         db.add(payment)
         await db.flush()

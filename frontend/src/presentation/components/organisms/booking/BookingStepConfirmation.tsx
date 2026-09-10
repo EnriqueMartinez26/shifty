@@ -18,11 +18,16 @@ import type {
   PromotionPreview
 } from '@application/services/PublicBookingService'
 
-import { usePreviewPublicPromotion, usePublicServices } from '@presentation/hooks/usePublic'
+import {
+  usePreviewPublicPromotion,
+  usePublicDepositPreview,
+  usePublicServices
+} from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { asSafeHttpsUrl, navigateExternal, sanitizePhoneForUrl } from '@shared/utils/safeUrl'
 
+import { depositReasonsText } from './depositReasons'
 import type { BookingWizardState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
@@ -72,17 +77,32 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const previewPromotion = usePreviewPublicPromotion()
   const servicesQuery = usePublicServices(storePublicId)
   const selectedService = servicesQuery.data?.find((service) => service.public_id === serviceId)
-  const canPayDeposit = Boolean(
-    paymentsEnabled &&
+  // La seña real la decide el backend (antelación e historial del cliente):
+  // inferirla desde los campos crudos del servicio divergía en cuanto la
+  // tienda configuraba un recargo. Mientras carga, se cae a la inferencia.
+  const depositQuery = usePublicDepositPreview({
+    storePublicId,
+    serviceId,
+    startsAt: bookingState.startsAt,
+    clientPhone: bookingState.client.phone || undefined,
+    promotionCode: bookingState.promotionCode || undefined
+  })
+  const inferredDeposit = Boolean(
     selectedService &&
     selectedService.deposit_mode !== 'none' &&
     Number(selectedService.deposit_amount ?? (selectedService.deposit_type === 'full' ? 1 : 0)) > 0
+  )
+  const depositPreview = depositQuery.data ?? null
+  const canPayDeposit = Boolean(
+    paymentsEnabled && (depositPreview ? depositPreview.amount > 0 : inferredDeposit)
   )
   // Con seña obligatoria y coordinación manual deshabilitada por la tienda, la
   // única vía válida es pagar online. El backend lo rechaza igual, pero no tiene
   // sentido ofrecer un botón que va a fallar.
   const onlinePaymentMandatory = Boolean(
-    canPayDeposit && selectedService?.deposit_mode === 'required' && !allowManualCoordination
+    depositPreview
+      ? depositPreview.online_payment_mandatory
+      : canPayDeposit && selectedService?.deposit_mode === 'required' && !allowManualCoordination
   )
 
   useEffect(() => {
@@ -465,6 +485,24 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           >
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             {errorMessage}
+          </div>
+        )}
+
+        {depositPreview && depositPreview.amount > 0 && (
+          <div
+            className="rounded-2xl p-4 text-xs"
+            style={createBookingAccentBoxStyle('#eff6ff', '#bfdbfe', '#1e3a8a')}
+            data-testid="deposit-preview"
+          >
+            <p className="font-black uppercase tracking-widest text-[10px] mb-1">Seña</p>
+            <p className="text-sm font-black">{currencyFmt.format(depositPreview.amount)}</p>
+            {depositPreview.extra_percent > 0 && (
+              <p className="font-medium mt-1">
+                Incluye {currencyFmt.format(depositPreview.base_amount)} de seña base mas{' '}
+                {depositPreview.extra_percent}% del precio por{' '}
+                {depositReasonsText(depositPreview.reasons)}.
+              </p>
+            )}
           </div>
         )}
 

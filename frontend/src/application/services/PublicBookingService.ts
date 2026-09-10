@@ -168,7 +168,36 @@ export interface PublicWaitlistEntry {
   window_ends_at: string
 }
 
+export interface DepositPreview {
+  amount: number
+  base_amount: number
+  extra_percent: number
+  reasons: string[]
+  price: number
+  payments_enabled: boolean
+  online_payment_mandatory: boolean
+}
+
 export class PublicBookingService {
+  async previewDeposit(params: {
+    storePublicId: string
+    serviceId: string
+    startsAt: string
+    clientPhone?: string
+    promotionCode?: string
+  }): Promise<DepositPreview> {
+    const { data } = await apiClient.get<DepositPreview>('/public/deposit/preview', {
+      params: {
+        store_public_id: params.storePublicId,
+        service_id: params.serviceId,
+        starts_at: params.startsAt,
+        client_phone: params.clientPhone || undefined,
+        promotion_code: params.promotionCode || undefined
+      }
+    })
+    return data
+  }
+
   async joinWaitlist(payload: WaitlistJoinPayload): Promise<PublicWaitlistEntry> {
     const { data } = await apiClient.post<PublicWaitlistEntry>('/public/waitlist', payload)
     return data

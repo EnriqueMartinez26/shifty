@@ -5,6 +5,7 @@ Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 """
 
 import hashlib
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
@@ -43,10 +44,13 @@ from modules.appointments.guards import (
 )
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.otp.service import OtpService
-from modules.payments.service import (
-    calculate_service_payment_amount,
-    ensure_payment_preference,
+from modules.payments.deposit_rules import (
+    ClientHistory,
+    DepositDecision,
+    DepositRules,
+    decide_deposit,
 )
+from modules.payments.service import ensure_payment_preference
 from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import (
@@ -66,6 +70,7 @@ from modules.public_api.schemas import (
     OtpVerifyPayload,
     PublicBookingCreate,
     PublicBookingResponse,
+    PublicDepositPreviewResponse,
     PublicPromotionPreviewResponse,
     PublicPaymentStatusResponse,
     PublicServiceResponse,
@@ -378,6 +383,86 @@ async def get_public_availability(
         set_tenant_context(None, False)
 
 
+def _decide(
+    service: Service,
+    store: Store,
+    *,
+    price: Decimal,
+    starts_at: datetime,
+    history: ClientHistory,
+    now: datetime | None = None,
+) -> DepositDecision:
+    now = now or datetime.now(timezone.utc)
+    return decide_deposit(
+        service,
+        price=price,
+        notice=starts_at - now,
+        rules=DepositRules.from_store(store),
+        history=history,
+    )
+
+
+@router.get("/deposit/preview", response_model=PublicDepositPreviewResponse)
+async def preview_public_deposit(
+    store_public_id: PublicIdQuery,
+    service_id: PublicIdQuery,
+    starts_at: datetime,
+    client_phone: Annotated[str | None, Query(min_length=6, max_length=30)] = None,
+    promotion_code: Annotated[str | None, Query(min_length=3, max_length=30)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> PublicDepositPreviewResponse:
+    """La sena real antes de confirmar: misma regla que el alta.
+
+    Sin esto el front inferia "hay sena" desde los campos crudos del servicio
+    y divergia en cuanto la tienda configuraba un recargo.
+    """
+    await _bypass_rls(db)
+    try:
+        repo = PublicRepository(db)
+        store = await repo.get_store_by_public_id(store_public_id)
+        if not store:
+            raise StoreNotFoundException(identifier=store_public_id)
+        service = await repo.get_service_by_public_id(service_id)
+        if not service or service.store_id != store.id:
+            raise ServiceNotFoundException(identifier=service_id)
+
+        price = Decimal(str(service.price or 0))
+        if promotion_code:
+            _promotion, quote, _error = await quote_promotion(
+                db, store_id=store.id, service=service, code=promotion_code
+            )
+            if quote:
+                price = quote.final_amount
+        history = ClientHistory()
+        if client_phone:
+            history = await repo.get_client_history(
+                store.id, re.sub(r"[\s\-\(\)\+]", "", client_phone)
+            )
+        starts_at_utc = (
+            starts_at if starts_at.tzinfo else starts_at.replace(tzinfo=timezone.utc)
+        )
+        decision = _decide(
+            service, store, price=price, starts_at=starts_at_utc, history=history
+        )
+        payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+        return PublicDepositPreviewResponse(
+            amount=float(decision.amount),
+            base_amount=float(decision.base_amount),
+            extra_percent=decision.extra_percent,
+            reasons=list(decision.reasons),
+            price=float(price),
+            payments_enabled=payments_enabled,
+            online_payment_mandatory=bool(
+                payments_enabled
+                and decision.amount > 0
+                and (getattr(service, "deposit_mode", "none") or "none") == "required"
+                and not store.allow_manual_coordination
+            ),
+        )
+    finally:
+        set_tenant_context(None, False)
+
+
 @router.get("/promotions/preview", response_model=PublicPromotionPreviewResponse)
 async def preview_public_promotion(
     store_public_id: PublicIdQuery,
@@ -555,9 +640,19 @@ async def create_public_booking(
             if preview_promotion_quote
             else base_service_price
         )
-        deposit_amount = calculate_service_payment_amount(
-            service, base_price=discounted_service_price
+        # La regla de sena se evalua UNA vez (misma antelacion, mismo
+        # historial) y el resultado viaja hasta el pago y la respuesta. Antes se
+        # recalculaba tres veces con `now` distinto. El historial es una sola
+        # consulta agregada, antes del lock.
+        history = await repo.get_client_history(store_id, data.client_phone)
+        deposit = _decide(
+            service,
+            store,
+            price=discounted_service_price,
+            starts_at=starts_at_utc,
+            history=history,
         )
+        deposit_amount = deposit.amount
         payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
         payment_required = (
             (
@@ -648,15 +743,27 @@ async def create_public_booking(
                     except ValueError as exc:
                         raise ValidationException(str(exc))
                 if payment_required:
-                    payable_before_discount = calculate_service_payment_amount(
-                        service, base_price=base_service_price
-                    )
-                    payable_after_discount = calculate_service_payment_amount(
+                    # Misma regla (antelacion e historial), dos precios: el de
+                    # lista para mostrar el descuento y el final para cobrar.
+                    payable_before_discount = _decide(
                         service,
-                        base_price=promotion_quote.final_amount
+                        store,
+                        price=base_service_price,
+                        starts_at=starts_at_utc,
+                        history=history,
+                    ).amount
+                    final_decision = (
+                        _decide(
+                            service,
+                            store,
+                            price=promotion_quote.final_amount,
+                            starts_at=starts_at_utc,
+                            history=history,
+                        )
                         if promotion_quote
-                        else discounted_service_price,
+                        else deposit
                     )
+                    payable_after_discount = final_decision.amount
                     # Dentro de la transaccion (que sostiene el lock FOR UPDATE
                     # del staff) solo se crea el Payment PENDING con link
                     # placeholder: la llamada HTTP a Mercado Pago se hace DESPUES
@@ -677,6 +784,7 @@ async def create_public_booking(
                         if promotion_quote
                         else None,
                         create_provider_link=False,
+                        deposit_rule=final_decision.snapshot(),
                     )
                 else:
                     # El pago se coordina por fuera, asi que la tienda tiene que
@@ -799,16 +907,9 @@ async def create_public_booking(
             payment_status=payment.status if payment else None,
             payment_link=payment.payment_link if payment else None,
             payment_public_id=payment.id if payment else None,
-            payment_amount=float(
-                payment.amount
-                if payment
-                else calculate_service_payment_amount(
-                    service,
-                    base_price=promotion_quote.final_amount
-                    if promotion_quote
-                    else discounted_service_price,
-                )
-            ),
+            # Sin pago online se informa la misma decision que se evaluo arriba
+            # (el precio final ya trae la promo cuando la hubo).
+            payment_amount=float(payment.amount if payment else deposit.amount),
             promotion_code=promotion_quote.code if promotion_quote else None,
             service_price=float(base_service_price),
             discount_amount=float(promotion_quote.discount_amount)
@@ -883,8 +984,6 @@ async def get_client_appointments(
     phone: Annotated[str, Path(min_length=6, max_length=30)],
     db: AsyncSession = Depends(get_db),
 ) -> ClientAppointmentsResponse:
-    import re
-
     phone = re.sub(r"[\s\-\(\)\+]", "", phone)
     await enforce_rate_limit(
         request,

@@ -67,6 +67,20 @@ class Store(BaseEntity):
     cancellation_hours: Mapped[int] = mapped_column(Integer, default=24)
     min_booking_notice_hours: Mapped[int] = mapped_column(Integer, default=2)
     buffer_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    # Recargos de sena (puntos porcentuales del precio) donde el riesgo de
+    # ausencia es mayor. 0 = apagado. La regla vive en payments/deposit_rules.
+    deposit_far_notice_days: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    deposit_far_notice_extra_percent: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    deposit_new_client_extra_percent: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
+    deposit_absent_client_extra_percent: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
 
     schedules: Mapped[list["StoreSchedule"]] = relationship(
         back_populates="store", cascade="all, delete-orphan", lazy="selectin"
@@ -77,6 +91,25 @@ class Store(BaseEntity):
 
     theme_config: Mapped[ThemeConfig] = mapped_column(JSON, default=dict)
     feature_flags: Mapped[FeatureFlags] = mapped_column(JSON, default=dict)
+
+    __table_args__ = (
+        CheckConstraint(
+            "deposit_far_notice_days BETWEEN 0 AND 365",
+            name="ck_stores_deposit_far_notice_days",
+        ),
+        CheckConstraint(
+            "deposit_far_notice_extra_percent BETWEEN 0 AND 100",
+            name="ck_stores_deposit_far_notice_extra_percent",
+        ),
+        CheckConstraint(
+            "deposit_new_client_extra_percent BETWEEN 0 AND 100",
+            name="ck_stores_deposit_new_client_extra_percent",
+        ),
+        CheckConstraint(
+            "deposit_absent_client_extra_percent BETWEEN 0 AND 100",
+            name="ck_stores_deposit_absent_client_extra_percent",
+        ),
+    )
 
     @property
     def business_hours(self) -> BusinessHours:

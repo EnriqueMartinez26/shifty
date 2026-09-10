@@ -160,6 +160,16 @@ class PublicPaymentStatusResponse(BaseModel):
     starts_at: datetime
 
 
+class PublicDepositPreviewResponse(BaseModel):
+    amount: float
+    base_amount: float
+    extra_percent: int
+    reasons: list[str] = Field(default_factory=list)
+    price: float
+    payments_enabled: bool
+    online_payment_mandatory: bool
+
+
 class PublicPromotionPreviewResponse(BaseModel):
     code: str
     title: str

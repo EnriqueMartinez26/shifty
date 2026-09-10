@@ -63,9 +63,16 @@ class StoreUpdate(BaseModel):
     custom_client_fields: Optional[List[StoreCustomField]] = Field(None, max_length=8)
 
     cancellation_hours: Optional[int] = Field(None, ge=0, le=MAX_HORAS_ANIO)
+    # Antelacion minima para reservar por el portal (hasta una semana).
+    min_booking_notice_hours: Optional[int] = Field(None, ge=0, le=168)
     buffer_minutes: Optional[int] = Field(None, ge=0, le=MAX_MINUTOS_DIA)
     allow_manual_coordination: Optional[bool] = None
     deposit_policy: Optional[str] = Field(None, max_length=2000)
+    # Recargos de sena (puntos porcentuales del precio); 0 apaga la regla.
+    deposit_far_notice_days: Optional[int] = Field(None, ge=0, le=365)
+    deposit_far_notice_extra_percent: Optional[int] = Field(None, ge=0, le=100)
+    deposit_new_client_extra_percent: Optional[int] = Field(None, ge=0, le=100)
+    deposit_absent_client_extra_percent: Optional[int] = Field(None, ge=0, le=100)
 
     business_hours: Optional[Dict[str, List[BusinessHourPeriod]]] = Field(
         None, max_length=7
@@ -123,9 +130,14 @@ class StoreResponse(BaseModel):
     website_url: Optional[str] = None
     custom_client_fields: List[StoreCustomField] = Field(default_factory=list)
     cancellation_hours: int
+    min_booking_notice_hours: int = 2
     buffer_minutes: int
     allow_manual_coordination: bool = True
     deposit_policy: Optional[str] = None
+    deposit_far_notice_days: int = 0
+    deposit_far_notice_extra_percent: int = 0
+    deposit_new_client_extra_percent: int = 0
+    deposit_absent_client_extra_percent: int = 0
     business_hours: Dict[str, List[BusinessHourPeriod]]
     send_email_confirmation: bool
     send_email_reminders: bool

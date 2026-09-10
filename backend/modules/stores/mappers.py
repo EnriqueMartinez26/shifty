@@ -29,6 +29,19 @@ def to_store_response(store: Store) -> StoreResponse:
         buffer_minutes=store.buffer_minutes,
         allow_manual_coordination=store.allow_manual_coordination,
         deposit_policy=store.deposit_policy,
+        min_booking_notice_hours=int(
+            getattr(store, "min_booking_notice_hours", 2) or 0
+        ),
+        deposit_far_notice_days=int(getattr(store, "deposit_far_notice_days", 0) or 0),
+        deposit_far_notice_extra_percent=int(
+            getattr(store, "deposit_far_notice_extra_percent", 0) or 0
+        ),
+        deposit_new_client_extra_percent=int(
+            getattr(store, "deposit_new_client_extra_percent", 0) or 0
+        ),
+        deposit_absent_client_extra_percent=int(
+            getattr(store, "deposit_absent_client_extra_percent", 0) or 0
+        ),
         business_hours={
             day: [BusinessHourPeriod.model_validate(period) for period in periods]
             for day, periods in store.business_hours.items()

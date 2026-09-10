@@ -94,9 +94,14 @@ type SettingsFormData = {
   custom_client_fields: StoreCustomField[]
   primary_color: string
   cancellation_hours: number
+  min_booking_notice_hours: number
   buffer_minutes: number
   allow_manual_coordination: boolean
   deposit_policy: string
+  deposit_far_notice_days: number
+  deposit_far_notice_extra_percent: number
+  deposit_new_client_extra_percent: number
+  deposit_absent_client_extra_percent: number
   business_hours: Record<string, BusinessHoursPeriod[]>
   send_email_confirmation: boolean
   send_email_reminders: boolean
@@ -205,9 +210,14 @@ const SettingsPage: React.FC = () => {
         custom_client_fields: store.custom_client_fields || [],
         primary_color: store.primary_color,
         cancellation_hours: store.cancellation_hours,
+        min_booking_notice_hours: store.min_booking_notice_hours ?? 2,
         buffer_minutes: store.buffer_minutes,
         allow_manual_coordination: store.allow_manual_coordination ?? true,
         deposit_policy: store.deposit_policy || '',
+        deposit_far_notice_days: store.deposit_far_notice_days ?? 0,
+        deposit_far_notice_extra_percent: store.deposit_far_notice_extra_percent ?? 0,
+        deposit_new_client_extra_percent: store.deposit_new_client_extra_percent ?? 0,
+        deposit_absent_client_extra_percent: store.deposit_absent_client_extra_percent ?? 0,
         business_hours: store.business_hours,
         send_email_confirmation: store.send_email_confirmation,
         send_email_reminders: store.send_email_reminders,
@@ -1091,6 +1101,95 @@ const SettingsPage: React.FC = () => {
                   Tiempo de limpieza/descanso automático.
                 </p>
               </div>
+              <div className="space-y-3">
+                <label
+                  className="block text-[10px] font-black uppercase tracking-widest"
+                  style={{ color: colors2000s.text.secondary }}
+                >
+                  Antelación mínima para reservar (horas)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={168}
+                  value={formData.min_booking_notice_hours}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      min_booking_notice_hours: numberInRange(e.target.value, 0, 168)
+                    })
+                  }
+                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
+                  style={createSettingsInputStyle()}
+                  placeholder="2"
+                />
+                <p
+                  className="text-[10px] font-bold italic"
+                  style={{ color: colors2000s.text.disabled }}
+                >
+                  Un cliente no puede reservar por la página con menos antelación que esta. Vos,
+                  desde el panel, sí.
+                </p>
+              </div>
+            </div>
+
+            <div
+              className="rounded-3xl p-6 space-y-5"
+              style={{
+                background: 'white',
+                border: `1px solid ${colors2000s.border.default}`,
+                boxShadow: colors2000s.shadows.insetDark
+              }}
+            >
+              <div>
+                <h3
+                  className="text-sm font-black uppercase tracking-tight"
+                  style={{ color: colors2000s.text.primary }}
+                >
+                  Seña según riesgo
+                </h3>
+                <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
+                  Recargos que se suman a la seña del servicio, en puntos del precio. La seña nunca
+                  supera el precio y no aparece en servicios sin seña. 0 apaga la regla. El link que
+                  generás vos desde el panel sigue usando la seña base.
+                </p>
+              </div>
+              <div className="grid md:grid-cols-2 gap-6">
+                <DepositRuleInput
+                  label="Reservas con mucha antelación (días)"
+                  hint="A partir de cuántos días de antelación sube la seña."
+                  value={formData.deposit_far_notice_days}
+                  max={365}
+                  onChange={(value) => setFormData({ ...formData, deposit_far_notice_days: value })}
+                />
+                <DepositRuleInput
+                  label="Recargo por antelación (%)"
+                  hint="Puntos que se suman cuando la reserva supera esos días."
+                  value={formData.deposit_far_notice_extra_percent}
+                  max={100}
+                  onChange={(value) =>
+                    setFormData({ ...formData, deposit_far_notice_extra_percent: value })
+                  }
+                />
+                <DepositRuleInput
+                  label="Recargo cliente nuevo (%)"
+                  hint="Para quien nunca tuvo un turno en tu negocio."
+                  value={formData.deposit_new_client_extra_percent}
+                  max={100}
+                  onChange={(value) =>
+                    setFormData({ ...formData, deposit_new_client_extra_percent: value })
+                  }
+                />
+                <DepositRuleInput
+                  label="Recargo por ausencias (%)"
+                  hint="Para quien ya faltó alguna vez sin avisar."
+                  value={formData.deposit_absent_client_extra_percent}
+                  max={100}
+                  onChange={(value) =>
+                    setFormData({ ...formData, deposit_absent_client_extra_percent: value })
+                  }
+                />
+              </div>
             </div>
           </div>
         )}
@@ -1542,5 +1641,40 @@ const SettingsPage: React.FC = () => {
     </div>
   )
 }
+
+const numberInRange = (raw: string, min: number, max: number): number => {
+  const parsed = parseInt(raw, 10)
+  if (Number.isNaN(parsed)) return min
+  return Math.min(max, Math.max(min, parsed))
+}
+
+const DepositRuleInput: React.FC<{
+  label: string
+  hint: string
+  value: number
+  max: number
+  onChange: (value: number) => void
+}> = ({ label, hint, value, max, onChange }) => (
+  <div className="space-y-2">
+    <label
+      className="block text-[10px] font-black uppercase tracking-widest"
+      style={{ color: colors2000s.text.secondary }}
+    >
+      {label}
+      <input
+        type="number"
+        min={0}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(numberInRange(e.target.value, 0, max))}
+        className="mt-2 w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
+        style={createSettingsInputStyle()}
+      />
+    </label>
+    <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.disabled }}>
+      {hint}
+    </p>
+  </div>
+)
 
 export default SettingsPage

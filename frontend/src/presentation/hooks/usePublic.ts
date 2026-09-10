@@ -4,6 +4,7 @@ import {
   publicBookingService,
   type AvailabilitySlot,
   type BookingConfirmation,
+  type DepositPreview,
   type OtpRequestPayload,
   type OtpRequestResponse,
   type OtpVerifyPayload,
@@ -76,6 +77,34 @@ export const usePublicAvailability = (
 export const useCreatePublicBooking = () =>
   useMutation<BookingConfirmation, Error, PublicBookingPayload>({
     mutationFn: (payload) => publicBookingService.createBooking(payload)
+  })
+
+/** La seña real (con recargos por antelación e historial) antes de confirmar. */
+export const usePublicDepositPreview = (params: {
+  storePublicId: string
+  serviceId: string
+  startsAt: string | null
+  clientPhone?: string
+  promotionCode?: string
+}) =>
+  useQuery<DepositPreview>({
+    queryKey: [
+      'public-deposit-preview',
+      params.storePublicId,
+      params.serviceId,
+      params.startsAt,
+      params.clientPhone,
+      params.promotionCode
+    ],
+    enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
+    queryFn: () =>
+      publicBookingService.previewDeposit({
+        storePublicId: params.storePublicId,
+        serviceId: params.serviceId,
+        startsAt: params.startsAt as string,
+        clientPhone: params.clientPhone,
+        promotionCode: params.promotionCode
+      })
   })
 
 export const useJoinWaitlist = () =>

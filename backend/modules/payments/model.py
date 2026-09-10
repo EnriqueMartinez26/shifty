@@ -118,6 +118,11 @@ class Payment(BaseEntity):
     raw_payload: Mapped[dict[str, JsonValue] | None] = mapped_column(
         JSON, nullable=True
     )
+    # Snapshot de la regla de sena aplicada (monto base, recargo y motivos):
+    # explica el monto aunque la tienda cambie la configuracion despues.
+    deposit_rule: Mapped[dict[str, JsonValue] | None] = mapped_column(
+        JSON, nullable=True
+    )
     # Optimistic locking, igual que en Appointment.
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
