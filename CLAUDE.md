@@ -274,12 +274,17 @@ Una instrucción en lenguaje natural no es una garantía.
 - El pre-commit hook (`.githooks/pre-commit`) existe pero **solo corre si
   cada clon hace `git config core.hooksPath .githooks`**; en este clon no
   estaba activado.
-- Falta: job de CI con Postgres real (RLS, trigger, exclusión, migraciones
-  desde base vacía); SAST determinista (Semgrep/CodeQL) y escaneo de
-  secretos, hoy solo `npm audit`; prueba de carga versionada en el repo;
-  descomposición de las funciones más largas; zona horaria por tienda;
-  unicidad de email/teléfono de clientes por tienda; migrar los commits de
-  routers/repos al patrón de `appointments`.
+- Ya cubierto (2026-09-10): job `backend-postgres` en CI (RLS, exclusión
+  GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
+  SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
+  prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
+- Falta todavía: activar el pre-commit hook por clon (`git config
+  core.hooksPath .githooks`); descomponer las funciones más largas
+  (`create_public_booking`, `client_reschedule_appointment`); auditar el
+  posible N+1 en `get_available_slots`; zona horaria por tienda; unicidad
+  de email/teléfono de clientes por tienda; migrar los commits de
+  routers/repos al patrón de `appointments`; pasar CodeQL a bloqueante
+  cuando el ruido inicial esté limpio.
 
 ## 6. Compuertas de proceso
 
