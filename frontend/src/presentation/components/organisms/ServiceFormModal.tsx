@@ -143,7 +143,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               <div
                 role="alert"
                 className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
-                style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+                style={{
+                  background: colors2000s.status.danger.bg,
+                  border: `1px solid ${colors2000s.status.danger.border}`,
+                  color: colors2000s.status.danger.text
+                }}
               >
                 {error}
               </div>
@@ -252,7 +256,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                       borderColor: formData.color === c ? 'white' : 'transparent',
                       boxShadow:
                         formData.color === c
-                          ? '0 0 0 2px #3b82f6, 0 4px 6px rgba(0,0,0,0.15)'
+                          ? `0 0 0 2px ${colors2000s.orange.accent}, 0 4px 6px rgba(0,0,0,0.15)`
                           : '0 2px 4px rgba(0,0,0,0.1)'
                     }}
                   />

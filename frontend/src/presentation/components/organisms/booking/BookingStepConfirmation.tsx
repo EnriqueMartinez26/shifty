@@ -180,8 +180,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={{
               background:
                 isPendingPayment || isPendingReview
-                  ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)'
-                  : 'linear-gradient(135deg, #4ade80 0%, #16a34a 100%)',
+                  ? `linear-gradient(135deg, ${colors2000s.status.warning.light} 0%, ${colors2000s.status.warning.dark} 100%)`
+                  : `linear-gradient(135deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`,
               boxShadow:
                 isPendingPayment || isPendingReview
                   ? 'inset 0 2px 4px rgba(255,255,255,0.4), 0 4px 12px rgba(217,119,6,0.3)'
@@ -340,11 +340,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         <button
           onClick={() => window.location.reload()}
-          className="w-full mt-4 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none"
+          className="w-full mt-4 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 border cursor-pointer select-none"
           style={{
-            background: 'linear-gradient(180deg, #1e293b 0%, #0f172a 100%)',
-            borderColor: '#020617',
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.15), 0 4px 10px rgba(0,0,0,0.1)'
+            background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+            borderColor: colors2000s.border.default,
+            color: colors2000s.text.primary,
+            boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
           }}
         >
           Hacer otra reserva
@@ -442,7 +443,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           {promotionPreview && (
             <div
               className="rounded-2xl p-4 border"
-              style={{ ...createBookingAccentBoxStyle('#ecfdf5', '#bbf7d0', '#166534') }}
+              style={{
+                ...createBookingAccentBoxStyle(
+                  colors2000s.status.success.bg,
+                  colors2000s.status.success.border,
+                  colors2000s.status.success.text
+                )
+              }}
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-green-700">
                 {promotionPreview.title}
@@ -461,7 +468,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             role="alert"
             aria-live="polite"
             className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
-            style={createBookingAccentBoxStyle('#fef2f2', '#fecaca', '#b91c1c')}
+            style={createBookingAccentBoxStyle(
+              colors2000s.status.danger.bg,
+              colors2000s.status.danger.border,
+              colors2000s.status.danger.text
+            )}
           >
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
             {errorMessage}
@@ -471,7 +482,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         {depositPolicy && (
           <div
             className="rounded-2xl p-4 text-xs leading-relaxed"
-            style={createBookingAccentBoxStyle('#f8fafc', '#e2e8f0', '#475569')}
+            style={createBookingAccentBoxStyle(
+              colors2000s.bg.button,
+              colors2000s.border.default,
+              colors2000s.text.secondary
+            )}
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">
               Politica de seña de {storeName}
@@ -548,9 +563,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={
               acceptsTerms
                 ? {
-                    background: 'linear-gradient(180deg, #38bdf8 0%, #0284c7 100%)',
-                    borderColor: '#0369a1',
-                    boxShadow: `${colors2000s.shadows.insetLight}, 0 5px 12px rgba(2,132,199,0.25)`
+                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    borderColor: colors2000s.orange.accent,
+                    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }
                 : buttonStyles2000s.disabled
             }
@@ -566,7 +581,11 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           role="alert"
           aria-live="polite"
           className="rounded-2xl p-4 text-xs font-bold flex items-center gap-2"
-          style={createBookingAccentBoxStyle('#fff7ed', '#fed7aa', '#c2410c')}
+          style={createBookingAccentBoxStyle(
+            colors2000s.status.warning.bg,
+            colors2000s.status.warning.border,
+            colors2000s.status.warning.text
+          )}
         >
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           El horario podria haberse ocupado mientras completabas el formulario. Volve un paso atras

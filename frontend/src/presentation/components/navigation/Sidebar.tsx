@@ -1,13 +1,16 @@
-import React from 'react'
+import React, { useState } from 'react'
 
 import {
   mdiAccountGroup,
   mdiBriefcase,
   mdiCashClock,
+  mdiCashMultiple,
   mdiCalendar,
   mdiChartBar,
+  mdiChevronDown,
   mdiChevronRight,
   mdiCog,
+  mdiDomain,
   mdiHelpCircle,
   mdiCreditCardOutline,
   mdiLogout,
@@ -30,94 +33,246 @@ import {
 } from '../../context/roles'
 import { Icon2000s } from '../legacy/Icon2000s'
 
-type MenuItem = {
+type MenuLink = {
+  type: 'link'
   iconPath: string
   label: string
   path: string
   roles: string[]
 }
 
-const menuItems: MenuItem[] = [
-  {
+type MenuGroup = {
+  type: 'group'
+  iconPath: string
+  label: string
+  items: MenuLink[]
+}
+
+type MenuEntry = MenuLink | MenuGroup
+
+const link = (config: Omit<MenuLink, 'type'>): MenuLink => ({ type: 'link', ...config })
+
+// Agrupado siguiendo el patron de Fresha/Booksy: Calendario y Reportes sueltos
+// (uso diario), cobros/promos bajo "Ventas", catalogo/equipo bajo "Mi Negocio".
+// Configuracion y Manual quedan aparte, al pie (ver bottomEntries).
+const menuEntries: MenuEntry[] = [
+  link({
     iconPath: mdiViewDashboard,
     label: 'Dashboard',
     path: '/dashboard',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
-  },
-  {
+  }),
+  link({
     iconPath: mdiCalendar,
     label: 'Agenda',
     path: '/dashboard/calendar',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
-  },
-  {
+  }),
+  link({
     iconPath: mdiChartBar,
     label: 'Reportes',
     path: '/dashboard/reports',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+  }),
+  {
+    type: 'group',
+    iconPath: mdiCashMultiple,
+    label: 'Ventas',
+    items: [
+      link({
+        iconPath: mdiCreditCardOutline,
+        label: 'Cobros online',
+        path: '/dashboard/payments',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+      }),
+      link({
+        iconPath: mdiCashClock,
+        label: 'Cobros',
+        path: '/dashboard/collections',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+      }),
+      link({
+        iconPath: mdiWalletOutline,
+        label: 'Cuentas pendientes',
+        path: '/dashboard/ledger',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
+      }),
+      link({
+        iconPath: mdiTagOutline,
+        label: 'Promociones',
+        path: '/dashboard/promotions',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+      })
+    ]
   },
   {
-    iconPath: mdiCreditCardOutline,
-    label: 'Cobros online',
-    path: '/dashboard/payments',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
-  },
-  {
-    iconPath: mdiCashClock,
-    label: 'Cobros',
-    path: '/dashboard/collections',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
-  },
-  {
-    iconPath: mdiTagOutline,
-    label: 'Promociones',
-    path: '/dashboard/promotions',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
-  },
-  {
-    iconPath: mdiWalletOutline,
-    label: 'Cuentas pendientes',
-    path: '/dashboard/ledger',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]
-  },
-  {
-    iconPath: mdiShieldCheck,
-    label: 'Usuarios',
-    path: '/dashboard/users',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
-  },
-  {
-    iconPath: mdiBriefcase,
-    label: 'Servicios',
-    path: '/dashboard/services',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
-  },
-  {
-    iconPath: mdiAccountGroup,
-    label: 'Personal',
-    path: '/dashboard/staff',
-    roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
-  },
-  {
+    type: 'group',
+    iconPath: mdiDomain,
+    label: 'Mi Negocio',
+    items: [
+      link({
+        iconPath: mdiBriefcase,
+        label: 'Servicios',
+        path: '/dashboard/services',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+      }),
+      link({
+        iconPath: mdiAccountGroup,
+        label: 'Personal',
+        path: '/dashboard/staff',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+      }),
+      link({
+        iconPath: mdiShieldCheck,
+        label: 'Usuarios',
+        path: '/dashboard/users',
+        roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
+      })
+    ]
+  }
+]
+
+const bottomEntries: MenuLink[] = [
+  link({
     iconPath: mdiCog,
     label: 'Configuración',
     path: '/dashboard/settings',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]
-  },
-  {
+  }),
+  link({
     iconPath: mdiHelpCircle,
     label: 'Manual de uso',
     path: '/dashboard/manual',
     roles: [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL, ROLE_RECEPTIONIST]
-  }
+  })
 ]
 
 const Sidebar: React.FC = () => {
   const location = useLocation()
   const { logout, user } = useAuth()
-  const visibleItems = menuItems.filter((item) =>
-    hasAnyRole(user?.role, item.roles, user?.is_global_admin)
-  )
+
+  const isVisible = (item: MenuLink) => hasAnyRole(user?.role, item.roles, user?.is_global_admin)
+
+  const groupContainsPath = (group: MenuGroup) =>
+    group.items.some((item) => item.path === location.pathname)
+
+  // Un grupo arranca abierto si la ruta activa esta adentro; el resto arranca
+  // cerrado. Despues el usuario controla el estado con el click.
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {}
+    menuEntries.forEach((entry) => {
+      if (entry.type === 'group') {
+        initial[entry.label] = groupContainsPath(entry)
+      }
+    })
+    return initial
+  })
+
+  const toggleGroup = (label: string) => {
+    setExpandedGroups((prev) => ({ ...prev, [label]: !prev[label] }))
+  }
+
+  const renderLink = (item: MenuLink, indent = false) => {
+    const isActive = location.pathname === item.path
+    const linkStyle = isActive
+      ? buttonStyles2000s.selected
+      : {
+          ...buttonStyles2000s.default,
+          background: 'transparent',
+          border: '1px solid transparent',
+          boxShadow: 'none'
+        }
+
+    return (
+      <Link
+        key={item.path}
+        to={item.path}
+        className={`flex items-center justify-between px-4 py-3 rounded-xl transition-all group ${indent ? 'ml-4' : ''}`}
+        style={linkStyle}
+        onMouseEnter={(e) => {
+          if (!isActive) {
+            Object.assign(e.currentTarget.style, buttonStyles2000s.hover)
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isActive) {
+            Object.assign(e.currentTarget.style, {
+              background: 'transparent',
+              border: '1px solid transparent',
+              boxShadow: 'none',
+              color: colors2000s.text.primary
+            })
+          }
+        }}
+      >
+        <div className="flex items-center gap-3">
+          <Icon2000s path={item.iconPath} size={20} variant={isActive ? 'active' : 'idle'} />
+          <span
+            className="font-bold text-sm"
+            style={{ color: isActive ? colors2000s.text.onOrange : colors2000s.text.primary }}
+          >
+            {item.label}
+          </span>
+        </div>
+        {isActive && <Icon2000s path={mdiChevronRight} size={16} variant="active" />}
+      </Link>
+    )
+  }
+
+  const renderGroup = (group: MenuGroup) => {
+    const visibleGroupItems = group.items.filter(isVisible)
+    if (visibleGroupItems.length === 0) {
+      return null
+    }
+    const isExpanded = expandedGroups[group.label]
+
+    return (
+      <div key={group.label}>
+        <button
+          type="button"
+          aria-expanded={isExpanded}
+          onClick={() => toggleGroup(group.label)}
+          className="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all"
+          style={{
+            ...buttonStyles2000s.default,
+            background: 'transparent',
+            border: '1px solid transparent',
+            boxShadow: 'none'
+          }}
+          onMouseEnter={(e) => {
+            Object.assign(e.currentTarget.style, buttonStyles2000s.hover)
+          }}
+          onMouseLeave={(e) => {
+            Object.assign(e.currentTarget.style, {
+              background: 'transparent',
+              border: '1px solid transparent',
+              boxShadow: 'none',
+              color: colors2000s.text.primary
+            })
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <Icon2000s path={group.iconPath} size={20} variant="idle" />
+            <span className="font-bold text-sm" style={{ color: colors2000s.text.primary }}>
+              {group.label}
+            </span>
+          </div>
+          <Icon2000s
+            path={isExpanded ? mdiChevronDown : mdiChevronRight}
+            size={16}
+            variant="idle"
+          />
+        </button>
+        {isExpanded && (
+          <div className="space-y-1 mt-1">
+            {visibleGroupItems.map((item) => renderLink(item, true))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const visibleBottomEntries = bottomEntries.filter(isVisible)
 
   return (
     <aside
@@ -157,52 +312,18 @@ const Sidebar: React.FC = () => {
       </div>
 
       <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto">
-        {visibleItems.map((item) => {
-          const isActive = location.pathname === item.path
-          const linkStyle = isActive
-            ? buttonStyles2000s.selected
-            : {
-                ...buttonStyles2000s.default,
-                background: 'transparent',
-                border: '1px solid transparent',
-                boxShadow: 'none'
-              }
+        {menuEntries.map((entry) =>
+          entry.type === 'link' ? (isVisible(entry) ? renderLink(entry) : null) : renderGroup(entry)
+        )}
 
-          return (
-            <Link
-              key={item.path}
-              to={item.path}
-              className="flex items-center justify-between px-4 py-3 rounded-xl transition-all group"
-              style={linkStyle}
-              onMouseEnter={(e) => {
-                if (!isActive) {
-                  Object.assign(e.currentTarget.style, buttonStyles2000s.hover)
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) {
-                  Object.assign(e.currentTarget.style, {
-                    background: 'transparent',
-                    border: '1px solid transparent',
-                    boxShadow: 'none',
-                    color: colors2000s.text.primary
-                  })
-                }
-              }}
-            >
-              <div className="flex items-center gap-3">
-                <Icon2000s path={item.iconPath} size={20} variant={isActive ? 'active' : 'idle'} />
-                <span
-                  className="font-bold text-sm"
-                  style={{ color: isActive ? colors2000s.text.onOrange : colors2000s.text.primary }}
-                >
-                  {item.label}
-                </span>
-              </div>
-              {isActive && <Icon2000s path={mdiChevronRight} size={16} variant="active" />}
-            </Link>
-          )
-        })}
+        {visibleBottomEntries.length > 0 && (
+          <div
+            className="pt-3 mt-3 space-y-1"
+            style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
+          >
+            {visibleBottomEntries.map((item) => renderLink(item))}
+          </div>
+        )}
       </nav>
 
       <div className="p-4 mt-auto" style={{ borderTop: `1px solid ${colors2000s.border.light}` }}>

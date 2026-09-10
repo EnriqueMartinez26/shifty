@@ -103,7 +103,11 @@ const PaymentsPage: React.FC = () => {
       {message && (
         <div
           className="p-4 rounded-2xl text-sm font-bold flex items-center gap-3"
-          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+          style={{
+            background: colors2000s.status.warning.bg,
+            border: `1px solid ${colors2000s.status.warning.border}`,
+            color: colors2000s.status.warning.text
+          }}
         >
           <AlertCircle className="w-5 h-5 flex-shrink-0" />
           <span>{message}</span>
@@ -138,8 +142,12 @@ const PaymentsPage: React.FC = () => {
             <span
               className="px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest"
               style={{
-                background: gatewayQuery.data?.configured ? '#dcfce7' : '#fef3c7',
-                color: gatewayQuery.data?.configured ? '#166534' : '#92400e'
+                background: gatewayQuery.data?.configured
+                  ? colors2000s.status.success.bg
+                  : colors2000s.status.warning.bg,
+                color: gatewayQuery.data?.configured
+                  ? colors2000s.status.success.text
+                  : colors2000s.status.warning.text
               }}
             >
               {gatewayQuery.data?.configured ? 'Conectada' : 'Sin conectar'}
@@ -183,7 +191,10 @@ const PaymentsPage: React.FC = () => {
 
           <div className="grid grid-cols-3 gap-3">
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+              <p
+                className="text-[10px] font-black uppercase tracking-widest"
+                style={{ color: colors2000s.text.disabled }}
+              >
                 Por revisar
               </p>
               <p className="mt-2 text-xl font-black" style={{ color: colors2000s.orange.accent }}>
@@ -191,18 +202,30 @@ const PaymentsPage: React.FC = () => {
               </p>
             </div>
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+              <p
+                className="text-[10px] font-black uppercase tracking-widest"
+                style={{ color: colors2000s.text.disabled }}
+              >
                 Con error
               </p>
-              <p className="mt-2 text-xl font-black text-red-500">
+              <p
+                className="mt-2 text-xl font-black"
+                style={{ color: colors2000s.status.danger.light }}
+              >
                 {outboxStatsQuery.data?.pending_with_error ?? 0}
               </p>
             </div>
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
-              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+              <p
+                className="text-[10px] font-black uppercase tracking-widest"
+                style={{ color: colors2000s.text.disabled }}
+              >
                 Actualizados
               </p>
-              <p className="mt-2 text-xl font-black text-green-600">
+              <p
+                className="mt-2 text-xl font-black"
+                style={{ color: colors2000s.status.success.dark }}
+              >
                 {outboxStatsQuery.data?.processed ?? 0}
               </p>
             </div>

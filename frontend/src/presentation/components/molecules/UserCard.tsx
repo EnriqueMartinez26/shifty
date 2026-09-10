@@ -34,11 +34,13 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
   const initials = getInitials(user.fullName)
 
   // Volumetric gradients and borders based on role
-  const accentBorderColor = isAdmin ? '#3b82f6' : '#ff8c42'
+  const accentBorderColor = isAdmin ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isAdmin
-    ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
+    ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
     : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-  const avatarBorder = isAdmin ? '1px solid #2563eb' : `1px solid ${colors2000s.orange.accent}`
+  const avatarBorder = isAdmin
+    ? `1px solid ${colors2000s.status.info.dark}`
+    : `1px solid ${colors2000s.orange.accent}`
 
   return (
     <div
@@ -60,13 +62,13 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,
             boxShadow: colors2000s.shadows.insetDark,
-            color: user.isActive ? '#10b981' : colors2000s.text.disabled
+            color: user.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
           }}
         >
           {user.isActive ? (
-            <CheckCircle2 size={12} className="text-emerald-500" />
+            <CheckCircle2 size={12} color={colors2000s.status.success.dark} />
           ) : (
-            <XCircle size={12} className="text-gray-400" />
+            <XCircle size={12} color={colors2000s.text.disabled} />
           )}
           {user.isActive ? 'ACTIVO' : 'INACTIVO'}
         </span>
@@ -86,10 +88,16 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
             {initials}
           </div>
           <div className="min-w-0">
-            <h3 className="font-black text-gray-800 text-sm uppercase tracking-tight truncate leading-tight">
+            <h3
+              className="font-black text-sm uppercase tracking-tight truncate leading-tight"
+              style={{ color: colors2000s.text.primary }}
+            >
               {user.fullName}
             </h3>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1 truncate">
+            <p
+              className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
+              style={{ color: colors2000s.text.disabled }}
+            >
               {user.email.getValue()}
             </p>
           </div>
@@ -103,7 +111,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
               background: 'white',
               border: `1px solid ${colors2000s.border.default}`,
               boxShadow: colors2000s.shadows.insetDark,
-              color: isAdmin ? '#3b82f6' : colors2000s.orange.accent
+              color: isAdmin ? colors2000s.status.info.dark : colors2000s.orange.accent
             }}
           >
             {isAdmin ? <Shield size={10} /> : <UserIcon size={10} />}
@@ -113,13 +121,19 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
 
         {/* Contact fields */}
         <div className="space-y-2 pt-2 border-t" style={{ borderColor: colors2000s.border.light }}>
-          <div className="flex items-center gap-2 text-xs font-bold text-gray-500">
-            <Mail size={14} className="text-gray-400" />
+          <div
+            className="flex items-center gap-2 text-xs font-bold"
+            style={{ color: colors2000s.text.secondary }}
+          >
+            <Mail size={14} color={colors2000s.text.disabled} />
             <span className="truncate">{user.email.getValue()}</span>
           </div>
           {user.toPrimitives().phone && (
-            <div className="flex items-center gap-2 text-xs font-bold text-gray-500">
-              <Phone size={14} className="text-gray-400" />
+            <div
+              className="flex items-center gap-2 text-xs font-bold"
+              style={{ color: colors2000s.text.secondary }}
+            >
+              <Phone size={14} color={colors2000s.text.disabled} />
               <span>{user.toPrimitives().phone}</span>
             </div>
           )}
@@ -141,7 +155,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
         <button
           onClick={() => onDelete(user.id)}
           className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-          style={{ ...buttonStyles2000s.default, color: '#ef4444' }}
+          style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
         >
           <Trash2 size={14} /> Eliminar
         </button>

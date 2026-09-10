@@ -67,7 +67,7 @@ const LoginPage: React.FC = () => {
             className="text-3xl font-bold tracking-tight mb-1"
             style={{ color: colors2000s.orange.accent }}
           >
-            Shifty v2
+            Shifty
           </h1>
           <p className="text-sm font-medium" style={{ color: colors2000s.text.secondary }}>
             Gestiona tus turnos, clientes y equipo

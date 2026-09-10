@@ -392,9 +392,9 @@ const SettingsPage: React.FC = () => {
         <div
           className="p-4 rounded-xl flex items-center gap-3 text-xs font-bold"
           style={{
-            background: '#ffeeee',
-            border: '1px solid #ffcccc',
-            color: '#cc0000',
+            background: colors2000s.status.danger.bg,
+            border: `1px solid ${colors2000s.status.danger.border}`,
+            color: colors2000s.status.danger.text,
             boxShadow: colors2000s.shadows.insetDark
           }}
         >
@@ -535,7 +535,11 @@ const SettingsPage: React.FC = () => {
                   <div
                     role="alert"
                     className="rounded-2xl px-4 py-2.5 text-xs font-bold"
-                    style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+                    style={{
+                      background: colors2000s.status.danger.bg,
+                      border: `1px solid ${colors2000s.status.danger.border}`,
+                      color: colors2000s.status.danger.text
+                    }}
                   >
                     {logoError}
                   </div>
@@ -710,7 +714,7 @@ const SettingsPage: React.FC = () => {
                               })
                             }
                             className="p-2 rounded-xl transition-all active:scale-95"
-                            style={{ color: '#ef4444' }}
+                            style={{ color: colors2000s.status.danger.light }}
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -1009,7 +1013,7 @@ const SettingsPage: React.FC = () => {
                                 setFormData({ ...formData, business_hours: newHours })
                               }}
                               className="p-1.5 transition-all"
-                              style={{ color: '#ef4444' }}
+                              style={{ color: colors2000s.status.danger.light }}
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1298,8 +1302,12 @@ const SettingsPage: React.FC = () => {
                 <span
                   className="px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest"
                   style={{
-                    background: gatewayQuery.data?.configured ? '#dcfce7' : '#fef3c7',
-                    color: gatewayQuery.data?.configured ? '#166534' : '#92400e'
+                    background: gatewayQuery.data?.configured
+                      ? colors2000s.status.success.bg
+                      : colors2000s.status.warning.bg,
+                    color: gatewayQuery.data?.configured
+                      ? colors2000s.status.success.text
+                      : colors2000s.status.warning.text
                   }}
                 >
                   {gatewayQuery.data?.configured ? 'Activa' : 'Pendiente'}
@@ -1518,21 +1526,24 @@ const SettingsPage: React.FC = () => {
       <div
         className="p-6 rounded-[2rem]"
         style={{
-          background: '#fffbeb',
-          border: '1px solid #fef3c7',
+          background: colors2000s.status.warning.bg,
+          border: `1px solid ${colors2000s.status.warning.border}`,
           boxShadow: colors2000s.shadows.outer
         }}
       >
         <div className="flex gap-4">
-          <AlertCircle className="w-6 h-6 text-amber-500 flex-shrink-0" />
+          <AlertCircle className="w-6 h-6 flex-shrink-0" color={colors2000s.status.warning.light} />
           <div className="space-y-1">
             <h4
               className="font-black text-xs uppercase tracking-widest"
-              style={{ color: '#d97706' }}
+              style={{ color: colors2000s.status.warning.text }}
             >
               Atención: Zona Crítica
             </h4>
-            <p className="text-[10px] font-bold leading-relaxed" style={{ color: '#b45309' }}>
+            <p
+              className="text-[10px] font-bold leading-relaxed"
+              style={{ color: colors2000s.status.warning.text }}
+            >
               Modificar el <strong>Slug</strong> invalidará el link de reserva compartido
               anteriormente. Asegúrate de notificar a tus clientes.
             </p>
