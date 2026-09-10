@@ -9,7 +9,7 @@ un slot es libre solo si:
 """
 
 import json
-from datetime import date, timedelta, time
+from datetime import date, datetime, time, timedelta
 from typing import TypedDict, cast
 
 from redis.asyncio import Redis
@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
-from core.utils import local_to_utc
+from core.availability_cache import SLOTS_TTL_SECONDS, current_version, slots_key
+from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
@@ -54,7 +55,15 @@ class AvailabilityService:
         respetando horarios, turnos ocupados y bloqueos de agenda.
         """
         # 1. Caché check ----------------------------------------------------
-        cache_key = f"availability:{store_id}:{service_public_id}:{search_date.isoformat()}:{int(force_all)}:{int(hide_private_reasons)}"
+        version = await current_version(self.redis, store_id, search_date)
+        cache_key = slots_key(
+            store_id,
+            search_date,
+            version,
+            service_public_id,
+            force_all=force_all,
+            hide_private_reasons=hide_private_reasons,
+        )
         cached = await self.redis.get(cache_key)
         if cached:
             return cast(list[AvailabilitySlot], json.loads(cached))
@@ -94,7 +103,7 @@ class AvailabilityService:
             if service_public_id in (member.service_ids or [])
         ]
         if not staff_members:
-            await self.redis.setex(cache_key, 300, "[]")
+            await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, "[]")
             return []
         staff_ids = [member.id for member in staff_members]
 
@@ -139,9 +148,16 @@ class AvailabilityService:
                 )
             )
         )
-        booked_by_staff: dict[str, list[Appointment]] = {}
+        # Rangos ocupados normalizados a UTC aware: SQLite devuelve naive y la
+        # comparacion con los slots (aware) explotaba.
+        booked_by_staff: dict[str, list[tuple[datetime, datetime]]] = {}
         for appointment in appt_res.scalars().all():
-            booked_by_staff.setdefault(appointment.staff_id, []).append(appointment)
+            booked_by_staff.setdefault(appointment.staff_id, []).append(
+                (
+                    ensure_utc_aware(appointment.starts_at),
+                    ensure_utc_aware(appointment.ends_at),
+                )
+            )
 
         block_res = await self.db.execute(
             select(StaffBlock).where(
@@ -182,10 +198,10 @@ class AvailabilityService:
                     # vecino por el buffer a cada lado).
                     blocked_by_appt = any(
                         not (
-                            slot_end <= appt.starts_at - buffer
-                            or current >= appt.ends_at + buffer
+                            slot_end <= appt_start - buffer
+                            or current >= appt_end + buffer
                         )
-                        for appt in booked
+                        for appt_start, appt_end in booked
                     )
 
                     # Verificar conflicto con bloqueos de agenda
@@ -216,10 +232,19 @@ class AvailabilityService:
                         {
                             "staff_id": staff.public_id,
                             "staff_name": staff.display_name,
+                            # starts_at/ends_at: instante en UTC (fuente de
+                            # verdad para reservar). start_time/end_time: lo
+                            # que ve el cliente, en hora argentina. Antes
+                            # salian en UTC y el front mostraba "12:00" para
+                            # un turno de 09:00 (2026-09-10).
                             "starts_at": current.isoformat(),
                             "ends_at": slot_end.isoformat(),
-                            "start_time": current.time().isoformat(timespec="seconds"),
-                            "end_time": slot_end.time().isoformat(timespec="seconds"),
+                            "start_time": current.astimezone(ARGENTINA_TZ)
+                            .time()
+                            .isoformat(timespec="seconds"),
+                            "end_time": slot_end.astimezone(ARGENTINA_TZ)
+                            .time()
+                            .isoformat(timespec="seconds"),
                             "status": status,
                             "reason": reason,
                         }
@@ -251,5 +276,5 @@ class AvailabilityService:
                     if is_first or is_last or adjacent:
                         filtered_slots.append(slot)
             all_slots = filtered_slots
-        await self.redis.setex(cache_key, 300, json.dumps(all_slots))
+        await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, json.dumps(all_slots))
         return all_slots

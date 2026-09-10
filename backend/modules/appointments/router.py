@@ -12,7 +12,7 @@ from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.cache import CacheInvalidator
+from core.availability_cache import AvailabilityCacheClient
 from core.router import CanonicalAPIRouter
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
@@ -70,7 +70,7 @@ def get_appointment_service(
     uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
     redis: Redis = Depends(get_redis),
 ) -> AppointmentService:
-    return AppointmentService(uow=uow, cache=cast(CacheInvalidator, redis))
+    return AppointmentService(uow=uow, cache=cast(AvailabilityCacheClient, redis))
 
 
 def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:

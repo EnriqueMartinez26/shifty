@@ -12,6 +12,8 @@ export interface BookingWizardState {
   assignedStaffId: string | null
   date: string | null
   startTime: string | null
+  /** Instante ISO (UTC) del slot elegido: es lo que se manda al reservar. */
+  startsAt: string | null
   client: BookingClientData
   promotionCode: string
   idempotencyKey: string

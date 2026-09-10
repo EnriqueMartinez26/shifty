@@ -23,3 +23,11 @@ def to_utc_naive(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt
     return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def ensure_utc_aware(value: datetime) -> datetime:
+    """SQLite devuelve naive aun con DateTime(timezone=True); Postgres, aware.
+
+    Todo lo que la base guarda es UTC: un naive se interpreta como UTC.
+    """
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

@@ -7,7 +7,9 @@ Responsabilidades:
 - Consulta y autogestion publica de turnos.
 """
 
-from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from core.utils import ARGENTINA_TZ
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -173,9 +175,15 @@ class PublicRepository:
     async def _staff_has_schedule_for_slot(
         self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> bool:
-        weekday = starts_at.weekday()
-        start_time = starts_at.astimezone(timezone.utc).time().replace(tzinfo=None)
-        end_time = ends_at.astimezone(timezone.utc).time().replace(tzinfo=None)
+        # El horario del profesional esta cargado en hora ARGENTINA (09:00 a
+        # 18:00); el turno llega como instante UTC. Comparar en UTC rechazaba
+        # las ultimas 3 horas de cada jornada y todo turno posterior a las
+        # 21:00 (cae en el dia UTC siguiente). 2026-09-10.
+        local_start = starts_at.astimezone(ARGENTINA_TZ)
+        local_end = ends_at.astimezone(ARGENTINA_TZ)
+        weekday = local_start.weekday()
+        start_time = local_start.time().replace(tzinfo=None)
+        end_time = local_end.time().replace(tzinfo=None)
         schedules_result = await self.db.execute(
             select(Schedule).where(
                 Schedule.staff_id == staff_id, Schedule.day_of_week == weekday
@@ -211,6 +219,8 @@ class PublicRepository:
         intake_answers: dict[str, str] | None,
         idempotency_key: str,
         initial_status: str = AppointmentStatus.PENDING.value,
+        buffer_minutes: int = 0,
+        price_amount: Decimal | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         svc_res = await self.db.execute(
             select(Service).where(
@@ -257,6 +267,9 @@ class PublicRepository:
             await self.db.execute(
                 select(Staff).where(Staff.id == staff.id).with_for_update()
             )
+            # Mismo criterio que el panel (get_conflicting_appointment): el
+            # turno vecino se ensancha por el buffer de la tienda a cada lado.
+            buffer = timedelta(minutes=max(0, buffer_minutes))
             conflict_res = await self.db.execute(
                 select(Appointment)
                 .where(
@@ -268,8 +281,8 @@ class PublicRepository:
                             AppointmentStatus.CONFIRMED.value,
                         ]
                     ),
-                    Appointment.starts_at < ends_at,
-                    Appointment.ends_at > starts_at,
+                    Appointment.starts_at < ends_at + buffer,
+                    Appointment.ends_at > starts_at - buffer,
                 )
                 .limit(1)
             )
@@ -299,6 +312,13 @@ class PublicRepository:
             intake_answers=intake_answers or {},
             idempotency_key=idempotency_key,
             status=initial_status,
+            # Precio congelado al reservar (el panel ya lo hacia): un cobro
+            # manual posterior no debe usar el precio de lista de hoy.
+            price_amount=(
+                price_amount
+                if price_amount is not None
+                else Decimal(str(service.price or 0))
+            ),
         )
         self.db.add(new_appointment)
         await self.db.flush()

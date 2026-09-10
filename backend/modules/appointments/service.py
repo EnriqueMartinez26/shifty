@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 import ulid
 
-from core.cache import CacheInvalidator
+from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
@@ -33,7 +33,11 @@ from modules.appointments.guards import (
 )
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
-from modules.notifications.tasks import enqueue_confirmation_email
+from modules.stores.model import Store
+from modules.notifications.tasks import (
+    build_client_details,
+    enqueue_confirmation_email,
+)
 from modules.payments.model import PaymentStatus
 from modules.payments.service import expire_mercadopago_preference
 from modules.services.model import Service
@@ -59,7 +63,7 @@ class AppointmentService:
     Se instancia por request, inyectando db y redis desde FastAPI Depends.
     """
 
-    def __init__(self, uow: AbstractUnitOfWork, cache: CacheInvalidator) -> None:
+    def __init__(self, uow: AbstractUnitOfWork, cache: AvailabilityCacheClient) -> None:
         self.uow = uow
         self.cache = cache
         self.scheduler = SchedulingDomainService()
@@ -182,9 +186,7 @@ class AppointmentService:
             },
         )
 
-        # Invalidar caché de disponibilidad
-        cache_key = f"availability:{store_id}:{service.public_id}:{starts_at.date().isoformat()}"
-        await self.cache.delete(cache_key)
+        await invalidate_availability(self.cache, store_id, starts_at)
 
         return appointment, service, staff
 
@@ -220,9 +222,9 @@ class AppointmentService:
 
         await self.uow.commit()
 
-        # Invalidar caché de disponibilidad
-        cache_key = f"availability:{appointment.store_id}:*:{appointment.starts_at.date().isoformat()}"
-        await self.cache.delete(cache_key)
+        await invalidate_availability(
+            self.cache, appointment.store_id, appointment.starts_at
+        )
 
         return appointment
 
@@ -250,7 +252,19 @@ class AppointmentService:
         )
 
         await self.uow.commit()
+        # Mail "turno confirmado" DESPUES del commit y sin lock (regla 5);
+        # best-effort: un SMTP caido no deshace la confirmacion.
+        await self._notify_client_confirmation(appointment)
         return appointment
+
+    async def _notify_client_confirmation(self, appointment: Appointment) -> None:
+        store = await self.uow.session.get(Store, appointment.store_id)
+        details = build_client_details(
+            appointment, appointment.service, appointment.staff, store
+        )
+        await enqueue_confirmation_email(
+            email=appointment.client_email, details=details
+        )
 
     async def complete(self, *, public_id: str, actor: User) -> Appointment:
         """Marca un turno como completado."""
@@ -395,11 +409,9 @@ class AppointmentService:
         )
         await self.uow.commit()
 
-        cache_key = (
-            f"availability:{appointment.store_id}:*:"
-            f"{appointment.starts_at.date().isoformat()}"
+        await invalidate_availability(
+            self.cache, appointment.store_id, appointment.starts_at
         )
-        await self.cache.delete(cache_key)
         return appointment
 
     async def update_staff_notes(
@@ -568,11 +580,9 @@ class AppointmentService:
 
         await self.uow.commit()
 
-        # Invalidar caché de disponibilidad para ambos días
-        for key_date in {original.starts_at.date(), new_starts_at.date()}:
-            await self.cache.delete(
-                f"availability:{store_id}:{service.public_id}:{key_date.isoformat()}"
-            )
+        await invalidate_availability(
+            self.cache, store_id, original.starts_at, new_starts_at
+        )
 
         return new_appointment, service, staff
 

@@ -4,13 +4,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
+from redis.exceptions import RedisError
 from sqlalchemy import or_, select
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.availability_cache import invalidate_availability
+from core.redis import get_redis
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
-from modules.notifications.tasks import send_store_notification_email
+from modules.notifications.tasks import (
+    build_client_details,
+    enqueue_confirmation_email,
+    send_store_notification_email,
+)
 from modules.payments.model import (
     OutboxMessage,
     Payment,
@@ -54,6 +61,9 @@ async def process_outbox_batch(
         .where(*filters)
         .order_by(OutboxMessage.created_at.asc())
         .limit(limit)
+        # Dos corridas solapadas (beat cada minuto) no deben tomar el mismo
+        # mensaje: sin esto se duplicaban notificaciones y mails (regla 8).
+        .with_for_update(skip_locked=True)
     )
     messages = list(result.scalars().all())
     now = datetime.now(timezone.utc)
@@ -76,6 +86,19 @@ async def process_outbox_batch(
                         store_id=notification.store_id,
                         error_type=type(exc).__name__,
                     )
+                if message.event_type == NotificationType.PAYMENT_APPROVED.value:
+                    # La sena acreditada confirma el turno: el cliente tambien
+                    # se entera (best-effort, nunca frena el lote).
+                    try:
+                        await _email_client_confirmation(
+                            db, notification.appointment_id
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "client_confirmation_email_skipped",
+                            appointment_id=notification.appointment_id,
+                            error_type=type(exc).__name__,
+                        )
             message.processed_at = now
             message.error = None
             processed += 1
@@ -128,6 +151,30 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
         )
 
     return None
+
+
+async def _email_client_confirmation(
+    db: AsyncSession, appointment_id: str | None
+) -> None:
+    if not appointment_id:
+        return
+    from sqlalchemy.orm import joinedload
+
+    from modules.stores.model import Store
+
+    res = await db.execute(
+        select(Appointment)
+        .options(joinedload(Appointment.service), joinedload(Appointment.staff))
+        .where(Appointment.id == appointment_id)
+    )
+    appointment = res.scalar_one_or_none()
+    if appointment is None or appointment.status != AppointmentStatus.CONFIRMED.value:
+        return
+    store = await db.get(Store, appointment.store_id)
+    details = build_client_details(
+        appointment, appointment.service, appointment.staff, store
+    )
+    await enqueue_confirmation_email(email=appointment.client_email, details=details)
 
 
 async def _email_store_owners(db: AsyncSession, notification: Notification) -> None:
@@ -300,6 +347,7 @@ async def expire_unpaid_appointments(
     rows = list(result.all())
     expired = 0
     rescued = 0
+    liberados: list[tuple[str, datetime]] = []
     for appointment, payment in rows:
         # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
         # webhook nunca llego, vencerlo perderia una reserva ya pagada.
@@ -312,7 +360,17 @@ async def expire_unpaid_appointments(
             # acreditado no puede degradarse a expirado.
             stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
         expired += 1
+        liberados.append((appointment.store_id, appointment.starts_at))
     await db.commit()
+    # El cupo vuelve a estar libre: la pagina publica no puede seguir
+    # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
+    if liberados:
+        try:
+            redis = await get_redis()
+            for store_id, starts_at in liberados:
+                await invalidate_availability(redis, store_id, starts_at)
+        except (RedisError, OSError) as exc:
+            logger.warning("availability_cache_invalidation_failed", error=str(exc))
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 
 

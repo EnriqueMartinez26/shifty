@@ -12,6 +12,7 @@ import structlog
 from core.celery_app import celery_app
 from core.worker_loop import run_in_worker_loop
 from core.config import settings
+from core.utils import ARGENTINA_TZ
 from core.database import (
     AsyncSessionFactory,
     _apply_tenant_context,
@@ -61,17 +62,101 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
     return await asyncio.to_thread(_send)
 
 
+def is_deliverable_email(email: str | None) -> bool:
+    """Descarta vacios y los emails tecnicos ``{tel}@store{id}.noreply``.
+
+    El alta publica inventa un email tecnico cuando el cliente no deja uno:
+    mandarle ahi rebota y ensucia la reputacion del remitente.
+    """
+    if not email or "@" not in email:
+        return False
+    return not email.lower().endswith(".noreply")
+
+
+def format_local_datetime(value: Any) -> tuple[str, str]:
+    """(fecha, hora) en hora argentina a partir de un ISO o datetime UTC.
+
+    Los mails mostraban el ISO en UTC ("2026-09-11T14:00:00+00:00"); el
+    cliente lee "11/09/2026" y "11:00".
+    """
+    if isinstance(value, datetime):
+        instant = value
+    else:
+        try:
+            instant = datetime.fromisoformat(str(value))
+        except ValueError:
+            return (str(value), "")
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    local = instant.astimezone(ARGENTINA_TZ)
+    return (local.strftime("%d/%m/%Y"), local.strftime("%H:%M"))
+
+
+def build_client_details(
+    appointment: Any, service: Any, staff: Any, store: Any | None
+) -> dict[str, Any]:
+    """Datos que necesitan todas las plantillas al cliente, en un solo lugar."""
+    slug = getattr(store, "slug", None)
+    base = settings.FRONTEND_URL.rstrip("/")
+    return {
+        "public_id": appointment.public_id,
+        "client_name": getattr(appointment, "client_name", None) or "",
+        "service": getattr(service, "name", ""),
+        "staff": getattr(staff, "display_name", ""),
+        "starts_at": appointment.starts_at.isoformat(),
+        "store_name": getattr(store, "name", "") or "",
+        "store_phone": getattr(store, "whatsapp_number", None) or "",
+        "booking_url": f"{base}/b/{slug}" if slug else "",
+    }
+
+
+def _saludo(details: dict[str, Any]) -> str:
+    nombre = str(details.get("client_name") or "").strip()
+    return f"Hola {nombre}," if nombre else "Hola,"
+
+
+def _contacto(details: dict[str, Any]) -> str:
+    tienda = details.get("store_name") or "la tienda"
+    telefono = details.get("store_phone")
+    link = details.get("booking_url")
+    partes = [f"Para cambios o cancelaciones, comunicate con {tienda}"]
+    if telefono:
+        partes.append(f"por WhatsApp al {telefono}")
+    if link:
+        partes.append(f"o entra en {link}")
+    return " ".join(partes) + "."
+
+
+def _cuando(details: dict[str, Any]) -> str:
+    fecha, hora = format_local_datetime(details.get("starts_at") or details.get("date"))
+    return f"{fecha} a las {hora} hs" if hora else fecha
+
+
+def _registration_subject(details: dict[str, Any]) -> str:
+    return f"Reserva registrada - {details.get('service', '')}"
+
+
+def _registration_body(details: dict[str, Any]) -> str:
+    return (
+        f"{_saludo(details)}\n\n"
+        f'Tu reserva para "{details.get("service")}" con {details.get("staff")} '
+        f"quedo registrada para el {_cuando(details)}.\n\n"
+        "Te vamos a avisar cuando este confirmada.\n\n"
+        f"{_contacto(details)}\n\n"
+        "- El equipo de Shifty"
+    )
+
+
 def _confirmation_subject(details: dict[str, Any]) -> str:
     return f"Turno confirmado - {details.get('service', '')}"
 
 
 def _confirmation_body(details: dict[str, Any]) -> str:
     return (
-        "Hola,\n\n"
+        f"{_saludo(details)}\n\n"
         f'Tu turno para "{details.get("service")}" con {details.get("staff")} '
-        "ha sido registrado correctamente.\n\n"
-        f"Fecha y hora: {details.get('date')}\n\n"
-        "Si necesitas cancelarlo, podes hacerlo desde la app hasta 2 horas antes.\n\n"
+        f"esta confirmado para el {_cuando(details)}.\n\n"
+        f"{_contacto(details)}\n\n"
         "- El equipo de Shifty"
     )
 
@@ -82,11 +167,10 @@ def _reminder_subject(details: dict[str, Any]) -> str:
 
 def _reminder_body(details: dict[str, Any]) -> str:
     return (
-        "Hola,\n\n"
+        f"{_saludo(details)}\n\n"
         f'Te recordamos que manana tenes turno para "{details.get("service")}" '
-        f"con {details.get('staff')}.\n\n"
-        f"Hora: {details.get('date')}\n\n"
-        "Si necesitas cancelar, hacelo lo antes posible desde la app.\n\n"
+        f"con {details.get('staff')}, el {_cuando(details)}.\n\n"
+        f"{_contacto(details)}\n\n"
         "- El equipo de Shifty"
     )
 
@@ -189,9 +273,46 @@ async def notify_client_reminder(
     return {"status": "skipped", "channel": "none"}
 
 
-async def enqueue_confirmation_email(
-    *, email: str, details: dict[str, Any]
+async def send_appointment_registration(
+    email: str, details: dict[str, Any]
 ) -> dict[str, str]:
+    logger.info(
+        "sending_registration_email",
+        email=_mask_email(email),
+        appointment=details.get("public_id"),
+    )
+    success = await _send_email(
+        email, _registration_subject(details), _registration_body(details)
+    )
+    if not success:
+        raise RuntimeError("SMTP send failed")
+    return {"status": "sent", "to": email}
+
+
+async def enqueue_registration_email(
+    *, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    """Mail "reserva registrada" al crear un turno pendiente. Nunca aborta."""
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
+    assert email is not None
+    try:
+        return await send_appointment_registration(email, details)
+    except Exception as exc:
+        logger.warning(
+            "registration_email_dispatch_failed",
+            appointment=details.get("public_id"),
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "reason": type(exc).__name__}
+
+
+async def enqueue_confirmation_email(
+    *, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
+    assert email is not None
     try:
         return await send_appointment_confirmation(email, details)
     except Exception as exc:

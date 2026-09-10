@@ -6,6 +6,8 @@ import { Calendar as CalendarIcon, ChevronLeft, Clock, Loader2 } from 'lucide-re
 
 import { usePublicAvailability } from '@presentation/hooks/usePublic'
 
+import { formatArgentinaTime } from '@shared/utils/argentinaTime'
+
 import { colors2000s } from '../../../../theme/colors'
 import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
@@ -15,7 +17,7 @@ interface BookingStepDateTimeProps {
   staffId: string | null
   selectedDate: string | null
   selectedTime: string | null
-  onSelect: (date: string, time: string, staffId: string) => void
+  onSelect: (date: string, time: string, staffId: string, startsAt: string) => void
   onBack: () => void
 }
 
@@ -53,7 +55,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
     const firstSlotByTime = new Map<string, (typeof availability)[number]>()
     for (const slot of availability) {
-      const timeKey = (slot.start_time || slot.starts_at.split('T')[1] || '').substring(0, 5)
+      // Hora argentina del instante: starts_at es la fuente de verdad (UTC).
+      const timeKey = formatArgentinaTime(slot.starts_at)
       const current = firstSlotByTime.get(timeKey)
       if (!current) {
         firstSlotByTime.set(timeKey, slot)
@@ -172,10 +175,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
             {visibleSlots.map((slot) => {
-              const timeString = (slot.start_time || slot.starts_at.split('T')[1] || '').substring(
-                0,
-                5
-              )
+              const timeString = formatArgentinaTime(slot.starts_at)
               const isSelected = selectedDate === dateStr && selectedTime === timeString
               const isAvailable = slot.status === 'available'
               const badgeColor =
@@ -187,8 +187,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
               return (
                 <button
-                  key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
-                  onClick={() => isAvailable && onSelect(dateStr, timeString, slot.staff_id)}
+                  key={`${slot.staff_id}-${slot.starts_at}`}
+                  onClick={() =>
+                    isAvailable && onSelect(dateStr, timeString, slot.staff_id, slot.starts_at)
+                  }
                   disabled={!isAvailable}
                   className="py-3 rounded-xl font-black text-lg transition-all active:scale-95 border disabled:cursor-not-allowed disabled:opacity-70"
                   style={{

@@ -140,8 +140,8 @@ const SECTIONS: ManualSection[] = [
       },
       {
         title: 'Y tus clientes',
-        body: 'A ellos les llega el recordatorio del turno por WhatsApp, que es lo que la gente realmente lee. Si no hay WhatsApp configurado, se envía por mail.',
-        tip: 'El teléfono es obligatorio al reservar y el mail no, así que WhatsApp llega a todos.'
+        body: 'A ellos les llega por mail el aviso de la reserva, la confirmación y el recordatorio del turno, siempre que hayan dejado un mail al reservar. El envío automático por WhatsApp todavía no está disponible.',
+        tip: 'El teléfono es obligatorio al reservar y el mail es opcional: pediles que lo dejen, es la única vía por la que hoy reciben avisos.'
       }
     ]
   },

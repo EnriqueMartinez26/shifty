@@ -58,6 +58,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
     assignedStaffId: null,
     date: null,
     startTime: null,
+    startsAt: null,
     client: {
       name: '',
       email: '',
@@ -363,7 +364,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                 requestedStaffId: null,
                 assignedStaffId: null,
                 date: null,
-                startTime: null
+                startTime: null,
+                startsAt: null
               })
               nextStep()
             }}
@@ -381,7 +383,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                 requestedStaffId: id,
                 assignedStaffId: null,
                 date: null,
-                startTime: null
+                startTime: null,
+                startsAt: null
               })
               nextStep()
             }}
@@ -396,8 +399,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
             onBack={prevStep}
-            onSelect={(date, time, assignedStaffId) => {
-              updateState({ date, startTime: time, assignedStaffId })
+            onSelect={(date, time, assignedStaffId, startsAt) => {
+              updateState({ date, startTime: time, assignedStaffId, startsAt })
               nextStep()
             }}
           />
@@ -444,7 +447,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
                 service_id: selectedServiceId,
                 staff_id:
                   bookingState.assignedStaffId || bookingState.requestedStaffId || undefined,
-                starts_at: `${bookingState.date}T${bookingState.startTime}:00Z`,
+                // El instante UTC del slot, tal cual lo devolvio la API: nunca se
+                // recompone fecha local + hora (un turno de 21:00 caia en el dia anterior).
+                starts_at: bookingState.startsAt ?? '',
                 client_name: bookingState.client.name,
                 client_email: bookingState.client.email || undefined,
                 client_phone: bookingState.client.phone,

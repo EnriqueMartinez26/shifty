@@ -31,6 +31,7 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
+from core.availability_cache import invalidate_availability
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_redis
@@ -47,7 +48,11 @@ from modules.payments.service import (
 )
 from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.notifications.model import NotificationType
-from modules.notifications.tasks import enqueue_confirmation_email
+from modules.notifications.tasks import (
+    build_client_details,
+    enqueue_confirmation_email,
+    enqueue_registration_email,
+)
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import quote_promotion, redeem_promotion
 from modules.public_api.repository import PublicRepository
@@ -606,6 +611,8 @@ async def create_public_booking(
                     intake_answers=normalized_custom_fields,
                     idempotency_key=idempotency_key,
                     initial_status=initial_status,
+                    buffer_minutes=store.buffer_minutes or 0,
+                    price_amount=discounted_service_price,
                 )
                 # Un turno esperando la seña retiene el slot solo por una ventana
                 # corta: si no se paga, vuelve a estar disponible enseguida en vez
@@ -697,6 +704,10 @@ async def create_public_booking(
             )
 
         await db.commit()
+        # El cupo dejo de estar libre: la disponibilidad publica lo refleja ya
+        # (antes la reserva publica no invalidaba nada y el slot seguia
+        # "available" hasta cinco minutos).
+        await invalidate_availability(redis, store_id, appointment.starts_at)
 
         # El turno y el Payment PENDING ya estan persistidos y el lock FOR UPDATE
         # del staff quedo soltado. Recien ahora se hace la llamada HTTP a Mercado
@@ -735,18 +746,18 @@ async def create_public_booking(
                     error_code="PAYMENT_LINK_CREATION_FAILED",
                 )
 
-        if (
-            appointment.client_email
-            and appointment.status == AppointmentStatus.CONFIRMED.value
-        ):
+        # Aviso al cliente por mail (best-effort, fuera de la transaccion).
+        # Antes la condicion exigia CONFIRMED y el turno nace PENDING o
+        # PENDING_PAYMENT: nunca salia nada. Ahora "reserva registrada" al
+        # crear, y "turno confirmado" solo si ya nacio confirmado.
+        detalles_cliente = build_client_details(appointment, service, staff, store)
+        if appointment.status == AppointmentStatus.CONFIRMED.value:
             await enqueue_confirmation_email(
-                email=appointment.client_email,
-                details={
-                    "public_id": appointment.public_id,
-                    "service": service.name,
-                    "staff": staff.display_name,
-                    "date": appointment.starts_at.isoformat(),
-                },
+                email=appointment.client_email, details=detalles_cliente
+            )
+        else:
+            await enqueue_registration_email(
+                email=appointment.client_email, details=detalles_cliente
             )
         response = PublicBookingResponse(
             public_id=appointment.public_id,
@@ -978,9 +989,9 @@ async def client_cancel_appointment(
             select(Service).where(Service.id == appointment.service_id)
         )
         service = svc_res.scalar_one_or_none()
-        if service:
-            cache_key = f"availability:{appointment.store_id}:{service.public_id}:{appointment.starts_at.date().isoformat()}"
-            await redis.delete(cache_key)
+        await invalidate_availability(
+            redis, appointment.store_id, appointment.starts_at
+        )
 
         stf_res = await db.execute(
             select(Staff).where(Staff.id == appointment.staff_id)
@@ -1172,10 +1183,9 @@ async def client_reschedule_appointment(
         await db.commit()
         await db.refresh(new_appointment)
 
-        for key_date in {original.starts_at.date(), data.new_starts_at.date()}:
-            await redis.delete(
-                f"availability:{original.store_id}:{service.public_id}:{key_date.isoformat()}"
-            )
+        await invalidate_availability(
+            redis, original.store_id, original.starts_at, data.new_starts_at
+        )
 
         response = PublicBookingResponse(
             public_id=new_appointment.public_id,

@@ -2,10 +2,13 @@ from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import Depends, Path, status
+from redis.asyncio import Redis
 from core.router import CanonicalAPIRouter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from core.availability_cache import invalidate_availability_range
 from core.database import get_db
+from core.redis import get_redis
 from core.exceptions import (
     PermissionDeniedException,
     ResourceNotFoundException,
@@ -56,6 +59,14 @@ def _recurrence_step(recurrence: str) -> timedelta:
     return timedelta(0)
 
 
+async def _invalidar_disponibilidad(
+    redis: Redis, store_id: str, rangos: list[tuple[datetime, datetime]]
+) -> None:
+    """Un bloqueo cambia la agenda: la pagina publica no puede mostrar lo viejo."""
+    for starts_at, ends_at in rangos:
+        await invalidate_availability_range(redis, store_id, starts_at, ends_at)
+
+
 @router.get("/", response_model=list[AppointmentBlockResponse])
 async def list_blocks(
     user: User = Depends(get_current_user),
@@ -80,6 +91,7 @@ async def create_store_wide_block(
     data: StoreWideBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> StoreWideBlockResponse:
     """Cierra la tienda entera en un rango: bloquea a todo el personal activo."""
     if not _can_manage_blocks(user):
@@ -108,6 +120,9 @@ async def create_store_wide_block(
             )
         )
     await db.commit()
+    await _invalidar_disponibilidad(
+        redis, user.store_id, [(data.starts_at, data.ends_at)]
+    )
 
     return StoreWideBlockResponse(
         blocked_staff=len(equipo),
@@ -124,6 +139,7 @@ async def create_block(
     data: AppointmentBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> AppointmentBlockResponse:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
@@ -146,6 +162,9 @@ async def create_block(
     )
     db.add(block)
     await db.commit()
+    await _invalidar_disponibilidad(
+        redis, user.store_id, [(data.starts_at, data.ends_at)]
+    )
     await db.refresh(block)
     return _to_response(block)
 
@@ -159,6 +178,7 @@ async def create_block_batch(
     data: RecurringAppointmentBlockCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> AppointmentBlockBatchResponse:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para crear bloqueos")
@@ -199,6 +219,7 @@ async def create_block_batch(
         created_blocks.append(block)
 
     await db.commit()
+    await _invalidar_disponibilidad(redis, user.store_id, ranges)
     for block in created_blocks:
         await db.refresh(block)
 
@@ -234,6 +255,7 @@ async def update_block(
     data: AppointmentBlockUpdate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> AppointmentBlockResponse:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para editar bloqueos")
@@ -246,6 +268,7 @@ async def update_block(
     if not block:
         raise ResourceNotFoundException(resource="Bloqueo", identifier=public_id)
     update_data = data.model_dump(exclude_unset=True)
+    rango_previo = (block.start_time, block.end_time)
     if "starts_at" in update_data:
         block.start_time = update_data["starts_at"]
     if "ends_at" in update_data:
@@ -256,6 +279,11 @@ async def update_block(
         if key in update_data:
             setattr(block, key, update_data[key])
     await db.commit()
+    await _invalidar_disponibilidad(
+        redis,
+        user.store_id,
+        [(rango_previo[0], rango_previo[1]), (block.start_time, block.end_time)],
+    )
     await db.refresh(block)
     return _to_response(block)
 
@@ -265,6 +293,7 @@ async def delete_block(
     public_id: PublicIdPath,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(
@@ -280,3 +309,6 @@ async def delete_block(
         raise ResourceNotFoundException(resource="Bloqueo", identifier=public_id)
     block.is_active = False
     await db.commit()
+    await _invalidar_disponibilidad(
+        redis, user.store_id, [(block.start_time, block.end_time)]
+    )

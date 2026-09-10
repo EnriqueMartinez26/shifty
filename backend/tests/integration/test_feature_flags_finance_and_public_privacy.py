@@ -230,12 +230,16 @@ async def create_staff(
 async def add_staff_schedule(
     client: AsyncClient, token: str, staff_public_id: str, *, target_date: datetime
 ) -> None:
+    # El horario del profesional es hora ARGENTINA. Los tests reservan con
+    # instantes UTC entre las 09 y las 17 (06 a 14 local), asi que la ventana
+    # de prueba abre a las 06:00 local (09:00 UTC). Antes la validacion del
+    # camino publico comparaba en UTC y cualquier hora "pasaba" (2026-09-10).
     res = await client.post(
         f"/staff/{staff_public_id}/schedules",
         headers=auth_headers(token),
         json={
             "day_of_week": target_date.weekday(),
-            "start_time": "09:00:00",
+            "start_time": "06:00:00",
             "end_time": "18:00:00",
         },
     )

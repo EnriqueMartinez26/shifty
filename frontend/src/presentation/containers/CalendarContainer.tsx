@@ -18,14 +18,22 @@ import {
   ChevronRight,
   Clock,
   Loader2,
-  LockOpen,
   Plus,
   ShieldBan
 } from 'lucide-react'
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
+import {
+  argentinaLocalToUtcIso,
+  formatArgentinaDate,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import {
+  AppointmentActions,
+  type AppointmentAction
+} from '../components/molecules/AppointmentActions'
 import { useAuth } from '../context/AuthContext'
 import {
   useAppointmentBlocks,
@@ -35,7 +43,13 @@ import {
   useDeleteAppointmentBlock,
   useUpdateAppointmentBlock
 } from '../hooks/useAppointmentBlocks'
-import { useCalendarAgenda, useReleaseAppointment } from '../hooks/useCalendarAgenda'
+import {
+  useCalendarAgenda,
+  useCompleteAppointment,
+  useConfirmAppointment,
+  useMarkAbsentAppointment,
+  useReleaseAppointment
+} from '../hooks/useCalendarAgenda'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
@@ -96,8 +110,8 @@ const fieldStyle = {
   color: colors2000s.text.primary
 }
 
-const toDateInput = (date: Date) => format(date, 'yyyy-MM-dd')
-const toTimeInput = (date: Date) => format(date, 'HH:mm')
+const toDateInput = (date: Date) => formatArgentinaDate(date.toISOString())
+const toTimeInput = (date: Date) => formatArgentinaTime(date.toISOString())
 
 const eventPriority = (event: UnifiedCalendarEvent) => {
   if (event.type === 'block') return 0
@@ -144,6 +158,9 @@ const statusStyle = (status: string) => {
 export const CalendarContainer: React.FC = () => {
   const { user } = useAuth()
   const canReleaseAppointments = user?.role === 'admin' || Boolean(user?.is_global_admin)
+  // Confirmar, completar y ausente: admin o personal (mismo criterio que la API).
+  const canManageAppointments =
+    canReleaseAppointments || user?.role === 'staff' || user?.role === 'professional'
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView] = useState<CalendarView>('day')
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
@@ -185,6 +202,14 @@ export const CalendarContainer: React.FC = () => {
   const updateBlock = useUpdateAppointmentBlock()
   const deleteBlock = useDeleteAppointmentBlock()
   const releaseAppointment = useReleaseAppointment()
+  const confirmAppointment = useConfirmAppointment()
+  const completeAppointment = useCompleteAppointment()
+  const markAbsentAppointment = useMarkAbsentAppointment()
+  const transitionBusy =
+    releaseAppointment.isPending ||
+    confirmAppointment.isPending ||
+    completeAppointment.isPending ||
+    markAbsentAppointment.isPending
 
   useEffect(() => {
     const firstStaff = staffMembers?.[0]
@@ -320,8 +345,10 @@ export const CalendarContainer: React.FC = () => {
   }
 
   const handleSaveBlock = async () => {
-    const startsAt = `${blockForm.date}T${blockForm.starts_at}:00Z`
-    const endsAt = `${blockForm.date}T${blockForm.ends_at}:00Z`
+    // La hora tipeada es hora argentina; antes se mandaba como si fuera UTC
+    // (el bloqueo quedaba corrido 3 horas respecto de lo que el dueno veia).
+    const startsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.starts_at)
+    const endsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.ends_at)
 
     try {
       if (editingBlockId) {
@@ -381,6 +408,60 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const handleAppointmentAction = async (
+    event: UnifiedCalendarEvent,
+    action: AppointmentAction
+  ) => {
+    if (event.type === 'block') return
+    if (action === 'release') {
+      await handleReleaseAppointment(event)
+      return
+    }
+    const textos: Record<Exclude<AppointmentAction, 'release'>, [string, string, string]> = {
+      confirm: ['¿Confirmar el turno de', 'Turno confirmado', 'No se pudo confirmar el turno'],
+      complete: [
+        '¿Marcar como completado el turno de',
+        'Turno completado',
+        'No se pudo completar el turno'
+      ],
+      absent: ['¿Marcar como ausente a', 'Turno marcado como ausente', 'No se pudo marcar el turno']
+    }
+    const [pregunta, exito, fallo] = textos[action]
+    if (!window.confirm(`${pregunta} ${event.title}?`)) return
+    const mutation =
+      action === 'confirm'
+        ? confirmAppointment
+        : action === 'complete'
+          ? completeAppointment
+          : markAbsentAppointment
+    try {
+      await mutation.mutateAsync(event.id)
+      setMessage(exito)
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, fallo))
+      if (isStateConflictError(error)) {
+        void agendaQuery.refetch()
+      }
+    }
+  }
+
+  const renderActions = (event: UnifiedCalendarEvent, compact: boolean) => {
+    if (event.type !== 'appointment') return null
+    return (
+      <AppointmentActions
+        status={event.status}
+        hasStarted={event.startsAt <= new Date()}
+        canRelease={canReleaseAppointments}
+        canManage={canManageAppointments}
+        busy={transitionBusy}
+        compact={compact}
+        onAction={(action) => {
+          void handleAppointmentAction(event, action)
+        }}
+      />
+    )
+  }
+
   const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => {
     const style =
       event.type === 'block'
@@ -415,21 +496,7 @@ export const CalendarContainer: React.FC = () => {
         <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
           {format(event.startsAt, 'HH:mm')} - {format(event.endsAt, 'HH:mm')} · {event.staffName}
         </p>
-        {canReleaseAppointments &&
-          event.type === 'appointment' &&
-          ['pending', 'pending_payment'].includes(event.status) && (
-            <button
-              type="button"
-              onClick={() => {
-                void handleReleaseAppointment(event)
-              }}
-              disabled={releaseAppointment.isPending}
-              className="mt-2 inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest text-red-700 border border-red-200 disabled:opacity-50"
-            >
-              <LockOpen className="w-3 h-3" />
-              Liberar
-            </button>
-          )}
+        {renderActions(event, compact)}
       </div>
     )
   }
@@ -566,21 +633,9 @@ export const CalendarContainer: React.FC = () => {
                                 'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
                             }}
                           >
-                            {canReleaseAppointments &&
-                              ['pending', 'pending_payment'].includes(event.status) && (
-                                <button
-                                  type="button"
-                                  title="Liberar turno pendiente"
-                                  aria-label={`Liberar turno de ${event.title}`}
-                                  onClick={() => {
-                                    void handleReleaseAppointment(event)
-                                  }}
-                                  disabled={releaseAppointment.isPending}
-                                  className="absolute top-2 right-2 z-10 rounded-lg bg-white p-1.5 text-red-700 border border-red-200 disabled:opacity-50"
-                                >
-                                  <LockOpen className="w-3.5 h-3.5" />
-                                </button>
-                              )}
+                            <div className="absolute top-1 right-1 z-10">
+                              {renderActions(event, true)}
+                            </div>
                             <div>
                               <p
                                 className="text-[8px] font-black uppercase tracking-widest mb-0.5"
