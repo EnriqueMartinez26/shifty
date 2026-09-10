@@ -30,12 +30,14 @@ import {
   formatArgentinaDate,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
+import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
+import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
 import { useAuth } from '../context/AuthContext'
 import {
@@ -55,6 +57,7 @@ import {
   useReleaseAppointment
 } from '../hooks/useCalendarAgenda'
 import { useManagedStaff } from '../hooks/useManagedStaff'
+import { useStoreSettings } from '../hooks/useStores'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
@@ -70,6 +73,9 @@ type UnifiedCalendarEvent =
       startsAt: Date
       endsAt: Date
       status: string
+      /** Solo llega para administradores (dato personal). */
+      clientPhone: string | null
+      serviceId: string
     }
   | {
       id: string
@@ -198,6 +204,8 @@ export const CalendarContainer: React.FC = () => {
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
 
   const { data: staffMembers, isLoading: loadingStaff } = useManagedStaff()
+  // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
+  const { data: storeSettings } = useStoreSettings()
   const agendaQuery = useCalendarAgenda(rangeKeyFrom, rangeKeyTo)
   const blocksQuery = useAppointmentBlocks()
   const templatesQuery = useBlockTemplates()
@@ -256,7 +264,9 @@ export const CalendarContainer: React.FC = () => {
         subtitle: appointment.serviceName,
         startsAt: appointment.timeSpan.getStartsAt(),
         endsAt: appointment.timeSpan.getEndsAt(),
-        status: appointment.status
+        status: appointment.status,
+        clientPhone: appointment.clientPhone,
+        serviceId: appointment.serviceId
       })
     )
 
@@ -546,6 +556,29 @@ export const CalendarContainer: React.FC = () => {
           {format(event.startsAt, 'HH:mm')} - {format(event.endsAt, 'HH:mm')} · {event.staffName}
         </p>
         {renderActions(event, compact)}
+        {event.type === 'appointment' && event.clientPhone && (
+          <ClientWhatsAppButton
+            phone={event.clientPhone}
+            status={event.status}
+            compact={compact}
+            message={{
+              clientName: event.title,
+              serviceName: event.subtitle,
+              staffName: event.staffName,
+              startsAt: event.startsAt,
+              storeName: storeSettings?.name ?? '',
+              rebookUrl:
+                storeSettings?.slug && event.serviceId
+                  ? buildRebookUrl(
+                      window.location.origin,
+                      storeSettings.slug,
+                      event.serviceId,
+                      event.staffId
+                    )
+                  : null
+            }}
+          />
+        )}
       </div>
     )
   }

@@ -18,7 +18,7 @@ from core.database import (
     _apply_tenant_context,
     set_tenant_context,
 )
-from core.redis import get_redis
+from modules.notifications.reminders import ReminderStage, due_stages
 
 logger = structlog.get_logger()
 
@@ -108,7 +108,23 @@ def build_client_details(
         "store_name": getattr(store, "name", "") or "",
         "store_phone": getattr(store, "whatsapp_number", None) or "",
         "booking_url": f"{base}/b/{slug}" if slug else "",
+        # Deep-link "reserva de nuevo": mismo servicio y mismo profesional.
+        "rebook_url": rebook_url(base, slug, service, staff),
     }
+
+
+def rebook_url(base: str, slug: str | None, service: Any, staff: Any) -> str:
+    if not slug:
+        return ""
+    params = []
+    service_id = getattr(service, "public_id", None)
+    staff_id = getattr(staff, "public_id", None) or getattr(staff, "id", None)
+    if service_id:
+        params.append(f"service={service_id}")
+    if staff_id:
+        params.append(f"staff={staff_id}")
+    query = f"?{'&'.join(params)}" if params else ""
+    return f"{base}/b/{slug}{query}"
 
 
 def _con_quien(details: dict[str, Any]) -> str:
@@ -187,14 +203,47 @@ def _cancellation_body(details: dict[str, Any]) -> str:
 
 
 def _reminder_subject(details: dict[str, Any]) -> str:
-    return f"Recordatorio: turno manana - {details.get('service', '')}"
+    fecha, hora = format_local_datetime(details.get("starts_at") or details.get("date"))
+    if details.get("stage") == "2h":
+        return f"Tu turno es a las {hora} - {details.get('service', '')}"
+    return f"Recordatorio: tu turno del {fecha} - {details.get('service', '')}"
 
 
 def _reminder_body(details: dict[str, Any]) -> str:
+    # Sin "manana" ni "hoy": el job puede correr con atraso y la fecha explicita
+    # nunca queda mal.
+    if details.get("stage") == "2h":
+        _, hora = format_local_datetime(details.get("starts_at") or details.get("date"))
+        aviso = (
+            f"Te recordamos que en un rato, a las {hora} hs, tenes turno para "
+            f'"{details.get("service")}" {_con_quien(details)}.'
+        )
+    else:
+        aviso = (
+            f'Te recordamos que tenes turno para "{details.get("service")}" '
+            f"{_con_quien(details)}, el {_cuando(details)}."
+        )
     return (
         f"{_saludo(details)}\n\n"
-        f'Te recordamos que manana tenes turno para "{details.get("service")}" '
-        f"{_con_quien(details)}, el {_cuando(details)}.\n\n"
+        f"{aviso}\n\n"
+        f"{_contacto(details)}\n\n"
+        "- El equipo de Shifty"
+    )
+
+
+def _rebook_subject(details: dict[str, Any]) -> str:
+    tienda = details.get("store_name") or "Shifty"
+    return f"Gracias por tu visita - {tienda}"
+
+
+def _rebook_body(details: dict[str, Any]) -> str:
+    link = details.get("rebook_url") or details.get("booking_url") or ""
+    tienda = details.get("store_name") or "la tienda"
+    linea_link = f"\n\nReserva tu proximo turno en un toque: {link}" if link else ""
+    return (
+        f"{_saludo(details)}\n\n"
+        f'Gracias por venir a {tienda}. Esperamos que "{details.get("service")}" '
+        f"{_con_quien(details)} haya salido bien.{linea_link}\n\n"
         f"{_contacto(details)}\n\n"
         "- El equipo de Shifty"
     )
@@ -355,6 +404,29 @@ async def enqueue_cancellation_email(
     return {"status": "sent", "to": email}
 
 
+async def enqueue_rebook_email(
+    *, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    """Mail "reserva tu proximo turno" al completar. Nunca aborta."""
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
+    assert email is not None
+    try:
+        success = await _send_email(
+            email, _rebook_subject(details), _rebook_body(details)
+        )
+    except Exception as exc:
+        logger.warning(
+            "rebook_email_dispatch_failed",
+            appointment=details.get("public_id"),
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "reason": type(exc).__name__}
+    if not success:
+        return {"status": "failed", "reason": "smtp"}
+    return {"status": "sent", "to": email}
+
+
 async def enqueue_confirmation_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
@@ -378,6 +450,36 @@ async def enqueue_confirmation_email(
         }
 
 
+async def _dispatch_reminder(
+    repo: Any, row: tuple[Any, Any, Any, Any, Any], stage: ReminderStage, now: datetime
+) -> bool:
+    """Reclama la marca durable y manda una etapa. Devuelve si se envio."""
+    appointment, service, staff, client, store = row
+    claimed = await repo.claim_reminder(appointment.id, stage.column, now)
+    if not claimed:
+        return False
+    details = build_client_details(appointment, service, staff, store)
+    details["stage"] = stage.name
+    try:
+        result = await notify_client_reminder(
+            phone=getattr(client, "phone", None),
+            email=getattr(client, "email", None),
+            details=details,
+        )
+    except Exception as exc:
+        # Se libera la marca para reintentar en la proxima corrida.
+        await repo.release_reminder(appointment.id, stage.column)
+        logger.warning(
+            "appointment_reminder_dispatch_failed",
+            appointment=appointment.public_id,
+            stage=stage.name,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return False
+    return result.get("status") == "sent"
+
+
 async def process_due_appointment_reminders(
     *, now: datetime | None = None, lookahead_hours: int = 48
 ) -> dict[str, Any]:
@@ -391,8 +493,9 @@ async def process_due_appointment_reminders(
     skipped = 0
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
-        # ver los turnos de TODAS las tiendas (shifty_app es NOBYPASSRLS). Las
-        # filas quedan materializadas, asi que el resto del loop no toca la DB.
+        # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
+        # NOBYPASSRLS). El contexto se mantiene durante toda la sesion porque
+        # los reclamos commitean y TenantSession lo reaplica.
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(db)
@@ -401,54 +504,16 @@ async def process_due_appointment_reminders(
                 starts_after=window_start,
                 starts_before=window_end,
             )
+            for row in rows:
+                appointment, _service, _staff, _client, store = row
+                if not getattr(store, "send_email_reminders", True):
+                    skipped += 1
+                    continue
+                for stage in due_stages(appointment, now):
+                    if await _dispatch_reminder(repo, row, stage, now):
+                        published += 1
         finally:
             set_tenant_context(None, False)
-        redis = await get_redis()
-        for appointment, service, staff, client, store in rows:
-            if not getattr(store, "send_email_reminders", True):
-                skipped += 1
-                continue
-
-            starts_at = appointment.starts_at
-            if starts_at.tzinfo is None:
-                starts_at = starts_at.replace(tzinfo=timezone.utc)
-            else:
-                starts_at = starts_at.astimezone(timezone.utc)
-
-            reminder_at = starts_at - timedelta(hours=24)
-            if reminder_at > now:
-                continue
-
-            reminder_key = f"reminder:sent:{appointment.public_id}"
-            claimed = await redis.set(
-                reminder_key,
-                "1",
-                nx=True,
-                ex=60 * 60 * 24 * 7,
-            )
-            if not claimed:
-                continue
-
-            try:
-                await notify_client_reminder(
-                    phone=getattr(client, "phone", None),
-                    email=client.email,
-                    details={
-                        "public_id": appointment.public_id,
-                        "service": service.name,
-                        "staff": staff.display_name,
-                        "date": starts_at.isoformat(),
-                    },
-                )
-                published += 1
-            except Exception as exc:  # pragma: no cover - depende de SMTP real
-                await redis.delete(reminder_key)
-                logger.warning(
-                    "appointment_reminder_dispatch_failed",
-                    appointment=appointment.public_id,
-                    error_type=type(exc).__name__,
-                    error=str(exc),
-                )
 
     logger.info(
         "reminders_processed",

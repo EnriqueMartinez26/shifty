@@ -67,6 +67,9 @@ class AppointmentListItem(BaseModel):
     # mostraba al cliente sin indicar el profesional (search si lo traia).
     staff_name: str
     client_name: str
+    # Solo para administradores (dato personal); el resto del personal recibe
+    # nulo. Sirve para el boton "mandar por WhatsApp" de la agenda.
+    client_phone: Optional[str] = None
     starts_at: datetime
     ends_at: datetime
     status: AppointmentStatus
@@ -152,6 +155,7 @@ class AppointmentSearchResult(BaseModel):
     staff_id: str
     client_name: str
     client_id: str
+    client_phone: Optional[str] = None
 
 
 class AppointmentSearchResponse(BaseModel):

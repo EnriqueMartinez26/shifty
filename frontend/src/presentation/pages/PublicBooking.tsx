@@ -4,10 +4,16 @@ import { CheckCircle2, Clock3, MapPin, Phone, Store, XCircle } from 'lucide-reac
 import { useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
+import { resolveBookingPreselect } from '@presentation/components/organisms/booking/deepLink'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
-import { usePublicPaymentStatus, usePublicStore } from '../hooks/usePublic'
+import {
+  usePublicPaymentStatus,
+  usePublicServices,
+  usePublicStaff,
+  usePublicStore
+} from '../hooks/usePublic'
 
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()
@@ -15,8 +21,21 @@ const PublicBooking: React.FC = () => {
   const paymentId = searchParams.get('payment_id') || undefined
   const { data: store, isLoading, isError } = usePublicStore(slug)
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
+  // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
+  // las listas publicas antes de montar el wizard. Sin parametros no se
+  // consulta nada extra.
+  const wanted = { service: searchParams.get('service'), staff: searchParams.get('staff') }
+  const servicesQuery = usePublicServices(wanted.service ? store?.public_id : undefined)
+  const staffQuery = usePublicStaff(
+    wanted.service && wanted.staff ? store?.public_id : undefined,
+    wanted.service || undefined
+  )
+  const resolvingDeepLink =
+    Boolean(wanted.service) &&
+    (servicesQuery.isLoading || (Boolean(wanted.staff) && staffQuery.isLoading))
+  const preselect = resolveBookingPreselect(wanted, servicesQuery.data, staffQuery.data)
 
-  if (isLoading) {
+  if (isLoading || resolvingDeepLink) {
     return (
       <div className="min-h-screen grid place-items-center bg-[#EEF2F6] text-sm font-black uppercase tracking-widest text-gray-500">
         Cargando...
@@ -153,7 +172,7 @@ const PublicBooking: React.FC = () => {
       )}
 
       {/* The Wizard Component */}
-      <BookingWizardContainer store={store} />
+      <BookingWizardContainer store={store} preselect={preselect} />
 
       {/* Footer minimalista */}
       <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">

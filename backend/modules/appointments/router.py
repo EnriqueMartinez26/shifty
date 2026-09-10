@@ -17,7 +17,7 @@ from core.router import CanonicalAPIRouter
 from core.database import _apply_tenant_context, get_db, set_tenant_context
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
-from core.roles import STORE_MANAGERS, require_roles
+from core.roles import STORE_MANAGERS, has_any_role, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -107,6 +107,8 @@ async def list_appointments_by_date(
 
     repo = AppointmentRepository(db)
     rows = await repo.get_by_date(date)
+    # El telefono del cliente solo lo ve un administrador (dato personal).
+    show_phone = has_any_role(user, STORE_MANAGERS)
     return [
         AppointmentListItem(
             public_id=appointment.public_id,
@@ -115,6 +117,7 @@ async def list_appointments_by_date(
             staff_id=staff.public_id,
             staff_name=staff.display_name,
             client_name=client.full_name or client.email,
+            client_phone=client.phone if show_phone else None,
             starts_at=appointment.starts_at,
             ends_at=appointment.ends_at,
             status=AppointmentStatus(appointment.status),
@@ -408,6 +411,7 @@ async def search_appointments(
 
     repo = AppointmentRepository(db)
     total, rows = await repo.search_appointments(filters, user.store_id)
+    show_phone = has_any_role(user, STORE_MANAGERS)
 
     results = [
         AppointmentSearchResult(
@@ -426,6 +430,7 @@ async def search_appointments(
             staff_id=staff.public_id,
             client_name=client.full_name or client.email,
             client_id=client.public_id,
+            client_phone=client.phone if show_phone else None,
         )
         for appointment, service, staff, client in rows
     ]

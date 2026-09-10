@@ -37,6 +37,7 @@ from modules.stores.model import Store
 from modules.notifications.tasks import (
     build_client_details,
     enqueue_confirmation_email,
+    enqueue_rebook_email,
 )
 from modules.payments.model import PaymentStatus
 from modules.payments.service import expire_mercadopago_preference
@@ -297,7 +298,20 @@ class AppointmentService:
         )
 
         await self.uow.commit()
+        # Mail "reserva tu proximo turno" DESPUES del commit, best-effort: un
+        # SMTP caido no deshace el completado.
+        await self._notify_client_rebook(appointment)
         return appointment
+
+    async def _notify_client_rebook(self, appointment: Appointment) -> None:
+        store = await self.uow.session.get(Store, appointment.store_id)
+        # Mismo interruptor que los recordatorios: es un mail automatico mas.
+        if store is not None and not getattr(store, "send_email_reminders", True):
+            return
+        details = build_client_details(
+            appointment, appointment.service, appointment.staff, store
+        )
+        await enqueue_rebook_email(email=appointment.client_email, details=details)
 
     async def mark_absent(self, *, public_id: str, actor: User) -> Appointment:
         """

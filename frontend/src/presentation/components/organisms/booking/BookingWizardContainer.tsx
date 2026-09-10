@@ -10,6 +10,7 @@ import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
 import { BookingStepStaff } from './BookingStepStaff'
+import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
 import type { BookingWizardState } from './types'
 import { createUuid } from '../../../../shared/utils/uuid'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
@@ -27,9 +28,14 @@ import {
 
 interface BookingWizardContainerProps {
   store: PublicStore
+  /** Servicio y profesional ya validados contra las listas publicas (deep-link). */
+  preselect?: BookingPreselect
 }
 
-export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ store }) => {
+export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
+  store,
+  preselect = EMPTY_PRESELECT
+}) => {
   const requiresOtp = Boolean(store.feature_flags?.otp_booking)
   const initialCustomFields = useMemo(
     () => Object.fromEntries((store.custom_client_fields || []).map((field) => [field.key, ''])),
@@ -43,7 +49,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
     [requiresOtp]
   )
 
-  const [currentStep, setCurrentStep] = useState(0)
+  // El deep-link se resuelve en el inicializador: sin useEffect que "salte"
+  // de paso despues del primer render.
+  const [currentStep, setCurrentStep] = useState(() => initialStepFor(preselect))
   const [otpState, setOtpState] = useState({
     code: '',
     email: '',
@@ -54,8 +62,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({ 
     error: ''
   })
   const [bookingState, setBookingState] = useState<BookingWizardState>({
-    serviceId: null,
-    requestedStaffId: null,
+    serviceId: preselect.serviceId,
+    requestedStaffId: preselect.staffId,
     assignedStaffId: null,
     date: null,
     startTime: null,

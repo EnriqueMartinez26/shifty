@@ -80,6 +80,16 @@ class AppointmentModel(Base):
     terms_accepted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Marcas durables de recordatorio. El job las reclama con
+    # ``UPDATE ... WHERE col IS NULL`` (seguro entre workers) y las deja en
+    # nulo si el envio falla. Reprogramar crea un turno nuevo, asi que el
+    # movido arranca sin marcas.
+    reminder_24h_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
+    reminder_2h_sent_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True)
+    )
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
     # Optimistic locking: SQLAlchemy incrementa esta columna en cada UPDATE y
     # falla con StaleDataError si otra transaccion la movio mientras tanto.

@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 from typing import TypeAlias
 
-from sqlalchemy import and_, or_, select, func
+from sqlalchemy import and_, or_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -345,8 +345,8 @@ class AppointmentRepository:
         self, starts_after: datetime, starts_before: datetime
     ) -> list[AppointmentReminderRow]:
         """
-        Devuelve turnos CONFIRMED o PENDING en el rango horario indicado.
-        Usado por la tarea de recordatorios 24h antes.
+        Devuelve turnos CONFIRMED o PENDING en el rango horario indicado a los
+        que todavia les falta algun recordatorio (24h o 2h).
         """
         result = await self.db.execute(
             select(Appointment, Service, Staff, User, Store)
@@ -364,7 +364,40 @@ class AppointmentRepository:
                         AppointmentStatus.CONFIRMED.value,
                     ]
                 ),
+                or_(
+                    Appointment.reminder_24h_sent_at.is_(None),
+                    Appointment.reminder_2h_sent_at.is_(None),
+                ),
             )
             .order_by(Appointment.starts_at.asc())
         )
         return [(row[0], row[1], row[2], row[3], row[4]) for row in result.all()]
+
+    async def claim_reminder(
+        self, appointment_id: str, column: str, sent_at: datetime
+    ) -> bool:
+        """Marca el recordatorio como enviado solo si nadie lo marco antes.
+
+        ``UPDATE ... WHERE col IS NULL`` es atomico: con varios workers solo
+        uno ve rowcount 1. Commitea por su cuenta (operacion tecnica atomica)
+        para que el reclamo sea visible antes de mandar el mail.
+        """
+        col = getattr(Appointment, column)
+        result = await self.db.execute(
+            update(Appointment)
+            .where(Appointment.id == appointment_id, col.is_(None))
+            .values({column: sent_at})
+            .execution_options(synchronize_session=False)
+        )
+        await self.db.commit()
+        return int(getattr(result, "rowcount", 0) or 0) == 1
+
+    async def release_reminder(self, appointment_id: str, column: str) -> None:
+        """Deshace el reclamo cuando el envio fallo, para reintentar despues."""
+        await self.db.execute(
+            update(Appointment)
+            .where(Appointment.id == appointment_id)
+            .values({column: None})
+            .execution_options(synchronize_session=False)
+        )
+        await self.db.commit()
