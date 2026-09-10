@@ -9,6 +9,7 @@ export interface ServiceFormValues {
 }
 
 export interface StaffFormValues {
+  kind: 'person' | 'resource'
   first_name: string
   last_name: string
   email: string

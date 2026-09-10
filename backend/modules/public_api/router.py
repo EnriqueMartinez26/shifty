@@ -326,6 +326,7 @@ async def get_public_staff(
         return [
             PublicStaffResponse(
                 public_id=member.public_id,
+                kind=getattr(member, "kind", None) or "person",
                 first_name=member.first_name or "",
                 last_name=member.last_name or "",
                 email=None,

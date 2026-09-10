@@ -2,11 +2,15 @@ import { createUuid } from '../../shared/utils/uuid'
 import { Email } from '../value-objects/Email'
 import { UserId } from '../value-objects/UserId'
 
+export type StaffKind = 'person' | 'resource'
+
 export interface StaffProps {
   id: UserId
+  /** 'person' = profesional con login; 'resource' = cancha, sala, box (sin email ni usuario). */
+  kind: StaffKind
   firstName: string
   lastName: string
-  email: Email
+  email: Email | null
   displayName: string | null
   isActive: boolean
   serviceIds: string[]
@@ -29,18 +33,23 @@ export class Staff {
 
   static fromPrimitives(props: {
     public_id: string
+    kind?: string | null
     first_name: string
     last_name: string
-    email: string
+    email: string | null
     display_name: string | null
     is_active: boolean
     service_ids: string[]
   }): Staff {
+    // Un recurso no tiene email: Email.create('') explotaba y tiraba abajo
+    // la pagina entera de personal (2026-09-10).
+    const email = props.email && props.email.trim() ? Email.create(props.email) : null
     return new Staff({
       id: UserId.create(props.public_id),
-      firstName: props.first_name,
-      lastName: props.last_name,
-      email: Email.create(props.email),
+      kind: props.kind === 'resource' ? 'resource' : 'person',
+      firstName: props.first_name ?? '',
+      lastName: props.last_name ?? '',
+      email,
       displayName: props.display_name,
       isActive: props.is_active,
       serviceIds: props.service_ids
@@ -57,8 +66,14 @@ export class Staff {
   get lastName() {
     return this.props.lastName
   }
-  get email() {
+  get email(): Email | null {
     return this.props.email
+  }
+  get kind(): StaffKind {
+    return this.props.kind
+  }
+  get isResource(): boolean {
+    return this.props.kind === 'resource'
   }
   get displayName() {
     return this.props.displayName ?? this.fullName
@@ -70,15 +85,9 @@ export class Staff {
     return [...this.props.serviceIds]
   }
 
-  get role(): 'ADMIN' | 'STAFF' {
-    if (this.email.getValue().toLowerCase().includes('admin')) {
-      return 'ADMIN'
-    }
-    return 'STAFF'
-  }
-
   get fullName(): string {
-    return `${this.props.firstName} ${this.props.lastName}`.trim()
+    const nombre = `${this.props.firstName} ${this.props.lastName}`.trim()
+    return nombre || (this.props.displayName ?? '')
   }
 
   // Business Logic
@@ -95,9 +104,10 @@ export class Staff {
   toPrimitives() {
     return {
       public_id: this.props.id.getValue(),
+      kind: this.props.kind,
       first_name: this.props.firstName,
       last_name: this.props.lastName,
-      email: this.props.email.getValue(),
+      email: this.props.email ? this.props.email.getValue() : null,
       display_name: this.props.displayName,
       is_active: this.props.isActive,
       service_ids: [...this.props.serviceIds]

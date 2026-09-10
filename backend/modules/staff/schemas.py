@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Literal, Annotated
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from datetime import time
@@ -47,10 +47,30 @@ class StaffBase(BaseModel):
 
 
 class StaffCreate(StaffBase):
-    first_name: str = Field(..., min_length=1, max_length=100)
-    last_name: str = Field(..., min_length=1, max_length=100)
-    email: EmailStr
+    # "person" exige nombre, apellido y email (crea un usuario de login).
+    # "resource" (cancha, sala, box) solo exige display_name: sin email ni
+    # usuario. kind es inmutable despues del alta.
+    kind: Literal["person", "resource"] = "person"
+    first_name: str | None = Field(None, max_length=100)
+    last_name: str | None = Field(None, max_length=100)
+    email: EmailStr | None = None
     service_ids: list[PublicId] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_by_kind(self) -> "StaffCreate":
+        if self.kind == "person":
+            if (
+                not (self.first_name or "").strip()
+                or not (self.last_name or "").strip()
+            ):
+                raise ValueError("Nombre y apellido son obligatorios para una persona")
+            if not self.email:
+                raise ValueError("El email es obligatorio para una persona")
+        else:
+            self.email = None
+            self.first_name = (self.first_name or "").strip() or None
+            self.last_name = (self.last_name or "").strip() or None
+        return self
 
 
 class StaffUpdate(BaseModel):
@@ -64,9 +84,10 @@ class StaffUpdate(BaseModel):
 
 class StaffResponse(StaffBase):
     public_id: str
+    kind: str = "person"
     first_name: str
     last_name: str
-    email: str
+    email: str | None = None
     is_active: bool
     service_ids: list[str] = Field(default_factory=list)
     services: list[ServiceResponse] = Field(default_factory=list)

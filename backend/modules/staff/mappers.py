@@ -10,6 +10,7 @@ def to_schedule_response(schedule: Schedule) -> ScheduleResponse:
 def to_staff_response(member: Staff) -> StaffResponse:
     return StaffResponse(
         public_id=member.public_id,
+        kind=getattr(member, "kind", None) or "person",
         display_name=member.display_name,
         first_name=member.first_name or "",
         last_name=member.last_name or "",

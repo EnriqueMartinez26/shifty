@@ -78,6 +78,32 @@ describe('StaffService', () => {
       )
       expect(mockRepository.create).not.toHaveBeenCalled()
     })
+
+    it('un recurso (cancha, sala) se crea sin email ni nombre', async () => {
+      mockRepository.create.mockImplementation(async (staff) => staff)
+
+      const result = await service.createStaff({
+        kind: 'resource',
+        display_name: 'Cancha 2',
+        service_ids: ['service-1']
+      })
+
+      expect(result.isResource).toBe(true)
+      expect(result.email).toBeNull()
+      expect(result.displayName).toBe('Cancha 2')
+      expect(result.toPrimitives()).toMatchObject({ kind: 'resource', email: null })
+    })
+
+    it('una persona sin email sigue siendo rechazada', async () => {
+      await expect(
+        service.createStaff({
+          kind: 'person',
+          display_name: 'Ana P.',
+          service_ids: ['service-1']
+        })
+      ).rejects.toThrow('Error de validación')
+      expect(mockRepository.create).not.toHaveBeenCalled()
+    })
   })
 
   describe('updateStaff', () => {
@@ -114,6 +140,31 @@ describe('StaffService', () => {
       expect(result).toBe(expectedStaff)
       expect(mockRepository.findById).toHaveBeenCalledWith('staff-id')
       expect(mockRepository.update).toHaveBeenCalledWith('staff-id', expect.any(Staff))
+    })
+
+    it('editar un recurso no le inventa un email', async () => {
+      const cancha = Staff.fromPrimitives({
+        public_id: 'cancha-1',
+        kind: 'resource',
+        first_name: '',
+        last_name: '',
+        email: null,
+        display_name: 'Cancha 1',
+        is_active: true,
+        service_ids: ['s1']
+      })
+      mockRepository.findById.mockResolvedValue(cancha)
+      mockRepository.update.mockImplementation(async (_id, staff) => staff)
+
+      const result = await service.updateStaff('cancha-1', {
+        kind: 'resource',
+        display_name: 'Cancha 1 (techada)',
+        service_ids: ['s1', 's2']
+      })
+
+      expect(result.isResource).toBe(true)
+      expect(result.email).toBeNull()
+      expect(result.displayName).toBe('Cancha 1 (techada)')
     })
 
     it('should throw error if staff is not found', async () => {

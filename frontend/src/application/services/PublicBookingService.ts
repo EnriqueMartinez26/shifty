@@ -45,6 +45,7 @@ export interface PublicService {
 
 export interface PublicStaff {
   public_id: string
+  kind?: 'person' | 'resource'
   first_name: string
   last_name: string
   display_name: string

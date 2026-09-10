@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Mail, Edit3, Trash2, CheckCircle2, XCircle } from 'lucide-react'
+import { Mail, Edit3, Trash2, CheckCircle2, XCircle, LayoutGrid } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
@@ -19,15 +19,19 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
     return `${f}${l}`.toUpperCase() || 'ST'
   }
 
-  const initials = getInitials(staff.firstName, staff.lastName)
-  const isAdmin = staff.role === 'ADMIN'
+  // Un recurso (cancha, sala, box) no tiene nombre ni apellido: las
+  // iniciales salen del nombre de muestra.
+  const initials = staff.isResource
+    ? getInitials(staff.displayName ?? '', '')
+    : getInitials(staff.firstName, staff.lastName)
+  const isResource = staff.isResource
 
-  // Volumetric gradients and borders based on role
-  const accentBorderColor = isAdmin ? '#3b82f6' : '#ff8c42'
-  const avatarGradient = isAdmin
+  // Azul para recursos, naranja para personas.
+  const accentBorderColor = isResource ? '#3b82f6' : '#ff8c42'
+  const avatarGradient = isResource
     ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
     : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-  const avatarBorder = isAdmin ? '1px solid #2563eb' : `1px solid ${colors2000s.orange.accent}`
+  const avatarBorder = isResource ? '1px solid #2563eb' : `1px solid ${colors2000s.orange.accent}`
 
   return (
     <div
@@ -79,15 +83,24 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
               {staff.displayName}
             </h3>
             <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1 truncate">
-              {staff.fullName}
+              {isResource ? 'Recurso' : staff.fullName}
             </p>
           </div>
         </div>
 
-        {/* Email contact field */}
+        {/* Email contact field (a resource has no email nor login) */}
         <div className="flex items-center gap-2 text-xs font-bold text-gray-500 pt-1">
-          <Mail size={14} className="text-gray-400" />
-          <span className="truncate">{staff.email.getValue()}</span>
+          {staff.email ? (
+            <>
+              <Mail size={14} className="text-gray-400" />
+              <span className="truncate">{staff.email.getValue()}</span>
+            </>
+          ) : (
+            <>
+              <LayoutGrid size={14} className="text-gray-400" />
+              <span className="truncate">Cancha, sala o box: sin usuario</span>
+            </>
+          )}
         </div>
 
         {/* Metadata Specialties Section */}

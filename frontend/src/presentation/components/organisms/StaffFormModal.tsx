@@ -27,12 +27,13 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
 }) => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<StaffFormValues>({
+    kind: 'person',
     first_name: '',
     last_name: '',
     email: '',
     display_name: '',
-    service_ids: [] as string[]
+    service_ids: []
   })
 
   const { data: services } = useServicesCatalog()
@@ -41,14 +42,16 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
     if (editingStaff) {
       const p = editingStaff.toPrimitives()
       setFormData({
+        kind: p.kind,
         first_name: p.first_name,
         last_name: p.last_name,
-        email: p.email,
+        email: p.email ?? '',
         display_name: p.display_name ?? '',
         service_ids: p.service_ids
       })
     } else {
       setFormData({
+        kind: 'person',
         first_name: '',
         last_name: '',
         email: '',
@@ -102,7 +105,13 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
               className="text-2xl font-black uppercase tracking-tight"
               style={{ color: colors2000s.text.primary }}
             >
-              {editingStaff ? 'Editar Profesional' : 'Nuevo Profesional'}
+              {editingStaff
+                ? formData.kind === 'resource'
+                  ? 'Editar Recurso'
+                  : 'Editar Profesional'
+                : formData.kind === 'resource'
+                  ? 'Nuevo Recurso'
+                  : 'Nuevo Profesional'}
             </h3>
             <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
               Configurá el perfil y especialidades.
@@ -150,76 +159,118 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                   className="font-black uppercase tracking-widest text-xs"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  Datos Personales
+                  {formData.kind === 'resource' ? 'Datos del recurso' : 'Datos Personales'}
                 </h4>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label
-                    className="text-[10px] font-black uppercase tracking-widest ml-1"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    Nombre
-                  </label>
-                  <input
-                    value={formData.first_name}
-                    onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
-                    className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                    style={create2000sModalInputStyle()}
-                    placeholder="Ej: Marcelo"
-                    required
-                  />
+              {!editingStaff && (
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Tipo">
+                  {(
+                    [
+                      ['person', 'Persona', 'Profesional con nombre y email'],
+                      ['resource', 'Recurso', 'Cancha, sala, box: solo un calendario']
+                    ] as const
+                  ).map(([kind, label, hint]) => (
+                    <button
+                      key={kind}
+                      type="button"
+                      role="radio"
+                      aria-checked={formData.kind === kind}
+                      onClick={() => setFormData({ ...formData, kind })}
+                      className="rounded-xl border px-3 py-2 text-left"
+                      style={{
+                        borderColor:
+                          formData.kind === kind
+                            ? colors2000s.orange.accent
+                            : colors2000s.border.default,
+                        background:
+                          formData.kind === kind
+                            ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                            : colors2000s.bg.button,
+                        color: formData.kind === kind ? '#ffffff' : colors2000s.text.primary
+                      }}
+                    >
+                      <span className="block text-[10px] font-black uppercase tracking-widest">
+                        {label}
+                      </span>
+                      <span className="block text-[10px] font-bold opacity-80">{hint}</span>
+                    </button>
+                  ))}
                 </div>
-                <div className="space-y-1.5">
-                  <label
-                    className="text-[10px] font-black uppercase tracking-widest ml-1"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    Apellido
-                  </label>
-                  <input
-                    value={formData.last_name}
-                    onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
-                    className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                    style={create2000sModalInputStyle()}
-                    placeholder="Ej: Rossi"
-                    required
-                  />
-                </div>
-              </div>
+              )}
 
-              <div className="space-y-1.5">
-                <label
-                  className="text-[10px] font-black uppercase tracking-widest ml-1 flex items-center gap-1"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  <Mail size={12} /> Email de contacto
-                </label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
-                  style={create2000sModalInputStyle()}
-                  placeholder="marcelo@shifty.com"
-                  required
-                />
-              </div>
+              {formData.kind === 'person' && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label
+                        className="text-[10px] font-black uppercase tracking-widest ml-1"
+                        style={{ color: colors2000s.text.secondary }}
+                      >
+                        Nombre
+                      </label>
+                      <input
+                        value={formData.first_name}
+                        onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
+                        className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
+                        style={create2000sModalInputStyle()}
+                        placeholder="Ej: Marcelo"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label
+                        className="text-[10px] font-black uppercase tracking-widest ml-1"
+                        style={{ color: colors2000s.text.secondary }}
+                      >
+                        Apellido
+                      </label>
+                      <input
+                        value={formData.last_name}
+                        onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
+                        className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
+                        style={create2000sModalInputStyle()}
+                        placeholder="Ej: Rossi"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label
+                      className="text-[10px] font-black uppercase tracking-widest ml-1 flex items-center gap-1"
+                      style={{ color: colors2000s.text.secondary }}
+                    >
+                      <Mail size={12} /> Email de contacto
+                    </label>
+                    <input
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
+                      style={create2000sModalInputStyle()}
+                      placeholder="marcelo@shifty.com"
+                      required
+                    />
+                  </div>
+                </>
+              )}
 
               <div className="space-y-1.5">
                 <label
                   className="text-[10px] font-black uppercase tracking-widest ml-1"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  Nombre Público (Display Name)
+                  {formData.kind === 'resource'
+                    ? 'Nombre del recurso'
+                    : 'Nombre Público (Display Name)'}
                 </label>
                 <input
                   value={formData.display_name}
                   onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
                   className="w-full rounded-xl px-4 py-3 font-bold outline-none text-xs"
                   style={create2000sModalInputStyle()}
-                  placeholder="Ej: Marce R."
+                  placeholder={formData.kind === 'resource' ? 'Ej: Cancha 2' : 'Ej: Marce R.'}
                   required
                 />
               </div>

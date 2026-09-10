@@ -35,18 +35,26 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
     )
   }
 
+  // Si la tienda ofrece canchas/salas (recursos) el copy cambia: no "quien
+  // te atiende" sino "que reservas".
+  const hayRecursos = (staffList || []).some((staff) => staff.kind === 'resource')
   const cards = [
     {
       id: null,
-      title: 'Cualquier profesional',
+      title: hayRecursos ? 'Cualquiera disponible' : 'Cualquier profesional',
       subtitle: 'Te asignamos el primero disponible para el horario que elijas.',
       accent: 'linear-gradient(180deg, #0f766e 0%, #115e59 100%)',
       icon: <Sparkles className="w-6 h-6" />
     },
     ...(staffList || []).map((staff, idx) => ({
       id: staff.public_id,
-      title: `${staff.first_name} ${staff.last_name}`.trim(),
-      subtitle: 'Profesional disponible para este servicio.',
+      // display_name es lo que ya usan slots, mails y reportes; nombre y
+      // apellido quedan vacios para un recurso.
+      title: staff.display_name || `${staff.first_name} ${staff.last_name}`.trim(),
+      subtitle:
+        staff.kind === 'resource'
+          ? 'Disponible para reservar.'
+          : 'Profesional disponible para este servicio.',
       accent:
         idx % 2 === 0
           ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
@@ -75,10 +83,12 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
             className="text-2xl font-black uppercase tracking-tight"
             style={{ color: colors2000s.orange.accent }}
           >
-            Quien te atiende?
+            {hayRecursos ? 'Que reservas?' : 'Quien te atiende?'}
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            Podes elegir un profesional puntual o dejar que el sistema lo asigne.
+            {hayRecursos
+              ? 'Elegi una opcion puntual o deja que el sistema asigne la primera libre.'
+              : 'Podes elegir un profesional puntual o dejar que el sistema lo asigne.'}
           </p>
         </div>
       </div>

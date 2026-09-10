@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 import ulid
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from infrastructure.persistence.models.base import Base
@@ -15,14 +15,22 @@ if TYPE_CHECKING:
 
 class StaffModel(Base):
     __tablename__ = "staff"
+    __table_args__ = (
+        CheckConstraint("kind IN ('person', 'resource')", name="ck_staff_kind"),
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
     )
+    # "person": profesional con usuario de login. "resource": cancha, sala,
+    # box... un calendario reservable sin email ni usuario (2026-09-10).
+    kind: Mapped[str] = mapped_column(
+        String(20), default="person", server_default="person"
+    )
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
     display_name: Mapped[str] = mapped_column(String(100))
-    email: Mapped[str] = mapped_column(String(255), index=True)
+    email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     store_id: Mapped[str] = mapped_column(String, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -71,3 +79,7 @@ class StaffModel(Base):
     @service_ids.setter
     def service_ids(self, value: list[str] | None) -> None:
         self._service_ids_override = list(value or [])
+
+
+STAFF_KIND_PERSON = "person"
+STAFF_KIND_RESOURCE = "resource"

@@ -103,11 +103,18 @@ def build_client_details(
         "client_name": getattr(appointment, "client_name", None) or "",
         "service": getattr(service, "name", ""),
         "staff": getattr(staff, "display_name", ""),
+        "staff_kind": getattr(staff, "kind", None) or "person",
         "starts_at": appointment.starts_at.isoformat(),
         "store_name": getattr(store, "name", "") or "",
         "store_phone": getattr(store, "whatsapp_number", None) or "",
         "booking_url": f"{base}/b/{slug}" if slug else "",
     }
+
+
+def _con_quien(details: dict[str, Any]) -> str:
+    """'con Ana' para una persona, 'en Cancha 2' para un recurso."""
+    nexo = "en" if details.get("staff_kind") == "resource" else "con"
+    return f"{nexo} {details.get('staff')}"
 
 
 def _saludo(details: dict[str, Any]) -> str:
@@ -139,7 +146,7 @@ def _registration_subject(details: dict[str, Any]) -> str:
 def _registration_body(details: dict[str, Any]) -> str:
     return (
         f"{_saludo(details)}\n\n"
-        f'Tu reserva para "{details.get("service")}" con {details.get("staff")} '
+        f'Tu reserva para "{details.get("service")}" {_con_quien(details)} '
         f"quedo registrada para el {_cuando(details)}.\n\n"
         "Te vamos a avisar cuando este confirmada.\n\n"
         f"{_contacto(details)}\n\n"
@@ -154,7 +161,7 @@ def _confirmation_subject(details: dict[str, Any]) -> str:
 def _confirmation_body(details: dict[str, Any]) -> str:
     return (
         f"{_saludo(details)}\n\n"
-        f'Tu turno para "{details.get("service")}" con {details.get("staff")} '
+        f'Tu turno para "{details.get("service")}" {_con_quien(details)} '
         f"esta confirmado para el {_cuando(details)}.\n\n"
         f"{_contacto(details)}\n\n"
         "- El equipo de Shifty"
@@ -170,8 +177,8 @@ def _cancellation_body(details: dict[str, Any]) -> str:
     linea_motivo = f" Motivo: {motivo}." if motivo else ""
     return (
         f"{_saludo(details)}\n\n"
-        f'Lamentamos avisarte que tu turno para "{details.get("service")}" con '
-        f"{details.get('staff')} del {_cuando(details)} fue cancelado por la "
+        f'Lamentamos avisarte que tu turno para "{details.get("service")}" '
+        f"{_con_quien(details)} del {_cuando(details)} fue cancelado por la "
         f"tienda.{linea_motivo}\n\n"
         "Podes elegir otro horario cuando quieras.\n\n"
         f"{_contacto(details)}\n\n"
@@ -187,7 +194,7 @@ def _reminder_body(details: dict[str, Any]) -> str:
     return (
         f"{_saludo(details)}\n\n"
         f'Te recordamos que manana tenes turno para "{details.get("service")}" '
-        f"con {details.get('staff')}, el {_cuando(details)}.\n\n"
+        f"{_con_quien(details)}, el {_cuando(details)}.\n\n"
         f"{_contacto(details)}\n\n"
         "- El equipo de Shifty"
     )

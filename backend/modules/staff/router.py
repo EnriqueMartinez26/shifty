@@ -16,6 +16,7 @@ from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
 from modules.staff.mappers import to_schedule_response, to_staff_response
 from modules.staff.repository import StaffRepository
+from modules.staff.service import StaffService
 from modules.staff.schemas import (
     ScheduleCreate,
     ScheduleUpdate,
@@ -39,8 +40,9 @@ async def create_staff(
     db: AsyncSession = Depends(get_db),
 ) -> StaffResponse:
     repo = StaffRepository(db)
+    service = StaffService(db)
     try:
-        created = await repo.create(
+        created = await service.create(
             data.model_dump(exclude={"service_ids"}), admin.store_id, data.service_ids
         )
         loaded = await repo.get_by_id(created.public_id, admin.store_id)
@@ -182,7 +184,7 @@ async def update_staff(
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        updated = await repo.update_profile(
+        updated = await StaffService(db).update_profile(
             staff,
             first_name=data.first_name,
             last_name=data.last_name,
@@ -214,5 +216,5 @@ async def delete_staff(
     staff = await repo.get_by_id(public_id, admin.store_id)
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
-    await repo.soft_delete(staff)
+    await StaffService(db).soft_delete(staff)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

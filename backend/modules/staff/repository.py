@@ -7,6 +7,10 @@ from sqlalchemy.orm import selectinload
 
 from core.security import hash_password
 from modules.services.model import Service
+from infrastructure.persistence.models.staff import (
+    STAFF_KIND_PERSON,
+    STAFF_KIND_RESOURCE,
+)
 from modules.staff.model import Schedule, Staff
 from modules.auth.service import revoke_sessions_for_user
 from modules.users.model import User, UserRole
@@ -49,6 +53,27 @@ class StaffRepository:
     async def create(
         self, data: dict[str, Any], store_id: str, service_public_ids: list[str]
     ) -> Staff:
+        """Alta sin commit (lo hace StaffService)."""
+        services = await self._get_services_for_store(service_public_ids, store_id)
+        kind = str(data.get("kind") or STAFF_KIND_PERSON)
+        if kind == STAFF_KIND_RESOURCE:
+            # Un recurso (cancha, sala) no tiene usuario ni email: solo es un
+            # calendario reservable.
+            resource = Staff(
+                id=str(ulid.ULID()),
+                kind=STAFF_KIND_RESOURCE,
+                first_name=data.get("first_name") or "",
+                last_name=data.get("last_name") or "",
+                email=None,
+                display_name=data["display_name"],
+                store_id=store_id,
+                service_ids=[service.public_id for service in services],
+            )
+            resource.services = services
+            self.db.add(resource)
+            await self.db.flush()
+            return resource
+
         # Normalizamos el email igual que el login (lower). Sin esto, "Pro@x.com"
         # y "pro@x.com" conviven como dos usuarios y el login case-insensitive
         # encuentra ambos y explota con MultipleResultsFound.
@@ -58,8 +83,6 @@ class StaffRepository:
         )
         if user_res.scalar_one_or_none():
             raise ValueError("Ya existe un usuario con ese email")
-
-        services = await self._get_services_for_store(service_public_ids, store_id)
 
         user = User(
             email=email,
@@ -74,6 +97,7 @@ class StaffRepository:
 
         new_staff = Staff(
             id=user.id,
+            kind=STAFF_KIND_PERSON,
             first_name=data["first_name"],
             last_name=data["last_name"],
             email=email,
@@ -83,8 +107,7 @@ class StaffRepository:
         )
         new_staff.services = services
         self.db.add(new_staff)
-        await self.db.commit()
-        await self.db.refresh(new_staff)
+        await self.db.flush()
         return new_staff
 
     async def get_all(self, store_id: str) -> list[Staff]:
@@ -251,12 +274,16 @@ class StaffRepository:
             staff.service_ids = [service.public_id for service in services_list]
             staff.services = services_list
 
-        user_res = await self.db.execute(select(User).where(User.id == staff.id))
-        user = user_res.scalar_one_or_none()
+        # Solo una persona tiene usuario que sincronizar; un recurso no.
+        user = None
+        if getattr(staff, "kind", STAFF_KIND_PERSON) == STAFF_KIND_PERSON:
+            user_res = await self.db.execute(select(User).where(User.id == staff.id))
+            user = user_res.scalar_one_or_none()
         if user:
             user.first_name = staff.first_name
             user.last_name = staff.last_name
-            user.email = staff.email
+            if staff.email:
+                user.email = staff.email
             user.full_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip()
             if is_active is not None:
                 user.is_active = is_active
@@ -266,15 +293,17 @@ class StaffRepository:
                 if not is_active:
                     await revoke_sessions_for_user(self.db, user.id)
 
-        await self.db.commit()
-        await self.db.refresh(staff)
+        await self.db.flush()
         return staff
 
     async def soft_delete(self, staff: Staff) -> None:
+        """Baja sin commit (lo hace StaffService)."""
         staff.is_active = False
-        user_res = await self.db.execute(select(User).where(User.email == staff.email))
+        # Por id, no por email: un recurso no tiene email y una persona podia
+        # tener el email cambiado en users sin pasar por aca.
+        user_res = await self.db.execute(select(User).where(User.id == staff.id))
         user = user_res.scalar_one_or_none()
         if user:
             user.is_active = False
             await revoke_sessions_for_user(self.db, user.id)
-        await self.db.commit()
+        await self.db.flush()

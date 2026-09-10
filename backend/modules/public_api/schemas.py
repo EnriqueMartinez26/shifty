@@ -49,6 +49,7 @@ class PublicServiceResponse(BaseModel):
 
 class PublicStaffResponse(BaseModel):
     public_id: str
+    kind: str = "person"
     first_name: str
     last_name: str
     email: Optional[str] = None

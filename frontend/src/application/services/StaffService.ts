@@ -46,9 +46,10 @@ export class StaffService extends BaseService<Staff> {
 
       const staff = Staff.fromPrimitives({
         public_id: createUuid(),
+        kind: validated.kind,
         first_name: validated.first_name,
         last_name: validated.last_name,
-        email: validated.email,
+        email: validated.kind === 'resource' ? null : validated.email,
         display_name: validated.display_name,
         is_active: true,
         service_ids: validated.service_ids
@@ -74,11 +75,13 @@ export class StaffService extends BaseService<Staff> {
       this.validate(data, createStaffSchema)
       const validated = createStaffSchema.parse(data)
 
+      // El tipo no se cambia al editar: un recurso no se vuelve persona (ni
+      // al reves) porque implicaria crear o borrar el usuario con login.
       const updatedStaff = Staff.fromPrimitives({
         ...existing.toPrimitives(),
         first_name: validated.first_name,
         last_name: validated.last_name,
-        email: validated.email,
+        email: existing.isResource ? null : validated.email,
         display_name: validated.display_name,
         service_ids: validated.service_ids
       })
