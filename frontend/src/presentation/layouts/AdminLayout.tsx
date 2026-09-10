@@ -3,11 +3,27 @@ import React from 'react'
 import { Outlet } from 'react-router'
 
 import { colors2000s } from '../../theme/colors'
+import { SubscriptionBanner } from '../components/molecules/SubscriptionBanner'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import NotificationsBell from '../components/navigation/NotificationsBell'
 import Sidebar from '../components/navigation/Sidebar'
+import { useStoreSettings, useStoreSubscription } from '../hooks/useStores'
+
+/** El chip del encabezado deja de mentir "En linea": refleja el plan. */
+const ESTADO_DEL_PLAN: Record<string, { label: string; color: string }> = {
+  suspended: { label: 'Suspendida', color: '#dc2626' },
+  past_due: { label: 'Vencida', color: '#d97706' },
+  cancelled: { label: 'Cancelada', color: '#6b7280' }
+}
 
 const AdminLayout: React.FC = () => {
+  const { data: subscription } = useStoreSubscription()
+  const { data: store } = useStoreSettings()
+  const estadoDelPlan = (subscription && ESTADO_DEL_PLAN[subscription.status]) ?? {
+    label: 'En línea',
+    color: '#22c55e'
+  }
+
   return (
     <div
       className="flex min-h-screen font-sans"
@@ -43,10 +59,12 @@ const AdminLayout: React.FC = () => {
                 color: colors2000s.text.secondary
               }}
             >
-              Estado: <span style={{ color: '#22c55e' }}>En línea</span>
+              Estado: <span style={{ color: estadoDelPlan.color }}>{estadoDelPlan.label}</span>
             </div>
           </div>
         </header>
+
+        <SubscriptionBanner subscription={subscription} storeName={store?.name} />
 
         <div className="relative animate-in fade-in duration-500">
           <Outlet />

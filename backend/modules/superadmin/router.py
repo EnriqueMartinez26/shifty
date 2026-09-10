@@ -398,8 +398,11 @@ async def set_store_subscription(
     if not plan:
         raise ResourceNotFoundException(resource="Plan", identifier=data.plan_id)
     try:
+        # exclude_unset: reasignar un plan SIN mandar fechas conservaba el
+        # periodo vigente solo por casualidad; con model_dump() plano llegaba
+        # None y lo borraba (el modal lo enmascaraba mandando siempre las dos).
         subscription = await repo.subscriptions.set_store_subscription(
-            store, plan, data.model_dump(), actor
+            store, plan, data.model_dump(exclude_unset=True), actor
         )
         return StoreSubscriptionResponse.model_validate(subscription)
     except ValueError as exc:

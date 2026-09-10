@@ -214,9 +214,10 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
               setSubscriptionForm((current) => ({ ...current, status: event.target.value }))
             }
           >
+            {/* Los cuatro estados del grafo del backend; "Prueba" no existia. */}
             <option value="active">Activa</option>
-            <option value="trialing">Prueba</option>
             <option value="past_due">Pago vencido</option>
+            <option value="suspended">Suspendida</option>
             <option value="cancelled">Cancelada</option>
           </SelectInput>
         </div>

@@ -163,6 +163,24 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
             appointment_id=str(appointment_id) if appointment_id else None,
         )
 
+    if message.event_type == NotificationType.SUBSCRIPTION_EXPIRING.value:
+        dias = payload.get("days_left")
+        plan = str(payload.get("plan_name") or "tu plan")
+        cuando = (
+            "hoy"
+            if dias == 0
+            else f"en {dias} dia" + ("s" if isinstance(dias, int) and dias != 1 else "")
+        )
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Tu suscripcion vence pronto",
+            body=(
+                f"{plan} vence {cuando}. Renovala para que tu pagina de reservas "
+                "siga funcionando."
+            ),
+        )
+
     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
         amount = payload.get("amount")
         amount_label = f" de ${amount}" if amount else ""

@@ -23,12 +23,15 @@ from modules.stores.media import (
     exceeds_pixel_budget,
 )
 from modules.stores.model import Store, StoreMedia, StoreSchedule
+from modules.billing.service import get_active_subscription, today_local
+from modules.billing.subscription_rules import outlook
 from modules.stores.schemas import (
     StoreFeatureFlags,
     StoreFeatureFlagsResponse,
     StoreFeatureFlagsUpdate,
     StoreMediaUploadResponse,
     StoreResponse,
+    StoreSubscriptionStatusResponse,
     StoreUpdate,
 )
 from modules.users.model import User, UserRole
@@ -144,6 +147,27 @@ async def update_my_store(
     await db.commit()
     await db.refresh(store)
     return to_store_response(store)
+
+
+@router.get("/me/subscription", response_model=StoreSubscriptionStatusResponse)
+async def get_my_subscription(
+    user: User = Depends(get_current_staff),
+    db: AsyncSession = Depends(get_db),
+) -> StoreSubscriptionStatusResponse:
+    """Estado del plan de la tienda para el banner del panel."""
+    subscription = await get_active_subscription(db, user.store_id)
+    vista = outlook(subscription, today=today_local())
+    return StoreSubscriptionStatusResponse(
+        status=vista.status,
+        plan_name=getattr(subscription, "plan_name", None) if subscription else None,
+        current_period_end=getattr(subscription, "current_period_end", None)
+        if subscription
+        else None,
+        days_left=vista.days_left,
+        grace_until=vista.grace_until_day,
+        warn=vista.warn,
+        blocks_writes=vista.blocks_writes,
+    )
 
 
 @router.get("/me/feature-flags", response_model=StoreFeatureFlagsResponse)

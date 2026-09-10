@@ -135,7 +135,7 @@ async def test_dos_workers_del_outbox_no_duplican_la_oferta(
             finally:
                 set_tenant_context(None, False)
 
-    resultados: list[Any] = await asyncio.gather(worker(), worker())
+    resultados = await asyncio.gather(worker(), worker())
     assert sum(int(r["processed"]) for r in resultados) >= 1
     ofertas = [e for e in enviados if e[1].startswith("Se libero un turno")]
     assert len(ofertas) == 1, ofertas

@@ -1,3 +1,4 @@
+from datetime import date, datetime
 from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -113,6 +114,18 @@ class StoreFeatureFlagsUpdate(BaseModel):
 
 class StoreFeatureFlagsResponse(BaseModel):
     flags: StoreFeatureFlags
+
+
+class StoreSubscriptionStatusResponse(BaseModel):
+    """Lo que el dueno ve de su plan: sin importes internos ni ids de billing."""
+
+    status: str
+    plan_name: Optional[str] = None
+    current_period_end: Optional[datetime] = None
+    days_left: Optional[int] = None
+    grace_until: Optional[date] = None
+    warn: bool = False
+    blocks_writes: bool = False
 
 
 class StoreResponse(BaseModel):

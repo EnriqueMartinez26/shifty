@@ -125,7 +125,19 @@ class PublicRepository:
         phone: str,
         name: str,
         email: str | None,
+        *,
+        adopt_contact: bool = False,
     ) -> User:
+        """Busca o crea el cliente de la tienda por telefono.
+
+        ``adopt_contact`` decide si los datos que llegan en ESTA peticion
+        pisan los del cliente que ya existe. Es False por defecto porque el
+        telefono no prueba identidad: sin esa guarda, cualquiera que conozca
+        un telefono se anotaba en la lista de espera con su propio email y a
+        partir de ahi recibia los mails del cliente real (confirmaciones,
+        recordatorios y sus datos de turno). Solo se adopta cuando el
+        telefono paso por OTP en esta tienda. 2026-09-10.
+        """
         # Dos clientes con el mismo telefono (alta vieja sin unicidad) rompian
         # con MultipleResultsFound -> 500. Se toma el mas reciente.
         result = await self.db.execute(
@@ -141,14 +153,18 @@ class PublicRepository:
         existing = result.scalars().first()
 
         if existing:
-            if email and (not existing.email or existing.email.endswith(".noreply")):
+            if (
+                adopt_contact
+                and email
+                and (not existing.email or existing.email.endswith(".noreply"))
+            ):
                 existing.email = email
                 await self.db.flush()
-            if name and not existing.first_name:
+            if adopt_contact and name and not existing.first_name:
                 existing.full_name = name
             return existing
 
-        if email:
+        if email and adopt_contact:
             result_by_email = await self.db.execute(
                 select(User).where(
                     User.email == email,
@@ -227,6 +243,7 @@ class PublicRepository:
         initial_status: str = AppointmentStatus.PENDING.value,
         buffer_minutes: int = 0,
         price_amount: Decimal | None = None,
+        client_email: str | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         svc_res = await self.db.execute(
             select(Service).where(
@@ -315,7 +332,9 @@ class PublicRepository:
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
             client_name=client.full_name or client.email,
-            client_email=client.email,
+            # Snapshot del contacto de ESTA reserva: el mail de esta reserva
+            # va al email que dejaron ahora, sin pisar el del cliente.
+            client_email=client_email or client.email,
             client_phone=client.phone,
             notes=notes,
             intake_answers=intake_answers or {},

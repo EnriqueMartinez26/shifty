@@ -53,6 +53,7 @@ import {
   panelStyle,
   parseOptionalInt,
   scopeBadgeStyle,
+  fromDateTimeInput,
   toDateTimeInput,
   type AdminFormState,
   type CouponFormState,
@@ -418,8 +419,8 @@ const SuperAdminPage: React.FC = () => {
           status: subscriptionForm.status.trim() || 'active',
           base_amount: subscriptionForm.base_amount.trim() || null,
           currency: subscriptionForm.currency.trim() || null,
-          current_period_start: subscriptionForm.current_period_start || null,
-          current_period_end: subscriptionForm.current_period_end || null
+          current_period_start: fromDateTimeInput(subscriptionForm.current_period_start),
+          current_period_end: fromDateTimeInput(subscriptionForm.current_period_end)
         }
       })
       setFeedback({ tone: 'success', text: `Suscripcion actualizada para ${selectedStore.name}` })
@@ -440,8 +441,8 @@ const SuperAdminPage: React.FC = () => {
         value: couponForm.value.trim(),
         currency: couponForm.coupon_type === 'fixed' ? couponForm.currency.trim() || 'ARS' : null,
         max_uses: parseOptionalInt(couponForm.max_uses),
-        valid_from: couponForm.valid_from || null,
-        valid_until: couponForm.valid_until || null,
+        valid_from: fromDateTimeInput(couponForm.valid_from),
+        valid_until: fromDateTimeInput(couponForm.valid_until),
         one_time_per_store: couponForm.one_time_per_store,
         description: couponForm.description.trim() || null
       }

@@ -72,6 +72,7 @@ celery_app.conf.update(
         "modules.payments.tasks",
         "modules.notifications.tasks",
         "modules.waitlist.tasks",
+        "modules.billing.tasks",
     ],
     # ----------------------------------------------------------------
     # Celery Beat — Tareas periódicas
@@ -109,6 +110,12 @@ celery_app.conf.update(
         "purge-expired-auth-sessions-daily": {
             "task": "purge_expired_auth_sessions",
             "schedule": crontab(minute=0, hour=4),
+        },
+        # Ciclo de vida de la suscripcion: aviso, vencimiento y suspension.
+        # 09:00 UTC son las 06:00 en Argentina: el aviso llega temprano.
+        "process-subscription-lifecycle-daily": {
+            "task": "process_subscription_lifecycle",
+            "schedule": crontab(minute=0, hour=9),
         },
     },
 )

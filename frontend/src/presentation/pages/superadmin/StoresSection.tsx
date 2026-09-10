@@ -5,7 +5,9 @@ import { Building2, Filter, Loader2, Search } from 'lucide-react'
 import type { SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
 import {
+  daysUntil,
   emptyStateStyle,
+  expiryLabel,
   innerCardStyle,
   panelStyle,
   scopeBadgeStyle,
@@ -258,6 +260,19 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                       style={{ color: colors2000s.text.primary }}
                     >
                       {formatDateEsAr(store.current_period_end)}
+                      <span
+                        className="block text-[10px] font-black uppercase tracking-widest"
+                        style={{
+                          color:
+                            (daysUntil(store.current_period_end) ?? 99) < 0
+                              ? '#dc2626'
+                              : (daysUntil(store.current_period_end) ?? 99) <= 7
+                                ? '#d97706'
+                                : colors2000s.text.secondary
+                        }}
+                      >
+                        {expiryLabel(store.current_period_end)}
+                      </span>
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex flex-wrap gap-2">

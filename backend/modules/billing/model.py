@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -64,7 +65,15 @@ class StoreSubscription(BaseEntity):
 
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
     plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), index=True)
+    # Copia del nombre del plan: la tabla plans es solo para superadmin en RLS
+    # y el dueno de la tienda necesita ver que plan tiene.
+    plan_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Grafo en modules/billing/subscription_rules.py + CHECK en la base.
     status: Mapped[str] = mapped_column(String(30), default="active")
+    # Aviso de vencimiento ya enviado para este periodo (idempotencia del job).
+    expiry_warning_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
@@ -80,6 +89,13 @@ class StoreSubscription(BaseEntity):
     )
     billing_metadata: Mapped[dict[str, Any] | None] = mapped_column(
         "metadata", JSON, nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'past_due', 'suspended', 'cancelled')",
+            name="ck_store_subscriptions_status",
+        ),
     )
 
     @property

@@ -94,7 +94,7 @@ def _slot(dias: int) -> datetime:
 
 async def _preview(
     client: AsyncClient, store: str, service: str, dias: int, phone: str
-) -> dict:
+) -> dict[str, Any]:
     res = await client.get(
         "/public/deposit/preview",
         params={
@@ -223,7 +223,7 @@ async def test_el_historial_del_cliente_cambia_la_sena(
     assert faltador["amount"] == 6000.0
 
 
-def _reasons(preview: dict) -> list[str]:
+def _reasons(preview: dict[str, Any]) -> list[str]:
     return list(preview["reasons"])
 
 

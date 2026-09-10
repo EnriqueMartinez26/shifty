@@ -10,6 +10,7 @@ from core.security import hash_password
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
+from modules.billing.subscription_rules import apply_subscription_transition
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -530,6 +531,7 @@ class SubscriptionAdminRepository(_BaseAdminRepository):
             subscription = StoreSubscription(
                 store_id=store.id,
                 plan_id=plan.id,
+                plan_name=plan.name,
                 status=payload.get("status", "active"),
                 base_amount=base_amount,
                 discount_amount=Decimal("0.00"),
@@ -548,7 +550,13 @@ class SubscriptionAdminRepository(_BaseAdminRepository):
                 "total_amount": str(subscription.total_amount),
             }
             subscription.plan_id = plan.id
-            subscription.status = payload.get("status", subscription.status)
+            subscription.plan_name = plan.name
+            nuevo_estado = payload.get("status", subscription.status)
+            if nuevo_estado != subscription.status:
+                apply_subscription_transition(subscription, nuevo_estado)
+            # Periodo nuevo: el aviso de vencimiento vuelve a estar disponible.
+            if payload.get("current_period_end") is not None:
+                subscription.expiry_warning_sent_at = None
             subscription.base_amount = base_amount
             subscription.discount_amount = Decimal("0.00")
             subscription.total_amount = base_amount

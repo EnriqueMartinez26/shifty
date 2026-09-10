@@ -23,7 +23,9 @@ NUEVO = ClientHistory()
 FALTADOR = ClientHistory(completed=2, absent=1)
 
 
-def _servicio(mode: str = "required", tipo: str = "percent", monto: float | None = 30):
+def _servicio(
+    mode: str = "required", tipo: str = "percent", monto: float | None = 30
+) -> SimpleNamespace:
     return SimpleNamespace(deposit_mode=mode, deposit_type=tipo, deposit_amount=monto)
 
 

@@ -164,7 +164,9 @@ class PlanResponse(PlanCreate):
 
 class StoreSubscriptionCreate(BaseModel):
     plan_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
-    status: str = Field(default="active", min_length=3, max_length=30)
+    # Los cuatro estados del grafo (modules/billing/subscription_rules.py); el
+    # front ofrecia "trialing", que el backend nunca conocio.
+    status: Literal["active", "past_due", "suspended", "cancelled"] = "active"
     base_amount: Decimal | None = Field(None, ge=0, le=10_000_000)
     currency: str | None = Field(None, min_length=3, max_length=10)
     current_period_start: datetime | None = None
@@ -175,6 +177,7 @@ class StoreSubscriptionResponse(BaseModel):
     public_id: str
     store_id: str
     plan_id: str
+    plan_name: str | None = None
     status: str
     base_amount: Decimal
     discount_amount: Decimal

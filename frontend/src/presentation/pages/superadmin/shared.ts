@@ -1,5 +1,11 @@
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
+import {
+  argentinaLocalToUtcIso,
+  formatArgentinaDate,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
+
 import { colors2000s } from '../../../theme/colors'
 import {
   create2000sEmptyStateStyle,
@@ -210,15 +216,42 @@ export const parseOptionalInt = (value: string) => {
   return trimmed ? Number.parseInt(trimmed, 10) : null
 }
 
+/**
+ * Instante UTC -> valor de un input datetime-local, en hora ARGENTINA.
+ * Antes usaba la hora del navegador y el valor volvia al backend como naive,
+ * que lo interpretaba como UTC: tres horas de deriva en cada guardado.
+ */
 export const toDateTimeInput = (value: string | null) => {
   if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return (
-    [date.getFullYear(), pad(date.getMonth() + 1), pad(date.getDate())].join('-') +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
-  )
+  const fecha = formatArgentinaDate(value)
+  const hora = formatArgentinaTime(value)
+  return fecha && hora ? `${fecha}T${hora}` : ''
+}
+
+/** Valor de un input datetime-local (hora argentina) -> instante UTC ISO. */
+export const fromDateTimeInput = (value: string): string | null => {
+  if (!value) return null
+  const [fecha, hora] = value.split('T')
+  if (!fecha || !hora) return null
+  return argentinaLocalToUtcIso(fecha, hora.slice(0, 5))
+}
+
+/** "vence en N dias" contando dias de calendario en hora argentina. */
+export const daysUntil = (value: string | null | undefined): number | null => {
+  if (!value) return null
+  const fin = formatArgentinaDate(value)
+  const hoy = formatArgentinaDate(new Date().toISOString())
+  if (!fin || !hoy) return null
+  const dia = (iso: string) => Date.parse(`${iso}T00:00:00Z`)
+  return Math.round((dia(fin) - dia(hoy)) / 86_400_000)
+}
+
+export const expiryLabel = (value: string | null | undefined): string => {
+  const dias = daysUntil(value)
+  if (dias === null) return 'Sin vencimiento'
+  if (dias < 0) return `Vencida hace ${Math.abs(dias)} d`
+  if (dias === 0) return 'Vence hoy'
+  return `Vence en ${dias} d`
 }
 
 export const isCouponExpired = (coupon: SuperAdminCoupon) =>

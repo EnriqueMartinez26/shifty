@@ -40,6 +40,7 @@ from modules.payments.router import router as payments_router
 from modules.promotions.router import router as promotions_router
 from modules.stores.router import router as stores_router
 from modules.superadmin.router import router as superadmin_router
+from modules.billing.dependencies import block_writes_when_suspended
 from modules.waitlist.public_router import router as public_waitlist_router
 from modules.waitlist.router import router as waitlist_router
 
@@ -309,22 +310,25 @@ app.add_middleware(
 
 # 3. Registrar Routers
 app.include_router(auth_router)
-app.include_router(services_router)
-app.include_router(staff_router)
-app.include_router(appointments_router)
+# Una tienda suspendida no escribe desde el panel (la lectura sigue). Va a
+# nivel router para que un endpoint de escritura nuevo quede cubierto solo.
+_SUSPENSION_GUARD = [Depends(block_writes_when_suspended)]
+app.include_router(services_router, dependencies=_SUSPENSION_GUARD)
+app.include_router(staff_router, dependencies=_SUSPENSION_GUARD)
+app.include_router(appointments_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(dashboard_router)
 app.include_router(users_router)
 app.include_router(reports_router)
-app.include_router(stores_router)
-app.include_router(appointment_blocks_router)
+app.include_router(stores_router, dependencies=_SUSPENSION_GUARD)
+app.include_router(appointment_blocks_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(payments_router)
 app.include_router(notifications_router)
-app.include_router(promotions_router)
+app.include_router(promotions_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(ledger_router)
 app.include_router(ops_router)
 app.include_router(superadmin_router)
 app.include_router(public_router)
-app.include_router(waitlist_router)
+app.include_router(waitlist_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(public_waitlist_router)
 
 

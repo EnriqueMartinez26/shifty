@@ -43,6 +43,7 @@ from modules.appointments.guards import (
     reject_cancellation_while_awaiting_payment,
 )
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.billing.service import store_is_suspended
 from modules.otp.service import OtpService
 from modules.payments.deposit_rules import (
     ClientHistory,
@@ -236,6 +237,10 @@ async def get_store_by_slug(
         repo = PublicRepository(db)
         store = await repo.get_store_by_slug(slug.lower())
         if not store:
+            raise StoreNotFoundException(identifier=slug)
+        # Tienda con la suscripcion suspendida: la vitrina publica desaparece
+        # (mismo 404 que una tienda inexistente, sin revelar el motivo).
+        if await store_is_suspended(db, store.id):
             raise StoreNotFoundException(identifier=slug)
         return PublicStoreResponse(
             public_id=store.public_id,
@@ -610,12 +615,15 @@ async def create_public_booking(
         if starts_at_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
             raise BookingNoticeException(notice_hours)
 
+        # El OTP es lo unico que prueba que quien reserva es dueno del
+        # telefono: sin el, los datos de contacto de esta peticion no pisan
+        # los del cliente que ya existe (ver get_or_create_client).
+        phone_verified = await OtpService(db).is_recently_verified(
+            store_id=store_id,
+            phone=data.client_phone,
+        )
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
-            is_verified = await OtpService(db).is_recently_verified(
-                store_id=store_id,
-                phone=data.client_phone,
-            )
-            if not is_verified:
+            if not phone_verified:
                 raise OTPException(
                     message="Se requiere validar OTP antes de reservar",
                     error_code="OTP_VERIFICATION_REQUIRED",
@@ -704,6 +712,7 @@ async def create_public_booking(
                     phone=data.client_phone,
                     name=data.client_name,
                     email=data.client_email,
+                    adopt_contact=phone_verified,
                 )
                 appointment, service, staff = await repo.create_appointment(
                     store_id=store_id,
@@ -717,6 +726,7 @@ async def create_public_booking(
                     initial_status=initial_status,
                     buffer_minutes=store.buffer_minutes or 0,
                     price_amount=discounted_service_price,
+                    client_email=str(data.client_email) if data.client_email else None,
                 )
                 # Un turno esperando la seña retiene el slot solo por una ventana
                 # corta: si no se paga, vuelve a estar disponible enseguida en vez

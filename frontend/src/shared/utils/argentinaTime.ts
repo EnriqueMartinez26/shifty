@@ -50,8 +50,23 @@ const parseInstant = (iso: string): Date | null => {
   return Number.isNaN(instant.getTime()) ? null : instant
 }
 
+/**
+ * `yyyy-MM-dd` sin hora: es una fecha de calendario, no un instante. Pasarla
+ * por la conversion de zona la corre un dia hacia atras (medianoche UTC son
+ * las 21:00 del dia anterior en Argentina).
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+const calendarParts = (value: string): WallClock | null => {
+  if (!DATE_ONLY.test(value)) return null
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return null
+  return { year, month, day, hour: 0, minute: 0 }
+}
+
 /** `HH:mm` en hora argentina de un instante ISO. Cadena vacia si es invalido. */
 export const formatArgentinaTime = (iso: string): string => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return `${pad(soloFecha.hour)}:${pad(soloFecha.minute)}`
   const instant = parseInstant(iso)
   if (!instant) return ''
   const wall = wallClockInArgentina(instant)
@@ -60,6 +75,8 @@ export const formatArgentinaTime = (iso: string): string => {
 
 /** `yyyy-MM-dd` en hora argentina de un instante ISO. Cadena vacia si es invalido. */
 export const formatArgentinaDate = (iso: string): string => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return `${soloFecha.year}-${pad(soloFecha.month)}-${pad(soloFecha.day)}`
   const instant = parseInstant(iso)
   if (!instant) return ''
   const wall = wallClockInArgentina(instant)
@@ -68,6 +85,8 @@ export const formatArgentinaDate = (iso: string): string => {
 
 /** `dd/MM/yyyy` en hora argentina, para mostrar a personas. */
 export const formatArgentinaDateDisplay = (iso: string): string => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return `${pad(soloFecha.day)}/${pad(soloFecha.month)}/${soloFecha.year}`
   const instant = parseInstant(iso)
   if (!instant) return ''
   const wall = wallClockInArgentina(instant)

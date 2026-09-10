@@ -6,6 +6,7 @@ import {
   type StoreFeatureFlagsResponse,
   type StoreMediaUploadResult,
   type StoreSettings,
+  type StoreSubscriptionStatus,
   type StoreUpdatePayload
 } from '@application/services/StoreSettingsService'
 
@@ -13,6 +14,15 @@ export const useStoreSettings = () =>
   useQuery<StoreSettings>({
     queryKey: ['store-settings'],
     queryFn: () => storeSettingsService.getSettings()
+  })
+
+export const useStoreSubscription = () =>
+  useQuery<StoreSubscriptionStatus>({
+    queryKey: ['store-subscription'],
+    queryFn: () => storeSettingsService.getSubscription(),
+    // El estado del plan cambia una vez por dia: no hace falta refrescarlo
+    // en cada navegacion del panel.
+    staleTime: 5 * 60 * 1000
   })
 
 export const useUpdateStoreSettings = () => {

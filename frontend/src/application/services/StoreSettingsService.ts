@@ -62,6 +62,17 @@ export interface StoreSettings {
   feature_flags?: StoreFeatureFlags
 }
 
+export interface StoreSubscriptionStatus {
+  status: 'none' | 'active' | 'past_due' | 'suspended' | 'cancelled'
+  plan_name: string | null
+  current_period_end: string | null
+  days_left: number | null
+  grace_until: string | null
+  warn: boolean
+  /** Suspendida: el panel es de solo lectura y la pagina publica no se ve. */
+  blocks_writes: boolean
+}
+
 export interface StoreUpdatePayload {
   name?: string
   slug?: string
@@ -100,6 +111,11 @@ export interface StoreFeatureFlagsResponse {
 }
 
 export class StoreSettingsService {
+  async getSubscription(): Promise<StoreSubscriptionStatus> {
+    const { data } = await apiClient.get<StoreSubscriptionStatus>('/stores/me/subscription')
+    return data
+  }
+
   async getSettings(): Promise<StoreSettings> {
     const { data } = await apiClient.get<StoreSettings>('/stores/me')
     return data

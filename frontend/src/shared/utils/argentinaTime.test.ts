@@ -39,3 +39,13 @@ describe('argentinaTime', () => {
     expect(() => argentinaLocalToUtcIso('2026-09-15', 'nueve')).toThrow()
   })
 })
+
+describe('fechas de calendario sin hora', () => {
+  it('no se corren un dia al formatearse', () => {
+    // Medianoche UTC son las 21:00 del dia anterior en Argentina: tratar
+    // "2026-09-27" como instante mostraba 26/09 (banner de suscripcion).
+    expect(formatArgentinaDateDisplay('2026-09-27')).toBe('27/09/2026')
+    expect(formatArgentinaDate('2026-09-27')).toBe('2026-09-27')
+    expect(formatArgentinaTime('2026-09-27')).toBe('00:00')
+  })
+})
