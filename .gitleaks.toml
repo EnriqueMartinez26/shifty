@@ -1,0 +1,21 @@
+title = "Shifty — configuracion de gitleaks"
+
+# Parte de las reglas por defecto de gitleaks (proveedores conocidos: AWS, GCP,
+# Stripe, tokens de GitHub, claves privadas, etc.) y solo agrega un allowlist
+# acotado para el ruido conocido. El objetivo es cazar un secreto REAL commiteado
+# por error (SECRET_KEY, FIELD_ENCRYPTION_KEY, token de Mercado Pago, password de
+# la base) en codigo, config o entorno; no las credenciales de mentira de los
+# tests ni los placeholders de los .example.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fixtures de test y archivos .example (valores de relleno, no secretos)"
+# Los .example existen para mostrar QUE variables hay, con valores de relleno.
+# backend/tests/** usa tokens/passwords ficticios que disparan la regla
+# generica por entropia; un secreto real no deberia vivir en un test. Las
+# reglas de proveedores especificos siguen activas en TODO el resto del repo.
+paths = [
+    '''.*\.example$''',
+    '''backend/tests/.*''',
+]

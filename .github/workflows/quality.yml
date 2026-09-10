@@ -196,6 +196,22 @@ jobs:
       - name: Run Postgres-only tests (RLS, GiST, triggers, migrations)
         run: uv run pytest tests/postgres -p no:cacheprovider
 
+  secret-scan:
+    # Escaneo de secretos con gitleaks: credenciales, tokens o claves reales
+    # commiteadas por error. Antes CI solo corria `npm audit` (dependencias);
+    # esto cubre el otro flanco de la cadena de suministro. Falla el pipeline
+    # si encuentra un secreto de alta confianza.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   standards:
     runs-on: ubuntu-latest
     steps:
