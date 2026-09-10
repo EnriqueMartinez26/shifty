@@ -99,6 +99,17 @@ export interface ExportedReport {
   filename: string
 }
 
+export interface ReportTrendPoint {
+  month: string
+  total_appointments: number
+  completed_appointments: number
+  cancelled_appointments: number
+}
+
+export interface ReportTrend {
+  points: ReportTrendPoint[]
+}
+
 export class ReportsService {
   async getSummary(fromDate: string, toDate: string): Promise<ReportSummary> {
     const { data } = await apiClient.get<ReportSummary>(
@@ -111,6 +122,11 @@ export class ReportsService {
     const { data } = await apiClient.get<ProfessionalReports>(
       `/reports/professionals?from_date=${fromDate}&to_date=${toDate}`
     )
+    return data
+  }
+
+  async getTrend(months: number): Promise<ReportTrend> {
+    const { data } = await apiClient.get<ReportTrend>(`/reports/trend?months=${months}`)
     return data
   }
 

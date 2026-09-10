@@ -106,6 +106,17 @@ class ProfessionalReportsResponse(BaseModel):
     professionals: list[ProfessionalReportItem]
 
 
+class ReportTrendPoint(BaseModel):
+    month: str
+    total_appointments: int
+    completed_appointments: int
+    cancelled_appointments: int
+
+
+class ReportTrendResponse(BaseModel):
+    points: list[ReportTrendPoint] = Field(default_factory=list)
+
+
 class ReportExportRequest(BaseModel):
     format: ExportFormat
     from_date: date | None = None

@@ -5,10 +5,11 @@ import {
   type ExportedReport,
   type ProfessionalReports,
   type ReportExportFormat,
-  type ReportSummary
+  type ReportSummary,
+  type ReportTrend
 } from '@application/services/ReportsService'
 
-export type { ProfessionalReports, ReportExportFormat, ReportSummary }
+export type { ProfessionalReports, ReportExportFormat, ReportSummary, ReportTrend }
 
 export const useReportSummary = (fromDate: string, toDate: string, enabled = true) => {
   return useQuery({
@@ -24,6 +25,14 @@ export const useProfessionalReports = (fromDate: string, toDate: string, enabled
     enabled: Boolean(fromDate && toDate && enabled),
     queryFn: (): Promise<ProfessionalReports> =>
       reportsService.getProfessionalReports(fromDate, toDate)
+  })
+}
+
+export const useReportTrend = (months = 6, enabled = true) => {
+  return useQuery({
+    queryKey: ['reports-trend', months],
+    enabled: Boolean(enabled) && months > 0,
+    queryFn: (): Promise<ReportTrend> => reportsService.getTrend(months)
   })
 }
 
