@@ -14,6 +14,36 @@ export interface AppointmentBlockPayload {
   starts_at: string
   ends_at: string
   reason: string
+  /** Cancela en bloque los turnos reservados adentro (solo administradores). */
+  cancel_affected?: boolean
+}
+
+export interface BlockPreviewPayload {
+  staff_id: string | null
+  starts_at: string
+  ends_at: string
+  recurrence?: 'none' | 'daily' | 'weekly'
+  recurrence_until?: string
+  max_occurrences?: number
+}
+
+export interface AffectedAppointment {
+  public_id: string
+  client_name: string
+  client_phone: string | null
+  service_name: string
+  staff_name: string
+  starts_at: string
+  ends_at: string
+  status: string
+  /** null = se cancela; 'pending_payment' | 'has_deposit' = requiere decision humana. */
+  blocker: string | null
+  cancellable: boolean
+}
+
+export interface BlockPreviewResult {
+  ranges: number
+  affected: AffectedAppointment[]
 }
 
 export interface RecurringAppointmentBlockPayload extends AppointmentBlockPayload {
@@ -41,6 +71,14 @@ export class AppointmentBlocksService {
 
   async getTemplates(): Promise<BlockTemplate[]> {
     const { data } = await apiClient.get<BlockTemplate[]>('/appointment-blocks/templates')
+    return data
+  }
+
+  async preview(payload: BlockPreviewPayload): Promise<BlockPreviewResult> {
+    const { data } = await apiClient.post<BlockPreviewResult>(
+      '/appointment-blocks/preview',
+      payload
+    )
     return data
   }
 

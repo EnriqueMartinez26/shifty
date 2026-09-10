@@ -161,6 +161,24 @@ def _confirmation_body(details: dict[str, Any]) -> str:
     )
 
 
+def _cancellation_subject(details: dict[str, Any]) -> str:
+    return f"Turno cancelado - {details.get('service', '')}"
+
+
+def _cancellation_body(details: dict[str, Any]) -> str:
+    motivo = str(details.get("block_reason") or "").strip()
+    linea_motivo = f" Motivo: {motivo}." if motivo else ""
+    return (
+        f"{_saludo(details)}\n\n"
+        f'Lamentamos avisarte que tu turno para "{details.get("service")}" con '
+        f"{details.get('staff')} del {_cuando(details)} fue cancelado por la "
+        f"tienda.{linea_motivo}\n\n"
+        "Podes elegir otro horario cuando quieras.\n\n"
+        f"{_contacto(details)}\n\n"
+        "- El equipo de Shifty"
+    )
+
+
 def _reminder_subject(details: dict[str, Any]) -> str:
     return f"Recordatorio: turno manana - {details.get('service', '')}"
 
@@ -305,6 +323,29 @@ async def enqueue_registration_email(
             error_type=type(exc).__name__,
         )
         return {"status": "failed", "reason": type(exc).__name__}
+
+
+async def enqueue_cancellation_email(
+    *, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    """Mail "turno cancelado" (p.ej. por un bloqueo de agenda). Nunca aborta."""
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
+    assert email is not None
+    try:
+        success = await _send_email(
+            email, _cancellation_subject(details), _cancellation_body(details)
+        )
+    except Exception as exc:
+        logger.warning(
+            "cancellation_email_dispatch_failed",
+            appointment=details.get("public_id"),
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "reason": type(exc).__name__}
+    if not success:
+        return {"status": "failed", "reason": "smtp"}
+    return {"status": "sent", "to": email}
 
 
 async def enqueue_confirmation_email(

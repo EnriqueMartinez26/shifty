@@ -111,13 +111,15 @@ class AppointmentService:
         # es para el cliente). Puede cargar un walk-in del momento. El "no
         # agendar en el pasado" lo garantiza el schema AppointmentCreate.
 
-        # 2. Verificar bloqueos de agenda --------------------------------
+        # 2. Bloqueo pesimista ANTES de leer bloqueos y conflictos ---------
+        # Antes los bloqueos se leian sin el lock: un bloqueo creado entre esa
+        # lectura y el INSERT dejaba un turno adentro (2026-09-10).
+        await self.uow.appointments.lock_staff_row(staff.id)
         block = await self.uow.appointments.get_overlapping_block(
             staff.id, starts_at, ends_at
         )
 
-        # 3. Bloqueo pesimista + verificación de conflictos --------------
-        await self.uow.appointments.lock_staff_row(staff.id)
+        # 3. Verificación de conflictos ----------------------------------
         buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
         conflict = await self.uow.appointments.get_conflicting_appointment(
             staff.id, starts_at, ends_at, buffer_minutes=buffer_minutes

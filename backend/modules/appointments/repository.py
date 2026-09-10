@@ -176,6 +176,51 @@ class AppointmentRepository:
         res = await self.db.execute(query)
         return res.scalar_one_or_none()
 
+    async def list_active_overlapping(
+        self,
+        store_id: str,
+        staff_ids: list[str],
+        ranges: list[tuple[datetime, datetime]],
+        *,
+        lock: bool = False,
+    ) -> list[Appointment]:
+        """Turnos activos de esos profesionales que solapan alguno de los rangos.
+
+        Un solo SELECT con ``in_()`` y un OR de rangos (sin N+1), con servicio,
+        profesional y cliente cargados para armar avisos. Con ``lock`` toma
+        ``FOR UPDATE`` solo sobre appointments (Postgres rechaza FOR UPDATE
+        sobre el lado nullable de un OUTER JOIN).
+        """
+        if not staff_ids or not ranges:
+            return []
+        from sqlalchemy.orm import joinedload
+
+        overlaps = or_(
+            *[
+                and_(Appointment.starts_at < ends_at, Appointment.ends_at > starts_at)
+                for starts_at, ends_at in ranges
+            ]
+        )
+        stmt = (
+            select(Appointment)
+            .options(
+                joinedload(Appointment.service),
+                joinedload(Appointment.staff),
+                joinedload(Appointment.client),
+            )
+            .where(
+                Appointment.store_id == store_id,
+                Appointment.staff_id.in_(staff_ids),
+                Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+                overlaps,
+            )
+            .order_by(Appointment.starts_at.asc())
+        )
+        if lock:
+            stmt = stmt.with_for_update(of=Appointment)
+        res = await self.db.execute(stmt)
+        return list(res.scalars().unique().all())
+
     async def get_overlapping_block(
         self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> StaffBlock | None:

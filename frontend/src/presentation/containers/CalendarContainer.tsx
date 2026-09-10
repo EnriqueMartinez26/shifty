@@ -22,6 +22,8 @@ import {
   ShieldBan
 } from 'lucide-react'
 
+import type { BlockPreviewResult } from '@application/services/AppointmentBlocksService'
+
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
 import {
   argentinaLocalToUtcIso,
@@ -34,9 +36,11 @@ import {
   AppointmentActions,
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
+import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
 import { useAuth } from '../context/AuthContext'
 import {
   useAppointmentBlocks,
+  useBlockPreview,
   useBlockTemplates,
   useCreateAppointmentBlock,
   useCreateRecurringAppointmentBlock,
@@ -202,6 +206,8 @@ export const CalendarContainer: React.FC = () => {
   const updateBlock = useUpdateAppointmentBlock()
   const deleteBlock = useDeleteAppointmentBlock()
   const releaseAppointment = useReleaseAppointment()
+  const previewBlock = useBlockPreview()
+  const [blockPreview, setBlockPreview] = useState<BlockPreviewResult | null>(null)
   const confirmAppointment = useConfirmAppointment()
   const completeAppointment = useCompleteAppointment()
   const markAbsentAppointment = useMarkAbsentAppointment()
@@ -344,11 +350,49 @@ export const CalendarContainer: React.FC = () => {
     }))
   }
 
-  const handleSaveBlock = async () => {
+  const blockPayloadFromForm = () => {
     // La hora tipeada es hora argentina; antes se mandaba como si fuera UTC
     // (el bloqueo quedaba corrido 3 horas respecto de lo que el dueno veia).
     const startsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.starts_at)
     const endsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.ends_at)
+    const recurrenceUntil =
+      blockForm.recurrence === 'none'
+        ? undefined
+        : argentinaLocalToUtcIso(blockForm.recurrence_until, blockForm.ends_at)
+    return { startsAt, endsAt, recurrenceUntil }
+  }
+
+  const submitBlock = async (cancelAffected: boolean) => {
+    const { startsAt, endsAt, recurrenceUntil } = blockPayloadFromForm()
+    if (blockForm.recurrence === 'none') {
+      await createBlock.mutateAsync({
+        staff_id: blockForm.staff_id,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        reason: blockForm.reason,
+        cancel_affected: cancelAffected
+      })
+      setMessage(cancelAffected ? 'Bloqueo creado y turnos cancelados' : 'Bloqueo creado')
+    } else {
+      await createRecurringBlock.mutateAsync({
+        staff_id: blockForm.staff_id,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        reason: blockForm.reason,
+        recurrence: blockForm.recurrence,
+        recurrence_until: recurrenceUntil,
+        max_occurrences: blockForm.max_occurrences,
+        cancel_affected: cancelAffected
+      })
+      setMessage(
+        cancelAffected ? 'Serie de bloqueos creada y turnos cancelados' : 'Serie de bloqueos creada'
+      )
+    }
+    handleResetBlockForm()
+  }
+
+  const handleSaveBlock = async () => {
+    const { startsAt, endsAt, recurrenceUntil } = blockPayloadFromForm()
 
     try {
       if (editingBlockId) {
@@ -362,28 +406,33 @@ export const CalendarContainer: React.FC = () => {
           }
         })
         setMessage('Bloqueo actualizado')
-      } else if (blockForm.recurrence === 'none') {
-        await createBlock.mutateAsync({
-          staff_id: blockForm.staff_id,
-          starts_at: startsAt,
-          ends_at: endsAt,
-          reason: blockForm.reason
-        })
-        setMessage('Bloqueo creado')
-      } else {
-        const recurrenceUntilTime = `${blockForm.recurrence_until}T${blockForm.ends_at}:00Z`
-        await createRecurringBlock.mutateAsync({
-          staff_id: blockForm.staff_id,
-          starts_at: startsAt,
-          ends_at: endsAt,
-          reason: blockForm.reason,
-          recurrence: blockForm.recurrence,
-          recurrence_until: recurrenceUntilTime,
-          max_occurrences: blockForm.max_occurrences
-        })
-        setMessage('Serie de bloqueos creada')
+        handleResetBlockForm()
+        return
       }
-      handleResetBlockForm()
+      // Antes de bloquear: que turnos quedan adentro. Si hay, el dueno los ve
+      // y confirma la cancelacion en bloque; el backend responde 409 sin eso.
+      const preview = await previewBlock.mutateAsync({
+        staff_id: blockForm.staff_id,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        recurrence: blockForm.recurrence,
+        recurrence_until: recurrenceUntil,
+        max_occurrences: blockForm.max_occurrences
+      })
+      if (preview.affected.length > 0) {
+        setBlockPreview(preview)
+        return
+      }
+      await submitBlock(false)
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
+    }
+  }
+
+  const handleConfirmBlockWithCancellations = async () => {
+    try {
+      await submitBlock(true)
+      setBlockPreview(null)
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
     }
@@ -1066,6 +1115,17 @@ export const CalendarContainer: React.FC = () => {
           </div>
         </div>
       </div>
+      {blockPreview && (
+        <BlockPreviewModal
+          preview={blockPreview}
+          reason={blockForm.reason}
+          busy={createBlock.isPending || createRecurringBlock.isPending}
+          onCancel={() => setBlockPreview(null)}
+          onConfirm={() => {
+            void handleConfirmBlockWithCancellations()
+          }}
+        />
+      )}
     </div>
   )
 }

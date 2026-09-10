@@ -1,4 +1,9 @@
-import { argentinaLocalToUtcIso, formatArgentinaDate, formatArgentinaTime } from './argentinaTime'
+import {
+  argentinaLocalToUtcIso,
+  formatArgentinaDate,
+  formatArgentinaDateDisplay,
+  formatArgentinaTime
+} from './argentinaTime'
 
 describe('argentinaTime', () => {
   it('muestra la hora argentina de un instante UTC (09:00 ART = 12:00Z)', () => {
@@ -9,6 +14,7 @@ describe('argentinaTime', () => {
   it('un slot de 00:00Z es 21:00 del dia anterior en Argentina', () => {
     expect(formatArgentinaTime('2026-09-16T00:00:00+00:00')).toBe('21:00')
     expect(formatArgentinaDate('2026-09-16T00:00:00+00:00')).toBe('2026-09-15')
+    expect(formatArgentinaDateDisplay('2026-09-16T00:00:00+00:00')).toBe('15/09/2026')
   })
 
   it('devuelve vacio ante un ISO invalido en vez de romper el render', () => {

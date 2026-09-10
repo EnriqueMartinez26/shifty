@@ -261,12 +261,15 @@ class PublicRepository:
                 staff.id, starts_at, ends_at
             ):
                 continue
-            if await self._staff_has_overlapping_block(staff.id, starts_at, ends_at):
-                continue
 
+            # Lock ANTES de leer bloqueos y conflictos: leer el bloqueo sin el
+            # lock dejaba colar una reserva dentro de un bloqueo recien creado
+            # (carrera reproducida en tests/postgres/test_pg_bloqueos.py).
             await self.db.execute(
                 select(Staff).where(Staff.id == staff.id).with_for_update()
             )
+            if await self._staff_has_overlapping_block(staff.id, starts_at, ends_at):
+                continue
             # Mismo criterio que el panel (get_conflicting_appointment): el
             # turno vecino se ensancha por el buffer de la tienda a cada lado.
             buffer = timedelta(minutes=max(0, buffer_minutes))

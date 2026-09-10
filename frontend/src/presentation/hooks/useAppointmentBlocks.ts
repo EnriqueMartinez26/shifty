@@ -4,10 +4,15 @@ import {
   appointmentBlocksService,
   type AppointmentBlock,
   type AppointmentBlockPayload,
+  type BlockPreviewPayload,
+  type BlockPreviewResult,
   type BlockTemplate,
   type RecurringAppointmentBlockPayload,
   type RecurringBlocksResult
 } from '@application/services/AppointmentBlocksService'
+
+// Un bloqueo puede cancelar turnos: la agenda tambien tiene que refrescarse.
+const BLOCK_QUERIES = [['appointment-blocks'], ['calendar-agenda']] as const
 
 export const useAppointmentBlocks = () =>
   useQuery<AppointmentBlock[]>({
@@ -26,7 +31,9 @@ export const useCreateAppointmentBlock = () => {
   return useMutation<AppointmentBlock, Error, AppointmentBlockPayload>({
     mutationFn: (payload) => appointmentBlocksService.create(payload),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      BLOCK_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
     }
   })
 }
@@ -36,7 +43,9 @@ export const useCreateRecurringAppointmentBlock = () => {
   return useMutation<RecurringBlocksResult, Error, RecurringAppointmentBlockPayload>({
     mutationFn: (payload) => appointmentBlocksService.createRecurring(payload),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      BLOCK_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
     }
   })
 }
@@ -50,7 +59,9 @@ export const useUpdateAppointmentBlock = () => {
   >({
     mutationFn: ({ publicId, payload }) => appointmentBlocksService.update(publicId, payload),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      BLOCK_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
     }
   })
 }
@@ -60,7 +71,14 @@ export const useDeleteAppointmentBlock = () => {
   return useMutation<void, Error, string>({
     mutationFn: (publicId) => appointmentBlocksService.delete(publicId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['appointment-blocks'] })
+      BLOCK_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
     }
   })
 }
+
+export const useBlockPreview = () =>
+  useMutation<BlockPreviewResult, Error, BlockPreviewPayload>({
+    mutationFn: (payload) => appointmentBlocksService.preview(payload)
+  })

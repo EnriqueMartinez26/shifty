@@ -15,6 +15,7 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
     build_client_details,
+    enqueue_cancellation_email,
     enqueue_confirmation_email,
     send_store_notification_email,
 )
@@ -72,6 +73,17 @@ async def process_outbox_batch(
 
     for message in messages:
         try:
+            if message.event_type == "appointment.cancelled_by_block":
+                # Aviso al cliente (no al dueno, que fue quien bloqueo).
+                payload = dict(message.payload or {})
+                await enqueue_cancellation_email(
+                    email=str(payload.get("client_email") or "") or None,
+                    details=payload,
+                )
+                message.processed_at = now
+                message.error = None
+                processed += 1
+                continue
             notification = _build_store_notification(message)
             if notification is not None:
                 db.add(notification)

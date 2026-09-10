@@ -66,6 +66,14 @@ export const formatArgentinaDate = (iso: string): string => {
   return `${wall.year}-${pad(wall.month)}-${pad(wall.day)}`
 }
 
+/** `dd/MM/yyyy` en hora argentina, para mostrar a personas. */
+export const formatArgentinaDateDisplay = (iso: string): string => {
+  const instant = parseInstant(iso)
+  if (!instant) return ''
+  const wall = wallClockInArgentina(instant)
+  return `${pad(wall.day)}/${pad(wall.month)}/${wall.year}`
+}
+
 /**
  * Convierte una fecha `yyyy-MM-dd` y una hora `HH:mm` tipeadas en hora
  * argentina al instante UTC en ISO (con `Z`). Es la inversa de

@@ -15,6 +15,18 @@ class PaymentRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
+    async def get_by_appointment(
+        self, appointment_id: str, store_id: str
+    ) -> Payment | None:
+        """Pago del turno sin lock (solo lectura: clasificar, mostrar)."""
+        res = await self.db.execute(
+            select(Payment).where(
+                Payment.appointment_id == appointment_id,
+                Payment.store_id == store_id,
+            )
+        )
+        return res.scalar_one_or_none()
+
     async def get_by_appointment_locked(
         self, appointment_id: str, store_id: str
     ) -> Payment | None:
