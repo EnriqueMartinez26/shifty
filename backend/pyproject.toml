@@ -105,4 +105,5 @@ pythonpath = ["."]
 addopts = "--strict-markers --strict-config"
 markers = [
     "integration: tests that exercise API or database integration boundaries",
+    "postgres: tests contra Postgres real (RLS, exclusion GiST, triggers, migraciones); se saltan sin TEST_POSTGRES_URL",
 ]

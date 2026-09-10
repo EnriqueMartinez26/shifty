@@ -203,7 +203,15 @@ async def create_service(
     return cast(str, res.json()["public_id"])
 
 
-async def create_staff(client: AsyncClient, token: str, service_public_id: str) -> str:
+async def create_staff(
+    client: AsyncClient,
+    token: str,
+    service_public_id: str,
+    *,
+    email: str = "pro-demo@test.com",
+) -> str:
+    # El email es unico global (falta unique(store_id, email)): con mas de una
+    # tienda en el mismo test hay que pasarlo distinto o choca con 409.
     res = await client.post(
         "/staff/",
         headers=auth_headers(token),
@@ -211,7 +219,7 @@ async def create_staff(client: AsyncClient, token: str, service_public_id: str) 
             "display_name": "Pro Demo",
             "first_name": "Pro",
             "last_name": "Demo",
-            "email": "pro-demo@test.com",
+            "email": email,
             "service_ids": [service_public_id],
         },
     )
