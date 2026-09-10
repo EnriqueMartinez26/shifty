@@ -193,6 +193,29 @@ Una instrucción en lenguaje natural no es una garantía.
     health check no filtra excepciones; mensajes de validación crudos no
     llegan al usuario final.
 
+### Disponibilidad, hora y avisos al cliente (Fase 0, 2026-09-10)
+
+- **Todo camino que cambia la agenda invalida el caché con
+  `core/availability_cache.invalidate_availability`** (reservar, cancelar,
+  liberar, reprogramar, expirar señas, crear/editar/borrar bloqueos). La clave
+  lleva versión por (tienda, día local); nunca `delete` a mano ni comodines.
+  (`test_cache_disponibilidad.py`)
+- **La hora que ve el cliente es hora argentina.** `start_time`/`end_time` de
+  la disponibilidad y todos los mails se formatean con `ARGENTINA_TZ`;
+  `starts_at`/`ends_at` siguen en UTC y el front manda el `starts_at` del
+  slot tal cual, nunca recompone fecha + hora
+  (`frontend/src/shared/utils/argentinaTime.ts`). La validación del horario
+  del profesional compara en hora local. (`test_hora_local_reserva_publica.py`)
+- **Mails al cliente**: "reserva registrada" al crear, "turno confirmado"
+  desde `confirm()` y desde el pago acreditado; siempre best-effort tras el
+  commit, nunca a un email técnico `.noreply` (`is_deliverable_email`).
+  (`test_mails_al_cliente.py`)
+- **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
+  `OTP_PROVIDER=console`. Respuesta neutra ante fallo de envío. El front
+  respeta la ventana de 30 minutos. (`test_otp_por_email.py`)
+- La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
+  panel.
+
 ### Configuración y despliegue
 
 21. **Un proceso con configuración inválida se muere.** La API tolera el

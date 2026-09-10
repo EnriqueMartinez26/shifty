@@ -57,7 +57,14 @@ casi toda la Fase 0: defectos que ya existían y que hay que arreglar antes.
 
 ---
 
-## 3. Fase 0 — Arreglos que afectan a todo cliente hoy (5,5 días)
+## 3. Fase 0 — Arreglos que afectan a todo cliente hoy (5,5 días) — HECHA el 2026-09-10
+
+**Estado:** completa en los commits `78f9303` (0.1, 0.2, 0.4, 0.5, 0.6, 0.7) y
+`05ea7f3` (0.3, OTP por email por decisión del dueño). Hallazgos extra durante la
+ejecución: la validación del horario del profesional en la reserva pública
+comparaba en UTC (rechazaba las últimas tres horas de cada jornada); la reserva
+pública tampoco invalidaba el caché; el mail de confirmación también sale cuando
+se acredita la seña. Verificado: backend 341 tests, Postgres real 10, front 140.
 
 ### 0.1 La hora del turno se muestra en UTC en la reserva pública (1 día)
 
