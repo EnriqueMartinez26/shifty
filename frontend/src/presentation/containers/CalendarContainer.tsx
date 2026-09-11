@@ -39,6 +39,7 @@ import {
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
+import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { useAuth } from '../context/AuthContext'
 import {
   useAppointmentBlocks,
@@ -175,6 +176,7 @@ export const CalendarContainer: React.FC = () => {
   const [view, setView] = useState<CalendarView>('day')
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
+  const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
   const [blockForm, setBlockForm] = useState({
     staff_id: '',
     date: toDateInput(new Date()),
@@ -533,7 +535,7 @@ export const CalendarContainer: React.FC = () => {
     return (
       <div
         key={`${event.type}-${event.id}`}
-        className={`relative rounded-2xl border ${compact ? 'p-2' : 'p-3'}`}
+        className={`relative rounded-[6px] border ${compact ? 'p-2' : 'p-3'}`}
         style={{
           background: style.background,
           borderColor: style.accent,
@@ -584,7 +586,7 @@ export const CalendarContainer: React.FC = () => {
   }
 
   const renderDayView = () => (
-    <div className="rounded-[3rem] border overflow-hidden relative" style={canvasStyle}>
+    <div className="rounded-[8px] border overflow-hidden relative" style={canvasStyle}>
       {(loadingStaff || agendaQuery.isLoading) && (
         <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center">
           <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" />
@@ -617,10 +619,6 @@ export const CalendarContainer: React.FC = () => {
                         idx % 2 === 0
                           ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
                           : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                      border:
-                        idx % 2 === 0
-                          ? '1px solid #2563eb'
-                          : `1px solid ${colors2000s.orange.accent}`,
                       boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                     }}
                   >
@@ -677,7 +675,7 @@ export const CalendarContainer: React.FC = () => {
                             key={block.public_id}
                             type="button"
                             onClick={() => handleEditBlock(block)}
-                            className="absolute left-2 right-2 rounded-2xl p-3 border border-l-[5px] text-left"
+                            className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] text-left"
                             style={{
                               top: `${Math.max(offsetMinutes / 15, 0) * 64}px`,
                               height: `${Math.max(((endMinutes - startMinutes) / 15) * 64, 64)}px`,
@@ -704,7 +702,7 @@ export const CalendarContainer: React.FC = () => {
                         return (
                           <div
                             key={event.id}
-                            className="absolute left-2 right-2 rounded-2xl p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between"
+                            className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between"
                             style={{
                               top: event.top,
                               height: event.height,
@@ -733,10 +731,9 @@ export const CalendarContainer: React.FC = () => {
                               </h4>
                             </div>
                             <span
-                              className="self-start px-2 py-0.5 rounded-lg text-[8px] font-black tracking-widest uppercase border"
+                              className="self-start px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-widest uppercase"
                               style={{
                                 background: 'white',
-                                borderColor: colors2000s.border.default,
                                 boxShadow: colors2000s.shadows.insetDark,
                                 color: style.text
                               }}
@@ -757,61 +754,64 @@ export const CalendarContainer: React.FC = () => {
   )
 
   const renderRangeGrid = (compact = false) => (
-    <div className={`grid ${compact ? 'grid-cols-7' : 'md:grid-cols-2 xl:grid-cols-4'} gap-4`}>
-      {daysInRange.map((day) => {
-        const dayEvents = unifiedEvents.filter((event) => isSameDay(event.startsAt, day))
-        return (
-          <div key={day.toISOString()} className="rounded-3xl p-4 bg-white" style={cardStyle}>
-            <div className="mb-3">
-              <p
-                className="text-[9px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.orange.accent }}
-              >
-                {format(day, 'EEE')}
-              </p>
-              <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
-                {format(day, 'dd/MM')}
-              </p>
-            </div>
-            <div className="space-y-2 max-h-64 overflow-auto">
-              {dayEvents
-                .slice(0, compact ? 4 : dayEvents.length)
-                .map((event) => renderEventPill(event, compact))}
-              {compact && dayEvents.length > 4 && (
-                <div
-                  className="text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
+    <div className={compact ? 'overflow-x-auto' : undefined}>
+      <div
+        className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
+      >
+        {daysInRange.map((day) => {
+          const dayEvents = unifiedEvents.filter((event) => isSameDay(event.startsAt, day))
+          return (
+            <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
+              <div className="mb-3">
+                <p
+                  className="text-[9px] font-black uppercase tracking-widest"
+                  style={{ color: colors2000s.orange.accent }}
                 >
-                  +{dayEvents.length - 4} eventos
-                </div>
-              )}
-              {dayEvents.length === 0 && (
-                <div
-                  className="text-[10px] font-bold uppercase tracking-widest"
-                  style={{ color: colors2000s.text.disabled }}
-                >
-                  Sin eventos
-                </div>
-              )}
+                  {format(day, 'EEE')}
+                </p>
+                <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
+                  {format(day, 'dd/MM')}
+                </p>
+              </div>
+              <div className="space-y-2 max-h-64 overflow-auto">
+                {dayEvents
+                  .slice(0, compact ? 4 : dayEvents.length)
+                  .map((event) => renderEventPill(event, compact))}
+                {compact && dayEvents.length > 4 && (
+                  <div
+                    className="text-[10px] font-black uppercase tracking-widest"
+                    style={{ color: colors2000s.text.secondary }}
+                  >
+                    +{dayEvents.length - 4} eventos
+                  </div>
+                )}
+                {dayEvents.length === 0 && (
+                  <div
+                    className="text-[10px] font-bold uppercase tracking-widest"
+                    style={{ color: colors2000s.text.disabled }}
+                  >
+                    Sin eventos
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
     </div>
   )
 
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
       <div
-        className="flex flex-col md:flex-row items-center justify-between gap-6 p-6 rounded-3xl"
+        className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
         style={panelStyle}
       >
         <div className="flex items-center gap-4">
           <div
-            className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0"
+            className="w-12 h-12 rounded-[6px] text-white flex items-center justify-center flex-shrink-0"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              border: `1px solid ${colors2000s.orange.accent}`,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
@@ -833,19 +833,22 @@ export const CalendarContainer: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 p-2 rounded-2xl border" style={fieldStyle}>
+        <div
+          className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 p-2 rounded-[6px] border"
+          style={fieldStyle}
+        >
           <button
             onClick={() =>
               setSelectedDate((prev) =>
                 subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
               )
             }
-            className="w-10 h-10 rounded-xl flex items-center justify-center transition-all active:scale-90"
+            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
             style={buttonStyles2000s.default}
           >
             <ChevronLeft size={20} className="text-gray-600" />
           </button>
-          <div className="px-6 text-center min-w-[200px]">
+          <div className="px-4 sm:px-6 text-center min-w-[140px] sm:min-w-[200px]">
             <p
               className="text-[9px] font-black uppercase tracking-widest mb-0.5"
               style={{ color: colors2000s.orange.accent }}
@@ -865,7 +868,7 @@ export const CalendarContainer: React.FC = () => {
                 addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
               )
             }
-            className="w-10 h-10 rounded-xl flex items-center justify-center transition-all active:scale-90"
+            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
             style={buttonStyles2000s.default}
           >
             <ChevronRight size={20} className="text-gray-600" />
@@ -884,18 +887,20 @@ export const CalendarContainer: React.FC = () => {
               {VIEW_LABELS[viewKey]}
             </button>
           ))}
-          <div
+          <button
+            type="button"
+            onClick={() => setIsNewAppointmentOpen(true)}
             className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs"
             style={buttonStyles2000s.selected}
           >
             <Plus size={18} /> Nuevo turno
-          </div>
+          </button>
         </div>
       </div>
 
       {message && (
         <div
-          className="p-4 rounded-2xl text-sm font-bold"
+          className="p-4 rounded-[6px] text-sm font-bold"
           style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
         >
           {message}
@@ -910,7 +915,7 @@ export const CalendarContainer: React.FC = () => {
           {unifiedEvents.map((event) => renderEventPill(event))}
           {!unifiedEvents.length && (
             <div
-              className="rounded-2xl p-6 bg-white text-sm font-bold"
+              className="rounded-[6px] p-6 bg-white text-sm font-bold"
               style={{
                 border: `1px solid ${colors2000s.border.light}`,
                 boxShadow: colors2000s.shadows.insetDark,
@@ -924,7 +929,7 @@ export const CalendarContainer: React.FC = () => {
       )}
 
       <div className="grid xl:grid-cols-[1.05fr_0.95fr] gap-6">
-        <div className="p-6 rounded-3xl space-y-4" style={panelStyle}>
+        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
           <div className="flex items-center gap-3">
             <ShieldBan className="w-5 h-5" style={{ color: colors2000s.orange.accent }} />
             <h3
@@ -941,7 +946,7 @@ export const CalendarContainer: React.FC = () => {
                 key={template.key}
                 type="button"
                 onClick={() => setBlockForm((prev) => ({ ...prev, reason: template.reason }))}
-                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
                 style={buttonStyles2000s.default}
               >
                 {template.label}
@@ -949,11 +954,11 @@ export const CalendarContainer: React.FC = () => {
             ))}
           </div>
 
-          <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <select
               value={blockForm.staff_id}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, staff_id: e.target.value }))}
-              className="rounded-2xl px-4 py-3 font-bold outline-none"
+              className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}
             >
               {staffMembers?.map((staff) => (
@@ -965,38 +970,38 @@ export const CalendarContainer: React.FC = () => {
             <input
               value={blockForm.reason}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, reason: e.target.value }))}
-              className="rounded-2xl px-4 py-3 font-bold outline-none"
+              className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}
               placeholder="Motivo interno"
             />
           </div>
 
-          <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <input
               type="date"
               value={blockForm.date}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, date: e.target.value }))}
-              className="rounded-2xl px-4 py-3 font-bold outline-none"
+              className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}
             />
             <input
               type="time"
               value={blockForm.starts_at}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, starts_at: e.target.value }))}
-              className="rounded-2xl px-4 py-3 font-bold outline-none"
+              className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}
             />
             <input
               type="time"
               value={blockForm.ends_at}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, ends_at: e.target.value }))}
-              className="rounded-2xl px-4 py-3 font-bold outline-none"
+              className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}
             />
           </div>
 
           {!editingBlockId && (
-            <div className="grid md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <select
                 value={blockForm.recurrence}
                 onChange={(e) =>
@@ -1005,7 +1010,7 @@ export const CalendarContainer: React.FC = () => {
                     recurrence: e.target.value as 'none' | 'daily' | 'weekly'
                   }))
                 }
-                className="rounded-2xl px-4 py-3 font-bold outline-none"
+                className="rounded-[6px] px-4 py-3 font-bold outline-none"
                 style={fieldStyle}
               >
                 <option value="none">Sin recurrencia</option>
@@ -1018,7 +1023,7 @@ export const CalendarContainer: React.FC = () => {
                 onChange={(e) =>
                   setBlockForm((prev) => ({ ...prev, recurrence_until: e.target.value }))
                 }
-                className="rounded-2xl px-4 py-3 font-bold outline-none"
+                className="rounded-[6px] px-4 py-3 font-bold outline-none"
                 style={fieldStyle}
               />
               <input
@@ -1032,7 +1037,7 @@ export const CalendarContainer: React.FC = () => {
                     max_occurrences: Number(e.target.value) || 1
                   }))
                 }
-                className="rounded-2xl px-4 py-3 font-bold outline-none"
+                className="rounded-[6px] px-4 py-3 font-bold outline-none"
                 style={fieldStyle}
               />
             </div>
@@ -1053,7 +1058,7 @@ export const CalendarContainer: React.FC = () => {
             <button
               type="button"
               onClick={handleResetBlockForm}
-              className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest"
+              className="px-4 py-3 text-xs font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
             >
               Limpiar
@@ -1061,7 +1066,7 @@ export const CalendarContainer: React.FC = () => {
           </div>
         </div>
 
-        <div className="p-6 rounded-3xl space-y-4" style={panelStyle}>
+        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
           <h3
             className="text-lg font-black uppercase tracking-tight"
             style={{ color: colors2000s.text.primary }}
@@ -1072,7 +1077,7 @@ export const CalendarContainer: React.FC = () => {
             {timelineEvents.map((event) => (
               <div
                 key={`${event.type}-${event.id}`}
-                className="rounded-2xl p-4 bg-white flex flex-col gap-3"
+                className="rounded-[6px] p-4 bg-white flex flex-col gap-3"
                 style={cardStyle}
               >
                 <div className="flex items-start justify-between gap-4">
@@ -1089,7 +1094,7 @@ export const CalendarContainer: React.FC = () => {
                     </p>
                   </div>
                   <span
-                    className="px-2 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                    className="px-2 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest"
                     style={{
                       background: event.type === 'block' ? '#ffedd5' : '#fee2e2',
                       color: event.type === 'block' ? '#c2410c' : '#b91c1c'
@@ -1111,7 +1116,7 @@ export const CalendarContainer: React.FC = () => {
                           reason: event.title
                         })
                       }
-                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                      className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
                       style={buttonStyles2000s.default}
                     >
                       Editar
@@ -1139,7 +1144,7 @@ export const CalendarContainer: React.FC = () => {
             ))}
             {!timelineEvents.length && (
               <div
-                className="rounded-2xl p-6 bg-white text-sm font-bold"
+                className="rounded-[6px] p-6 bg-white text-sm font-bold"
                 style={{ ...cardStyle, color: colors2000s.text.secondary }}
               >
                 No hay bloqueos ni ausencias en el rango actual.
@@ -1159,6 +1164,12 @@ export const CalendarContainer: React.FC = () => {
           }}
         />
       )}
+
+      <NewAppointmentModal
+        isOpen={isNewAppointmentOpen}
+        onClose={() => setIsNewAppointmentOpen(false)}
+        defaultDate={selectedDate}
+      />
     </div>
   )
 }

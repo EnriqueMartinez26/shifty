@@ -34,7 +34,7 @@ export const StaffManagementContainer: React.FC = () => {
     <div className="space-y-6 animate-in fade-in duration-700">
       {/* Unified Skeuomorphic Header Card matching Reports.tsx */}
       <div
-        className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-3xl"
+        className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-lg"
         style={{
           background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
           border: `1px solid ${colors2000s.border.default}`,
@@ -89,7 +89,7 @@ export const StaffManagementContainer: React.FC = () => {
 
       {isLoading ? (
         <div
-          className="flex flex-col items-center justify-center py-20 rounded-[3rem]"
+          className="flex flex-col items-center justify-center py-20 rounded-lg"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.light}`,
@@ -109,7 +109,7 @@ export const StaffManagementContainer: React.FC = () => {
         </div>
       ) : filteredStaff?.length === 0 ? (
         <div
-          className="flex flex-col items-center justify-center py-20 rounded-[3rem] text-center"
+          className="flex flex-col items-center justify-center py-20 rounded-lg text-center"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.light}`,
@@ -117,7 +117,7 @@ export const StaffManagementContainer: React.FC = () => {
           }}
         >
           <div
-            className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner"
+            className="w-20 h-20 rounded-md flex items-center justify-center mx-auto mb-6 shadow-inner"
             style={{ background: colors2000s.bg.disabled }}
           >
             <User size={40} className="opacity-25" style={{ color: colors2000s.text.primary }} />

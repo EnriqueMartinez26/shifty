@@ -115,7 +115,6 @@ export const ToggleRow: React.FC<{
       className="relative h-7 w-14 rounded-full"
       style={{
         background: checked ? colors2000s.orange.light : colors2000s.bg.disabled,
-        border: `1px solid ${colors2000s.border.default}`,
         boxShadow: colors2000s.shadows.insetDark
       }}
     >

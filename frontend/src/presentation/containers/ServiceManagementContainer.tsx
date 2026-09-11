@@ -66,7 +66,7 @@ export const ServiceManagementContainer: React.FC = () => {
     <div className="space-y-6">
       {/* Unified Skeuomorphic Header Card matching Reports.tsx */}
       <div
-        className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-3xl"
+        className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-lg"
         style={{
           background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
           border: `1px solid ${colors2000s.border.default}`,

@@ -8,7 +8,7 @@ import {
   Eye,
   Video,
   DollarSign,
-  CheckCircle2,
+  Check,
   Image as ImageIcon
 } from 'lucide-react'
 
@@ -101,14 +101,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-5xl rounded-[2.5rem] border animate-in zoom-in-95 duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
+        className="relative w-full max-w-5xl rounded-md animate-in zoom-in-95 duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
         style={create2000sModalSurfaceStyle()}
       >
         {/* Formulario (Izquierda) */}
-        <div
-          className="flex-1 p-8 md:p-10 border-r overflow-y-auto"
-          style={{ borderColor: colors2000s.border.light }}
-        >
+        <div className="flex-1 p-8 md:p-10 overflow-y-auto">
           <div className="flex justify-between items-center mb-8">
             <div>
               <h3
@@ -126,7 +123,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             </div>
             <button
               onClick={onClose}
-              className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90"
+              className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
               style={buttonStyles2000s.default}
             >
               <X size={20} className="text-gray-500" />
@@ -145,7 +142,6 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                 className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
                 style={{
                   background: colors2000s.status.danger.bg,
-                  border: `1px solid ${colors2000s.status.danger.border}`,
                   color: colors2000s.status.danger.text
                 }}
               >
@@ -179,7 +175,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                   Duración (min)
@@ -268,7 +264,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-6 py-4 rounded-xl font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+                className="px-6 py-4 font-black uppercase tracking-widest text-xs transition-all active:scale-95"
                 style={buttonStyles2000s.default}
               >
                 Cancelar
@@ -293,9 +289,8 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
 
         {/* Vista Previa (Derecha) - metallic brushed preview frame */}
         <div
-          className="hidden lg:flex w-[380px] p-10 flex-col justify-start border-l"
+          className="hidden lg:flex w-[380px] p-10 flex-col justify-start"
           style={{
-            borderColor: colors2000s.border.light,
             background: `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.button} 100%)`,
             boxShadow: 'inset 5px 0 10px rgba(0,0,0,0.02)'
           }}
@@ -315,7 +310,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
 
           {/* Mirroring ServiceCard.tsx skeuomorphic layout exactly */}
           <div
-            className="w-full rounded-[2rem] p-6 border-l-[6px] flex flex-col justify-between h-[280px]"
+            className="w-full rounded-md p-6 border-l-[6px] flex flex-col justify-between h-[280px]"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderTop: `1px solid ${colors2000s.border.default}`,
@@ -328,15 +323,14 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             {/* Top right status badge */}
             <div className="self-end mb-2">
               <span
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[9px] font-black uppercase tracking-widest"
                 style={{
                   background: 'white',
-                  border: `1px solid ${colors2000s.border.default}`,
                   boxShadow: colors2000s.shadows.insetDark,
                   color: '#10b981'
                 }}
               >
-                <CheckCircle2 size={12} className="text-emerald-500" />
+                <Check size={12} className="text-emerald-500" />
                 ACTIVO
               </span>
             </div>
@@ -345,10 +339,9 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               {/* Header Section: Avatar initials + Titles */}
               <div className="flex items-center gap-4">
                 <div
-                  className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
+                  className="w-12 h-12 rounded-md text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
                   style={{
                     background: `linear-gradient(180deg, ${formData.color} 0%, ${formData.color}dd 100%)`,
-                    border: `1px solid ${formData.color}`,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                   }}
                 >
@@ -373,16 +366,12 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               </div>
 
               {/* Specs metadata rows */}
-              <div
-                className="grid grid-cols-2 gap-4 pt-4 border-t"
-                style={{ borderColor: colors2000s.border.light }}
-              >
+              <div className="grid grid-cols-2 gap-4 pt-4">
                 {/* Duración */}
                 <div
-                  className="p-2.5 rounded-xl flex items-center gap-2 border"
+                  className="p-2.5 rounded-md flex items-center gap-2"
                   style={{
                     background: 'white',
-                    borderColor: colors2000s.border.light,
                     boxShadow: colors2000s.shadows.insetDark
                   }}
                 >
@@ -399,10 +388,9 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
 
                 {/* Precio */}
                 <div
-                  className="p-2.5 rounded-xl flex items-center gap-2 border"
+                  className="p-2.5 rounded-md flex items-center gap-2"
                   style={{
                     background: 'white',
-                    borderColor: colors2000s.border.light,
                     boxShadow: colors2000s.shadows.insetDark
                   }}
                 >

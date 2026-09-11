@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
-import { AlertCircle, Loader2, WalletCards } from 'lucide-react'
+import { Loader2, TriangleAlert, WalletCards } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -107,7 +107,7 @@ const LedgerPage: React.FC = () => {
           className="p-4 rounded-2xl text-sm font-bold flex items-center gap-3"
           style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
         >
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <TriangleAlert className="w-5 h-5 flex-shrink-0" />
           <span>{message}</span>
         </div>
       )}

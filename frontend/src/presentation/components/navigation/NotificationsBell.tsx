@@ -49,7 +49,7 @@ const NotificationsBell: React.FC = () => {
         onClick={() => setIsOpen((open) => !open)}
         aria-label={unreadCount > 0 ? `Notificaciones, ${unreadCount} sin leer` : 'Notificaciones'}
         aria-expanded={isOpen}
-        className="relative rounded-xl px-3 py-2 transition-all active:scale-95 cursor-pointer"
+        className="relative rounded-md px-3 py-2 transition-all active:scale-95 cursor-pointer"
         style={{
           background: 'white',
           border: `1px solid ${colors2000s.border.default}`,
@@ -63,7 +63,6 @@ const NotificationsBell: React.FC = () => {
             className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              border: `1px solid ${colors2000s.orange.accent}`,
               color: colors2000s.text.onOrange,
               boxShadow: colors2000s.shadows.outerOrange
             }}
@@ -75,7 +74,7 @@ const NotificationsBell: React.FC = () => {
 
       {isOpen && (
         <div
-          className="absolute right-0 mt-2 w-80 rounded-xl overflow-hidden z-50"
+          className="absolute right-0 mt-2 w-80 rounded-lg overflow-hidden z-50"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,

@@ -79,7 +79,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-lg rounded-[2.5rem] border animate-in zoom-in-95 duration-200 p-8 overflow-y-auto max-h-[90vh]"
+        className="relative w-full max-w-lg rounded-md animate-in zoom-in-95 duration-200 p-8 overflow-y-auto max-h-[90vh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div className="flex justify-between items-center mb-8">
@@ -101,7 +101,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             type="button"
             aria-label="Cerrar"
             onClick={onClose}
-            className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-90"
+            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
             style={buttonStyles2000s.default}
           >
             <X size={20} className="text-gray-500" />
@@ -118,7 +118,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             <div
               role="alert"
               className="rounded-2xl px-4 py-3 text-xs font-bold"
-              style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+              style={{ background: '#fff1f2', color: '#be123c' }}
             >
               {error}
             </div>
@@ -146,7 +146,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                 Nombre
@@ -171,7 +171,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                 Rol
@@ -224,7 +224,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="px-6 py-4 rounded-xl font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+              className="px-6 py-4 font-black uppercase tracking-widest text-xs transition-all active:scale-95"
               style={buttonStyles2000s.default}
             >
               Cancelar

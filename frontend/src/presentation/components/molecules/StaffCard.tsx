@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Mail, Edit3, Trash2, CheckCircle2, XCircle, LayoutGrid } from 'lucide-react'
+import { Mail, Edit3, Trash2, Check, X, LayoutGrid } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
@@ -31,13 +31,10 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
   const avatarGradient = isResource
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
     : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-  const avatarBorder = isResource
-    ? `1px solid ${colors2000s.status.info.dark}`
-    : `1px solid ${colors2000s.orange.accent}`
 
   return (
     <div
-      className="relative p-6 rounded-[2rem] transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px]"
+      className="relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px]"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderTop: `1px solid ${colors2000s.border.default}`,
@@ -50,18 +47,17 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
       {/* Top right status badge */}
       <div className="absolute right-6 top-6">
         <span
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[9px] font-black uppercase tracking-widest"
           style={{
             background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
             boxShadow: colors2000s.shadows.insetDark,
             color: staff.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
           }}
         >
           {staff.isActive ? (
-            <CheckCircle2 size={12} color={colors2000s.status.success.dark} />
+            <Check size={12} color={colors2000s.status.success.dark} />
           ) : (
-            <XCircle size={12} color={colors2000s.text.disabled} />
+            <X size={12} color={colors2000s.text.disabled} />
           )}
           {staff.isActive ? 'ACTIVO' : 'INACTIVO'}
         </span>
@@ -74,7 +70,6 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
             className="w-12 h-12 rounded-full text-white flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
             style={{
               background: avatarGradient,
-              border: avatarBorder,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
@@ -115,10 +110,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
         </div>
 
         {/* Metadata Specialties Section */}
-        <div
-          className="flex items-center gap-2 pt-3 border-t"
-          style={{ borderColor: colors2000s.border.light }}
-        >
+        <div className="flex items-center gap-2 pt-3">
           <span
             className="text-[9px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.disabled }}
@@ -137,10 +129,9 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
               (staff.serviceIds || []).slice(0, 3).map((id, index) => (
                 <span
                   key={id}
-                  className="px-2 py-0.5 rounded text-[8px] font-black border uppercase tracking-widest"
+                  className="px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest"
                   style={{
                     background: 'white',
-                    border: `1px solid ${colors2000s.border.default}`,
                     boxShadow: colors2000s.shadows.insetDark,
                     color: colors2000s.orange.accent
                   }}
@@ -151,10 +142,9 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
             )}
             {(staff.serviceIds || []).length > 3 && (
               <span
-                className="px-1.5 py-0.5 rounded text-[8px] font-black border"
+                className="px-1.5 py-0.5 rounded-md text-[8px] font-black"
                 style={{
                   background: colors2000s.bg.disabled,
-                  borderColor: colors2000s.border.light,
                   color: colors2000s.text.secondary
                 }}
               >
@@ -165,20 +155,17 @@ export const StaffCard: React.FC<StaffCardProps> = ({ staff, onEdit, onDelete })
         </div>
 
         {/* Outlined Action Buttons in Footer */}
-        <div
-          className="grid grid-cols-2 gap-3 pt-4 border-t"
-          style={{ borderColor: colors2000s.border.light }}
-        >
+        <div className="grid grid-cols-2 gap-3 pt-4">
           <button
             onClick={() => onEdit(staff)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
             style={buttonStyles2000s.default}
           >
             <Edit3 size={14} /> Editar
           </button>
           <button
             onClick={() => onDelete(staff.id)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
           >
             <Trash2 size={14} /> Eliminar

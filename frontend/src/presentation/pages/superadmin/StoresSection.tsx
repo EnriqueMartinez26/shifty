@@ -180,8 +180,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                     onClick={() => setSelectedStoreId(store.public_id)}
                     className="cursor-pointer transition-colors"
                     style={{
-                      background: isSelected ? '#fff7ed' : 'transparent',
-                      borderTop: `1px solid ${colors2000s.border.light}`
+                      background: isSelected ? '#fff7ed' : 'transparent'
                     }}
                   >
                     <td className="px-4 py-4">

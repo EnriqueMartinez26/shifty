@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Briefcase, Clock, DollarSign, Edit2, Trash2, CheckCircle2, XCircle } from 'lucide-react'
+import { Briefcase, Clock, DollarSign, Edit2, Trash2, Check, X } from 'lucide-react'
 
 import { Service } from '@domain/entities/Service'
 
@@ -23,7 +23,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
 
   return (
     <div
-      className={`relative p-6 rounded-[2rem] transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full ${
+      className={`relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full ${
         isSelected ? 'ring-2 ring-offset-2 ring-orange-400' : ''
       }`}
       style={{
@@ -38,18 +38,17 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
       {/* Top right status badge */}
       <div className="absolute right-6 top-6">
         <span
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[9px] font-black uppercase tracking-widest"
           style={{
             background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
             boxShadow: colors2000s.shadows.insetDark,
             color: service.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
           }}
         >
           {service.isActive ? (
-            <CheckCircle2 size={12} color={colors2000s.status.success.dark} />
+            <Check size={12} color={colors2000s.status.success.dark} />
           ) : (
-            <XCircle size={12} color={colors2000s.text.disabled} />
+            <X size={12} color={colors2000s.text.disabled} />
           )}
           {service.isActive ? 'ACTIVO' : 'INACTIVO'}
         </span>
@@ -59,10 +58,9 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         {/* Header Section: Avatar initials + Titles */}
         <div className="flex items-center gap-4 pr-20">
           <div
-            className="w-12 h-12 rounded-2xl text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
+            className="w-12 h-12 rounded-md text-white flex items-center justify-center flex-shrink-0 shadow-md overflow-hidden"
             style={{
               background: `linear-gradient(180deg, ${accentColor} 0%, ${accentColor}dd 100%)`,
-              border: `1px solid ${accentColor}`,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
@@ -93,16 +91,12 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         </div>
 
         {/* Specs metadata rows */}
-        <div
-          className="grid grid-cols-2 gap-4 pt-4 border-t"
-          style={{ borderColor: colors2000s.border.light }}
-        >
+        <div className="grid grid-cols-2 gap-4 pt-4">
           {/* Duración */}
           <div
-            className="p-3 rounded-xl flex items-center gap-3 border"
+            className="p-3 rounded-md flex items-center gap-3"
             style={{
               background: 'white',
-              borderColor: colors2000s.border.light,
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
@@ -125,10 +119,9 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
 
           {/* Precio */}
           <div
-            className="p-3 rounded-xl flex items-center gap-3 border"
+            className="p-3 rounded-md flex items-center gap-3"
             style={{
               background: 'white',
-              borderColor: colors2000s.border.light,
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
@@ -149,20 +142,17 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
       </div>
 
       {/* Outlined Action Buttons in Footer */}
-      <div
-        className="grid grid-cols-2 gap-3 pt-4 border-t mt-5"
-        style={{ borderColor: colors2000s.border.light }}
-      >
+      <div className="grid grid-cols-2 gap-3 pt-4 mt-5">
         <button
           onClick={() => onEdit(service)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
         </button>
         <button
           onClick={() => onDelete(service.id)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
           style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
         >
           <Trash2 size={14} /> Eliminar

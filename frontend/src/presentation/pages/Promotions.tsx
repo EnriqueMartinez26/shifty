@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 
-import { AlertCircle, Loader2, Save, TicketPercent } from 'lucide-react'
+import { Loader2, Save, TicketPercent, TriangleAlert } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -153,7 +153,7 @@ const PromotionsPage: React.FC = () => {
           className="p-4 rounded-2xl text-sm font-bold flex items-center gap-3"
           style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
         >
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <TriangleAlert className="w-5 h-5 flex-shrink-0" />
           <span>{message}</span>
         </div>
       )}
@@ -405,8 +405,7 @@ const PromotionsPage: React.FC = () => {
                 background: promotionForm.is_active
                   ? colors2000s.orange.light
                   : colors2000s.bg.disabled,
-                boxShadow: colors2000s.shadows.insetDark,
-                border: `1px solid ${colors2000s.border.default}`
+                boxShadow: colors2000s.shadows.insetDark
               }}
             >
               <div
@@ -427,7 +426,7 @@ const PromotionsPage: React.FC = () => {
                 setEditingPromotionId(null)
                 setPromotionForm(createEmptyPromotionForm())
               }}
-              className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest"
+              className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
             >
               Cancelar edición
@@ -488,8 +487,7 @@ const PromotionsPage: React.FC = () => {
                     className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest"
                     style={{
                       background: promotion.is_active ? '#ecfdf5' : '#f3f4f6',
-                      color: promotion.is_active ? '#15803d' : '#6b7280',
-                      border: `1px solid ${promotion.is_active ? '#bbf7d0' : '#d1d5db'}`
+                      color: promotion.is_active ? '#15803d' : '#6b7280'
                     }}
                   >
                     {promotion.is_active ? 'Activa' : 'Pausada'}
@@ -522,7 +520,7 @@ const PromotionsPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleEditPromotion(promotion)}
-                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                    className="px-4 py-2 text-[10px] font-black uppercase tracking-widest"
                     style={buttonStyles2000s.default}
                   >
                     Editar

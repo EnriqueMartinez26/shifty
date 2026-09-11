@@ -181,7 +181,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
               Usuarios
             </p>
           </div>
-          <div className="mb-3 grid grid-cols-3 gap-2 text-center">
+          <div className="mb-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
             {[
               { label: 'Admins', value: overview.users.admins_count },
               { label: 'Usuarios', value: overview.users.users_count },

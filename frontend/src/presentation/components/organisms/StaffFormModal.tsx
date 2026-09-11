@@ -90,14 +90,13 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-4xl rounded-[2.5rem] shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col overflow-hidden max-h-[90vh]"
+        className="relative w-full max-w-4xl rounded-md shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col overflow-hidden max-h-[90vh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div
-          className="p-8 flex justify-between items-center border-b"
+          className="p-8 flex justify-between items-center"
           style={{
-            background: colors2000s.bg.disabled,
-            borderColor: colors2000s.border.default
+            background: colors2000s.bg.disabled
           }}
         >
           <div>
@@ -119,7 +118,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2.5 rounded-xl transition-all"
+            className="p-2.5 transition-all"
             style={buttonStyles2000s.default}
           >
             <X size={18} />
@@ -136,7 +135,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             <div
               role="alert"
               className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
-              style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c' }}
+              style={{ background: '#fff1f2', color: '#be123c' }}
             >
               {error}
             </div>
@@ -146,10 +145,9 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             <div className="space-y-6">
               <div className="flex items-center gap-2 mb-4">
                 <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center shadow-md border"
+                  className="w-8 h-8 rounded-md flex items-center justify-center shadow-md"
                   style={{
                     background: 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)',
-                    border: '1px solid #2563eb',
                     color: 'white'
                   }}
                 >
@@ -280,10 +278,9 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             <div className="space-y-6">
               <div className="flex items-center gap-2 mb-4">
                 <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center shadow-md border"
+                  className="w-8 h-8 rounded-md flex items-center justify-center shadow-md"
                   style={{
                     background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                    border: `1px solid ${colors2000s.orange.accent}`,
                     color: 'white'
                   }}
                 >
@@ -298,10 +295,9 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
               </div>
 
               <div
-                className="rounded-2xl p-4 max-h-[300px] overflow-y-auto space-y-2"
+                className="rounded-md p-4 max-h-[300px] overflow-y-auto space-y-2"
                 style={{
                   background: 'white',
-                  border: `1px solid ${colors2000s.border.default}`,
                   boxShadow: colors2000s.shadows.insetDark
                 }}
               >
@@ -344,14 +340,11 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             </div>
           </div>
 
-          <div
-            className="flex gap-4 pt-10 border-t mt-10"
-            style={{ borderColor: colors2000s.border.light }}
-          >
+          <div className="flex gap-4 pt-10 mt-10">
             <button
               type="button"
               onClick={onClose}
-              className="px-8 py-4 rounded-xl font-black uppercase tracking-widest text-xs transition-all active:scale-95"
+              className="px-8 py-4 font-black uppercase tracking-widest text-xs transition-all active:scale-95"
               style={buttonStyles2000s.default}
             >
               Cancelar

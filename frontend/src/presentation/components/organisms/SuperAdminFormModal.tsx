@@ -58,7 +58,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="flex h-10 w-10 items-center justify-center rounded-full"
+            className="flex h-10 w-10 items-center justify-center"
             style={buttonStyles2000s.default}
           >
             <X size={18} />
@@ -90,7 +90,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-2xl px-6 py-4 text-xs font-black uppercase tracking-widest"
+              className="px-6 py-4 text-xs font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
             >
               {cancelLabel}

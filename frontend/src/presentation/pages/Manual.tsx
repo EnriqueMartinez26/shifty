@@ -194,7 +194,6 @@ const Manual: React.FC = () => {
             className="p-3 rounded-2xl text-white"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              border: `1px solid ${colors2000s.orange.accent}`,
               boxShadow: colors2000s.shadows.outerOrange
             }}
           >
@@ -276,8 +275,7 @@ const Manual: React.FC = () => {
                   <p
                     className="text-xs font-bold mt-3 pl-3"
                     style={{
-                      color: colors2000s.orange.accent,
-                      borderLeft: `3px solid ${colors2000s.orange.light}`
+                      color: colors2000s.orange.accent
                     }}
                   >
                     {step.tip}
@@ -300,7 +298,7 @@ const Manual: React.FC = () => {
           <Link
             to="/legal/terminos"
             target="_blank"
-            className="px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
+            className="px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
             style={buttonStyles2000s.default}
           >
             <FileText className="w-3.5 h-3.5" />
@@ -309,7 +307,7 @@ const Manual: React.FC = () => {
           <Link
             to="/legal/privacidad"
             target="_blank"
-            className="px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
+            className="px-4 py-2.5 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2"
             style={buttonStyles2000s.default}
           >
             <FileText className="w-3.5 h-3.5" />

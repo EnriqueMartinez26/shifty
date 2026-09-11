@@ -4,16 +4,16 @@ import type { CSSProperties, ReactNode } from 'react'
 import { format, subDays } from 'date-fns'
 import {
   ArrowUpRight,
-  Ban,
   CalendarClock,
-  CircleAlert,
-  CircleDollarSign,
+  CalendarX,
   Clock3,
+  DollarSign,
   Gauge,
   LayoutDashboard,
   ListChecks,
   Sparkles,
   TrendingUp,
+  TriangleAlert,
   UserRoundPlus,
   Wallet
 } from 'lucide-react'
@@ -263,7 +263,7 @@ const headlineStyle: CSSProperties = {
 const emptyStyle: CSSProperties = {
   margin: 0,
   padding: 16,
-  borderRadius: 16,
+  borderRadius: 6,
   border: `1px dashed ${colors2000s.border.default}`,
   background: 'rgba(255, 255, 255, 0.45)',
   color: colors2000s.text.secondary,
@@ -495,7 +495,7 @@ const Dashboard = () => {
           stats?.revenue_trend
         )} vs semana pasada`,
         signal: Number(stats?.revenue_trend ?? 0) >= 0 ? 'Tendencia positiva' : 'Revisar caida',
-        icon: <CircleDollarSign size={18} />,
+        icon: <DollarSign size={18} />,
         tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'success',
         onSelect: () => navigate('/dashboard/reports')
       },
@@ -536,7 +536,7 @@ const Dashboard = () => {
           Number(reportStats?.cancelled_appointments ?? 0) > 0
             ? 'Revisar patron'
             : 'Sin cancelaciones',
-        icon: <Ban size={18} />,
+        icon: <CalendarX size={18} />,
         tone: Number(reportStats?.cancelled_appointments ?? 0) > 0 ? 'warning' : 'success',
         onSelect: () => navigate('/dashboard/reports')
       }
@@ -880,7 +880,7 @@ function EnterpriseDashboard({
           <Panel
             title={copy.actionsTitle}
             description="Lo que merece atencion inmediata."
-            icon={<CircleAlert size={18} />}
+            icon={<TriangleAlert size={18} />}
           >
             <ActionList items={urgentActions} emptyText={copy.emptyActions} />
           </Panel>
@@ -907,7 +907,7 @@ function EnterpriseDashboard({
         <Panel
           title={copy.alertsTitle}
           description="Desvios, caidas y modulos fuera de regimen."
-          icon={<CircleAlert size={18} />}
+          icon={<TriangleAlert size={18} />}
         >
           <ActionList items={alerts} emptyText={copy.emptyAlerts} compact />
         </Panel>
@@ -995,7 +995,6 @@ function HeroPanel({ hero }: { hero: DashboardHero }) {
               padding: '10px 14px',
               borderRadius: 999,
               background: 'rgba(255, 255, 255, 0.9)',
-              border: `1px solid ${colors2000s.border.default}`,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
               color: colors2000s.text.secondary,
               fontSize: 12,
@@ -1062,7 +1061,6 @@ function SummaryMetricsPanel({ title, metrics }: { title: string; metrics: Metri
               alignSelf: 'center',
               padding: '10px 14px',
               borderRadius: 999,
-              border: `1px solid ${colors2000s.border.default}`,
               background: 'rgba(255, 255, 255, 0.76)',
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
               color: colors2000s.text.secondary,
@@ -1142,12 +1140,11 @@ function SectionHeader({
           style={{
             width: 34,
             height: 34,
-            borderRadius: 12,
+            borderRadius: 6,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
             background: 'rgba(255, 140, 66, 0.12)',
-            border: `1px solid rgba(200, 90, 15, 0.25)`,
             color: colors2000s.orange.accent,
             boxShadow: colors2000s.shadows.insetLight
           }}
@@ -1206,9 +1203,8 @@ function OperationPanel({
                 justifyContent: 'space-between',
                 gap: 12,
                 padding: '12px 16px',
-                borderRadius: 16,
+                borderRadius: 6,
                 background: 'rgba(255, 255, 255, 0.72)',
-                border: `1px solid ${colors2000s.border.light}`,
                 boxShadow: colors2000s.shadows.insetLight
               }}
             >
@@ -1273,7 +1269,7 @@ function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: b
             ].join(', ')
           : 'rgba(255, 255, 255, 0.65)',
         border: `1px solid ${tone.border}`,
-        borderRadius: 20,
+        borderRadius: 6,
         boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
         color: colors2000s.text.primary,
         textAlign: 'left',
@@ -1299,7 +1295,6 @@ function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: b
                 alignSelf: 'start',
                 padding: '4px 8px',
                 borderRadius: 999,
-                border: `1px solid ${tone.border}`,
                 background: 'rgba(255, 255, 255, 0.74)',
                 color: tone.accent,
                 fontSize: 10,
@@ -1319,12 +1314,11 @@ function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: b
             style={{
               width: emphasis ? 40 : 34,
               height: emphasis ? 40 : 34,
-              borderRadius: 14,
+              borderRadius: 6,
               display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
               background: 'rgba(255, 255, 255, 0.86)',
-              border: `1px solid ${tone.border}`,
               color: tone.accent,
               boxShadow: colors2000s.shadows.insetLight,
               flexShrink: 0
@@ -1353,8 +1347,7 @@ function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: b
             justifyContent: 'space-between',
             gap: 10,
             marginTop: 'auto',
-            paddingTop: emphasis ? 8 : 0,
-            borderTop: emphasis ? `1px solid ${tone.border}` : 'none'
+            paddingTop: emphasis ? 8 : 0
           }}
         >
           <span style={{ color: tone.accent, fontSize: 12, lineHeight: '16px', fontWeight: 800 }}>
@@ -1384,8 +1377,7 @@ function HealthPill({ item }: { item: HealthItem }) {
     <div
       style={{
         padding: '14px 16px',
-        borderRadius: 8,
-        border: `1px solid ${tone.border}`,
+        borderRadius: 4,
         background: tone.background,
         boxShadow: colors2000s.shadows.insetLight,
         display: 'grid',
@@ -1411,7 +1403,7 @@ function QuickActionCard({ item }: { item: ActionItem }) {
       onClick={item.onSelect}
       style={{
         ...buttonStyles2000s.default,
-        borderRadius: 20,
+        borderRadius: 6,
         padding: 16,
         textAlign: 'left',
         display: 'grid',
@@ -1540,11 +1532,10 @@ function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: stri
               style={{
                 width: 60,
                 alignSelf: 'stretch',
-                borderRadius: 14,
+                borderRadius: 6,
                 display: 'grid',
                 placeItems: 'center',
-                background: tone.background,
-                border: `1px solid ${tone.border}`
+                background: tone.background
               }}
             >
               <time
@@ -1578,7 +1569,6 @@ function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: stri
                   padding: '6px 10px',
                   borderRadius: 999,
                   background: tone.background,
-                  border: `1px solid ${tone.border}`,
                   color: tone.accent,
                   fontSize: 10,
                   lineHeight: '12px',
@@ -1676,7 +1666,6 @@ function TransactionsPanel({
                         padding: '3px 8px',
                         borderRadius: 999,
                         background: tone.background,
-                        border: `1px solid ${tone.border}`,
                         color: tone.accent,
                         fontSize: 9,
                         lineHeight: '11px',
@@ -1713,7 +1702,7 @@ function TransactionsPanel({
           onClick={onViewAll}
           style={{
             ...buttonStyles2000s.default,
-            borderRadius: 14,
+            borderRadius: 6,
             padding: '10px 12px',
             justifySelf: 'start',
             fontSize: 11,
@@ -1789,12 +1778,11 @@ function RankedList({ items }: { items: RankedItem[] }) {
               style={{
                 width: 34,
                 height: 34,
-                borderRadius: 12,
+                borderRadius: 6,
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 background: 'rgba(255, 140, 66, 0.12)',
-                border: `1px solid rgba(200, 90, 15, 0.18)`,
                 color: colors2000s.orange.accent,
                 fontSize: 12,
                 lineHeight: '16px',
@@ -1885,7 +1873,7 @@ function OpportunityList({ items, emptyText }: { items: OpportunityItem[]; empty
                 onClick={item.onSelect}
                 style={{
                   ...buttonStyles2000s.default,
-                  borderRadius: 14,
+                  borderRadius: 6,
                   padding: '10px 12px',
                   justifySelf: 'start',
                   fontSize: 11,

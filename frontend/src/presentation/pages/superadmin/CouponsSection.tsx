@@ -87,7 +87,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
               </div>
 
               <div
-                className="mt-4 grid grid-cols-2 gap-3 text-[10px] font-black uppercase tracking-widest"
+                className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[10px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
                 <div>

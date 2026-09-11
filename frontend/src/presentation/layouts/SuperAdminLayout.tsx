@@ -34,7 +34,6 @@ const SuperAdminLayout: React.FC = () => {
               className="flex h-12 w-12 items-center justify-center rounded-2xl relative overflow-hidden"
               style={{
                 background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                border: `1px solid ${colors2000s.orange.accent}`,
                 boxShadow: colors2000s.shadows.outerOrange
               }}
             >
@@ -54,7 +53,6 @@ const SuperAdminLayout: React.FC = () => {
                   className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em]"
                   style={{
                     background: '#eff6ff',
-                    border: '1px solid #bfdbfe',
                     color: '#1d4ed8'
                   }}
                 >
@@ -83,7 +81,7 @@ const SuperAdminLayout: React.FC = () => {
             <button
               type="button"
               onClick={logout}
-              className="inline-flex items-center gap-2 rounded-2xl px-4 py-3 text-[10px] font-black uppercase tracking-[0.18em]"
+              className="inline-flex items-center gap-2 px-4 py-3 text-[10px] font-black uppercase tracking-[0.18em]"
               style={{
                 ...buttonStyles2000s.default,
                 background: 'rgba(239,68,68,0.05)',

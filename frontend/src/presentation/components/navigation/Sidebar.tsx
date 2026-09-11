@@ -154,7 +154,18 @@ const bottomEntries: MenuLink[] = [
   })
 ]
 
-const Sidebar: React.FC = () => {
+interface SidebarProps {
+  // Off-canvas en mobile: por defecto abierto para no romper los tests que
+  // montan <Sidebar /> sin props y esperan los links presentes en el DOM.
+  // A partir de `lg:` el sidebar queda siempre visible sin importar esto.
+  isOpen?: boolean
+  onNavigate?: () => void
+  // Ver AdminLayout: saca el sidebar del arbol de accesibilidad solo cuando
+  // esta realmente fuera de pantalla (off-canvas cerrado en mobile).
+  inert?: boolean
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = false }) => {
   const location = useLocation()
   const { logout, user } = useAuth()
 
@@ -194,6 +205,7 @@ const Sidebar: React.FC = () => {
       <Link
         key={item.path}
         to={item.path}
+        onClick={onNavigate}
         className={`flex items-center justify-between px-4 py-3 rounded-xl transition-all group ${indent ? 'ml-4' : ''}`}
         style={linkStyle}
         onMouseEnter={(e) => {
@@ -239,7 +251,7 @@ const Sidebar: React.FC = () => {
           type="button"
           aria-expanded={isExpanded}
           onClick={() => toggleGroup(group.label)}
-          className="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all"
+          className="w-full flex items-center justify-between px-4 py-3 transition-all"
           style={{
             ...buttonStyles2000s.default,
             background: 'transparent',
@@ -283,7 +295,10 @@ const Sidebar: React.FC = () => {
 
   return (
     <aside
-      className="w-64 h-screen flex flex-col fixed left-0 top-0 z-50"
+      inert={inert || undefined}
+      className={`w-64 h-screen flex flex-col fixed left-0 top-0 z-50 transition-transform duration-200 lg:translate-x-0 ${
+        isOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderRight: `1px solid ${colors2000s.border.default}`,
@@ -292,7 +307,7 @@ const Sidebar: React.FC = () => {
     >
       <div className="p-6 flex items-center gap-3">
         <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center relative overflow-hidden"
+          className="w-10 h-10 rounded-md flex items-center justify-center relative overflow-hidden"
           style={{
             background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
             boxShadow: colors2000s.shadows.outerOrange,
@@ -335,7 +350,7 @@ const Sidebar: React.FC = () => {
 
       <div className="p-4 mt-auto" style={{ borderTop: `1px solid ${colors2000s.border.light}` }}>
         <div
-          className="flex items-center gap-3 p-3 mb-4 rounded-xl"
+          className="flex items-center gap-3 p-3 mb-4 rounded-md"
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
@@ -347,7 +362,6 @@ const Sidebar: React.FC = () => {
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
               color: colors2000s.text.secondary,
-              border: `1px solid ${colors2000s.border.default}`,
               boxShadow: colors2000s.shadows.insetLight
             }}
           >
@@ -371,7 +385,7 @@ const Sidebar: React.FC = () => {
 
         <button
           onClick={logout}
-          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-bold group"
+          className="w-full flex items-center gap-3 px-4 py-3 transition-all font-bold group"
           style={{
             ...buttonStyles2000s.default,
             background: 'rgba(239,68,68,0.05)',

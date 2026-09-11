@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 
-import { AlertCircle, Loader2, RefreshCcw, Settings2 } from 'lucide-react'
+import { Loader2, RefreshCcw, Settings2, TriangleAlert } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -109,7 +109,7 @@ const PaymentsPage: React.FC = () => {
             color: colors2000s.status.warning.text
           }}
         >
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <TriangleAlert className="w-5 h-5 flex-shrink-0" />
           <span>{message}</span>
         </div>
       )}
@@ -161,7 +161,7 @@ const PaymentsPage: React.FC = () => {
           <button
             type="button"
             onClick={() => window.location.assign('/dashboard/settings?tab=payments')}
-            className="w-full py-3 rounded-xl text-xs font-black uppercase tracking-widest"
+            className="w-full py-3 text-xs font-black uppercase tracking-widest"
             style={buttonStyles2000s.default}
           >
             Abrir configuración de Mercado Pago
@@ -181,7 +181,7 @@ const PaymentsPage: React.FC = () => {
               onClick={() => {
                 void handleProcessOutbox()
               }}
-              className="px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest"
+              className="px-4 py-2 text-xs font-black uppercase tracking-widest"
               style={buttonStyles2000s.default}
             >
               <RefreshCcw className="w-4 h-4 inline mr-2" />
@@ -189,7 +189,7 @@ const PaymentsPage: React.FC = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"

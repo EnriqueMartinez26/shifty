@@ -7,7 +7,7 @@ import {
   Lock,
   Save,
   Check,
-  AlertCircle,
+  TriangleAlert,
   Loader2,
   Calendar,
   Plus,
@@ -345,7 +345,7 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1
           className="text-3xl font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
@@ -379,7 +379,7 @@ const SettingsPage: React.FC = () => {
 
       {/* Tabs Navigation */}
       <div
-        className="flex gap-2 p-2 rounded-2xl overflow-x-auto no-scrollbar"
+        className="flex gap-2 p-2 rounded-lg overflow-x-auto no-scrollbar"
         style={{
           background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
           border: `1px solid ${colors2000s.border.default}`,
@@ -401,7 +401,7 @@ const SettingsPage: React.FC = () => {
 
       {saveStatus === 'error' && (
         <div
-          className="p-4 rounded-xl flex items-center gap-3 text-xs font-bold"
+          className="p-4 rounded-lg flex items-center gap-3 text-xs font-bold"
           style={{
             background: colors2000s.status.danger.bg,
             border: `1px solid ${colors2000s.status.danger.border}`,
@@ -409,14 +409,14 @@ const SettingsPage: React.FC = () => {
             boxShadow: colors2000s.shadows.insetDark
           }}
         >
-          <AlertCircle className="w-5 h-5 flex-shrink-0" />
+          <TriangleAlert className="w-5 h-5 flex-shrink-0" />
           <p>{errorMessage}</p>
         </div>
       )}
 
       {/* Tab Content */}
       <div
-        className="p-8 rounded-[2.5rem] animate-in fade-in slide-in-from-bottom-4 duration-500"
+        className="p-8 rounded-lg animate-in fade-in slide-in-from-bottom-4 duration-500"
         style={create2000sPanelStyle()}
       >
         {activeTab === 'identity' && (
@@ -500,10 +500,9 @@ const SettingsPage: React.FC = () => {
                 </label>
                 <div className="flex items-center gap-4">
                   <div
-                    className="w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden shrink-0"
+                    className="w-20 h-20 rounded-md flex items-center justify-center overflow-hidden shrink-0"
                     style={{
-                      background: 'white',
-                      border: `1px solid ${colors2000s.border.default}`
+                      background: 'white'
                     }}
                   >
                     {formData.logo_url ? (
@@ -518,7 +517,7 @@ const SettingsPage: React.FC = () => {
                   </div>
                   <div className="flex-1 space-y-2">
                     <label
-                      className="inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
+                      className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
                       style={buttonStyles2000s.default}
                     >
                       {uploadMedia.isPending ? (
@@ -549,7 +548,6 @@ const SettingsPage: React.FC = () => {
                     className="rounded-2xl px-4 py-2.5 text-xs font-bold"
                     style={{
                       background: colors2000s.status.danger.bg,
-                      border: `1px solid ${colors2000s.status.danger.border}`,
                       color: colors2000s.status.danger.text
                     }}
                   >
@@ -665,7 +663,7 @@ const SettingsPage: React.FC = () => {
                       ]
                     })
                   }
-                  className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
+                  className="px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
                   style={buttonStyles2000s.default}
                 >
                   <Plus className="w-3 h-3 mr-1" />
@@ -678,7 +676,6 @@ const SettingsPage: React.FC = () => {
                   className="p-4 rounded-2xl text-xs font-bold"
                   style={{
                     background: 'white',
-                    border: `1px solid ${colors2000s.border.light}`,
                     boxShadow: colors2000s.shadows.insetDark,
                     color: colors2000s.text.secondary
                   }}
@@ -692,7 +689,7 @@ const SettingsPage: React.FC = () => {
                     (field: StoreCustomField, index: number) => (
                       <div
                         key={`${field.key}-${index}`}
-                        className="p-5 rounded-[1.5rem] space-y-4"
+                        className="p-5 rounded-md space-y-4"
                         style={{
                           background: 'white',
                           border: `1px solid ${colors2000s.border.light}`,
@@ -956,7 +953,7 @@ const SettingsPage: React.FC = () => {
                 return (
                   <div
                     key={day.id}
-                    className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-2xl transition-all"
+                    className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-md transition-all"
                     style={{
                       background: 'white',
                       border: `1px solid ${colors2000s.border.light}`,
@@ -982,7 +979,7 @@ const SettingsPage: React.FC = () => {
                         dayHours.map((period: BusinessHoursPeriod, idx: number) => (
                           <div
                             key={`${day.id}-${idx}-${period.open}-${period.close}`}
-                            className="flex items-center gap-2"
+                            className="flex flex-wrap items-center gap-2"
                           >
                             <input
                               type="time"
@@ -1043,7 +1040,7 @@ const SettingsPage: React.FC = () => {
                         ]
                         setFormData({ ...formData, business_hours: newHours })
                       }}
-                      className="px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"
+                      className="px-3 py-2 text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"
                       style={buttonStyles2000s.default}
                     >
                       <Plus className="w-3 h-3 mr-1" />
@@ -1203,7 +1200,7 @@ const SettingsPage: React.FC = () => {
         {activeTab === 'notifications' && (
           <div className="space-y-6">
             <div
-              className="flex items-center justify-between p-6 rounded-[2rem] transition-all"
+              className="flex items-center justify-between p-6 rounded-md transition-all"
               style={{
                 background: 'white',
                 border: `1px solid ${colors2000s.border.light}`,
@@ -1252,7 +1249,7 @@ const SettingsPage: React.FC = () => {
             </div>
 
             <div
-              className="flex items-center justify-between p-6 rounded-[2rem] transition-all"
+              className="flex items-center justify-between p-6 rounded-md transition-all"
               style={{
                 background: 'white',
                 border: `1px solid ${colors2000s.border.light}`,
@@ -1312,7 +1309,7 @@ const SettingsPage: React.FC = () => {
               return (
                 <div
                   key={feature.key}
-                  className="flex items-center justify-between gap-6 p-6 rounded-[2rem] transition-all"
+                  className="flex items-center justify-between gap-6 p-6 rounded-md transition-all"
                   style={{
                     background: 'white',
                     border: `1px solid ${colors2000s.border.light}`,
@@ -1382,7 +1379,7 @@ const SettingsPage: React.FC = () => {
             </div>
 
             <div
-              className="rounded-[2rem] p-6 space-y-4"
+              className="rounded-md p-6 space-y-4"
               style={{
                 background: 'white',
                 border: `1px solid ${colors2000s.border.light}`,
@@ -1431,7 +1428,7 @@ const SettingsPage: React.FC = () => {
                     type="button"
                     onClick={() => void handleRefreshMercadoPago()}
                     disabled={refreshMercadoPagoOAuth.isPending}
-                    className="py-3 rounded-xl font-black uppercase tracking-widest text-xs"
+                    className="py-3 font-black uppercase tracking-widest text-xs"
                     style={buttonStyles2000s.default}
                   >
                     <RefreshCcw className="w-4 h-4 inline mr-2" />
@@ -1625,7 +1622,7 @@ const SettingsPage: React.FC = () => {
       </div>
 
       <div
-        className="p-6 rounded-[2rem]"
+        className="p-6 rounded-lg"
         style={{
           background: colors2000s.status.warning.bg,
           border: `1px solid ${colors2000s.status.warning.border}`,
@@ -1633,7 +1630,10 @@ const SettingsPage: React.FC = () => {
         }}
       >
         <div className="flex gap-4">
-          <AlertCircle className="w-6 h-6 flex-shrink-0" color={colors2000s.status.warning.light} />
+          <TriangleAlert
+            className="w-6 h-6 flex-shrink-0"
+            color={colors2000s.status.warning.light}
+          />
           <div className="space-y-1">
             <h4
               className="font-black text-xs uppercase tracking-widest"

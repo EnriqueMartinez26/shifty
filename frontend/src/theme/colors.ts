@@ -97,6 +97,15 @@ export const buttonStyles2000s = {
     border: `1px solid ${colors2000s.border.default}`,
     color: colors2000s.text.primary,
     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+    // A diferencia de sus hermanos (.hover/.selected/.disabled, que no
+    // declaran radio y dejan que la clase Tailwind del que llama decida),
+    // `.default` SI fija un radio propio, y por especificidad gana por
+    // encima de cualquier `rounded-*` que el consumidor le ponga al lado.
+    // Es intencional: varios botones alternan entre este estado y
+    // `.selected` (que si respeta la clase del consumidor), asi que el
+    // radio visible cambia segun el estado - no es un bug, es como quedo
+    // pensado. Si alguna vez se quiere el mismo radio en los dos estados,
+    // hay que decidirlo ahi explicitamente, no borrar esta linea a ciegas.
     borderRadius: '4px',
     transition: 'all 0.15s',
     cursor: 'pointer'

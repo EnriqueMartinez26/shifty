@@ -67,7 +67,7 @@ const ReportsPage: React.FC = () => {
     return (
       <div className="space-y-8 animate-in fade-in duration-500">
         <div
-          className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-3xl"
+          className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-lg"
           style={cardStyle}
         >
           <div>
@@ -83,7 +83,7 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
         <div
-          className="text-sm p-4 rounded-xl font-bold"
+          className="text-sm p-4 rounded-lg font-bold"
           style={{
             background: '#ffeeee',
             border: '1px solid #ffcccc',
@@ -100,7 +100,7 @@ const ReportsPage: React.FC = () => {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       <div
-        className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-3xl"
+        className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-lg"
         style={{
           background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
           border: `1px solid ${colors2000s.border.default}`,
@@ -153,8 +153,8 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-6">
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
@@ -165,7 +165,7 @@ const ReportsPage: React.FC = () => {
             {stats?.total_appointments ?? 0}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
@@ -176,7 +176,7 @@ const ReportsPage: React.FC = () => {
             {currencyFmt.format(stats?.total_revenue ?? 0)}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
@@ -187,7 +187,7 @@ const ReportsPage: React.FC = () => {
             {currencyFmt.format(stats?.average_ticket ?? 0)}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
@@ -198,7 +198,7 @@ const ReportsPage: React.FC = () => {
             {currencyFmt.format(debtSummary?.outstanding_balance ?? 0)}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
             style={{ color: colors2000s.text.secondary }}
@@ -209,7 +209,7 @@ const ReportsPage: React.FC = () => {
             {clientStats?.total_clients ?? 0}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
             style={{ color: colors2000s.text.secondary }}
@@ -220,7 +220,7 @@ const ReportsPage: React.FC = () => {
             {clientStats?.new_clients ?? 0}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
@@ -231,7 +231,7 @@ const ReportsPage: React.FC = () => {
             {clientStats?.returning_clients ?? 0}
           </p>
         </div>
-        <div className="p-5 rounded-2xl" style={cardStyle}>
+        <div className="p-5 rounded-md" style={cardStyle}>
           <p
             className="text-[10px] font-black uppercase tracking-widest flex items-center gap-2"
             style={{ color: colors2000s.text.secondary }}
@@ -250,7 +250,7 @@ const ReportsPage: React.FC = () => {
             void downloadFile('csv')
           }}
           disabled={exportMutation.isPending}
-          className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+          className="px-5 py-3 text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
@@ -286,12 +286,11 @@ const ReportsPage: React.FC = () => {
       </div>
 
       <div className="grid xl:grid-cols-3 gap-6">
-        <div className="rounded-3xl overflow-hidden" style={create2000sListCardStyle()}>
+        <div className="rounded-lg overflow-hidden" style={create2000sListCardStyle()}>
           <div
             className="px-6 py-4 font-black uppercase tracking-tight text-sm"
             style={{
               background: colors2000s.bg.disabled,
-              borderBottom: `1px solid ${colors2000s.border.default}`,
               color: colors2000s.text.primary
             }}
           >
@@ -301,7 +300,7 @@ const ReportsPage: React.FC = () => {
             {(summary?.top_services || []).map((item) => (
               <div
                 key={item.service_id}
-                className="rounded-2xl p-4"
+                className="rounded-md p-4"
                 style={{
                   background: colors2000s.bg.disabledBottom,
                   border: `1px solid ${colors2000s.border.light}`
@@ -323,7 +322,7 @@ const ReportsPage: React.FC = () => {
             ))}
             {(summary?.top_services.length ?? 0) === 0 && (
               <div
-                className="rounded-2xl p-4 text-sm font-bold"
+                className="rounded-md p-4 text-sm font-bold"
                 style={{
                   background: colors2000s.bg.disabledBottom,
                   color: colors2000s.text.secondary
@@ -335,12 +334,11 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="rounded-3xl overflow-hidden" style={create2000sListCardStyle()}>
+        <div className="rounded-lg overflow-hidden" style={create2000sListCardStyle()}>
           <div
             className="px-6 py-4 font-black uppercase tracking-tight text-sm"
             style={{
               background: colors2000s.bg.disabled,
-              borderBottom: `1px solid ${colors2000s.border.default}`,
               color: colors2000s.text.primary
             }}
           >
@@ -350,7 +348,7 @@ const ReportsPage: React.FC = () => {
             {(summary?.top_clients || []).map((item) => (
               <div
                 key={item.client_id}
-                className="rounded-2xl p-4"
+                className="rounded-md p-4"
                 style={{
                   background: colors2000s.bg.disabledBottom,
                   border: `1px solid ${colors2000s.border.light}`
@@ -372,7 +370,7 @@ const ReportsPage: React.FC = () => {
             ))}
             {(summary?.top_clients.length ?? 0) === 0 && (
               <div
-                className="rounded-2xl p-4 text-sm font-bold"
+                className="rounded-md p-4 text-sm font-bold"
                 style={{
                   background: colors2000s.bg.disabledBottom,
                   color: colors2000s.text.secondary
@@ -384,12 +382,11 @@ const ReportsPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="rounded-3xl overflow-hidden" style={create2000sListCardStyle()}>
+        <div className="rounded-lg overflow-hidden" style={create2000sListCardStyle()}>
           <div
             className="px-6 py-4 font-black uppercase tracking-tight text-sm"
             style={{
               background: colors2000s.bg.disabled,
-              borderBottom: `1px solid ${colors2000s.border.default}`,
               color: colors2000s.text.primary
             }}
           >
@@ -399,7 +396,7 @@ const ReportsPage: React.FC = () => {
             {(debtSummary?.top_debtors || []).map((item) => (
               <div
                 key={item.client_id}
-                className="rounded-2xl p-4"
+                className="rounded-md p-4"
                 style={{
                   background: colors2000s.bg.disabledBottom,
                   border: `1px solid ${colors2000s.border.light}`
@@ -421,7 +418,7 @@ const ReportsPage: React.FC = () => {
             ))}
             {(debtSummary?.top_debtors.length ?? 0) === 0 && (
               <div
-                className="rounded-2xl p-4 text-sm font-bold"
+                className="rounded-md p-4 text-sm font-bold"
                 style={{
                   background: colors2000s.bg.disabledBottom,
                   color: colors2000s.text.secondary
@@ -434,12 +431,11 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-3xl overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
+      <div className="rounded-lg overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
         <div
           className="px-6 py-4 flex items-center gap-2 font-black uppercase tracking-tight text-sm"
           style={{
             background: colors2000s.bg.disabled,
-            borderBottom: `1px solid ${colors2000s.border.default}`,
             color: colors2000s.text.primary
           }}
         >
@@ -521,12 +517,11 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-3xl overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
+      <div className="rounded-lg overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
         <div
           className="px-6 py-4 flex items-center gap-2 font-black uppercase tracking-tight text-sm"
           style={{
             background: colors2000s.bg.disabled,
-            borderBottom: `1px solid ${colors2000s.border.default}`,
             color: colors2000s.text.primary
           }}
         >

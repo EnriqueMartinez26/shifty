@@ -1,15 +1,6 @@
 import React from 'react'
 
-import {
-  Shield,
-  User as UserIcon,
-  Mail,
-  Phone,
-  CheckCircle2,
-  XCircle,
-  Edit2,
-  Trash2
-} from 'lucide-react'
+import { Shield, User as UserIcon, Mail, Phone, Check, X, Edit2, Trash2 } from 'lucide-react'
 
 import { User } from '@domain/entities/User'
 
@@ -38,13 +29,10 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
   const avatarGradient = isAdmin
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
     : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-  const avatarBorder = isAdmin
-    ? `1px solid ${colors2000s.status.info.dark}`
-    : `1px solid ${colors2000s.orange.accent}`
 
   return (
     <div
-      className="relative p-6 rounded-[2rem] transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full"
+      className="relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderTop: `1px solid ${colors2000s.border.default}`,
@@ -57,18 +45,17 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
       {/* Top right status badge */}
       <div className="absolute right-6 top-6">
         <span
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-widest"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[9px] font-black uppercase tracking-widest"
           style={{
             background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
             boxShadow: colors2000s.shadows.insetDark,
             color: user.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
           }}
         >
           {user.isActive ? (
-            <CheckCircle2 size={12} color={colors2000s.status.success.dark} />
+            <Check size={12} color={colors2000s.status.success.dark} />
           ) : (
-            <XCircle size={12} color={colors2000s.text.disabled} />
+            <X size={12} color={colors2000s.text.disabled} />
           )}
           {user.isActive ? 'ACTIVO' : 'INACTIVO'}
         </span>
@@ -81,7 +68,6 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
             className="w-12 h-12 rounded-full text-white flex items-center justify-center font-black text-sm shadow-md flex-shrink-0"
             style={{
               background: avatarGradient,
-              border: avatarBorder,
               boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
             }}
           >
@@ -106,10 +92,9 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
         {/* Badges/Rol */}
         <div className="flex flex-wrap gap-2 pt-1">
           <span
-            className="px-2.5 py-1 rounded-xl text-[9px] font-black border uppercase tracking-widest flex items-center gap-1"
+            className="px-2.5 py-1 rounded text-[9px] font-black uppercase tracking-widest flex items-center gap-1"
             style={{
               background: 'white',
-              border: `1px solid ${colors2000s.border.default}`,
               boxShadow: colors2000s.shadows.insetDark,
               color: isAdmin ? colors2000s.status.info.dark : colors2000s.orange.accent
             }}
@@ -120,7 +105,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
         </div>
 
         {/* Contact fields */}
-        <div className="space-y-2 pt-2 border-t" style={{ borderColor: colors2000s.border.light }}>
+        <div className="space-y-2 pt-2">
           <div
             className="flex items-center gap-2 text-xs font-bold"
             style={{ color: colors2000s.text.secondary }}
@@ -141,20 +126,17 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
       </div>
 
       {/* Outlined Action Buttons in Footer */}
-      <div
-        className="grid grid-cols-2 gap-3 pt-4 border-t mt-4"
-        style={{ borderColor: colors2000s.border.light }}
-      >
+      <div className="grid grid-cols-2 gap-3 pt-4 mt-4">
         <button
           onClick={() => onEdit(user)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
         </button>
         <button
           onClick={() => onDelete(user.id)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
           style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
         >
           <Trash2 size={14} /> Eliminar
