@@ -110,9 +110,18 @@ class AppointmentService:
         starts_at: datetime = data["starts_at"]
         ends_at: datetime = starts_at + timedelta(minutes=service.duration_minutes)
 
-        # Nota: el dueno NO esta sujeto a min_booking_notice_hours (esa regla
-        # es para el cliente). Puede cargar un walk-in del momento. El "no
-        # agendar en el pasado" lo garantiza el schema AppointmentCreate.
+        # Nota: `actor` (el staff autenticado) NO esta sujeto a
+        # min_booking_notice_hours (esa regla es para el cliente publico).
+        # El "no agendar en el pasado" lo garantiza el schema AppointmentCreate.
+        #
+        # Este metodo reserva al propio `actor` como cliente (ver client_id
+        # mas abajo) - es un auto-booking, no un alta de turno para un
+        # tercero. Cargar un walk-in (un cliente distinto al staff logueado)
+        # es responsabilidad de create_public_booking
+        # (modules/public_api/router.py), que ya acepta client_name/phone/
+        # email explicitos y es lo que usa el boton "Nuevo turno" del panel
+        # admin. Este comentario antes prometia soporte de walk-in que el
+        # codigo de abajo (client_id=actor.id) nunca implemento.
 
         # 2. Bloqueo pesimista ANTES de leer bloqueos y conflictos ---------
         # Antes los bloqueos se leian sin el lock: un bloqueo creado entre esa
