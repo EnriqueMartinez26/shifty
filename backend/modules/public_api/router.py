@@ -229,6 +229,41 @@ def _now_compatible_with(value: datetime) -> datetime:
     return now if value.tzinfo else now.replace(tzinfo=None)
 
 
+def _resolve_payment_requirement(
+    payment_method: str,
+    payments_enabled: bool,
+    deposit_amount: Decimal,
+    deposit_mode: str,
+    allow_manual_coordination: bool,
+) -> bool:
+    # Responde una sola vez "con el metodo pedido y estos datos de tienda/
+    # servicio, hace falta pagar la sena para reservar" en vez de repetir la
+    # misma combinacion de 5 variables en tres ifs distintos. Puede levantar
+    # ValidationException si el payment_method pedido no es viable.
+    viable = payments_enabled and deposit_amount > 0
+    mandatory_online = (
+        viable and deposit_mode == "required" and not allow_manual_coordination
+    )
+
+    if payment_method == "mercadopago":
+        if deposit_amount <= 0:
+            raise ValidationException(
+                "Este servicio no tiene una seña configurada para Mercado Pago"
+            )
+        if not payments_enabled:
+            raise ValidationException(
+                "La tienda no tiene habilitados los cobros con Mercado Pago"
+            )
+        return True
+    if payment_method == "manual":
+        if mandatory_online:
+            raise ValidationException(
+                "Este servicio requiere pagar la seña con Mercado Pago para reservar"
+            )
+        return False
+    return viable  # "auto"
+
+
 @router.get("/stores/{slug}", response_model=PublicStoreResponse)
 async def get_store_by_slug(
     slug: SlugPath, db: AsyncSession = Depends(get_db)
@@ -682,41 +717,13 @@ async def create_public_booking(
         )
         deposit_amount = deposit.amount
         payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
-        payment_required = (
-            (
-                data.payment_method == "mercadopago"
-                or (
-                    data.payment_method == "auto"
-                    and payments_enabled
-                    and deposit_amount > 0
-                )
-            )
-            and payments_enabled
-            and deposit_amount > 0
+        payment_required = _resolve_payment_requirement(
+            payment_method=data.payment_method,
+            payments_enabled=payments_enabled,
+            deposit_amount=deposit_amount,
+            deposit_mode=getattr(service, "deposit_mode", "none") or "none",
+            allow_manual_coordination=store.allow_manual_coordination,
         )
-        if data.payment_method == "mercadopago" and deposit_amount <= 0:
-            raise ValidationException(
-                "Este servicio no tiene una seña configurada para Mercado Pago"
-            )
-        if data.payment_method == "mercadopago" and not payments_enabled:
-            raise ValidationException(
-                "La tienda no tiene habilitados los cobros con Mercado Pago"
-            )
-        # Una seña marcada como obligatoria solo se puede saltear si la tienda
-        # habilito explicitamente coordinar el pago por fuera de la plataforma.
-        # Sin esto, cualquiera reserva sin pagar mandando payment_method=manual.
-        online_payment_mandatory = (
-            payments_enabled
-            and deposit_amount > 0
-            and (getattr(service, "deposit_mode", "none") or "none") == "required"
-            and not store.allow_manual_coordination
-        )
-        if online_payment_mandatory and data.payment_method == "manual":
-            raise ValidationException(
-                "Este servicio requiere pagar la seña con Mercado Pago para reservar"
-            )
-        if online_payment_mandatory:
-            payment_required = True
         initial_status = (
             AppointmentStatus.PENDING_PAYMENT.value
             if payment_required
