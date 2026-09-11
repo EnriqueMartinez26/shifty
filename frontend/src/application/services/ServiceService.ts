@@ -4,6 +4,8 @@ import type { IServiceRepository } from '../../domain/repositories/IServiceRepos
 import { Duration } from '../../domain/value-objects/Duration'
 import { Price } from '../../domain/value-objects/Price'
 import { ServiceColor } from '../../domain/value-objects/ServiceColor'
+import apiClient from '../../infrastructure/http/client'
+import { HttpServiceRepository } from '../../infrastructure/repositories/HttpServiceRepository'
 import { createServiceSchema } from '../validators/service.validators'
 
 export class ServiceService extends BaseService<Service> {
@@ -67,3 +69,5 @@ export class ServiceService extends BaseService<Service> {
     }, 'deleteService')
   }
 }
+
+export const serviceService = new ServiceService(new HttpServiceRepository(apiClient))

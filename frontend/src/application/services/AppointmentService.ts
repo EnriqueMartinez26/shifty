@@ -1,6 +1,8 @@
 import { BaseService } from './BaseService'
 import type { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
+import apiClient from '../../infrastructure/http/client'
+import { HttpBookingRepository } from '../../infrastructure/repositories/HttpBookingRepository'
 import type { CreateBookingRequestDTO } from '../dtos/BookingDTO'
 
 /**
@@ -109,3 +111,5 @@ export class AppointmentService extends BaseService<Appointment> {
     }, 'reschedule')
   }
 }
+
+export const appointmentService = new AppointmentService(new HttpBookingRepository(apiClient))

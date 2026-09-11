@@ -3,6 +3,8 @@ import { User } from '../../domain/entities/User'
 import type { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { CreateUserUseCase } from '../../domain/use-cases/user/CreateUserUseCase'
 import type { CreateUserInput } from '../../domain/use-cases/user/CreateUserUseCase'
+import apiClient from '../../infrastructure/http/client'
+import { HttpUserRepository } from '../../infrastructure/repositories/HttpUserRepository'
 import { createUserSchema } from '../validators/user.validators'
 
 /**
@@ -86,3 +88,5 @@ export class UserService extends BaseService<User> {
     }, 'updateUser')
   }
 }
+
+export const userService = new UserService(new HttpUserRepository(apiClient))

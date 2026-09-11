@@ -98,8 +98,11 @@ Una instrucción en lenguaje natural no es una garantía.
   `BaseRepository` (método plantilla: las subclases implementan `*Impl`, la
   base traduce errores a subclases de `ApplicationError`). No importa
   `presentation/`.
-- DI por Service Locator (`infrastructure/di/ServiceContainer.ts`), cableado
-  en `infrastructure/di/dependencies.ts`.
+- Sin contenedor de DI: los servicios de `application/services/` se exportan
+  como singletons de módulo (`export const userService = new UserService(...)`
+  al final de cada archivo, mismo patrón que ya usaba
+  `PublicBookingService.ts`) e importan directo donde se consumen, p. ej.
+  `presentation/hooks/useManagedDomainUsers.ts`.
 - `presentation/` separa contenedores (estado + hooks de react-query) de
   componentes de render. Los errores suben como `ApplicationError` tipado
   (`code`, `statusCode`, `isOperational`).

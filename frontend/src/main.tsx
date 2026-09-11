@@ -6,7 +6,6 @@ import { createRoot } from 'react-dom/client'
 
 import './index.css'
 import App from './App.tsx'
-import { registerDependencies } from './infrastructure/di/dependencies'
 import { initSentry, Sentry } from './infrastructure/observability/sentry'
 import { setupEventHandlers } from './infrastructure/setup/setupEventHandlers'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
@@ -20,18 +19,14 @@ import {
   InternalServerErrorHandler,
   NetworkErrorHandler
 } from './shared/errors/handlers/SpecificHandlers'
-import { EventBus } from './shared/events/EventBus'
+import { eventBus } from './shared/events/EventBus'
 
 initSentry()
 
-// 1. Initialize Dependency Injection Container
-const container = registerDependencies()
-
-// 2. Initialize and Wire Event Handlers
-const eventBus = container.resolve<EventBus>('eventBus')
+// 1. Wire Event Handlers
 setupEventHandlers(eventBus, {})
 
-// 3. Initialize and Configure Global Error Handler Strategy
+// 2. Initialize and Configure Global Error Handler Strategy
 const globalErrorHandler = new GlobalErrorHandler()
 globalErrorHandler.registerHandler(new ValidationErrorHandler())
 globalErrorHandler.registerHandler(new NotFoundErrorHandler())
@@ -51,7 +46,7 @@ window.addEventListener('unhandledrejection', (event) => {
   void globalErrorHandler.handle(event.reason)
 })
 
-// 4. Configure React Query with Global Error Handling
+// 3. Configure React Query with Global Error Handling
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error: unknown) => {

@@ -1,3 +1,12 @@
+// El singleton `staffService` exportado por StaffService.ts importa el
+// apiClient real (que a su vez toca runtime-env.ts / import.meta, que
+// ts-jest no compila fuera de node_modules). Se mockea el módulo del
+// cliente HTTP para poder cargar la clase bajo test sin arrastrar esa cadena.
+jest.mock('../../infrastructure/http/client', () => ({
+  __esModule: true,
+  default: {}
+}))
+
 import { StaffService } from './StaffService'
 import { Staff } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'

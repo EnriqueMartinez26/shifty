@@ -2,13 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 
 import { Service } from '@domain/entities/Service'
 
-import { ServiceService } from '@application/services/ServiceService'
-
-import { resolveService } from './resolveService'
+import { serviceService } from '@application/services/ServiceService'
 
 export const useServicesCatalog = () => {
-  const serviceService = resolveService<ServiceService>('serviceService')
-
   return useQuery<Service[]>({
     queryKey: ['services'],
     queryFn: () => serviceService.listServices()

@@ -2,16 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { User } from '@domain/entities/User'
 
-import { UserService } from '@application/services/UserService'
-
-import { resolveService } from './resolveService'
+import { userService, UserService } from '@application/services/UserService'
 
 type CreateManagedUserInput = Parameters<UserService['createUser']>[0]
 type UpdateManagedUserInput = Parameters<UserService['updateUser']>[1]
 
 export const useManagedDomainUsers = () => {
-  const userService = resolveService<UserService>('userService')
-
   return useQuery<User[]>({
     queryKey: ['managed-users'],
     queryFn: () => userService.listUsers(true)
@@ -20,7 +16,6 @@ export const useManagedDomainUsers = () => {
 
 export const useCreateManagedDomainUser = () => {
   const queryClient = useQueryClient()
-  const userService = resolveService<UserService>('userService')
 
   return useMutation({
     mutationFn: (data: CreateManagedUserInput) => userService.createUser(data),
@@ -32,7 +27,6 @@ export const useCreateManagedDomainUser = () => {
 
 export const useUpdateManagedDomainUser = () => {
   const queryClient = useQueryClient()
-  const userService = resolveService<UserService>('userService')
 
   return useMutation({
     mutationFn: ({ id, data }: { id: string; data: UpdateManagedUserInput }) =>
@@ -45,7 +39,6 @@ export const useUpdateManagedDomainUser = () => {
 
 export const useDeleteManagedDomainUser = () => {
   const queryClient = useQueryClient()
-  const userService = resolveService<UserService>('userService')
 
   return useMutation({
     mutationFn: (id: string) => userService.deleteUser(id),
