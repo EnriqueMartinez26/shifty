@@ -43,6 +43,8 @@ interface BookingStepConfirmationProps {
   serviceId: string
   paymentsEnabled: boolean
   storeName: string
+  /** Slug de la tienda: link a "mis turnos" desde la pantalla de exito. */
+  storeSlug?: string
   whatsappNumber?: string | null
   depositPolicy?: string | null
   allowManualCoordination?: boolean
@@ -60,6 +62,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   serviceId,
   paymentsEnabled,
   storeName,
+  storeSlug,
   whatsappNumber,
   depositPolicy,
   allowManualCoordination = true,
@@ -355,6 +358,21 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           >
             Coordinar el pago por WhatsApp
             <ExternalLink className="w-4 h-4" />
+          </a>
+        )}
+
+        {storeSlug && (
+          <a
+            href={`/b/${storeSlug}/mis-turnos`}
+            className="w-full mt-4 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
+            style={{
+              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+              borderColor: colors2000s.border.default,
+              color: colors2000s.text.primary,
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
+            }}
+          >
+            Quiero cambiar o cancelar mi turno
           </a>
         )}
 

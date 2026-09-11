@@ -14,7 +14,7 @@ se le avisa al dueno, que puede reservar a mano desde el panel.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -28,7 +28,6 @@ from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
-    enqueue_waitlist_offer_email,
     format_local_datetime,
     is_deliverable_email,
     rebook_url,
@@ -41,12 +40,24 @@ from modules.waitlist.model import WaitlistEntry, WaitlistStatus
 logger = structlog.get_logger()
 
 
+# Un bloqueo borrado devuelve un RANGO (12:30 a 14:00), no un turno: sus
+# extremos no caen en la grilla de horarios que ve el cliente, asi que
+# ofrecerlo por mail manda a la gente a un horario que no existe. Para ese
+# origen solo se le avisa al duenio, que reserva a mano desde el panel.
+RANGOS_SIN_GRILLA = frozenset({"block_deleted"})
+
+
 @dataclass(frozen=True)
 class ReleasedSlot:
     store_id: str
     staff_id: str
     starts_at: datetime
     ends_at: datetime
+    reason: str = ""
+
+    @property
+    def aligned_to_grid(self) -> bool:
+        return self.reason not in RANGOS_SIN_GRILLA
 
     @classmethod
     def from_payload(cls, store_id: str, payload: dict[str, Any]) -> "ReleasedSlot":
@@ -57,6 +68,7 @@ class ReleasedSlot:
                 datetime.fromisoformat(str(payload["starts_at"]))
             ),
             ends_at=ensure_utc_aware(datetime.fromisoformat(str(payload["ends_at"]))),
+            reason=str(payload.get("reason") or ""),
         )
 
     @property
@@ -65,10 +77,19 @@ class ReleasedSlot:
 
 
 @dataclass(frozen=True)
+class PendingOfferEmail:
+    """Mail listo para mandar FUERA de la transaccion del outbox (regla 5)."""
+
+    email: str
+    details: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class OfferResult:
     candidates: int
     offered_entry_id: str | None
     owner_notified: bool
+    pending_email: PendingOfferEmail | None = None
 
 
 async def matching_entries(
@@ -158,10 +179,48 @@ def _owner_notification(
     )
 
 
-async def offer_released_slot(
+async def live_offer_exists(
     db: AsyncSession, slot: ReleasedSlot, *, now: datetime
+) -> bool:
+    """Ya hay una oferta vigente sobre este mismo hueco."""
+    result = await db.execute(
+        select(WaitlistEntry.id)
+        .where(
+            WaitlistEntry.store_id == slot.store_id,
+            WaitlistEntry.is_active.is_(True),
+            WaitlistEntry.status == WaitlistStatus.OFFERED.value,
+            WaitlistEntry.offered_staff_id == slot.staff_id,
+            WaitlistEntry.offered_starts_at == slot.starts_at,
+            WaitlistEntry.offer_expires_at.is_not(None),
+            WaitlistEntry.offer_expires_at > now,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def offer_released_slot(
+    db: AsyncSession,
+    slot: ReleasedSlot,
+    *,
+    now: datetime,
+    notify_owner: bool = True,
 ) -> OfferResult:
-    """Avisa al dueno y le ofrece el cupo al primero de la lista. No commitea."""
+    """Le ofrece el cupo al primero de la lista. NO commitea y NO manda mails.
+
+    El mail vuelve en ``pending_email`` para que el llamador lo despache
+    despues del commit: mandarlo aca lo dejaba dentro de la transaccion que
+    sostiene el ``FOR UPDATE`` del outbox (regla 5), y un fallo del lote
+    reenviaba ofertas ya enviadas.
+    """
+    # El cupo pudo volver a ocuparse entre que se publico el evento y que el
+    # consumidor lo proceso, y puede haber una oferta viva sobre el mismo
+    # hueco (dos eventos por el mismo rango, o una re-oferta solapada).
+    if not await slot_still_free(db, slot) or await live_offer_exists(
+        db, slot, now=now
+    ):
+        return OfferResult(candidates=0, offered_entry_id=None, owner_notified=False)
+
     encajan = await matching_entries(db, slot)
     if not encajan:
         return OfferResult(candidates=0, offered_entry_id=None, owner_notified=False)
@@ -169,14 +228,18 @@ async def offer_released_slot(
     store = await db.get(Store, slot.store_id)
     staff = await db.get(Staff, slot.staff_id)
     staff_name = getattr(staff, "display_name", None) or "el profesional"
-    db.add(_owner_notification(slot.store_id, slot, staff_name, len(encajan)))
+    # Solo la primera vez que se libera el hueco: una re-oferta a la persona
+    # siguiente no es una novedad para el duenio.
+    if notify_owner:
+        db.add(_owner_notification(slot.store_id, slot, staff_name, len(encajan)))
 
     notice_hours = int(getattr(store, "min_booking_notice_hours", 2) or 0)
-    if slot.starts_at < now + timedelta(hours=notice_hours):
-        # Dentro de la antelacion minima el cliente no puede reservar por el
-        # portal: queda en manos del dueno (WhatsApp o alta desde el panel).
+    if not slot.aligned_to_grid or slot.starts_at < now + timedelta(hours=notice_hours):
+        # Dentro de la antelacion minima -- o sobre un rango que no cae en la
+        # grilla -- el cliente no puede reservarlo por el portal: queda en
+        # manos del dueno (WhatsApp o alta desde el panel).
         return OfferResult(
-            candidates=len(encajan), offered_entry_id=None, owner_notified=True
+            candidates=len(encajan), offered_entry_id=None, owner_notified=notify_owner
         )
 
     entry, service = encajan[0]
@@ -189,12 +252,13 @@ async def offer_released_slot(
         minutes=int(service.duration_minutes)
     )
 
-    if is_deliverable_email(entry.client_email):
+    pendiente: PendingOfferEmail | None = None
+    if is_deliverable_email(entry.client_email) and entry.client_email:
         base = settings.FRONTEND_URL.rstrip("/")
         slug = getattr(store, "slug", None)
         fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
         link = rebook_url(base, slug, service, staff)
-        await enqueue_waitlist_offer_email(
+        pendiente = PendingOfferEmail(
             email=entry.client_email,
             details={
                 "public_id": entry.id,
@@ -217,22 +281,47 @@ async def offer_released_slot(
         candidates=len(encajan),
     )
     return OfferResult(
-        candidates=len(encajan), offered_entry_id=entry.id, owner_notified=True
+        candidates=len(encajan),
+        offered_entry_id=entry.id,
+        owner_notified=notify_owner,
+        pending_email=pendiente,
     )
 
 
-async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> dict[str, int]:
-    """Ofertas vencidas vuelven a la cola; si el cupo sigue libre, va al siguiente."""
+@dataclass
+class LapseResult:
+    lapsed: int = 0
+    reoffered: int = 0
+    expired: int = 0
+    pending_emails: list[PendingOfferEmail] = field(default_factory=list)
+
+    def counters(self) -> dict[str, int]:
+        return {
+            "lapsed": self.lapsed,
+            "reoffered": self.reoffered,
+            "expired": self.expired,
+        }
+
+
+async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResult:
+    """Ofertas vencidas vuelven a la cola; si el cupo sigue libre, va al siguiente.
+
+    Toma las filas con ``FOR UPDATE SKIP LOCKED``: sin eso, dos corridas
+    solapadas del beat re-ofrecian el mismo cupo a dos personas. Los mails
+    vuelven en ``pending_emails`` y los manda la tarea despues del commit.
+    """
     rows = await db.execute(
-        select(WaitlistEntry).where(
+        select(WaitlistEntry)
+        .where(
             WaitlistEntry.is_active.is_(True),
             WaitlistEntry.status == WaitlistStatus.OFFERED.value,
             WaitlistEntry.offer_expires_at.is_not(None),
             WaitlistEntry.offer_expires_at <= now,
         )
+        .with_for_update(skip_locked=True)
     )
     lapsed = list(rows.scalars().all())
-    reofrecidos = 0
+    resultado = LapseResult(lapsed=len(lapsed))
     for entry in lapsed:
         entry.status = WaitlistStatus.WAITING.value
         entry.offer_expires_at = None
@@ -244,25 +333,28 @@ async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> dict[str, 
                 ends_at=ensure_utc_aware(entry.offered_ends_at),
             )
             await db.flush()
-            if await slot_still_free(db, slot):
-                result = await offer_released_slot(db, slot, now=now)
-                if result.offered_entry_id:
-                    reofrecidos += 1
+            # El duenio ya se entero cuando se libero: esto es un pase de mano.
+            oferta = await offer_released_slot(db, slot, now=now, notify_owner=False)
+            if oferta.offered_entry_id:
+                resultado.reoffered += 1
+            if oferta.pending_email:
+                resultado.pending_emails.append(oferta.pending_email)
 
     vencidas = await db.execute(
-        select(WaitlistEntry).where(
+        select(WaitlistEntry)
+        .where(
             WaitlistEntry.is_active.is_(True),
             WaitlistEntry.status.in_(
                 [WaitlistStatus.WAITING.value, WaitlistStatus.OFFERED.value]
             ),
             WaitlistEntry.window_ends_at <= now,
         )
+        .with_for_update(skip_locked=True)
     )
-    expiradas = 0
     for entry in vencidas.scalars().all():
         entry.status = WaitlistStatus.EXPIRED.value
-        expiradas += 1
-    return {"lapsed": len(lapsed), "reoffered": reofrecidos, "expired": expiradas}
+        resultado.expired += 1
+    return resultado
 
 
 async def mark_booked(

@@ -178,6 +178,25 @@ export interface DepositPreview {
   online_payment_mandatory: boolean
 }
 
+export interface ClientAppointmentItem {
+  public_id: string
+  service_name: string
+  staff_name: string
+  starts_at: string
+  ends_at: string
+  status: string
+  notes: string | null
+  custom_fields: Record<string, string>
+  can_cancel: boolean
+  can_reschedule: boolean
+}
+
+export interface ClientAppointments {
+  client_name: string
+  client_phone: string
+  appointments: ClientAppointmentItem[]
+}
+
 export class PublicBookingService {
   async previewDeposit(params: {
     storePublicId: string
@@ -259,6 +278,30 @@ export class PublicBookingService {
       params: { store_public_id: storePublicId, service_id: serviceId, code }
     })
     return data
+  }
+
+  async getClientAppointments(storePublicId: string, phone: string): Promise<ClientAppointments> {
+    const { data } = await apiClient.get<ClientAppointments>(
+      `/public/client/${storePublicId}/${phone}/appointments`
+    )
+    return data
+  }
+
+  async cancelClientAppointment(publicId: string, phone: string): Promise<void> {
+    await apiClient.patch(`/public/client/appointments/${publicId}/cancel`, { phone })
+  }
+
+  async rescheduleClientAppointment(payload: {
+    publicId: string
+    phone: string
+    newStartsAt: string
+    idempotencyKey: string
+  }): Promise<void> {
+    await apiClient.patch(`/public/client/appointments/${payload.publicId}/reschedule`, {
+      phone: payload.phone,
+      new_starts_at: payload.newStartsAt,
+      idempotency_key: payload.idempotencyKey
+    })
   }
 
   async requestOtp(payload: OtpRequestPayload): Promise<OtpRequestResponse> {

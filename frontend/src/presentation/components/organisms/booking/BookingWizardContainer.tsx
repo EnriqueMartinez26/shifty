@@ -11,12 +11,15 @@ import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
 import { BookingStepStaff } from './BookingStepStaff'
 import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
+import { resolveBackJump, resolveStepJump } from './stepFlow'
 import type { BookingWizardState } from './types'
 import { createUuid } from '../../../../shared/utils/uuid'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
+  usePublicServices,
+  usePublicStaff,
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
@@ -99,8 +102,32 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     setBookingState((prev) => ({ ...prev, ...updates }))
   }
 
+  // Las mismas consultas que hacen los pasos (react-query las comparte): se
+  // usan para saltear los pasos que tienen una sola opcion.
+  const servicesQuery = usePublicServices(store.public_id)
+  const staffQuery = usePublicStaff(store.public_id, bookingState.serviceId || undefined)
+  const stepOptions = {
+    services: servicesQuery.data,
+    staff: bookingState.serviceId ? staffQuery.data : undefined
+  }
+
   const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
-  const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 0))
+  const prevStep = () => setCurrentStep((prev) => Math.max(resolveBackJump(prev, stepOptions), 0))
+
+  // Sincroniza el wizard con las listas que llegan de la API: un paso con una
+  // sola opcion se elige solo y se saltea. Es un efecto porque depende de
+  // datos asincronicos, no de una interaccion.
+  const salto = resolveStepJump(currentStep, stepOptions)
+  useEffect(() => {
+    if (salto.step === currentStep) return
+    const seleccion: Partial<BookingWizardState> = {}
+    if (salto.serviceId) seleccion.serviceId = salto.serviceId
+    if (salto.staffId) seleccion.requestedStaffId = salto.staffId
+    if (Object.keys(seleccion).length > 0) {
+      setBookingState((prev) => ({ ...prev, ...seleccion }))
+    }
+    setCurrentStep(salto.step)
+  }, [salto.step, salto.serviceId, salto.staffId, currentStep])
   const handleRequestOtp = async () => {
     try {
       if (!otpState.email.trim()) {
@@ -457,6 +484,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             serviceId={selectedServiceId}
             paymentsEnabled={Boolean(store.feature_flags?.payments)}
             storeName={store.name}
+            storeSlug={store.slug}
             whatsappNumber={store.whatsapp_number}
             depositPolicy={store.deposit_policy}
             allowManualCoordination={store.allow_manual_coordination}

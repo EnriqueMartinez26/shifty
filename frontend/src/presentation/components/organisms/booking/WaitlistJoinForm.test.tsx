@@ -72,3 +72,45 @@ describe('WaitlistJoinForm', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Ya estas anotado')
   })
 })
+
+describe('cambio de dia', () => {
+  beforeEach(() => {
+    mockJoin.mockReset()
+    mockState.isSuccess = false
+  })
+
+  it('el cartel de exito no se arrastra a otro dia', async () => {
+    // Regresion 2026-09-11: tras anotarse para el dia A, al mirar el dia B
+    // seguia el cartel y decia el dia B (falso), sin boton para anotarse.
+    mockJoin.mockResolvedValue({ public_id: 'wl-1' })
+    const { rerender } = render(
+      <WaitlistJoinForm
+        key="2026-09-20"
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        date="2026-09-20"
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
+    fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
+    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '1155550101' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
+    await waitFor(() => expect(mockJoin).toHaveBeenCalledTimes(1))
+
+    // El padre remonta el formulario al cambiar de dia (key={dateStr}).
+    rerender(
+      <WaitlistJoinForm
+        key="2026-09-25"
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        date="2026-09-25"
+      />
+    )
+
+    expect(screen.getByRole('button', { name: /Avisame si se libera/ })).toBeInTheDocument()
+    expect(screen.queryByText(/Quedaste en lista de espera/)).not.toBeInTheDocument()
+  })
+})

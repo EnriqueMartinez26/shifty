@@ -38,8 +38,11 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
   const [open, setOpen] = useState(false)
   const [form, setForm] = useState({ name: '', phone: '', email: '' })
   const [error, setError] = useState('')
+  // El dia al que se anoto, no el que esta mirando: el cartel de exito decia
+  // el dia actual y podia afirmar algo falso si el cliente cambiaba de dia.
+  const [anotadoPara, setAnotadoPara] = useState<string | null>(null)
 
-  if (join.isSuccess) {
+  if (join.isSuccess && anotadoPara) {
     return (
       <div
         className="mt-4 rounded-2xl border p-4 flex items-start gap-3"
@@ -52,7 +55,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
             Quedaste en lista de espera
           </p>
           <p className="text-xs font-bold text-gray-500 mt-1">
-            Si se libera un turno el {formatArgentinaDateDisplay(dayWindow(date).starts)} te
+            Si se libera un turno el {formatArgentinaDateDisplay(dayWindow(anotadoPara).starts)} te
             avisamos{form.email.trim() ? ' por email' : ''}. El cupo se ofrece a una persona por vez
             durante unos minutos.
           </p>
@@ -89,6 +92,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         client_phone: form.phone.trim(),
         client_email: form.email.trim() || null
       })
+      setAnotadoPara(date)
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'No pudimos anotarte. Proba de nuevo.'))
     }

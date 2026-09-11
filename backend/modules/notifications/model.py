@@ -14,6 +14,7 @@ class NotificationType(str, enum.Enum):
     PAYMENT_APPROVED = "payment.approved"
     WAITLIST_SLOT_RELEASED = "waitlist.slot_released"
     SUBSCRIPTION_EXPIRING = "subscription.expiring"
+    APPOINTMENT_CANCELLED_BY_CLIENT = "appointment.cancelled_by_client"
 
 
 class Notification(BaseEntity):

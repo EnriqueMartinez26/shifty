@@ -119,7 +119,7 @@ export const WaitlistContainer: React.FC = () => {
           className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
           style={{ background: 'white', border: `1px solid ${colors2000s.border.default}` }}
         >
-          {entries.length} en espera
+          {waitlist.isError ? 'Sin datos' : `${entries.length} en espera`}
         </span>
       </div>
 
@@ -136,6 +136,21 @@ export const WaitlistContainer: React.FC = () => {
       {waitlist.isLoading ? (
         <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-gray-500">
           <Loader2 className="w-4 h-4 animate-spin" /> Cargando lista de espera...
+        </div>
+      ) : waitlist.isError ? (
+        // Un error no es una lista vacia: decir "nadie en espera" cuando la
+        // consulta fallo le hace perder clientes al duenio sin que se entere.
+        <div
+          role="alert"
+          className="rounded-3xl p-10 text-center"
+          style={{ background: 'white', border: `1px solid ${colors2000s.border.default}` }}
+        >
+          <p className="text-xs font-black uppercase tracking-widest text-red-600">
+            No pudimos cargar la lista de espera
+          </p>
+          <p className="text-xs font-bold text-gray-500 mt-2">
+            Actualizá la página en unos instantes.
+          </p>
         </div>
       ) : entries.length === 0 ? (
         <div

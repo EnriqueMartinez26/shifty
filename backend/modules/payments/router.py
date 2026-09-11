@@ -641,12 +641,15 @@ async def create_payment_preference(
         db, appointment_id, user.store_id
     )
     try:
+        # Sin override: si el turno ya tiene un cobro con la sena calculada
+        # por la regla, se respeta ese importe y solo se refresca el link.
         payment = await ensure_payment_preference(
             db,
             appointment=appointment,
             service=service,
             store_id=user.store_id,
             amount_override=_payment_amount_for_service(service),
+            keep_existing_amount=True,
         )
     except CircuitBreakerOpenError as exc:
         raise AppException(

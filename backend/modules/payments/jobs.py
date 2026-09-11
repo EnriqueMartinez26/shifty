@@ -15,6 +15,8 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
     build_client_details,
+    enqueue_waitlist_offer_email,
+    format_local_datetime,
     enqueue_cancellation_email,
     enqueue_confirmation_email,
     send_store_notification_email,
@@ -72,18 +74,25 @@ async def process_outbox_batch(
     now = datetime.now(timezone.utc)
     processed = 0
     failed = 0
+    # Mails de la lista de espera: se juntan y se mandan DESPUES del commit.
+    # Dentro del lote quedarian en la transaccion que sostiene el FOR UPDATE
+    # (regla 5) y un fallo del lote los reenviaria (el outbox no tiene
+    # contador de intentos).
+    ofertas_pendientes: list[Any] = []
 
     for message in messages:
         try:
             if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
                 # Lista de espera: aviso al dueno y oferta a una persona por vez.
-                await offer_released_slot(
+                oferta = await offer_released_slot(
                     db,
                     ReleasedSlot.from_payload(
                         message.store_id, dict(message.payload or {})
                     ),
                     now=now,
                 )
+                if oferta.pending_email:
+                    ofertas_pendientes.append(oferta.pending_email)
                 message.processed_at = now
                 message.error = None
                 processed += 1
@@ -134,6 +143,12 @@ async def process_outbox_batch(
             failed += 1
 
     await db.commit()
+    # Recien ahora, con la transaccion cerrada y las ofertas persistidas, se
+    # mandan los mails. Un SMTP caido no revierte nada ni duplica ofertas.
+    for pendiente in ofertas_pendientes:
+        await enqueue_waitlist_offer_email(
+            email=pendiente.email, details=pendiente.details
+        )
     return {"processed": processed, "failed": failed, "inspected": len(messages)}
 
 
@@ -159,6 +174,21 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
             body=(
                 f"{client_name} reservo {service_name} y va a coordinar el pago. "
                 "Confirmalo cuando recibas la transferencia."
+            ),
+            appointment_id=str(appointment_id) if appointment_id else None,
+        )
+
+    if message.event_type == NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value:
+        cuando = payload.get("starts_at")
+        fecha, hora = format_local_datetime(cuando) if cuando else ("", "")
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Un cliente cancelo su turno",
+            body=(
+                f"{client_name} cancelo {service_name}"
+                + (f" del {fecha} a las {hora}" if fecha else "")
+                + ". El horario volvio a estar disponible."
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
         )

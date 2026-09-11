@@ -184,6 +184,44 @@ def _confirmation_body(details: dict[str, Any]) -> str:
     )
 
 
+def _rescheduled_subject(details: dict[str, Any]) -> str:
+    return f"Te movimos el turno - {details.get('service', '')}"
+
+
+def _rescheduled_body(details: dict[str, Any]) -> str:
+    return (
+        f"{_saludo(details)}\n\n"
+        f'La tienda movio tu turno de "{details.get("service")}" '
+        f"{_con_quien(details)}: ahora es el {_cuando(details)}.\n\n"
+        "Si ese horario no te sirve, avisanos.\n\n"
+        f"{_contacto(details)}\n\n"
+        "- El equipo de Shifty"
+    )
+
+
+async def enqueue_reschedule_email(
+    *, email: str | None, details: dict[str, Any]
+) -> dict[str, str]:
+    """Mail "te movimos el turno". Nunca aborta la reprogramacion."""
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
+    assert email is not None
+    try:
+        success = await _send_email(
+            email, _rescheduled_subject(details), _rescheduled_body(details)
+        )
+    except Exception as exc:
+        logger.warning(
+            "reschedule_email_dispatch_failed",
+            appointment=details.get("public_id"),
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "reason": type(exc).__name__}
+    if not success:
+        return {"status": "failed", "reason": "smtp"}
+    return {"status": "sent", "to": email}
+
+
 def _cancellation_subject(details: dict[str, Any]) -> str:
     return f"Turno cancelado - {details.get('service', '')}"
 
@@ -330,6 +368,12 @@ async def notify_client_reminder(
             "reminder_sent", canal="whatsapp", appointment=details.get("public_id")
         )
         return {"status": "sent", "channel": "whatsapp", "to": phone}
+
+    # El email tecnico {tel}@store{id}.noreply no recibe nada: mandarle ahi
+    # rebota, ensucia la reputacion del remitente y, como el fallo libera el
+    # reclamo, el job reintentaba cada 15 minutos hasta la hora del turno.
+    if not is_deliverable_email(email):
+        email = None
 
     if email:
         if await _send_email(email, _reminder_subject(details), cuerpo):

@@ -1,9 +1,10 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   publicBookingService,
   type AvailabilitySlot,
   type BookingConfirmation,
+  type ClientAppointments,
   type DepositPreview,
   type OtpRequestPayload,
   type OtpRequestResponse,
@@ -106,6 +107,44 @@ export const usePublicDepositPreview = (params: {
         promotionCode: params.promotionCode
       })
   })
+
+export const usePublicClientAppointments = (
+  storePublicId: string | undefined,
+  phone: string,
+  enabled: boolean
+) =>
+  useQuery<ClientAppointments>({
+    queryKey: ['public-client-appointments', storePublicId, phone],
+    enabled: Boolean(storePublicId && phone && enabled),
+    retry: false,
+    queryFn: () => publicBookingService.getClientAppointments(storePublicId as string, phone)
+  })
+
+export const useCancelClientAppointment = () => {
+  const queryClient = useQueryClient()
+  return useMutation<void, Error, { publicId: string; phone: string }>({
+    mutationFn: ({ publicId, phone }) =>
+      publicBookingService.cancelClientAppointment(publicId, phone),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-client-appointments'] })
+    }
+  })
+}
+
+export const useRescheduleClientAppointment = () => {
+  const queryClient = useQueryClient()
+  return useMutation<
+    void,
+    Error,
+    { publicId: string; phone: string; newStartsAt: string; idempotencyKey: string }
+  >({
+    mutationFn: (payload) => publicBookingService.rescheduleClientAppointment(payload),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-client-appointments'] })
+      void queryClient.invalidateQueries({ queryKey: ['public-availability'] })
+    }
+  })
+}
 
 export const useJoinWaitlist = () =>
   useMutation<PublicWaitlistEntry, Error, WaitlistJoinPayload>({

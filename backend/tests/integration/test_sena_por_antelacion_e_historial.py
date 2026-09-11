@@ -92,6 +92,33 @@ def _slot(dias: int) -> datetime:
     )
 
 
+async def _verificar_telefono(
+    session: AsyncSession, store_slug: str, telefono: str
+) -> None:
+    """El historial solo se usa con el telefono verificado por OTP."""
+    from modules.otp.service import OtpService
+    from modules.users.model import User
+
+    tienda = (
+        await session.execute(
+            select(User).where(User.email == f"{store_slug}@example.com")
+        )
+    ).scalar_one()
+    servicio = OtpService(session)
+    pedido = await servicio.request_code(
+        store_id=tienda.store_id,
+        phone=telefono,
+        channel="email",
+        email="cliente@example.com",
+        store_name="Demo",
+    )
+    await servicio.verify_code(
+        store_id=tienda.store_id,
+        phone=telefono,
+        code=str(pedido["debug_code"]),
+    )
+
+
 async def _preview(
     client: AsyncClient, store: str, service: str, dias: int, phone: str
 ) -> dict[str, Any]:
@@ -116,6 +143,12 @@ async def test_cliente_nuevo_con_mucha_antelacion_paga_los_recargos_y_queda_el_s
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", _mp_fake)
     store, _token, service, staff = await _tienda_con_sena(client, "sena-nuevo")
 
+    # Sin OTP el telefono no personaliza: ni se muestra ni se cobra el
+    # recargo por historial (el preview era un oraculo del historial ajeno).
+    anonimo = await _preview(client, store, service, 10, "+5491155550301")
+    assert anonimo["reasons"] == ["base", "far_notice"]
+
+    await _verificar_telefono(test_session, "sena-nuevo", "5491155550301")
     preview = await _preview(client, store, service, 10, "+5491155550301")
     # base 30% + 20 (antelacion >= 7 dias) + 10 (cliente nuevo) = 60% de 10000
     assert preview["amount"] == 6000.0
@@ -160,11 +193,12 @@ async def test_cliente_nuevo_con_mucha_antelacion_paga_los_recargos_y_queda_el_s
 
 @pytest.mark.asyncio
 async def test_el_historial_del_cliente_cambia_la_sena(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     store, token, service, staff = await _tienda_con_sena(client, "sena-historial")
     telefono = "+5491155550302"
+    await _verificar_telefono(test_session, "sena-historial", "5491155550302")
 
     # Sin historial y con poca antelacion: base + cliente nuevo.
     assert _reasons(await _preview(client, store, service, 2, telefono)) == [

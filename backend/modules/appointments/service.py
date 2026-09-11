@@ -38,6 +38,7 @@ from modules.notifications.tasks import (
     build_client_details,
     enqueue_confirmation_email,
     enqueue_rebook_email,
+    enqueue_reschedule_email,
 )
 from modules.payments.model import PaymentStatus
 from modules.payments.service import expire_mercadopago_preference
@@ -514,6 +515,12 @@ class AppointmentService:
         # El precio quedo congelado en la reserva original: reprogramar cambia
         # el horario, no re-tarifa al precio de lista de hoy.
         orig_price_amount = original.price_amount
+        # El contacto es el DEL CLIENTE, no el de quien reprograma: se copiaba
+        # el del administrador y a partir de ahi la confirmacion, el
+        # recordatorio y el boton de WhatsApp apuntaban a la tienda misma.
+        orig_client_name = original.client_name
+        orig_client_email = original.client_email
+        orig_client_phone = original.client_phone
 
         # 2. Resolver servicio para calcular duración
         service = await self.uow.appointments.get_service_by_id(
@@ -589,12 +596,9 @@ class AppointmentService:
                 if orig_price_amount is not None
                 else Decimal(str(service.price or 0))
             ),
-            client_name=(
-                f"{actor.first_name or ''} {actor.last_name or ''}".strip()
-                or actor.email
-            ),
-            client_email=actor.email,
-            client_phone=actor.phone,
+            client_name=orig_client_name,
+            client_email=orig_client_email,
+            client_phone=orig_client_phone,
             notes=orig_notes,
             intake_answers=orig_intake_answers,
             idempotency_key=idempotency_key,
@@ -617,6 +621,14 @@ class AppointmentService:
 
         await invalidate_availability(
             self.cache, store_id, original.starts_at, new_starts_at
+        )
+        # El cliente tiene que enterarse del horario nuevo: la fila nueva nace
+        # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
+        # le corresponde y sin este mail no se enteraba por ningun canal.
+        store = await self.uow.session.get(Store, store_id)
+        await enqueue_reschedule_email(
+            email=new_appointment.client_email,
+            details=build_client_details(new_appointment, service, staff, store),
         )
 
         return new_appointment, service, staff

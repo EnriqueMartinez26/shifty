@@ -28,16 +28,23 @@ class ReminderStage:
     floor: timedelta
 
 
+_LEAD_2H = timedelta(hours=2)
+# El piso del de 24h tiene que estar POR ENCIMA del lead del de 2h, no pegado:
+# con piso == lead, un worker que vuelve de una caida a falta de 2h05m mandaba
+# el de 24h y, en el tick siguiente (cada 15 minutos), el de 2h. Dos mails en
+# un cuarto de hora, justo lo que el piso venia a evitar. 2026-09-11.
+_PISO_24H = _LEAD_2H + timedelta(hours=1)
+
 STAGE_24H = ReminderStage(
     name="24h",
     column="reminder_24h_sent_at",
     lead=timedelta(hours=24),
-    floor=timedelta(hours=2),
+    floor=_PISO_24H,
 )
 STAGE_2H = ReminderStage(
     name="2h",
     column="reminder_2h_sent_at",
-    lead=timedelta(hours=2),
+    lead=_LEAD_2H,
     floor=timedelta(0),
 )
 STAGES: tuple[ReminderStage, ...] = (STAGE_24H, STAGE_2H)

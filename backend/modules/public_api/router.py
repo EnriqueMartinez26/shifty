@@ -46,6 +46,7 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.service import store_is_suspended
 from modules.otp.service import OtpService
 from modules.payments.deposit_rules import (
+    UNKNOWN_HISTORY,
     ClientHistory,
     DepositDecision,
     DepositRules,
@@ -409,6 +410,7 @@ def _decide(
 
 @router.get("/deposit/preview", response_model=PublicDepositPreviewResponse)
 async def preview_public_deposit(
+    request: Request,
     store_public_id: PublicIdQuery,
     service_id: PublicIdQuery,
     starts_at: datetime,
@@ -420,7 +422,18 @@ async def preview_public_deposit(
 
     Sin esto el front inferia "hay sena" desde los campos crudos del servicio
     y divergia en cuanto la tienda configuraba un recargo.
+
+    El historial del cliente SOLO entra si ese telefono paso por OTP en esta
+    tienda: sin esa guarda el endpoint era un oraculo anonimo que decia, por
+    telefono, si era cliente y si tenia ausencias. 2026-09-11.
     """
+    telefono = re.sub(r"[\s\-\(\)\+]", "", client_phone) if client_phone else ""
+    await enforce_rate_limit(
+        request,
+        "public:deposit:preview",
+        settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE,
+        subject=f"{store_public_id}:{telefono}",
+    )
     await _bypass_rls(db)
     try:
         repo = PublicRepository(db)
@@ -438,11 +451,11 @@ async def preview_public_deposit(
             )
             if quote:
                 price = quote.final_amount
-        history = ClientHistory()
-        if client_phone:
-            history = await repo.get_client_history(
-                store.id, re.sub(r"[\s\-\(\)\+]", "", client_phone)
-            )
+        history = UNKNOWN_HISTORY
+        if telefono and await OtpService(db).is_recently_verified(
+            store_id=store.id, phone=telefono
+        ):
+            history = await repo.get_client_history(store.id, telefono)
         starts_at_utc = (
             starts_at if starts_at.tzinfo else starts_at.replace(tzinfo=timezone.utc)
         )
@@ -652,7 +665,14 @@ async def create_public_booking(
         # historial) y el resultado viaja hasta el pago y la respuesta. Antes se
         # recalculaba tres veces con `now` distinto. El historial es una sola
         # consulta agregada, antes del lock.
-        history = await repo.get_client_history(store_id, data.client_phone)
+        # Mismo criterio que el preview: un telefono sin verificar no trae el
+        # historial de nadie, ni para mostrar ni para cobrar. Si no, quien
+        # tipea el telefono de otro hereda (o le carga) sus recargos.
+        history = (
+            await repo.get_client_history(store_id, data.client_phone)
+            if phone_verified
+            else UNKNOWN_HISTORY
+        )
         deposit = _decide(
             service,
             store,
@@ -835,20 +855,6 @@ async def create_public_booking(
         # (antes la reserva publica no invalidaba nada y el slot seguia
         # "available" hasta cinco minutos).
         await invalidate_availability(redis, store_id, appointment.starts_at)
-        # Si estaba en lista de espera para esto, la entrada se cierra sola.
-        # Best-effort: no puede deshacer una reserva ya hecha.
-        try:
-            if await mark_booked(
-                db,
-                store_id=store_id,
-                client_phone=data.client_phone,
-                service_id=service.id,
-                starts_at=appointment.starts_at,
-            ):
-                await db.commit()
-        except Exception as exc:
-            await db.rollback()
-            logger.warning("waitlist_mark_booked_failed", error_type=type(exc).__name__)
 
         # El turno y el Payment PENDING ya estan persistidos y el lock FOR UPDATE
         # del staff quedo soltado. Recien ahora se hace la llamada HTTP a Mercado
@@ -929,6 +935,23 @@ async def create_public_booking(
             if promotion_quote
             else float(base_service_price),
         )
+        # Recien con el turno firme (incluido el link de pago) se cierra la
+        # entrada de lista de espera: cerrarla antes la perdia si el link de
+        # Mercado Pago fallaba y el turno se revertia. Best-effort: no puede
+        # deshacer una reserva ya hecha.
+        try:
+            if await mark_booked(
+                db,
+                store_id=store_id,
+                client_phone=data.client_phone,
+                service_id=service.id,
+                starts_at=appointment.starts_at,
+            ):
+                await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.warning("waitlist_mark_booked_failed", error_type=type(exc).__name__)
+
         await idempotency_save(idempotency_key, response.model_dump(mode="json"), redis)
         return response
     except Exception:
@@ -1123,6 +1146,25 @@ async def client_cancel_appointment(
             starts_at=appointment.starts_at,
             ends_at=appointment.ends_at,
             reason="client_cancelled",
+        )
+        # La tienda se entera de que le cancelaron: antes el cliente cancelaba
+        # y el dueno solo lo notaba mirando la agenda.
+        servicio_cancelado = await db.execute(
+            select(Service).where(Service.id == appointment.service_id)
+        )
+        db.add(
+            OutboxMessage(
+                store_id=appointment.store_id,
+                event_type=NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value,
+                payload={
+                    "appointment_id": appointment.id,
+                    "client_name": client.full_name or "Un cliente",
+                    "service_name": getattr(
+                        servicio_cancelado.scalar_one_or_none(), "name", ""
+                    ),
+                    "starts_at": appointment.starts_at.isoformat(),
+                },
+            )
         )
         await db.commit()
         await db.refresh(appointment)

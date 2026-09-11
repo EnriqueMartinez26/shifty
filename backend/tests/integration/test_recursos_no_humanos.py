@@ -163,3 +163,37 @@ async def test_editar_y_dar_de_baja_un_recurso_no_toca_usuarios(
     assert await _usuarios(test_session) == antes
     listado = await client.get("/staff/", headers=auth_headers(token))
     assert all(m["public_id"] != pid for m in listado.json())
+
+
+@pytest.mark.asyncio
+async def test_editar_un_recurso_con_el_payload_completo_del_front(
+    client: AsyncClient,
+) -> None:
+    """El front mandaba el payload entero (con first_name/last_name vacios) y
+    StaffUpdate los rechazaba con 422: ningun recurso se podia editar."""
+    _, token = await register_and_login(
+        client, slug="cancha-edit", email="cancha-edit@example.com"
+    )
+    creado = await client.post(
+        "/staff/",
+        headers=auth_headers(token),
+        json={"kind": "resource", "display_name": "Cancha 1"},
+    )
+    assert creado.status_code == 201, creado.text
+    pid = creado.json()["public_id"]
+
+    # Payload tal cual lo arma el front para un recurso (sin nombre ni email).
+    editado = await client.put(
+        f"/staff/{pid}",
+        headers=auth_headers(token),
+        json={
+            "public_id": pid,
+            "kind": "resource",
+            "display_name": "Cancha 1 (techada)",
+            "is_active": True,
+            "service_ids": [],
+        },
+    )
+    assert editado.status_code == 200, editado.text
+    assert editado.json()["display_name"] == "Cancha 1 (techada)"
+    assert editado.json()["email"] is None

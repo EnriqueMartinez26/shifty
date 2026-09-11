@@ -6,6 +6,8 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+
 
 def _normalize_phone(value: str) -> str:
     # Misma normalizacion que la reserva publica (solo digitos).
@@ -18,9 +20,13 @@ def _normalize_phone(value: str) -> str:
 
 
 class WaitlistJoinRequest(BaseModel):
-    store_public_id: str = Field(..., min_length=1, max_length=64)
-    service_id: str = Field(..., min_length=1, max_length=64)
-    staff_id: Optional[str] = Field(default=None, max_length=64)
+    store_public_id: str = Field(
+        ..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
+    service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    staff_id: Optional[str] = Field(
+        default=None, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     window_starts_at: datetime
     window_ends_at: datetime
     client_name: str = Field(..., min_length=1, max_length=100)
@@ -34,6 +40,16 @@ class WaitlistJoinRequest(BaseModel):
         return _normalize_phone(value)
 
     @model_validator(mode="after")
+    def reject_control_chars_in_text(self) -> "WaitlistJoinRequest":
+        """Regla 19: nada de NUL, bidi ni zero-width en texto libre publico.
+
+        Estos textos viajan al mail de la oferta y al link wa.me del panel.
+        """
+        self.client_name = reject_payload_control_chars(self.client_name)
+        self.notes = reject_payload_control_chars(self.notes)
+        return self
+
+    @model_validator(mode="after")
     def window_is_valid(self) -> "WaitlistJoinRequest":
         if self.window_ends_at <= self.window_starts_at:
             raise ValueError("La ventana termina antes de empezar")
@@ -43,7 +59,9 @@ class WaitlistJoinRequest(BaseModel):
 
 
 class WaitlistClientQuery(BaseModel):
-    store_public_id: str = Field(..., min_length=1, max_length=64)
+    store_public_id: str = Field(
+        ..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     phone: str = Field(..., min_length=6, max_length=30)
 
     @field_validator("phone")
@@ -77,4 +95,6 @@ class WaitlistBookRequest(BaseModel):
     """El dueno reserva a mano para alguien de la lista (sin antelacion minima)."""
 
     starts_at: datetime
-    staff_id: Optional[str] = Field(default=None, max_length=64)
+    staff_id: Optional[str] = Field(
+        default=None, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )

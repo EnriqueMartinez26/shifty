@@ -235,9 +235,15 @@ async def test_el_cupo_se_ofrece_a_una_sola_persona_y_pasa_a_la_siguiente(
     vencido = datetime.now(timezone.utc) + timedelta(minutes=30)
     resumen = await expire_lapsed_offers(test_session, now=vencido)
     await test_session.commit()
-    assert resumen["lapsed"] == 1 and resumen["reoffered"] == 1
+    assert resumen.lapsed == 1 and resumen.reoffered == 1
     assert (await _entrada(test_session, id_primera)).status == "waiting"
     assert (await _entrada(test_session, id_segunda)).status == "offered"
+    # El mail vuelve pendiente: se manda FUERA de la transaccion (regla 5).
+    assert [p.email for p in resumen.pending_emails] == ["marta@example.com"]
+    for pendiente in resumen.pending_emails:
+        await tasks.enqueue_waitlist_offer_email(
+            email=pendiente.email, details=pendiente.details
+        )
     assert any(e[0] == "marta@example.com" for e in buzon.enviados)
 
     # Marta reserva el cupo: su entrada se cierra sola.

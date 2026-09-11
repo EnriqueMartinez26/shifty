@@ -144,3 +144,20 @@ def test_el_snapshot_es_serializable_y_explica_el_monto() -> None:
         "extra_percent": 50,
         "reasons": ["base", "far_notice", "absences"],
     }
+
+
+def test_historial_desconocido_no_dispara_recargos_por_historial() -> None:
+    # Telefono sin OTP: no sabemos de quien es. No es "cliente nuevo" ni
+    # "faltador": no se cobra ningun recargo por historial (2026-09-11).
+    from modules.payments.deposit_rules import UNKNOWN_HISTORY
+
+    d = decide_deposit(
+        _servicio(),
+        price=Decimal("10000"),
+        notice=timedelta(days=10),
+        rules=CON_TODO,
+        history=UNKNOWN_HISTORY,
+    )
+    assert d.reasons == ["base", "far_notice"]
+    assert d.amount == Decimal("5000.00")
+    assert UNKNOWN_HISTORY.is_new is False

@@ -598,6 +598,7 @@ async def ensure_payment_preference(
     promotion_code: str | None = None,
     create_provider_link: bool = True,
     deposit_rule: dict[str, JsonValue] | None = None,
+    keep_existing_amount: bool = False,
 ) -> Payment:
     amount = (
         amount_override
@@ -620,12 +621,18 @@ async def ensure_payment_preference(
     should_refresh_provider_link = False
 
     if payment:
-        if amount > 0:
+        # Un cobro que ya nacio con la regla de sena (snapshot deposit_rule) no
+        # se re-tarifa por generar el link desde el panel: ese camino calcula
+        # la sena base del servicio y pisaba el monto a la mitad, dejaba el
+        # snapshot mintiendo y rompia la validacion de importe del webhook
+        # (el cliente pagaba y el turno no se confirmaba nunca). 2026-09-11.
+        conserva_importe = keep_existing_amount and payment.deposit_rule is not None
+        if amount > 0 and not conserva_importe:
             should_refresh_provider_link = payment.amount != amount
             payment.amount = amount
-        payment.original_amount = original_amount
-        payment.discount_amount = discount_amount
-        payment.promotion_code = promotion_code
+            payment.original_amount = original_amount
+            payment.discount_amount = discount_amount
+            payment.promotion_code = promotion_code
         if deposit_rule is not None:
             payment.deposit_rule = deposit_rule
         # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o

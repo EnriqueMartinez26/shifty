@@ -1,10 +1,12 @@
 import React from 'react'
 
-import { CheckCircle2, Clock3, MapPin, Phone, Store, XCircle } from 'lucide-react'
+import { CalendarCheck, CheckCircle2, Clock3, MapPin, Phone, Store, XCircle } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
 import { resolveBookingPreselect } from '@presentation/components/organisms/booking/deepLink'
+
+import { buildWaMeUrl } from '@shared/utils/clientWhatsApp'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
@@ -152,8 +154,35 @@ const PublicBooking: React.FC = () => {
             }}
           >
             <Phone size={14} className="text-orange-500 stroke-[2.5px]" />
-            <span>{store.whatsapp_number || 'Reserva por web disponible'}</span>
+            {store.whatsapp_number ? (
+              <a
+                href={buildWaMeUrl(
+                  store.whatsapp_number,
+                  `Hola ${store.name}! Quiero consultar por un turno.`
+                )}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {store.whatsapp_number}
+              </a>
+            ) : (
+              <span>Reserva por web disponible</span>
+            )}
           </div>
+
+          <a
+            href={`/b/${store.slug}/mis-turnos`}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border"
+            style={{
+              background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+              borderColor: colors2000s.border.default,
+              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
+              color: colors2000s.text.primary
+            }}
+          >
+            <CalendarCheck size={14} className="text-orange-500 stroke-[2.5px]" />
+            <span>Mis turnos</span>
+          </a>
         </div>
       </div>
 

@@ -30,6 +30,7 @@ import type { BusinessType } from '@shared/types/business'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
 import {
   useDisconnectMercadoPagoOAuth,
@@ -488,6 +489,7 @@ const SettingsPage: React.FC = () => {
                     placeholder={labels.slugPlaceholder}
                   />
                 </div>
+                <ShareLinksPanel slug={formData.slug} />
               </div>
               <div className="space-y-3">
                 <label

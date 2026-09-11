@@ -37,13 +37,13 @@ export class HttpStaffRepository
   }
 
   protected async createImpl(staff: Staff): Promise<Staff> {
-    const payload = StaffMapper.toResponseDTO(staff)
+    const payload = StaffMapper.toWritePayload(staff)
     const { data } = await this.client.post<StaffResponseDTO>('/staff/', payload)
     return StaffMapper.toDomain(data)
   }
 
   protected async updateImpl(id: string, staff: Staff): Promise<Staff> {
-    const payload = StaffMapper.toResponseDTO(staff)
+    const payload = StaffMapper.toWritePayload(staff)
     const { data } = await this.client.put<StaffResponseDTO>(`/staff/${id}`, payload)
     return StaffMapper.toDomain(data)
   }

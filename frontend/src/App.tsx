@@ -31,6 +31,7 @@ const WaitlistPage = lazy(() => import('./presentation/pages/Waitlist'))
 const SuperAdminPage = lazy(() => import('./presentation/pages/SuperAdmin'))
 const UsersPage = lazy(() => import('./presentation/pages/Users'))
 const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
+const ClientAppointmentsPage = lazy(() => import('./presentation/pages/ClientAppointments'))
 const SettingsPage = lazy(() => import('./presentation/pages/Settings'))
 const LegalPage = lazy(() => import('./presentation/pages/Legal'))
 const ManualPage = lazy(() => import('./presentation/pages/Manual'))
@@ -221,6 +222,8 @@ function App() {
                 </ModuleBoundary>
               }
             />
+            <Route path="/b/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
+            <Route path="/booking/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
             <Route
               path="/b/:slug"
               element={

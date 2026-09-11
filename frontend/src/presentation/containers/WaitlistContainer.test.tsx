@@ -100,3 +100,17 @@ describe('WaitlistContainer', () => {
     expect(screen.getByText('Nadie en lista de espera')).toBeInTheDocument()
   })
 })
+
+describe('WaitlistContainer con la consulta en error', () => {
+  it('un error no se muestra como lista vacia', () => {
+    // Regresion 2026-09-11: decia "Nadie en lista de espera" y "0 en espera"
+    // cuando la consulta fallaba, y el duenio perdia clientes sin enterarse.
+    mockWaitlist.mockReturnValue({ data: undefined, isLoading: false, isError: true })
+
+    render(<WaitlistContainer />)
+
+    expect(screen.queryByText('Nadie en lista de espera')).not.toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent('No pudimos cargar la lista de espera')
+    expect(screen.getByText('Sin datos')).toBeInTheDocument()
+  })
+})

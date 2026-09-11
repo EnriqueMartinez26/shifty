@@ -54,15 +54,31 @@ class DepositRules:
 
 @dataclass(frozen=True)
 class ClientHistory:
-    """Resumen agregado del cliente en ESTA tienda (una sola consulta)."""
+    """Resumen agregado del cliente en ESTA tienda (una sola consulta).
+
+    ``known=False`` significa "no sabemos": el telefono no paso por OTP, asi
+    que no es de nadie en particular. No es lo mismo que un cliente nuevo, y
+    por eso no dispara los recargos por historial: si no, quien tipea el
+    telefono de otro le carga (o hereda) sus antecedentes, y el preview se
+    volvia un oraculo de la cartera de la tienda.
+    """
 
     completed: int = 0
     absent: int = 0
     cancelled: int = 0
+    known: bool = True
 
     @property
     def is_new(self) -> bool:
-        return self.completed == 0 and self.absent == 0 and self.cancelled == 0
+        return (
+            self.known
+            and self.completed == 0
+            and self.absent == 0
+            and self.cancelled == 0
+        )
+
+
+UNKNOWN_HISTORY = ClientHistory(known=False)
 
 
 @dataclass(frozen=True)
@@ -129,7 +145,7 @@ def decide_deposit(
     if rules.new_client_extra_percent > 0 and history.is_new:
         extra += rules.new_client_extra_percent
         reasons.append(REASON_NEW_CLIENT)
-    if rules.absent_client_extra_percent > 0 and history.absent > 0:
+    if rules.absent_client_extra_percent > 0 and history.known and history.absent > 0:
         extra += rules.absent_client_extra_percent
         reasons.append(REASON_ABSENCES)
 

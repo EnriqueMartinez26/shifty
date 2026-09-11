@@ -169,6 +169,18 @@ class WaitlistService:
         service = await self.db.get(Service, entry.service_id)
         if not service:
             raise ResourceNotFoundException("Servicio", entry.service_id)
+        # Lock de la entrada antes de usarla: dos pestanias del panel sobre la
+        # misma persona creaban dos turnos confirmados desde una sola entrada.
+        bloqueada = await self.db.execute(
+            select(WaitlistEntry).where(WaitlistEntry.id == entry.id).with_for_update()
+        )
+        entry = bloqueada.scalar_one()
+        if entry.status not in OPEN_WAITLIST_STATUSES:
+            raise AppException(
+                message="Esa persona ya no esta en la lista de espera",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="WAITLIST_ENTRY_CLOSED",
+            )
         try:
             appointment, service, staff = await self._create_confirmed(
                 store, entry, service, starts_at, staff_public_id

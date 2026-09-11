@@ -174,6 +174,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <p className="text-xs text-gray-400 mt-2 font-medium">Proba seleccionando otro dia.</p>
             <div className="px-4 text-left">
               <WaitlistJoinForm
+                key={dateStr}
                 storePublicId={storePublicId}
                 serviceId={serviceId}
                 staffId={staffId}
@@ -237,6 +238,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
           visibleSlots.length > 0 &&
           !visibleSlots.some((slot) => slot.status === 'available') && (
             <WaitlistJoinForm
+              key={dateStr}
               storePublicId={storePublicId}
               serviceId={serviceId}
               staffId={staffId}
