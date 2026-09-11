@@ -15,8 +15,6 @@ import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
-  usePublicServices,
-  usePublicStaff,
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
@@ -90,15 +88,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     setBookingState((prev) => ({ ...prev, ...updates }))
   }
 
-  // Las mismas consultas que hacen los pasos (react-query las comparte): se
-  // usan para saltear los pasos que tienen una sola opcion.
-  const servicesQuery = usePublicServices(store.public_id)
-  const staffQuery = usePublicStaff(store.public_id, bookingState.serviceId || undefined)
-  const stepOptions = {
-    services: servicesQuery.data,
-    staff: bookingState.serviceId ? staffQuery.data : undefined
-  }
-
   const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
   const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 0))
 
@@ -117,15 +106,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
 
   const handleRequestOtp = async () => {
     try {
-      if (!otpState.email.trim()) {
-        setOtpState((prev) => ({ ...prev, error: 'Ingresa un email para recibir el codigo' }))
-        return
-      }
       const response = await requestOtp.mutateAsync({
         store_public_id: store.public_id,
         phone: bookingState.client.phone,
-        channel: 'email',
-        email: otpState.email.trim()
+        channel: otpState.channel
       })
       setOtpState((prev) => ({
         ...prev,
