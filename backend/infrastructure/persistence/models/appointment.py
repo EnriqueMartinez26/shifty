@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import ulid
 from sqlalchemy import (
@@ -51,6 +51,12 @@ class AppointmentModel(Base):
     client_id: Mapped[Optional[str]] = mapped_column(
         String, ForeignKey("users.id"), index=True
     )
+    # Snapshot de contacto congelado al reservar: no se re-deriva del
+    # usuario vinculado despues. Si el cliente cambia nombre/email/telefono,
+    # el turno ya reservado conserva lo que valia al momento de la reserva.
+    client_name: Mapped[str] = mapped_column(String(255))
+    client_email: Mapped[Optional[str]] = mapped_column(String(255))
+    client_phone: Mapped[Optional[str]] = mapped_column(String(50))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     duration_minutes: Mapped[int] = mapped_column()
@@ -109,19 +115,10 @@ class AppointmentModel(Base):
     client = relationship("UserModel")
 
     def __init__(self, **kwargs: Any) -> None:
-        client_name = kwargs.pop("client_name", None)
-        client_email = kwargs.pop("client_email", None)
-        client_phone = kwargs.pop("client_phone", None)
         # `status=` es el nombre publico que usan los repositorios al crear.
         if "status" in kwargs:
             kwargs["_status"] = kwargs.pop("status")
         super().__init__(**kwargs)
-        if client_name is not None:
-            self.client_name = client_name
-        if client_email is not None:
-            self.client_email = client_email
-        if client_phone is not None:
-            self.client_phone = client_phone
 
     @hybrid_property
     def status(self) -> str:
@@ -135,59 +132,6 @@ class AppointmentModel(Base):
     @property
     def public_id(self) -> str:
         return self.id
-
-    @property
-    def client_name(self) -> str:
-        override = cast(str | None, getattr(self, "_client_name_override", None))
-        if override:
-            return override
-        client = self.__dict__.get("client")
-        if client is not None:
-            first_name = cast(str | None, getattr(client, "first_name", None))
-            last_name = cast(str | None, getattr(client, "last_name", None))
-            value = " ".join(
-                part.strip()
-                for part in (first_name, last_name)
-                if part and part.strip()
-            ).strip()
-            if value:
-                return value
-            email = cast(str | None, getattr(client, "email", None))
-            if email:
-                return email
-        return ""
-
-    @client_name.setter
-    def client_name(self, value: str | None) -> None:
-        self._client_name_override = (value or "").strip()
-
-    @property
-    def client_email(self) -> Optional[str]:
-        override = cast(str | None, getattr(self, "_client_email_override", None))
-        if override is not None:
-            return override
-        client = self.__dict__.get("client")
-        if client is not None:
-            return cast(str | None, getattr(client, "email", None))
-        return None
-
-    @client_email.setter
-    def client_email(self, value: str | None) -> None:
-        self._client_email_override = value.strip() if isinstance(value, str) else value
-
-    @property
-    def client_phone(self) -> Optional[str]:
-        override = cast(str | None, getattr(self, "_client_phone_override", None))
-        if override is not None:
-            return override
-        client = self.__dict__.get("client")
-        if client is not None:
-            return cast(str | None, getattr(client, "phone", None))
-        return None
-
-    @client_phone.setter
-    def client_phone(self, value: str | None) -> None:
-        self._client_phone_override = value.strip() if isinstance(value, str) else value
 
     def apply_status_transition(self, new_status: AppointmentStatus | str) -> None:
         from core.exceptions import InvalidStatusTransitionException
