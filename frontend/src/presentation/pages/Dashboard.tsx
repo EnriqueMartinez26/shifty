@@ -4,12 +4,14 @@ import type { CSSProperties, ReactNode } from 'react'
 import { format, subDays } from 'date-fns'
 import {
   ArrowUpRight,
+  Ban,
   CalendarClock,
   CircleAlert,
   CircleDollarSign,
   Clock3,
   Gauge,
   LayoutDashboard,
+  ListChecks,
   Sparkles,
   TrendingUp,
   UserRoundPlus,
@@ -20,16 +22,20 @@ import { useNavigate } from 'react-router'
 import type { UpcomingAppointment } from '@application/services/DashboardService'
 import type {
   ProfessionalReportItem,
-  ReportTopServiceItem
+  ReportAppointmentItem,
+  ReportTopServiceItem,
+  ReportTrendPoint
 } from '@application/services/ReportsService'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import SalesDonut from '../components/organisms/dashboard/SalesDonut'
+import TrendChart from '../components/organisms/dashboard/TrendChart'
 import { useAuth } from '../context/AuthContext'
 import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
 import { useDashboardSummary } from '../hooks/useDashboard'
 import { useLedgerSummary } from '../hooks/useLedger'
 import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
-import { useProfessionalReports, useReportSummary } from '../hooks/useReports'
+import { useProfessionalReports, useReportSummary, useReportTrend } from '../hooks/useReports'
 import { useStoreFeatureFlags } from '../hooks/useStores'
 import { createDashboardListItemStyle, createDashboardPanelStyle } from '../lib/surfaceStyles'
 
@@ -71,6 +77,15 @@ type RankedItem = {
   detail?: ReactNode
 }
 
+type TransactionItem = {
+  id: string
+  title: string
+  subtitle?: string
+  amount: string
+  status: string
+  tone?: Tone
+}
+
 type HealthItem = {
   id: string
   label: string
@@ -98,6 +113,9 @@ type DashboardHero = {
 
 type DashboardCopy = {
   metricsTitle: string
+  transactionsTitle: string
+  transactionsDescription: string
+  viewTransactionsLabel: string
   operationsTitle: string
   operationsDescription: string
   actionsTitle: string
@@ -109,6 +127,7 @@ type DashboardCopy = {
   emptyAgenda: string
   emptyAlerts: string
   emptyOpportunities: string
+  emptyTransactions: string
 }
 
 type DashboardOperationCard = {
@@ -121,6 +140,12 @@ type DashboardOperationCard = {
 type EnterpriseDashboardProps = {
   copy: DashboardCopy
   hero: DashboardHero
+  trendPoints: ReportTrendPoint[]
+  trendLoading: boolean
+  topServices: ReportTopServiceItem[]
+  salesLoading: boolean
+  transactions: TransactionItem[]
+  onViewTransactions: () => void
   todayMetrics: MetricItem[]
   urgentActions: ActionItem[]
   agenda: AgendaItem[]
@@ -149,6 +174,9 @@ const percentFormatter = new Intl.NumberFormat('es-AR', {
 
 const copy: DashboardCopy = {
   metricsTitle: 'Resumen del dia',
+  transactionsTitle: 'Transacciones',
+  transactionsDescription: 'Ultimos turnos del periodo con su estado y monto.',
+  viewTransactionsLabel: 'Ver todas',
   operationsTitle: 'Operacion de hoy',
   operationsDescription: 'Turnos, carga operativa y capacidad disponible en una sola vista.',
   actionsTitle: 'Acciones urgentes',
@@ -159,7 +187,8 @@ const copy: DashboardCopy = {
   emptyActions: 'No hay tareas criticas por resolver.',
   emptyAgenda: 'No hay proximos turnos para mostrar.',
   emptyAlerts: 'Sin alertas activas.',
-  emptyOpportunities: 'Sin oportunidades destacadas por ahora.'
+  emptyOpportunities: 'Sin oportunidades destacadas por ahora.',
+  emptyTransactions: 'No hay turnos registrados en el periodo.'
 }
 
 const pageStyle: CSSProperties = {
@@ -184,6 +213,13 @@ const boardGridStyle: CSSProperties = {
 const lowerGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr)',
+  gap: 16,
+  alignItems: 'start'
+}
+
+const insightsGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 2fr) minmax(260px, 1fr) minmax(260px, 1fr)',
   gap: 16,
   alignItems: 'start'
 }
@@ -317,6 +353,19 @@ const mapTopServices = (items: ReportTopServiceItem[] | undefined): RankedItem[]
     detail: `${numberFormatter.format(item.appointments)} reservas`
   }))
 
+const mapTransactions = (items: ReportAppointmentItem[] | undefined): TransactionItem[] =>
+  [...(items ?? [])]
+    .sort((left, right) => new Date(right.starts_at).getTime() - new Date(left.starts_at).getTime())
+    .slice(0, 6)
+    .map((item) => ({
+      id: item.public_id,
+      title: item.client_name,
+      subtitle: `${item.service_name} - ${format(new Date(item.starts_at), 'dd/MM HH:mm')}`,
+      amount: formatCurrency(item.service_price),
+      status: item.status,
+      tone: getAppointmentTone(item.status)
+    }))
+
 const Dashboard = () => {
   const navigate = useNavigate() as unknown as (path: string) => void
   const { token, user } = useAuth()
@@ -330,6 +379,7 @@ const Dashboard = () => {
   const featureFlagsQuery = useStoreFeatureFlags()
   const reportsQuery = useReportSummary(fromDate, toDate, reportsAllowed)
   const professionalsQuery = useProfessionalReports(fromDate, toDate, reportsAllowed)
+  const trendQuery = useReportTrend(6, reportsAllowed)
 
   const flags = featureFlagsQuery.data?.flags
   const paymentsEnabled = Boolean(flags?.payments)
@@ -438,14 +488,29 @@ const Dashboard = () => {
   const todayMetrics = useMemo<MetricItem[]>(
     () => [
       {
-        id: 'appointments-today',
-        label: 'Turnos hoy',
-        value: numberFormatter.format(stats?.appointments_today ?? 0),
-        detail: `${numberFormatter.format(upcomingAppointments.length)} proximos en agenda`,
-        signal: Number(stats?.appointments_today ?? 0) > 0 ? 'Agenda activa' : 'Sin carga',
-        icon: <CalendarClock size={18} />,
-        tone: 'primary',
-        onSelect: () => navigate('/dashboard/calendar')
+        id: 'weekly-revenue',
+        label: 'Ingreso semanal',
+        value: formatCurrency(stats?.weekly_revenue),
+        detail: `${Number(stats?.revenue_trend ?? 0) >= 0 ? '+' : ''}${formatPercent(
+          stats?.revenue_trend
+        )} vs semana pasada`,
+        signal: Number(stats?.revenue_trend ?? 0) >= 0 ? 'Tendencia positiva' : 'Revisar caida',
+        icon: <CircleDollarSign size={18} />,
+        tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'success',
+        onSelect: () => navigate('/dashboard/reports')
+      },
+      {
+        id: 'new-clients',
+        label: 'Clientes nuevos',
+        value: numberFormatter.format(stats?.new_clients_last_30d ?? 0),
+        detail: `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`,
+        signal:
+          Number(stats?.new_clients_last_30d ?? 0) > 0
+            ? 'Adquisicion en curso'
+            : 'Sin altas recientes',
+        icon: <UserRoundPlus size={18} />,
+        tone: 'success',
+        onSelect: () => navigate('/dashboard/users')
       },
       {
         id: 'occupancy',
@@ -463,28 +528,16 @@ const Dashboard = () => {
         onSelect: () => navigate('/dashboard/reports')
       },
       {
-        id: 'new-clients',
-        label: 'Clientes nuevos',
-        value: numberFormatter.format(stats?.new_clients_last_30d ?? 0),
-        detail: `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`,
+        id: 'cancellations',
+        label: 'Cancelaciones',
+        value: numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
+        detail: `${numberFormatter.format(upcomingAppointments.length)} proximos en agenda`,
         signal:
-          Number(stats?.new_clients_last_30d ?? 0) > 0
-            ? 'Adquisicion en curso'
-            : 'Sin altas recientes',
-        icon: <UserRoundPlus size={18} />,
-        tone: 'success',
-        onSelect: () => navigate('/dashboard/users')
-      },
-      {
-        id: 'weekly-revenue',
-        label: 'Ingreso semanal',
-        value: formatCurrency(stats?.weekly_revenue),
-        detail: `${Number(stats?.revenue_trend ?? 0) >= 0 ? '+' : ''}${formatPercent(
-          stats?.revenue_trend
-        )} vs semana pasada`,
-        signal: Number(stats?.revenue_trend ?? 0) >= 0 ? 'Tendencia positiva' : 'Revisar caida',
-        icon: <CircleDollarSign size={18} />,
-        tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'success',
+          Number(reportStats?.cancelled_appointments ?? 0) > 0
+            ? 'Revisar patron'
+            : 'Sin cancelaciones',
+        icon: <Ban size={18} />,
+        tone: Number(reportStats?.cancelled_appointments ?? 0) > 0 ? 'warning' : 'success',
         onSelect: () => navigate('/dashboard/reports')
       }
     ],
@@ -493,6 +546,7 @@ const Dashboard = () => {
       clientStats?.returning_clients,
       navigate,
       occupancy,
+      reportStats?.cancelled_appointments,
       stats,
       upcomingAppointments.length
     ]
@@ -736,6 +790,12 @@ const Dashboard = () => {
     <EnterpriseDashboard
       copy={copy}
       hero={hero}
+      trendPoints={trendQuery.data?.points ?? []}
+      trendLoading={trendQuery.isLoading}
+      topServices={reportsQuery.data?.top_services ?? []}
+      salesLoading={reportsQuery.isLoading}
+      transactions={mapTransactions(reportsQuery.data?.appointments)}
+      onViewTransactions={() => navigate('/dashboard/reports')}
       todayMetrics={todayMetrics}
       urgentActions={urgentActions}
       agenda={mapAgenda(upcomingAppointments)}
@@ -753,6 +813,12 @@ const Dashboard = () => {
 function EnterpriseDashboard({
   copy,
   hero,
+  trendPoints,
+  trendLoading,
+  topServices,
+  salesLoading,
+  transactions,
+  onViewTransactions,
   todayMetrics,
   urgentActions,
   agenda,
@@ -785,9 +851,22 @@ function EnterpriseDashboard({
     <main style={pageStyle}>
       {errorMessage ? <ErrorPanel message={errorMessage} /> : null}
 
-      <HeroPanel hero={hero} />
-
       <SummaryMetricsPanel title={copy.metricsTitle} metrics={todayMetrics} />
+
+      <section style={insightsGridStyle} className="dashboard-insights-grid">
+        <TrendChart points={trendPoints} isLoading={trendLoading} />
+        <SalesDonut services={topServices} isLoading={salesLoading} />
+        <TransactionsPanel
+          title={copy.transactionsTitle}
+          description={copy.transactionsDescription}
+          items={transactions}
+          emptyText={copy.emptyTransactions}
+          viewAllLabel={copy.viewTransactionsLabel}
+          onViewAll={onViewTransactions}
+        />
+      </section>
+
+      <HeroPanel hero={hero} />
 
       <section style={boardGridStyle} className="dashboard-board-grid">
         <OperationPanel
@@ -847,6 +926,18 @@ function EnterpriseDashboard({
           @media (max-width: 1200px) {
             .dashboard-board-grid,
             .dashboard-lower-grid {
+              grid-template-columns: 1fr !important;
+            }
+          }
+
+          @media (max-width: 1100px) {
+            .dashboard-insights-grid {
+              grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+            }
+          }
+
+          @media (max-width: 720px) {
+            .dashboard-insights-grid {
               grid-template-columns: 1fr !important;
             }
           }
@@ -1504,6 +1595,139 @@ function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: stri
         )
       })}
     </div>
+  )
+}
+
+function TransactionsPanel({
+  title,
+  description,
+  items,
+  emptyText,
+  viewAllLabel,
+  onViewAll
+}: {
+  title: string
+  description: string
+  items: TransactionItem[]
+  emptyText: string
+  viewAllLabel: string
+  onViewAll: () => void
+}) {
+  return (
+    <section style={createDashboardPanelStyle()}>
+      <div style={{ ...panelBodyStyle, display: 'grid', gap: 16 }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 12
+          }}
+        >
+          <SectionHeader icon={<ListChecks size={18} />} title={title} description={description} />
+        </div>
+
+        {items.length ? (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {items.map((item) => {
+              const tone = toneTokens(item.tone)
+              return (
+                <div
+                  key={item.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    ...createDashboardListItemStyle(tone.border, 'rgba(255, 255, 255, 0.68)', 12)
+                  }}
+                >
+                  <span style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+                    <strong
+                      style={{
+                        fontSize: 13,
+                        lineHeight: '17px',
+                        fontWeight: 900,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      {item.title}
+                    </strong>
+                    {item.subtitle ? (
+                      <small
+                        style={{
+                          color: colors2000s.text.secondary,
+                          fontSize: 11,
+                          lineHeight: '14px',
+                          fontWeight: 700,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {item.subtitle}
+                      </small>
+                    ) : null}
+                    <span
+                      style={{
+                        alignSelf: 'start',
+                        padding: '3px 8px',
+                        borderRadius: 999,
+                        background: tone.background,
+                        border: `1px solid ${tone.border}`,
+                        color: tone.accent,
+                        fontSize: 9,
+                        lineHeight: '11px',
+                        fontWeight: 900,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase'
+                      }}
+                    >
+                      {item.status}
+                    </span>
+                  </span>
+
+                  <strong
+                    style={{
+                      color: colors2000s.text.primary,
+                      fontSize: 13,
+                      lineHeight: '17px',
+                      fontWeight: 900,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {item.amount}
+                  </strong>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <EmptyState text={emptyText} />
+        )}
+
+        <button
+          type="button"
+          onClick={onViewAll}
+          style={{
+            ...buttonStyles2000s.default,
+            borderRadius: 14,
+            padding: '10px 12px',
+            justifySelf: 'start',
+            fontSize: 11,
+            lineHeight: '14px',
+            fontWeight: 900,
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+            color: colors2000s.orange.accent
+          }}
+        >
+          {viewAllLabel}
+        </button>
+      </div>
+    </section>
   )
 }
 

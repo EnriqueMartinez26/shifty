@@ -43,7 +43,7 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
       id: null,
       title: hayRecursos ? 'Cualquiera disponible' : 'Cualquier profesional',
       subtitle: 'Te asignamos el primero disponible para el horario que elijas.',
-      accent: 'linear-gradient(180deg, #0f766e 0%, #115e59 100%)',
+      accent: `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`,
       icon: <Sparkles className="w-6 h-6" />
     },
     ...(staffList || []).map((staff, idx) => ({
@@ -57,7 +57,7 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
           : 'Profesional disponible para este servicio.',
       accent:
         idx % 2 === 0
-          ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
+          ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
           : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
       icon: <User className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
     }))
@@ -113,12 +113,12 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
                   background: isSelected
                     ? 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.15) 100%)'
                     : idx % 2 === 0
-                      ? 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)'
+                      ? `linear-gradient(135deg, ${colors2000s.status.info.bg} 0%, #dbeafe 100%)`
                       : 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
                   borderColor: isSelected
                     ? 'rgba(255,255,255,0.4)'
                     : idx % 2 === 0
-                      ? '#bfdbfe'
+                      ? colors2000s.status.info.border
                       : '#fed7aa',
                   boxShadow: isSelected
                     ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
@@ -126,7 +126,7 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
                   color: isSelected
                     ? '#ffffff'
                     : idx % 2 === 0
-                      ? '#2563eb'
+                      ? colors2000s.status.info.dark
                       : colors2000s.orange.dark
                 }}
               >
@@ -154,9 +154,11 @@ export const BookingStepStaff: React.FC<BookingStepStaffProps> = ({
                 className="w-7 h-7 rounded-full flex items-center justify-center transition-all border"
                 style={{
                   background: isSelected
-                    ? 'linear-gradient(180deg, #22c55e 0%, #16a34a 100%)'
+                    ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : '#ffffff',
-                  borderColor: isSelected ? '#16a34a' : colors2000s.border.default,
+                  borderColor: isSelected
+                    ? colors2000s.status.success.dark
+                    : colors2000s.border.default,
                   boxShadow: isSelected
                     ? 'inset 0 1px 0 rgba(255,255,255,0.3)'
                     : 'inset 0 1px 2px rgba(0,0,0,0.1)'

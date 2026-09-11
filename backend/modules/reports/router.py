@@ -1,7 +1,7 @@
 from datetime import date
 from io import BytesIO
 
-from fastapi import Depends
+from fastapi import Depends, Query
 from core.router import CanonicalAPIRouter
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ from modules.reports.schemas import (
     ProfessionalReportsResponse,
     ReportExportRequest,
     ReportSummaryResponse,
+    ReportTrendResponse,
 )
 from modules.reports.service import ReportService
 from modules.users.model import User
@@ -59,6 +60,20 @@ async def get_professional_reports(
         return await service.get_professionals(
             from_date, to_date, only_staff_id=staff_scope
         )
+    except ValueError as exc:
+        raise AppException(message=str(exc), http_status=400)
+
+
+@router.get("/trend", response_model=ReportTrendResponse)
+async def get_report_trend(
+    months: int = Query(default=6, ge=1, le=24),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReportTrendResponse:
+    service = ReportService(db)
+    staff_scope = _report_scope_for(user)
+    try:
+        return await service.get_trend(months=months, staff_id=staff_scope)
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
 

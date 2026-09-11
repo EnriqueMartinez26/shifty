@@ -190,9 +190,9 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               const isAvailable = slot.status === 'available'
               const badgeColor =
                 slot.status === 'blocked'
-                  ? '#dc2626'
+                  ? colors2000s.status.danger.dark
                   : slot.status === 'booked'
-                    ? '#2563eb'
+                    ? colors2000s.status.info.dark
                     : colors2000s.text.secondary
 
               return (
@@ -208,7 +208,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                       ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
                       : isAvailable
                         ? `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`
-                        : 'linear-gradient(180deg, #f5f5f5 0%, #e5e7eb 100%)',
+                        : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
                     borderColor: isSelected
                       ? colors2000s.orange.accent
                       : colors2000s.border.default,

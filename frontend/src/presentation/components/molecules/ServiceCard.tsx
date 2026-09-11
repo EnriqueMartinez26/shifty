@@ -19,7 +19,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   onDelete,
   isSelected = false
 }) => {
-  const accentColor = service.color || '#FF6B35'
+  const accentColor = service.color || colors2000s.orange.light
 
   return (
     <div
@@ -43,13 +43,13 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,
             boxShadow: colors2000s.shadows.insetDark,
-            color: service.isActive ? '#10b981' : colors2000s.text.disabled
+            color: service.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
           }}
         >
           {service.isActive ? (
-            <CheckCircle2 size={12} className="text-emerald-500" />
+            <CheckCircle2 size={12} color={colors2000s.status.success.dark} />
           ) : (
-            <XCircle size={12} className="text-gray-400" />
+            <XCircle size={12} color={colors2000s.text.disabled} />
           )}
           {service.isActive ? 'ACTIVO' : 'INACTIVO'}
         </span>
@@ -77,10 +77,16 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             )}
           </div>
           <div className="min-w-0">
-            <h3 className="font-black text-gray-800 text-sm uppercase tracking-tight truncate leading-tight">
+            <h3
+              className="font-black text-sm uppercase tracking-tight truncate leading-tight"
+              style={{ color: colors2000s.text.primary }}
+            >
               {service.name}
             </h3>
-            <p className="text-[10px] font-bold text-gray-400 mt-1 truncate max-w-[200px] leading-tight">
+            <p
+              className="text-[10px] font-bold mt-1 truncate max-w-[200px] leading-tight"
+              style={{ color: colors2000s.text.disabled }}
+            >
               {service.description || 'Sin descripción'}
             </p>
           </div>
@@ -100,12 +106,18 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
               boxShadow: colors2000s.shadows.insetDark
             }}
           >
-            <Clock size={16} className="text-gray-400" />
+            <Clock size={16} color={colors2000s.text.disabled} />
             <div>
-              <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">
+              <p
+                className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
+                style={{ color: colors2000s.text.disabled }}
+              >
                 Duración
               </p>
-              <p className="text-xs font-black text-gray-800 leading-none">
+              <p
+                className="text-xs font-black leading-none"
+                style={{ color: colors2000s.text.primary }}
+              >
                 {service.duration.format()}
               </p>
             </div>
@@ -122,7 +134,10 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
           >
             <DollarSign size={16} className="text-orange-500" />
             <div>
-              <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">
+              <p
+                className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
+                style={{ color: colors2000s.text.disabled }}
+              >
                 Precio
               </p>
               <p className="text-xs font-black leading-none" style={{ color: accentColor }}>
@@ -148,7 +163,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         <button
           onClick={() => onDelete(service.id)}
           className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-          style={{ ...buttonStyles2000s.default, color: '#ef4444' }}
+          style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
         >
           <Trash2 size={14} /> Eliminar
         </button>

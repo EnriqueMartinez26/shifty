@@ -47,7 +47,7 @@ def _looks_like_placeholder(value: str) -> bool:
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Shifty v2"
+    PROJECT_NAME: str = "Shifty"
     VERSION: str = "0.1.0"
     ENV: Environment = Environment.DEVELOPMENT
 
@@ -296,7 +296,7 @@ def _fallback_settings() -> Settings:
         "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
     )
     return Settings.model_construct(
-        PROJECT_NAME="Shifty v2",
+        PROJECT_NAME="Shifty",
         VERSION="0.1.0",
         ENV=Environment.DEVELOPMENT,
         # Aleatorio por proceso: aunque el BootErrorMiddleware responda 503 a

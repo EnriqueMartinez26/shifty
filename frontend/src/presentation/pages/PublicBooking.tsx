@@ -43,7 +43,10 @@ const PublicBooking: React.FC = () => {
 
   if (isLoading || resolvingDeepLink) {
     return (
-      <div className="min-h-screen grid place-items-center bg-[#EEF2F6] text-sm font-black uppercase tracking-widest text-gray-500">
+      <div
+        className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
+        style={{ background: colors2000s.bg.primary, color: colors2000s.text.secondary }}
+      >
         Cargando...
       </div>
     )
@@ -51,7 +54,10 @@ const PublicBooking: React.FC = () => {
 
   if (isError || !store) {
     return (
-      <div className="min-h-screen grid place-items-center bg-[#EEF2F6] text-sm font-black uppercase tracking-widest text-red-500 font-black">
+      <div
+        className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
+        style={{ background: colors2000s.bg.primary, color: colors2000s.status.danger.light }}
+      >
         Negocio no encontrado
       </div>
     )
@@ -63,17 +69,23 @@ const PublicBooking: React.FC = () => {
       payment?.payment_status === 'approved' && payment.appointment_status === 'confirmed'
     const failed = ['rejected', 'expired', 'refunded'].includes(payment?.payment_status || '')
     return (
-      <div className="min-h-screen bg-[#EEF2F6] grid place-items-center px-4">
+      <div
+        className="min-h-screen grid place-items-center px-4"
+        style={{ background: colors2000s.bg.primary }}
+      >
         <section
           className="w-full max-w-xl rounded-[2.5rem] bg-white p-8 text-center space-y-5"
           style={{ boxShadow: colors2000s.shadows.outer }}
         >
           {approved ? (
-            <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto" />
+            <CheckCircle2 className="w-16 h-16 mx-auto" color={colors2000s.status.success.light} />
           ) : failed ? (
-            <XCircle className="w-16 h-16 text-red-500 mx-auto" />
+            <XCircle className="w-16 h-16 mx-auto" color={colors2000s.status.danger.light} />
           ) : (
-            <Clock3 className="w-16 h-16 text-amber-500 mx-auto animate-pulse" />
+            <Clock3
+              className="w-16 h-16 mx-auto animate-pulse"
+              color={colors2000s.status.warning.light}
+            />
           )}
           <h1 className="text-2xl font-black uppercase tracking-tight">
             {approved
@@ -82,7 +94,7 @@ const PublicBooking: React.FC = () => {
                 ? 'La seña no fue aprobada'
                 : 'Estamos validando tu pago'}
           </h1>
-          <p className="text-sm font-bold text-gray-500">
+          <p className="text-sm font-bold" style={{ color: colors2000s.text.secondary }}>
             {approved
               ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
               : failed
@@ -90,7 +102,11 @@ const PublicBooking: React.FC = () => {
                 : 'No cierres esta pantalla. La confirmación depende del webhook verificado del backend.'}
           </p>
           {paymentStatus.isError && (
-            <p role="alert" className="text-sm font-bold text-red-600">
+            <p
+              role="alert"
+              className="text-sm font-bold"
+              style={{ color: colors2000s.status.danger.dark }}
+            >
               No pudimos consultar el estado del pago. Actualizá la página en unos instantes.
             </p>
           )}
@@ -109,7 +125,10 @@ const PublicBooking: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#EEF2F6] py-12 px-4 sm:px-6 lg:px-8">
+    <div
+      className="min-h-screen py-12 px-4 sm:px-6 lg:px-8"
+      style={{ background: colors2000s.bg.primary }}
+    >
       {/* Header Info */}
       <div className="max-w-2xl mx-auto mb-8 text-center animate-in fade-in slide-in-from-top-4 duration-700">
         <div

@@ -192,17 +192,17 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all cursor-default select-none"
                 style={{
                   background: isCompleted
-                    ? 'linear-gradient(180deg, #4ade80 0%, #22c55e 100%)'
+                    ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : isActive
                       ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-                      : 'linear-gradient(180deg, #f3f4f6 0%, #e5e7eb 100%)',
+                      : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
                   border: isCompleted
-                    ? '1px solid #16a34a'
+                    ? `1px solid ${colors2000s.status.success.accent}`
                     : isActive
                       ? `1px solid ${colors2000s.orange.accent}`
-                      : '1px solid rgba(0,0,0,0.1)',
+                      : `1px solid ${colors2000s.border.light}`,
                   boxShadow: isCompleted
-                    ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(34,197,94,0.3)`
+                    ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
                     : isActive
                       ? `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                       : `${colors2000s.shadows.insetLight}, 0 1px 2px rgba(0,0,0,0.05)`,
@@ -222,8 +222,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 className="h-1 flex-1 mx-2 rounded-full transition-all"
                 style={{
                   background: isCompleted
-                    ? 'linear-gradient(90deg, #22c55e 0%, #4ade80 100%)'
-                    : '#e5e7eb',
+                    ? `linear-gradient(90deg, ${colors2000s.status.success.dark} 0%, ${colors2000s.status.success.light} 100%)`
+                    : colors2000s.bg.disabled,
                   boxShadow: isCompleted ? 'none' : 'inset 0 1px 1px rgba(0,0,0,0.1)'
                 }}
               />
@@ -307,7 +307,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
           {otpState.debugCode && (
             <div
               className="rounded-2xl p-3 text-xs font-black uppercase tracking-widest"
-              style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8' }}
+              style={{
+                background: colors2000s.status.info.bg,
+                border: `1px solid ${colors2000s.status.info.border}`,
+                color: colors2000s.status.info.text
+              }}
             >
               Codigo debug: {otpState.debugCode}
             </div>
@@ -318,7 +322,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               role="alert"
               aria-live="polite"
               className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
-              style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}
+              style={{
+                background: colors2000s.status.danger.bg,
+                border: `1px solid ${colors2000s.status.danger.border}`,
+                color: colors2000s.status.danger.text
+              }}
             >
               <AlertCircle className="w-4 h-4" />
               {otpState.error}
@@ -328,7 +336,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
           {otpState.verified ? (
             <div
               className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
-              style={{ background: '#ecfdf5', border: '1px solid #bbf7d0', color: '#15803d' }}
+              style={{
+                background: colors2000s.status.success.bg,
+                border: `1px solid ${colors2000s.status.success.border}`,
+                color: colors2000s.status.success.text
+              }}
             >
               <ShieldCheck className="w-4 h-4" />
               Telefono validado correctamente

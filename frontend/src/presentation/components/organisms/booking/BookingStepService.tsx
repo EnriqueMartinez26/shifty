@@ -46,7 +46,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
       <div className="grid gap-4">
         {services?.map((svc) => {
           const isSelected = selectedId === svc.public_id
-          const serviceColor = svc.color || '#ff8c42'
+          const serviceColor = svc.color || colors2000s.orange.light
 
           return (
             <button
@@ -122,9 +122,11 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                 className="w-7 h-7 rounded-full flex items-center justify-center transition-all border"
                 style={{
                   background: isSelected
-                    ? 'linear-gradient(180deg, #22c55e 0%, #16a34a 100%)'
+                    ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : '#ffffff',
-                  borderColor: isSelected ? '#16a34a' : colors2000s.border.default,
+                  borderColor: isSelected
+                    ? colors2000s.status.success.dark
+                    : colors2000s.border.default,
                   boxShadow: isSelected
                     ? 'inset 0 1px 0 rgba(255,255,255,0.3)'
                     : 'inset 0 1px 2px rgba(0,0,0,0.1)'

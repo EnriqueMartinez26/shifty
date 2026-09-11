@@ -111,16 +111,16 @@ export interface RedeemFormState {
 export const scopeBadgeStyle = (variant: 'global' | 'tenant' | 'danger') => {
   if (variant === 'global') {
     return {
-      background: '#eff6ff',
-      border: '1px solid #bfdbfe',
-      color: '#1d4ed8'
+      background: colors2000s.status.info.bg,
+      border: `1px solid ${colors2000s.status.info.border}`,
+      color: colors2000s.status.info.text
     }
   }
   if (variant === 'danger') {
     return {
-      background: '#fff1f2',
-      border: '1px solid #fecdd3',
-      color: '#be123c'
+      background: colors2000s.status.danger.bg,
+      border: `1px solid ${colors2000s.status.danger.border}`,
+      color: colors2000s.status.danger.text
     }
   }
   return {

@@ -41,6 +41,9 @@ describe('Sidebar', () => {
       'href',
       '/dashboard/calendar'
     )
+    // El personal no tiene ningun hijo visible en "Mi Negocio": el grupo entero
+    // no deberia renderizarse, ni siquiera colapsado.
+    expect(screen.queryByRole('button', { name: /Mi Negocio/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Usuarios' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cerrar sesión' }))
@@ -48,7 +51,7 @@ describe('Sidebar', () => {
     expect(mockLogout).toHaveBeenCalledTimes(1)
   })
 
-  it('shows admin-only links when the user is global admin', () => {
+  it('shows admin-only links inside their group once expanded, for a global admin', () => {
     mockUser = {
       first_name: 'Lara',
       email: 'lara@example.com',
@@ -62,7 +65,27 @@ describe('Sidebar', () => {
       </MemoryRouter>
     )
 
+    // Colapsados por defecto: no estan en pantalla hasta abrir el grupo.
+    expect(screen.queryByRole('link', { name: 'Usuarios' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Promociones' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Mi Negocio/ }))
     expect(screen.getByRole('link', { name: 'Usuarios' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Ventas/ }))
     expect(screen.getByRole('link', { name: 'Promociones' })).toBeInTheDocument()
+  })
+
+  it('auto-expands the group that contains the active route', () => {
+    render(
+      <MemoryRouter initialEntries={['/dashboard/ledger']}>
+        <Sidebar />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toHaveAttribute(
+      'href',
+      '/dashboard/ledger'
+    )
   })
 })

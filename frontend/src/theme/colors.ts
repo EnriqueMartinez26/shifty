@@ -50,6 +50,43 @@ export const colors2000s = {
   states: {
     hover: '#f9f9f9', // Hover background - top
     hoverBottom: '#f0f0f0' // Hover background - bottom
+  },
+
+  // Paleta semántica de estado (success/warning/danger/info)
+  // Reemplaza los hex sueltos que se repetían ad-hoc en booking, cards y badges.
+  status: {
+    success: {
+      light: '#10b981',
+      dark: '#0f9f6e',
+      accent: '#166534',
+      bg: '#ecfdf5',
+      border: '#bbf7d0',
+      text: '#166534'
+    },
+    danger: {
+      light: '#ef4444',
+      dark: '#d13b3b',
+      accent: '#b91c1c',
+      bg: '#fef2f2',
+      border: '#fecaca',
+      text: '#b91c1c'
+    },
+    warning: {
+      light: '#eab308',
+      dark: '#b76a00',
+      accent: '#92400e',
+      bg: '#fffbeb',
+      border: '#fde68a',
+      text: '#92400e'
+    },
+    info: {
+      light: '#3b82f6',
+      dark: '#2563eb',
+      accent: '#1d4ed8',
+      bg: '#eff6ff',
+      border: '#bfdbfe',
+      text: '#1d4ed8'
+    }
   }
 } as const
 

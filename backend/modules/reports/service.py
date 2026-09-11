@@ -25,6 +25,8 @@ from modules.reports.schemas import (
     ReportTopServiceItem,
     ReportSummaryResponse,
     ReportSummaryStats,
+    ReportTrendPoint,
+    ReportTrendResponse,
 )
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock
@@ -38,6 +40,17 @@ def _report_client_name(client: User | None, fallback: str | None = None) -> str
     if client is None:
         return (fallback or "").strip()
     return client.full_name or client.email or (fallback or "").strip()
+
+
+def _add_months(month_start: date, delta: int) -> date:
+    """Primer dia del mes que esta `delta` meses despues de `month_start`.
+
+    `month_start` debe ser ya el dia 1 del mes; `delta` puede ser negativo.
+    """
+    month_index = month_start.month - 1 + delta
+    year = month_start.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, 1)
 
 
 @dataclass
@@ -392,6 +405,12 @@ class ReportService:
         ) in historical_rows:
             if not client_id:
                 continue
+            # func.min(Appointment.starts_at) vuelve aware (TIMESTAMPTZ); start_dt/
+            # end_dt son naive (ver _range_bounds). Sin esto, comparar mas abajo
+            # (y en la linea 494 via first_seen_by_client) explota con
+            # "can't compare offset-naive and offset-aware datetimes".
+            if starts_at.tzinfo is not None:
+                starts_at = starts_at.replace(tzinfo=None)
             first_seen_by_client.setdefault(client_id, starts_at)
             if starts_at < start_dt:
                 clients_seen_before_range.add(client_id)
@@ -666,3 +685,73 @@ class ReportService:
             to_date=resolved_to,
             professionals=items,
         )
+
+    async def get_trend(
+        self,
+        *,
+        months: int = 6,
+        staff_id: str | None = None,
+    ) -> ReportTrendResponse:
+        """Serie mensual de turnos (total / completados / cancelados).
+
+        Agrupa por mes calendario en la base (date_trunc, no en Python) y
+        rellena con ceros los meses sin turnos para que el grafico de barras
+        del dashboard no tenga huecos.
+        """
+        if months < 1:
+            raise ValueError("months debe ser mayor a 0")
+
+        today = datetime.now(timezone.utc).date()
+        current_month_start = date(today.year, today.month, 1)
+        start_month = _add_months(current_month_start, -(months - 1))
+        # Cubrir el mes actual completo (no solo hasta "hoy"): un turno futuro
+        # ya agendado dentro del mes en curso tiene que contar en su bucket.
+        end_month_exclusive = _add_months(current_month_start, 1)
+        start_dt = datetime.combine(start_month, time.min)
+        end_dt = datetime.combine(end_month_exclusive, time.min)
+
+        month_expr = func.date_trunc("month", Appointment.starts_at)
+        query = (
+            select(month_expr, Appointment.status, func.count(Appointment.id))
+            .where(Appointment.starts_at >= start_dt, Appointment.starts_at < end_dt)
+            .group_by(month_expr, Appointment.status)
+        )
+        if staff_id:
+            query = query.where(Appointment.staff_id == staff_id)
+        result = await self.db.execute(query)
+
+        buckets: dict[str, MetricBucket] = {}
+        cursor = start_month
+        for _ in range(months):
+            buckets[cursor.strftime("%Y-%m")] = {
+                "total": 0,
+                "completed": 0,
+                "cancelled": 0,
+            }
+            cursor = _add_months(cursor, 1)
+
+        for month_value, status, count in result.all():
+            # func.date_trunc vuelve aware (TIMESTAMPTZ); mismo caso que
+            # _aggregate_summary, se normaliza antes de comparar/formatear.
+            if month_value.tzinfo is not None:
+                month_value = month_value.replace(tzinfo=None)
+            key = month_value.strftime("%Y-%m")
+            bucket = buckets.setdefault(
+                key, {"total": 0, "completed": 0, "cancelled": 0}
+            )
+            bucket["total"] += count
+            if status == AppointmentStatus.COMPLETED.value:
+                bucket["completed"] += count
+            elif status == AppointmentStatus.CANCELLED.value:
+                bucket["cancelled"] += count
+
+        points = [
+            ReportTrendPoint(
+                month=key,
+                total_appointments=buckets[key]["total"],
+                completed_appointments=buckets[key]["completed"],
+                cancelled_appointments=buckets[key]["cancelled"],
+            )
+            for key in sorted(buckets.keys())
+        ]
+        return ReportTrendResponse(points=points)
