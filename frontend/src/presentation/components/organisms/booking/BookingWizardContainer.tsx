@@ -1,20 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
-import { AlertCircle, Check, ChevronLeft, ShieldCheck } from 'lucide-react'
+import { Check } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import { rememberOtpVerification } from '@shared/utils/otpSession'
 
-import { BookingStepClient } from './BookingStepClient'
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
-import { BookingStepStaff } from './BookingStepStaff'
-import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
-import { resolveBackJump, resolveStepJump } from './stepFlow'
-import type { BookingWizardState } from './types'
+import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
+import type { BookingOtpState, BookingWizardState } from './types'
 import { createUuid } from '../../../../shared/utils/uuid'
-import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
+import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
@@ -23,11 +20,7 @@ import {
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
-import {
-  createBookingBackButtonStyle,
-  createBookingInputStyle,
-  createBookingSurfaceStyle
-} from '../../../lib/surfaceStyles'
+import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
   store: PublicStore
@@ -44,20 +37,15 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     () => Object.fromEntries((store.custom_client_fields || []).map((field) => [field.key, ''])),
     [store.custom_client_fields]
   )
-  const steps = useMemo(
-    () =>
-      requiresOtp
-        ? ['Servicio', 'Profesional', 'Horario', 'Datos', 'OTP', 'Confirmacion']
-        : ['Servicio', 'Profesional', 'Horario', 'Datos', 'Confirmacion'],
-    [requiresOtp]
-  )
+  // Siempre 3 pasos, incluidas las tiendas con OTP: el paso de validacion se
+  // muestra como sub-fase dentro de "Datos y Confirmacion" en vez de ocupar
+  // un paso propio.
+  const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmacion'], [])
 
-  // El deep-link se resuelve en el inicializador: sin useEffect que "salte"
-  // de paso despues del primer render.
-  const [currentStep, setCurrentStep] = useState(() => initialStepFor(preselect))
-  const [otpState, setOtpState] = useState({
+  const [currentStep, setCurrentStep] = useState(0)
+  const [otpState, setOtpState] = useState<BookingOtpState>({
     code: '',
-    email: '',
+    channel: 'whatsapp',
     verified: false,
     verifiedPhone: '',
     debugCode: '',
@@ -112,22 +100,21 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   }
 
   const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
-  const prevStep = () => setCurrentStep((prev) => Math.max(resolveBackJump(prev, stepOptions), 0))
+  const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 0))
 
-  // Sincroniza el wizard con las listas que llegan de la API: un paso con una
-  // sola opcion se elige solo y se saltea. Es un efecto porque depende de
-  // datos asincronicos, no de una interaccion.
-  const salto = resolveStepJump(currentStep, stepOptions)
-  useEffect(() => {
-    if (salto.step === currentStep) return
-    const seleccion: Partial<BookingWizardState> = {}
-    if (salto.serviceId) seleccion.serviceId = salto.serviceId
-    if (salto.staffId) seleccion.requestedStaffId = salto.staffId
-    if (Object.keys(seleccion).length > 0) {
-      setBookingState((prev) => ({ ...prev, ...seleccion }))
-    }
-    setCurrentStep(salto.step)
-  }, [salto.step, salto.serviceId, salto.staffId, currentStep])
+  const handleClientChange = (client: BookingWizardState['client']) => {
+    updateState({ client })
+    // Una verificacion de OTP queda atada al telefono que se valido. Si el
+    // usuario lo edita despues de verificar, el gate vuelve a cerrarse para
+    // ese telefono nuevo (create_public_booking la exige de nuevo en el
+    // backend; esto solo evita mostrar un estado "verificado" enganoso).
+    setOtpState((prev) =>
+      prev.verified && client.phone !== prev.verifiedPhone
+        ? { ...prev, verified: false, code: '', debugCode: '', error: '' }
+        : prev
+    )
+  }
+
   const handleRequestOtp = async () => {
     try {
       if (!otpState.email.trim()) {
@@ -178,7 +165,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
 
   const renderStepIndicator = () => (
     <div
-      className="flex items-center justify-between p-4 mb-8 rounded-2xl relative overflow-hidden"
+      className="flex items-center justify-between p-4 mb-8 relative overflow-hidden"
       style={createBookingSurfaceStyle()}
     >
       {steps.map((label, i) => {
@@ -196,11 +183,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                     : isActive
                       ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
                       : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
-                  border: isCompleted
-                    ? `1px solid ${colors2000s.status.success.accent}`
-                    : isActive
-                      ? `1px solid ${colors2000s.orange.accent}`
-                      : `1px solid ${colors2000s.border.light}`,
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`
                     : isActive
@@ -212,7 +194,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 {isCompleted ? <Check className="w-4 h-4 font-black" /> : i + 1}
               </div>
               <span
-                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black ${isActive ? 'text-orange-600' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
+                className={`text-[9px] uppercase tracking-wider hidden md:block mt-1 font-black text-center ${isActive ? 'text-orange-600' : isCompleted ? 'text-green-600' : 'text-gray-400'}`}
               >
                 {label}
               </span>
@@ -234,147 +216,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     </div>
   )
 
-  const renderOtpStep = () => (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
-      <div className="flex items-center gap-4">
-        <button
-          onClick={prevStep}
-          type="button"
-          className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
-          style={createBookingBackButtonStyle()}
-        >
-          <ChevronLeft size={20} className="stroke-[3px]" />
-        </button>
-        <div>
-          <h2
-            className="text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.orange.accent }}
-          >
-            Validacion OTP
-          </h2>
-          <p className="text-sm font-bold text-gray-500">
-            Verificamos tu telefono con un codigo que te mandamos por email.
-          </p>
-        </div>
-      </div>
-
-      <div className="rounded-3xl p-6 bg-white space-y-4" style={createBookingSurfaceStyle()}>
-        <div className="flex items-start gap-3">
-          <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
-          <div>
-            <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-              {bookingState.client.phone}
-            </p>
-            <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-              Te mandamos el codigo por email.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-          <input
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            value={otpState.email}
-            onChange={(e) => setOtpState((prev) => ({ ...prev, email: e.target.value, error: '' }))}
-            placeholder="tu@email.com"
-            aria-label="Email para recibir el codigo"
-            className="rounded-2xl px-4 py-3 font-bold outline-none"
-            style={createBookingInputStyle()}
-          />
-          <button
-            type="button"
-            onClick={() => {
-              void handleRequestOtp()
-            }}
-            className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest"
-            style={buttonStyles2000s.default}
-          >
-            {requestOtp.isPending ? 'Enviando...' : 'Enviar codigo'}
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          <input
-            value={otpState.code}
-            onChange={(e) => setOtpState((prev) => ({ ...prev, code: e.target.value, error: '' }))}
-            className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-            style={createBookingInputStyle()}
-            placeholder="Ingresa el codigo OTP"
-          />
-
-          {otpState.debugCode && (
-            <div
-              className="rounded-2xl p-3 text-xs font-black uppercase tracking-widest"
-              style={{
-                background: colors2000s.status.info.bg,
-                border: `1px solid ${colors2000s.status.info.border}`,
-                color: colors2000s.status.info.text
-              }}
-            >
-              Codigo debug: {otpState.debugCode}
-            </div>
-          )}
-
-          {otpState.error && (
-            <div
-              role="alert"
-              aria-live="polite"
-              className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
-              style={{
-                background: colors2000s.status.danger.bg,
-                border: `1px solid ${colors2000s.status.danger.border}`,
-                color: colors2000s.status.danger.text
-              }}
-            >
-              <AlertCircle className="w-4 h-4" />
-              {otpState.error}
-            </div>
-          )}
-
-          {otpState.verified ? (
-            <div
-              className="rounded-2xl p-3 text-xs font-bold flex items-center gap-2"
-              style={{
-                background: colors2000s.status.success.bg,
-                border: `1px solid ${colors2000s.status.success.border}`,
-                color: colors2000s.status.success.text
-              }}
-            >
-              <ShieldCheck className="w-4 h-4" />
-              Telefono validado correctamente
-            </div>
-          ) : (
-            <button
-              type="button"
-              disabled={!otpState.code || verifyOtp.isPending}
-              onClick={() => {
-                void handleVerifyOtp()
-              }}
-              className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-              style={buttonStyles2000s.selected}
-            >
-              {verifyOtp.isPending ? 'Verificando...' : 'Verificar codigo'}
-            </button>
-          )}
-
-          <button
-            type="button"
-            disabled={!otpState.verified}
-            onClick={nextStep}
-            className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-            style={buttonStyles2000s.default}
-          >
-            Continuar
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-
-  const confirmationIndex = steps.length - 1
-  const otpIndex = requiresOtp ? confirmationIndex - 1 : -1
   // Todos los pasos posteriores al primero requieren un servicio elegido. La
   // guarda en el JSX convierte esa invariante en un chequeo del compilador en
   // lugar de un "!" que promete sin verificar.
@@ -382,7 +223,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
 
   return (
     <div
-      className="max-w-2xl mx-auto rounded-[2rem] p-8 relative overflow-hidden animate-in fade-in zoom-in-95 duration-700"
+      className="max-w-2xl mx-auto rounded-lg p-8 relative overflow-hidden animate-in fade-in zoom-in-95 duration-700"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         border: `1px solid ${colors2000s.border.default}`,
@@ -401,7 +242,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       {renderStepIndicator()}
 
       <div
-        className="min-h-[400px] p-6 rounded-2xl relative"
+        className="min-h-[400px] p-6 rounded-lg relative"
         style={{
           background: 'rgba(255, 255, 255, 0.4)',
           border: '1px solid rgba(255, 255, 255, 0.5)',
@@ -427,25 +268,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         )}
 
         {currentStep === 1 && selectedServiceId && (
-          <BookingStepStaff
-            storePublicId={store.public_id}
-            serviceId={selectedServiceId}
-            selectedId={bookingState.requestedStaffId}
-            onBack={prevStep}
-            onSelect={(id) => {
-              updateState({
-                requestedStaffId: id,
-                assignedStaffId: null,
-                date: null,
-                startTime: null,
-                startsAt: null
-              })
-              nextStep()
-            }}
-          />
-        )}
-
-        {currentStep === 2 && selectedServiceId && (
           <BookingStepDateTime
             storePublicId={store.public_id}
             serviceId={selectedServiceId}
@@ -453,44 +275,14 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
             onBack={prevStep}
-            onSelect={(date, time, assignedStaffId, startsAt) => {
-              updateState({ date, startTime: time, assignedStaffId, startsAt })
+            onSelect={(date, time, assignedStaffId, requestedStaffId) => {
+              updateState({ date, startTime: time, assignedStaffId, requestedStaffId })
               nextStep()
             }}
           />
         )}
 
-        {currentStep === 3 && (
-          <BookingStepClient
-            clientData={bookingState.client}
-            customFields={store.custom_client_fields || []}
-            onBack={prevStep}
-            onSubmit={(clientData) => {
-              updateState({ client: clientData })
-              // Si este telefono ya se verifico en el dispositivo dentro de la
-              // ventana que acepta el backend, no se vuelve a pedir el codigo.
-              const yaVerificado = isOtpStillValid(store.slug, clientData.phone)
-              setOtpState({
-                code: '',
-                email: clientData.email,
-                verified: yaVerificado,
-                verifiedPhone: yaVerificado ? clientData.phone : '',
-                debugCode: '',
-                expiresAt: '',
-                error: ''
-              })
-              if (yaVerificado && requiresOtp) {
-                setCurrentStep(steps.length - 1)
-                return
-              }
-              nextStep()
-            }}
-          />
-        )}
-
-        {requiresOtp && currentStep === otpIndex && renderOtpStep()}
-
-        {currentStep === confirmationIndex && selectedServiceId && (
+        {currentStep === 2 && selectedServiceId && (
           <BookingStepConfirmation
             storePublicId={store.public_id}
             serviceId={selectedServiceId}
@@ -501,7 +293,21 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             depositPolicy={store.deposit_policy}
             allowManualCoordination={store.allow_manual_coordination}
             bookingState={bookingState}
+            customFields={store.custom_client_fields || []}
+            requiresOtp={requiresOtp}
+            otpState={otpState}
+            isRequestingOtp={requestOtp.isPending}
+            isVerifyingOtp={verifyOtp.isPending}
+            onRequestOtp={() => {
+              void handleRequestOtp()
+            }}
+            onVerifyOtp={() => {
+              void handleVerifyOtp()
+            }}
+            onOtpChannelChange={(channel) => setOtpState((prev) => ({ ...prev, channel }))}
+            onOtpCodeChange={(code) => setOtpState((prev) => ({ ...prev, code, error: '' }))}
             onBack={prevStep}
+            onClientChange={handleClientChange}
             onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
             onConfirm={async (paymentMethod, acceptsTerms) =>
               await createBooking.mutateAsync({

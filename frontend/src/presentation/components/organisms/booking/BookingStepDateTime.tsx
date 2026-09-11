@@ -2,9 +2,16 @@ import React, { useMemo, useState } from 'react'
 
 import { addDays, format, parseISO } from 'date-fns'
 import { es } from 'date-fns/locale'
-import { Calendar as CalendarIcon, ChevronLeft, Clock, Loader2 } from 'lucide-react'
+import {
+  Calendar as CalendarIcon,
+  ChevronLeft,
+  Clock,
+  Loader2,
+  Sparkles,
+  Users
+} from 'lucide-react'
 
-import { usePublicAvailability } from '@presentation/hooks/usePublic'
+import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePublic'
 
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
@@ -18,7 +25,12 @@ interface BookingStepDateTimeProps {
   staffId: string | null
   selectedDate: string | null
   selectedTime: string | null
-  onSelect: (date: string, time: string, staffId: string, startsAt: string) => void
+  onSelect: (
+    date: string,
+    time: string,
+    assignedStaffId: string,
+    requestedStaffId: string | null
+  ) => void
   onBack: () => void
 }
 
@@ -37,9 +49,22 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     return isNaN(parsed.getTime()) ? new Date() : parsed
   })
   const [forceAll, setForceAll] = useState(false)
+  // Semilla desde la prop `staffId` (el ultimo pedido guardado en el estado
+  // del wizard) para que volver desde el paso de confirmacion conserve la
+  // seleccion en vez de resetear a "Cualquiera".
+  const [selectedStaffId, setSelectedStaffId] = useState<string | null>(staffId)
 
   const dates = useMemo(() => Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i)), [])
   const dateStr = format(activeDate, 'yyyy-MM-dd')
+
+  const { data: staffList, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  const staffOptions = useMemo(
+    () => [
+      { id: null as string | null, label: 'Cualquiera' },
+      ...(staffList || []).map((staff) => ({ id: staff.public_id, label: staff.display_name }))
+    ],
+    [staffList]
+  )
 
   const { data: availability, isLoading } = usePublicAvailability(
     storePublicId,
@@ -50,8 +75,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
   const visibleSlots = useMemo(() => {
     if (!availability) return []
-    if (staffId) {
-      return availability.filter((slot) => slot.staff_id === staffId)
+    if (selectedStaffId) {
+      return availability.filter((slot) => slot.staff_id === selectedStaffId)
     }
 
     const firstSlotByTime = new Map<string, (typeof availability)[number]>()
@@ -70,7 +95,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     return Array.from(firstSlotByTime.values()).sort((a, b) =>
       a.starts_at.localeCompare(b.starts_at)
     )
-  }, [availability, staffId])
+  }, [availability, selectedStaffId])
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
@@ -90,10 +115,51 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             Elegi fecha y hora
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            {staffId
+            {selectedStaffId
               ? 'Busca un horario disponible para ese profesional.'
               : 'Te mostramos horarios con cualquier profesional disponible.'}
           </p>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
+          <Users size={14} className="text-orange-500" />
+          <span>Profesional</span>
+        </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+          {isStaffLoading ? (
+            <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+          ) : (
+            staffOptions.map((option) => {
+              const isSelected = selectedStaffId === option.id
+              return (
+                <button
+                  key={option.id ?? 'any-professional'}
+                  type="button"
+                  onClick={() => setSelectedStaffId(option.id)}
+                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
+                  style={{
+                    borderRadius: 6,
+                    background: isSelected
+                      ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                      : '#ffffff',
+                    borderColor: isSelected
+                      ? colors2000s.orange.accent
+                      : colors2000s.border.default,
+                    boxShadow: isSelected
+                      ? colors2000s.shadows.insetLight
+                      : colors2000s.shadows.insetDark,
+                    color: isSelected ? '#ffffff' : colors2000s.text.primary
+                  }}
+                >
+                  {option.id === null && <Sparkles className="w-3.5 h-3.5" />}
+                  {option.label}
+                </button>
+              )
+            })
+          )}
         </div>
       </div>
 
@@ -104,7 +170,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         </div>
 
         <div
-          className="flex gap-3 overflow-x-auto p-4 snap-x hide-scrollbar rounded-2xl border"
+          className="flex gap-3 overflow-x-auto p-4 snap-x hide-scrollbar border"
           style={createBookingSurfaceStyle()}
         >
           {dates.map((date) => {
@@ -116,7 +182,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               <button
                 key={formattedDate}
                 onClick={() => setActiveDate(date)}
-                className="flex flex-col items-center justify-center min-w-[72px] py-3 rounded-2xl border transition-all snap-center active:scale-95"
+                className="flex flex-col items-center justify-center min-w-[72px] py-3 rounded-md border transition-all snap-center active:scale-95"
                 style={{
                   background: isSelected
                     ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
@@ -167,7 +233,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <Loader2 className="w-8 h-8 animate-spin text-orange-500 mb-4" />
           </div>
         ) : visibleSlots.length === 0 ? (
-          <div className="text-center py-10 rounded-2xl border" style={createBookingSurfaceStyle()}>
+          <div className="text-center py-10 border" style={createBookingSurfaceStyle()}>
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
               No hay turnos disponibles.
             </p>
@@ -197,12 +263,12 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
 
               return (
                 <button
-                  key={`${slot.staff_id}-${slot.starts_at}`}
+                  key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
                   onClick={() =>
-                    isAvailable && onSelect(dateStr, timeString, slot.staff_id, slot.starts_at)
+                    isAvailable && onSelect(dateStr, timeString, slot.staff_id, selectedStaffId)
                   }
                   disabled={!isAvailable}
-                  className="py-3 rounded-xl font-black text-lg transition-all active:scale-95 border disabled:cursor-not-allowed disabled:opacity-70"
+                  className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border disabled:cursor-not-allowed disabled:opacity-70"
                   style={{
                     background: isSelected
                       ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
@@ -227,7 +293,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                     className="text-[8px] uppercase tracking-widest mt-1"
                     style={{ color: isSelected ? '#ffffff' : badgeColor }}
                   >
-                    {staffId ? slot.status : slot.staff_name}
+                    {selectedStaffId ? slot.status : slot.staff_name}
                   </div>
                 </button>
               )

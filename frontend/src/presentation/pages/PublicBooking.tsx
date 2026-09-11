@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { CalendarCheck, CheckCircle2, Clock3, MapPin, Phone, Store, XCircle } from 'lucide-react'
+import { CalendarCheck, Check, Clock3, MapPin, Phone, Store, X } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
@@ -74,13 +74,13 @@ const PublicBooking: React.FC = () => {
         style={{ background: colors2000s.bg.primary }}
       >
         <section
-          className="w-full max-w-xl rounded-[2.5rem] bg-white p-8 text-center space-y-5"
+          className="w-full max-w-xl rounded-lg bg-white p-8 text-center space-y-5"
           style={{ boxShadow: colors2000s.shadows.outer }}
         >
           {approved ? (
-            <CheckCircle2 className="w-16 h-16 mx-auto" color={colors2000s.status.success.light} />
+            <Check className="w-16 h-16 mx-auto" color={colors2000s.status.success.light} />
           ) : failed ? (
-            <XCircle className="w-16 h-16 mx-auto" color={colors2000s.status.danger.light} />
+            <X className="w-16 h-16 mx-auto" color={colors2000s.status.danger.light} />
           ) : (
             <Clock3
               className="w-16 h-16 mx-auto animate-pulse"
@@ -132,7 +132,7 @@ const PublicBooking: React.FC = () => {
       {/* Header Info */}
       <div className="max-w-2xl mx-auto mb-8 text-center animate-in fade-in slide-in-from-top-4 duration-700">
         <div
-          className="inline-flex items-center justify-center w-16 h-16 rounded-[1.25rem] text-white mb-4 transform -rotate-6 border"
+          className="inline-flex items-center justify-center w-16 h-16 rounded-md text-white mb-4 transform -rotate-6 border"
           style={{
             background: `linear-gradient(135deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
             borderColor: colors2000s.orange.accent,
@@ -151,7 +151,7 @@ const PublicBooking: React.FC = () => {
 
         <div className="flex flex-wrap items-center justify-center gap-4 text-xs font-black uppercase tracking-widest">
           <div
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-md border"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderColor: colors2000s.border.default,
@@ -164,7 +164,7 @@ const PublicBooking: React.FC = () => {
           </div>
 
           <div
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl border"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-md border"
             style={{
               background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
               borderColor: colors2000s.border.default,
@@ -207,7 +207,7 @@ const PublicBooking: React.FC = () => {
 
       {store.description && (
         <div
-          className="max-w-2xl mx-auto mb-6 rounded-3xl p-6 text-center border"
+          className="max-w-2xl mx-auto mb-6 rounded-lg p-6 text-center border"
           style={{
             background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
             borderColor: colors2000s.border.default,

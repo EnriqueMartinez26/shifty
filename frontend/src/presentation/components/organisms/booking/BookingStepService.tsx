@@ -52,7 +52,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
             <button
               key={svc.public_id}
               onClick={() => onSelect(svc.public_id)}
-              className="w-full text-left p-5 flex items-center gap-4 rounded-2xl transition-all active:scale-98 group border relative overflow-hidden"
+              className="w-full text-left p-5 flex items-center gap-4 transition-all active:scale-98 group border relative overflow-hidden"
               style={createBookingChoiceCardStyle(isSelected)}
             >
               {/* Left dynamic accented border */}
@@ -63,12 +63,11 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
 
               {/* Glossy avatar */}
               <div
-                className="w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 border ml-1 overflow-hidden"
+                className="w-14 h-14 rounded-md flex items-center justify-center flex-shrink-0 ml-1 overflow-hidden"
                 style={{
                   background: isSelected
                     ? 'linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.15) 100%)'
                     : 'linear-gradient(135deg, #ffffff 0%, #f3f4f6 100%)',
-                  borderColor: isSelected ? 'rgba(255,255,255,0.4)' : colors2000s.border.light,
                   boxShadow: isSelected
                     ? 'inset 0 1px 2px rgba(255,255,255,0.5)'
                     : colors2000s.shadows.insetDark,
@@ -93,10 +92,9 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                 <div className="flex items-center gap-3">
                   {/* Recessed spec fields */}
                   <span
-                    className="text-xs font-black px-3 py-1 rounded-lg flex items-center gap-1 border"
+                    className="text-xs font-black px-3 py-1 rounded-md flex items-center gap-1"
                     style={{
                       background: '#ffffff',
-                      borderColor: colors2000s.border.light,
                       boxShadow: colors2000s.shadows.insetDark,
                       color: colors2000s.text.primary
                     }}
@@ -105,10 +103,9 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                   </span>
 
                   <span
-                    className="text-xs font-black px-3 py-1 rounded-lg border"
+                    className="text-xs font-black px-3 py-1 rounded-md"
                     style={{
                       background: '#ffffff',
-                      borderColor: colors2000s.border.light,
                       boxShadow: colors2000s.shadows.insetDark,
                       color: colors2000s.orange.accent
                     }}
@@ -119,14 +116,11 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
               </div>
 
               <div
-                className="w-7 h-7 rounded-full flex items-center justify-center transition-all border"
+                className="w-7 h-7 rounded-full flex items-center justify-center transition-all"
                 style={{
                   background: isSelected
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : '#ffffff',
-                  borderColor: isSelected
-                    ? colors2000s.status.success.dark
-                    : colors2000s.border.default,
                   boxShadow: isSelected
                     ? 'inset 0 1px 0 rgba(255,255,255,0.3)'
                     : 'inset 0 1px 2px rgba(0,0,0,0.1)'

@@ -18,3 +18,13 @@ export interface BookingWizardState {
   promotionCode: string
   idempotencyKey: string
 }
+
+export interface BookingOtpState {
+  code: string
+  channel: 'whatsapp' | 'sms'
+  verified: boolean
+  verifiedPhone: string
+  debugCode: string
+  expiresAt: string
+  error: string
+}
