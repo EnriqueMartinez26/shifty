@@ -216,6 +216,34 @@ Una instrucción en lenguaje natural no es una garantía.
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
 
+### Lista de espera, suscripción y avisos (Fases 4-7, 2026-09-11)
+
+- **Ningún consumidor del outbox manda mail dentro de su transacción.** El
+  lote toma las filas con `FOR UPDATE SKIP LOCKED` y commitea una sola vez:
+  un envío adentro deja el estado a merced del time limit de Celery y
+  reenvía lo ya enviado. El trabajo devuelve el mail pendiente y el llamador
+  lo despacha después del commit (`OfferResult.pending_email`).
+  (`test_lista_de_espera_concurrencia.py`)
+- **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
+  existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
+  para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
+  guarda, saber un número alcanzaba para recibir los mails de otra persona y
+  para preguntarle al sistema si ese número es cliente y si faltó a turnos.
+  (`test_secuestro_de_contacto.py`)
+- **Un cobro con `deposit_rule` conserva su importe.** Regenerar el link
+  desde el panel no re-tarifa: hacerlo dejaba el snapshot mintiendo y rompía
+  para siempre la validación de importe del webhook.
+- **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
+  horas está por encima del lead del de 2 horas, y ningún aviso al cliente
+  sale sin pasar por `is_deliverable_email`.
+- **Un rango liberado no es un turno.** Borrar un bloqueo devuelve un rango
+  cuyos extremos no caen en la grilla: ese origen avisa al dueño, no le
+  ofrece al cliente un horario inexistente (`ReleasedSlot.aligned_to_grid`).
+- **Una tienda suspendida no escribe.** La guarda va a nivel router
+  (`block_writes_when_suspended`) para que un endpoint de escritura nuevo
+  quede cubierto sin acordarse; usa el usuario OPCIONAL porque esos routers
+  tienen GET públicos.
+
 ### Configuración y despliegue
 
 21. **Un proceso con configuración inválida se muere.** La API tolera el
@@ -275,6 +303,10 @@ Una instrucción en lenguaje natural no es una garantía.
   conflictos, cero 5xx.
 - **Un bug de producción se reproduce con un test antes de arreglarse**,
   con fecha y síntoma en el comentario.
+- **Un pipe a `tail` esconde el exit code.** `mypy . | tail -1 && pytest`
+  corre pytest aunque mypy falle: el estado del pipeline es el de `tail`.
+  Los comandos del gate se encadenan sin pipe, o se lee `$?` del comando que
+  importa. (2026-09-11: cuatro errores de mypy pasaron tres fases así.)
 - **CI es la verdad.** Si local pasa y CI falla, la diferencia es el bug
   (caché de ESLint, CRLF, `node_modules` viejo, `import/order`). Antes de
   cada push: `ruff format --check`, `ruff check`, `mypy`, `pytest`;

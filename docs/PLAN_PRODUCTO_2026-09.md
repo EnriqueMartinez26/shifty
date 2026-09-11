@@ -313,7 +313,15 @@ necesite persona y recurso a la vez queda para la versión completa.
 
 ---
 
-## 6. Fase 3 — Post-turno y recordatorio en dos pasos (2 días)
+## 6. Fase 3 — Post-turno y recordatorio en dos pasos (2 días) — HECHA el 2026-09-10
+
+**Estado:** completa en `88a118f`. Decisión aplicada: el teléfono del cliente
+solo lo ven los administradores. Correcciones posteriores del review
+(`e9c7ac8`): el piso del recordatorio de 24 horas quedó por encima del lead
+del de 2 horas (estaban pegados y salían los dos mails con 15 minutos de
+diferencia tras una caída); el recordatorio ya no se manda al email técnico
+`.noreply`; reprogramar desde el panel avisa al cliente y conserva SU
+contacto (copiaba el del administrador).
 
 **Objetivo.** Menos ausencias y más re-reservas con el canal que hay.
 
@@ -363,7 +371,20 @@ preselecciona solo ids válidos.
 
 ---
 
-## 7. Fase 4 — Lista de espera con relleno (4 días)
+## 7. Fase 4 — Lista de espera con relleno (4 días) — HECHA el 2026-09-10
+
+**Estado:** completa en `af13f3f`. Decisiones aplicadas: anotarse sin OTP con
+rate limit; encaje por profesional (o cualquiera) y que el servicio quepa en
+el hueco; ventana de oferta de 10 minutos. La unicidad de teléfono por tienda
+sigue pendiente (índice parcial de entradas abiertas, no de clientes).
+
+El review posterior (`e9c7ac8`) encontró seis defectos de concurrencia en
+esta fase, todos corregidos con test: el mail salía dentro de la transacción
+del outbox, `expire_lapsed_offers` no tomaba lock, se ofrecían cupos ya
+ocupados o con oferta viva, la reserva cerraba la entrada antes de que el
+turno fuera firme, una entrada podía generar dos turnos desde el panel, y la
+re-oferta volvía a notificar al dueño. Además, borrar un bloqueo devuelve un
+rango que no cae en la grilla: ese origen solo avisa al dueño.
 
 **Objetivo.** Que un cupo liberado no se pierda ni le cueste tiempo al dueño.
 
@@ -426,7 +447,17 @@ formulario de anotarse.
 
 ---
 
-## 8. Fase 5 — Seña por antelación e historial (2,5 días)
+## 8. Fase 5 — Seña por antelación e historial (2,5 días) — HECHA el 2026-09-10
+
+**Estado:** completa en `eceafd8`. Umbrales configurables por tienda (0 los
+apaga); el link del panel y el cobro manual usan la seña base.
+
+Correcciones del review (`e9c7ac8`): generar el link desde el panel
+re-tarifaba un cobro que ya tenía `deposit_rule` (la tienda cobraba la mitad
+y el webhook rechazaba el importe para siempre); y el historial de un
+teléfono **sin OTP** ya no se usa —ni para mostrar ni para cobrar—, porque
+`/public/deposit/preview` era un oráculo anónimo del historial de cualquier
+número. "Historial desconocido" dejó de ser lo mismo que "cliente nuevo".
 
 **Objetivo.** Cobrar más seña donde el riesgo de ausencia es mayor, con
 reglas fijas que el dueño entiende. Solo el cálculo del monto; nada de
@@ -483,7 +514,12 @@ seña varía y el texto no lo dice, es problema de la tienda, no del sistema.
 
 ---
 
-## 9. Fase 6 — Suscripción: aviso y gracia (2 días)
+## 9. Fase 6 — Suscripción: aviso y gracia (2 días) — HECHA el 2026-09-10
+
+**Estado:** completa en `14846aa` (migración `b7d9f1a3c5e7`). Decisiones
+aplicadas: 7 días de aviso, 7 de gracia; suspendida esconde la vitrina
+pública (404) y deja el panel en solo lectura, con el login vivo. El mismo
+commit cierra el secuestro de contacto encontrado al revisar la Fase 4.
 
 **Objetivo.** Que el dueño de la tienda sepa cuándo vence su plan antes de
 que pase nada, y que Shifty pueda cobrar sin cortar de golpe.
@@ -531,7 +567,15 @@ banner por estado.
 
 ---
 
-## 10. Fase 7 — El cliente desde el teléfono (2,5 días)
+## 10. Fase 7 — El cliente desde el teléfono (2,5 días) — HECHA el 2026-09-11
+
+**Estado:** completa en `e9c7ac8`, salvo el E2E con Playwright, que queda
+pendiente por ser una dependencia nueva (necesita verificación humana en el
+registro y lockfile en el mismo commit). Lo demás está: "Mis turnos" con OTP
+por email, cancelar avisa a la tienda, se saltean los pasos de una sola
+opción, deep-links `?service=&staff=&date=`, wa.me en el encabezado y links
+para compartir en Ajustes. El estado del wizard sincronizado con la URL no se
+hizo: se resolvió el caso real (deep-link) sin reescribir la navegación.
 
 **Objetivo.** Que reservar y autogestionarse desde el celular sea corto, y
 que exista una prueba que lo recorra como un cliente.
