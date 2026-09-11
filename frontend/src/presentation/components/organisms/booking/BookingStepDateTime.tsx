@@ -29,7 +29,8 @@ interface BookingStepDateTimeProps {
     date: string,
     time: string,
     assignedStaffId: string,
-    requestedStaffId: string | null
+    requestedStaffId: string | null,
+    startsAt: string
   ) => void
   onBack: () => void
 }
@@ -265,7 +266,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 <button
                   key={`${slot.staff_id}-${slot.start_time || slot.starts_at}`}
                   onClick={() =>
-                    isAvailable && onSelect(dateStr, timeString, slot.staff_id, selectedStaffId)
+                    isAvailable &&
+                    onSelect(dateStr, timeString, slot.staff_id, selectedStaffId, slot.starts_at)
                   }
                   disabled={!isAvailable}
                   className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border disabled:cursor-not-allowed disabled:opacity-70"

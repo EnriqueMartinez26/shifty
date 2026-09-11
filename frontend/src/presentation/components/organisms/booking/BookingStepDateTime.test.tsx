@@ -3,14 +3,18 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { BookingStepDateTime } from './BookingStepDateTime'
 
 const mockAvailability = jest.fn()
+const mockStaff = jest.fn()
 
 jest.mock('@presentation/hooks/usePublic', () => ({
-  usePublicAvailability: (...args: unknown[]) => mockAvailability(...args)
+  usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
+  usePublicStaff: (...args: unknown[]) => mockStaff(...args)
 }))
 
 describe('BookingStepDateTime', () => {
   beforeEach(() => {
     mockAvailability.mockReset()
+    mockStaff.mockReset()
+    mockStaff.mockReturnValue({ data: [], isLoading: false })
   })
 
   it('muestra los slots en hora argentina y entrega el instante UTC al elegir', () => {
@@ -60,7 +64,13 @@ describe('BookingStepDateTime', () => {
     fireEvent.click(screen.getByText('21:00'))
 
     expect(onSelect).toHaveBeenCalledTimes(1)
-    const [, hora, staff, startsAt] = onSelect.mock.calls[0] as [string, string, string, string]
+    const [, hora, staff, , startsAt] = onSelect.mock.calls[0] as [
+      string,
+      string,
+      string,
+      string | null,
+      string
+    ]
     expect(hora).toBe('21:00')
     expect(staff).toBe('st-1')
     expect(startsAt).toBe('2026-09-16T00:00:00+00:00')

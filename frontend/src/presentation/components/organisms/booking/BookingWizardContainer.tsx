@@ -259,8 +259,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             selectedDate={bookingState.date}
             selectedTime={bookingState.startTime}
             onBack={prevStep}
-            onSelect={(date, time, assignedStaffId, requestedStaffId) => {
-              updateState({ date, startTime: time, assignedStaffId, requestedStaffId })
+            onSelect={(date, time, assignedStaffId, requestedStaffId, startsAt) => {
+              updateState({ date, startTime: time, assignedStaffId, requestedStaffId, startsAt })
               nextStep()
             }}
           />
