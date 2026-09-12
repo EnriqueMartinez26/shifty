@@ -27,6 +27,19 @@ def _current() -> str:
     return current.stdout.split()[0]
 
 
+def _merge_parents(rev: str) -> list[str]:
+    """Padres de `rev` si es un mergepoint; lista vacia si no lo es."""
+    show = alembic("show", rev)
+    assert show.returncode == 0, show.stderr
+    lines = show.stdout.splitlines()
+    if "(mergepoint)" not in lines[0]:
+        return []
+    for line in lines:
+        if line.startswith("Merges:"):
+            return [r.strip() for r in line.removeprefix("Merges:").split(",")]
+    raise AssertionError(f"mergepoint sin linea 'Merges:': {show.stdout}")
+
+
 @pytest.mark.asyncio
 async def test_el_esquema_queda_completo_y_en_head(owner_engine: AsyncEngine) -> None:
     assert _current() == _head()
@@ -107,7 +120,12 @@ async def test_el_esquema_queda_completo_y_en_head(owner_engine: AsyncEngine) ->
 @pytest.mark.asyncio
 async def test_la_ultima_migracion_es_reversible(owner_engine: AsyncEngine) -> None:
     head = _head()
-    down = alembic("downgrade", "-1")
+    # Un mergepoint tiene dos padres: "-1" es ambiguo (Alembic no sabe a
+    # cual de los dos volver) y falla con "Ambiguous walk". Bajar a
+    # cualquiera de los padres explicitos prueba lo mismo que "-1" en el
+    # caso lineal: que el head no deja la base encallada sin poder volver.
+    merge_parents = _merge_parents(head)
+    down = alembic("downgrade", merge_parents[0] if merge_parents else "-1")
     assert down.returncode == 0, down.stderr[-2000:]
     assert _current() != head
     up = alembic("upgrade", "head")
