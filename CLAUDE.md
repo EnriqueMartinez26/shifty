@@ -161,8 +161,9 @@ Una instrucción en lenguaje natural no es una garantía.
     ventana), nunca cargando la lista a memoria. (2026-09-04: ledger y
     reportes sumaban en Python.)
 12. **Un `await db.execute` dentro de un `for` es N+1 hasta demostrar lo
-    contrario**; se resuelve con `in_()` o join. Candidato pendiente:
-    `availability.get_available_slots`.
+    contrario**; se resuelve con `in_()` o join.
+    `availability.get_available_slots` se auditó el 2026-09-16: carga
+    horarios, turnos y bloqueos con `in_()` y agrupa en memoria; no tiene N+1.
 13. **Migraciones con `upgrade` y `downgrade` reales**, probadas desde base
     vacía y con `downgrade -1 / upgrade head`. Head único (CI
     `contract-and-migrations`). Los timeouts del rol de la app viven en la
@@ -246,6 +247,17 @@ Una instrucción en lenguaje natural no es una garantía.
   (`block_writes_when_suspended`) para que un endpoint de escritura nuevo
   quede cubierto sin acordarse; usa el usuario OPCIONAL porque esos routers
   tienen GET públicos.
+- **Anotarse en la lista de espera es anónimo, así que tiene topes.**
+  `MAX_OPEN_ENTRIES_PER_PHONE` (3) entradas abiertas por teléfono y tienda, y
+  quien deja pasar `MAX_LAPSED_OFFERS` (2) ofertas expira solo
+  (`waitlist_entries.lapsed_offers`). Sin eso una cola de entradas que nunca
+  reservan mataba cada cupo liberado en ofertas de 10 minutos a nadie.
+  (`test_lista_de_espera_acaparamiento.py`)
+- **Un teléfono identifica a UN cliente por tienda**: índice único parcial
+  `uq_users_client_phone_per_store` (`role = 'client' AND phone IS NOT NULL`;
+  el personal puede compartir el teléfono del local). La migración que lo crea
+  se detiene con el conteo si ya hay duplicados: no borra ni elige por nadie.
+  El email sigue siendo único GLOBAL (`users.email`), no por tienda.
 
 ### Configuración y despliegue
 
@@ -331,18 +343,27 @@ Una instrucción en lenguaje natural no es una garantía.
   permisos se verifica en código, no en la doc.
 - El pre-commit hook (`.githooks/pre-commit`) existe pero **solo corre si
   cada clon hace `git config core.hooksPath .githooks`**; en este clon no
-  estaba activado.
+  estaba activado. Además `verify-toolchain` exige la versión EXACTA de Node
+  (24.18.0 / 26.5.0) y npm: en una máquina con otra versión (2026-09-16:
+  24.16.0) activarlo bloquea todos los commits, y `npm ci` necesita
+  `--engine-strict=false`. Antes de activarlo, alinear el toolchain.
+- El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
+  `e2e.yml`) está versionado pero **no se corrió nunca todavía**: necesita un
+  stack real con una tienda publicada. No contar con él como evidencia hasta
+  la primera corrida.
 - Ya cubierto (2026-09-10): job `backend-postgres` en CI (RLS, exclusión
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
   prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
 - Falta todavía: activar el pre-commit hook por clon (`git config
-  core.hooksPath .githooks`); descomponer las funciones más largas
-  (`create_public_booking`, `client_reschedule_appointment`); auditar el
-  posible N+1 en `get_available_slots`; zona horaria por tienda; unicidad
-  de email/teléfono de clientes por tienda; migrar los commits de
-  routers/repos al patrón de `appointments`; pasar CodeQL a bloqueante
-  cuando el ruido inicial esté limpio.
+  core.hooksPath .githooks`, con el toolchain alineado); descomponer las
+  funciones más largas (`create_public_booking`,
+  `client_reschedule_appointment`); zona horaria por tienda; unicidad de
+  email de clientes POR tienda (hoy es global, así que un mismo email no
+  puede ser cliente en dos tiendas); migrar los commits de routers/repos al
+  patrón de `appointments`; pasar CodeQL a bloqueante cuando el ruido inicial
+  esté limpio; correr el E2E por primera vez. Cerrado el 2026-09-16: N+1 en
+  `get_available_slots` (auditado, no había) y teléfono único por tienda.
 
 ## 6. Compuertas de proceso
 

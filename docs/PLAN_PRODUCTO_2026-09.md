@@ -569,13 +569,27 @@ banner por estado.
 
 ## 10. Fase 7 — El cliente desde el teléfono (2,5 días) — HECHA el 2026-09-11
 
-**Estado:** completa en `e9c7ac8`, salvo el E2E con Playwright, que queda
-pendiente por ser una dependencia nueva (necesita verificación humana en el
-registro y lockfile en el mismo commit). Lo demás está: "Mis turnos" con OTP
-por email, cancelar avisa a la tienda, se saltean los pasos de una sola
-opción, deep-links `?service=&staff=&date=`, wa.me en el encabezado y links
-para compartir en Ajustes. El estado del wizard sincronizado con la URL no se
-hizo: se resolvió el caso real (deep-link) sin reescribir la navegación.
+**Estado:** completa. "Mis turnos" con OTP por email, cancelar avisa a la
+tienda, se saltea el paso del servicio cuando hay uno solo (en el wizard de 3
+pasos el profesional es un filtro del horario, no un paso), deep-links
+`?service=&staff=&date=` (arrancan en el horario y la fecha lejana aparece en
+la tira), wa.me en el encabezado y en todas las vistas del calendario, y links
+para compartir en Ajustes. El E2E con Playwright existe desde el 2026-09-16
+(`frontend/e2e/reserva-movil.spec.ts`, viewport Pixel 7, `npm run e2e`;
+`@playwright/test` 1.63.0 verificado en el registro: publica Microsoft desde
+2020) y el workflow manual `.github/workflows/e2e.yml` lo corre contra un
+entorno ya levantado con una tienda publicada. **No se ejecutó todavía**: en
+la máquina de desarrollo Docker no estaba disponible y el alta de tiendas es
+solo desde el superadmin; la primera corrida real es un pendiente del
+release. El estado del wizard sincronizado con la URL no se hizo: se resolvió
+el caso real (deep-link) sin reescribir la navegación.
+
+Del review de la Fase 4 se cerró el 2026-09-16 lo que había quedado como
+issue: topes anti-acaparamiento de la lista de espera (3 entradas abiertas
+por teléfono y tienda; quien deja pasar 2 ofertas expira solo) y teléfono de
+cliente único por tienda con índice parcial en Postgres (la migración se
+detiene, sin borrar nada, si la base ya tiene duplicados). WhatsApp API queda
+fuera por costo: OTP y avisos solo por email, wa.me manual desde el panel.
 
 **Objetivo.** Que reservar y autogestionarse desde el celular sea corto, y
 que exista una prueba que lo recorra como un cliente.
