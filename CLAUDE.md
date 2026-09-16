@@ -348,9 +348,13 @@ Una instrucción en lenguaje natural no es una garantía.
   24.16.0) activarlo bloquea todos los commits, y `npm ci` necesita
   `--engine-strict=false`. Antes de activarlo, alinear el toolchain.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
-  `e2e.yml`) está versionado pero **no se corrió nunca todavía**: necesita un
-  stack real con una tienda publicada. No contar con él como evidencia hasta
-  la primera corrida.
+  `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
+  detrás de nginx (`E2E_BASE_URL=http://localhost`,
+  `E2E_API_URL=http://localhost/api`, `E2E_NO_WEBSERVER=1`, tienda de
+  carga `load-1789010879`). Dos trampas: el contenedor `frontend` sirve un
+  **build estático** (cambios del front exigen `docker-compose build
+  frontend`), y el `CORS_ORIGINS` del compose solo admite el origen de nginx,
+  así que el vite dev server en :5173 ve "Negocio no encontrado".
 - Ya cubierto (2026-09-10): job `backend-postgres` en CI (RLS, exclusión
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
@@ -362,8 +366,8 @@ Una instrucción en lenguaje natural no es una garantía.
   email de clientes POR tienda (hoy es global, así que un mismo email no
   puede ser cliente en dos tiendas); migrar los commits de routers/repos al
   patrón de `appointments`; pasar CodeQL a bloqueante cuando el ruido inicial
-  esté limpio; correr el E2E por primera vez. Cerrado el 2026-09-16: N+1 en
-  `get_available_slots` (auditado, no había) y teléfono único por tienda.
+  esté limpio. Cerrado el 2026-09-16: N+1 en `get_available_slots`
+  (auditado, no había), teléfono único por tienda y primera corrida del E2E.
 
 ## 6. Compuertas de proceso
 

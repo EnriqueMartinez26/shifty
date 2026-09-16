@@ -54,11 +54,14 @@ test.describe('reserva publica desde el celular', () => {
     await sinScrollHorizontal(page, 'horario')
     const dias = page.locator('[data-testid^="date-"]')
     const cantidad = await dias.count()
-    let slot = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ }).first()
+    const slot = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ }).first()
+    const sinTurnos = page.getByText('No hay turnos disponibles.')
     for (let i = 0; i < cantidad; i += 1) {
       await dias.nth(i).click()
-      slot = page.locator('button:not([disabled])', { hasText: /^\d{2}:\d{2}/ }).first()
-      if (await slot.isVisible({ timeout: 3_000 }).catch(() => false)) break
+      // Esperar a que ese dia termine de cargar: o hay un slot o dice que no
+      // hay (isVisible() no espera; revisar antes de la carga miraba vacio).
+      await expect(slot.or(sinTurnos).first()).toBeVisible({ timeout: 10_000 })
+      if ((await slot.count()) > 0) break
     }
     await expect(slot, 'ningun dia de la tira tiene un horario disponible').toBeVisible()
     await slot.click()
@@ -73,11 +76,14 @@ test.describe('reserva publica desde el celular', () => {
     await page.getByRole('checkbox').first().check()
     await page.getByRole('button', { name: /reservar y pagar por whatsapp/i }).click()
 
+    // Los tres finales validos del flujo: confirmada, registrada (pendiente de
+    // revision de la tienda) o pendiente de pago.
     await expect(
-      page
-        .getByText('Tu reserva ya quedo registrada.')
-        .or(page.getByText('Tu turno se confirma cuando el cobro quede aprobado.'))
+      page.getByRole('heading', {
+        name: /^Reserva (Confirmada|Registrada|Pendiente de Pago)$/
+      })
     ).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByText('Detalles del Turno')).toBeVisible()
     await sinScrollHorizontal(page, 'confirmacion')
   })
 })

@@ -578,11 +578,12 @@ para compartir en Ajustes. El E2E con Playwright existe desde el 2026-09-16
 (`frontend/e2e/reserva-movil.spec.ts`, viewport Pixel 7, `npm run e2e`;
 `@playwright/test` 1.63.0 verificado en el registro: publica Microsoft desde
 2020) y el workflow manual `.github/workflows/e2e.yml` lo corre contra un
-entorno ya levantado con una tienda publicada. **No se ejecutó todavía**: en
-la máquina de desarrollo Docker no estaba disponible y el alta de tiendas es
-solo desde el superadmin; la primera corrida real es un pendiente del
-release. El estado del wizard sincronizado con la URL no se hizo: se resolvió
-el caso real (deep-link) sin reescribir la navegación.
+entorno ya levantado con una tienda publicada. Corrió en verde el 2026-09-16
+contra el stack local detrás de nginx con la tienda de carga: recorre
+servicio → horario → datos → "Reserva Registrada" sin desborde horizontal en
+ningún paso (viewport Pixel 7). El estado del wizard sincronizado con la URL
+no se hizo: se resolvió el caso real (deep-link) sin reescribir la
+navegación.
 
 Del review de la Fase 4 se cerró el 2026-09-16 lo que había quedado como
 issue: topes anti-acaparamiento de la lista de espera (3 entradas abiertas
