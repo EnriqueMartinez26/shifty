@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import ulid
-from sqlalchemy import Boolean, DateTime, String
+from sqlalchemy import Boolean, DateTime, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.persistence.models.base import Base
@@ -20,6 +20,20 @@ def _split_full_name(full_name: str | None) -> tuple[str | None, str | None]:
 
 class UserModel(Base):
     __tablename__ = "users"
+    # Un telefono identifica a UN cliente por tienda. Dos filas iguales
+    # rompian get_or_create_client con MultipleResultsFound (500); el
+    # repositorio ya elige la mas reciente, y este indice impide que vuelvan
+    # a aparecer. Solo clientes: el personal comparte telefonos del local.
+    __table_args__ = (
+        Index(
+            "uq_users_client_phone_per_store",
+            "store_id",
+            "phone",
+            unique=True,
+            postgresql_where=text("role = 'client' AND phone IS NOT NULL"),
+            sqlite_where=text("role = 'client' AND phone IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, index=True, default=lambda: str(ulid.ULID())

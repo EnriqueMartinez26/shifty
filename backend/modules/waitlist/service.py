@@ -7,7 +7,7 @@ from decimal import Decimal
 from http import HTTPStatus
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +21,12 @@ from modules.public_api.repository import PublicRepository
 from modules.services.model import Service
 from modules.staff.model import Staff
 from modules.stores.model import Store
-from modules.waitlist.model import OPEN_WAITLIST_STATUSES, WaitlistEntry, WaitlistStatus
+from modules.waitlist.model import (
+    MAX_OPEN_ENTRIES_PER_PHONE,
+    OPEN_WAITLIST_STATUSES,
+    WaitlistEntry,
+    WaitlistStatus,
+)
 from modules.waitlist.offers import mark_booked
 
 WaitlistRow = tuple[WaitlistEntry, Service, Staff | None]
@@ -69,6 +74,15 @@ class WaitlistService:
             store.id, client_phone, service.id, window_starts_at
         ):
             raise WaitlistDuplicateException()
+        if await self._open_count(store.id, client_phone) >= MAX_OPEN_ENTRIES_PER_PHONE:
+            raise AppException(
+                message=(
+                    f"Ya tenes {MAX_OPEN_ENTRIES_PER_PHONE} pedidos abiertos en la lista "
+                    "de espera de esta tienda"
+                ),
+                http_status=HTTPStatus.CONFLICT,
+                error_code="WAITLIST_TOO_MANY_OPEN",
+            )
 
         client = await self.public_repo.get_or_create_client(
             store.id, client_phone, client_name, client_email
@@ -280,6 +294,19 @@ class WaitlistService:
                 error_code="STAFF_SERVICE_MISMATCH",
             )
         return staff
+
+    async def _open_count(self, store_id: str, phone: str) -> int:
+        result = await self.db.execute(
+            select(func.count())
+            .select_from(WaitlistEntry)
+            .where(
+                WaitlistEntry.store_id == store_id,
+                WaitlistEntry.client_phone == phone,
+                WaitlistEntry.status.in_(OPEN_WAITLIST_STATUSES),
+                WaitlistEntry.is_active.is_(True),
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def _open_duplicate(
         self, store_id: str, phone: str, service_id: str, window_starts_at: datetime

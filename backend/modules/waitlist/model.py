@@ -18,6 +18,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     text,
@@ -42,6 +43,14 @@ OPEN_WAITLIST_STATUSES: tuple[str, ...] = (
 
 _OPEN_SQL = "status IN ('waiting', 'offered')"
 
+# Anti-acaparamiento (review 2026-09-11, MEDIUM): anotarse es anonimo y sin
+# OTP, asi que alguien podia llenar la cola con entradas que nunca reservan y
+# cada cupo liberado moria en ofertas de 10 minutos a nadie. Dos topes
+# deterministas: cuantas entradas abiertas puede tener un telefono por tienda,
+# y cuantas ofertas puede dejar pasar una entrada antes de expirar sola.
+MAX_OPEN_ENTRIES_PER_PHONE = 3
+MAX_LAPSED_OFFERS = 2
+
 
 class WaitlistEntry(BaseEntity):
     __tablename__ = "waitlist_entries"
@@ -62,6 +71,10 @@ class WaitlistEntry(BaseEntity):
         String(20), default=WaitlistStatus.WAITING.value, index=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Ofertas que esta entrada dejo vencer sin reservar. Al llegar a
+    # MAX_LAPSED_OFFERS la entrada expira: quien no reserva dos veces no
+    # bloquea mas la cola.
+    lapsed_offers: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Oferta vigente (o la ultima que dejo pasar): sirve para no volver a
     # ofrecerle el mismo cupo y para que el dueno vea que se le aviso.
     notified_at: Mapped[datetime | None] = mapped_column(

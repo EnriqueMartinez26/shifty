@@ -35,7 +35,11 @@ from modules.notifications.tasks import (
 from modules.services.model import Service
 from modules.staff.model import Staff
 from modules.stores.model import Store
-from modules.waitlist.model import WaitlistEntry, WaitlistStatus
+from modules.waitlist.model import (
+    MAX_LAPSED_OFFERS,
+    WaitlistEntry,
+    WaitlistStatus,
+)
 
 logger = structlog.get_logger()
 
@@ -116,6 +120,8 @@ async def matching_entries(
             WaitlistEntry.store_id == slot.store_id,
             WaitlistEntry.is_active.is_(True),
             WaitlistEntry.status == WaitlistStatus.WAITING.value,
+            # Quien ya dejo pasar MAX_LAPSED_OFFERS ofertas no recibe mas.
+            WaitlistEntry.lapsed_offers < MAX_LAPSED_OFFERS,
             WaitlistEntry.service_id.in_(servicios_del_staff),
             or_(
                 WaitlistEntry.staff_id.is_(None),
@@ -323,8 +329,15 @@ async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResul
     lapsed = list(rows.scalars().all())
     resultado = LapseResult(lapsed=len(lapsed))
     for entry in lapsed:
-        entry.status = WaitlistStatus.WAITING.value
+        entry.lapsed_offers = int(entry.lapsed_offers or 0) + 1
         entry.offer_expires_at = None
+        if entry.lapsed_offers >= MAX_LAPSED_OFFERS:
+            # Dejo pasar dos cupos: no acapara mas la cola. El hueco igual se
+            # le ofrece al siguiente (abajo).
+            entry.status = WaitlistStatus.EXPIRED.value
+            resultado.expired += 1
+        else:
+            entry.status = WaitlistStatus.WAITING.value
         if entry.offered_staff_id and entry.offered_starts_at and entry.offered_ends_at:
             slot = ReleasedSlot(
                 store_id=entry.store_id,
