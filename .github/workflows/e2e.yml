@@ -1,0 +1,59 @@
+name: E2E (reserva publica, movil)
+
+# Manual a proposito: la reserva completa necesita un stack real (Postgres,
+# Redis, API, worker) con una tienda publicada, y el alta de tiendas es solo
+# desde el superadmin. Este job no levanta ni siembra nada: corre Playwright
+# con viewport de telefono contra un entorno que ya existe (staging, o un
+# stack local expuesto), apuntado por los inputs.
+# Ver frontend/e2e/reserva-movil.spec.ts y frontend/playwright.config.ts.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: URL del front (ej. https://staging.shifty.app)
+        required: true
+      api_url:
+        description: URL de la API (ej. https://staging.shifty.app/api)
+        required: true
+      store_slug:
+        description: Slug de una tienda publicada sin OTP ni sena obligatoria
+        required: true
+
+env:
+  NODE_VERSION: "26.5.0"
+
+jobs:
+  reserva-movil:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Reserva desde el celular
+        env:
+          E2E_BASE_URL: ${{ inputs.base_url }}
+          E2E_API_URL: ${{ inputs.api_url }}
+          E2E_STORE_SLUG: ${{ inputs.store_slug }}
+          # Con base_url externa no hay que levantar vite.
+          E2E_NO_WEBSERVER: "1"
+        run: npm run e2e
+      - name: Reporte
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7

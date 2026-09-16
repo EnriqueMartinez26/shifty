@@ -27,9 +27,11 @@
     "format": "prettier --write .",
     "format:fix": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run format:check && npm run lint:strict && npm run typecheck && npm run dead-code"
+    "check": "npm run format:check && npm run lint:strict && npm run typecheck && npm run dead-code",
+    "e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.2",
     "@types/jest": "^29.5.12",
