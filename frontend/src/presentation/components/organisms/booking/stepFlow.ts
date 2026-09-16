@@ -1,56 +1,39 @@
 export interface StepOptions {
   /** Servicios publicados por la tienda (undefined mientras carga). */
   services: ReadonlyArray<{ public_id: string }> | undefined
-  /** Profesionales del servicio elegido (undefined mientras carga). */
-  staff: ReadonlyArray<{ public_id: string }> | undefined
 }
 
 export interface StepJump {
   step: number
-  /** Selecciones que hay que aplicar al saltear un paso trivial. */
+  /** Seleccion que hay que aplicar al saltear el paso trivial. */
   serviceId?: string
-  staffId?: string
 }
 
-const STEP_SERVICE = 0
-const STEP_STAFF = 1
-const STEP_DATETIME = 2
+export const STEP_SERVICE = 0
+export const STEP_DATETIME = 1
 
 /**
  * Un paso con una sola opcion no es una eleccion: se elige solo y se saltea.
- * Una tienda de una persona con un servicio pasa de cinco pasos a tres.
+ * En el wizard de 3 pasos el unico salteable es el del servicio (el
+ * profesional ya no es un paso: es un filtro dentro del horario, con
+ * "Cualquiera" como opcion valida aunque haya uno solo).
  *
- * Devuelve el paso al que hay que ir desde `from` y las selecciones que hay
- * que aplicar. Mientras las listas cargan (undefined) no se saltea nada: el
- * paso se muestra con su propio "Cargando".
+ * Mientras la lista carga (undefined) no se saltea nada: el paso se muestra
+ * con su propio "Cargando".
  */
 export const resolveStepJump = (from: number, options: StepOptions): StepJump => {
-  const jump: StepJump = { step: from }
-
-  if (jump.step === STEP_SERVICE) {
-    const unico = options.services?.length === 1 ? options.services[0] : undefined
-    if (!unico) return jump
-    jump.serviceId = unico.public_id
-    jump.step = STEP_STAFF
-  }
-
-  if (jump.step === STEP_STAFF) {
-    const unico = options.staff?.length === 1 ? options.staff[0] : undefined
-    if (!unico) return jump
-    jump.staffId = unico.public_id
-    jump.step = STEP_DATETIME
-  }
-
-  return jump
+  if (from !== STEP_SERVICE) return { step: from }
+  const unico = options.services?.length === 1 ? options.services[0] : undefined
+  if (!unico) return { step: from }
+  return { step: STEP_DATETIME, serviceId: unico.public_id }
 }
 
 /**
- * Volver atras desde un paso que se salteo tiene que seguir de largo: si no,
- * el boton "atras" no hace nada visible.
+ * Volver atras hacia un paso que se salteo no tiene sentido: con un solo
+ * servicio, "atras" desde el horario se queda donde esta.
  */
 export const resolveBackJump = (from: number, options: StepOptions): number => {
-  let step = Math.max(from - 1, STEP_SERVICE)
-  if (step === STEP_STAFF && options.staff?.length === 1) step = STEP_SERVICE
+  const step = Math.max(from - 1, STEP_SERVICE)
   if (step === STEP_SERVICE && options.services?.length === 1) return from
   return step
 }

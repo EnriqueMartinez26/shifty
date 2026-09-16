@@ -3,18 +3,20 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Check } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { rememberOtpVerification } from '@shared/utils/otpSession'
+import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
-import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
+import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
+import { resolveBackJump, resolveStepJump } from './stepFlow'
 import type { BookingOtpState, BookingWizardState } from './types'
 import { createUuid } from '../../../../shared/utils/uuid'
 import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
+  usePublicServices,
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
@@ -40,10 +42,13 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   // un paso propio.
   const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmacion'], [])
 
-  const [currentStep, setCurrentStep] = useState(0)
+  // Deep-link (?service=&staff=&date=): con servicio valido se arranca en el
+  // horario, que ya muestra al profesional pedido como filtro.
+  const [currentStep, setCurrentStep] = useState(() => initialStepFor(preselect))
   const [otpState, setOtpState] = useState<BookingOtpState>({
     code: '',
-    channel: 'whatsapp',
+    channel: 'email',
+    email: '',
     verified: false,
     verifiedPhone: '',
     debugCode: '',
@@ -83,33 +88,63 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const createBooking = useCreatePublicBooking()
   const requestOtp = useRequestPublicOtp()
   const verifyOtp = useVerifyPublicOtp()
+  const { data: services } = usePublicServices(store.public_id)
+
+  // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
+  // en el horario. Sincroniza con la lista publica (dato externo): cuando
+  // llega, si el paso visible es el del servicio y hay uno solo, salta.
+  useEffect(() => {
+    const jump = resolveStepJump(currentStep, { services })
+    if (jump.step === currentStep) return
+    if (jump.serviceId) {
+      setBookingState((prev) =>
+        prev.serviceId === jump.serviceId ? prev : { ...prev, serviceId: jump.serviceId ?? null }
+      )
+    }
+    setCurrentStep(jump.step)
+  }, [currentStep, services])
 
   const updateState = (updates: Partial<typeof bookingState>) => {
     setBookingState((prev) => ({ ...prev, ...updates }))
   }
 
   const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
-  const prevStep = () => setCurrentStep((prev) => Math.max(prev - 1, 0))
+  const prevStep = () => setCurrentStep((prev) => resolveBackJump(prev, { services }))
 
   const handleClientChange = (client: BookingWizardState['client']) => {
+    const emailAnterior = bookingState.client.email
     updateState({ client })
     // Una verificacion de OTP queda atada al telefono que se valido. Si el
     // usuario lo edita despues de verificar, el gate vuelve a cerrarse para
     // ese telefono nuevo (create_public_booking la exige de nuevo en el
     // backend; esto solo evita mostrar un estado "verificado" enganoso).
-    setOtpState((prev) =>
-      prev.verified && client.phone !== prev.verifiedPhone
-        ? { ...prev, verified: false, code: '', debugCode: '', error: '' }
-        : prev
-    )
+    // Si ese telefono ya se verifico en este dispositivo dentro de la
+    // ventana de 30 minutos, no se vuelve a pedir el codigo (el backend lo
+    // acepta y asi no se agota el presupuesto de pedidos por hora).
+    setOtpState((prev) => {
+      const email = prev.email === emailAnterior || !prev.email ? client.email : prev.email
+      if (client.phone === prev.verifiedPhone) return { ...prev, email }
+      if (client.phone.trim() && isOtpStillValid(store.slug, client.phone)) {
+        return { ...prev, email, verified: true, verifiedPhone: client.phone, error: '' }
+      }
+      return prev.verified
+        ? { ...prev, email, verified: false, code: '', debugCode: '', error: '' }
+        : { ...prev, email }
+    })
   }
 
   const handleRequestOtp = async () => {
+    const email = otpState.email.trim()
+    if (!email) {
+      setOtpState((prev) => ({ ...prev, error: 'Ingresa el email donde queres recibir el codigo' }))
+      return
+    }
     try {
       const response = await requestOtp.mutateAsync({
         store_public_id: store.public_id,
         phone: bookingState.client.phone,
-        channel: otpState.channel
+        channel: otpState.channel,
+        email
       })
       setOtpState((prev) => ({
         ...prev,
@@ -288,7 +323,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             onVerifyOtp={() => {
               void handleVerifyOtp()
             }}
-            onOtpChannelChange={(channel) => setOtpState((prev) => ({ ...prev, channel }))}
+            onOtpEmailChange={(email) => setOtpState((prev) => ({ ...prev, email, error: '' }))}
             onOtpCodeChange={(code) => setOtpState((prev) => ({ ...prev, code, error: '' }))}
             onBack={prevStep}
             onClientChange={handleClientChange}

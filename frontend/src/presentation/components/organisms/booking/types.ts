@@ -21,7 +21,10 @@ export interface BookingWizardState {
 
 export interface BookingOtpState {
   code: string
-  channel: 'whatsapp' | 'sms'
+  /** El codigo va por email (SMTP existente); no hay WhatsApp ni SMS. */
+  channel: 'email'
+  /** Email al que se manda el codigo; arranca con el del formulario. */
+  email: string
   verified: boolean
   verifiedPhone: string
   debugCode: string

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
+import { format } from 'date-fns'
 
 import { BookingStepDateTime } from './BookingStepDateTime'
 
@@ -7,7 +8,8 @@ const mockStaff = jest.fn()
 
 jest.mock('@presentation/hooks/usePublic', () => ({
   usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
-  usePublicStaff: (...args: unknown[]) => mockStaff(...args)
+  usePublicStaff: (...args: unknown[]) => mockStaff(...args),
+  useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false })
 }))
 
 describe('BookingStepDateTime', () => {
@@ -114,5 +116,65 @@ describe('BookingStepDateTime', () => {
     expect(screen.getAllByText('09:00')).toHaveLength(1)
     expect(screen.getByText('Bruno')).toBeInTheDocument()
     expect(screen.queryByText('Ana')).not.toBeInTheDocument()
+  })
+
+  it('con recursos (cancha, sala) no habla de "profesional"', () => {
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    mockStaff.mockReturnValue({
+      isLoading: false,
+      data: [
+        {
+          public_id: 'cancha-1',
+          kind: 'resource',
+          first_name: '',
+          last_name: '',
+          display_name: 'Cancha 1',
+          service_ids: ['svc-1']
+        }
+      ]
+    })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={null}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Cancha / sala')).toBeInTheDocument()
+    expect(screen.getByText('Cancha 1')).toBeInTheDocument()
+    expect(
+      screen.getByText('Te mostramos horarios en cualquier cancha o sala disponible.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/profesional/i)).not.toBeInTheDocument()
+  })
+
+  it('una fecha lejana que vino por deep-link aparece en la tira y carga sus horarios', () => {
+    // La tira muestra 14 dias: el ?date= de un link de reoferta a 45 dias
+    // cargaba sus horarios pero el dia no se veia seleccionado en ningun lado.
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+    const lejana = new Date()
+    lejana.setDate(lejana.getDate() + 45)
+    const lejanaStr = format(lejana, 'yyyy-MM-dd')
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate={lejanaStr}
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    expect(screen.getByTestId(`date-${lejanaStr}`)).toBeInTheDocument()
+    expect(mockAvailability).toHaveBeenCalledWith('store-1', 'svc-1', lejanaStr, false)
   })
 })

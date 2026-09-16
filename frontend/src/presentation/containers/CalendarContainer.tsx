@@ -523,6 +523,35 @@ export const CalendarContainer: React.FC = () => {
     )
   }
 
+  // El boton wa.me manual va en TODAS las vistas: la de dia lo habia perdido
+  // (review 2026-09-11, LOW) y era justo la que usa el mostrador.
+  const renderClientWhatsApp = (event: UnifiedCalendarEvent, compact: boolean) => {
+    if (event.type !== 'appointment' || !event.clientPhone) return null
+    return (
+      <ClientWhatsAppButton
+        phone={event.clientPhone}
+        status={event.status}
+        compact={compact}
+        message={{
+          clientName: event.title,
+          serviceName: event.subtitle,
+          staffName: event.staffName,
+          startsAt: event.startsAt,
+          storeName: storeSettings?.name ?? '',
+          rebookUrl:
+            storeSettings?.slug && event.serviceId
+              ? buildRebookUrl(
+                  window.location.origin,
+                  storeSettings.slug,
+                  event.serviceId,
+                  event.staffId
+                )
+              : null
+        }}
+      />
+    )
+  }
+
   const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => {
     const style =
       event.type === 'block'
@@ -558,29 +587,7 @@ export const CalendarContainer: React.FC = () => {
           {format(event.startsAt, 'HH:mm')} - {format(event.endsAt, 'HH:mm')} · {event.staffName}
         </p>
         {renderActions(event, compact)}
-        {event.type === 'appointment' && event.clientPhone && (
-          <ClientWhatsAppButton
-            phone={event.clientPhone}
-            status={event.status}
-            compact={compact}
-            message={{
-              clientName: event.title,
-              serviceName: event.subtitle,
-              staffName: event.staffName,
-              startsAt: event.startsAt,
-              storeName: storeSettings?.name ?? '',
-              rebookUrl:
-                storeSettings?.slug && event.serviceId
-                  ? buildRebookUrl(
-                      window.location.origin,
-                      storeSettings.slug,
-                      event.serviceId,
-                      event.staffId
-                    )
-                  : null
-            }}
-          />
-        )}
+        {renderClientWhatsApp(event, compact)}
       </div>
     )
   }
@@ -713,8 +720,9 @@ export const CalendarContainer: React.FC = () => {
                                 'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
                             }}
                           >
-                            <div className="absolute top-1 right-1 z-10">
+                            <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
                               {renderActions(event, true)}
+                              {renderClientWhatsApp(event, true)}
                             </div>
                             <div>
                               <p

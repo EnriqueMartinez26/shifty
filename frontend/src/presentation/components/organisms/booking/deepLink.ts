@@ -31,8 +31,9 @@ export const resolveBookingPreselect = (
   return { serviceId, staffId, date }
 }
 
-/** Paso inicial del wizard: 0 servicio, 1 profesional, 2 horario. */
-export const initialStepFor = (preselect: BookingPreselect): number => {
-  if (!preselect.serviceId) return 0
-  return preselect.staffId ? 2 : 1
-}
+/**
+ * Paso inicial del wizard de 3 pasos (0 servicio, 1 horario y profesional,
+ * 2 datos): con un servicio valido en la URL se arranca en el horario, donde
+ * el profesional preseleccionado ya aparece filtrado.
+ */
+export const initialStepFor = (preselect: BookingPreselect): number => (preselect.serviceId ? 1 : 0)

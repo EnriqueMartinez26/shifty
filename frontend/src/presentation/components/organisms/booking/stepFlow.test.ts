@@ -3,48 +3,35 @@ import { resolveBackJump, resolveStepJump } from './stepFlow'
 const uno = [{ public_id: 'a' }]
 const dos = [{ public_id: 'a' }, { public_id: 'b' }]
 
-describe('pasos que se saltean solos', () => {
-  it('con varias opciones no saltea nada', () => {
-    expect(resolveStepJump(0, { services: dos, staff: dos })).toEqual({ step: 0 })
-    expect(resolveStepJump(1, { services: dos, staff: dos })).toEqual({ step: 1 })
+describe('pasos que se saltean solos (wizard de 3 pasos)', () => {
+  it('con varios servicios no saltea nada', () => {
+    expect(resolveStepJump(0, { services: dos })).toEqual({ step: 0 })
   })
 
-  it('un solo servicio y un solo profesional llevan directo al horario', () => {
-    expect(resolveStepJump(0, { services: uno, staff: uno })).toEqual({
-      step: 2,
-      serviceId: 'a',
-      staffId: 'a'
-    })
+  it('un solo servicio lleva directo al horario con ese servicio elegido', () => {
+    expect(resolveStepJump(0, { services: uno })).toEqual({ step: 1, serviceId: 'a' })
   })
 
-  it('un solo servicio con varios profesionales para en el paso del profesional', () => {
-    expect(resolveStepJump(0, { services: uno, staff: dos })).toEqual({
-      step: 1,
-      serviceId: 'a'
-    })
+  it('mientras la lista carga no saltea (evita elegir a ciegas)', () => {
+    expect(resolveStepJump(0, { services: undefined })).toEqual({ step: 0 })
   })
 
-  it('mientras las listas cargan no saltea (evita elegir a ciegas)', () => {
-    expect(resolveStepJump(0, { services: undefined, staff: undefined })).toEqual({ step: 0 })
-    expect(resolveStepJump(1, { services: uno, staff: undefined })).toEqual({ step: 1 })
-  })
-
-  it('no toca los pasos posteriores al horario', () => {
-    expect(resolveStepJump(3, { services: uno, staff: uno })).toEqual({ step: 3 })
+  it('no toca los pasos posteriores al servicio', () => {
+    expect(resolveStepJump(1, { services: uno })).toEqual({ step: 1 })
+    expect(resolveStepJump(2, { services: uno })).toEqual({ step: 2 })
   })
 })
 
 describe('volver atras', () => {
-  it('sigue de largo por los pasos que se saltearon', () => {
-    // Desde el horario, con un solo profesional, vuelve al servicio.
-    expect(resolveBackJump(2, { services: dos, staff: uno })).toBe(0)
-    // Si ademas hay un solo servicio, no hay a donde volver.
-    expect(resolveBackJump(2, { services: uno, staff: uno })).toBe(2)
+  it('con un solo servicio no hay a donde volver desde el horario', () => {
+    expect(resolveBackJump(1, { services: uno })).toBe(1)
+    // Desde los datos se vuelve al horario normalmente.
+    expect(resolveBackJump(2, { services: uno })).toBe(1)
   })
 
-  it('con varias opciones retrocede de a un paso', () => {
-    expect(resolveBackJump(2, { services: dos, staff: dos })).toBe(1)
-    expect(resolveBackJump(1, { services: dos, staff: dos })).toBe(0)
-    expect(resolveBackJump(0, { services: dos, staff: dos })).toBe(0)
+  it('con varios servicios retrocede de a un paso', () => {
+    expect(resolveBackJump(2, { services: dos })).toBe(1)
+    expect(resolveBackJump(1, { services: dos })).toBe(0)
+    expect(resolveBackJump(0, { services: dos })).toBe(0)
   })
 })

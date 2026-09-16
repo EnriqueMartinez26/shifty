@@ -11,10 +11,10 @@ describe('deep-link de la reserva publica', () => {
       staff
     )
     expect(pre).toEqual({ serviceId: 'svc-1', staffId: 'st-1', date: '2026-09-20' })
-    expect(initialStepFor(pre)).toBe(2)
+    expect(initialStepFor(pre)).toBe(1)
   })
 
-  it('con solo el servicio arranca en el paso del profesional', () => {
+  it('con solo el servicio arranca en el paso del horario', () => {
     const pre = resolveBookingPreselect({ service: 'svc-2', staff: null }, services, staff)
     expect(pre).toEqual({ serviceId: 'svc-2', staffId: null, date: null })
     expect(initialStepFor(pre)).toBe(1)

@@ -32,7 +32,7 @@ import {
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { asSafeHttpsUrl, navigateExternal, sanitizePhoneForUrl } from '@shared/utils/safeUrl'
 
-import { depositReasonsText } from './depositReasons'
+import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
@@ -61,7 +61,7 @@ interface BookingStepConfirmationProps {
   isVerifyingOtp: boolean
   onRequestOtp: () => void
   onVerifyOtp: () => void
-  onOtpChannelChange: (channel: 'whatsapp' | 'sms') => void
+  onOtpEmailChange: (email: string) => void
   onOtpCodeChange: (code: string) => void
   onBack: () => void
   onClientChange: (client: BookingClientData) => void
@@ -109,7 +109,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   isVerifyingOtp,
   onRequestOtp,
   onVerifyOtp,
-  onOtpChannelChange,
+  onOtpEmailChange,
   onOtpCodeChange,
   onBack,
   onClientChange,
@@ -410,23 +410,25 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             Verificamos tu telefono
           </p>
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            {client.phone} - Canal: {otpState.channel === 'whatsapp' ? 'WhatsApp' : 'SMS'}
+            Te mandamos un codigo por email para confirmar el {client.phone}
           </p>
         </div>
       </div>
 
       <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-        <select
-          value={otpState.channel}
-          onChange={(e) => onOtpChannelChange(e.target.value as 'whatsapp' | 'sms')}
+        <input
+          type="email"
+          inputMode="email"
+          aria-label="Email para el codigo"
+          value={otpState.email}
+          onChange={(e) => onOtpEmailChange(e.target.value)}
           className="px-4 py-3 font-bold outline-none"
           style={clientInputStyle}
-        >
-          <option value="whatsapp">WhatsApp</option>
-          <option value="sms">SMS</option>
-        </select>
+          placeholder="tu@email.com"
+        />
         <button
           type="button"
+          disabled={isRequestingOtp || !otpState.email.trim()}
           onClick={onRequestOtp}
           className="px-4 py-3 text-xs font-black uppercase tracking-widest"
           style={{ ...buttonStyles2000s.default, borderRadius: 6 }}
@@ -441,7 +443,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           onChange={(e) => onOtpCodeChange(e.target.value)}
           className="w-full px-4 py-3 font-bold outline-none"
           style={clientInputStyle}
-          placeholder="Ingresa el codigo OTP"
+          placeholder="Codigo que te llego por email"
         />
 
         {otpState.debugCode && (
@@ -877,9 +879,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <p className="text-sm font-black">{currencyFmt.format(depositPreview.amount)}</p>
             {depositPreview.extra_percent > 0 && (
               <p className="font-medium mt-1">
-                Incluye {currencyFmt.format(depositPreview.base_amount)} de seña base mas{' '}
-                {depositPreview.extra_percent}% del precio por{' '}
-                {depositReasonsText(depositPreview.reasons)}.
+                {depositBreakdownText(depositPreview, (n) => currencyFmt.format(n))}
               </p>
             )}
           </div>

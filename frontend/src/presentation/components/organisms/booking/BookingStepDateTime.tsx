@@ -55,10 +55,21 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   // seleccion en vez de resetear a "Cualquiera".
   const [selectedStaffId, setSelectedStaffId] = useState<string | null>(staffId)
 
-  const dates = useMemo(() => Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i)), [])
+  // 14 dias a partir de hoy, mas la fecha que vino por deep-link si cae mas
+  // lejos: si no, el dia elegido cargaba sus horarios pero no se veia en la tira.
+  const dates = useMemo(() => {
+    const base = Array.from({ length: 14 }).map((_, i) => addDays(new Date(), i))
+    if (!selectedDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) return base
+    const wanted = parseISO(selectedDate)
+    const ultimo = base[base.length - 1] ?? new Date()
+    if (isNaN(wanted.getTime()) || wanted <= ultimo) return base
+    return [...base, wanted]
+  }, [selectedDate])
   const dateStr = format(activeDate, 'yyyy-MM-dd')
 
   const { data: staffList, isLoading: isStaffLoading } = usePublicStaff(storePublicId, serviceId)
+  // Copy por tipo: una cancha o sala no es "un profesional".
+  const hayRecursos = (staffList || []).some((staff) => staff.kind === 'resource')
   const staffOptions = useMemo(
     () => [
       { id: null as string | null, label: 'Cualquiera' },
@@ -116,9 +127,13 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             Elegi fecha y hora
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            {selectedStaffId
-              ? 'Busca un horario disponible para ese profesional.'
-              : 'Te mostramos horarios con cualquier profesional disponible.'}
+            {hayRecursos
+              ? selectedStaffId
+                ? 'Busca un horario disponible para esa cancha o sala.'
+                : 'Te mostramos horarios en cualquier cancha o sala disponible.'
+              : selectedStaffId
+                ? 'Busca un horario disponible para ese profesional.'
+                : 'Te mostramos horarios con cualquier profesional disponible.'}
           </p>
         </div>
       </div>
@@ -126,7 +141,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
       <div>
         <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
           <Users size={14} className="text-orange-500" />
-          <span>Profesional</span>
+          <span>{hayRecursos ? 'Cancha / sala' : 'Profesional'}</span>
         </div>
 
         <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
@@ -182,6 +197,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             return (
               <button
                 key={formattedDate}
+                data-testid={`date-${formattedDate}`}
                 onClick={() => setActiveDate(date)}
                 className="flex flex-col items-center justify-center min-w-[72px] py-3 rounded-md border transition-all snap-center active:scale-95"
                 style={{
