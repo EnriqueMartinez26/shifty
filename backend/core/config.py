@@ -46,6 +46,74 @@ def _looks_like_placeholder(value: str) -> bool:
     return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
 
 
+# Minimos operativos: valen en TODO entorno, desarrollo incluido, porque un
+# valor absurdo aca no es una configuracion insegura sino un proceso que no
+# funciona. Tabla `(campo, minimo, mensaje)` y no nueve `if` identicos: sumar
+# un limite es sumar una fila, con el mensaje al lado del numero que justifica.
+_MINIMOS_OPERATIVOS: tuple[tuple[str, int, str], ...] = (
+    (
+        "PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+        1,
+        "PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1",
+    ),
+    (
+        "PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS",
+        1,
+        "PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS debe ser >= 1",
+    ),
+    (
+        "MERCADOPAGO_OAUTH_STATE_TTL_SECONDS",
+        60,
+        "MERCADOPAGO_OAUTH_STATE_TTL_SECONDS debe ser >= 60",
+    ),
+    (
+        "MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS",
+        60,
+        "MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS debe ser >= 60",
+    ),
+    ("PAYMENT_HOLD_MINUTES", 5, "PAYMENT_HOLD_MINUTES debe ser >= 5"),
+    ("REDIS_MAX_CONNECTIONS", 1, "REDIS_MAX_CONNECTIONS debe ser >= 1"),
+    (
+        "CELERY_WORKER_PREFETCH_MULTIPLIER",
+        1,
+        "CELERY_WORKER_PREFETCH_MULTIPLIER debe ser >= 1",
+    ),
+    (
+        "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS",
+        1,
+        "CELERY_TASK_SOFT_TIME_LIMIT_SECONDS debe ser >= 1",
+    ),
+    (
+        "MAX_REQUEST_BODY_BYTES",
+        1024,
+        "MAX_REQUEST_BODY_BYTES no puede ser menor a 1024 bytes",
+    ),
+)
+
+# Interruptores que produccion exige en una posicion y no en la otra:
+# `(campo, valor obligatorio, mensaje)`.
+_BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
+    (
+        "RATE_LIMIT_FAIL_CLOSED",
+        True,
+        "RATE_LIMIT_FAIL_CLOSED debe ser true en produccion: sin Redis "
+        "no puede quedar todo sin limite",
+    ),
+    ("EXPOSE_API_DOCS", False, "EXPOSE_API_DOCS debe ser false en produccion"),
+    ("RATE_LIMIT_ENABLED", True, "RATE_LIMIT_ENABLED debe estar activo en produccion"),
+    ("COOKIE_SECURE", True, "COOKIE_SECURE debe ser true en produccion"),
+    (
+        "OTP_DEBUG_EXPOSE_CODE",
+        False,
+        "OTP_DEBUG_EXPOSE_CODE debe ser false en produccion",
+    ),
+)
+
+# Una URL publica que apunte a la maquina del deploy deja los mails y los
+# retornos de Mercado Pago apuntando a ningun lado.
+_PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shifty"
     VERSION: str = "0.1.0"
@@ -178,87 +246,74 @@ class Settings(BaseSettings):
         production_data.setdefault("RATE_LIMIT_FAIL_CLOSED", True)
         return production_data
 
-    @model_validator(mode="after")
-    def validate_production_security(self) -> "Settings":
-        # El secreto de firma se valida en TODO entorno que no sea desarrollo:
-        # un staging con el placeholder del repo firma tokens forjables.
-        if self.ENV != Environment.DEVELOPMENT:
-            if (
-                self.SECRET_KEY == "generate_a_very_secret_key_here_for_production"
-                or len(self.SECRET_KEY) < 32
-                or _looks_like_placeholder(self.SECRET_KEY)
-            ):
-                raise ValueError(
-                    "SECRET_KEY debe ser fuerte y unico fuera de desarrollo "
-                    "(parece un placeholder del repo)"
-                )
-            # Misma vara para la clave de cifrado de campos: un placeholder deja
-            # el cifrado de los tokens de MP como un no-op reversible.
-            if self.FIELD_ENCRYPTION_KEY and _looks_like_placeholder(
-                self.FIELD_ENCRYPTION_KEY
-            ):
-                raise ValueError("FIELD_ENCRYPTION_KEY parece un placeholder del repo")
-        if self.ENV == Environment.PRODUCTION:
-            if "localhost" in self.CORS_ORIGINS or "127.0.0.1" in self.CORS_ORIGINS:
-                raise ValueError("CORS_ORIGINS no debe incluir localhost en produccion")
-            if "*" in self.CORS_ORIGINS:
-                raise ValueError(
-                    "CORS_ORIGINS no puede ser * con credenciales habilitadas"
-                )
-            if not self.RATE_LIMIT_FAIL_CLOSED:
-                raise ValueError(
-                    "RATE_LIMIT_FAIL_CLOSED debe ser true en produccion: sin Redis "
-                    "no puede quedar todo sin limite"
-                )
-            if self.ACCESS_TOKEN_EXPIRE_MINUTES > 30:
-                raise ValueError(
-                    "ACCESS_TOKEN_EXPIRE_MINUTES no debe superar 30 en produccion"
-                )
-            if self.EXPOSE_API_DOCS:
-                raise ValueError("EXPOSE_API_DOCS debe ser false en produccion")
-            if not self.RATE_LIMIT_ENABLED:
-                raise ValueError("RATE_LIMIT_ENABLED debe estar activo en produccion")
-            if not self.COOKIE_SECURE:
-                raise ValueError("COOKIE_SECURE debe ser true en produccion")
-            if (
-                self.FIELD_ENCRYPTION_KEY is not None
-                and len(self.FIELD_ENCRYPTION_KEY) < 32
-            ):
-                raise ValueError(
-                    "FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion"
-                )
-            if self.OTP_PROVIDER == "console":
-                raise ValueError("OTP_PROVIDER no puede ser console en produccion")
-            if self.OTP_DEBUG_EXPOSE_CODE:
-                raise ValueError("OTP_DEBUG_EXPOSE_CODE debe ser false en produccion")
-            if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
-                raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
-            if self.FRONTEND_URL.startswith(("http://localhost", "http://127.0.0.1")):
-                raise ValueError(
-                    "FRONTEND_URL no puede apuntar a localhost en produccion"
-                )
-            if self.PUBLIC_API_URL.startswith(("http://localhost", "http://127.0.0.1")):
-                raise ValueError(
-                    "PUBLIC_API_URL no puede apuntar a localhost en produccion"
-                )
-            if not self.FIELD_ENCRYPTION_KEY:
-                raise ValueError("FIELD_ENCRYPTION_KEY es obligatorio en produccion")
-        if self.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1:
-            raise ValueError("PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD debe ser >= 1")
-        if self.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS < 1:
-            raise ValueError("PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS debe ser >= 1")
-        if self.MERCADOPAGO_OAUTH_STATE_TTL_SECONDS < 60:
-            raise ValueError("MERCADOPAGO_OAUTH_STATE_TTL_SECONDS debe ser >= 60")
-        if self.MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS < 60:
-            raise ValueError("MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS debe ser >= 60")
-        if self.PAYMENT_HOLD_MINUTES < 5:
-            raise ValueError("PAYMENT_HOLD_MINUTES debe ser >= 5")
-        if self.REDIS_MAX_CONNECTIONS < 1:
-            raise ValueError("REDIS_MAX_CONNECTIONS debe ser >= 1")
-        if self.CELERY_WORKER_PREFETCH_MULTIPLIER < 1:
-            raise ValueError("CELERY_WORKER_PREFETCH_MULTIPLIER debe ser >= 1")
-        if self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS < 1:
-            raise ValueError("CELERY_TASK_SOFT_TIME_LIMIT_SECONDS debe ser >= 1")
+    def _validate_secrets_outside_development(self) -> None:
+        """Secretos: cualquier entorno que no sea desarrollo.
+
+        Un staging que firme con el placeholder del repo emite tokens
+        forjables contra datos reales, asi que la vara no es solo produccion.
+        """
+        if (
+            self.SECRET_KEY == "generate_a_very_secret_key_here_for_production"
+            or len(self.SECRET_KEY) < 32
+            or _looks_like_placeholder(self.SECRET_KEY)
+        ):
+            raise ValueError(
+                "SECRET_KEY debe ser fuerte y unico fuera de desarrollo "
+                "(parece un placeholder del repo)"
+            )
+        # Misma vara para la clave de cifrado de campos: un placeholder deja
+        # el cifrado de los tokens de MP como un no-op reversible.
+        if self.FIELD_ENCRYPTION_KEY and _looks_like_placeholder(
+            self.FIELD_ENCRYPTION_KEY
+        ):
+            raise ValueError("FIELD_ENCRYPTION_KEY parece un placeholder del repo")
+
+    def _validate_production_origins(self) -> None:
+        """Produccion: origenes y URLs publicas que no pueden ser locales."""
+        if "localhost" in self.CORS_ORIGINS or "127.0.0.1" in self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS no debe incluir localhost en produccion")
+        if "*" in self.CORS_ORIGINS:
+            raise ValueError("CORS_ORIGINS no puede ser * con credenciales habilitadas")
+        # Los dos mensajes van escritos enteros y no con un f-string sobre el
+        # nombre del campo: el texto exacto es lo que se busca en el log y lo
+        # que inventaria el test de alcances.
+        if self.FRONTEND_URL.startswith(_PREFIJOS_LOCALES):
+            raise ValueError("FRONTEND_URL no puede apuntar a localhost en produccion")
+        if self.PUBLIC_API_URL.startswith(_PREFIJOS_LOCALES):
+            raise ValueError(
+                "PUBLIC_API_URL no puede apuntar a localhost en produccion"
+            )
+
+    def _validate_production_hardening(self) -> None:
+        """Produccion: interruptores, sesiones, OTP y clave de cifrado."""
+        for field, required, message in _BOOLEANOS_DE_PRODUCCION:
+            if getattr(self, field) is not required:
+                raise ValueError(message)
+        if self.ACCESS_TOKEN_EXPIRE_MINUTES > 30:
+            raise ValueError(
+                "ACCESS_TOKEN_EXPIRE_MINUTES no debe superar 30 en produccion"
+            )
+        if (
+            self.FIELD_ENCRYPTION_KEY is not None
+            and len(self.FIELD_ENCRYPTION_KEY) < 32
+        ):
+            raise ValueError(
+                "FIELD_ENCRYPTION_KEY debe tener al menos 32 caracteres en produccion"
+            )
+        if self.OTP_PROVIDER == "console":
+            raise ValueError("OTP_PROVIDER no puede ser console en produccion")
+        if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
+            raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
+        if not self.FIELD_ENCRYPTION_KEY:
+            raise ValueError("FIELD_ENCRYPTION_KEY es obligatorio en produccion")
+
+    def _validate_operational_limits(self) -> None:
+        """Limites que valen en cualquier entorno, desarrollo incluido."""
+        for field, minimum, message in _MINIMOS_OPERATIVOS:
+            if getattr(self, field) < minimum:
+                raise ValueError(message)
+        # Los dos que no son un minimo fijo: una relacion entre dos campos y un
+        # techo, asi que no entran en la tabla.
         if (
             self.CELERY_TASK_TIME_LIMIT_SECONDS
             <= self.CELERY_TASK_SOFT_TIME_LIMIT_SECONDS
@@ -266,12 +321,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CELERY_TASK_TIME_LIMIT_SECONDS debe ser mayor al soft time limit"
             )
-        if self.MAX_REQUEST_BODY_BYTES < 1024:
-            raise ValueError("MAX_REQUEST_BODY_BYTES no puede ser menor a 1024 bytes")
         if self.MAX_REQUEST_BODY_BYTES > 1024 * 1024:
             raise ValueError(
                 "MAX_REQUEST_BODY_BYTES no debe superar 1MB sin revision de seguridad"
             )
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        """Config que falla cerrada (regla 17), repartida por alcance.
+
+        Las 27 condiciones pertenecen a tres alcances con condiciones de entrada
+        distintas; apiladas en un solo cuerpo de 94 lineas habia que leerlas
+        todas para saber donde iba una nueva (B7-06). Produccion se reparte en
+        dos partes para que ninguna pase de 30 lineas. Cada `raise` sigue siendo
+        el mismo `ValueError` con el mismo texto, que es lo que verifican
+        `tests/unit/test_config_production_guards.py` y
+        `tests/unit/test_validador_de_produccion_por_alcance.py`.
+        """
+        if self.ENV != Environment.DEVELOPMENT:
+            self._validate_secrets_outside_development()
+        if self.ENV == Environment.PRODUCTION:
+            self._validate_production_origins()
+            self._validate_production_hardening()
+        self._validate_operational_limits()
         return self
 
     model_config = SettingsConfigDict(
