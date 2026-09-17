@@ -103,4 +103,23 @@ describe('api client module wiring', () => {
 
     expect(clientModule.getAuthToken()).toBeNull()
   })
+
+  it('no reintenta un 409 en un POST, pero sí en métodos idempotentes', async () => {
+    const clientModule = await import('./client')
+    const { shouldRetryRequest } = clientModule
+
+    // Un 409 al crear un turno es un conflicto de negocio real (el slot ya no
+    // está libre), no algo transitorio: reintentarlo no lo resuelve y puede
+    // terminar reservando después de que la UI ya mostró el conflicto.
+    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'post' } })).toBe(
+      false
+    )
+    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'post' } })).toBe(true)
+    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'patch' } })).toBe(
+      true
+    )
+    expect(shouldRetryRequest({ code: 'ERR_CONNECTION_REFUSED', config: { method: 'get' } })).toBe(
+      false
+    )
+  })
 })

@@ -61,6 +61,28 @@ apiClient.interceptors.request.use((config) => {
 })
 
 // Configuración de Retry Inteligente
+export const shouldRetryRequest = (error: {
+  code?: string
+  response?: { status?: number }
+  config?: { method?: string }
+}): boolean => {
+  // NO reintentar si el servidor rechazó la conexión (ERR_CONNECTION_REFUSED)
+  // eso significa que el backend directamente no está corriendo.
+  if (error.code === 'ERR_NETWORK' || error.code === 'ERR_CONNECTION_REFUSED') {
+    return false
+  }
+  // Un 409 en un POST (crear un turno, unirse a la lista de espera, etc.) es
+  // un conflicto de negocio real -el slot ya no está libre-, no algo
+  // transitorio: reintentarlo no lo resuelve, y si el estado cambia entre
+  // reintentos puede terminar reservando después de que la UI ya mostró el
+  // conflicto al usuario. Los métodos idempotentes sí se benefician del retry.
+  if (error.config?.method?.toLowerCase() === 'post') {
+    return error.code === 'ECONNABORTED'
+  }
+  // Reintentar solo en timeouts o errores de concurrencia (409 Conflict)
+  return error.code === 'ECONNABORTED' || error.response?.status === 409
+}
+
 axiosRetry(apiClient, {
   retries: 3,
   retryDelay: (retryCount) => {
@@ -69,15 +91,7 @@ axiosRetry(apiClient, {
     const jitter = Math.random() * 1000
     return delay + jitter
   },
-  retryCondition: (error) => {
-    // NO reintentar si el servidor rechazó la conexión (ERR_CONNECTION_REFUSED)
-    // eso significa que el backend directamente no está corriendo.
-    if (error.code === 'ERR_NETWORK' || error.code === 'ERR_CONNECTION_REFUSED') {
-      return false
-    }
-    // Reintentar solo en timeouts o errores de concurrencia (409 Conflict)
-    return error.code === 'ECONNABORTED' || error.response?.status === 409
-  }
+  retryCondition: shouldRetryRequest
 })
 
 // Refresh single-flight: muchos requests pueden caer en 401 a la vez cuando el
