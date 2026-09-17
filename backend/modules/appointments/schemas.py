@@ -133,7 +133,7 @@ class AppointmentFilterParams(BaseModel):
     statuses: Optional[List[str]] = Field(None, max_length=10)
     from_date: Optional[date] = None
     to_date: Optional[date] = None
-    page: int = Field(default=1, ge=1)
+    page: int = Field(default=1, ge=1, le=10_000)
     page_size: int = Field(default=20, ge=1, le=100)
 
 

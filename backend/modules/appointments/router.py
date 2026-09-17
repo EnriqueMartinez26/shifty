@@ -387,7 +387,9 @@ async def search_appointments(
     to_date: Optional[date_type] = Query(
         default=None, description="Hasta (YYYY-MM-DD)"
     ),
-    page: int = Query(default=1, ge=1),
+    # ge Y le (regla 9): sin tope, (page - 1) * page_size desbordaba el entero
+    # de la base en el OFFSET y salia 500 (B1-03).
+    page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=20, ge=1, le=100),
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
