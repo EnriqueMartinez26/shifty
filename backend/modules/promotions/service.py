@@ -7,7 +7,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.exceptions import AppException, ValidationException
 from modules.promotions.model import PromotionRedemption, StorePromotion
+from modules.promotions.schemas import PromotionCreate, PromotionUpdate
 from modules.services.model import Service
 from modules.users.model import User
 
@@ -147,3 +149,82 @@ async def redeem_promotion(
         )
     )
     return quote
+
+
+def _assert_codigo_libre(existente: StorePromotion | None) -> None:
+    if existente is not None:
+        raise AppException(
+            message="Ya existe una promocion con ese codigo",
+            http_status=409,
+            error_code="PROMOTION_CODE_DUPLICATE",
+        )
+
+
+async def create_store_promotion(
+    db: AsyncSession, *, store_id: str, data: PromotionCreate
+) -> StorePromotion:
+    """Alta de una promocion. Dueña de la transaccion (CLAUDE.md §2)."""
+    duplicate = await db.execute(
+        select(StorePromotion).where(
+            StorePromotion.store_id == store_id,
+            StorePromotion.code == data.code,
+        )
+    )
+    _assert_codigo_libre(duplicate.scalar_one_or_none())
+
+    promotion = StorePromotion(store_id=store_id, **data.model_dump())
+    db.add(promotion)
+    await db.commit()
+    await db.refresh(promotion)
+    return promotion
+
+
+async def update_store_promotion(
+    db: AsyncSession, *, promotion: StorePromotion, data: PromotionUpdate
+) -> StorePromotion:
+    """Edicion parcial: valida codigo, tope porcentual y ventana, y persiste."""
+    payload = data.model_dump(exclude_unset=True)
+
+    candidate_code = payload.get("code")
+    if candidate_code and candidate_code != promotion.code:
+        duplicate = await db.execute(
+            select(StorePromotion).where(
+                StorePromotion.store_id == promotion.store_id,
+                StorePromotion.code == candidate_code,
+                StorePromotion.id != promotion.id,
+            )
+        )
+        _assert_codigo_libre(duplicate.scalar_one_or_none())
+
+    candidate_type = payload.get("promotion_type", promotion.promotion_type)
+    candidate_value = payload.get("value", promotion.value)
+    if (
+        candidate_type == "percent"
+        and candidate_value is not None
+        and candidate_value > 100
+    ):
+        raise ValidationException("El descuento porcentual no puede superar 100")
+
+    candidate_valid_from = payload.get("valid_from", promotion.valid_from)
+    candidate_valid_until = payload.get("valid_until", promotion.valid_until)
+    if (
+        candidate_valid_from
+        and candidate_valid_until
+        and candidate_valid_from >= candidate_valid_until
+    ):
+        raise ValidationException("La vigencia de la promocion es invalida")
+
+    for key, value in payload.items():
+        setattr(promotion, key, value)
+
+    await db.commit()
+    await db.refresh(promotion)
+    return promotion
+
+
+async def deactivate_store_promotion(
+    db: AsyncSession, *, promotion: StorePromotion
+) -> None:
+    """Baja logica: la promocion puede tener canjes historicos asociados."""
+    promotion.is_active = False
+    await db.commit()
