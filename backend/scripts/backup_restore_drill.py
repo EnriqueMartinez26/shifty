@@ -4,9 +4,16 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from scripts.backup_db import _sha256_file  # noqa: E402
 
 
 def _run(
@@ -21,6 +28,19 @@ def _run(
 def _latest_backup(backup_dir: Path) -> Path | None:
     backups = sorted(backup_dir.glob("shifty-*.dump"), reverse=True)
     return backups[0] if backups else None
+
+
+def _verify_checksum(dump: Path, checksum_file: Path) -> tuple[bool, str]:
+    """Compara el sha256 real del dump con el que escribio backup_db.py
+    (`<hex>  <nombre>`). Sin archivo de checksum no hay nada que validar: falla."""
+    if not checksum_file.exists():
+        return False, f"No se encontro checksum para validar: {checksum_file}"
+    parts = checksum_file.read_text(encoding="utf-8").split()
+    expected = parts[0] if parts else ""
+    actual = _sha256_file(dump)
+    if actual != expected:
+        return False, f"Checksum distinto: esperado {expected}, calculado {actual}"
+    return True, f"sha256 verificado: {actual}"
 
 
 def main() -> int:
@@ -96,6 +116,15 @@ def main() -> int:
         checksum_file = latest.with_suffix(".sha256")
         if checksum_file.exists():
             evidence["checksum_file"] = str(checksum_file)
+        # El .sha256 se recalcula y compara: registrar solo su ruta dejaba un
+        # dump truncado con evidencia "ok" (C-06, 2026-09-17).
+        ok, detail = _verify_checksum(latest, checksum_file)
+        add_step(
+            "verify-checksum",
+            ok,
+            stdout=detail if ok else "",
+            stderr="" if ok else detail,
+        )
     else:
         add_step("locate-backup", False, stderr="No se encontro backup para validar")
 
