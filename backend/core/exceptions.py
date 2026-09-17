@@ -14,6 +14,17 @@ from datetime import datetime
 from http import HTTPStatus
 from typing import Any
 
+from core.utils import ARGENTINA_TZ, ensure_utc_aware
+
+
+def _hhmm_local(moment: datetime) -> str:
+    """Hora argentina para el texto que lee el cliente.
+
+    ``starts_at``/``ends_at`` llegan en UTC desde la base (naive en SQLite);
+    el ``detail`` sigue en ISO UTC para el front, solo el mensaje se localiza.
+    """
+    return ensure_utc_aware(moment).astimezone(ARGENTINA_TZ).strftime("%H:%M")
+
 
 # ---------------------------------------------------------------------------
 # BASE
@@ -56,11 +67,11 @@ class AppointmentConflictException(AppException):
         message = "El horario solicitado ya no está disponible."
         if conflict_start and conflict_end:
             # Formatear horarios para que el usuario sepa EXACTAMENTE qué está ocupado
-            start_str = conflict_start.strftime("%H:%M")
-            end_str = conflict_end.strftime("%H:%M")
+            start_str = _hhmm_local(conflict_start)
+            end_str = _hhmm_local(conflict_end)
             message = f"El profesional ya tiene un turno de {start_str} a {end_str}. "
             if suggestion:
-                sugg_str = suggestion.strftime("%H:%M")
+                sugg_str = _hhmm_local(suggestion)
                 message += f"Te sugerimos intentar a las {sugg_str}."
             else:
                 message += f"Por favor, intenta reservar a partir de las {end_str}."
@@ -135,8 +146,8 @@ class BlockedScheduleException(AppException):
     ) -> None:
         message = "El profesional no está disponible en ese horario."
         if block_start and block_end:
-            start_str = block_start.strftime("%H:%M")
-            end_str = block_end.strftime("%H:%M")
+            start_str = _hhmm_local(block_start)
+            end_str = _hhmm_local(block_end)
             message = f"La agenda está bloqueada de {start_str} a {end_str}"
             if reason:
                 message += f" (Razón: {reason})."
@@ -144,7 +155,7 @@ class BlockedScheduleException(AppException):
                 message += "."
 
             if suggestion:
-                sugg_str = suggestion.strftime("%H:%M")
+                sugg_str = _hhmm_local(suggestion)
                 message += f" Podés reservar a partir de las {sugg_str}."
         elif reason:
             message = f"Horario no disponible: {reason}."
