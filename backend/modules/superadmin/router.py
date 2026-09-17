@@ -88,7 +88,10 @@ async def list_stores(
     is_active: bool | None = Query(True),
     has_subscription: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    # Tope superior (regla 9: ge Y le): sin el, un offset por encima del bigint
+    # de Postgres (2^63-1) desbordaba la query y salia 500, el mismo incidente
+    # que ya se cerro en /users/ el 2026-09-04.
+    offset: int = Query(0, ge=0, le=1_000_000),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[StoreTableResponse]:
