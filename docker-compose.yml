@@ -118,7 +118,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: uv run celery -A core.celery_app worker --loglevel=info
+    command: celery -A core.celery_app worker --loglevel=info
     container_name: shifty_celery
     restart: always
     environment: *app_environment
@@ -140,7 +140,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: uv run celery -A core.celery_app beat --loglevel=info
+    command: celery -A core.celery_app beat --loglevel=info
     container_name: shifty_celery_beat
     restart: always
     environment: *app_environment
