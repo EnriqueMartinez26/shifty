@@ -11,6 +11,7 @@ from modules.auth.dependencies import get_current_admin
 from modules.users.model import User
 from modules.users.repository import UserRepository
 from modules.users.schemas import UserCreate, UserResponse, UserUpdate
+from modules.users.service import UserService
 
 router = CanonicalAPIRouter(prefix="/users", tags=["Users Management"])
 PublicIdPath = Annotated[
@@ -24,10 +25,9 @@ async def create_user(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
-    repo = UserRepository(db)
     try:
         return UserResponse.model_validate(
-            await repo.create(data.model_dump(), admin.store_id)
+            await UserService(db).create(data.model_dump(), admin.store_id)
         )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
@@ -94,7 +94,9 @@ async def update_user(
         raise UserNotFoundException(public_id)
 
     try:
-        return UserResponse.model_validate(await repo.update(user, data.model_dump()))
+        return UserResponse.model_validate(
+            await UserService(db).update(user, data.model_dump())
+        )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
 
@@ -117,5 +119,5 @@ async def delete_user(
     if not user:
         raise UserNotFoundException(public_id)
 
-    await repo.soft_delete(user)
+    await UserService(db).soft_delete(user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

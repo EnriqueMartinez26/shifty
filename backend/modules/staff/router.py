@@ -92,7 +92,9 @@ async def add_staff_schedule(
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        schedule = await repo.add_schedule(staff, data.model_dump(), admin.store_id)
+        schedule = await StaffService(db).add_schedule(
+            staff, data.model_dump(), admin.store_id
+        )
     except ValueError as exc:
         raise ValidationException(str(exc))
     return to_schedule_response(schedule)
@@ -117,7 +119,7 @@ async def update_staff_schedule(
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
 
     try:
-        actualizado = await repo.update_schedule(
+        actualizado = await StaffService(db).update_schedule(
             staff, schedule, data.model_dump(exclude_unset=True)
         )
     except ValueError as exc:
@@ -148,7 +150,7 @@ async def delete_staff_schedule(
     if not schedule:
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
 
-    await repo.delete_schedule(schedule)
+    await StaffService(db).delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")
@@ -164,7 +166,7 @@ async def update_staff_services(
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        await repo.update_services(staff, service_ids)
+        await StaffService(db).update_services(staff, service_ids)
     except ValueError as exc:
         raise ValidationException(str(exc))
     return {"message": "Servicios actualizados correctamente"}

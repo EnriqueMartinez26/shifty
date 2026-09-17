@@ -187,8 +187,7 @@ class StaffRepository:
         )
         new_schedule = Schedule(**schedule_data, staff_id=staff.id, store_id=store_id)
         self.db.add(new_schedule)
-        await self.db.commit()
-        await self.db.refresh(new_schedule)
+        await self.db.flush()
         return new_schedule
 
     async def get_schedule(self, staff: Staff, schedule_id: str) -> Schedule | None:
@@ -215,13 +214,12 @@ class StaffRepository:
         schedule.day_of_week = day
         schedule.start_time = start
         schedule.end_time = end
-        await self.db.commit()
-        await self.db.refresh(schedule)
+        await self.db.flush()
         return schedule
 
     async def delete_schedule(self, schedule: Schedule) -> None:
         await self.db.delete(schedule)
-        await self.db.commit()
+        await self.db.flush()
 
     async def update_services(
         self, staff: Staff, service_public_ids: list[str]
@@ -232,8 +230,7 @@ class StaffRepository:
         )
         staff.service_ids = [service.public_id for service in services_list]
         staff.services = services_list
-        await self.db.commit()
-        await self.db.refresh(staff)
+        await self.db.flush()
         return staff
 
     async def update_profile(
