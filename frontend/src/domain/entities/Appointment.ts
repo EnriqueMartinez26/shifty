@@ -85,17 +85,13 @@ export class Appointment {
     return !this.props.status.isFinalized() && !this.props.timeSpan.isInPast()
   }
 
-  reschedule(newTimeSpan: BookingTimeSpan): void {
-    if (newTimeSpan.isInPast()) throw new Error('No se puede reprogramar a una fecha pasada')
-    this.props.timeSpan = newTimeSpan
-    this.props.status = BookingStatus.create('pending')
-  }
-
-  // Los mutadores confirm() / markAbsent() / complete() se eliminaron a
-  // proposito: mutaban el estado sin replicar el grafo de transiciones del
-  // backend, y eran una tercera fuente de verdad divergente esperando a que
-  // alguien la cableara a un boton. Las transiciones se piden a la API, que es
-  // la unica autoridad sobre el estado del turno.
+  // Los mutadores confirm() / markAbsent() / complete() / reschedule() se
+  // eliminaron a proposito: mutaban el estado a mano (reschedule() forzaba
+  // 'pending', una transicion que ni siquiera existe en
+  // ALLOWED_STATUS_TRANSITIONS para 'confirmed') sin replicar el grafo real
+  // del backend, y eran una tercera fuente de verdad divergente esperando a
+  // que alguien la cableara a un boton. Las transiciones se piden a la API,
+  // que es la unica autoridad sobre el estado del turno.
 
   toPrimitives() {
     return {
