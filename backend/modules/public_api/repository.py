@@ -220,13 +220,18 @@ class PublicRepository:
     async def _staff_has_overlapping_block(
         self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> bool:
+        # Pregunta de existencia, no de unicidad: dos bloqueos solapados del
+        # mismo profesional (el alta lo permite) hacian que scalar_one_or_none
+        # levantara MultipleResultsFound y la reserva saliera 500 (B1-02).
         blocks_result = await self.db.execute(
-            select(StaffBlock).where(
+            select(StaffBlock)
+            .where(
                 StaffBlock.staff_id == staff_id,
                 StaffBlock.is_active.is_(True),
                 StaffBlock.starts_at < ends_at,
                 StaffBlock.ends_at > starts_at,
             )
+            .limit(1)
         )
         return blocks_result.scalar_one_or_none() is not None
 
