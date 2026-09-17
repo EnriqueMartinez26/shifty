@@ -300,95 +300,46 @@ def _sanitize_settings_error(value: str) -> str:
 
 
 def _fallback_settings() -> Settings:
-    cors_origins = os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
-    )
+    """Settings de respaldo cuando la configuracion real no valida.
+
+    ``model_construct`` completa con el default de ``Settings`` todo campo que
+    no se le pasa, asi que aca van SOLO tres cosas: los campos obligatorios
+    (sin default en la clase), los endurecimientos deliberados del respaldo y
+    lo que se lee del entorno para que el 503 salga con las URLs del deploy.
+    Repetir un default aca es una segunda tabla que nadie mantiene (B7-05);
+    ``tests/unit/test_fallback_settings_hereda_defaults.py`` lo vigila.
+
+    Como ``model_construct`` saltea los validadores, este objeto puede ser
+    invalido a proposito: solo sirve para que ``BootErrorMiddleware`` responda
+    503 y para que Celery aborte, nunca para atender trafico.
+    """
     return Settings.model_construct(
-        PROJECT_NAME="Shifty",
-        VERSION="0.1.0",
-        ENV=Environment.DEVELOPMENT,
+        # Obligatorios: sin ellos el atributo directamente no existe.
         # Aleatorio por proceso: aunque el BootErrorMiddleware responda 503 a
         # todo, ningun componente (Celery, scripts) debe poder firmar tokens
         # con un secreto conocido publicado en el repo.
         SECRET_KEY="boot-failed-" + secrets.token_urlsafe(32),
-        ALGORITHM="HS256",
-        JWT_ISSUER="shifty-api",
-        JWT_AUDIENCE="shifty",
-        ACCESS_TOKEN_EXPIRE_MINUTES=15,
-        REFRESH_TOKEN_EXPIRE_DAYS=30,
-        PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=30,
-        BCRYPT_ROUNDS=12,
-        LOGIN_LOCKOUT_MAX_ATTEMPTS=5,
-        LOGIN_LOCKOUT_WINDOW_SECONDS=900,
-        COOKIE_SECURE=True,
-        COOKIE_SAMESITE="lax",
-        FIELD_ENCRYPTION_KEY="boot-failed-" + secrets.token_urlsafe(32),
-        OTP_CODE_EXPIRE_MINUTES=10,
-        OTP_MAX_ATTEMPTS=5,
-        OTP_MAX_FAILURES_PER_HOUR=10,
-        OTP_MAX_REQUESTS_PER_HOUR=5,
-        OTP_PROVIDER="console",
-        OTP_DEBUG_EXPOSE_CODE=False,
-        PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD=5,
-        PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS=30,
-        MERCADOPAGO_OAUTH_CLIENT_ID=None,
-        MERCADOPAGO_OAUTH_CLIENT_SECRET=None,
-        MERCADOPAGO_OAUTH_REDIRECT_URI=None,
-        MERCADOPAGO_OAUTH_AUTH_URL="https://auth.mercadopago.com/authorization",
-        MERCADOPAGO_OAUTH_STATE_TTL_SECONDS=900,
-        MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS=300,
-        PAYMENT_HOLD_MINUTES=30,
-        TWILIO_ACCOUNT_SID=None,
-        TWILIO_AUTH_TOKEN=None,
-        TWILIO_SMS_FROM=None,
-        TWILIO_WHATSAPP_FROM=None,
-        EXPOSE_API_DOCS=False,
-        MAX_REQUEST_BODY_BYTES=32 * 1024,
-        ALLOWED_WRITE_CONTENT_TYPES="application/json",
-        TRUST_PROXY_HEADERS=True,
-        RATE_LIMIT_ENABLED=False,
-        RATE_LIMIT_FAIL_CLOSED=False,
-        RATE_LIMIT_WINDOW_SECONDS=60,
-        RATE_LIMIT_GLOBAL_PER_MINUTE=240,
-        RATE_LIMIT_AUTH_PER_MINUTE=12,
-        RATE_LIMIT_PUBLIC_READ_PER_MINUTE=120,
-        RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE=20,
-        REDIS_MAX_CONNECTIONS=100,
-        REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS=2.0,
-        REDIS_SOCKET_TIMEOUT_SECONDS=2.0,
-        REPORT_MAX_RANGE_DAYS=370,
-        SENTRY_DSN=None,
-        OPS_ENABLE_PUBLIC_HEALTH=True,
-        SLO_MAX_PENDING_WEBHOOKS=200,
-        SLO_MAX_FAILED_WEBHOOKS=20,
-        SLO_MAX_PENDING_OUTBOX=200,
-        MERCADOPAGO_WEBHOOK_SECRET=None,
-        RUN_RUNTIME_CONTRACTS_ON_STARTUP=False,
         DATABASE_URL="postgresql+asyncpg://invalid:invalid@localhost/invalid",
-        MIGRATION_DATABASE_URL=None,
-        DB_POOL_SIZE=10,
-        DB_MAX_OVERFLOW=5,
-        DB_POOL_RECYCLE_SECONDS=1800,
         REDIS_URL="redis://localhost:6379/0",
-        CELERY_BROKER_URL="memory://",
-        CELERY_RESULT_BACKEND_URL=None,
-        CELERY_WORKER_PREFETCH_MULTIPLIER=1,
-        CELERY_TASK_ACKS_LATE=True,
-        CELERY_TASK_SOFT_TIME_LIMIT_SECONDS=120,
-        CELERY_TASK_TIME_LIMIT_SECONDS=150,
         SMTP_HOST="placeholder",
         SMTP_PORT=587,
         SMTP_USER="placeholder",
         SMTP_PASS="placeholder",
         EMAILS_FROM_EMAIL="no-reply@example.com",
-        FRONTEND_URL=os.getenv(
-            "FRONTEND_URL",
-            "http://localhost:3000",
-        ),
-        FRONTEND_RESET_PASSWORD_PATH="/reset-password",
+        # Endurecimientos del respaldo: difieren a proposito del default de la
+        # clase (docs apagados, sin rate limit contra un Redis que quiza no
+        # esta, cookie segura, clave de cifrado desconocida en vez de None).
+        COOKIE_SECURE=True,
+        EXPOSE_API_DOCS=False,
+        RATE_LIMIT_ENABLED=False,
+        FIELD_ENCRYPTION_KEY="boot-failed-" + secrets.token_urlsafe(32),
+        # Del entorno: el 503 y CORS tienen que salir con las URLs del deploy.
+        FRONTEND_URL=os.getenv("FRONTEND_URL", "http://localhost:3000"),
         PUBLIC_API_URL=os.getenv("PUBLIC_API_URL", "http://localhost/api"),
-        CORS_ORIGINS=cors_origins,
+        CORS_ORIGINS=os.getenv(
+            "CORS_ORIGINS",
+            "http://localhost,http://127.0.0.1,http://localhost:5173,http://127.0.0.1:5173",
+        ),
     )
 
 
