@@ -224,9 +224,15 @@ class AppointmentRepository:
     async def get_overlapping_block(
         self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> StaffBlock | None:
-        """Retorna el primer StaffBlock que solape con el rango dado."""
+        """Retorna el primer StaffBlock que solape con el rango dado.
+
+        ``limit(1)`` porque puede haber mas de uno (dos bloqueos solapados del
+        mismo profesional): sin el, ``scalar_one_or_none`` levantaba
+        ``MultipleResultsFound`` y la reserva salia 500 (B1-02).
+        """
         res = await self.db.execute(
-            select(StaffBlock).where(
+            select(StaffBlock)
+            .where(
                 and_(
                     StaffBlock.staff_id == staff_id,
                     StaffBlock.is_active.is_(True),
@@ -234,6 +240,7 @@ class AppointmentRepository:
                     StaffBlock.ends_at > starts_at,
                 )
             )
+            .limit(1)
         )
         return res.scalar_one_or_none()
 
