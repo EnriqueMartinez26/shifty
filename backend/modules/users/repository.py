@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
-from modules.auth.service import revoke_sessions_for_user
+from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User
 
 
@@ -21,6 +21,12 @@ class UserRepository:
         password = payload.pop("password")
         first_name = payload.get("first_name") or ""
         last_name = payload.get("last_name") or ""
+        # La identidad del login es lower(email): sin normalizar, "X@a.com" y
+        # "x@a.com" convivian como dos filas y el login de ambas pasaba a 500
+        # (MultipleResultsFound). Con el email en minusculas el duplicado choca
+        # con el indice unico y sale como 400; el indice funcional
+        # uq_users_email_lower frena a cualquier camino que se olvide de esto.
+        payload["email"] = normalize_email(str(payload["email"]))
 
         new_user = User(
             **payload,

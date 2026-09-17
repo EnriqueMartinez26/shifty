@@ -24,6 +24,12 @@ class UserModel(Base):
     # rompian get_or_create_client con MultipleResultsFound (500); el
     # repositorio ya elige la mas reciente, y este indice impide que vuelvan
     # a aparecer. Solo clientes: el personal comparte telefonos del local.
+    #
+    # lower(email) es la identidad real del login (func.lower +
+    # scalar_one_or_none): dos filas que difieran solo en mayusculas lo rompen
+    # con 500. La columna `email` es unica case-sensitive, asi que la unicidad
+    # de verdad vive en el indice funcional uq_users_email_lower, no en las
+    # normalizaciones repetidas en Python.
     __table_args__ = (
         Index(
             "uq_users_client_phone_per_store",
@@ -33,6 +39,7 @@ class UserModel(Base):
             postgresql_where=text("role = 'client' AND phone IS NOT NULL"),
             sqlite_where=text("role = 'client' AND phone IS NOT NULL"),
         ),
+        Index("uq_users_email_lower", text("lower(email)"), unique=True),
     )
 
     id: Mapped[str] = mapped_column(
