@@ -5,7 +5,7 @@ from typing import Any
 
 import structlog
 from redis.exceptions import RedisError
-from sqlalchemy import or_, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -395,11 +395,11 @@ async def _fetch_remote_payment(
     return candidates[0]
 
 
-async def expire_unpaid_appointments(
-    db: AsyncSession, *, limit: int = 100
-) -> dict[str, int]:
-    now = datetime.now(timezone.utc)
-    result = await db.execute(
+def _expired_holds_query(
+    now: datetime, limit: int
+) -> Select[tuple[Appointment, Payment]]:
+    """Turnos con retencion vencida y sin cobro acreditado, los mas viejos primero."""
+    return (
         select(Appointment, Payment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
         .where(
@@ -415,9 +415,33 @@ async def expire_unpaid_appointments(
         )
         .order_by(Appointment.expires_at.asc())
         .limit(limit)
-        # Postgres rechaza FOR UPDATE sobre el lado nullable de un OUTER JOIN,
-        # asi que bloqueamos solo la fila del turno.
-        .with_for_update(skip_locked=True, of=Appointment)
+    )
+
+
+async def expire_unpaid_appointments(
+    db: AsyncSession, *, limit: int = 100
+) -> dict[str, int]:
+    now = datetime.now(timezone.utc)
+    vencidos = _expired_holds_query(now, limit)
+
+    # Fase A, SIN lock: preguntarle a Mercado Pago por los cobros pendientes.
+    # Es HTTP (hasta 20 s por pedido) y no puede correr con las filas del lote
+    # bloqueadas: con MP degradado una corrida sostenia 100 turnos bloqueados
+    # durante minutos (regla 5; incidente 2026-09-04). 2026-09-16, B2-02.
+    candidatos = list((await db.execute(vencidos)).all())
+    remotos = await _fetch_remote_payments(
+        db, [payment for _, payment in candidatos if payment is not None]
+    )
+
+    # Fase B, CON lock: decidir con el resultado ya en memoria. Postgres
+    # rechaza FOR UPDATE sobre el lado nullable de un OUTER JOIN, asi que se
+    # bloquea solo la fila del turno. populate_existing: las instancias ya
+    # cargadas en la fase A se refrescan con la fila bloqueada, no con lo que
+    # se leyo antes de la llamada a MP.
+    result = await db.execute(
+        vencidos.with_for_update(skip_locked=True, of=Appointment).execution_options(
+            populate_existing=True
+        )
     )
     rows = list(result.all())
     expired = 0
@@ -426,7 +450,9 @@ async def expire_unpaid_appointments(
     for appointment, payment in rows:
         # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
         # webhook nunca llego, vencerlo perderia una reserva ya pagada.
-        if payment and await _payment_was_accredited(db, payment):
+        if payment and await _apply_remote_payment(
+            db, payment, remotos.get(payment.id)
+        ):
             rescued += 1
             continue
         appointment.apply_status_transition(AppointmentStatus.EXPIRED)
@@ -459,16 +485,35 @@ async def expire_unpaid_appointments(
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 
 
-async def _payment_was_accredited(db: AsyncSession, payment: Payment) -> bool:
-    """Verifica contra Mercado Pago si un cobro pendiente ya fue acreditado."""
-    if payment.provider != "mercadopago":
-        return False
-    try:
-        remote = await _fetch_remote_payment(db, payment)
-    except Exception:
-        # Si no podemos preguntar, dejamos que el turno venza: la conciliacion
-        # posterior va a detectar el cobro y dejarlo visible para reembolso.
-        return False
+async def _fetch_remote_payments(
+    db: AsyncSession, payments: list[Payment]
+) -> dict[str, dict[str, Any]]:
+    """Una request HTTP a Mercado Pago por cobro pendiente: {payment.id: pago remoto}.
+
+    Se llama sin ningun lock tomado. Si no se puede preguntar por un cobro, no
+    figura en el resultado y el turno vence: la conciliacion posterior va a
+    detectar el cobro y dejarlo visible para reembolso.
+    """
+    remotos: dict[str, dict[str, Any]] = {}
+    for payment in payments:
+        if payment.provider != "mercadopago":
+            continue
+        try:
+            remote = await _fetch_remote_payment(db, payment)
+        except Exception:
+            continue
+        if remote:
+            remotos[payment.id] = remote
+    return remotos
+
+
+async def _apply_remote_payment(
+    db: AsyncSession, payment: Payment, remote: dict[str, Any] | None
+) -> bool:
+    """Aplica el pago remoto (ya consultado) y dice si el cobro quedo acreditado.
+
+    Escribe sobre el pago y el turno: corre con la fila del turno bloqueada.
+    """
     if not remote:
         return False
     applied = await apply_mercadopago_webhook_payload(
