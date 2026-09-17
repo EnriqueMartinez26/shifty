@@ -41,6 +41,7 @@ import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButt
 import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { useAuth } from '../context/AuthContext'
+import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN } from '../context/roles'
 import {
   useAppointmentBlocks,
   useBlockPreview,
@@ -168,10 +169,9 @@ const statusStyle = (status: string) => {
 
 export const CalendarContainer: React.FC = () => {
   const { user } = useAuth()
-  const canReleaseAppointments = user?.role === 'admin' || Boolean(user?.is_global_admin)
+  const canReleaseAppointments = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
   // Confirmar, completar y ausente: admin o personal (mismo criterio que la API).
-  const canManageAppointments =
-    canReleaseAppointments || user?.role === 'staff' || user?.role === 'professional'
+  const canManageAppointments = canReleaseAppointments || user?.role === ROLE_PROFESSIONAL
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView] = useState<CalendarView>('day')
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null)

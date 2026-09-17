@@ -16,6 +16,7 @@ import { buildWaitlistMessage } from '@shared/utils/waitlistWhatsApp'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'
+import { ROLE_STORE_ADMIN } from '../context/roles'
 import { useStoreSettings } from '../hooks/useStores'
 import { useBookFromWaitlist, useRemoveWaitlistEntry, useWaitlist } from '../hooks/useWaitlist'
 
@@ -31,7 +32,7 @@ const STATUS_LABEL: Record<string, string> = {
  */
 export const WaitlistContainer: React.FC = () => {
   const { user } = useAuth()
-  const canManage = user?.role === 'admin' || Boolean(user?.is_global_admin)
+  const canManage = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
   const waitlist = useWaitlist()
   const { data: storeSettings } = useStoreSettings()
   const removeEntry = useRemoveWaitlistEntry()
