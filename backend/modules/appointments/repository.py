@@ -355,13 +355,21 @@ class AppointmentRepository:
     # ------------------------------------------------------------------
 
     async def get_upcoming_for_reminders(
-        self, starts_after: datetime, starts_before: datetime
+        self,
+        starts_after: datetime,
+        starts_before: datetime,
+        *,
+        limit: int | None = None,
     ) -> list[AppointmentReminderRow]:
         """
         Devuelve turnos CONFIRMED o PENDING en el rango horario indicado a los
         que todavia les falta algun recordatorio (24h o 2h).
+
+        ``limit`` acota el lote por corrida (B4-02, 2026-09-17): el orden por
+        ``starts_at`` hace que los mas proximos salgan primero y el resto
+        espere al tick siguiente.
         """
-        result = await self.db.execute(
+        query = (
             select(Appointment, Service, Staff, User, Store)
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
@@ -384,6 +392,9 @@ class AppointmentRepository:
             )
             .order_by(Appointment.starts_at.asc())
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await self.db.execute(query)
         return [(row[0], row[1], row[2], row[3], row[4]) for row in result.all()]
 
     async def claim_reminder(
