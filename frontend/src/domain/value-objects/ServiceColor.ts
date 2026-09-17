@@ -6,7 +6,10 @@ export class ServiceColor {
   }
 
   static create(value: string): ServiceColor {
-    const hexRegex = /^#[0-9A-F]{6}$/i
+    // Mismo patrón que el backend (modules/services/schemas.py): acepta hex
+    // corto (#FFF) y largo (#FFFFFF). Rechazar el corto acá rompía TODO el
+    // listado de servicios apenas uno tuviera un color de 3 dígitos.
+    const hexRegex = /^#([0-9A-F]{6}|[0-9A-F]{3})$/i
     if (!hexRegex.test(value)) {
       throw new Error(`Color hexadecimal inválido: ${value}`)
     }
