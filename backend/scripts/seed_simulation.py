@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from dotenv import load_dotenv
 from sqlalchemy import delete, insert, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -19,6 +20,7 @@ if str(backend_dir) not in sys.path:
 
 load_dotenv(backend_dir.parent / ".env")
 
+from core.database import TenantSession, _apply_tenant_context, set_tenant_context
 from core.security import hash_password
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditAction, AuditLog
@@ -1046,11 +1048,23 @@ async def summarize_counts(session: AsyncSession) -> dict[str, int]:
 
 
 async def seed_simulation() -> None:
-    print(f"[CONN] Seeding database at: {DATABASE_URL}")
-    engine = create_async_engine(cast(str, DATABASE_URL), echo=False)
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    # Solo host, puerto y base: la URL completa lleva usuario y contrasena, y la
+    # salida del seed queda en logs (C-04, 2026-09-16).
+    url = make_url(cast(str, DATABASE_URL))
+    print(f"[CONN] Seeding database at: {url.host}:{url.port or 5432}/{url.database}")
+    engine = create_async_engine(url, echo=False)
+    # TenantSession reaplica el contexto tras cada commit: set_config(..., true)
+    # es local a la transaccion y el resumen posterior al commit lo necesita.
+    async_session = async_sessionmaker(
+        engine, class_=TenantSession, expire_on_commit=False
+    )
 
+    # Bypass explicito de RLS, como los jobs de Celery y bootstrap_superadmin.
+    # Sin esto el script solo escribia con un superusuario (BYPASSRLS): con el
+    # rol shifty_app cada INSERT caia por el WITH CHECK (C-04, 2026-09-16).
+    set_tenant_context(None, True)
     async with async_session() as session:
+        await _apply_tenant_context(session)
         await cleanup_seed(session)
         reports = []
         for scenario in STORE_SCENARIOS:
