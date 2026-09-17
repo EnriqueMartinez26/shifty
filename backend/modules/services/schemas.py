@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, field_validator
 
-from core.validation import reject_unsafe_url
+from core.validation import reject_control_chars, reject_unsafe_url
 
 
 class ServiceBase(BaseModel):
@@ -24,7 +24,14 @@ class ServiceBase(BaseModel):
 
 
 class ServiceCreate(ServiceBase):
-    pass
+    @field_validator("name", "description")
+    @classmethod
+    def reject_control_chars_in_text(cls, value: str | None) -> str | None:
+        # Regla 19: el nombre y la descripcion salen al catalogo publico y a
+        # los mails al cliente. Va en los schemas de entrada y no en
+        # ServiceBase porque ServiceResponse hereda de la base y un servicio
+        # ya guardado con un invisible tiene que seguir leyendose.
+        return reject_control_chars(value)
 
 
 class ServiceUpdate(BaseModel):
@@ -39,6 +46,11 @@ class ServiceUpdate(BaseModel):
     image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
     is_active: bool | None = None
+
+    @field_validator("name", "description")
+    @classmethod
+    def reject_control_chars_in_text(cls, value: str | None) -> str | None:
+        return reject_control_chars(value)
 
     @field_validator("image_url", "youtube_trailer_url")
     @classmethod
