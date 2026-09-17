@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from core.config import settings
+from core.utils import ensure_utc_aware, local_day_start, today_local
 
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.ledger.model import CustomerLedger
@@ -117,7 +118,7 @@ class ReportService:
     def _resolve_date_range(
         self, from_date: date | None, to_date: date | None
     ) -> tuple[date, date]:
-        today = datetime.now(timezone.utc).date()
+        today = today_local()
         resolved_to = to_date or today
         resolved_from = from_date or (resolved_to - timedelta(days=30))
 
@@ -137,8 +138,14 @@ class ReportService:
     def _range_bounds(
         self, from_date: date, to_date: date
     ) -> tuple[datetime, datetime]:
-        start_dt = datetime.combine(from_date, time.min)
-        end_dt = datetime.combine(to_date + timedelta(days=1), time.min)
+        """[medianoche argentina de from_date, medianoche argentina del dia
+        siguiente a to_date), como instantes UTC aware (regla 24).
+
+        Antes era medianoche naive, o sea UTC = 21:00 hora local del dia
+        anterior: los turnos de la noche caian en el reporte del dia siguiente.
+        """
+        start_dt = local_day_start(from_date)
+        end_dt = local_day_start(to_date + timedelta(days=1))
         return start_dt, end_dt
 
     def _empty_debt_summary(self) -> ReportDebtSummary:
@@ -589,12 +596,11 @@ class ReportService:
         ) in historical_rows:
             if not client_id:
                 continue
-            # func.min(Appointment.starts_at) vuelve aware (TIMESTAMPTZ); start_dt/
-            # end_dt son naive (ver _range_bounds). Sin esto, comparar mas abajo
-            # (y en la linea 494 via first_seen_by_client) explota con
-            # "can't compare offset-naive and offset-aware datetimes".
-            if starts_at.tzinfo is not None:
-                starts_at = starts_at.replace(tzinfo=None)
+            # start_dt/end_dt son UTC aware (ver _range_bounds). Postgres
+            # devuelve func.min(starts_at) aware; SQLite, naive: se normaliza a
+            # aware antes de comparar (aca y via first_seen_by_client) o explota
+            # con "can't compare offset-naive and offset-aware datetimes".
+            starts_at = ensure_utc_aware(starts_at)
             first_seen_by_client.setdefault(client_id, starts_at)
             if starts_at < start_dt:
                 clients_seen_before_range.add(client_id)
@@ -768,8 +774,8 @@ class ReportService:
 
             blocked_minutes = 0
             for block in blocks_by_staff.get(staff.id, []):
-                clipped_start = max(block.starts_at.replace(tzinfo=None), start_dt)
-                clipped_end = min(block.ends_at.replace(tzinfo=None), end_dt)
+                clipped_start = max(ensure_utc_aware(block.starts_at), start_dt)
+                clipped_end = min(ensure_utc_aware(block.ends_at), end_dt)
                 if clipped_end > clipped_start:
                     blocked_minutes += int(
                         (clipped_end - clipped_start).total_seconds() // 60
@@ -846,7 +852,7 @@ class ReportService:
         if months < 1:
             raise ValueError("months debe ser mayor a 0")
 
-        today = datetime.now(timezone.utc).date()
+        today = today_local()
         current_month_start = date(today.year, today.month, 1)
         start_month = _add_months(current_month_start, -(months - 1))
         # Cubrir el mes actual completo (no solo hasta "hoy"): un turno futuro
@@ -880,10 +886,8 @@ class ReportService:
             cursor = _add_months(cursor, 1)
 
         for month_value, status, count in result.all():
-            # func.date_trunc vuelve aware (TIMESTAMPTZ); mismo caso que
-            # _aggregate_summary, se normaliza antes de comparar/formatear.
-            if month_value.tzinfo is not None:
-                month_value = month_value.replace(tzinfo=None)
+            # func.date_trunc vuelve aware (TIMESTAMPTZ); solo se formatea, no
+            # se compara, asi que no hace falta normalizar.
             key = month_value.strftime("%Y-%m")
             bucket = buckets.setdefault(
                 key, {"total": 0, "completed": 0, "cancelled": 0}
