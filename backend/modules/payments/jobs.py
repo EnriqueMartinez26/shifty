@@ -300,6 +300,10 @@ async def process_webhook_inbox_batch(
         .where(*filters)
         .order_by(WebhookInbox.created_at.asc())
         .limit(limit)
+        # Dos corridas solapadas del beat (cada item hace HTTP a MP) no deben
+        # tomar el mismo webhook: sin esto se repetia el fetch y attempts
+        # subia dos veces por evento (regla 8). 2026-09-16, B2-03.
+        .with_for_update(skip_locked=True)
     )
     inbox_items = list(result.scalars().all())
     processed = 0
@@ -354,6 +358,10 @@ async def reconcile_pending_payments(
         )
         .order_by(Payment.created_at.asc())
         .limit(limit)
+        # Regla 8: dos corridas solapadas no consultan dos veces a MP por el
+        # mismo cobro. Solo la fila del cobro: el JOIN con la configuracion de
+        # la tienda no la bloquea. 2026-09-16, B2-03.
+        .with_for_update(skip_locked=True, of=Payment)
     )
     payments = list(result.scalars().all())
 
