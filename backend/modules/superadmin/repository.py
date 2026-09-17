@@ -133,6 +133,52 @@ def _store_row(store: Store, row: Row[Any]) -> dict[str, Any]:
     }
 
 
+def _assert_coupon_redeemable(
+    coupon: SaaSCoupon,
+    subscription: StoreSubscription,
+    now: datetime,
+    previous_redemption: CouponRedemption | None,
+) -> None:
+    """Elegibilidad de un canje: funcion pura sobre (cupon, suscripcion, ahora).
+
+    Estaba embebida en ``redeem_coupon`` como ocho ``raise`` consecutivos
+    detras de dos ``SELECT ... FOR UPDATE``, asi que no habia forma de probar
+    la maquina de elegibilidad sin base (B3-07/B3-08, 2026-09-17). Corre
+    DESPUES del lock: moverla antes reabriria la carrera de ``current_uses``.
+    """
+    period_end = _utc(subscription.current_period_end)
+    if subscription.status != "active":
+        raise ValueError("La suscripción de la tienda no está activa")
+    if period_end and period_end < now:
+        raise ValueError("La suscripción de la tienda está vencida")
+    if not coupon.is_active:
+        raise ValueError("El cupón no está activo")
+    if coupon.valid_from and coupon.valid_from > now:
+        raise ValueError("El cupón todavía no está vigente")
+    if coupon.valid_until and coupon.valid_until < now:
+        raise ValueError("El cupón está vencido")
+    if coupon.max_uses is not None and coupon.current_uses >= coupon.max_uses:
+        raise ValueError("El cupón ya alcanzó su límite de usos")
+    if coupon.currency and coupon.currency != subscription.currency:
+        raise ValueError("La moneda del cupón no coincide con la suscripción")
+    if coupon.one_time_per_store and previous_redemption is not None:
+        raise ValueError("Esta tienda ya canjeó ese cupón")
+
+
+def _compute_discount(
+    coupon: SaaSCoupon, base_amount: Decimal
+) -> tuple[Decimal, Decimal]:
+    """Descuento y total final; el descuento nunca supera la base."""
+    if coupon.coupon_type == "percent":
+        discount_amount = _money(base_amount * _money(coupon.value) / Decimal("100"))
+    elif coupon.coupon_type == "fixed":
+        discount_amount = _money(coupon.value)
+    else:
+        raise ValueError("Tipo de cupón inválido")
+    discount_amount = min(discount_amount, base_amount)
+    return discount_amount, _money(base_amount - discount_amount)
+
+
 class _BaseAdminRepository:
     """Base de los repositorios de superadmin: sesión + auditoría común."""
 
@@ -676,56 +722,16 @@ class CouponAdminRepository(_BaseAdminRepository):
     ) -> CouponRedemption:
         if not store.is_active:
             raise ValueError("No se puede canjear un cupón sobre una tienda inactiva")
-        coupon_result = await self.db.execute(
-            select(SaaSCoupon).where(SaaSCoupon.id == coupon.id).with_for_update()
-        )
-        coupon = coupon_result.scalar_one()
-        subscription_result = await self.db.execute(
-            select(StoreSubscription)
-            .where(StoreSubscription.id == subscription.id)
-            .with_for_update()
-        )
-        subscription = subscription_result.scalar_one()
+        coupon = await self._lock_coupon(coupon.id)
+        subscription = await self._lock_subscription(subscription.id)
 
-        now = datetime.now(timezone.utc)
-        period_end = _utc(subscription.current_period_end)
-        if subscription.status != "active":
-            raise ValueError("La suscripción de la tienda no está activa")
-        if period_end and period_end < now:
-            raise ValueError("La suscripción de la tienda está vencida")
-        if not coupon.is_active:
-            raise ValueError("El cupón no está activo")
-        if coupon.valid_from and coupon.valid_from > now:
-            raise ValueError("El cupón todavía no está vigente")
-        if coupon.valid_until and coupon.valid_until < now:
-            raise ValueError("El cupón está vencido")
-        if coupon.max_uses is not None and coupon.current_uses >= coupon.max_uses:
-            raise ValueError("El cupón ya alcanzó su límite de usos")
-        if coupon.currency and coupon.currency != subscription.currency:
-            raise ValueError("La moneda del cupón no coincide con la suscripción")
-        if coupon.one_time_per_store:
-            previous = await self.db.execute(
-                select(CouponRedemption).where(
-                    CouponRedemption.coupon_id == coupon.id,
-                    CouponRedemption.store_id == store.id,
-                    CouponRedemption.is_active.is_(True),
-                )
-            )
-            if previous.scalar_one_or_none():
-                raise ValueError("Esta tienda ya canjeó ese cupón")
+        previous = await self._previous_redemption(coupon, store)
+        _assert_coupon_redeemable(
+            coupon, subscription, datetime.now(timezone.utc), previous
+        )
 
         base_amount = _money(subscription.base_amount)
-        if coupon.coupon_type == "percent":
-            discount_amount = _money(
-                base_amount * _money(coupon.value) / Decimal("100")
-            )
-        elif coupon.coupon_type == "fixed":
-            discount_amount = _money(coupon.value)
-        else:
-            raise ValueError("Tipo de cupón inválido")
-
-        discount_amount = min(discount_amount, base_amount)
-        final_amount = _money(base_amount - discount_amount)
+        discount_amount, final_amount = _compute_discount(coupon, base_amount)
 
         coupon.current_uses += 1
         subscription.coupon_id = coupon.id
@@ -762,6 +768,34 @@ class CouponAdminRepository(_BaseAdminRepository):
         await self.db.commit()
         await self.db.refresh(redemption)
         return redemption
+
+    async def _lock_coupon(self, coupon_id: str) -> SaaSCoupon:
+        result = await self.db.execute(
+            select(SaaSCoupon).where(SaaSCoupon.id == coupon_id).with_for_update()
+        )
+        return result.scalar_one()
+
+    async def _lock_subscription(self, subscription_id: str) -> StoreSubscription:
+        result = await self.db.execute(
+            select(StoreSubscription)
+            .where(StoreSubscription.id == subscription_id)
+            .with_for_update()
+        )
+        return result.scalar_one()
+
+    async def _previous_redemption(
+        self, coupon: SaaSCoupon, store: Store
+    ) -> CouponRedemption | None:
+        if not coupon.one_time_per_store:
+            return None
+        result = await self.db.execute(
+            select(CouponRedemption).where(
+                CouponRedemption.coupon_id == coupon.id,
+                CouponRedemption.store_id == store.id,
+                CouponRedemption.is_active.is_(True),
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_store_redemptions(
         self, store_id: str, limit: int | None = None
