@@ -282,8 +282,17 @@ class Settings(BaseSettings):
     )
 
 
+def redact_url(value: str) -> str:
+    """Tapa toda URL embebida dejando solo el esquema.
+
+    Una ``DATABASE_URL`` lleva ``usuario:contraseña@host``; ningun mensaje de
+    error (settings, scripts de migracion) debe cruzarla entera a un log.
+    """
+    return re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+", r"\1[redacted]", value)
+
+
 def _sanitize_settings_error(value: str) -> str:
-    value = re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+", r"\1[redacted]", value)
+    value = redact_url(value)
     value = re.sub(
         r"(?i)(secret|token|password|pass|key)=([^\s,;]+)", r"\1=[redacted]", value
     )
