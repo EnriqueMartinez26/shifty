@@ -18,6 +18,25 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def today_local() -> _date:
+    """El dia de negocio de hoy: la fecha en hora argentina, no la fecha UTC.
+
+    Entre las 21:00 y las 24:00 hora local el dia UTC ya es "manana"; para el
+    panel y los reportes "hoy" es lo que dice el calendario del negocio.
+    """
+    return now_utc().astimezone(ARGENTINA_TZ).date()
+
+
+def local_day_start(day: _date) -> datetime:
+    """Medianoche argentina de ``day`` como instante UTC.
+
+    Es el corte de "un dia" de negocio (regla 24): el dia siguiente se obtiene
+    con aritmetica de calendario (``day + timedelta(days=1)``) y se vuelve a
+    pasar por aca, nunca sumando ``timedelta(hours=24)`` a un instante.
+    """
+    return local_to_utc(day, _time.min)
+
+
 def to_utc_naive(dt: datetime) -> datetime:
     """Convierte un datetime a UTC y le quita la info de timezone (para DBs antiguas o legacy)."""
     if dt.tzinfo is None:
