@@ -38,7 +38,8 @@ from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
 
-BusinessHoursPayload = dict[str, list[dict[str, str]]]
+# Ya validado por BusinessHourPeriod: horas reales y open < close.
+BusinessHoursPayload = dict[str, list[dict[str, time]]]
 
 
 async def _get_current_store(user: User, db: AsyncSession) -> Store:
@@ -68,8 +69,8 @@ def _replace_business_hours(
             StoreSchedule(
                 store_id=store.id,
                 day_of_week=day_of_week,
-                open_time=time.fromisoformat(period["open"]),
-                close_time=time.fromisoformat(period["close"]),
+                open_time=period["open"],
+                close_time=period["close"],
             )
         )
 

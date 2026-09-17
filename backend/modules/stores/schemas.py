@@ -1,7 +1,13 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from core.business_types import BusinessType, DEFAULT_BUSINESS_TYPE
 from core.validation import SLUG_PATTERN, reject_unsafe_url
@@ -22,8 +28,22 @@ CustomClientFieldType = Literal["text", "textarea", "tel", "email", "date", "sel
 
 
 class BusinessHourPeriod(BaseModel):
-    open: str = Field(..., pattern=r"^\d{2}:\d{2}$")
-    close: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    # La hora del local es una hora, no una cadena: "99:99" cumplia el patron
+    # ^\d{2}:\d{2}$ y reventaba en time.fromisoformat del router (500). Con
+    # `time` la validacion la hace Pydantic (422), igual que ScheduleBase en
+    # staff. El contrato de salida no cambia: se serializa como "HH:MM".
+    open: time
+    close: time
+
+    @field_serializer("open", "close", when_used="json")
+    def _hh_mm(self, value: time) -> str:
+        return value.strftime("%H:%M")
+
+    @model_validator(mode="after")
+    def validate_time_order(self) -> "BusinessHourPeriod":
+        if self.open >= self.close:
+            raise ValueError("open debe ser anterior a close")
+        return self
 
 
 class StoreCustomFieldOption(BaseModel):
