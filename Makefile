@@ -15,11 +15,15 @@ migrate:
 makemigrations:
 	docker compose exec backend alembic revision --autogenerate -m "$(name)"
 
+# pytest e ipython viven en el grupo `dev` de pyproject.toml y la imagen se
+# construye con `uv sync --frozen --no-dev`: sin `--group dev` estos dos
+# atajos morian con "executable file not found in PATH". `--frozen` evita que
+# uv re-resuelva y reescriba uv.lock, que aca es el del host (bind-mount).
 test:
-	docker compose exec backend pytest
+	docker compose exec backend uv run --frozen --group dev pytest
 
 shell:
-	docker compose exec backend ipython
+	docker compose exec backend uv run --frozen --group dev ipython
 
 clean:
 	docker compose down -v
