@@ -24,10 +24,16 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
+from core.model_registry import load_all_models
 from core.validation import validate_password_strength
 from core.security import hash_password
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
+
+# Fuera de la API nadie importa todos los routers: sin esto SQLAlchemy no
+# puede resolver las relaciones declaradas por nombre y la primera query muere
+# con "expression '<Modelo>' failed to locate a name" (core/model_registry.py).
+load_all_models()
 
 
 def _required_env(name: str) -> str:

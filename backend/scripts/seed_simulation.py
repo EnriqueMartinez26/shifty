@@ -21,6 +21,7 @@ if str(backend_dir) not in sys.path:
 load_dotenv(backend_dir.parent / ".env")
 
 from core.database import TenantSession, _apply_tenant_context, set_tenant_context
+from core.model_registry import load_all_models
 from core.security import hash_password
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditAction, AuditLog
@@ -43,6 +44,10 @@ from modules.staff.model import Schedule, Staff, StaffBlock, staff_services
 from modules.stores.model import Store, StoreSchedule
 from modules.users.model import User, UserRole
 from modules.auth.session_model import AuthSession
+
+# Los imports de arriba son los modelos que este script USA; el registro es
+# el que garantiza que esten TODOS para configurar los mappers.
+load_all_models()
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
