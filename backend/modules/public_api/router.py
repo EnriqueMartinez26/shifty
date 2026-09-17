@@ -1327,6 +1327,11 @@ async def client_reschedule_appointment(
                 error_code="SCHEDULE_BLOCKED",
             )
 
+        # Mismo criterio que el alta publica (create_appointment) y el panel:
+        # el turno vecino se ensancha por el buffer de la tienda a cada lado.
+        # Sin esto el cliente reprogramaba a un horario pegado que el alta
+        # rechazaba y el profesional perdia el hueco configurado (B1-07).
+        buffer = timedelta(minutes=max(0, getattr(store, "buffer_minutes", 0) or 0))
         try:
             async with db.begin_nested():
                 conflict_res = await db.execute(
@@ -1341,8 +1346,8 @@ async def client_reschedule_appointment(
                             ]
                         ),
                         Appointment.id != original.id,
-                        Appointment.starts_at < new_ends_at,
-                        Appointment.ends_at > data.new_starts_at,
+                        Appointment.starts_at < new_ends_at + buffer,
+                        Appointment.ends_at > data.new_starts_at - buffer,
                     )
                     .limit(1)
                 )
