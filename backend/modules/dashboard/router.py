@@ -2,10 +2,12 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends
 from core.router import CanonicalAPIRouter
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from core.database import get_db
+from core.roles import store_scope_for
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.auth.dependencies import get_current_staff
 from modules.dashboard.schemas import (
@@ -28,12 +30,27 @@ _ACCREDITED_PAYMENT_STATUSES = [
 ]
 
 
+def _store_scope(
+    store_id: str | None, column: InstrumentedAttribute[str]
+) -> list[ColumnElement[bool]]:
+    """Predicado ``store_id`` para desempacar en el ``where`` de cada query.
+
+    Defensa en profundidad sobre RLS (CLAUDE.md §2): toda consulta del panel
+    lleva la tienda del request aunque la politica de Postgres falle. Vacio
+    solo para el superadmin (ver core.roles.store_scope_for).
+    """
+    if store_id is None:
+        return []
+    return [column == store_id]
+
+
 @router.get("/summary", response_model=DashboardSummaryResponse)
 async def get_dashboard_summary(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> DashboardSummaryResponse:
     """Devuelve métricas resumidas y próximos turnos para el dashboard."""
+    store_id = store_scope_for(user)
     now = datetime.now(timezone.utc)
     start_today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
     end_today = start_today + timedelta(days=1)
@@ -49,13 +66,15 @@ async def get_dashboard_summary(
             Appointment.starts_at >= start_today.replace(tzinfo=None),
             Appointment.starts_at < end_today.replace(tzinfo=None),
             Appointment.status != AppointmentStatus.CANCELLED.value,
+            *_store_scope(store_id, Appointment.store_id),
         )
     )
     appointments_today = int(appointments_today_q.scalar() or 0)
 
     pending_q = await db.execute(
         select(func.count(Appointment.id)).where(
-            Appointment.status == AppointmentStatus.PENDING.value
+            Appointment.status == AppointmentStatus.PENDING.value,
+            *_store_scope(store_id, Appointment.store_id),
         )
     )
     pending_confirmations = int(pending_q.scalar() or 0)
@@ -69,6 +88,7 @@ async def get_dashboard_summary(
             Appointment.starts_at >= start_today.replace(tzinfo=None),
             Appointment.starts_at < end_today.replace(tzinfo=None),
             Appointment.status != AppointmentStatus.CANCELLED.value,
+            *_store_scope(store_id, Appointment.store_id),
         )
     )
     booked_mins = float(booked_mins_q.scalar() or 0)
@@ -77,7 +97,10 @@ async def get_dashboard_summary(
     # Calculamos la duración en Python para que sea agnóstico a la base de datos (PostgreSQL vs SQLite)
     day_of_week = start_today.weekday()
     schedules_q = await db.execute(
-        select(Schedule).where(Schedule.day_of_week == day_of_week)
+        select(Schedule).where(
+            Schedule.day_of_week == day_of_week,
+            *_store_scope(store_id, Schedule.store_id),
+        )
     )
     total_avail_mins = 0.0
     for (sch,) in schedules_q:
@@ -96,6 +119,7 @@ async def get_dashboard_summary(
         select(func.count(User.id)).where(
             User.role == UserRole.CLIENT.value,
             User.created_at >= last_30_days.replace(tzinfo=None),
+            *_store_scope(store_id, User.store_id),
         )
     )
     new_clients_last_30d = int(new_clients_q.scalar() or 0)
@@ -115,6 +139,7 @@ async def get_dashboard_summary(
                 Appointment.starts_at >= desde.replace(tzinfo=None),
                 Appointment.starts_at < hasta.replace(tzinfo=None),
                 Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
+                *_store_scope(store_id, Appointment.store_id),
             )
         )
         return float(query.scalar() or 0)
@@ -142,6 +167,7 @@ async def get_dashboard_summary(
             Appointment.starts_at >= week_start.replace(tzinfo=None),
             Appointment.starts_at < week_end.replace(tzinfo=None),
             Appointment.status != AppointmentStatus.CANCELLED.value,
+            *_store_scope(store_id, Appointment.store_id),
         )
     )
     average_appointment_minutes = int(round(float(avg_duration_q.scalar() or 0)))
@@ -159,6 +185,7 @@ async def get_dashboard_summary(
                     AppointmentStatus.CONFIRMED.value,
                 ]
             ),
+            *_store_scope(store_id, Appointment.store_id),
         )
         .order_by(Appointment.starts_at.asc())
         .limit(5)

@@ -14,7 +14,7 @@ from modules.reports.service import ReportService
 @pytest.mark.asyncio
 async def test_report_summary_uses_safe_client_name_fallback() -> None:
     fake_db = SimpleNamespace()
-    service = ReportService(db=cast(AsyncSession, fake_db))
+    service = ReportService(db=cast(AsyncSession, fake_db), store_id="store-1")
     appointment = SimpleNamespace(
         id="appt-1",
         public_id="appt-1",
@@ -64,7 +64,7 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
 @pytest.mark.asyncio
 async def test_report_trend_fills_gaps_and_counts_by_status() -> None:
     fake_db = SimpleNamespace()
-    service = ReportService(db=cast(AsyncSession, fake_db))
+    service = ReportService(db=cast(AsyncSession, fake_db), store_id="store-1")
 
     today = datetime.now(timezone.utc).date()
     current_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
@@ -100,7 +100,7 @@ async def test_report_trend_fills_gaps_and_counts_by_status() -> None:
 @pytest.mark.asyncio
 async def test_report_trend_rejects_non_positive_months() -> None:
     fake_db = SimpleNamespace()
-    service = ReportService(db=cast(AsyncSession, fake_db))
+    service = ReportService(db=cast(AsyncSession, fake_db), store_id="store-1")
 
     with pytest.raises(ValueError):
         await service.get_trend(months=0)
