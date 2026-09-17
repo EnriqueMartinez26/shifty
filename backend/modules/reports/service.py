@@ -6,8 +6,9 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from core.config import settings
 
@@ -75,8 +76,23 @@ class _SummaryAggregation:
 
 
 class ReportService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, *, store_id: str | None):
         self.db = db
+        # Tienda que acota TODAS las consultas del reporte: defensa en
+        # profundidad sobre RLS (CLAUDE.md §2), la unica capa que la suite en
+        # SQLite puede ejercitar. None solo para el superadmin, mismo criterio
+        # que la politica RLS (ver core.roles.store_scope_for). Es parametro
+        # obligatorio a proposito: un caller que lo olvide falla al construir,
+        # no devuelve datos de otras tiendas en silencio.
+        self.store_id = store_id
+
+    def _store_scope(
+        self, column: InstrumentedAttribute[str]
+    ) -> list[ColumnElement[bool]]:
+        """Predicado ``store_id`` para desempacar en el ``where`` de cada query."""
+        if self.store_id is None:
+            return []
+        return [column == self.store_id]
 
     def _resolve_date_range(
         self, from_date: date | None, to_date: date | None
@@ -136,19 +152,26 @@ class ReportService:
         # Solo el ultimo movimiento por cliente, resuelto en la DB (row_number
         # sobre la particion por client_id) en vez de traer todo el ledger y
         # deduplicar en Python: ese barrido crecia sin techo por cada cargo.
-        ultimo_por_cliente = select(
-            CustomerLedger.id.label("id"),
-            func.row_number()
-            .over(
-                partition_by=CustomerLedger.client_id,
-                order_by=CustomerLedger.created_at.desc(),
+        ultimo_por_cliente = (
+            select(
+                CustomerLedger.id.label("id"),
+                func.row_number()
+                .over(
+                    partition_by=CustomerLedger.client_id,
+                    order_by=CustomerLedger.created_at.desc(),
+                )
+                .label("rn"),
             )
-            .label("rn"),
-        ).subquery()
+            .where(*self._store_scope(CustomerLedger.store_id))
+            .subquery()
+        )
         result = await self.db.execute(
             select(CustomerLedger)
             .join(ultimo_por_cliente, CustomerLedger.id == ultimo_por_cliente.c.id)
-            .where(ultimo_por_cliente.c.rn == 1)
+            .where(
+                ultimo_por_cliente.c.rn == 1,
+                *self._store_scope(CustomerLedger.store_id),
+            )
         )
 
         debt_rows = [
@@ -163,7 +186,9 @@ class ReportService:
             movement.client_id for movement in debt_rows if movement.client_id
         ]
         users_result = await self.db.execute(
-            select(User).where(User.id.in_(client_ids))
+            select(User).where(
+                User.id.in_(client_ids), *self._store_scope(User.store_id)
+            )
         )
         users_by_id = {user.id: user for user in users_result.scalars().all()}
 
@@ -210,7 +235,11 @@ class ReportService:
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
-            .where(Appointment.starts_at >= start_dt, Appointment.starts_at < end_dt)
+            .where(
+                Appointment.starts_at >= start_dt,
+                Appointment.starts_at < end_dt,
+                *self._store_scope(Appointment.store_id),
+            )
             .order_by(Appointment.starts_at.asc())
         )
         if staff_id:
@@ -226,8 +255,8 @@ class ReportService:
     ) -> dict[str, Decimal]:
         """Suma, por turno, la plata acreditada (aprobada o confirmada manual).
 
-        Se acota a los ids de turnos ya cargados (propios del tenant), asi que
-        no puede sumar cobros de otra tienda.
+        Se acota a los ids de turnos ya cargados (propios del tenant) y ademas
+        lleva el predicado de tienda, como toda consulta del reporte.
         """
         if not appointment_ids:
             return {}
@@ -240,6 +269,7 @@ class ReportService:
                         PaymentStatus.MANUAL_CONFIRMED.value,
                     ]
                 ),
+                *self._store_scope(Payment.store_id),
             )
         )
         acumulado: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
@@ -283,7 +313,11 @@ class ReportService:
                 func.min(Appointment.starts_at),
             )
             .join(User, Appointment.client_id == User.id)
-            .where(Appointment.client_id.is_not(None), Appointment.starts_at < end_dt)
+            .where(
+                Appointment.client_id.is_not(None),
+                Appointment.starts_at < end_dt,
+                *self._store_scope(Appointment.store_id),
+            )
             .group_by(
                 Appointment.client_id, User.first_name, User.last_name, User.email
             )
@@ -550,7 +584,9 @@ class ReportService:
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
 
-        staff_query = select(Staff).where(Staff.is_active.is_(True))
+        staff_query = select(Staff).where(
+            Staff.is_active.is_(True), *self._store_scope(Staff.store_id)
+        )
         if only_staff_id:
             staff_query = staff_query.where(Staff.id == only_staff_id)
         staff_result = await self.db.execute(
@@ -564,7 +600,10 @@ class ReportService:
             )
 
         schedules_result = await self.db.execute(
-            select(Schedule).where(Schedule.staff_id.in_(staff_ids))
+            select(Schedule).where(
+                Schedule.staff_id.in_(staff_ids),
+                *self._store_scope(Schedule.store_id),
+            )
         )
         blocks_result = await self.db.execute(
             select(StaffBlock).where(
@@ -572,6 +611,7 @@ class ReportService:
                 StaffBlock.is_active.is_(True),
                 StaffBlock.starts_at < end_dt,
                 StaffBlock.ends_at > start_dt,
+                *self._store_scope(StaffBlock.store_id),
             )
         )
         rows = await self._fetch_rows(
@@ -713,7 +753,11 @@ class ReportService:
         month_expr = func.date_trunc("month", Appointment.starts_at)
         query = (
             select(month_expr, Appointment.status, func.count(Appointment.id))
-            .where(Appointment.starts_at >= start_dt, Appointment.starts_at < end_dt)
+            .where(
+                Appointment.starts_at >= start_dt,
+                Appointment.starts_at < end_dt,
+                *self._store_scope(Appointment.store_id),
+            )
             .group_by(month_expr, Appointment.status)
         )
         if staff_id:

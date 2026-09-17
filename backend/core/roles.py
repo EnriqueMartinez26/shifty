@@ -57,6 +57,20 @@ def has_any_role(user: User, allowed_roles: Iterable[str]) -> bool:
     return canonical_role(user) in set(allowed_roles)
 
 
+def store_scope_for(user: User) -> str | None:
+    """Tienda que acota TODAS las consultas de este usuario.
+
+    Es la capa de defensa en profundidad de CLAUDE.md §2: el predicado
+    ``store_id`` viaja en la query aunque la politica RLS falle (en SQLite ni
+    siquiera existe). ``None`` solo para el superadmin, el mismo criterio con el
+    que la politica RLS abre todo (``app.is_global_admin``); que tienda ve el
+    superadmin en reportes y panel es una decision de producto aparte (B5-02).
+    """
+    if bool(getattr(user, "is_global_admin", False)):
+        return None
+    return str(user.store_id)
+
+
 def require_roles(user: User, allowed_roles: Iterable[str], detail: str) -> None:
     if not has_any_role(user, allowed_roles):
         raise AppException(

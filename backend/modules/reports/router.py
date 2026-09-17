@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import AppException, PermissionDeniedException
 
 from core.database import get_db
-from core.roles import REPORT_VIEWERS, has_any_role
+from core.roles import REPORT_VIEWERS, has_any_role, store_scope_for
 from modules.auth.dependencies import get_current_user
 from modules.reports.exporter import export_to_csv, export_to_excel, export_to_pdf
 from modules.reports.schemas import (
@@ -39,7 +39,7 @@ async def get_report_summary(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ReportSummaryResponse:
-    service = ReportService(db)
+    service = ReportService(db, store_id=store_scope_for(user))
     staff_scope = _report_scope_for(user)
     try:
         return await service.get_summary(from_date, to_date, staff_id=staff_scope)
@@ -54,7 +54,7 @@ async def get_professional_reports(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProfessionalReportsResponse:
-    service = ReportService(db)
+    service = ReportService(db, store_id=store_scope_for(user))
     staff_scope = _report_scope_for(user)
     try:
         return await service.get_professionals(
@@ -70,7 +70,7 @@ async def get_report_trend(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ReportTrendResponse:
-    service = ReportService(db)
+    service = ReportService(db, store_id=store_scope_for(user))
     staff_scope = _report_scope_for(user)
     try:
         return await service.get_trend(months=months, staff_id=staff_scope)
@@ -84,7 +84,7 @@ async def export_report(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
-    service = ReportService(db)
+    service = ReportService(db, store_id=store_scope_for(user))
     staff_scope = _report_scope_for(user)
     try:
         summary = await service.get_summary(
