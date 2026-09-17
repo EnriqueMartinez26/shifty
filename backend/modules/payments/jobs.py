@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any
 
 import structlog
@@ -47,6 +49,13 @@ RECONCILIATION_LOOKBACK_DAYS = 30
 
 logger = structlog.get_logger()
 
+# Mail listo para mandar DESPUES del commit del lote (regla 5). Adentro de la
+# transaccion quedaria bajo el FOR UPDATE SKIP LOCKED y, si Celery mata la
+# tarea antes del commit, la corrida siguiente reenviaria lo ya enviado. Es la
+# misma funcion de envio de siempre con sus argumentos ya fijados: conserva
+# is_deliverable_email y el best-effort de cada camino.
+PendingEmail = Callable[[], Awaitable[object]]
+
 
 async def process_outbox_batch(
     db: AsyncSession,
@@ -74,11 +83,9 @@ async def process_outbox_batch(
     now = datetime.now(timezone.utc)
     processed = 0
     failed = 0
-    # Mails de la lista de espera: se juntan y se mandan DESPUES del commit.
-    # Dentro del lote quedarian en la transaccion que sostiene el FOR UPDATE
-    # (regla 5) y un fallo del lote los reenviaria (el outbox no tiene
-    # contador de intentos).
-    ofertas_pendientes: list[Any] = []
+    # Ningun mail sale dentro del lote: el cuerpo del for solo persiste y
+    # acumula; todo se despacha despues del unico commit (2026-09-16, B2-01).
+    mails_pendientes: list[PendingEmail] = []
 
     for message in messages:
         try:
@@ -92,49 +99,38 @@ async def process_outbox_batch(
                     now=now,
                 )
                 if oferta.pending_email:
-                    ofertas_pendientes.append(oferta.pending_email)
-                message.processed_at = now
-                message.error = None
-                processed += 1
-                continue
-            if message.event_type == "appointment.cancelled_by_block":
+                    mails_pendientes.append(
+                        partial(
+                            enqueue_waitlist_offer_email,
+                            email=oferta.pending_email.email,
+                            details=oferta.pending_email.details,
+                        )
+                    )
+            elif message.event_type == "appointment.cancelled_by_block":
                 # Aviso al cliente (no al dueno, que fue quien bloqueo).
                 payload = dict(message.payload or {})
-                await enqueue_cancellation_email(
-                    email=str(payload.get("client_email") or "") or None,
-                    details=payload,
-                )
-                message.processed_at = now
-                message.error = None
-                processed += 1
-                continue
-            notification = _build_store_notification(message)
-            if notification is not None:
-                db.add(notification)
-                # El mail es un efecto secundario: la notificacion in-app ya
-                # quedo persistida y es la fuente durable. Un SMTP caido no
-                # puede marcar el evento como fallido ni frenar el lote.
-                try:
-                    await _email_store_owners(db, notification)
-                except Exception as exc:
-                    logger.warning(
-                        "store_notification_email_skipped",
-                        store_id=notification.store_id,
-                        error_type=type(exc).__name__,
+                mails_pendientes.append(
+                    partial(
+                        enqueue_cancellation_email,
+                        email=str(payload.get("client_email") or "") or None,
+                        details=payload,
                     )
-                if message.event_type == NotificationType.PAYMENT_APPROVED.value:
-                    # La sena acreditada confirma el turno: el cliente tambien
-                    # se entera (best-effort, nunca frena el lote).
-                    try:
-                        await _email_client_confirmation(
+                )
+            else:
+                notification = _build_store_notification(message)
+                if notification is not None:
+                    # La notificacion in-app es la fuente durable; el mail es
+                    # un efecto secundario que sale despues del commit.
+                    db.add(notification)
+                    mails_pendientes.extend(await _store_owner_mails(db, notification))
+                    if message.event_type == NotificationType.PAYMENT_APPROVED.value:
+                        # La sena acreditada confirma el turno: el cliente
+                        # tambien se entera.
+                        confirmacion = await _client_confirmation_mail(
                             db, notification.appointment_id
                         )
-                    except Exception as exc:
-                        logger.warning(
-                            "client_confirmation_email_skipped",
-                            appointment_id=notification.appointment_id,
-                            error_type=type(exc).__name__,
-                        )
+                        if confirmacion is not None:
+                            mails_pendientes.append(confirmacion)
             message.processed_at = now
             message.error = None
             processed += 1
@@ -143,12 +139,14 @@ async def process_outbox_batch(
             failed += 1
 
     await db.commit()
-    # Recien ahora, con la transaccion cerrada y las ofertas persistidas, se
-    # mandan los mails. Un SMTP caido no revierte nada ni duplica ofertas.
-    for pendiente in ofertas_pendientes:
-        await enqueue_waitlist_offer_email(
-            email=pendiente.email, details=pendiente.details
-        )
+    # Recien ahora, con la transaccion cerrada y processed_at persistido, se
+    # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
+    # como fallido ni duplica envios.
+    for enviar in mails_pendientes:
+        try:
+            await enviar()
+        except Exception as exc:
+            logger.warning("outbox_email_skipped", error_type=type(exc).__name__)
     return {"processed": processed, "failed": failed, "inspected": len(messages)}
 
 
@@ -228,11 +226,12 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
     return None
 
 
-async def _email_client_confirmation(
+async def _client_confirmation_mail(
     db: AsyncSession, appointment_id: str | None
-) -> None:
+) -> PendingEmail | None:
+    """Arma (no manda) el "turno confirmado" al cliente; se despacha tras el commit."""
     if not appointment_id:
-        return
+        return None
     from sqlalchemy.orm import joinedload
 
     from modules.stores.model import Store
@@ -244,16 +243,21 @@ async def _email_client_confirmation(
     )
     appointment = res.scalar_one_or_none()
     if appointment is None or appointment.status != AppointmentStatus.CONFIRMED.value:
-        return
+        return None
     store = await db.get(Store, appointment.store_id)
     details = build_client_details(
         appointment, appointment.service, appointment.staff, store
     )
-    await enqueue_confirmation_email(email=appointment.client_email, details=details)
+    return partial(
+        enqueue_confirmation_email, email=appointment.client_email, details=details
+    )
 
 
-async def _email_store_owners(db: AsyncSession, notification: Notification) -> None:
-    """Replica la notificacion in-app por mail a los administradores de la tienda.
+async def _store_owner_mails(
+    db: AsyncSession, notification: Notification
+) -> list[PendingEmail]:
+    """Arma (no manda) la replica por mail de la notificacion in-app, uno por
+    administrador de la tienda; se despachan tras el commit.
 
     Es best-effort: si falla el envio no se pierde el evento, porque la
     notificacion del panel ya quedo persistida.
@@ -266,12 +270,16 @@ async def _email_store_owners(db: AsyncSession, notification: Notification) -> N
             User.email.is_not(None),
         )
     )
-    for email in result.scalars().all():
-        if not email:
-            continue
-        await send_store_notification_email(
-            email=email, title=notification.title, body=notification.body
+    return [
+        partial(
+            send_store_notification_email,
+            email=email,
+            title=notification.title,
+            body=notification.body,
         )
+        for email in result.scalars().all()
+        if email
+    ]
 
 
 async def process_webhook_inbox_batch(
