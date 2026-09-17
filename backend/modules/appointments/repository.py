@@ -15,6 +15,7 @@ from typing import TypeAlias
 from sqlalchemy import and_, or_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.utils import local_to_utc
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.appointments.schemas import AppointmentFilterParams
@@ -249,11 +250,14 @@ class AppointmentRepository:
     # ------------------------------------------------------------------
 
     async def get_by_date(self, target_date: date) -> list[AppointmentAgendaRow]:
-        """Lista turnos de una fecha para la agenda diaria."""
-        from datetime import timezone
+        """Lista turnos de una fecha para la agenda diaria.
 
-        day_start = datetime.combine(target_date, time.min).replace(tzinfo=timezone.utc)
-        day_end = day_start + timedelta(days=1)
+        La fecha es un dia calendario argentino, no una ventana UTC (regla
+        24): cortar en UTC mandaba los turnos de 21:00 a 23:59 locales a la
+        agenda del dia siguiente (B1-08). Mismo criterio que availability.
+        """
+        day_start = local_to_utc(target_date, time.min)
+        day_end = local_to_utc(target_date + timedelta(days=1), time.min)
 
         result = await self.db.execute(
             select(Appointment, Service, Staff, User)
@@ -312,15 +316,17 @@ class AppointmentRepository:
         if filters.statuses:
             conditions.append(Appointment.status.in_(filters.statuses))
 
+        # Rango de fechas en dias calendario argentinos (regla 24), como la
+        # agenda diaria; antes cortaba en UTC y ademas con datetimes naive.
         if filters.from_date:
             conditions.append(
-                Appointment.starts_at >= datetime.combine(filters.from_date, time.min)
+                Appointment.starts_at >= local_to_utc(filters.from_date, time.min)
             )
 
         if filters.to_date:
             conditions.append(
                 Appointment.starts_at
-                < datetime.combine(filters.to_date + timedelta(days=1), time.min)
+                < local_to_utc(filters.to_date + timedelta(days=1), time.min)
             )
 
         if conditions:
