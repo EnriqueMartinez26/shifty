@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 import enum
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from sqlalchemy import (
     DateTime,
@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
@@ -100,8 +101,13 @@ class Payment(BaseEntity):
         Numeric(12, 2), nullable=True
     )
     currency: Mapped[str] = mapped_column(String(10), default="ARS")
-    status: Mapped[str] = mapped_column(
-        String(50), default=PaymentStatus.PENDING.value, index=True
+    # Columna privada: la unica escritura legitima es apply_status(). Se expone
+    # como hybrid_property de solo lectura, asi que `payment.status = "approved"`
+    # levanta AttributeError en vez de saltearse el grafo (mismo patron que
+    # Appointment; 2026-09-17, B2-08). A nivel clase sigue sirviendo para
+    # filtrar en queries.
+    _status: Mapped[str] = mapped_column(
+        "status", String(50), default=PaymentStatus.PENDING.value, index=True
     )
     promotion_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     preference_id: Mapped[str | None] = mapped_column(
@@ -134,6 +140,21 @@ class Payment(BaseEntity):
         ),
     )
 
+    def __init__(self, **kwargs: Any) -> None:
+        # `status=` es el nombre publico que usan el service y los tests al crear.
+        if "status" in kwargs:
+            kwargs["_status"] = kwargs.pop("status")
+        super().__init__(**kwargs)
+
+    @hybrid_property
+    def status(self) -> str:
+        return self._status
+
+    @status.inplace.expression
+    @classmethod
+    def _status_expression(cls) -> Mapped[str]:
+        return cls._status
+
     @property
     def is_accredited(self) -> bool:
         """La plata efectivamente entro (aprobada o confirmada manual)."""
@@ -155,7 +176,7 @@ class Payment(BaseEntity):
         """
         if not can_apply_payment_status(self.status, new_status):
             return False
-        self.status = new_status
+        self._status = new_status
         self.raw_payload = payload or self.raw_payload
         if self.status in {
             PaymentStatus.APPROVED.value,

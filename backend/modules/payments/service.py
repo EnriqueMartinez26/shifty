@@ -16,7 +16,6 @@ from core.crypto import decrypt_secret, encrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
-    can_apply_payment_status,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -636,9 +635,9 @@ async def ensure_payment_preference(
         if deposit_rule is not None:
             payment.deposit_rule = deposit_rule
         # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o
-        # devuelto no vuelve a pendiente porque se recalcule el importe.
-        if can_apply_payment_status(payment.status, PaymentStatus.PENDING.value):
-            payment.status = PaymentStatus.PENDING.value
+        # devuelto no vuelve a pendiente porque se recalcule el importe. Lo
+        # decide la entidad (devuelve False y no toca nada si es ilegal).
+        payment.apply_status(PaymentStatus.PENDING.value)
         should_refresh_provider_link = (
             should_refresh_provider_link
             or _is_placeholder_preference(payment.preference_id)
