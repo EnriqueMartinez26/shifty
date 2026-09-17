@@ -48,7 +48,8 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
         )
 
     async def fake_execute(*args: Any, **kwargs: Any) -> SimpleNamespace:
-        return SimpleNamespace(all=lambda: [])
+        # Sin filas para el historico ni los top-5, y 0 de ingreso total.
+        return SimpleNamespace(all=lambda: [], scalar_one=lambda: 0)
 
     fake_db.execute = fake_execute
     service_any = cast(Any, service)

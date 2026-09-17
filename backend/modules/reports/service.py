@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any, cast
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, Select, Subquery, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -35,12 +35,36 @@ from modules.users.model import User
 
 MetricBucket = dict[str, Any]
 
+# Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
+# cobro manual confirmado). Mismo criterio que modules/dashboard/router.py.
+_ACCREDITED_PAYMENT_STATUSES = [
+    PaymentStatus.APPROVED.value,
+    PaymentStatus.MANUAL_CONFIRMED.value,
+]
+# Un turno cancelado o vencido no cuenta para los top-5 de servicios/clientes.
+_EXCLUDED_FROM_TOPS = [
+    AppointmentStatus.CANCELLED.value,
+    AppointmentStatus.EXPIRED.value,
+]
+
 
 def _report_client_name(client: User | None, fallback: str | None = None) -> str:
     """Nombre a mostrar de un cliente en el reporte (o el fallback ya limpio)."""
     if client is None:
         return (fallback or "").strip()
     return client.full_name or client.email or (fallback or "").strip()
+
+
+def _client_name_from_columns(
+    first_name: str | None,
+    last_name: str | None,
+    email: str | None,
+    fallback: str | None,
+) -> str:
+    """Mismo criterio que ``_report_client_name`` sobre columnas agregadas:
+    nombre completo, si no email, si no el snapshot del turno."""
+    full_name = f"{first_name or ''} {last_name or ''}".strip()
+    return full_name or (email or "").strip() or (fallback or "").strip()
 
 
 def _add_months(month_start: date, delta: int) -> date:
@@ -65,14 +89,10 @@ class _SummaryAggregation:
     cancelled: int = 0
     pending: int = 0
     confirmed: int = 0
-    total_revenue: float = 0.0
-    average_ticket: float = 0.0
     total_clients: int = 0
     new_clients: int = 0
     returning_clients: int = 0
     inactive_clients: int = 0
-    top_services: list[MetricBucket] = field(default_factory=list)
-    top_clients: list[MetricBucket] = field(default_factory=list)
 
 
 class ReportService:
@@ -165,62 +185,91 @@ class ReportService:
             .where(*self._store_scope(CustomerLedger.store_id))
             .subquery()
         )
-        result = await self.db.execute(
-            select(CustomerLedger)
+        # Regla 11: el filtro "debe algo", el total, el conteo y el top-5 se
+        # resuelven en la base. Al proceso vuelven dos escalares y cinco filas,
+        # no una fila por deudor de la tienda.
+        deudores = (
+            select(
+                CustomerLedger.client_id.label("client_id"),
+                CustomerLedger.balance_after.label("balance"),
+                CustomerLedger.created_at.label("created_at"),
+            )
             .join(ultimo_por_cliente, CustomerLedger.id == ultimo_por_cliente.c.id)
             .where(
                 ultimo_por_cliente.c.rn == 1,
+                CustomerLedger.balance_after > 0,
                 *self._store_scope(CustomerLedger.store_id),
             )
+            .subquery()
         )
-
-        debt_rows = [
-            movement
-            for movement in result.scalars().all()
-            if Decimal(str(movement.balance_after or 0)) > 0
-        ]
-        if not debt_rows:
+        totales = await self.db.execute(
+            select(
+                func.count(deudores.c.client_id),
+                func.coalesce(func.sum(deudores.c.balance), 0),
+            )
+        )
+        debtors_count, total_raw = totales.one()
+        if not debtors_count:
             return self._empty_debt_summary()
+        total_balance = Decimal(str(total_raw or 0))
 
-        client_ids = [
-            movement.client_id for movement in debt_rows if movement.client_id
+        top_result = await self.db.execute(
+            select(deudores.c.client_id, deudores.c.balance, User)
+            .outerjoin(
+                User,
+                and_(
+                    User.id == deudores.c.client_id,
+                    *self._store_scope(User.store_id),
+                ),
+            )
+            .order_by(deudores.c.balance.desc(), deudores.c.created_at.desc())
+            .limit(5)
+        )
+        top_debtor_items = [
+            ReportDebtClientItem(
+                client_id=client_id or "",
+                client_name=self._user_display_name(user, client_id=client_id or ""),
+                balance=round(float(Decimal(str(balance or 0))), 2),
+            )
+            for client_id, balance, user in top_result.all()
         ]
-        users_result = await self.db.execute(
-            select(User).where(
-                User.id.in_(client_ids), *self._store_scope(User.store_id)
-            )
-        )
-        users_by_id = {user.id: user for user in users_result.scalars().all()}
-
-        total_balance = sum(
-            (Decimal(str(item.balance_after or 0)) for item in debt_rows),
-            Decimal("0.00"),
-        )
-        top_debtors = sorted(
-            debt_rows,
-            key=lambda item: (Decimal(str(item.balance_after or 0)), item.created_at),
-            reverse=True,
-        )[:5]
-        top_debtor_items: list[ReportDebtClientItem] = []
-        for item in top_debtors:
-            client_id = item.client_id or ""
-            top_debtor_items.append(
-                ReportDebtClientItem(
-                    client_id=client_id,
-                    client_name=self._user_display_name(
-                        users_by_id.get(client_id),
-                        client_id=client_id,
-                    ),
-                    balance=round(float(Decimal(str(item.balance_after or 0))), 2),
-                )
-            )
 
         return ReportDebtSummary(
             outstanding_balance=round(float(total_balance), 2),
-            debtors_count=len(debt_rows),
-            average_debt=round(float(total_balance / len(debt_rows)), 2),
+            debtors_count=int(debtors_count),
+            average_debt=round(float(total_balance / int(debtors_count)), 2),
             top_debtors=top_debtor_items,
         )
+
+    def _select_in_range(
+        self,
+        *columns: Any,
+        start_dt: datetime,
+        end_dt: datetime,
+        staff_id: str | None,
+    ) -> Select[Any]:
+        """Base comun de toda consulta sobre los turnos del rango.
+
+        El listado y las agregaciones usan los mismos joins y filtros, asi el
+        ingreso total, los top-5 y la lista de turnos hablan del mismo conjunto
+        de filas: turnos con servicio, profesional y cliente, dentro del rango,
+        de la tienda y, si corresponde, del profesional.
+        """
+        query = (
+            select(*columns)
+            .select_from(Appointment)
+            .join(Service, Appointment.service_id == Service.id)
+            .join(Staff, Appointment.staff_id == Staff.id)
+            .join(User, Appointment.client_id == User.id)
+            .where(
+                Appointment.starts_at >= start_dt,
+                Appointment.starts_at < end_dt,
+                *self._store_scope(Appointment.store_id),
+            )
+        )
+        if staff_id:
+            query = query.where(Appointment.staff_id == staff_id)
+        return query
 
     async def _fetch_rows(
         self,
@@ -230,52 +279,180 @@ class ReportService:
         staff_id: str | None = None,
     ) -> list[tuple[Appointment, Service, Staff, User]]:
         start_dt, end_dt = self._range_bounds(from_date, to_date)
-        query = (
-            select(Appointment, Service, Staff, User)
-            .join(Service, Appointment.service_id == Service.id)
-            .join(Staff, Appointment.staff_id == Staff.id)
-            .join(User, Appointment.client_id == User.id)
-            .where(
-                Appointment.starts_at >= start_dt,
-                Appointment.starts_at < end_dt,
-                *self._store_scope(Appointment.store_id),
-            )
-            .order_by(Appointment.starts_at.asc())
-        )
-        if staff_id:
-            query = query.where(Appointment.staff_id == staff_id)
+        query = self._select_in_range(
+            Appointment,
+            Service,
+            Staff,
+            User,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            staff_id=staff_id,
+        ).order_by(Appointment.starts_at.asc())
         result = await self.db.execute(query)
         return cast(
             list[tuple[Appointment, Service, Staff, User]],
             result.all(),
         )
 
-    async def _accredited_payments_by_appointment(
-        self, appointment_ids: list[str]
-    ) -> dict[str, Decimal]:
-        """Suma, por turno, la plata acreditada (aprobada o confirmada manual).
+    def _paid_by_appointment(self) -> Subquery:
+        """Plata acreditada por turno, agregada en la base.
 
-        Se acota a los ids de turnos ya cargados (propios del tenant) y ademas
-        lleva el predicado de tienda, como toda consulta del reporte.
+        ``GROUP BY appointment_id`` + ``SUM(amount)`` sobre los pagos aprobados
+        o confirmados a mano, acotado a la tienda. Es el bloque que usan el
+        ingreso total, los top-5 y el ingreso por profesional: al proceso nunca
+        vuelve una fila por pago (regla 11; antes se sumaba en un defaultdict).
         """
-        if not appointment_ids:
-            return {}
-        result = await self.db.execute(
-            select(Payment.appointment_id, Payment.amount).where(
-                Payment.appointment_id.in_(appointment_ids),
-                Payment.status.in_(
-                    [
-                        PaymentStatus.APPROVED.value,
-                        PaymentStatus.MANUAL_CONFIRMED.value,
-                    ]
-                ),
+        return (
+            select(
+                Payment.appointment_id.label("appointment_id"),
+                func.sum(Payment.amount).label("paid"),
+            )
+            .where(
+                Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
                 *self._store_scope(Payment.store_id),
             )
+            .group_by(Payment.appointment_id)
+            .subquery()
         )
-        acumulado: dict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
-        for appointment_id, amount in result.all():
-            acumulado[appointment_id] += amount or Decimal("0.00")
-        return acumulado
+
+    async def _accredited_revenue(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> Decimal:
+        """Ingreso total del rango: un escalar, sumado en la base."""
+        paid = self._paid_by_appointment()
+        result = await self.db.execute(
+            self._select_in_range(
+                func.coalesce(func.sum(paid.c.paid), 0),
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            ).join(paid, paid.c.appointment_id == Appointment.id)
+        )
+        return Decimal(str(result.scalar_one() or 0))
+
+    async def _accredited_revenue_by_staff(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> dict[str, Decimal]:
+        """Ingreso cobrado por profesional: una fila por staff, no por pago."""
+        paid = self._paid_by_appointment()
+        result = await self.db.execute(
+            self._select_in_range(
+                Appointment.staff_id,
+                func.coalesce(func.sum(paid.c.paid), 0),
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            )
+            .join(paid, paid.c.appointment_id == Appointment.id)
+            .group_by(Appointment.staff_id)
+        )
+        return {
+            row_staff_id: Decimal(str(total or 0))
+            for row_staff_id, total in result.all()
+        }
+
+    async def _top_services(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> list[ReportTopServiceItem]:
+        """Top-5 de servicios por turnos e ingreso: GROUP BY + ORDER BY + LIMIT."""
+        paid = self._paid_by_appointment()
+        turnos = func.count(Appointment.id)
+        completados = func.sum(
+            case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
+        )
+        ingreso = func.coalesce(func.sum(paid.c.paid), 0)
+        result = await self.db.execute(
+            self._select_in_range(
+                Service.public_id,
+                Service.name,
+                turnos,
+                completados,
+                ingreso,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            )
+            .outerjoin(paid, paid.c.appointment_id == Appointment.id)
+            .where(Appointment.status.not_in(_EXCLUDED_FROM_TOPS))
+            .group_by(Service.id, Service.public_id, Service.name)
+            # Mismo desempate que el orden anterior en Python (estable sobre
+            # turnos ascendentes): a igual conteo e ingreso, el visto primero.
+            .order_by(
+                turnos.desc(), ingreso.desc(), func.min(Appointment.starts_at).asc()
+            )
+            .limit(5)
+        )
+        return [
+            ReportTopServiceItem(
+                service_id=service_id,
+                service_name=service_name,
+                appointments=int(appointments),
+                completed_appointments=int(completed or 0),
+                revenue=round(float(Decimal(str(revenue or 0))), 2),
+            )
+            for service_id, service_name, appointments, completed, revenue in (
+                result.all()
+            )
+        ]
+
+    async def _top_clients(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> list[ReportTopClientItem]:
+        """Top-5 de clientes por turnos e ingreso: GROUP BY + ORDER BY + LIMIT."""
+        paid = self._paid_by_appointment()
+        turnos = func.count(Appointment.id)
+        completados = func.sum(
+            case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
+        )
+        ingreso = func.coalesce(func.sum(paid.c.paid), 0)
+        result = await self.db.execute(
+            self._select_in_range(
+                Appointment.client_id,
+                User.first_name,
+                User.last_name,
+                User.email,
+                func.max(Appointment.client_name),
+                turnos,
+                completados,
+                ingreso,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            )
+            .outerjoin(paid, paid.c.appointment_id == Appointment.id)
+            .where(Appointment.status.not_in(_EXCLUDED_FROM_TOPS))
+            .group_by(
+                Appointment.client_id, User.first_name, User.last_name, User.email
+            )
+            .order_by(
+                turnos.desc(), ingreso.desc(), func.min(Appointment.starts_at).asc()
+            )
+            .limit(5)
+        )
+        items: list[ReportTopClientItem] = []
+        for (
+            client_id,
+            first_name,
+            last_name,
+            email,
+            snapshot_name,
+            appointments,
+            completed,
+            revenue,
+        ) in result.all():
+            items.append(
+                ReportTopClientItem(
+                    client_id=client_id,
+                    client_name=_client_name_from_columns(
+                        first_name, last_name, email, snapshot_name
+                    )
+                    or client_id,
+                    appointments=int(appointments),
+                    completed_appointments=int(completed or 0),
+                    revenue=round(float(Decimal(str(revenue or 0))), 2),
+                )
+            )
+        return items
 
     async def get_summary(
         self,
@@ -295,8 +472,17 @@ class ReportService:
         # sin pago acreditado es una reserva, no un ingreso. El monto ya viene
         # con el descuento de la promo aplicado y al precio historico, asi que
         # esto tambien resuelve el precio de lista y las promociones.
-        paid_by_appt = await self._accredited_payments_by_appointment(
-            [appointment.id for appointment, *_ in rows]
+        # Regla 11: total, por servicio y por cliente se agregan en la base; al
+        # proceso vuelven un escalar y cinco filas por dimension, no una fila
+        # por pago ni un acumulador por cada turno del rango.
+        total_revenue = await self._accredited_revenue(
+            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
+        )
+        top_services = await self._top_services(
+            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
+        )
+        top_clients = await self._top_clients(
+            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
         )
         # Antes se traia TODO el historial de turnos de la tienda (sin cota
         # inferior) para calcular cohortes en Python. El loop solo necesita, por
@@ -332,20 +518,21 @@ class ReportService:
 
         aggregation = self._aggregate_summary(
             rows=rows,
-            paid_by_appt=paid_by_appt,
             historical_rows=list(historical_clients_result.all()),
             start_dt=start_dt,
             end_dt=end_dt,
         )
 
+        revenue = float(total_revenue)
+        total = aggregation.total_appointments
         stats = ReportSummaryStats(
-            total_appointments=aggregation.total_appointments,
+            total_appointments=total,
             completed_appointments=aggregation.completed,
             cancelled_appointments=aggregation.cancelled,
             pending_appointments=aggregation.pending,
             confirmed_appointments=aggregation.confirmed,
-            total_revenue=round(aggregation.total_revenue, 2),
-            average_ticket=round(aggregation.average_ticket, 2),
+            total_revenue=round(revenue, 2),
+            average_ticket=round(revenue / total, 2) if total else 0.0,
         )
         client_stats = ReportClientStats(
             total_clients=aggregation.total_clients,
@@ -362,26 +549,8 @@ class ReportService:
             to_date=resolved_to,
             stats=stats,
             client_stats=client_stats,
-            top_services=[
-                ReportTopServiceItem(
-                    service_id=item["service_id"],
-                    service_name=item["service_name"],
-                    appointments=item["appointments"],
-                    completed_appointments=item["completed_appointments"],
-                    revenue=round(item["revenue"], 2),
-                )
-                for item in aggregation.top_services
-            ],
-            top_clients=[
-                ReportTopClientItem(
-                    client_id=item["client_id"],
-                    client_name=item["client_name"],
-                    appointments=item["appointments"],
-                    completed_appointments=item["completed_appointments"],
-                    revenue=round(item["revenue"], 2),
-                )
-                for item in aggregation.top_clients
-            ],
+            top_services=top_services,
+            top_clients=top_clients,
             debt_summary=debt_summary,
             appointments=aggregation.items,
         )
@@ -390,19 +559,18 @@ class ReportService:
         self,
         *,
         rows: list[Any],
-        paid_by_appt: dict[str, Decimal],
         historical_rows: list[Any],
         start_dt: datetime,
         end_dt: datetime,
     ) -> _SummaryAggregation:
         """Agrega los turnos del rango en metricas puras (sin tocar la base).
 
-        Separado de get_summary para que la lógica de conteo/ingreso/cohortes
-        se pueda leer y testear sin montar queries: recibe lo ya traido y
-        devuelve el resultado listo para envolver en DTOs.
+        Separado de get_summary para que la lógica de conteo/cohortes se pueda
+        leer y testear sin montar queries: recibe lo ya traido y devuelve el
+        resultado listo para envolver en DTOs. El dinero y los top-5 no pasan
+        por aca: se agregan en SQL (regla 11).
         """
         items: list[ReportAppointmentItem] = []
-        total_revenue = 0.0
         completed = 0
         cancelled = 0
         pending = 0
@@ -411,24 +579,6 @@ class ReportService:
         clients_seen_before_range: set[str] = set()
         first_seen_by_client: dict[str, datetime] = {}
         known_client_names: dict[str, str] = {}
-        service_metrics: dict[str, MetricBucket] = defaultdict(
-            lambda: {
-                "service_id": "",
-                "service_name": "",
-                "appointments": 0,
-                "completed_appointments": 0,
-                "revenue": 0.0,
-            }
-        )
-        client_metrics: dict[str, MetricBucket] = defaultdict(
-            lambda: {
-                "client_id": "",
-                "client_name": "",
-                "appointments": 0,
-                "completed_appointments": 0,
-                "revenue": 0.0,
-            }
-        )
 
         for (
             client_id,
@@ -467,8 +617,6 @@ class ReportService:
                 appointment, service, staff = row
                 client = None
             status = appointment.status
-            # Ingreso real de este turno: lo acreditado, no el precio de lista.
-            paid = float(paid_by_appt.get(appointment.id, Decimal("0.00")))
             status_upper = status.upper() if status else ""
             client_id = appointment.client_id
             client_key = client_id or ""
@@ -486,33 +634,6 @@ class ReportService:
                 pending += 1
             elif status_upper == "CONFIRMED":
                 confirmed += 1
-            # El ingreso no depende del estado del turno sino de si se cobro.
-            total_revenue += paid
-
-            if status not in {
-                AppointmentStatus.CANCELLED.value,
-                AppointmentStatus.EXPIRED.value,
-            }:
-                service_bucket = service_metrics[service.public_id]
-                service_bucket["service_id"] = service.public_id
-                service_bucket["service_name"] = service.name
-                service_bucket["appointments"] += 1
-                if status == AppointmentStatus.COMPLETED.value:
-                    service_bucket["completed_appointments"] += 1
-                service_bucket["revenue"] += paid
-
-                if client_id:
-                    client_bucket = client_metrics[client_key]
-                    client_bucket["client_id"] = client_key
-                    client_bucket["client_name"] = (
-                        known_client_names.get(client_key)
-                        or _report_client_name(client, appointment.client_name)
-                        or client_key
-                    )
-                    client_bucket["appointments"] += 1
-                    if status == AppointmentStatus.COMPLETED.value:
-                        client_bucket["completed_appointments"] += 1
-                    client_bucket["revenue"] += paid
 
             resolved_client_name = (
                 _report_client_name(client, appointment.client_name)
@@ -540,22 +661,11 @@ class ReportService:
             )
 
         total = len(items)
-        average_ticket = (total_revenue / total) if total else 0.0
         new_clients = sum(
             1
             for client_id in clients_in_range
             if start_dt <= first_seen_by_client.get(client_id, start_dt) < end_dt
         )
-        top_services = sorted(
-            service_metrics.values(),
-            key=lambda item: (item["appointments"], item["revenue"]),
-            reverse=True,
-        )[:5]
-        top_clients = sorted(
-            client_metrics.values(),
-            key=lambda item: (item["appointments"], item["revenue"]),
-            reverse=True,
-        )[:5]
 
         return _SummaryAggregation(
             items=items,
@@ -564,14 +674,10 @@ class ReportService:
             cancelled=cancelled,
             pending=pending,
             confirmed=confirmed,
-            total_revenue=total_revenue,
-            average_ticket=average_ticket,
             total_clients=len(clients_in_range),
             new_clients=new_clients,
             returning_clients=max(len(clients_in_range) - new_clients, 0),
             inactive_clients=len(clients_seen_before_range - clients_in_range),
-            top_services=top_services,
-            top_clients=top_clients,
         )
 
     async def get_professionals(
@@ -633,9 +739,10 @@ class ReportService:
             appointment, service, staff = row[:3]
             appointments_by_staff[staff.id].append((appointment, service, staff))
 
-        # Mismo criterio que el resumen: ingreso = plata acreditada por turno.
-        paid_by_appt = await self._accredited_payments_by_appointment(
-            [appointment.id for appointment, *_ in rows]
+        # Mismo criterio que el resumen: ingreso = plata acreditada, sumada
+        # por profesional en la base (regla 11), no turno a turno en Python.
+        revenue_by_staff = await self._accredited_revenue_by_staff(
+            start_dt=start_dt, end_dt=end_dt, staff_id=only_staff_id
         )
 
         items: list[ProfessionalReportItem] = []
@@ -674,7 +781,7 @@ class ReportService:
             absent = 0
             cancelled = 0
             used_minutes = 0
-            revenue = 0.0
+            revenue = float(revenue_by_staff.get(staff.id, Decimal("0.00")))
 
             for appointment, service, _ in appointments_by_staff.get(staff.id, []):
                 total_appointments += 1
@@ -691,8 +798,6 @@ class ReportService:
                     absent += 1
                 elif appointment.status == AppointmentStatus.CANCELLED.value:
                     cancelled += 1
-                # El ingreso del profesional es lo cobrado, no lo agendado.
-                revenue += float(paid_by_appt.get(appointment.id, Decimal("0.00")))
 
             effective_minutes = max(available_minutes - blocked_minutes, 0)
             occupancy_rate = (
