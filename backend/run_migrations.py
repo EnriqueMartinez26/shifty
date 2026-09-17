@@ -27,11 +27,15 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(backend_dir, "..", ".env"))
 
+from core.config import redact_url
+
 
 def parse_db_url(url: str) -> dict[str, Any]:
     parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
     if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
-        raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
+        # La URL trae usuario:contraseña@host y main() no captura este error:
+        # el traceback va a la consola o al log del job. Nunca entera.
+        raise ValueError(f"No se pudo parsear DATABASE_URL: {redact_url(url)}")
     query = parse_qs(parsed.query)
     return {
         "user": unquote(parsed.username or ""),
