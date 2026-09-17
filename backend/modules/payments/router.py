@@ -766,13 +766,25 @@ async def mercadopago_webhook(
         # Pago fallo y el webhook crudo no trae estado), dejamos el evento sin
         # procesar para que el worker del inbox lo reintente. Marcarlo aca perderia
         # el cobro de forma permanente.
-        applied = await apply_mercadopago_webhook_payload(
-            db, store_id=resolved_store_id, payload=payload
-        )
-        if applied:
-            inbox.mark_processed()
+        try:
+            applied = await apply_mercadopago_webhook_payload(
+                db, store_id=resolved_store_id, payload=payload
+            )
+        except RuntimeError as exc:
+            # 2026-09-16 (B2-04): un importe, moneda, referencia o collector
+            # inconsistente llegaba como RuntimeError hasta el handler generico:
+            # 500 hacia Mercado Pago, sin commit, y la fila del inbox recien
+            # agregada se perdia con el rollback. El inbox es el mecanismo de
+            # reintento (regla 7): el motivo queda en `error`, `attempts` suma
+            # uno y `processed_at` sigue vacio hasta agotar los intentos, igual
+            # que hace el lote de `process_webhook_inbox_batch`.
+            applied = False
+            inbox.register_failure(str(exc))
         else:
-            inbox.register_failure("No se pudo resolver el pago del webhook")
+            if applied:
+                inbox.mark_processed()
+            else:
+                inbox.register_failure("No se pudo resolver el pago del webhook")
         await db.commit()
         return {"success": True, "data": {"received": True, "applied": applied}}
     finally:
