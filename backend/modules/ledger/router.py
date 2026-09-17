@@ -1,9 +1,9 @@
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Annotated
 
 from fastapi import Depends, Path
 from core.router import CanonicalAPIRouter
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -106,10 +106,12 @@ async def get_ledger_summary(
 ) -> LedgerSummaryResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
-    # Antes se traia TODO el ledger de la tienda y se deduplicaba en Python para
-    # quedarse con el ultimo movimiento por cliente: crecia sin techo con cada
-    # cargo. Ahora la DB devuelve solo el ultimo por cliente (row_number sobre
-    # la particion por client_id), y el total se cuenta con COUNT.
+    # La deuda vigente de un cliente es su ULTIMO movimiento (balance_after es
+    # un saldo incremental). La DB se queda con uno por cliente (row_number
+    # sobre la particion por client_id) y agrega ahi mismo: total, cantidad y
+    # promedio con SUM/COUNT/AVG, y el top 5 con ORDER BY ... LIMIT. Antes la
+    # lista entera de deudores viajaba al proceso y se sumaba en Python
+    # (regla 11; 2026-09-16, B2-06).
     ultimo_por_cliente = (
         select(
             CustomerLedger.id.label("id"),
@@ -123,12 +125,25 @@ async def get_ledger_summary(
         .where(CustomerLedger.store_id == user.store_id)
         .subquery()
     )
-    result = await db.execute(
-        select(CustomerLedger)
+    deuda_vigente = (
+        select(
+            CustomerLedger.client_id.label("client_id"),
+            CustomerLedger.balance_after.label("balance_after"),
+            CustomerLedger.created_at.label("created_at"),
+        )
         .join(ultimo_por_cliente, CustomerLedger.id == ultimo_por_cliente.c.id)
-        .where(ultimo_por_cliente.c.rn == 1)
+        .where(ultimo_por_cliente.c.rn == 1, CustomerLedger.balance_after > 0)
+        .subquery()
     )
-    latest_rows = list(result.scalars().all())
+    total_balance, debtors_count, average_balance = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(deuda_vigente.c.balance_after), 0),
+                func.count(),
+                func.avg(deuda_vigente.c.balance_after),
+            ).select_from(deuda_vigente)
+        )
+    ).one()
     total_movements = int(
         await db.scalar(
             select(func.count())
@@ -137,45 +152,43 @@ async def get_ledger_summary(
         )
         or 0
     )
-
-    debt_rows = [
-        movement
-        for movement in latest_rows
-        if Decimal(str(movement.balance_after or 0)) > 0
-    ]
-    client_ids = [movement.client_id for movement in debt_rows]
-    users_by_id: dict[str, User] = {}
-    if client_ids:
-        users_result = await db.execute(select(User).where(User.id.in_(client_ids)))
-        users_by_id = {
-            customer.id: customer for customer in users_result.scalars().all()
-        }
-
-    total_balance = sum(
-        (Decimal(str(item.balance_after or 0)) for item in debt_rows), Decimal("0.00")
+    # El nombre sale del mismo JOIN, acotado a clientes de ESTA tienda: un
+    # client_id ajeno cae al fallback en vez de leer users de otra tienda.
+    top_result = await db.execute(
+        select(deuda_vigente, User)
+        .select_from(
+            deuda_vigente.outerjoin(
+                User,
+                and_(
+                    User.id == deuda_vigente.c.client_id,
+                    User.store_id == user.store_id,
+                ),
+            )
+        )
+        .order_by(
+            deuda_vigente.c.balance_after.desc(), deuda_vigente.c.created_at.desc()
+        )
+        .limit(5)
     )
-    average_balance = (total_balance / len(debt_rows)) if debt_rows else Decimal("0.00")
-    top_debtors = sorted(
-        debt_rows,
-        key=lambda item: (Decimal(str(item.balance_after or 0)), item.created_at),
-        reverse=True,
-    )[:5]
 
     return LedgerSummaryResponse(
-        total_balance=total_balance,
-        debtors_count=len(debt_rows),
-        average_balance=average_balance.quantize(Decimal("0.01")),
+        total_balance=Decimal(str(total_balance or 0)).quantize(Decimal("0.01")),
+        debtors_count=int(debtors_count or 0),
+        # AVG redondea distinto segun el motor (numeric en Postgres, float en
+        # SQLite): el redondeo se fija aca, explicito, a 2 decimales y con la
+        # misma regla (half-even) que usaba la division en Python.
+        average_balance=Decimal(str(average_balance or 0)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_EVEN
+        ),
         total_movements=total_movements,
         top_debtors=[
             LedgerSummaryClientItem(
-                client_id=item.client_id,
-                client_name=_client_display_name(
-                    users_by_id.get(item.client_id), fallback_id=item.client_id
-                ),
-                balance=Decimal(str(item.balance_after or 0)).quantize(Decimal("0.01")),
-                last_movement_at=item.created_at,
+                client_id=client_id,
+                client_name=_client_display_name(customer, fallback_id=client_id),
+                balance=Decimal(str(balance_after)).quantize(Decimal("0.01")),
+                last_movement_at=created_at,
             )
-            for item in top_debtors
+            for client_id, balance_after, created_at, customer in top_result.all()
         ],
     )
 
