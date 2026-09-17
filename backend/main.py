@@ -116,6 +116,12 @@ async def _assert_rls_capable_role() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Settings de respaldo: no hay base alcanzable y BootErrorMiddleware
+    # responde 503 a toda request. Sin este corte el chequeo de RLS fallaba
+    # contra localhost/invalid y el proceso moria antes de servir el 503.
+    if SETTINGS_BOOT_ERROR is not None:
+        yield
+        return
     await _assert_rls_capable_role()
     if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
         await ensure_runtime_contracts(engine)
