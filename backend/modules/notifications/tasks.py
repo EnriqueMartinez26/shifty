@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import httpx
 import smtplib
+import time
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Any, cast
@@ -21,6 +22,18 @@ from core.database import (
 from modules.notifications.reminders import ReminderStage, due_stages
 
 logger = structlog.get_logger()
+
+# B4-02 (2026-09-17): el lote de recordatorios corre bajo el time limit de
+# Celery (120 s soft / 150 s hard, core/config.py) y cada recordatorio se
+# reclama con commit ANTES de mandarse. Sin tope, con un SMTP lento el hard
+# limit mataba el proceso a mitad del lote y los turnos ya reclamados quedaban
+# marcados como enviados sin mail: la corrida siguiente los descartaba. Dos
+# topes: filas por corrida (la query traia 5 objetos ORM por turno de 48 h de
+# TODAS las tiendas) y un presupuesto de tiempo que se revisa ANTES de reclamar
+# el siguiente. Lo que no entra queda con la marca en NULL y espera al tick
+# siguiente (beat cada 15 minutos); el reclamo sigue siendo la exclusion.
+REMINDER_BATCH_LIMIT = 200
+REMINDER_TIME_BUDGET_SECONDS = 90
 
 
 def _mask_email(email: str | None) -> str:
@@ -568,16 +581,23 @@ async def _dispatch_reminder(
 
 
 async def process_due_appointment_reminders(
-    *, now: datetime | None = None, lookahead_hours: int = 48
+    *,
+    now: datetime | None = None,
+    lookahead_hours: int = 48,
+    limit: int = REMINDER_BATCH_LIMIT,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     window_start = now
     window_end = now + timedelta(hours=lookahead_hours)
+    # Reloj monotonico y no ``now``: ``now`` es la hora logica del lote
+    # (inyectable en tests) y el presupuesto es tiempo real de proceso.
+    deadline = time.monotonic() + REMINDER_TIME_BUDGET_SECONDS
 
     from modules.appointments.repository import AppointmentRepository
 
     published = 0
     skipped = 0
+    deferred = 0
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
         # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
@@ -590,8 +610,20 @@ async def process_due_appointment_reminders(
             rows = await repo.get_upcoming_for_reminders(
                 starts_after=window_start,
                 starts_before=window_end,
+                limit=limit,
             )
-            for row in rows:
+            for index, row in enumerate(rows):
+                if time.monotonic() >= deadline:
+                    # Presupuesto agotado: no se reclama ni uno mas. Los que
+                    # quedan siguen en NULL y salen en el proximo tick.
+                    deferred = len(rows) - index
+                    logger.warning(
+                        "reminders_time_budget_exhausted",
+                        deferred=deferred,
+                        published=published,
+                        budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
+                    )
+                    break
                 appointment, _service, _staff, _client, store = row
                 if not getattr(store, "send_email_reminders", True):
                     skipped += 1
@@ -606,6 +638,7 @@ async def process_due_appointment_reminders(
         "reminders_processed",
         published=published,
         skipped=skipped,
+        deferred=deferred,
         window_start=window_start.isoformat(),
         window_end=window_end.isoformat(),
     )
@@ -613,6 +646,7 @@ async def process_due_appointment_reminders(
         "status": "processed",
         "published": published,
         "skipped": skipped,
+        "deferred": deferred,
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
     }
