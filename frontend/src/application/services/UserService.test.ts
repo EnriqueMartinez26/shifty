@@ -61,6 +61,28 @@ describe('UserService', () => {
       expect(mockRepository.create).toHaveBeenCalledWith(expect.any(User), input.password)
     })
 
+    it('no pisa el nombre con undefined cuando el llamador manda snake_case (bug real del panel)', async () => {
+      // UserFormValues (el formulario del panel) manda first_name/last_name,
+      // no firstName/lastName - CreateUserInput solo declara la segunda
+      // forma, pero TS deja pasar el objeto igual porque son opcionales.
+      const formInput = {
+        email: 'panel@example.com',
+        password: 'securePassword123',
+        first_name: 'Ana',
+        last_name: 'Gómez',
+        phone: '123456789',
+        role: 'receptionist'
+      }
+
+      mockRepository.create.mockImplementation(async (user) => user as User)
+
+      await service.createUser(formInput as unknown as CreateUserInput)
+
+      const createdUser = mockRepository.create.mock.calls[0]![0] as User
+      expect(createdUser.firstName).toBe('Ana')
+      expect(createdUser.lastName).toBe('Gómez')
+    })
+
     it('should throw validation error when email is invalid', async () => {
       const input = {
         email: 'invalid-email',

@@ -6,14 +6,14 @@ export const createUserSchema = z.object({
   first_name: z.string().min(2, 'Nombre muy corto').optional().or(z.literal('')),
   last_name: z.string().min(2, 'Apellido muy corto').optional().or(z.literal('')),
   phone: z.string().optional().or(z.literal('')),
-  role: z.enum(['admin', 'staff', 'client'])
+  role: z.enum(['admin', 'staff', 'receptionist', 'client'])
 })
 
 export const updateUserSchema = z.object({
   first_name: z.string().min(2).optional().or(z.literal('')),
   last_name: z.string().min(2).optional().or(z.literal('')),
   phone: z.string().optional().or(z.literal('')),
-  role: z.enum(['admin', 'staff', 'client']).optional(),
+  role: z.enum(['admin', 'staff', 'receptionist', 'client']).optional(),
   password: z.string().min(6).optional().or(z.literal('')),
   is_active: z.boolean().optional()
 })
