@@ -1313,6 +1313,11 @@ async def client_reschedule_appointment(
                 http_status=status.HTTP_409_CONFLICT,
                 error_code="OUT_OF_SCHEDULE",
             )
+        # Lock del profesional ANTES de leer bloqueos y conflictos, igual que
+        # el alta publica (create_appointment): leer el bloqueo sin el lock
+        # dejaba colar el turno nuevo dentro de un bloqueo recien creado
+        # (B1-05; carrera en tests/postgres/test_pg_bloqueos.py).
+        await db.execute(select(Staff).where(Staff.id == staff.id).with_for_update())
         if await repo._staff_has_overlapping_block(
             staff.id, data.new_starts_at, new_ends_at
         ):
@@ -1324,9 +1329,6 @@ async def client_reschedule_appointment(
 
         try:
             async with db.begin_nested():
-                await db.execute(
-                    select(Staff).where(Staff.id == staff.id).with_for_update()
-                )
                 conflict_res = await db.execute(
                     select(Appointment)
                     .where(

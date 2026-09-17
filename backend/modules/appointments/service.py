@@ -547,14 +547,15 @@ class AppointmentService:
         # El dueno reprograma sin la antelacion minima; el "no pasado" lo
         # valida el schema AppointmentReschedule.
 
-        # 3. Verificar bloqueos de agenda en la nueva fecha
+        # 3. Bloqueo pesimista ANTES de leer bloqueos y conflictos, igual que
+        # en book(): leer el bloqueo sin el lock dejaba colar el turno nuevo
+        # dentro de un bloqueo creado entre esa lectura y el INSERT (B1-05).
+        await self.uow.appointments.lock_staff_row(staff_id)
         block = await self.uow.appointments.get_overlapping_block(
             staff_id, new_starts_at, ends_at
         )
 
-        # 4. Bloqueo pesimista + verificar conflictos (excluyendo el turno original)
-        await self.uow.appointments.lock_staff_row(staff_id)
-
+        # 4. Verificar conflictos (excluyendo el turno original)
         buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
         conflict = await self.uow.appointments.get_conflicting_appointment(
             staff_id,
