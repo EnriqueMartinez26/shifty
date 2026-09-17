@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import Depends
 from core.router import CanonicalAPIRouter
@@ -8,6 +8,7 @@ from sqlalchemy.orm import InstrumentedAttribute
 
 from core.database import get_db
 from core.roles import store_scope_for
+from core.utils import local_day_start, now_utc, today_local
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.auth.dependencies import get_current_staff
 from modules.dashboard.schemas import (
@@ -51,13 +52,17 @@ async def get_dashboard_summary(
 ) -> DashboardSummaryResponse:
     """Devuelve métricas resumidas y próximos turnos para el dashboard."""
     store_id = store_scope_for(user)
-    now = datetime.now(timezone.utc)
-    start_today = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-    end_today = start_today + timedelta(days=1)
+    now = now_utc()
+    # "Hoy" y "la semana" son dias del calendario argentino convertidos a UTC
+    # (regla 24), no el dia UTC: un turno de las 22:30 hora local se persiste
+    # a la 01:30Z del dia siguiente y tiene que contar en el dia local.
+    today = today_local()
+    start_today = local_day_start(today)
+    end_today = local_day_start(today + timedelta(days=1))
 
-    week_start = start_today - timedelta(days=start_today.weekday())
-    week_start = week_start.replace(tzinfo=timezone.utc)
-    week_end = week_start + timedelta(days=7)
+    monday = today - timedelta(days=today.weekday())
+    week_start = local_day_start(monday)
+    week_end = local_day_start(monday + timedelta(days=7))
 
     last_30_days = now - timedelta(days=30)
 
@@ -95,7 +100,7 @@ async def get_dashboard_summary(
 
     # 2. Total minutos disponibles (según Schedules de staff activo)
     # Calculamos la duración en Python para que sea agnóstico a la base de datos (PostgreSQL vs SQLite)
-    day_of_week = start_today.weekday()
+    day_of_week = today.weekday()
     schedules_q = await db.execute(
         select(Schedule).where(
             Schedule.day_of_week == day_of_week,
@@ -147,7 +152,7 @@ async def get_dashboard_summary(
     weekly_revenue = await _accredited_revenue(week_start, week_end)
 
     # 3. Tendencia (Semana pasada)
-    last_week_start = week_start - timedelta(days=7)
+    last_week_start = local_day_start(monday - timedelta(days=7))
     last_week_end = week_start
     last_week_revenue = await _accredited_revenue(last_week_start, last_week_end)
 
