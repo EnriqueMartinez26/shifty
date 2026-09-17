@@ -36,7 +36,12 @@ def parse_db_url(url: str) -> dict[str, Any]:
     """
     parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
     if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
-        raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
+        # Sin la URL en el mensaje: es la del rol dueno de la base y el
+        # traceback queda en los logs de compose y de CI (C-01, 2026-09-16).
+        raise ValueError(
+            "No se pudo parsear MIGRATION_DATABASE_URL "
+            f"(esquema={parsed.scheme!r}, host={parsed.hostname!r})"
+        )
 
     query = parse_qs(parsed.query)
     return {
