@@ -3,14 +3,12 @@ from typing import Annotated
 
 from fastapi import Depends, Path
 from core.router import CanonicalAPIRouter
-from sqlalchemy import and_, func, select, text
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from core.exceptions import (
     FeatureDisabledException,
-    ResourceNotFoundException,
-    ValidationException,
     PermissionDeniedException,
     StoreNotFoundException,
 )
@@ -25,6 +23,7 @@ from modules.ledger.schemas import (
     LedgerSummaryClientItem,
     LedgerSummaryResponse,
 )
+from modules.ledger.service import add_movement, reverse_movement
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -46,45 +45,6 @@ async def _ensure_ledger_feature_enabled(db: AsyncSession, user: User) -> None:
         raise StoreNotFoundException(user.store_id)
     if not is_store_feature_enabled(store.feature_flags, "ledger"):
         raise FeatureDisabledException("deuda")
-
-
-async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -> None:
-    """Serializa los movimientos de un mismo cliente.
-
-    balance_after es un saldo incremental: se lee el ultimo y se le suma el
-    movimiento nuevo. Sin serializar, dos movimientos concurrentes leen el mismo
-    saldo previo y el segundo pisa al primero, corrompiendo la cuenta. Un
-    advisory lock por (tienda, cliente) los ordena; se libera al cerrar la
-    transaccion. En SQLite (tests) es no-op: no hay concurrencia real ahi.
-    """
-    if db.bind and db.bind.dialect.name == "postgresql":
-        await db.execute(
-            text("SELECT pg_advisory_xact_lock(hashtext(:clave))"),
-            {"clave": f"ledger:{store_id}:{client_id}"},
-        )
-
-
-async def _previous_balance(db: AsyncSession, store_id: str, client_id: str) -> Decimal:
-    """Ultimo saldo del cliente (0 si no tiene movimientos). Con el lock tomado."""
-    result = await db.execute(
-        select(CustomerLedger)
-        .where(
-            CustomerLedger.store_id == store_id,
-            CustomerLedger.client_id == client_id,
-        )
-        .order_by(CustomerLedger.created_at.desc())
-        .limit(1)
-    )
-    previous = result.scalar_one_or_none()
-    return previous.balance_after if previous else Decimal("0.00")
-
-
-async def _reduce_new_balance(
-    db: AsyncSession, store_id: str, client_id: str, movement_type: str, amount: Decimal
-) -> Decimal:
-    """Saldo resultante de aplicar el movimiento. El signo lo decide la entidad."""
-    previous_balance = await _previous_balance(db, store_id, client_id)
-    return previous_balance + CustomerLedger.signed(movement_type, amount)
 
 
 def _client_display_name(user: User | None, *, fallback_id: str) -> str:
@@ -238,24 +198,15 @@ async def add_customer_ledger_movement(
 ) -> LedgerMovementResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
-    # Lock por cliente antes de leer el saldo previo: evita que dos movimientos
-    # concurrentes calculen balance_after sobre el mismo saldo y se pisen.
-    await _lock_client_ledger(db, user.store_id, client_id)
-    balance_after = await _reduce_new_balance(
-        db, user.store_id, client_id, data.movement_type, data.amount
-    )
-    movement = CustomerLedger(
+    movement = await add_movement(
+        db,
         store_id=user.store_id,
         client_id=client_id,
-        appointment_id=data.appointment_id,
         movement_type=data.movement_type,
         amount=data.amount,
-        balance_after=balance_after,
+        appointment_id=data.appointment_id,
         notes=data.notes,
     )
-    db.add(movement)
-    await db.commit()
-    await db.refresh(movement)
     return LedgerMovementResponse(
         public_id=movement.id,
         movement_type=movement.movement_type,
@@ -286,45 +237,12 @@ async def reverse_customer_ledger_movement(
     """
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
-    await _lock_client_ledger(db, user.store_id, client_id)
-
-    original = (
-        await db.execute(
-            select(CustomerLedger).where(
-                CustomerLedger.id == movement_id,
-                CustomerLedger.store_id == user.store_id,
-                CustomerLedger.client_id == client_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if original is None:
-        raise ResourceNotFoundException("Movimiento de fiado", movement_id)
-
-    if original.is_reversal:
-        raise ValidationException(
-            "Un movimiento de reversa no se puede volver a revertir."
-        )
-
-    already = (
-        await db.execute(
-            select(CustomerLedger.id).where(
-                CustomerLedger.reverses_id == original.id,
-                CustomerLedger.store_id == user.store_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if already is not None:
-        raise ValidationException("Ese movimiento ya fue revertido.")
-
-    # La entidad decide como se compensa (ajuste con signo opuesto) y marca el
-    # candado reverses_id; aca solo calculamos el saldo resultante y persistimos.
-    previous_balance = await _previous_balance(db, user.store_id, client_id)
-    reversal = original.build_reversal(
-        balance_after=previous_balance - original.signed_amount
+    reversal = await reverse_movement(
+        db,
+        store_id=user.store_id,
+        client_id=client_id,
+        movement_id=movement_id,
     )
-    db.add(reversal)
-    await db.commit()
-    await db.refresh(reversal)
     return LedgerMovementResponse(
         public_id=reversal.id,
         movement_type=reversal.movement_type,

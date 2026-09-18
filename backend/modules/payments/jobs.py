@@ -39,6 +39,7 @@ from modules.waitlist.events import EVENT_SLOT_RELEASED, publish_slot_released
 from modules.waitlist.offers import ReleasedSlot, offer_released_slot
 from modules.payments.service import (
     fetch_mercadopago_payment,
+    load_gateway_configs,
     stamp_payment_from_status,
     search_mercadopago_payments,
 )
@@ -135,7 +136,7 @@ async def process_outbox_batch(
             message.error = None
             processed += 1
         except Exception as exc:
-            message.error = str(exc)[:1000]
+            message.register_failure(str(exc))
             failed += 1
 
     await db.commit()
@@ -308,16 +309,19 @@ async def process_webhook_inbox_batch(
     inbox_items = list(result.scalars().all())
     processed = 0
     failed = 0
+    # La configuracion es por tienda, no por evento: una lectura con in_()
+    # antes del for en vez de dos por webhook (regla 12; 2026-09-17, B2-13).
+    configs = await load_gateway_configs(db, (i.store_id for i in inbox_items))
 
     for inbox in inbox_items:
         try:
             applied = True
             if inbox.provider == "mercadopago" and inbox.store_id:
                 inbox.payload = await enrich_mercadopago_webhook_payload(
-                    db, store_id=inbox.store_id, payload=inbox.payload
+                    db, store_id=inbox.store_id, payload=inbox.payload, configs=configs
                 )
                 applied = await apply_mercadopago_webhook_payload(
-                    db, store_id=inbox.store_id, payload=inbox.payload
+                    db, store_id=inbox.store_id, payload=inbox.payload, configs=configs
                 )
             if applied:
                 inbox.mark_processed()

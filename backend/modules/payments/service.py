@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
 from urllib.parse import urlencode, urlparse
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.circuit_breaker import AsyncCircuitBreaker
@@ -16,7 +17,6 @@ from core.crypto import decrypt_secret, encrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
-    can_apply_payment_status,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -65,6 +65,14 @@ def _clean_payload(value: JsonValue) -> JsonValue:
     if isinstance(value, list):
         return [_clean_payload(item) for item in value if item is not None]
     return value
+
+
+def _placeholder_link(appointment_id: str) -> tuple[str, str]:
+    """(preference_id, payment_link) falsos: marcan que falta pedirle el link a MP."""
+    return (
+        f"pref_{appointment_id}",
+        f"https://payments.shifty.local/pay/{appointment_id}",
+    )
 
 
 def _is_placeholder_preference(preference_id: str | None) -> bool:
@@ -252,6 +260,42 @@ async def _get_gateway_config(
     return result.scalar_one_or_none()
 
 
+# Configuracion del gateway ya resuelta por tienda. La arma un lote una sola
+# vez (load_gateway_configs) y la pasa hacia abajo: cada request HTTP a MP
+# arrastraba su propia consulta a payment_gateway_configs, y el inbox la
+# repetia por cada webhook (regla 12; 2026-09-17, B2-13).
+GatewayConfigs = Mapping[str, PaymentGatewayConfig]
+
+
+async def load_gateway_configs(
+    db: AsyncSession, store_ids: Iterable[str | None]
+) -> dict[str, PaymentGatewayConfig]:
+    """Una lectura con ``in_()`` para todas las tiendas del lote.
+
+    Una tienda sin fila queda fuera del dict: ``configs.get(store_id)`` es
+    None, igual que lo que devolvia ``_get_gateway_config``.
+    """
+    ids = {store_id for store_id in store_ids if store_id}
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(PaymentGatewayConfig).where(
+            PaymentGatewayConfig.store_id.in_(ids),
+            PaymentGatewayConfig.provider == "mercadopago",
+        )
+    )
+    return {config.store_id: config for config in result.scalars().all()}
+
+
+async def resolve_gateway_config(
+    db: AsyncSession, store_id: str, configs: GatewayConfigs | None = None
+) -> PaymentGatewayConfig | None:
+    """La config del lote si vino; si no, la consulta de siempre."""
+    if configs is not None:
+        return configs.get(store_id)
+    return await _get_gateway_config(db, store_id)
+
+
 async def _get_store(db: AsyncSession, store_id: str) -> Store | None:
     result = await db.execute(select(Store).where(Store.id == store_id))
     return result.scalar_one_or_none()
@@ -411,8 +455,9 @@ async def _mercadopago_api_request_for_store(
     method: str,
     path: str,
     json_body: dict[str, JsonValue] | None = None,
+    configs: GatewayConfigs | None = None,
 ) -> dict[str, JsonValue] | None:
-    config = await _get_gateway_config(db, store_id)
+    config = await resolve_gateway_config(db, store_id, configs)
     access_token = _resolve_access_token(config)
     if not access_token:
         return None
@@ -546,13 +591,18 @@ async def expire_mercadopago_preference(
 
 
 async def fetch_mercadopago_payment(
-    db: AsyncSession, *, store_id: str, payment_id: str
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment_id: str,
+    configs: GatewayConfigs | None = None,
 ) -> dict[str, JsonValue] | None:
     return await _mercadopago_api_request_for_store(
         db,
         store_id=store_id,
         method="GET",
         path=f"/v1/payments/{payment_id}",
+        configs=configs,
     )
 
 
@@ -586,6 +636,150 @@ async def search_mercadopago_payments(
     return [item for item in results if isinstance(item, dict)]
 
 
+def _resolve_amounts(
+    service: Service,
+    *,
+    amount_override: Decimal | None,
+    original_amount: Decimal | None,
+    discount_amount: Decimal | None,
+) -> tuple[Decimal, Decimal, Decimal]:
+    """Normaliza (importe, importe original, descuento) a 2 decimales.
+
+    Cuatro parametros opcionales (amount_override / original_amount /
+    discount_amount / keep_existing_amount) escondian cual importe gana. Aca
+    queda explicito: manda el override y, si no hay, la sena del servicio.
+    """
+    amount = _money(
+        Decimal(
+            str(
+                amount_override
+                if amount_override is not None
+                else calculate_service_payment_amount(service)
+            )
+        )
+    )
+    return (
+        amount,
+        _money(
+            Decimal(str(original_amount if original_amount is not None else amount))
+        ),
+        _money(Decimal(str(discount_amount or 0))),
+    )
+
+
+def _reprice_existing_payment(
+    payment: Payment,
+    *,
+    amount: Decimal,
+    original_amount: Decimal,
+    discount_amount: Decimal,
+    promotion_code: str | None,
+    keep_existing_amount: bool,
+) -> bool:
+    """Reaplica los importes a un cobro que ya existe. True si el importe cambio.
+
+    Un cobro que ya nacio con la regla de sena (snapshot deposit_rule) no se
+    re-tarifa por generar el link desde el panel: ese camino calcula la sena
+    base del servicio y pisaba el monto a la mitad, dejaba el snapshot
+    mintiendo y rompia la validacion de importe del webhook (el cliente pagaba
+    y el turno no se confirmaba nunca). 2026-09-11.
+    """
+    conserva_importe = keep_existing_amount and payment.deposit_rule is not None
+    if amount <= 0 or conserva_importe:
+        return False
+    cambio = payment.amount != amount
+    payment.amount = amount
+    payment.original_amount = original_amount
+    payment.discount_amount = discount_amount
+    payment.promotion_code = promotion_code
+    return cambio
+
+
+def _needs_provider_link(
+    payment: Payment, *, importe_cambio: bool, create_provider_link: bool
+) -> bool:
+    """Hay que pedir un link nuevo a MP: cambio el importe o el que hay es falso.
+
+    Si el importe cambio y el link no se pide ahora, el vigente (que cobra el
+    importe VIEJO) se invalida a placeholder: la fase siguiente o un reintento
+    lo ven y piden uno nuevo. Sin esto el cobro quedaba con el importe nuevo y
+    el link de MP con el viejo, y el webhook rechazaba el pago por importe
+    (misma clase que el bug del 2026-09-11).
+    """
+    if importe_cambio and not create_provider_link:
+        payment.preference_id, payment.payment_link = _placeholder_link(
+            payment.appointment_id
+        )
+    return (
+        importe_cambio
+        or _is_placeholder_preference(payment.preference_id)
+        or _is_placeholder_payment_link(payment.payment_link)
+    )
+
+
+async def _attach_provider_link(
+    db: AsyncSession,
+    *,
+    payment: Payment,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    amount: Decimal,
+) -> None:
+    """Pide la preferencia a Mercado Pago y la sella en el cobro.
+
+    Es la unica parte de esta funcion que sale a la red: quien la llama tiene
+    que haber commiteado antes (regla 5), para no sostener la fila del cobro
+    bloqueada ni una conexion del pool durante una request de hasta 20 s.
+    """
+    preference_payload = await create_mercadopago_preference(
+        db,
+        payment=payment,
+        appointment=appointment,
+        service=service,
+        store_id=store_id,
+        amount=amount,
+    )
+    if not preference_payload:
+        raise RuntimeError(
+            "La tienda debe conectar su cuenta de Mercado Pago antes de cobrar"
+        )
+    preference_id = str(preference_payload.get("id") or "").strip()
+    payment_link = _resolve_checkout_link(preference_payload)
+    if not preference_id or not payment_link:
+        raise RuntimeError("Mercado Pago no devolvio una preferencia valida")
+    payment.preference_id = preference_id
+    payment.payment_link = payment_link
+    payment.raw_payload = preference_payload
+
+
+def _nuevo_cobro_pendiente(
+    *,
+    store_id: str,
+    appointment: Appointment,
+    amount: Decimal,
+    original_amount: Decimal,
+    discount_amount: Decimal,
+    promotion_code: str | None,
+    deposit_rule: dict[str, JsonValue] | None,
+) -> Payment:
+    """Cobro PENDING con link placeholder: el real lo sella _attach_provider_link."""
+    preference_id, payment_link = _placeholder_link(appointment.id)
+    return Payment(
+        store_id=store_id,
+        appointment_id=appointment.id,
+        amount=amount,
+        original_amount=original_amount,
+        discount_amount=discount_amount,
+        currency="ARS",
+        status=PaymentStatus.PENDING.value,
+        preference_id=preference_id,
+        payment_link=payment_link,
+        promotion_code=promotion_code,
+        deposit_rule=deposit_rule,
+    )
+
+
 async def ensure_payment_preference(
     db: AsyncSession,
     *,
@@ -600,17 +794,12 @@ async def ensure_payment_preference(
     deposit_rule: dict[str, JsonValue] | None = None,
     keep_existing_amount: bool = False,
 ) -> Payment:
-    amount = (
-        amount_override
-        if amount_override is not None
-        else calculate_service_payment_amount(service)
+    amount, original_amount, discount_amount = _resolve_amounts(
+        service,
+        amount_override=amount_override,
+        original_amount=original_amount,
+        discount_amount=discount_amount,
     )
-    amount = _money(Decimal(str(amount)))
-
-    original_amount = _money(
-        Decimal(str(original_amount if original_amount is not None else amount))
-    )
-    discount_amount = _money(Decimal(str(discount_amount or 0)))
 
     result = await db.execute(
         select(Payment).where(
@@ -618,43 +807,34 @@ async def ensure_payment_preference(
         )
     )
     payment = result.scalar_one_or_none()
-    should_refresh_provider_link = False
 
     if payment:
-        # Un cobro que ya nacio con la regla de sena (snapshot deposit_rule) no
-        # se re-tarifa por generar el link desde el panel: ese camino calcula
-        # la sena base del servicio y pisaba el monto a la mitad, dejaba el
-        # snapshot mintiendo y rompia la validacion de importe del webhook
-        # (el cliente pagaba y el turno no se confirmaba nunca). 2026-09-11.
-        conserva_importe = keep_existing_amount and payment.deposit_rule is not None
-        if amount > 0 and not conserva_importe:
-            should_refresh_provider_link = payment.amount != amount
-            payment.amount = amount
-            payment.original_amount = original_amount
-            payment.discount_amount = discount_amount
-            payment.promotion_code = promotion_code
-        if deposit_rule is not None:
-            payment.deposit_rule = deposit_rule
-        # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o
-        # devuelto no vuelve a pendiente porque se recalcule el importe.
-        if can_apply_payment_status(payment.status, PaymentStatus.PENDING.value):
-            payment.status = PaymentStatus.PENDING.value
-        should_refresh_provider_link = (
-            should_refresh_provider_link
-            or _is_placeholder_preference(payment.preference_id)
-            or _is_placeholder_payment_link(payment.payment_link)
-        )
-    else:
-        payment = Payment(
-            store_id=store_id,
-            appointment_id=appointment.id,
+        importe_cambio = _reprice_existing_payment(
+            payment,
             amount=amount,
             original_amount=original_amount,
             discount_amount=discount_amount,
-            currency="ARS",
-            status=PaymentStatus.PENDING.value,
-            preference_id=f"pref_{appointment.id}",
-            payment_link=f"https://payments.shifty.local/pay/{appointment.id}",
+            promotion_code=promotion_code,
+            keep_existing_amount=keep_existing_amount,
+        )
+        if deposit_rule is not None:
+            payment.deposit_rule = deposit_rule
+        # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o
+        # devuelto no vuelve a pendiente porque se recalcule el importe. Lo
+        # decide la entidad (devuelve False y no toca nada si es ilegal).
+        payment.apply_status(PaymentStatus.PENDING.value)
+        should_refresh_provider_link = _needs_provider_link(
+            payment,
+            importe_cambio=importe_cambio,
+            create_provider_link=create_provider_link,
+        )
+    else:
+        payment = _nuevo_cobro_pendiente(
+            store_id=store_id,
+            appointment=appointment,
+            amount=amount,
+            original_amount=original_amount,
+            discount_amount=discount_amount,
             promotion_code=promotion_code,
             deposit_rule=deposit_rule,
         )
@@ -670,7 +850,7 @@ async def ensure_payment_preference(
         )
 
     if create_provider_link and should_refresh_provider_link:
-        preference_payload = await create_mercadopago_preference(
+        await _attach_provider_link(
             db,
             payment=payment,
             appointment=appointment,
@@ -678,19 +858,95 @@ async def ensure_payment_preference(
             store_id=store_id,
             amount=amount,
         )
-        if preference_payload:
-            preference_id = str(preference_payload.get("id") or "").strip()
-            payment_link = _resolve_checkout_link(preference_payload)
-            if not preference_id or not payment_link:
-                raise RuntimeError("Mercado Pago no devolvio una preferencia valida")
-            payment.preference_id = preference_id
-            payment.payment_link = payment_link
-            payment.raw_payload = preference_payload
-        else:
-            raise RuntimeError(
-                "La tienda debe conectar su cuenta de Mercado Pago antes de cobrar"
-            )
 
+    return payment
+
+
+async def _discard_orphan_payment(
+    db: AsyncSession, *, store_id: str, payment_id: str
+) -> None:
+    """Compensacion: borra el cobro que creo la fase 1 y lo que encolo para el.
+
+    Solo para un cobro que nacio en ESTA llamada (nadie mas lo referencia): si
+    MP fallo, dejarlo PENDING con placeholder inflaba pending_payments y
+    total_pending_amount de la conciliacion y el job lo consultaba a MP en
+    cada corrida. Transaccion propia, como _revert_failed_booking en
+    public_api.
+    """
+    await db.execute(
+        delete(OutboxMessage).where(
+            OutboxMessage.store_id == store_id,
+            OutboxMessage.event_type == "payment.preference.created",
+            OutboxMessage.payload["payment_id"].as_string() == payment_id,
+        )
+    )
+    await db.execute(
+        delete(Payment).where(Payment.id == payment_id, Payment.store_id == store_id)
+    )
+    await db.commit()
+
+
+async def create_panel_payment_preference(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    amount_override: Decimal | None = None,
+) -> Payment:
+    """Link de pago pedido desde el panel: commit -> llamada -> compensacion.
+
+    Fase 1: se persiste el cobro PENDING (re-tarifado si corresponde; si el
+    importe cambio, el link viejo queda como placeholder) y se COMMITEA.
+    Fase 2: con la transaccion cerrada y la fila suelta, se llama a Mercado
+    Pago (hasta 20 s) y se sella el link real.
+
+    Si MP falla y el cobro lo creo esta llamada, se borra (compensacion). Si
+    ya existia, queda con su placeholder y el reintento desde el panel lo
+    refresca. Antes las dos fases vivian en la misma transaccion, con la
+    conexion del pool tomada durante la request externa (regla 5).
+    """
+    ya_existia = (
+        await db.execute(
+            select(Payment.id).where(
+                Payment.appointment_id == appointment.id,
+                Payment.store_id == store_id,
+            )
+        )
+    ).scalar_one_or_none() is not None
+
+    payment = await ensure_payment_preference(
+        db,
+        appointment=appointment,
+        service=service,
+        store_id=store_id,
+        amount_override=amount_override,
+        keep_existing_amount=True,
+        create_provider_link=False,
+    )
+    payment_id = payment.id
+    await db.commit()
+
+    try:
+        payment = await ensure_payment_preference(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            amount_override=payment.amount,
+            original_amount=payment.original_amount,
+            discount_amount=payment.discount_amount,
+            promotion_code=payment.promotion_code,
+            keep_existing_amount=True,
+            create_provider_link=True,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        if not ya_existia:
+            await _discard_orphan_payment(db, store_id=store_id, payment_id=payment_id)
+        raise
+    await db.refresh(payment)
     return payment
 
 

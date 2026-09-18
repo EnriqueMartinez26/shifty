@@ -55,8 +55,8 @@ from modules.payments.service import (
     apply_mercadopago_oauth_payload,
     build_mercadopago_oauth_authorization_url,
     calculate_service_payment_amount,
+    create_panel_payment_preference,
     exchange_mercadopago_oauth_code,
-    ensure_payment_preference,
     mercadopago_oauth_is_configured,
     refresh_mercadopago_oauth_connection,
 )
@@ -650,14 +650,14 @@ async def create_payment_preference(
     )
     try:
         # Sin override: si el turno ya tiene un cobro con la sena calculada
-        # por la regla, se respeta ese importe y solo se refresca el link.
-        payment = await ensure_payment_preference(
+        # por la regla, se respeta ese importe y solo se refresca el link. El
+        # service commitea el cobro ANTES de salir a Mercado Pago (regla 5).
+        payment = await create_panel_payment_preference(
             db,
             appointment=appointment,
             service=service,
             store_id=user.store_id,
             amount_override=_payment_amount_for_service(service),
-            keep_existing_amount=True,
         )
     except CircuitBreakerOpenError as exc:
         raise AppException(
@@ -671,8 +671,6 @@ async def create_payment_preference(
             http_status=status.HTTP_502_BAD_GATEWAY,
             error_code="PAYMENT_LINK_CREATION_FAILED",
         )
-    await db.commit()
-    await db.refresh(payment)
     return _payment_preference_response(payment)
 
 
