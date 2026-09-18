@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from datetime import timezone
 from typing import Annotated, cast
 
 from fastapi import Depends, Path, status
@@ -12,6 +13,7 @@ from core.redis import get_redis
 from core.exceptions import PermissionDeniedException
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AsyncSqlAlchemyUnitOfWork
+from core.utils import ensure_utc_aware
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointment_blocks.schemas import (
     AffectedAppointmentResponse,
@@ -63,11 +65,14 @@ async def get_block_service(
 
 
 def _to_response(block: StaffBlock) -> AppointmentBlockResponse:
+    # Siempre UTC con zona: desde que el alta no hace refresh por bloqueo
+    # (B1-14) el objeto conserva el offset que mando el cliente, y SQLite
+    # devuelve naive. La base guarda UTC; la respuesta tambien.
     return AppointmentBlockResponse(
         public_id=block.id,
         staff_id=block.staff_id,
-        starts_at=block.starts_at,
-        ends_at=block.ends_at,
+        starts_at=ensure_utc_aware(block.starts_at).astimezone(timezone.utc),
+        ends_at=ensure_utc_aware(block.ends_at).astimezone(timezone.utc),
         reason=block.reason,
         is_active=block.is_active,
     )

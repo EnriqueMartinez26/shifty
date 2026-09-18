@@ -40,6 +40,7 @@ from core.uow import AbstractUnitOfWork
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import build_client_details, is_deliverable_email
+from modules.payments.model import Payment
 from modules.staff.model import Staff, StaffBlock
 from modules.stores.model import Store
 from modules.users.model import User
@@ -114,17 +115,41 @@ class AppointmentBlockService:
             )
         return members
 
+    async def _payments_by_appointment(
+        self, appointment_ids: list[str]
+    ) -> dict[str, Payment]:
+        """Pago de cada turno en UNA consulta (regla 12, B1-14).
+
+        Antes era un ``get_by_appointment`` por turno afectado, con los locks
+        de los profesionales tomados. Hay a lo sumo un pago por turno
+        (``uq_payments_store_appointment``), asi que el dict es exacto.
+        """
+        if not appointment_ids:
+            return {}
+        result = await self.uow.session.execute(
+            select(Payment).where(
+                Payment.appointment_id.in_(appointment_ids),
+                Payment.store_id == self.actor.store_id,
+            )
+        )
+        return {payment.appointment_id: payment for payment in result.scalars()}
+
     async def _classify(
         self, appointments: list[Appointment]
     ) -> list[AffectedAppointment]:
         affected: list[AffectedAppointment] = []
+        payments = await self._payments_by_appointment(
+            [
+                appointment.id
+                for appointment in appointments
+                if appointment.status != AppointmentStatus.PENDING_PAYMENT.value
+            ]
+        )
         for appointment in appointments:
             if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
                 affected.append(AffectedAppointment(appointment, "pending_payment"))
                 continue
-            payment = await self.uow.payments.get_by_appointment(
-                appointment.id, self.actor.store_id
-            )
+            payment = payments.get(appointment.id)
             if payment is not None and payment.is_accredited:
                 affected.append(AffectedAppointment(appointment, "has_deposit"))
                 continue
@@ -193,6 +218,7 @@ class AppointmentBlockService:
                     start_time=starts_at,
                     end_time=ends_at,
                     reason=reason,
+                    is_active=True,
                 )
                 self.uow.session.add(block)
                 result.blocks.append(block)
@@ -213,8 +239,10 @@ class AppointmentBlockService:
             },
         )
         await self.uow.commit()
-        for block in result.blocks:
-            await self.uow.session.refresh(block)
+        # Sin refresh por bloqueo (B1-14: era un SELECT por cada uno, hasta
+        # 600 en un cierre largo). Todas las columnas que lee la respuesta
+        # (id, staff, rango, reason, is_active) se asignan del lado de Python
+        # y la sesion no expira al commitear (expire_on_commit=False).
         await self._invalidate(ranges)
         return result
 
