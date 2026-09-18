@@ -769,9 +769,18 @@ class CouponAdminRepository(_BaseAdminRepository):
         await self.db.refresh(redemption)
         return redemption
 
+    # populate_existing en los dos locks: el router ya cargo el cupon y la
+    # suscripcion en esta sesion, y sin eso el FOR UPDATE devuelve la instancia
+    # del identity map SIN refrescar: current_uses se validaba y se
+    # incrementaba con el valor leido antes del lock y dos canjes concurrentes
+    # pasaban el tope max_uses (S-08, 2026-09-18). Mismo patron que
+    # payments/jobs.py.
     async def _lock_coupon(self, coupon_id: str) -> SaaSCoupon:
         result = await self.db.execute(
-            select(SaaSCoupon).where(SaaSCoupon.id == coupon_id).with_for_update()
+            select(SaaSCoupon)
+            .where(SaaSCoupon.id == coupon_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one()
 
@@ -780,6 +789,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             select(StoreSubscription)
             .where(StoreSubscription.id == subscription_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         return result.scalar_one()
 
