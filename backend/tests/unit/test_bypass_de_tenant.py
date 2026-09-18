@@ -32,7 +32,14 @@ from core.database import (
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 # Los modulos que hacian el reset a medias. dependencies.py ya lo hacia bien y
 # no entra: alli el reset es intermedio y lo sigue un contexto real.
-SIN_RESET_A_MEDIAS = ("modules/auth/service.py", "modules/stores/router.py")
+# S-09 (2026-09-18) suma los dos bloques de payments/router.py (callback OAuth
+# de Mercado Pago y webhook). Las tasks de Celery de payments/tasks.py no
+# entran: bypass de tarea entera por diseno, con la sesion cerrandose enseguida.
+SIN_RESET_A_MEDIAS = (
+    "modules/auth/service.py",
+    "modules/stores/router.py",
+    "modules/payments/router.py",
+)
 
 
 def _sesion_falsa() -> AsyncSession:

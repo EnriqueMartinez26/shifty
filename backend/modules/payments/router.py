@@ -17,7 +17,7 @@ from modules.payments.application import PaymentService
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
 from core.crypto import encrypt_secret
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.database import get_db, tenant_bypass
 from core.redis import get_redis
 from core.exceptions import (
     AppException,
@@ -507,9 +507,7 @@ async def mercadopago_oauth_callback(
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
     _mercadopago_oauth_required()
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         if error:
             return _oauth_frontend_redirect("denied")
         if not code or not state:
@@ -567,8 +565,6 @@ async def mercadopago_oauth_callback(
         await db.commit()
 
         return _oauth_frontend_redirect("connected")
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.post("/mercadopago/oauth/refresh", response_model=GatewayConfigResponse)
@@ -726,9 +722,7 @@ async def mercadopago_webhook(
     store_id: Annotated[str | None, Query(max_length=64)] = None,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         # Un body invalido no puede tirar un 500: es trafico externo no confiable.
         try:
             payload = await request.json()
@@ -793,8 +787,6 @@ async def mercadopago_webhook(
                 inbox.register_failure("No se pudo resolver el pago del webhook")
         await db.commit()
         return {"success": True, "data": {"received": True, "applied": applied}}
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.get("/outbox/stats", response_model=OutboxStatsResponse)
