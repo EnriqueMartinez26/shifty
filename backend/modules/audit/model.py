@@ -47,9 +47,11 @@ class AuditLog(Base):
     # PK simple, sin ULID para máxima performance de inserción
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
-    # Cuándo ocurrió la acción (server-side, no confiar en el cliente)
+    # Cuándo ocurrió la acción (server-side, no confiar en el cliente).
+    # timestamptz como el resto del esquema (regla 24, B5-13): naive, now()
+    # quedaba en la hora de pared de la sesion y el front no podia convertirlo.
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), index=True
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
 
     # Quién realizó la acción (nullable para acciones del sistema / Celery)
