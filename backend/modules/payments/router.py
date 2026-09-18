@@ -8,7 +8,7 @@ from core.router import CanonicalAPIRouter
 from fastapi import Depends, Path, Query, Request, status
 from fastapi.responses import RedirectResponse
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.uow import AsyncSqlAlchemyUnitOfWork
@@ -326,19 +326,27 @@ async def _count_store_rows(
     return int(total or 0)
 
 
-def _payment_status_count_query(store_id: str, status_value: str) -> Any:
-    return (
-        select(func.count())
-        .select_from(Payment)
-        .where(Payment.store_id == store_id, Payment.status == status_value)
-    )
+async def _payment_totals_by_status(
+    db: AsyncSession, store_id: str
+) -> dict[str, tuple[int, Decimal]]:
+    """Cantidad e importe de los pagos de la tienda, agrupados por estado.
 
-
-def _payment_status_sum_query(store_id: str, status_value: str) -> Any:
-    return select(func.coalesce(func.sum(Payment.amount), 0)).where(
-        Payment.store_id == store_id,
-        Payment.status == status_value,
+    Un estado sin filas no aparece en el GROUP BY: el llamador lee con
+    ``.get(estado, (0, 0))`` para devolver el 0 explicito que espera el panel.
+    """
+    result = await db.execute(
+        select(
+            Payment.status,
+            func.count(),
+            func.coalesce(func.sum(Payment.amount), 0),
+        )
+        .where(Payment.store_id == store_id)
+        .group_by(Payment.status)
     )
+    return {
+        str(status_value): (int(count or 0), Decimal(str(total or 0)))
+        for status_value, count, total in result.all()
+    }
 
 
 def _mercadopago_oauth_required() -> None:
@@ -833,92 +841,39 @@ async def reconciliation_summary(
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
 
-    pending_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.PENDING.value)
-            )
-        )
-        or 0
+    sin_filas = (0, Decimal("0"))
+    por_estado = await _payment_totals_by_status(db, user.store_id)
+    pending_count, pending_amount = por_estado.get(
+        PaymentStatus.PENDING.value, sin_filas
     )
-    approved_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.APPROVED.value)
-            )
-        )
-        or 0
+    approved_count, approved_amount = por_estado.get(
+        PaymentStatus.APPROVED.value, sin_filas
     )
-    rejected_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.REJECTED.value)
-            )
-        )
-        or 0
+    manual_count, manual_amount = por_estado.get(
+        PaymentStatus.MANUAL_CONFIRMED.value, sin_filas
     )
-    manual_confirmed_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(
-                    user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
-                )
-            )
-        )
-        or 0
-    )
-    refunded_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.REFUNDED.value)
-            )
-        )
-        or 0
-    )
-    total_pending_amount = Decimal(
-        str(
-            (
-                await db.scalar(
-                    _payment_status_sum_query(
-                        user.store_id, PaymentStatus.PENDING.value
+    # Pendientes y fallidos del inbox salen de UNA sentencia: COUNT ignora los
+    # NULL, asi que un CASE sin ELSE cuenta solo las filas que cumplen.
+    pending_webhooks, failed_webhooks = (
+        await db.execute(
+            select(
+                func.count(
+                    case(
+                        (
+                            and_(
+                                WebhookInbox.processed_at.is_(None),
+                                WebhookInbox.error.is_(None),
+                            ),
+                            1,
+                        )
                     )
-                )
+                ),
+                func.count(case((WebhookInbox.error.is_not(None), 1))),
             )
-            or 0
+            .select_from(WebhookInbox)
+            .where(WebhookInbox.store_id == user.store_id)
         )
-    )
-    approved_amount = Decimal(
-        str(
-            await db.scalar(
-                _payment_status_sum_query(user.store_id, PaymentStatus.APPROVED.value)
-            )
-            or 0
-        )
-    )
-    manual_confirmed_amount = Decimal(
-        str(
-            await db.scalar(
-                _payment_status_sum_query(
-                    user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
-                )
-            )
-            or 0
-        )
-    )
-    total_approved_amount = approved_amount + manual_confirmed_amount
-    pending_webhooks = await _count_store_rows(
-        db,
-        WebhookInbox,
-        WebhookInbox.store_id == user.store_id,
-        WebhookInbox.processed_at.is_(None),
-        WebhookInbox.error.is_(None),
-    )
-    failed_webhooks = await _count_store_rows(
-        db,
-        WebhookInbox,
-        WebhookInbox.store_id == user.store_id,
-        WebhookInbox.error.is_not(None),
-    )
+    ).one()
     pending_outbox = await _count_store_rows(
         db,
         OutboxMessage,
@@ -927,15 +882,15 @@ async def reconciliation_summary(
     )
 
     return ReconciliationSummaryResponse(
-        pending_payments=pending_payments,
-        approved_payments=approved_payments,
-        rejected_payments=rejected_payments,
-        manual_confirmed_payments=manual_confirmed_payments,
-        refunded_payments=refunded_payments,
-        total_pending_amount=total_pending_amount,
-        total_approved_amount=total_approved_amount,
-        pending_webhooks=pending_webhooks,
-        failed_webhooks=failed_webhooks,
+        pending_payments=pending_count,
+        approved_payments=approved_count,
+        rejected_payments=por_estado.get(PaymentStatus.REJECTED.value, sin_filas)[0],
+        manual_confirmed_payments=manual_count,
+        refunded_payments=por_estado.get(PaymentStatus.REFUNDED.value, sin_filas)[0],
+        total_pending_amount=pending_amount,
+        total_approved_amount=approved_amount + manual_amount,
+        pending_webhooks=int(pending_webhooks or 0),
+        failed_webhooks=int(failed_webhooks or 0),
         pending_outbox=pending_outbox,
     )
 
