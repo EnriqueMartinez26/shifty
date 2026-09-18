@@ -50,6 +50,10 @@ logger = structlog.get_logger()
 # origen solo se le avisa al duenio, que reserva a mano desde el panel.
 RANGOS_SIN_GRILLA = frozenset({"block_deleted"})
 
+# Ofertas vencidas que procesa cada corrida del beat (B1-16). Mismo tope por
+# defecto que los lotes del outbox de pagos; el resto espera a la siguiente.
+LAPSED_OFFERS_BATCH = 100
+
 
 @dataclass(frozen=True)
 class ReleasedSlot:
@@ -309,12 +313,19 @@ class LapseResult:
         }
 
 
-async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResult:
+async def expire_lapsed_offers(
+    db: AsyncSession, *, now: datetime, limit: int = LAPSED_OFFERS_BATCH
+) -> LapseResult:
     """Ofertas vencidas vuelven a la cola; si el cupo sigue libre, va al siguiente.
 
     Toma las filas con ``FOR UPDATE SKIP LOCKED``: sin eso, dos corridas
     solapadas del beat re-ofrecian el mismo cupo a dos personas. Los mails
     vuelven en ``pending_emails`` y los manda la tarea despues del commit.
+
+    El lote tiene tope (``limit``) y orden por vencimiento (B1-16): cada
+    vencida cuesta varias consultas para re-ofrecer su cupo, todas con las
+    filas tomadas; sin tope, una cola grande acercaba la corrida al time
+    limit de Celery. Lo que no entra se procesa en la corrida siguiente.
     """
     rows = await db.execute(
         select(WaitlistEntry)
@@ -324,6 +335,8 @@ async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResul
             WaitlistEntry.offer_expires_at.is_not(None),
             WaitlistEntry.offer_expires_at <= now,
         )
+        .order_by(WaitlistEntry.offer_expires_at.asc())
+        .limit(limit)
         .with_for_update(skip_locked=True)
     )
     lapsed = list(rows.scalars().all())

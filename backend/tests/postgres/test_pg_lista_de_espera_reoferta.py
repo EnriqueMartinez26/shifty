@@ -138,3 +138,106 @@ async def test_dos_corridas_solapadas_reofrecen_el_cupo_una_sola_vez(
         finally:
             set_tenant_context(None, False)
     assert estados == {"Primera": "waiting", "Segunda": "offered"}
+
+
+@pytest.mark.asyncio
+async def test_dos_corridas_con_tope_se_reparten_las_vencidas_sin_repetir(
+    client: AsyncClient, app_sessions: async_sessionmaker[AsyncSession]
+) -> None:
+    """B1-16 (2026-09-18): el lote de vencidas ahora tiene ``LIMIT``.
+
+    Con ``LIMIT`` + ``FOR UPDATE SKIP LOCKED`` dos corridas solapadas con
+    tope 1 tienen que tomar vencidas DISTINTAS (la segunda saltea la fila
+    que la primera tiene tomada y agarra la siguiente), no la misma dos
+    veces ni ninguna.
+    """
+    store, token = await register_and_login(
+        client, app_sessions, slug="reoferta-lote", email="reoferta-lote@demo.com"
+    )
+    service = await create_service(client, token)
+    staff = await create_staff(
+        client, token, service, email="pro-reoferta-lote@demo.com"
+    )
+    dia = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+    slot = dia.replace(hour=15, minute=0, second=0, microsecond=0)
+
+    for indice in range(2):
+        cupo = slot + timedelta(days=indice)
+        alta = await client.post(
+            "/public/waitlist",
+            json={
+                "store_public_id": store,
+                "service_id": service,
+                "window_starts_at": (cupo - timedelta(hours=2)).isoformat(),
+                "window_ends_at": (cupo + timedelta(hours=2)).isoformat(),
+                "client_name": f"Lote {indice}",
+                "client_phone": f"+54911555504{indice:02d}",
+                "client_email": f"lote{indice}@demo.com",
+            },
+        )
+        assert alta.status_code == 201, alta.text
+
+    vencida = datetime.now(timezone.utc) - timedelta(minutes=1)
+    async with app_sessions() as session:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(session)
+            entradas = (
+                (
+                    await session.execute(
+                        select(WaitlistEntry).order_by(WaitlistEntry.created_at.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for indice, entrada in enumerate(entradas):
+                cupo = slot + timedelta(days=indice)
+                await session.execute(
+                    text(
+                        "UPDATE waitlist_entries SET status='offered', "
+                        "notified_at=:v, offer_expires_at=:v, "
+                        "offered_staff_id=:staff, offered_starts_at=:inicio, "
+                        "offered_ends_at=:fin WHERE id=:id"
+                    ),
+                    {
+                        "v": vencida - timedelta(seconds=indice),
+                        "staff": staff,
+                        "inicio": cupo,
+                        "fin": cupo + timedelta(minutes=30),
+                        "id": entrada.id,
+                    },
+                )
+            await session.commit()
+        finally:
+            set_tenant_context(None, False)
+
+    ahora = datetime.now(timezone.utc)
+    ambas_leyeron = asyncio.Barrier(2)
+
+    async def corrida() -> int:
+        async with app_sessions() as db:
+            set_tenant_context(None, True)
+            try:
+                await _apply_tenant_context(db)
+                resultado = await expire_lapsed_offers(db, now=ahora, limit=1)
+                await ambas_leyeron.wait()
+                await db.commit()
+                return resultado.lapsed
+            finally:
+                set_tenant_context(None, False)
+
+    procesadas = await asyncio.gather(corrida(), corrida())
+
+    assert sorted(procesadas) == [1, 1], procesadas
+    async with app_sessions() as session:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(session)
+            estados = (
+                (await session.execute(select(WaitlistEntry.status))).scalars().all()
+            )
+        finally:
+            set_tenant_context(None, False)
+    assert sorted(estados) == ["waiting", "waiting"], estados
