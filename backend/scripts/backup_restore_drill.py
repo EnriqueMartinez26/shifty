@@ -4,16 +4,31 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Raiz del backend derivada del propio archivo: el drill se invoca tanto con
+# `working-directory: backend` (workflow mensual) como desde la raiz del repo,
+# y las rutas de los scripts que lanza no pueden depender del cwd.
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from scripts.backup_db import _sha256_file  # noqa: E402
 
 
 def _run(
     command: list[str], *, env: dict[str, str] | None = None
 ) -> tuple[int, str, str]:
     result = subprocess.run(
-        command, capture_output=True, text=True, env=env, check=False
+        command,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        cwd=BACKEND_ROOT,
     )
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
@@ -23,7 +38,20 @@ def _latest_backup(backup_dir: Path) -> Path | None:
     return backups[0] if backups else None
 
 
-def main() -> int:
+def _verify_checksum(dump: Path, checksum_file: Path) -> tuple[bool, str]:
+    """Compara el sha256 real del dump con el que escribio backup_db.py
+    (`<hex>  <nombre>`). Sin archivo de checksum no hay nada que validar: falla."""
+    if not checksum_file.exists():
+        return False, f"No se encontro checksum para validar: {checksum_file}"
+    parts = checksum_file.read_text(encoding="utf-8").split()
+    expected = parts[0] if parts else ""
+    actual = _sha256_file(dump)
+    if actual != expected:
+        return False, f"Checksum distinto: esperado {expected}, calculado {actual}"
+    return True, f"sha256 verificado: {actual}"
+
+
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Ejecuta drill de backup+restore y guarda evidencia JSON."
     )
@@ -47,7 +75,101 @@ def main() -> int:
         action="store_true",
         help="Ejecuta restore en restore-database-url",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def _add_step(
+    evidence: dict[str, Any],
+    name: str,
+    ok: bool,
+    stdout: str = "",
+    stderr: str = "",
+) -> None:
+    evidence["steps"].append(
+        {
+            "name": name,
+            "ok": ok,
+            "stdout": stdout[-4000:],
+            "stderr": stderr[-4000:],
+        }
+    )
+    if not ok:
+        evidence["status"] = "failed"
+
+
+def _paso_backup(
+    args: argparse.Namespace, backup_dir: Path, evidence: dict[str, Any]
+) -> None:
+    if not args.database_url:
+        _add_step(evidence, "backup", False, stderr="DATABASE_URL no configurado")
+        return
+    code, out, err = _run(
+        [
+            sys.executable,
+            str(BACKEND_ROOT / "scripts" / "backup_db.py"),
+            "--output-dir",
+            str(backup_dir.resolve()),
+            "--database-url",
+            args.database_url,
+        ]
+    )
+    _add_step(evidence, "backup", code == 0, out, err)
+
+
+def _paso_verificar_checksum(backup_dir: Path, evidence: dict[str, Any]) -> Path | None:
+    """Ubica el ultimo dump y compara su sha256; devuelve el dump o None."""
+    latest = _latest_backup(backup_dir)
+    if not latest:
+        _add_step(
+            evidence,
+            "locate-backup",
+            False,
+            stderr="No se encontro backup para validar",
+        )
+        return None
+    evidence["backup_file"] = str(latest)
+    checksum_file = latest.with_suffix(".sha256")
+    if checksum_file.exists():
+        evidence["checksum_file"] = str(checksum_file)
+    # El .sha256 se recalcula y compara: registrar solo su ruta dejaba un
+    # dump truncado con evidencia "ok" (C-06, 2026-09-17).
+    ok, detail = _verify_checksum(latest, checksum_file)
+    _add_step(
+        evidence,
+        "verify-checksum",
+        ok,
+        stdout=detail if ok else "",
+        stderr="" if ok else detail,
+    )
+    return latest
+
+
+def _paso_restore(
+    args: argparse.Namespace, latest: Path | None, evidence: dict[str, Any]
+) -> None:
+    if not latest:
+        _add_step(evidence, "restore", False, stderr="No hay backup para restore")
+        return
+    if not args.restore_database_url:
+        _add_step(
+            evidence, "restore", False, stderr="DRILL_DATABASE_URL no configurado"
+        )
+        return
+    code, out, err = _run(
+        [
+            sys.executable,
+            str(BACKEND_ROOT / "scripts" / "restore_backup.py"),
+            "--backup-file",
+            str(latest.resolve()),
+            "--database-url",
+            args.restore_database_url,
+        ]
+    )
+    _add_step(evidence, "restore", code == 0, out, err)
+
+
+def main() -> int:
+    args = _parse_args()
 
     started_at = datetime.now(timezone.utc)
     evidence_dir = Path(args.evidence_dir)
@@ -55,67 +177,19 @@ def main() -> int:
     backup_dir = Path(args.backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
 
-    steps: list[dict[str, Any]] = []
     evidence: dict[str, Any] = {
         "started_at": started_at.isoformat(),
         "status": "ok",
-        "steps": steps,
+        "steps": [],
     }
 
-    def add_step(name: str, ok: bool, stdout: str = "", stderr: str = "") -> None:
-        steps.append(
-            {
-                "name": name,
-                "ok": ok,
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
-            }
-        )
-        if not ok:
-            evidence["status"] = "failed"
-
     if args.run_backup:
-        if not args.database_url:
-            add_step("backup", False, stderr="DATABASE_URL no configurado")
-        else:
-            code, out, err = _run(
-                [
-                    "python",
-                    "scripts/backup_db.py",
-                    "--output-dir",
-                    str(backup_dir),
-                    "--database-url",
-                    args.database_url,
-                ]
-            )
-            add_step("backup", code == 0, out, err)
+        _paso_backup(args, backup_dir, evidence)
 
-    latest = _latest_backup(backup_dir)
-    if latest:
-        evidence["backup_file"] = str(latest)
-        checksum_file = latest.with_suffix(".sha256")
-        if checksum_file.exists():
-            evidence["checksum_file"] = str(checksum_file)
-    else:
-        add_step("locate-backup", False, stderr="No se encontro backup para validar")
+    latest = _paso_verificar_checksum(backup_dir, evidence)
 
     if args.run_restore:
-        if not latest:
-            add_step("restore", False, stderr="No hay backup para restore")
-        elif not args.restore_database_url:
-            add_step("restore", False, stderr="DRILL_DATABASE_URL no configurado")
-        else:
-            code, out, err = _run(
-                [
-                    "python",
-                    "scripts/restore_backup.py",
-                    "--backup-file",
-                    str(latest),
-                    "--database-url",
-                    args.restore_database_url,
-                ]
-            )
-            add_step("restore", code == 0, out, err)
+        _paso_restore(args, latest, evidence)
 
     finished_at = datetime.now(timezone.utc)
     evidence["finished_at"] = finished_at.isoformat()

@@ -27,6 +27,9 @@ def _build_pg_restore_command(
         "pg_restore",
         "--clean",
         "--if-exists",
+        # Sin esto pg_restore devuelve 0 aunque fallen objetos y el drill
+        # daba por buena una restauracion parcial (C-06, 2026-09-17).
+        "--exit-on-error",
         "--no-owner",
         "--no-privileges",
         "--host",

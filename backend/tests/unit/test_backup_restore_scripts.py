@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 from pytest import MonkeyPatch
 
@@ -49,6 +51,9 @@ def test_restore_command_uses_pg_restore_without_exposing_password(
     )
 
     assert command[:3] == ["pg_restore", "--clean", "--if-exists"]
+    # 2026-09-17 · C-06: sin --exit-on-error pg_restore devuelve 0 aunque
+    # fallen objetos; un dump truncado "restauraba" con evidencia ok.
+    assert "--exit-on-error" in command
     assert "--no-owner" in command
     assert "--no-privileges" in command
     assert command[command.index("--host") + 1] == "localhost"
@@ -70,7 +75,10 @@ def test_backup_restore_drill_writes_success_evidence_for_existing_backup(
     backup_file = backup_dir / "shifty-20260621T120000Z.dump"
     checksum_file = backup_dir / "shifty-20260621T120000Z.sha256"
     backup_file.write_bytes(b"fake custom dump")
-    checksum_file.write_text("abc123  shifty-20260621T120000Z.dump\n", encoding="utf-8")
+    # 2026-09-17 · C-06: el checksum tiene que ser el real del dump; antes el
+    # drill lo registraba sin recalcularlo y "abc123" daba evidencia ok.
+    digest = hashlib.sha256(b"fake custom dump").hexdigest()
+    checksum_file.write_text(f"{digest}  {backup_file.name}\n", encoding="utf-8")
 
     monkeypatch.setattr(
         "sys.argv",
@@ -91,6 +99,86 @@ def test_backup_restore_drill_writes_success_evidence_for_existing_backup(
     assert evidence["backup_file"] == str(backup_file)
     assert evidence["checksum_file"] == str(checksum_file)
     assert "duration_seconds" in evidence
+    verify = next(
+        step for step in evidence["steps"] if step["name"] == "verify-checksum"
+    )
+    assert verify["ok"] is True
+
+
+def test_backup_restore_drill_fails_when_checksum_does_not_match(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """2026-09-17 · C-06: el drill guardaba la ruta del `.sha256` como evidencia
+    pero nunca lo recalculaba ni comparaba. Sintoma: un dump truncado (o un
+    checksum de otro archivo) producia `"status": "ok"` y el runbook que gatea
+    releases quedaba verde sin haber validado nada."""
+    drill = load_script("backup_restore_drill")
+    backup_dir = tmp_path / "backups"
+    evidence_dir = tmp_path / "evidence"
+    backup_dir.mkdir()
+    backup_file = backup_dir / "shifty-20260621T120000Z.dump"
+    checksum_file = backup_dir / "shifty-20260621T120000Z.sha256"
+    backup_file.write_bytes(b"dump truncado a mitad de cami")
+    digest_completo = hashlib.sha256(b"dump completo").hexdigest()
+    checksum_file.write_text(
+        f"{digest_completo}  {backup_file.name}\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backup_restore_drill.py",
+            "--backup-dir",
+            str(backup_dir),
+            "--evidence-dir",
+            str(evidence_dir),
+        ],
+    )
+
+    assert drill.main() == 1
+    evidence = json.loads(
+        next(evidence_dir.glob("drill-*.json")).read_text(encoding="utf-8")
+    )
+    assert evidence["status"] == "failed"
+    verify = next(
+        step for step in evidence["steps"] if step["name"] == "verify-checksum"
+    )
+    assert verify["ok"] is False
+    assert digest_completo in verify["stderr"]
+
+
+def test_backup_restore_drill_fails_when_checksum_file_is_missing(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """2026-09-17 · C-06: un dump sin su `.sha256` no se puede validar; antes el
+    drill lo daba por bueno en silencio."""
+    drill = load_script("backup_restore_drill")
+    backup_dir = tmp_path / "backups"
+    evidence_dir = tmp_path / "evidence"
+    backup_dir.mkdir()
+    (backup_dir / "shifty-20260621T120000Z.dump").write_bytes(b"fake custom dump")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backup_restore_drill.py",
+            "--backup-dir",
+            str(backup_dir),
+            "--evidence-dir",
+            str(evidence_dir),
+        ],
+    )
+
+    assert drill.main() == 1
+    evidence = json.loads(
+        next(evidence_dir.glob("drill-*.json")).read_text(encoding="utf-8")
+    )
+    assert evidence["status"] == "failed"
+    assert "checksum_file" not in evidence
+    verify = next(
+        step for step in evidence["steps"] if step["name"] == "verify-checksum"
+    )
+    assert verify["ok"] is False
 
 
 def test_backup_restore_drill_records_failed_backup_without_database(
@@ -121,3 +209,60 @@ def test_backup_restore_drill_records_failed_backup_without_database(
         for step in evidence["steps"]
     )
     assert any(step["name"] == "locate-backup" for step in evidence["steps"])
+
+
+def test_el_drill_lanza_sus_subprocesos_con_el_interprete_y_rutas_absolutas(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Defecto real (2026-09-17, C-17): `_run` usaba "python" y rutas relativas.
+
+    Sintoma: `_run` no fijaba `cwd` ni usaba `sys.executable`; funcionaba solo
+    porque el workflow mensual pone `working-directory: backend` y `uv run`
+    deja el venv en el PATH. Desde la raiz del repo,
+    `uv run python backend/scripts/backup_restore_drill.py --run-backup` moria
+    con "can't open file 'scripts/backup_db.py'". El runbook de backup gatea
+    releases (CLAUDE.md §6).
+    """
+    drill = load_script("backup_restore_drill")
+    lanzados: list[dict[str, object]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        lanzados.append({"command": list(command), "cwd": kwargs.get("cwd")})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(drill.subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backup_restore_drill.py",
+            "--backup-dir",
+            str(tmp_path / "backups"),
+            "--evidence-dir",
+            str(tmp_path / "evidence"),
+            "--run-backup",
+            "--database-url",
+            "postgresql://u:p@localhost:5432/d",
+        ],
+    )
+
+    drill.main()
+
+    assert lanzados, "el drill no lanzo ningun subproceso"
+    lanzamiento = lanzados[0]
+    command = lanzamiento["command"]
+    assert isinstance(command, list)
+    assert command[0] == sys.executable, (
+        f"el drill invoca {command[0]!r} en vez del interprete que lo corre"
+    )
+    assert Path(command[1]).is_absolute(), (
+        f"el drill pasa una ruta relativa al cwd: {command[1]!r}"
+    )
+    assert Path(command[1]).exists(), f"la ruta no existe: {command[1]!r}"
+    assert lanzamiento["cwd"] == BACKEND_ROOT, (
+        f"el drill no fija cwd en la raiz del backend: {lanzamiento['cwd']!r}"
+    )
+    # Con cwd fijo, un --output-dir relativo al cwd del drill caeria en otro
+    # directorio que el que despues revisa _latest_backup.
+    salida = command[command.index("--output-dir") + 1]
+    assert Path(salida).is_absolute(), f"--output-dir relativo: {salida!r}"
