@@ -62,6 +62,21 @@ logger = structlog.get_logger()
 PendingEmail = Callable[[], Awaitable[object]]
 
 
+def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
+    """De que tienda y turno es un mail del outbox, para el log si no sale.
+
+    Solo identificadores: ni email ni nombre del cliente (S-04, 2026-09-18;
+    se habian perdido al sacar los envios de la transaccion en B2-01).
+    """
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    turno = payload.get("appointment_id") or payload.get("public_id")
+    return {
+        "store_id": message.store_id,
+        "appointment_id": str(turno) if turno else None,
+        "event_type": message.event_type,
+    }
+
+
 async def process_outbox_batch(
     db: AsyncSession,
     *,
@@ -90,9 +105,10 @@ async def process_outbox_batch(
     failed = 0
     # Ningun mail sale dentro del lote: el cuerpo del for solo persiste y
     # acumula; todo se despacha despues del unico commit (2026-09-16, B2-01).
-    mails_pendientes: list[PendingEmail] = []
+    mails_pendientes: list[tuple[PendingEmail, dict[str, str | None]]] = []
 
     for message in messages:
+        contexto = _contexto_del_mail(message)
         try:
             if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
                 # Lista de espera: aviso al dueno y oferta a una persona por vez.
@@ -105,20 +121,26 @@ async def process_outbox_batch(
                 )
                 if oferta.pending_email:
                     mails_pendientes.append(
-                        partial(
-                            enqueue_waitlist_offer_email,
-                            email=oferta.pending_email.email,
-                            details=oferta.pending_email.details,
+                        (
+                            partial(
+                                enqueue_waitlist_offer_email,
+                                email=oferta.pending_email.email,
+                                details=oferta.pending_email.details,
+                            ),
+                            contexto,
                         )
                     )
             elif message.event_type == "appointment.cancelled_by_block":
                 # Aviso al cliente (no al dueno, que fue quien bloqueo).
                 payload = dict(message.payload or {})
                 mails_pendientes.append(
-                    partial(
-                        enqueue_cancellation_email,
-                        email=str(payload.get("client_email") or "") or None,
-                        details=payload,
+                    (
+                        partial(
+                            enqueue_cancellation_email,
+                            email=str(payload.get("client_email") or "") or None,
+                            details=payload,
+                        ),
+                        contexto,
                     )
                 )
             else:
@@ -127,7 +149,10 @@ async def process_outbox_batch(
                     # La notificacion in-app es la fuente durable; el mail es
                     # un efecto secundario que sale despues del commit.
                     db.add(notification)
-                    mails_pendientes.extend(await _store_owner_mails(db, notification))
+                    mails_pendientes.extend(
+                        (mail, contexto)
+                        for mail in await _store_owner_mails(db, notification)
+                    )
                     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
                         # La sena acreditada confirma el turno: el cliente
                         # tambien se entera.
@@ -135,7 +160,7 @@ async def process_outbox_batch(
                             db, notification.appointment_id
                         )
                         if confirmacion is not None:
-                            mails_pendientes.append(confirmacion)
+                            mails_pendientes.append((confirmacion, contexto))
             message.processed_at = now
             message.error = None
             processed += 1
@@ -147,11 +172,13 @@ async def process_outbox_batch(
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
     # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
     # como fallido ni duplica envios.
-    for enviar in mails_pendientes:
+    for enviar, contexto in mails_pendientes:
         try:
             await enviar()
         except Exception as exc:
-            logger.warning("outbox_email_skipped", error_type=type(exc).__name__)
+            logger.warning(
+                "outbox_email_skipped", error_type=type(exc).__name__, **contexto
+            )
     return {"processed": processed, "failed": failed, "inspected": len(messages)}
 
 
