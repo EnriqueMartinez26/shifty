@@ -52,6 +52,15 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
+    # Los tres procesos de la app esperan este healthcheck: con `depends_on`
+    # corto solo se ordenaba el arranque y, con restart: always, el primer
+    # `up` en frio era un ciclo de reinicios contra una base que no escuchaba.
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shifty_user} -d ${POSTGRES_DB:-shifty_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - shifty_network
     deploy:
@@ -65,6 +74,11 @@ services:
     restart: always
     ports:
       - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - shifty_network
     deploy:
@@ -84,6 +98,11 @@ services:
       - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
     networks:
       - shifty_network
     deploy:
@@ -104,9 +123,12 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - shifty_network
     deploy:
@@ -126,9 +148,12 @@ services:
       - ./backend:/app
       - /app/.venv
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - shifty_network
     deploy:
@@ -148,9 +173,12 @@ services:
       - ./backend:/app
       - /app/.venv
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - shifty_network
     deploy:
