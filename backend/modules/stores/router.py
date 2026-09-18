@@ -1,7 +1,7 @@
 from datetime import time
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Depends, File, Form, UploadFile
+from fastapi import Depends, File, Form, Path, UploadFile
 from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
 from sqlalchemy import delete, select
@@ -14,6 +14,7 @@ from core.exceptions import (
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
+from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
 from modules.stores.media import (
@@ -37,6 +38,9 @@ from modules.stores.schemas import (
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 # Ya validado por BusinessHourPeriod: horas reales y open < close.
 BusinessHoursPayload = dict[str, list[dict[str, time]]]
@@ -295,7 +299,9 @@ async def upload_store_media(
 
 @router.get("/media/{media_id}")
 async def serve_store_media(
-    media_id: str,
+    # Validado como el resto de los path params (B3-17): la ruta es publica y
+    # consulta bajo bypass de RLS; un id fuera del patron no llega a la base.
+    media_id: PublicIdPath,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     # Publico: el portal de reservas muestra el logo sin login. Se lee por id
