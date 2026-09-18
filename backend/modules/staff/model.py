@@ -6,7 +6,6 @@ from infrastructure.persistence.models.appointment_block import (
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from sqlalchemy import Table
 from typing import cast
-import enum
 
 # Alias de la tabla del modelo ORM, no una redeclaracion (B3-20). Antes era un
 # Table(..., extend_existing=True) sobre la misma MetaData y sin la columna
@@ -15,17 +14,7 @@ import enum
 staff_services = cast(Table, StaffServiceModel.__table__)
 
 
-class BlockReason(str, enum.Enum):
-    VACATION = "vacation"
-    SICK_LEAVE = "sick_leave"
-    MAINTENANCE = "maintenance"
-    TRAINING = "training"
-    PERSONAL = "personal"
-    OTHER = "other"
-
-
 __all__ = [
-    "BlockReason",
     "Schedule",
     "Staff",
     "StaffBlock",
