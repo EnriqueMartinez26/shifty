@@ -106,9 +106,9 @@ const ReportsPage: React.FC = () => {
         <div
           className="text-sm p-4 rounded-lg font-bold"
           style={{
-            background: '#ffeeee',
-            border: '1px solid #ffcccc',
-            color: '#cc0000',
+            background: colors2000s.status.danger.bg,
+            border: `1px solid ${colors2000s.status.danger.border}`,
+            color: colors2000s.status.danger.text,
             boxShadow: colors2000s.shadows.insetDark
           }}
         >
@@ -311,9 +311,9 @@ const ReportsPage: React.FC = () => {
           role="alert"
           className="text-sm p-4 rounded-lg font-bold"
           style={{
-            background: '#ffeeee',
-            border: '1px solid #ffcccc',
-            color: '#cc0000',
+            background: colors2000s.status.danger.bg,
+            border: `1px solid ${colors2000s.status.danger.border}`,
+            color: colors2000s.status.danger.text,
             boxShadow: colors2000s.shadows.insetDark
           }}
         >

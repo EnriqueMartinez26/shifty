@@ -1,5 +1,7 @@
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
 
+import { reportUnreadableInstant } from './reportUnreadableInstant'
+
 export const currencyFmtEsAr = new Intl.NumberFormat('es-AR', {
   style: 'currency',
   currency: 'ARS',
@@ -23,10 +25,21 @@ export const formatCurrencyEsAr = (value: string | number, currency = 'ARS') =>
  * Tambien dejan de romper con un valor ilegible: `Intl.format(new Date('x'))`
  * lanza `RangeError`, mientras que estos devuelven el texto de respaldo.
  */
+/**
+ * Un valor presente pero ilegible no es lo mismo que uno ausente: el primero
+ * es dato corrupto y se reporta, el segundo es el caso normal y no.
+ */
+const formattedDate = (value: string | null, field: string): string => {
+  if (!value) return ''
+  const fecha = formatArgentinaDateDisplay(value)
+  if (!fecha) reportUnreadableInstant(field, value)
+  return fecha
+}
+
 export const formatDateEsAr = (value: string | null) =>
-  formatArgentinaDateDisplay(value ?? '') || 'Sin fecha'
+  formattedDate(value, 'formatDateEsAr') || 'Sin fecha'
 
 export const formatDateTimeEsAr = (value: string | null) => {
-  const fecha = formatArgentinaDateDisplay(value ?? '')
+  const fecha = formattedDate(value, 'formatDateTimeEsAr')
   return fecha ? `${fecha}, ${formatArgentinaTime(value ?? '')}` : 'Sin actividad'
 }

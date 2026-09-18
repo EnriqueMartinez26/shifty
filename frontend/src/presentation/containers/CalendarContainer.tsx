@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 import {
   addDays,
-  addMinutes,
   endOfMonth,
   endOfWeek,
   format,
@@ -60,7 +59,12 @@ import {
 } from '../hooks/useCalendarAgenda'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
-import { MIN_APPOINTMENT_MINUTES, gridPlacement } from '../lib/calendarGrid'
+import {
+  GRID_SLOT_LABELS,
+  MIN_APPOINTMENT_MINUTES,
+  SLOT_HEIGHT_PX,
+  gridPlacement
+} from '../lib/calendarGrid'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
@@ -91,11 +95,6 @@ type UnifiedCalendarEvent =
       endsAt: Date
       status: 'blocked'
     }
-
-const TIME_SLOTS = Array.from({ length: 48 }, (_, i) => {
-  const date = addMinutes(startOfDay(new Date()), (i + 16) * 15)
-  return format(date, 'HH:mm')
-})
 
 const VIEW_LABELS: Record<CalendarView, string> = {
   day: 'Dia',
@@ -312,13 +311,17 @@ export const CalendarContainer: React.FC = () => {
         (event) =>
           event.type !== 'block' && formatArgentinaDate(toInstantIso(event.startsAt)) === dateStr
       )
-      .map((event) => {
+      .flatMap((event) => {
         const startIso = toInstantIso(event.startsAt)
-        return {
-          ...event,
-          ...gridPlacement(startIso, toInstantIso(event.endsAt), MIN_APPOINTMENT_MINUTES),
-          timeLabel: formatArgentinaTime(startIso)
-        }
+        const placement = gridPlacement(
+          startIso,
+          toInstantIso(event.endsAt),
+          MIN_APPOINTMENT_MINUTES
+        )
+        // Un turno sin instante legible no se dibuja: ubicarlo igual lo apila
+        // sobre uno real. Queda reportado desde `gridPlacement`.
+        if (!placement) return []
+        return [{ ...event, ...placement, timeLabel: formatArgentinaTime(startIso) }]
       })
   }, [dateStr, unifiedEvents])
 
@@ -660,10 +663,11 @@ export const CalendarContainer: React.FC = () => {
                 className="w-20 flex-shrink-0 bg-white sticky left-0 z-10 border-r"
                 style={{ borderColor: colors2000s.border.light }}
               >
-                {TIME_SLOTS.map((time) => (
+                {GRID_SLOT_LABELS.map((time) => (
                   <div
                     key={time}
-                    className="h-16 border-b border-gray-50 flex items-start justify-center pt-2"
+                    className="border-b border-gray-50 flex items-start justify-center pt-2"
+                    style={{ height: SLOT_HEIGHT_PX }}
                   >
                     <span className="text-[10px] font-black text-gray-400">{time}</span>
                   </div>
@@ -676,14 +680,19 @@ export const CalendarContainer: React.FC = () => {
                     key={staff.id}
                     className="flex-1 min-w-[150px] relative border-r border-gray-50"
                   >
-                    {TIME_SLOTS.map((time) => (
-                      <div key={time} className="h-16 border-b border-gray-50/50" />
+                    {GRID_SLOT_LABELS.map((time) => (
+                      <div
+                        key={time}
+                        className="border-b border-gray-50/50"
+                        style={{ height: SLOT_HEIGHT_PX }}
+                      />
                     ))}
 
                     {blocksForSelectedDate
                       .filter((block) => block.staff_id === staff.id && block.is_active)
-                      .map((block) => {
+                      .flatMap((block) => {
                         const placement = gridPlacement(block.starts_at, block.ends_at)
+                        if (!placement) return []
                         return (
                           <button
                             key={block.public_id}

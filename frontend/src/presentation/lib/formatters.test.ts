@@ -1,4 +1,16 @@
 import { formatDateEsAr, formatDateTimeEsAr } from './formatters'
+import {
+  resetUnreadableInstantReports,
+  setUnreadableInstantReporter
+} from './reportUnreadableInstant'
+
+const captureMessage = jest.fn()
+
+beforeEach(() => {
+  resetUnreadableInstantReports()
+  captureMessage.mockClear()
+  setUnreadableInstantReporter(captureMessage)
+})
 
 describe('formatDateEsAr', () => {
   it('usa la hora argentina, no la del navegador', () => {
@@ -17,6 +29,24 @@ describe('formatDateEsAr', () => {
     expect(formatDateEsAr('')).toBe('Sin fecha')
     // Antes esto lanzaba RangeError desde Intl.format.
     expect(formatDateEsAr('no-es-una-fecha')).toBe('Sin fecha')
+  })
+
+  it('reporta el valor ilegible, pero no la ausencia de valor', () => {
+    // Degradar en silencio dejaba el dato corrupto sin ninguna senal: antes
+    // el RangeError llegaba a Sentry por el ErrorBoundary.
+    formatDateEsAr(null)
+    formatDateEsAr('')
+    expect(captureMessage).not.toHaveBeenCalled()
+
+    formatDateEsAr('no-es-una-fecha')
+    expect(captureMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('no inunda la telemetria repitiendo el mismo valor en cada render', () => {
+    formatDateEsAr('no-es-una-fecha')
+    formatDateEsAr('no-es-una-fecha')
+    formatDateEsAr('no-es-una-fecha')
+    expect(captureMessage).toHaveBeenCalledTimes(1)
   })
 })
 

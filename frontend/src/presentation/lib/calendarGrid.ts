@@ -11,11 +11,36 @@
 
 import { argentinaMinutesOfDay } from '@shared/utils/argentinaTime'
 
+import { reportUnreadableInstant } from './reportUnreadableInstant'
+
 /** Primera franja de la columna de horas. */
 const GRID_START_MINUTES = 4 * 60
 const SLOT_MINUTES = 15
-/** Alto de cada franja: el mismo `h-16` que dibuja la columna de horas. */
+/** Alto de cada franja, en px. La fila y la tarjeta salen de este mismo valor. */
 export const SLOT_HEIGHT_PX = 64
+
+/**
+ * Cuantas franjas dibuja la columna. 48 x 15 min = 12 horas, o sea que la
+ * grilla va de 04:00 a 15:45 y lo posterior no se dibuja. Es una limitacion
+ * preexistente, no algo que introduzca este archivo: queda explicita aca en
+ * vez de escondida en un `length: 48`.
+ */
+const GRID_SLOT_COUNT = 48
+
+const pad = (value: number): string => String(value).padStart(2, '0')
+
+/**
+ * Rotulos de la columna de horas. Son aritmetica de reloj, no instantes: antes
+ * salian de formatear un `Date` anclado a la medianoche local, lo que ataba el
+ * rotulo a la zona del navegador sin necesidad.
+ */
+export const GRID_SLOT_LABELS: readonly string[] = Array.from(
+  { length: GRID_SLOT_COUNT },
+  (_, index) => {
+    const minutes = GRID_START_MINUTES + index * SLOT_MINUTES
+    return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`
+  }
+)
 
 /**
  * Piso de duracion visual de un turno: uno de 15 minutos quedaria demasiado
@@ -33,18 +58,24 @@ export interface GridPlacement {
  *
  * `minDurationMinutes` es el piso de duracion visual: los turnos pasan
  * `MIN_APPOINTMENT_MINUTES`, los bloqueos se dibujan con su duracion real.
- * Un instante ilegible cae al tope de la grilla con la altura minima, en vez
- * de emitir un `NaN` que el navegador descarta en silencio.
+ *
+ * Devuelve `null` cuando algun instante es ilegible, y el llamador no lo
+ * dibuja. Ubicarlo en `top: 0` lo apilaba encima de un turno legitimo anterior
+ * a las 04:00, en columnas `position: absolute` sin orden garantizado: una
+ * tarjeta con datos rotos tapando una real es peor que una ausente, sobre todo
+ * porque la ausencia queda registrada en la telemetria.
  */
 export const gridPlacement = (
   startIso: string,
   endIso: string,
   minDurationMinutes = 0
-): GridPlacement => {
-  const minHeight = `${SLOT_HEIGHT_PX}px`
+): GridPlacement | null => {
   const startMinutes = argentinaMinutesOfDay(startIso)
   const endMinutes = argentinaMinutesOfDay(endIso)
-  if (startMinutes === null || endMinutes === null) return { top: '0px', height: minHeight }
+  if (startMinutes === null || endMinutes === null) {
+    reportUnreadableInstant('calendarGrid', startMinutes === null ? startIso : endIso)
+    return null
+  }
 
   const offsetMinutes = startMinutes - GRID_START_MINUTES
   const durationMinutes = Math.max(endMinutes - startMinutes, minDurationMinutes)

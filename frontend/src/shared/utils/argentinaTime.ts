@@ -93,9 +93,20 @@ export const formatArgentinaDateDisplay = (iso: string): string => {
   return `${pad(wall.day)}/${pad(wall.month)}/${wall.year}`
 }
 
-/** `dd/MM` en hora argentina, para listas ya acotadas a un rango conocido. */
-export const formatArgentinaDayMonth = (iso: string): string =>
-  formatArgentinaDateDisplay(iso).slice(0, 5)
+/**
+ * `dd/MM` en hora argentina, para listas ya acotadas a un rango conocido.
+ * Se compone desde el wall clock en vez de recortar la salida de
+ * `formatArgentinaDateDisplay`: un slice deja el resultado atado al largo
+ * exacto de otro formateador, sin que nada lo sostenga.
+ */
+export const formatArgentinaDayMonth = (iso: string): string => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return `${pad(soloFecha.day)}/${pad(soloFecha.month)}`
+  const instant = parseInstant(iso)
+  if (!instant) return ''
+  const wall = wallClockInArgentina(instant)
+  return `${pad(wall.day)}/${pad(wall.month)}`
+}
 
 /**
  * Minutos transcurridos desde la medianoche argentina de un instante ISO.
