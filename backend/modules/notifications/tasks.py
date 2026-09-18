@@ -219,6 +219,17 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
         return await session.send(to, subject, body)
 
 
+async def send_email(to: str, subject: str, body: str) -> bool:
+    """Envio suelto para otros modulos (p. ej. el OTP). Devuelve si salio.
+
+    B4-12 (2026-09-18): ``otp`` importaba ``_send_email`` dentro de la
+    funcion. Esta es la entrada publica; delega en ``_send_email`` al momento
+    de la llamada (no es un alias ligado al importar), asi el sink SMTP sigue
+    siendo uno solo y los tests que lo reemplazan cubren tambien este camino.
+    """
+    return await _send_email(to, subject, body)
+
+
 def is_deliverable_email(email: str | None) -> bool:
     """Descarta vacios y los emails tecnicos ``{tel}@store{id}.noreply``.
 
@@ -275,7 +286,11 @@ def rebook_url(base: str, slug: str | None, service: Any, staff: Any) -> str:
         return ""
     params = []
     service_id = getattr(service, "public_id", None)
-    staff_id = getattr(staff, "public_id", None) or getattr(staff, "id", None)
+    # B4-11 (2026-09-18): sin fallback a ``staff.id``. Con el modelo real no
+    # se alcanzaba (``Staff.public_id`` devuelve ``id``) y sugeria que un id
+    # interno podia salir en el link al cliente. ``getattr`` porque el
+    # profesional puede faltar (``waitlist/offers.py`` lo obtiene con db.get).
+    staff_id = getattr(staff, "public_id", None)
     if service_id:
         params.append(f"service={service_id}")
     if staff_id:
