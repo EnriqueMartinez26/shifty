@@ -265,12 +265,15 @@ const SettingsPage: React.FC = () => {
     setSaveStatus('saving')
     setErrorMessage('')
     try {
+      // Hay un solo formData para cinco pestanas y un solo boton de guardado.
+      // Mandar solo la mitad correspondiente a la pestana activa descartaba en
+      // silencio lo editado en las otras: al invalidarse la query, el useEffect
+      // repoblaba formData desde el servidor y el cambio desaparecia mientras
+      // el boton decia "Guardado". Se mandan las dos mitades; ambas escrituras
+      // son idempotentes, asi que la que no cambio no hace dano.
       const { feature_flags, ...storePayload } = formData
-      if (activeTab === 'features') {
-        await updateFeatureFlags.mutateAsync(feature_flags)
-      } else {
-        await updateStore.mutateAsync(storePayload)
-      }
+      await updateStore.mutateAsync(storePayload)
+      await updateFeatureFlags.mutateAsync(feature_flags)
       setSaveStatus('success')
       setTimeout(() => setSaveStatus('idle'), 3000)
     } catch (error: unknown) {
