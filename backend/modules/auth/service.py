@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import settings
-from core.database import _apply_tenant_context, set_tenant_context
+from core.database import tenant_bypass
 from core.exceptions import (
     AppException,
     AuthenticationException,
@@ -303,10 +303,7 @@ async def login_user(
             headers={"Retry-After": str(settings.LOGIN_LOCKOUT_WINDOW_SECONDS)},
         )
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-
+    async with tenant_bypass(db):
         result = await db.execute(
             select(User).where(func.lower(User.email) == normalized_email)
         )
@@ -343,8 +340,6 @@ async def login_user(
         await db.commit()
         await _clear_login_failures(email_key)
         return AuthTokenPair(access_token=access_token, refresh_token=refresh_token)
-    finally:
-        set_tenant_context(None, False)
 
 
 async def _handle_refresh_reuse(
@@ -377,9 +372,7 @@ async def refresh_session(
     if not refresh_token:
         raise AuthenticationException(message="Sesion expirada")
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         result = await db.execute(
             select(AuthSession).where(
                 AuthSession.refresh_token_hash == hash_token(refresh_token)
@@ -436,17 +429,13 @@ async def refresh_session(
         await db.commit()
 
         return AuthTokenPair(access_token=access_token, refresh_token=new_refresh_token)
-    finally:
-        set_tenant_context(None, False)
 
 
 async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
     if not refresh_token:
         return
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         result = await db.execute(
             select(AuthSession).where(
                 AuthSession.refresh_token_hash == hash_token(refresh_token)
@@ -456,8 +445,6 @@ async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
         if session and session.revoked_at is None:
             session.revoked_at = datetime.now(timezone.utc)
             await db.commit()
-    finally:
-        set_tenant_context(None, False)
 
 
 async def revoke_store_sessions(
@@ -473,16 +460,12 @@ async def revoke_store_sessions(
             error_code="USER_WITHOUT_STORE",
         )
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         affected = await _revoke_sessions(
             db, AuthSession.store_id == current_user.store_id
         )
         await db.commit()
         return {"revoked_sessions": affected}
-    finally:
-        set_tenant_context(None, False)
 
 
 async def revoke_user_sessions(
@@ -498,9 +481,7 @@ async def revoke_user_sessions(
             error_code="USER_WITHOUT_STORE",
         )
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         user_result = await db.execute(
             select(User).where(
                 User.id == user_public_id, User.store_id == current_user.store_id
@@ -512,8 +493,6 @@ async def revoke_user_sessions(
         affected = await _revoke_sessions(db, AuthSession.user_id == target.id)
         await db.commit()
         return {"revoked_sessions": affected}
-    finally:
-        set_tenant_context(None, False)
 
 
 async def revoke_all_sessions(
@@ -522,14 +501,10 @@ async def revoke_all_sessions(
     if not current_user.is_global_admin:
         raise PermissionDeniedException(action="Operacion exclusiva para superadmin")
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         affected = await _revoke_sessions(db)
         await db.commit()
         return {"revoked_sessions": affected}
-    finally:
-        set_tenant_context(None, False)
 
 
 async def list_user_sessions(
@@ -576,10 +551,7 @@ async def request_password_reset(
     data: ForgotPasswordRequest, db: AsyncSession
 ) -> PasswordResetEmail | None:
     normalized_email = normalize_email(str(data.email))
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-
+    async with tenant_bypass(db):
         result = await db.execute(
             select(User).where(
                 func.lower(User.email) == normalized_email, User.is_active.is_(True)
@@ -609,17 +581,12 @@ async def request_password_reset(
             email_to=user.email,
             reset_url=f"{base_url}{reset_path}?token={token}",
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 async def reset_password(
     data: ResetPasswordRequest, db: AsyncSession
 ) -> PasswordResetOutcome:
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-
+    async with tenant_bypass(db):
         token_hash = hash_password_reset_token(data.token)
         now = datetime.now(timezone.utc)
         result = await db.execute(
@@ -647,8 +614,6 @@ async def reset_password(
             message="Contraseña actualizada correctamente",
             email_to=user.email,
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 async def change_password(
