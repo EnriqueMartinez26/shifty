@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -140,9 +140,17 @@ class Settings(BaseSettings):
     FIELD_ENCRYPTION_KEY: str | None = None
     OTP_CODE_EXPIRE_MINUTES: int = 10
     OTP_MAX_ATTEMPTS: int = 5
-    # Tope acumulado por telefono (ventana 1h): pedir codigos nuevos ya no
-    # resetea el presupuesto de intentos.
-    OTP_MAX_FAILURES_PER_HOUR: int = 10
+    # Tope acumulado de VERIFICACIONES por telefono (ventana 1h), exitosas o
+    # no: se consume antes de comparar el codigo. Pedir codigos nuevos no
+    # resetea el presupuesto. B4-09 (2026-09-18): antes se llamaba
+    # OTP_MAX_FAILURES_PER_HOUR, que prometia "fallos"; el nombre viejo sigue
+    # aceptado como alias para que un .env existente no se ignore en silencio.
+    OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR: int = Field(
+        default=10,
+        validation_alias=AliasChoices(
+            "OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR", "OTP_MAX_FAILURES_PER_HOUR"
+        ),
+    )
     OTP_MAX_REQUESTS_PER_HOUR: int = 5
     OTP_PROVIDER: str = "console"
     # Nunca exponer el codigo en la respuesta salvo opt-in explicito (tests).

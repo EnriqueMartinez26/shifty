@@ -164,7 +164,10 @@ class OtpService:
         normalized_phone = normalize_phone(phone)
 
         await _consume_budget(
-            "fail", store_id, normalized_phone, settings.OTP_MAX_FAILURES_PER_HOUR
+            "verify",
+            store_id,
+            normalized_phone,
+            settings.OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR,
         )
 
         now = datetime.now(timezone.utc)
