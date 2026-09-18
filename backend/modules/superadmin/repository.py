@@ -324,14 +324,17 @@ class UserAdminRepository(_BaseAdminRepository):
         first_name = data.get("first_name") or ""
         last_name = data.get("last_name") or ""
         # El email se guarda normalizado (minusculas): el login matchea con
-        # func.lower(email) y scalar_one_or_none. Dos admins que difieran solo
-        # en mayusculas romperian ese login con MultipleResultsFound (500). El
-        # indice unico es case-sensitive, asi que ademas se chequea a mano.
+        # func.lower(email). La garantia de unicidad case-insensitive es el
+        # indice funcional uq_users_email_lower; este pre-chequeo es solo el
+        # mensaje amable (regla 16). Con limit(1) no puede dar 500 aunque la
+        # base traiga duplicados heredados, y no se atrapa la IntegrityError:
+        # en la carrera entre el SELECT y el INSERT decide el indice y main.py
+        # responde 409 neutro (regla 20).
         data["email"] = normalize_email(str(data["email"]))
         existing = await self.db.execute(
-            select(User).where(func.lower(User.email) == data["email"])
+            select(User.id).where(func.lower(User.email) == data["email"]).limit(1)
         )
-        if existing.scalar_one_or_none() is not None:
+        if existing.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")
         user = User(
             **data,
@@ -342,21 +345,17 @@ class UserAdminRepository(_BaseAdminRepository):
             is_global_admin=False,
         )
         self.db.add(user)
-        try:
-            await self.db.flush()
-            self._audit(
-                actor,
-                "User",
-                user.public_id,
-                AuditAction.CREATE.value,
-                after={"email": user.email, "store_id": store.id, "role": "admin"},
-            )
-            await self.db.commit()
-            await self.db.refresh(user)
-            return user
-        except IntegrityError:
-            await self.db.rollback()
-            raise ValueError("Ya existe un usuario con ese email")
+        await self.db.flush()
+        self._audit(
+            actor,
+            "User",
+            user.public_id,
+            AuditAction.CREATE.value,
+            after={"email": user.email, "store_id": store.id, "role": "admin"},
+        )
+        await self.db.commit()
+        await self.db.refresh(user)
+        return user
 
     async def update_user(
         self, user: User, payload: dict[str, Any], actor: User

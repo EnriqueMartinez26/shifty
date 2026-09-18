@@ -74,14 +74,16 @@ class StaffRepository:
             await self.db.flush()
             return resource
 
-        # Normalizamos el email igual que el login (lower). Sin esto, "Pro@x.com"
-        # y "pro@x.com" conviven como dos usuarios y el login case-insensitive
-        # encuentra ambos y explota con MultipleResultsFound.
+        # Normalizamos el email igual que el login (lower). La unicidad
+        # case-insensitive la garantiza el indice uq_users_email_lower: este
+        # pre-chequeo es el mensaje amable (regla 16), con limit(1) para no dar
+        # 500 ante duplicados heredados. En la carrera SELECT/INSERT decide el
+        # indice: la IntegrityError sube hasta main.py y sale como 409.
         email = str(data["email"]).strip().lower()
         user_res = await self.db.execute(
-            select(User).where(func.lower(User.email) == email)
+            select(User.id).where(func.lower(User.email) == email).limit(1)
         )
-        if user_res.scalar_one_or_none():
+        if user_res.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")
 
         user = User(
@@ -250,10 +252,13 @@ class StaffRepository:
         if email is not None:
             email = email.strip().lower()
         if email is not None and email != staff.email:
+            # Mensaje amable; la garantia es uq_users_email_lower (ver create).
             existing_res = await self.db.execute(
-                select(User).where(func.lower(User.email) == email, User.id != staff.id)
+                select(User.id)
+                .where(func.lower(User.email) == email, User.id != staff.id)
+                .limit(1)
             )
-            if existing_res.scalar_one_or_none():
+            if existing_res.first() is not None:
                 raise ValueError("Ya existe un usuario con ese email")
 
         if first_name is not None:
