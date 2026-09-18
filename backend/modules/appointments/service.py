@@ -17,6 +17,7 @@ import ulid
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.circuit_breaker import CircuitBreakerOpenError
+from core.utils import ensure_utc_aware
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
     AppException,
@@ -702,33 +703,64 @@ class AppointmentService:
 
         Respeta el mismo ``buffer_minutes`` que la validación de conflictos, para
         no sugerir un horario que después el alta rechazaría.
-        """
-        from datetime import timedelta
 
-        current = start_from
-        max_search = start_from + timedelta(hours=6)
+        Bloqueos y turnos de toda la ventana se traen en UNA consulta cada uno
+        y se recorren en memoria (regla 12, B1-15): antes eran dos consultas
+        por intento, hasta 48, con el lock del profesional tomado. Mismo
+        criterio que antes: primero bloqueos, despues choques ensanchados por
+        el buffer, en orden de inicio.
+        """
+        duration = timedelta(minutes=duration_mins)
+        buffer = timedelta(minutes=buffer_minutes)
+        current = ensure_utc_aware(start_from)
+        max_search = current + timedelta(hours=6)
+
+        # La ventana cubre todo intento posible: [current, max_search + duracion),
+        # y para los turnos ensanchada por el buffer a cada lado.
+        blocks = [
+            (ensure_utc_aware(block.starts_at), ensure_utc_aware(block.ends_at))
+            for block in await self.uow.appointments.list_active_blocks_in_window(
+                staff_id, current, max_search + duration
+            )
+        ]
+        booked = [
+            (ensure_utc_aware(appt.starts_at), ensure_utc_aware(appt.ends_at))
+            for appt in await self.uow.appointments.list_active_appointments_in_window(
+                staff_id, current - buffer, max_search + duration + buffer
+            )
+        ]
 
         while current < max_search:
-            end = current + timedelta(minutes=duration_mins)
+            end = current + duration
 
             # 1. Verificar bloqueos
-            block = await self.uow.appointments.get_overlapping_block(
-                staff_id, current, end
+            block_end = next(
+                (
+                    b_end
+                    for b_start, b_end in blocks
+                    if b_start < end and b_end > current
+                ),
+                None,
             )
-            if block:
-                current = block.ends_at
+            if block_end is not None:
+                current = block_end
                 continue
 
             # 2. Verificar conflictos
-            conflict = await self.uow.appointments.get_conflicting_appointment(
-                staff_id, current, end, buffer_minutes=buffer_minutes
+            conflict_end = next(
+                (
+                    a_end
+                    for a_start, a_end in booked
+                    if a_start < end + buffer and a_end > current - buffer
+                ),
+                None,
             )
-            if conflict:
+            if conflict_end is not None:
                 # Saltar hasta despues del turno MAS el buffer: si solo saltaramos
                 # a ends_at, con buffer > 0 el mismo turno seguiria en conflicto
                 # (se extiende 'buffer' mas alla) y current no avanzaria -> loop
                 # infinito.
-                current = conflict.ends_at + timedelta(minutes=buffer_minutes)
+                current = conflict_end + buffer
                 continue
 
             # Si llegamos aquí, el hueco está libre
