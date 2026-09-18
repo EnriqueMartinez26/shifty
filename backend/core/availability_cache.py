@@ -27,6 +27,20 @@ from core.utils import ARGENTINA_TZ
 
 SLOTS_TTL_SECONDS = 300
 
+# Vencimiento de la clave de version. `INCR` sobre una clave que no existe la
+# crea SIN TTL, asi que sin esto quedaba una clave por tienda y por dia tocado
+# (local y UTC) para siempre, en el mismo Redis que sostiene el rate limit y la
+# idempotencia de cobros (B7-09).
+#
+# Lo que hace seguro vencerla: el TTL se estira en CADA INCR y en CADA lectura
+# (`current_version` usa GETEX). Como toda escritura de slots viene despues de
+# leer la version en la misma consulta (`AvailabilityService`), al escribir un
+# slot la version tiene por delante los siete dias enteros y el slot solo 300 s:
+# la version no puede vencer mientras quede vivo un slot escrito bajo ella, y
+# un INCR que la recree desde 1 no encuentra slots de "1" que resucitar. Con la
+# renovacion solo en INCR eso no se cumplia (rechazo V-diff, 2026-09-18).
+VERSION_TTL_SECONDS = 7 * 24 * 60 * 60
+
 
 @runtime_checkable
 class AvailabilityCacheClient(Protocol):
@@ -39,19 +53,45 @@ class AvailabilityCacheClient(Protocol):
 
     def get(self, key: str, /) -> Awaitable[Any]: ...
 
+    # GETEX (Redis >= 6.2; el compose usa redis:7): lee y estira el TTL en una
+    # sola operacion atomica.
+    def getex(self, key: str, /, *, ex: int) -> Awaitable[Any]: ...
+
     def setex(self, key: str, seconds: int, value: str, /) -> Awaitable[Any]: ...
 
     def incr(self, key: str, /) -> Awaitable[int]: ...
+
+    def expire(self, key: str, seconds: int, /) -> Awaitable[Any]: ...
 
 
 def version_key(store_id: str, day: date) -> str:
     return f"availability:v:{store_id}:{day.isoformat()}"
 
 
+async def _bump_version(
+    client: AvailabilityCacheClient, store_id: str, day: date
+) -> None:
+    """Sube la version de un dia y le (re)pone vencimiento.
+
+    Sigue siendo un `INCR`: no se borra ninguna clave ni se usan comodines.
+    El `EXPIRE` va despues de CADA `INCR`, asi que un dia que se sigue tocando
+    nunca vence; si el proceso se muere entre los dos, la clave queda como
+    quedaba antes de B7-09 (sin TTL) y el proximo INCR la arregla.
+    """
+    key = version_key(store_id, day)
+    await client.incr(key)
+    await client.expire(key, VERSION_TTL_SECONDS)
+
+
 async def current_version(
     client: AvailabilityCacheClient, store_id: str, day: date
 ) -> str:
-    raw = await client.get(version_key(store_id, day))
+    """Version vigente del dia, estirando su vencimiento al leerla.
+
+    El GETEX es lo que impide el reciclado: ver `VERSION_TTL_SECONDS`. Si la
+    clave no existe no la crea (la version es "0" hasta el primer INCR).
+    """
+    raw = await client.getex(version_key(store_id, day), ex=VERSION_TTL_SECONDS)
     if raw is None:
         return "0"
     return raw.decode() if isinstance(raw, bytes) else str(raw)
@@ -93,7 +133,7 @@ async def invalidate_availability(
     llamador decide si envuelve en try/except; aca solo se hace el INCR.
     """
     for day in local_days_touched(*instants):
-        await client.incr(version_key(store_id, day))
+        await _bump_version(client, store_id, day)
 
 
 async def invalidate_availability_range(
@@ -117,4 +157,4 @@ async def invalidate_availability_range(
         day = date.fromordinal(day.toordinal() + 1)
     seen |= local_days_touched(starts_at, ends_at)
     for touched in seen:
-        await client.incr(version_key(store_id, touched))
+        await _bump_version(client, store_id, touched)

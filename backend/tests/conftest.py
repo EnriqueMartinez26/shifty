@@ -90,6 +90,10 @@ class MockRedis:
     async def get(self, key: str) -> str | None:
         return self.store.get(key)
 
+    async def getex(self, key: str, ex: int | None = None) -> str | None:
+        # Sin reloj: el TTL no se simula aca (ver test_version_de_cache_expira).
+        return self.store.get(key)
+
     async def set(
         self,
         key: str,
