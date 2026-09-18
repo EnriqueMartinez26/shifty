@@ -223,7 +223,13 @@ async def cancel_appointment(
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
 ) -> AppointmentResponse:
-    """Cancela un turno. Disponible para el cliente dueño, staff y admin."""
+    """Cancela un turno de la tienda. Lo usan el staff y el admin.
+
+    El rol cliente no inicia sesión: cancela por
+    ``/public/client/appointments/{id}/cancel``. No verifica titularidad:
+    cualquier usuario autenticado de la tienda puede cancelar cualquier turno
+    de esa tienda.
+    """
     appointment = await svc.cancel(public_id=public_id, actor=user)
     return _to_appointment_response(appointment)
 
