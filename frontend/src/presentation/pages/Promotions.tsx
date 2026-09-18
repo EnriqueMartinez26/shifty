@@ -7,7 +7,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
-import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
@@ -511,7 +511,7 @@ const PromotionsPage: React.FC = () => {
                   <span>
                     Vence:{' '}
                     {promotion.valid_until
-                      ? new Date(promotion.valid_until).toLocaleString('es-AR')
+                      ? formatDateTimeEsAr(promotion.valid_until)
                       : 'sin fecha'}
                   </span>
                 </div>

@@ -11,7 +11,7 @@ import {
   usePaymentsAppointments,
   useReconciliationSummary
 } from '../hooks/usePayments'
-import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
 
 const statusLabel: Record<string, string> = {
@@ -172,7 +172,7 @@ const CollectionsPage: React.FC = () => {
                     style={{ color: colors2000s.text.secondary }}
                   >
                     {appointment.service_name} · {appointment.staff_name} ·{' '}
-                    {new Date(appointment.starts_at).toLocaleString('es-AR')}
+                    {formatDateTimeEsAr(appointment.starts_at)}
                   </p>
                 </div>
 
