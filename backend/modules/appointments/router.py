@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient
 from core.router import CanonicalAPIRouter
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.database import get_db, tenant_bypass
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
 from core.roles import STORE_MANAGERS, has_any_role, require_roles
@@ -144,9 +144,7 @@ async def get_availability(
     """Consulta slots disponibles para un servicio en una fecha."""
     svc = AvailabilityService(db, redis)
     if user is None:
-        set_tenant_context(None, is_admin=True)
-        try:
-            await _apply_tenant_context(db)
+        async with tenant_bypass(db):
             repo = PublicRepository(db)
             service = await repo.get_service_by_public_id(service_id)
             if not service:
@@ -154,8 +152,6 @@ async def get_availability(
             return list(
                 await svc.get_available_slots(service.store_id, service_id, date)
             )
-        finally:
-            set_tenant_context(None, False)
 
     return list(await svc.get_available_slots(user.store_id, service_id, date))
 

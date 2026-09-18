@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.database import get_db, tenant_bypass
 from core.exceptions import (
     AppException,
     BookingNoticeException,
@@ -127,11 +127,6 @@ def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
         ]
     )
     return "public-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
-
-
-async def _bypass_rls(db: AsyncSession) -> None:
-    set_tenant_context(None, is_admin=True)
-    await _apply_tenant_context(db)
 
 
 async def _revert_failed_booking(
@@ -289,8 +284,7 @@ def _resolve_payment_requirement(
 async def get_store_by_slug(
     slug: SlugPath, db: AsyncSession = Depends(get_db)
 ) -> PublicStoreResponse:
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_slug(slug.lower())
         if not store:
@@ -325,8 +319,6 @@ async def get_store_by_slug(
                 for flag in ("payments", "otp_booking")
             },
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.get("/services", response_model=list[PublicServiceResponse])
@@ -334,8 +326,7 @@ async def get_public_services(
     store_public_id: PublicIdQuery,
     db: AsyncSession = Depends(get_db),
 ) -> list[PublicServiceResponse]:
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
@@ -358,8 +349,6 @@ async def get_public_services(
             )
             for service in services
         ]
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.get("/staff", response_model=list[PublicStaffResponse])
@@ -372,8 +361,7 @@ async def get_public_staff(
     ] = None,
     db: AsyncSession = Depends(get_db),
 ) -> list[PublicStaffResponse]:
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store_id = None
         if store_public_id:
@@ -407,8 +395,6 @@ async def get_public_staff(
             )
             for member in staff_members
         ]
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.get("/availability")
@@ -422,8 +408,7 @@ async def get_public_availability(
 ) -> list[object]:
     from datetime import date as date_type
 
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
@@ -441,8 +426,6 @@ async def get_public_availability(
                 hide_private_reasons=True,
             )
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 def _decide(
@@ -490,8 +473,7 @@ async def preview_public_deposit(
         settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE,
         subject=f"{store_public_id}:{telefono}",
     )
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
@@ -533,8 +515,6 @@ async def preview_public_deposit(
                 and not store.allow_manual_coordination
             ),
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.get("/promotions/preview", response_model=PublicPromotionPreviewResponse)
@@ -544,8 +524,7 @@ async def preview_public_promotion(
     code: Annotated[str, Query(min_length=3, max_length=30)],
     db: AsyncSession = Depends(get_db),
 ) -> PublicPromotionPreviewResponse:
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
@@ -571,8 +550,6 @@ async def preview_public_promotion(
             discount_amount=float(quote.discount_amount),
             final_amount=float(quote.final_amount),
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.post("/otp/request")
@@ -587,8 +564,7 @@ async def request_public_otp(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{data.store_public_id}:{data.phone}",
     )
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(data.store_public_id)
         if not store:
@@ -600,8 +576,6 @@ async def request_public_otp(
             email=str(data.email) if data.email else None,
             store_name=store.name,
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.post("/otp/verify")
@@ -616,8 +590,7 @@ async def verify_public_otp(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{data.store_public_id}:{data.phone}",
     )
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(data.store_public_id)
         if not store:
@@ -625,8 +598,6 @@ async def verify_public_otp(
         return await OtpService(db).verify_code(
             store_id=store.id, phone=data.phone, code=data.code
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.post(
@@ -647,265 +618,235 @@ async def create_public_booking(
         subject=f"{data.client_phone}:{data.service_id}",
     )
     idempotency_key: str | None = None
-    await _bypass_rls(db)
-    try:
-        idempotency_key = data.idempotency_key or _public_booking_idempotency_key(data)
-        cached = await idempotency_guard(idempotency_key, redis)
-        if cached:
-            return PublicBookingResponse.model_validate(cached)
-
-        repo = PublicRepository(db)
-        service = await repo.get_service_by_public_id(data.service_id)
-        if not service:
-            raise ServiceNotFoundException(identifier=data.service_id)
-
-        if data.store_public_id:
-            store = await repo.get_store_by_public_id(data.store_public_id)
-            if not store:
-                raise StoreNotFoundException(identifier=data.store_public_id)
-            if service.store_id != store.id:
-                raise ServiceNotFoundException(identifier=data.service_id)
-            store_id = store.id
-        else:
-            store_id = service.store_id
-            store = await repo.get_store_by_id(store_id)
-            if not store:
-                raise StoreNotFoundException(identifier=str(store_id))
-
-        # Antelacion minima. El flujo admin ya la validaba, pero el booking
-        # publico solo la aplicaba al *mostrar* slots, no al crearlos: un POST
-        # directo podia agendar en el pasado o dentro de la ventana bloqueada.
-        notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
-        starts_at_utc = (
-            data.starts_at
-            if data.starts_at.tzinfo
-            else data.starts_at.replace(tzinfo=timezone.utc)
-        )
-        if starts_at_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
-            raise BookingNoticeException(notice_hours)
-
-        # El OTP es lo unico que prueba que quien reserva es dueno del
-        # telefono: sin el, los datos de contacto de esta peticion no pisan
-        # los del cliente que ya existe (ver get_or_create_client).
-        phone_verified = await OtpService(db).is_recently_verified(
-            store_id=store_id,
-            phone=data.client_phone,
-        )
-        if is_store_feature_enabled(store.feature_flags, "otp_booking"):
-            if not phone_verified:
-                raise OTPException(
-                    message="Se requiere validar OTP antes de reservar",
-                    error_code="OTP_VERIFICATION_REQUIRED",
-                    http_status=status.HTTP_403_FORBIDDEN,
-                )
-
-        normalized_custom_fields = _validate_custom_fields(store, data.custom_fields)
-        base_service_price = Decimal(str(service.price or 0))
-        preview_promotion_quote = None
-        if data.promotion_code:
-            _promotion, preview_promotion_quote, preview_error = await quote_promotion(
-                db,
-                store_id=store_id,
-                service=service,
-                code=data.promotion_code,
-            )
-            if not preview_promotion_quote:
-                raise ValidationException(preview_error or "Promocion invalida")
-
-        discounted_service_price = (
-            preview_promotion_quote.final_amount
-            if preview_promotion_quote
-            else base_service_price
-        )
-        # La regla de sena se evalua UNA vez (misma antelacion, mismo
-        # historial) y el resultado viaja hasta el pago y la respuesta. Antes se
-        # recalculaba tres veces con `now` distinto. El historial es una sola
-        # consulta agregada, antes del lock.
-        # Mismo criterio que el preview: un telefono sin verificar no trae el
-        # historial de nadie, ni para mostrar ni para cobrar. Si no, quien
-        # tipea el telefono de otro hereda (o le carga) sus recargos.
-        history = (
-            await repo.get_client_history(store_id, data.client_phone)
-            if phone_verified
-            else UNKNOWN_HISTORY
-        )
-        deposit = _decide(
-            service,
-            store,
-            price=discounted_service_price,
-            starts_at=starts_at_utc,
-            history=history,
-        )
-        deposit_amount = deposit.amount
-        payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
-        payment_required = _resolve_payment_requirement(
-            payment_method=data.payment_method,
-            payments_enabled=payments_enabled,
-            deposit_amount=deposit_amount,
-            deposit_mode=getattr(service, "deposit_mode", "none") or "none",
-            allow_manual_coordination=store.allow_manual_coordination,
-        )
-        initial_status = (
-            AppointmentStatus.PENDING_PAYMENT.value
-            if payment_required
-            else AppointmentStatus.PENDING.value
-        )
-
-        payment = None
-        promotion_quote = None
+    async with tenant_bypass(db):
         try:
-            async with db.begin_nested():
-                client = await repo.get_or_create_client(
-                    store_id=store_id,
-                    phone=data.client_phone,
-                    name=data.client_name,
-                    email=data.client_email,
-                    adopt_contact=phone_verified,
-                )
-                appointment, service, staff = await repo.create_appointment(
-                    store_id=store_id,
-                    service_public_id=data.service_id,
-                    staff_public_id=data.staff_id,
-                    starts_at=data.starts_at,
-                    client=client,
-                    notes=data.notes,
-                    intake_answers=normalized_custom_fields,
-                    idempotency_key=idempotency_key,
-                    initial_status=initial_status,
-                    buffer_minutes=store.buffer_minutes or 0,
-                    price_amount=discounted_service_price,
-                    client_email=str(data.client_email) if data.client_email else None,
-                )
-                # Un turno esperando la seña retiene el slot solo por una ventana
-                # corta: si no se paga, vuelve a estar disponible enseguida en vez
-                # de bloquear la agenda hasta la hora del turno. La coordinacion
-                # manual si retiene hasta el horario, porque la confirma la tienda.
-                if payment_required:
-                    appointment.expires_at = _payment_hold_deadline(
-                        appointment.starts_at
+            idempotency_key = data.idempotency_key or _public_booking_idempotency_key(
+                data
+            )
+            cached = await idempotency_guard(idempotency_key, redis)
+            if cached:
+                return PublicBookingResponse.model_validate(cached)
+
+            repo = PublicRepository(db)
+            service = await repo.get_service_by_public_id(data.service_id)
+            if not service:
+                raise ServiceNotFoundException(identifier=data.service_id)
+
+            if data.store_public_id:
+                store = await repo.get_store_by_public_id(data.store_public_id)
+                if not store:
+                    raise StoreNotFoundException(identifier=data.store_public_id)
+                if service.store_id != store.id:
+                    raise ServiceNotFoundException(identifier=data.service_id)
+                store_id = store.id
+            else:
+                store_id = service.store_id
+                store = await repo.get_store_by_id(store_id)
+                if not store:
+                    raise StoreNotFoundException(identifier=str(store_id))
+
+            # Antelacion minima. El flujo admin ya la validaba, pero el booking
+            # publico solo la aplicaba al *mostrar* slots, no al crearlos: un POST
+            # directo podia agendar en el pasado o dentro de la ventana bloqueada.
+            notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
+            starts_at_utc = (
+                data.starts_at
+                if data.starts_at.tzinfo
+                else data.starts_at.replace(tzinfo=timezone.utc)
+            )
+            if starts_at_utc < datetime.now(timezone.utc) + timedelta(
+                hours=notice_hours
+            ):
+                raise BookingNoticeException(notice_hours)
+
+            # El OTP es lo unico que prueba que quien reserva es dueno del
+            # telefono: sin el, los datos de contacto de esta peticion no pisan
+            # los del cliente que ya existe (ver get_or_create_client).
+            phone_verified = await OtpService(db).is_recently_verified(
+                store_id=store_id,
+                phone=data.client_phone,
+            )
+            if is_store_feature_enabled(store.feature_flags, "otp_booking"):
+                if not phone_verified:
+                    raise OTPException(
+                        message="Se requiere validar OTP antes de reservar",
+                        error_code="OTP_VERIFICATION_REQUIRED",
+                        http_status=status.HTTP_403_FORBIDDEN,
                     )
-                else:
-                    appointment.expires_at = appointment.starts_at
-                if data.accepts_terms:
-                    appointment.terms_accepted_at = datetime.now(timezone.utc)
-                if data.promotion_code:
-                    try:
-                        promotion_quote = await redeem_promotion(
-                            db,
-                            store_id=store_id,
-                            appointment_id=appointment.id,
-                            client=client,
-                            service=service,
-                            code=data.promotion_code,
+
+            normalized_custom_fields = _validate_custom_fields(
+                store, data.custom_fields
+            )
+            base_service_price = Decimal(str(service.price or 0))
+            preview_promotion_quote = None
+            if data.promotion_code:
+                (
+                    _promotion,
+                    preview_promotion_quote,
+                    preview_error,
+                ) = await quote_promotion(
+                    db,
+                    store_id=store_id,
+                    service=service,
+                    code=data.promotion_code,
+                )
+                if not preview_promotion_quote:
+                    raise ValidationException(preview_error or "Promocion invalida")
+
+            discounted_service_price = (
+                preview_promotion_quote.final_amount
+                if preview_promotion_quote
+                else base_service_price
+            )
+            # La regla de sena se evalua UNA vez (misma antelacion, mismo
+            # historial) y el resultado viaja hasta el pago y la respuesta. Antes se
+            # recalculaba tres veces con `now` distinto. El historial es una sola
+            # consulta agregada, antes del lock.
+            # Mismo criterio que el preview: un telefono sin verificar no trae el
+            # historial de nadie, ni para mostrar ni para cobrar. Si no, quien
+            # tipea el telefono de otro hereda (o le carga) sus recargos.
+            history = (
+                await repo.get_client_history(store_id, data.client_phone)
+                if phone_verified
+                else UNKNOWN_HISTORY
+            )
+            deposit = _decide(
+                service,
+                store,
+                price=discounted_service_price,
+                starts_at=starts_at_utc,
+                history=history,
+            )
+            deposit_amount = deposit.amount
+            payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+            payment_required = _resolve_payment_requirement(
+                payment_method=data.payment_method,
+                payments_enabled=payments_enabled,
+                deposit_amount=deposit_amount,
+                deposit_mode=getattr(service, "deposit_mode", "none") or "none",
+                allow_manual_coordination=store.allow_manual_coordination,
+            )
+            initial_status = (
+                AppointmentStatus.PENDING_PAYMENT.value
+                if payment_required
+                else AppointmentStatus.PENDING.value
+            )
+
+            payment = None
+            promotion_quote = None
+            try:
+                async with db.begin_nested():
+                    client = await repo.get_or_create_client(
+                        store_id=store_id,
+                        phone=data.client_phone,
+                        name=data.client_name,
+                        email=data.client_email,
+                        adopt_contact=phone_verified,
+                    )
+                    appointment, service, staff = await repo.create_appointment(
+                        store_id=store_id,
+                        service_public_id=data.service_id,
+                        staff_public_id=data.staff_id,
+                        starts_at=data.starts_at,
+                        client=client,
+                        notes=data.notes,
+                        intake_answers=normalized_custom_fields,
+                        idempotency_key=idempotency_key,
+                        initial_status=initial_status,
+                        buffer_minutes=store.buffer_minutes or 0,
+                        price_amount=discounted_service_price,
+                        client_email=str(data.client_email)
+                        if data.client_email
+                        else None,
+                    )
+                    # Un turno esperando la seña retiene el slot solo por una ventana
+                    # corta: si no se paga, vuelve a estar disponible enseguida en vez
+                    # de bloquear la agenda hasta la hora del turno. La coordinacion
+                    # manual si retiene hasta el horario, porque la confirma la tienda.
+                    if payment_required:
+                        appointment.expires_at = _payment_hold_deadline(
+                            appointment.starts_at
                         )
-                    except ValueError as exc:
-                        raise ValidationException(str(exc))
-                if payment_required:
-                    # Misma regla (antelacion e historial), dos precios: el de
-                    # lista para mostrar el descuento y el final para cobrar.
-                    payable_before_discount = _decide(
-                        service,
-                        store,
-                        price=base_service_price,
-                        starts_at=starts_at_utc,
-                        history=history,
-                    ).amount
-                    final_decision = (
-                        _decide(
+                    else:
+                        appointment.expires_at = appointment.starts_at
+                    if data.accepts_terms:
+                        appointment.terms_accepted_at = datetime.now(timezone.utc)
+                    if data.promotion_code:
+                        try:
+                            promotion_quote = await redeem_promotion(
+                                db,
+                                store_id=store_id,
+                                appointment_id=appointment.id,
+                                client=client,
+                                service=service,
+                                code=data.promotion_code,
+                            )
+                        except ValueError as exc:
+                            raise ValidationException(str(exc))
+                    if payment_required:
+                        # Misma regla (antelacion e historial), dos precios: el de
+                        # lista para mostrar el descuento y el final para cobrar.
+                        payable_before_discount = _decide(
                             service,
                             store,
-                            price=promotion_quote.final_amount,
+                            price=base_service_price,
                             starts_at=starts_at_utc,
                             history=history,
+                        ).amount
+                        final_decision = (
+                            _decide(
+                                service,
+                                store,
+                                price=promotion_quote.final_amount,
+                                starts_at=starts_at_utc,
+                                history=history,
+                            )
+                            if promotion_quote
+                            else deposit
                         )
-                        if promotion_quote
-                        else deposit
-                    )
-                    payable_after_discount = final_decision.amount
-                    # Dentro de la transaccion (que sostiene el lock FOR UPDATE
-                    # del staff) solo se crea el Payment PENDING con link
-                    # placeholder: la llamada HTTP a Mercado Pago se hace DESPUES
-                    # del commit, con el lock ya soltado (ver mas abajo), para no
-                    # serializar reservas ni agotar el pool ante latencia de MP.
-                    payment = await ensure_payment_preference(
-                        db,
-                        appointment=appointment,
-                        service=service,
-                        store_id=store_id,
-                        amount_override=payable_after_discount,
-                        original_amount=payable_before_discount,
-                        discount_amount=max(
-                            Decimal("0.00"),
-                            payable_before_discount - payable_after_discount,
-                        ),
-                        promotion_code=promotion_quote.code
-                        if promotion_quote
-                        else None,
-                        create_provider_link=False,
-                        deposit_rule=final_decision.snapshot(),
-                    )
-                else:
-                    # El pago se coordina por fuera, asi que la tienda tiene que
-                    # confirmar el turno a mano cuando reciba la transferencia.
-                    db.add(
-                        OutboxMessage(
+                        payable_after_discount = final_decision.amount
+                        # Dentro de la transaccion (que sostiene el lock FOR UPDATE
+                        # del staff) solo se crea el Payment PENDING con link
+                        # placeholder: la llamada HTTP a Mercado Pago se hace DESPUES
+                        # del commit, con el lock ya soltado (ver mas abajo), para no
+                        # serializar reservas ni agotar el pool ante latencia de MP.
+                        payment = await ensure_payment_preference(
+                            db,
+                            appointment=appointment,
+                            service=service,
                             store_id=store_id,
-                            event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
-                            payload={
-                                "appointment_id": appointment.id,
-                                "client_name": data.client_name,
-                                "service_name": service.name,
-                            },
+                            amount_override=payable_after_discount,
+                            original_amount=payable_before_discount,
+                            discount_amount=max(
+                                Decimal("0.00"),
+                                payable_before_discount - payable_after_discount,
+                            ),
+                            promotion_code=promotion_quote.code
+                            if promotion_quote
+                            else None,
+                            create_provider_link=False,
+                            deposit_rule=final_decision.snapshot(),
                         )
-                    )
-        except ValueError as exc:
-            await idempotency_release(idempotency_key, redis)
-            raise AppException(
-                message=str(exc), http_status=409, error_code="APPOINTMENT_CONFLICT"
-            )
-        except CircuitBreakerOpenError as exc:
-            await idempotency_release(idempotency_key, redis)
-            raise AppException(
-                message=f"Proveedor de pagos temporalmente no disponible: {exc}",
-                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                error_code="PAYMENT_PROVIDER_UNAVAILABLE",
-            )
-        except RuntimeError as exc:
-            await idempotency_release(idempotency_key, redis)
-            raise AppException(
-                message=f"No se pudo iniciar el cobro online: {exc}",
-                http_status=status.HTTP_502_BAD_GATEWAY,
-                error_code="PAYMENT_LINK_CREATION_FAILED",
-            )
-
-        await db.commit()
-        # El cupo dejo de estar libre: la disponibilidad publica lo refleja ya
-        # (antes la reserva publica no invalidaba nada y el slot seguia
-        # "available" hasta cinco minutos).
-        await invalidate_availability(redis, store_id, appointment.starts_at)
-
-        # El turno y el Payment PENDING ya estan persistidos y el lock FOR UPDATE
-        # del staff quedo soltado. Recien ahora se hace la llamada HTTP a Mercado
-        # Pago para el link real: fuera de la transaccion, sin retener el lock ni
-        # serializar otras reservas. Si MP falla, el turno queda en
-        # PENDING_PAYMENT y su hold expira solo; un reintento (misma idempotency)
-        # reusa el turno y reintenta el link.
-        if payment_required and payment is not None:
-            try:
-                await ensure_payment_preference(
-                    db,
-                    appointment=appointment,
-                    service=service,
-                    store_id=store_id,
-                    amount_override=payment.amount,
-                    original_amount=payment.original_amount,
-                    discount_amount=payment.discount_amount,
-                    promotion_code=payment.promotion_code,
-                    create_provider_link=True,
+                    else:
+                        # El pago se coordina por fuera, asi que la tienda tiene que
+                        # confirmar el turno a mano cuando reciba la transferencia.
+                        db.add(
+                            OutboxMessage(
+                                store_id=store_id,
+                                event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
+                                payload={
+                                    "appointment_id": appointment.id,
+                                    "client_name": data.client_name,
+                                    "service_name": service.name,
+                                },
+                            )
+                        )
+            except ValueError as exc:
+                await idempotency_release(idempotency_key, redis)
+                raise AppException(
+                    message=str(exc), http_status=409, error_code="APPOINTMENT_CONFLICT"
                 )
-                await db.commit()
             except CircuitBreakerOpenError as exc:
-                await _revert_failed_booking(db, redis, appointment)
                 await idempotency_release(idempotency_key, redis)
                 raise AppException(
                     message=f"Proveedor de pagos temporalmente no disponible: {exc}",
@@ -913,7 +854,6 @@ async def create_public_booking(
                     error_code="PAYMENT_PROVIDER_UNAVAILABLE",
                 )
             except RuntimeError as exc:
-                await _revert_failed_booking(db, redis, appointment)
                 await idempotency_release(idempotency_key, redis)
                 raise AppException(
                     message=f"No se pudo iniciar el cobro online: {exc}",
@@ -921,73 +861,118 @@ async def create_public_booking(
                     error_code="PAYMENT_LINK_CREATION_FAILED",
                 )
 
-        # Aviso al cliente por mail (best-effort, fuera de la transaccion).
-        # Antes la condicion exigia CONFIRMED y el turno nace PENDING o
-        # PENDING_PAYMENT: nunca salia nada. Ahora "reserva registrada" al
-        # crear, y "turno confirmado" solo si ya nacio confirmado.
-        detalles_cliente = build_client_details(appointment, service, staff, store)
-        if appointment.status == AppointmentStatus.CONFIRMED.value:
-            await enqueue_confirmation_email(
-                email=appointment.client_email, details=detalles_cliente
-            )
-        else:
-            await enqueue_registration_email(
-                email=appointment.client_email, details=detalles_cliente
-            )
-        response = PublicBookingResponse(
-            public_id=appointment.public_id,
-            service_id=service.public_id,
-            service_name=service.name,
-            staff_id=staff.public_id,
-            staff_name=staff.display_name,
-            starts_at=appointment.starts_at,
-            ends_at=appointment.ends_at,
-            status=appointment.status,
-            client_name=data.client_name,
-            client_phone=data.client_phone,
-            notes=data.notes,
-            custom_fields=appointment.intake_answers or normalized_custom_fields,
-            payment_required=payment_required,
-            payment_status=payment.status if payment else None,
-            payment_link=payment.payment_link if payment else None,
-            payment_public_id=payment.id if payment else None,
-            # Sin pago online se informa la misma decision que se evaluo arriba
-            # (el precio final ya trae la promo cuando la hubo).
-            payment_amount=float(payment.amount if payment else deposit.amount),
-            promotion_code=promotion_quote.code if promotion_quote else None,
-            service_price=float(base_service_price),
-            discount_amount=float(promotion_quote.discount_amount)
-            if promotion_quote
-            else 0.0,
-            final_price=float(promotion_quote.final_amount)
-            if promotion_quote
-            else float(base_service_price),
-        )
-        # Recien con el turno firme (incluido el link de pago) se cierra la
-        # entrada de lista de espera: cerrarla antes la perdia si el link de
-        # Mercado Pago fallaba y el turno se revertia. Best-effort: no puede
-        # deshacer una reserva ya hecha.
-        try:
-            if await mark_booked(
-                db,
-                store_id=store_id,
-                client_phone=data.client_phone,
-                service_id=service.id,
-                starts_at=appointment.starts_at,
-            ):
-                await db.commit()
-        except Exception as exc:
-            await db.rollback()
-            logger.warning("waitlist_mark_booked_failed", error_type=type(exc).__name__)
+            await db.commit()
+            # El cupo dejo de estar libre: la disponibilidad publica lo refleja ya
+            # (antes la reserva publica no invalidaba nada y el slot seguia
+            # "available" hasta cinco minutos).
+            await invalidate_availability(redis, store_id, appointment.starts_at)
 
-        await idempotency_save(idempotency_key, response.model_dump(mode="json"), redis)
-        return response
-    except Exception:
-        if idempotency_key:
-            await idempotency_release(idempotency_key, redis)
-        raise
-    finally:
-        set_tenant_context(None, False)
+            # El turno y el Payment PENDING ya estan persistidos y el lock FOR UPDATE
+            # del staff quedo soltado. Recien ahora se hace la llamada HTTP a Mercado
+            # Pago para el link real: fuera de la transaccion, sin retener el lock ni
+            # serializar otras reservas. Si MP falla, el turno queda en
+            # PENDING_PAYMENT y su hold expira solo; un reintento (misma idempotency)
+            # reusa el turno y reintenta el link.
+            if payment_required and payment is not None:
+                try:
+                    await ensure_payment_preference(
+                        db,
+                        appointment=appointment,
+                        service=service,
+                        store_id=store_id,
+                        amount_override=payment.amount,
+                        original_amount=payment.original_amount,
+                        discount_amount=payment.discount_amount,
+                        promotion_code=payment.promotion_code,
+                        create_provider_link=True,
+                    )
+                    await db.commit()
+                except CircuitBreakerOpenError as exc:
+                    await _revert_failed_booking(db, redis, appointment)
+                    await idempotency_release(idempotency_key, redis)
+                    raise AppException(
+                        message=f"Proveedor de pagos temporalmente no disponible: {exc}",
+                        http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        error_code="PAYMENT_PROVIDER_UNAVAILABLE",
+                    )
+                except RuntimeError as exc:
+                    await _revert_failed_booking(db, redis, appointment)
+                    await idempotency_release(idempotency_key, redis)
+                    raise AppException(
+                        message=f"No se pudo iniciar el cobro online: {exc}",
+                        http_status=status.HTTP_502_BAD_GATEWAY,
+                        error_code="PAYMENT_LINK_CREATION_FAILED",
+                    )
+
+            # Aviso al cliente por mail (best-effort, fuera de la transaccion).
+            # Antes la condicion exigia CONFIRMED y el turno nace PENDING o
+            # PENDING_PAYMENT: nunca salia nada. Ahora "reserva registrada" al
+            # crear, y "turno confirmado" solo si ya nacio confirmado.
+            detalles_cliente = build_client_details(appointment, service, staff, store)
+            if appointment.status == AppointmentStatus.CONFIRMED.value:
+                await enqueue_confirmation_email(
+                    email=appointment.client_email, details=detalles_cliente
+                )
+            else:
+                await enqueue_registration_email(
+                    email=appointment.client_email, details=detalles_cliente
+                )
+            response = PublicBookingResponse(
+                public_id=appointment.public_id,
+                service_id=service.public_id,
+                service_name=service.name,
+                staff_id=staff.public_id,
+                staff_name=staff.display_name,
+                starts_at=appointment.starts_at,
+                ends_at=appointment.ends_at,
+                status=appointment.status,
+                client_name=data.client_name,
+                client_phone=data.client_phone,
+                notes=data.notes,
+                custom_fields=appointment.intake_answers or normalized_custom_fields,
+                payment_required=payment_required,
+                payment_status=payment.status if payment else None,
+                payment_link=payment.payment_link if payment else None,
+                payment_public_id=payment.id if payment else None,
+                # Sin pago online se informa la misma decision que se evaluo arriba
+                # (el precio final ya trae la promo cuando la hubo).
+                payment_amount=float(payment.amount if payment else deposit.amount),
+                promotion_code=promotion_quote.code if promotion_quote else None,
+                service_price=float(base_service_price),
+                discount_amount=float(promotion_quote.discount_amount)
+                if promotion_quote
+                else 0.0,
+                final_price=float(promotion_quote.final_amount)
+                if promotion_quote
+                else float(base_service_price),
+            )
+            # Recien con el turno firme (incluido el link de pago) se cierra la
+            # entrada de lista de espera: cerrarla antes la perdia si el link de
+            # Mercado Pago fallaba y el turno se revertia. Best-effort: no puede
+            # deshacer una reserva ya hecha.
+            try:
+                if await mark_booked(
+                    db,
+                    store_id=store_id,
+                    client_phone=data.client_phone,
+                    service_id=service.id,
+                    starts_at=appointment.starts_at,
+                ):
+                    await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                logger.warning(
+                    "waitlist_mark_booked_failed", error_type=type(exc).__name__
+                )
+
+            await idempotency_save(
+                idempotency_key, response.model_dump(mode="json"), redis
+            )
+            return response
+        except Exception:
+            if idempotency_key:
+                await idempotency_release(idempotency_key, redis)
+            raise
 
 
 @router.get(
@@ -1006,8 +991,7 @@ async def get_public_payment_status(
         settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE,
         subject=f"{store_public_id}:{payment_public_id}",
     )
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         result = await db.execute(
             select(Payment, Appointment)
             .join(Appointment, Appointment.id == Payment.appointment_id)
@@ -1031,8 +1015,6 @@ async def get_public_payment_status(
             currency=payment.currency,
             starts_at=appointment.starts_at,
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.get(
@@ -1052,8 +1034,7 @@ async def get_client_appointments(
         settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE,
         subject=f"{store_public_id}:{phone}",
     )
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
@@ -1107,8 +1088,6 @@ async def get_client_appointments(
             client_phone=phone,
             appointments=items,
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.patch(
@@ -1127,8 +1106,7 @@ async def client_cancel_appointment(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{public_id}:{data.phone}",
     )
-    await _bypass_rls(db)
-    try:
+    async with tenant_bypass(db):
         repo = PublicRepository(db)
         # Lock del turno antes de transicionarlo (TOCTOU).
         appt_res = await db.execute(
@@ -1177,9 +1155,12 @@ async def client_cancel_appointment(
         )
         # La tienda se entera de que le cancelaron: antes el cliente cancelaba
         # y el dueno solo lo notaba mirando la agenda.
-        servicio_cancelado = await db.execute(
+        # Una sola lectura del servicio: la usan el aviso y la respuesta
+        # (B1-21: antes se repetia la misma consulta despues del commit).
+        svc_res = await db.execute(
             select(Service).where(Service.id == appointment.service_id)
         )
+        service = svc_res.scalar_one_or_none()
         db.add(
             OutboxMessage(
                 store_id=appointment.store_id,
@@ -1187,9 +1168,7 @@ async def client_cancel_appointment(
                 payload={
                     "appointment_id": appointment.id,
                     "client_name": client.full_name or "Un cliente",
-                    "service_name": getattr(
-                        servicio_cancelado.scalar_one_or_none(), "name", ""
-                    ),
+                    "service_name": getattr(service, "name", ""),
                     "starts_at": appointment.starts_at.isoformat(),
                 },
             )
@@ -1197,10 +1176,6 @@ async def client_cancel_appointment(
         await db.commit()
         await db.refresh(appointment)
 
-        svc_res = await db.execute(
-            select(Service).where(Service.id == appointment.service_id)
-        )
-        service = svc_res.scalar_one_or_none()
         await invalidate_availability(
             redis, appointment.store_id, appointment.starts_at
         )
@@ -1223,8 +1198,6 @@ async def client_cancel_appointment(
             notes=appointment.notes,
             custom_fields=appointment.intake_answers or {},
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.patch(
@@ -1243,180 +1216,184 @@ async def client_reschedule_appointment(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{public_id}:{data.phone}",
     )
-    await _bypass_rls(db)
-    try:
-        repo = PublicRepository(db)
-        cached = await idempotency_guard(data.idempotency_key, redis)
-        if cached:
-            return PublicBookingResponse.model_validate(cached)
-
-        # Lock del turno: reprogramar lo cancela, y sin lock dos requests
-        # concurrentes pueden partir del mismo estado origen.
-        appt_res = await db.execute(
-            select(Appointment).where(Appointment.id == public_id).with_for_update()
-        )
-        original = appt_res.scalar_one_or_none()
-        if not original:
-            raise AppointmentNotFoundException(public_id=public_id)
-
-        # Titularidad + OTP ANTES de cualquier chequeo que revele estado del
-        # turno: sin esto, quien solo conozca el public_id sabria si esta
-        # esperando pago (fuga menor de estado).
-        client = await repo.get_client_by_phone(original.store_id, data.phone)
-        if not client or client.id != original.client_id:
-            raise PermissionDeniedException(
-                action="El teléfono no coincide con el titular del turno"
-            )
-
-        await _require_recent_client_otp(
-            db, store_id=original.store_id, phone=data.phone
-        )
-
-        # Reprogramar cancela el turno original: le corresponde el mismo guard.
-        reject_cancellation_while_awaiting_payment(original)
-
-        # Un turno con pago acreditado no se reprograma desde el cliente: el
-        # Payment quedaria huerfano apuntando al turno cancelado y el nuevo
-        # apareceria como impago. Que lo maneje la tienda.
-        paid_res = await db.execute(
-            select(Payment.id).where(
-                Payment.appointment_id == original.id,
-                Payment.status.in_(
-                    [
-                        PaymentStatus.APPROVED.value,
-                        PaymentStatus.MANUAL_CONFIRMED.value,
-                    ]
-                ),
-            )
-        )
-        if paid_res.scalar_one_or_none() is not None:
-            raise AppException(
-                message=(
-                    "Este turno ya tiene un pago registrado; contactá a la tienda "
-                    "para reprogramarlo."
-                ),
-                http_status=status.HTTP_409_CONFLICT,
-                error_code="PAID_APPOINTMENT_RESCHEDULE_DENIED",
-            )
-
-        svc_res = await db.execute(
-            select(Service).where(Service.id == original.service_id)
-        )
-        service = svc_res.scalar_one_or_none()
-        if not service:
-            raise ServiceNotFoundException(identifier=str(original.service_id))
-
-        stf_res = await db.execute(select(Staff).where(Staff.id == original.staff_id))
-        staff = stf_res.scalar_one_or_none()
-        if not staff:
-            raise StaffNotFoundException(identifier=str(original.staff_id))
-
-        new_starts_utc = (
-            data.new_starts_at
-            if data.new_starts_at.tzinfo
-            else data.new_starts_at.replace(tzinfo=timezone.utc)
-        )
-        new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
-
-        # El nuevo horario debe respetar las MISMAS reglas que una reserva nueva:
-        # antelacion minima, agenda del profesional y bloqueos. Antes solo se
-        # validaba el solapamiento, asi que un cliente podia moverse a un horario
-        # fuera de agenda, sobre un franco, o dentro de la ventana de antelacion.
-        store = await repo.get_store_by_id(original.store_id)
-        notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
-        if new_starts_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
-            raise BookingNoticeException(notice_hours)
-        # Horario, bloqueo y choque con la MISMA funcion que el alta publica
-        # (B1-19): antes el router tenia su propia copia (dos metodos privados
-        # del repo, un lock y una consulta de choque a mano) y las dos
-        # divergieron (B1-05 orden del lock, B1-07 buffer). El lock del
-        # profesional y la relectura bajo lock quedan en el repositorio
-        # (regla 4); el turno que se mueve no choca consigo mismo.
-        rechazo = await repo.staff_can_take_range(
-            staff.id,
-            data.new_starts_at,
-            new_ends_at,
-            buffer_minutes=getattr(store, "buffer_minutes", 0) or 0,
-            exclude_appointment_id=original.id,
-        )
-        if rechazo is RangeRejection.OUT_OF_SCHEDULE:
-            raise AppException(
-                message="El profesional no atiende en ese horario",
-                http_status=status.HTTP_409_CONFLICT,
-                error_code="OUT_OF_SCHEDULE",
-            )
-        if rechazo is RangeRejection.BLOCKED:
-            raise AppException(
-                message="Ese horario esta bloqueado en la agenda",
-                http_status=status.HTTP_409_CONFLICT,
-                error_code="SCHEDULE_BLOCKED",
-            )
-        if rechazo is RangeRejection.TAKEN:
-            raise AppointmentConflictException()
-
+    async with tenant_bypass(db):
         try:
-            async with db.begin_nested():
-                original.apply_status_transition(AppointmentStatus.CANCELLED)
-                publish_slot_released(
-                    db,
-                    store_id=original.store_id,
-                    staff_id=original.staff_id,
-                    service_id=original.service_id,
-                    appointment_id=original.id,
-                    starts_at=original.starts_at,
-                    ends_at=original.ends_at,
-                    reason="client_rescheduled",
+            repo = PublicRepository(db)
+            cached = await idempotency_guard(data.idempotency_key, redis)
+            if cached:
+                return PublicBookingResponse.model_validate(cached)
+
+            # Lock del turno: reprogramar lo cancela, y sin lock dos requests
+            # concurrentes pueden partir del mismo estado origen.
+            appt_res = await db.execute(
+                select(Appointment).where(Appointment.id == public_id).with_for_update()
+            )
+            original = appt_res.scalar_one_or_none()
+            if not original:
+                raise AppointmentNotFoundException(public_id=public_id)
+
+            # Titularidad + OTP ANTES de cualquier chequeo que revele estado del
+            # turno: sin esto, quien solo conozca el public_id sabria si esta
+            # esperando pago (fuga menor de estado).
+            client = await repo.get_client_by_phone(original.store_id, data.phone)
+            if not client or client.id != original.client_id:
+                raise PermissionDeniedException(
+                    action="El teléfono no coincide con el titular del turno"
                 )
-                new_appointment = Appointment(
-                    store_id=original.store_id,
-                    staff_id=original.staff_id,
-                    service_id=original.service_id,
-                    client_id=original.client_id,
-                    starts_at=data.new_starts_at,
-                    ends_at=new_ends_at,
-                    duration_minutes=service.duration_minutes,
-                    # Preservar el precio congelado del turno original.
-                    price_amount=original.price_amount,
-                    client_name=client.full_name or client.email,
-                    client_email=client.email,
-                    client_phone=client.phone,
-                    notes=original.notes,
-                    intake_answers=original.intake_answers or {},
-                    idempotency_key=data.idempotency_key,
+
+            await _require_recent_client_otp(
+                db, store_id=original.store_id, phone=data.phone
+            )
+
+            # Reprogramar cancela el turno original: le corresponde el mismo guard.
+            reject_cancellation_while_awaiting_payment(original)
+
+            # Un turno con pago acreditado no se reprograma desde el cliente: el
+            # Payment quedaria huerfano apuntando al turno cancelado y el nuevo
+            # apareceria como impago. Que lo maneje la tienda.
+            paid_res = await db.execute(
+                select(Payment.id).where(
+                    Payment.appointment_id == original.id,
+                    Payment.status.in_(
+                        [
+                            PaymentStatus.APPROVED.value,
+                            PaymentStatus.MANUAL_CONFIRMED.value,
+                        ]
+                    ),
                 )
-                db.add(new_appointment)
-                await db.flush()
+            )
+            if paid_res.scalar_one_or_none() is not None:
+                raise AppException(
+                    message=(
+                        "Este turno ya tiene un pago registrado; contactá a la tienda "
+                        "para reprogramarlo."
+                    ),
+                    http_status=status.HTTP_409_CONFLICT,
+                    error_code="PAID_APPOINTMENT_RESCHEDULE_DENIED",
+                )
+
+            svc_res = await db.execute(
+                select(Service).where(Service.id == original.service_id)
+            )
+            service = svc_res.scalar_one_or_none()
+            if not service:
+                raise ServiceNotFoundException(identifier=str(original.service_id))
+
+            stf_res = await db.execute(
+                select(Staff).where(Staff.id == original.staff_id)
+            )
+            staff = stf_res.scalar_one_or_none()
+            if not staff:
+                raise StaffNotFoundException(identifier=str(original.staff_id))
+
+            new_starts_utc = (
+                data.new_starts_at
+                if data.new_starts_at.tzinfo
+                else data.new_starts_at.replace(tzinfo=timezone.utc)
+            )
+            new_ends_at = data.new_starts_at + timedelta(
+                minutes=service.duration_minutes
+            )
+
+            # El nuevo horario debe respetar las MISMAS reglas que una reserva nueva:
+            # antelacion minima, agenda del profesional y bloqueos. Antes solo se
+            # validaba el solapamiento, asi que un cliente podia moverse a un horario
+            # fuera de agenda, sobre un franco, o dentro de la ventana de antelacion.
+            store = await repo.get_store_by_id(original.store_id)
+            notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
+            if new_starts_utc < datetime.now(timezone.utc) + timedelta(
+                hours=notice_hours
+            ):
+                raise BookingNoticeException(notice_hours)
+            # Horario, bloqueo y choque con la MISMA funcion que el alta publica
+            # (B1-19): antes el router tenia su propia copia (dos metodos privados
+            # del repo, un lock y una consulta de choque a mano) y las dos
+            # divergieron (B1-05 orden del lock, B1-07 buffer). El lock del
+            # profesional y la relectura bajo lock quedan en el repositorio
+            # (regla 4); el turno que se mueve no choca consigo mismo.
+            rechazo = await repo.staff_can_take_range(
+                staff.id,
+                data.new_starts_at,
+                new_ends_at,
+                buffer_minutes=getattr(store, "buffer_minutes", 0) or 0,
+                exclude_appointment_id=original.id,
+            )
+            if rechazo is RangeRejection.OUT_OF_SCHEDULE:
+                raise AppException(
+                    message="El profesional no atiende en ese horario",
+                    http_status=status.HTTP_409_CONFLICT,
+                    error_code="OUT_OF_SCHEDULE",
+                )
+            if rechazo is RangeRejection.BLOCKED:
+                raise AppException(
+                    message="Ese horario esta bloqueado en la agenda",
+                    http_status=status.HTTP_409_CONFLICT,
+                    error_code="SCHEDULE_BLOCKED",
+                )
+            if rechazo is RangeRejection.TAKEN:
+                raise AppointmentConflictException()
+
+            try:
+                async with db.begin_nested():
+                    original.apply_status_transition(AppointmentStatus.CANCELLED)
+                    publish_slot_released(
+                        db,
+                        store_id=original.store_id,
+                        staff_id=original.staff_id,
+                        service_id=original.service_id,
+                        appointment_id=original.id,
+                        starts_at=original.starts_at,
+                        ends_at=original.ends_at,
+                        reason="client_rescheduled",
+                    )
+                    new_appointment = Appointment(
+                        store_id=original.store_id,
+                        staff_id=original.staff_id,
+                        service_id=original.service_id,
+                        client_id=original.client_id,
+                        starts_at=data.new_starts_at,
+                        ends_at=new_ends_at,
+                        duration_minutes=service.duration_minutes,
+                        # Preservar el precio congelado del turno original.
+                        price_amount=original.price_amount,
+                        client_name=client.full_name or client.email,
+                        client_email=client.email,
+                        client_phone=client.phone,
+                        notes=original.notes,
+                        intake_answers=original.intake_answers or {},
+                        idempotency_key=data.idempotency_key,
+                    )
+                    db.add(new_appointment)
+                    await db.flush()
+            except Exception:
+                await idempotency_release(data.idempotency_key, redis)
+                raise
+
+            await db.commit()
+            await db.refresh(new_appointment)
+
+            await invalidate_availability(
+                redis, original.store_id, original.starts_at, data.new_starts_at
+            )
+
+            response = PublicBookingResponse(
+                public_id=new_appointment.public_id,
+                service_id=service.public_id,
+                service_name=service.name,
+                staff_id=staff.public_id,
+                staff_name=staff.display_name,
+                starts_at=new_appointment.starts_at,
+                ends_at=new_appointment.ends_at,
+                status=new_appointment.status,
+                client_name=client.full_name or "Cliente",
+                client_phone=data.phone,
+                notes=new_appointment.notes,
+                custom_fields=new_appointment.intake_answers or {},
+            )
+            await idempotency_save(
+                data.idempotency_key, response.model_dump(mode="json"), redis
+            )
+            return response
         except Exception:
             await idempotency_release(data.idempotency_key, redis)
             raise
-
-        await db.commit()
-        await db.refresh(new_appointment)
-
-        await invalidate_availability(
-            redis, original.store_id, original.starts_at, data.new_starts_at
-        )
-
-        response = PublicBookingResponse(
-            public_id=new_appointment.public_id,
-            service_id=service.public_id,
-            service_name=service.name,
-            staff_id=staff.public_id,
-            staff_name=staff.display_name,
-            starts_at=new_appointment.starts_at,
-            ends_at=new_appointment.ends_at,
-            status=new_appointment.status,
-            client_name=client.full_name or "Cliente",
-            client_phone=data.phone,
-            notes=new_appointment.notes,
-            custom_fields=new_appointment.intake_answers or {},
-        )
-        await idempotency_save(
-            data.idempotency_key, response.model_dump(mode="json"), redis
-        )
-        return response
-    except Exception:
-        await idempotency_release(data.idempotency_key, redis)
-        raise
-    finally:
-        set_tenant_context(None, False)
