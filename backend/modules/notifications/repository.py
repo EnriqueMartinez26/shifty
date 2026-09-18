@@ -9,10 +9,20 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import ColumnElement, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.notifications.model import Notification
+
+
+def _scope(store_id: str) -> list[ColumnElement[bool]]:
+    """Filtro base de toda consulta: la tienda y solo notificaciones activas.
+
+    B4-10 (2026-09-18): marcar por id no filtraba ``is_active`` y una
+    notificacion dada de baja se podia marcar leida. El filtro sale de un
+    solo lugar para que las cuatro consultas no vuelvan a divergir.
+    """
+    return [Notification.store_id == store_id, Notification.is_active.is_(True)]
 
 
 class NotificationRepository:
@@ -22,10 +32,7 @@ class NotificationRepository:
     async def list_for_store(
         self, store_id: str, *, limit: int, unread_only: bool
     ) -> list[Notification]:
-        filters = [
-            Notification.store_id == store_id,
-            Notification.is_active.is_(True),
-        ]
+        filters = _scope(store_id)
         if unread_only:
             filters.append(Notification.read_at.is_(None))
         result = await self.db.execute(
@@ -40,21 +47,17 @@ class NotificationRepository:
         total = await self.db.scalar(
             select(func.count())
             .select_from(Notification)
-            .where(
-                Notification.store_id == store_id,
-                Notification.read_at.is_(None),
-                Notification.is_active.is_(True),
-            )
+            .where(*_scope(store_id), Notification.read_at.is_(None))
         )
         return int(total or 0)
 
     async def mark_read(self, notification_id: str, store_id: str) -> int | None:
-        """Marca una notificacion de la tienda. ``None`` si no es de la tienda;
-        si no, cuantas filas pasaron de no leida a leida (0 o 1)."""
+        """Marca una notificacion activa de la tienda. ``None`` si no es de la
+        tienda o esta inactiva; si no, cuantas filas pasaron de no leida a
+        leida (0 o 1)."""
         result = await self.db.execute(
             select(Notification).where(
-                Notification.id == notification_id,
-                Notification.store_id == store_id,
+                Notification.id == notification_id, *_scope(store_id)
             )
         )
         notification = result.scalar_one_or_none()
@@ -74,11 +77,7 @@ class NotificationRepository:
         """
         result = await self.db.execute(
             update(Notification)
-            .where(
-                Notification.store_id == store_id,
-                Notification.read_at.is_(None),
-                Notification.is_active.is_(True),
-            )
+            .where(*_scope(store_id), Notification.read_at.is_(None))
             .values(read_at=datetime.now(timezone.utc))
         )
         return int(getattr(result, "rowcount", 0) or 0)
