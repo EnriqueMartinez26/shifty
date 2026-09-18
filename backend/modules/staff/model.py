@@ -4,24 +4,15 @@ from infrastructure.persistence.models.appointment_block import (
     AppointmentBlockModel as StaffBlock,
 )
 from infrastructure.persistence.models.staff_service import StaffServiceModel
-from core.models import Base
-from sqlalchemy import Column, ForeignKey, String, Table, JSON
+from sqlalchemy import Table
+from typing import cast
 import enum
 
-staff_services = Table(
-    "staff_services",
-    Base.metadata,
-    Column(
-        "staff_id", String, ForeignKey("staff.id", ondelete="CASCADE"), primary_key=True
-    ),
-    Column(
-        "service_id",
-        String,
-        ForeignKey("services.id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    extend_existing=True,
-)
+# Alias de la tabla del modelo ORM, no una redeclaracion (B3-20). Antes era un
+# Table(..., extend_existing=True) sobre la misma MetaData y sin la columna
+# rating, que solo funcionaba porque el import de arriba corria primero.
+# __table__ esta tipado como FromClause; en un modelo declarativo es la Table.
+staff_services = cast(Table, StaffServiceModel.__table__)
 
 
 class BlockReason(str, enum.Enum):
