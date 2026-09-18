@@ -37,7 +37,7 @@ from modules.users.model import User
 MetricBucket = dict[str, Any]
 
 # Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
-# cobro manual confirmado). Mismo criterio que modules/dashboard/router.py.
+# cobro manual confirmado). Mismo criterio que modules/dashboard/repository.py.
 _ACCREDITED_PAYMENT_STATUSES = [
     PaymentStatus.APPROVED.value,
     PaymentStatus.MANUAL_CONFIRMED.value,
