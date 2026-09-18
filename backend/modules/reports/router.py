@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import AppException, PermissionDeniedException
 
 from core.database import get_db
-from core.roles import REPORT_VIEWERS, has_any_role, store_scope_for
+from core.roles import (
+    REPORT_VIEWERS,
+    ROLE_PROFESSIONAL,
+    canonical_role,
+    has_any_role,
+    store_scope_for,
+)
 from modules.auth.dependencies import get_current_user
 from modules.reports.exporter import export_to_csv, export_to_excel, export_to_pdf
 from modules.reports.schemas import (
@@ -27,7 +33,10 @@ router = CanonicalAPIRouter(prefix="/reports", tags=["Reports"])
 def _report_scope_for(user: User) -> str | None:
     if not has_any_role(user, REPORT_VIEWERS):
         raise PermissionDeniedException("ver reportes")
-    if str(user.role) == "staff" and not user.is_global_admin:
+    # Rol canonico, no el literal legacy "staff" (B5-07): si el vocabulario
+    # persistido cambia, el profesional sigue acotado a sus turnos en vez de
+    # caer en None y ver la tienda completa.
+    if canonical_role(user) == ROLE_PROFESSIONAL and not user.is_global_admin:
         return user.id
     return None
 
