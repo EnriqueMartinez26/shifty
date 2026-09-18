@@ -63,7 +63,7 @@ from modules.notifications.tasks import (
 )
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import quote_promotion, redeem_promotion
-from modules.public_api.repository import PublicRepository
+from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.public_api.schemas import (
     ClientAppointmentItem,
     ClientAppointmentsResponse,
@@ -1326,55 +1326,36 @@ async def client_reschedule_appointment(
         notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
         if new_starts_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
             raise BookingNoticeException(notice_hours)
-        if not await repo._staff_has_schedule_for_slot(
-            staff.id, data.new_starts_at, new_ends_at
-        ):
+        # Horario, bloqueo y choque con la MISMA funcion que el alta publica
+        # (B1-19): antes el router tenia su propia copia (dos metodos privados
+        # del repo, un lock y una consulta de choque a mano) y las dos
+        # divergieron (B1-05 orden del lock, B1-07 buffer). El lock del
+        # profesional y la relectura bajo lock quedan en el repositorio
+        # (regla 4); el turno que se mueve no choca consigo mismo.
+        rechazo = await repo.staff_can_take_range(
+            staff.id,
+            data.new_starts_at,
+            new_ends_at,
+            buffer_minutes=getattr(store, "buffer_minutes", 0) or 0,
+            exclude_appointment_id=original.id,
+        )
+        if rechazo is RangeRejection.OUT_OF_SCHEDULE:
             raise AppException(
                 message="El profesional no atiende en ese horario",
                 http_status=status.HTTP_409_CONFLICT,
                 error_code="OUT_OF_SCHEDULE",
             )
-        # Lock del profesional ANTES de leer bloqueos y conflictos, igual que
-        # el alta publica (create_appointment): leer el bloqueo sin el lock
-        # dejaba colar el turno nuevo dentro de un bloqueo recien creado
-        # (B1-05; carrera en tests/postgres/test_pg_bloqueos.py).
-        await db.execute(select(Staff).where(Staff.id == staff.id).with_for_update())
-        if await repo._staff_has_overlapping_block(
-            staff.id, data.new_starts_at, new_ends_at
-        ):
+        if rechazo is RangeRejection.BLOCKED:
             raise AppException(
                 message="Ese horario esta bloqueado en la agenda",
                 http_status=status.HTTP_409_CONFLICT,
                 error_code="SCHEDULE_BLOCKED",
             )
+        if rechazo is RangeRejection.TAKEN:
+            raise AppointmentConflictException()
 
-        # Mismo criterio que el alta publica (create_appointment) y el panel:
-        # el turno vecino se ensancha por el buffer de la tienda a cada lado.
-        # Sin esto el cliente reprogramaba a un horario pegado que el alta
-        # rechazaba y el profesional perdia el hueco configurado (B1-07).
-        buffer = timedelta(minutes=max(0, getattr(store, "buffer_minutes", 0) or 0))
         try:
             async with db.begin_nested():
-                conflict_res = await db.execute(
-                    select(Appointment)
-                    .where(
-                        Appointment.staff_id == staff.id,
-                        Appointment.status.in_(
-                            [
-                                AppointmentStatus.PENDING.value,
-                                AppointmentStatus.PENDING_PAYMENT.value,
-                                AppointmentStatus.CONFIRMED.value,
-                            ]
-                        ),
-                        Appointment.id != original.id,
-                        Appointment.starts_at < new_ends_at + buffer,
-                        Appointment.ends_at > data.new_starts_at - buffer,
-                    )
-                    .limit(1)
-                )
-                if conflict_res.scalar_one_or_none():
-                    raise AppointmentConflictException()
-
                 original.apply_status_transition(AppointmentStatus.CANCELLED)
                 publish_slot_released(
                     db,

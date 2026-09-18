@@ -8,6 +8,7 @@ Responsabilidades:
 """
 
 from decimal import Decimal
+from enum import Enum
 from core.utils import ARGENTINA_TZ
 from datetime import datetime, timedelta
 
@@ -32,6 +33,14 @@ from modules.users.model import User, UserRole
 # siendo un hash bcrypt valido, asi que un verify eventual devuelve False sin
 # romper (no un formato invalido que lance excepcion).
 _UNUSABLE_CLIENT_PASSWORD_HASH = hash_password(str(ulid.ULID()))
+
+
+class RangeRejection(str, Enum):
+    """Por que un profesional no puede tomar un rango (``staff_can_take_range``)."""
+
+    OUT_OF_SCHEDULE = "out_of_schedule"
+    BLOCKED = "blocked"
+    TAKEN = "taken"
 
 
 class PublicRepository:
@@ -194,19 +203,64 @@ class PublicRepository:
         await self.db.flush()
         return new_client
 
-    async def _staff_has_schedule_for_slot(
-        self, staff_id: str, starts_at: datetime, ends_at: datetime
-    ) -> bool:
-        return staff_id in await self._staff_ids_with_schedule_for_slot(
+    async def staff_can_take_range(
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        buffer_minutes: int,
+        exclude_appointment_id: str | None = None,
+    ) -> RangeRejection | None:
+        """Este profesional, puede tomar este rango? ``None`` si puede.
+
+        Unica respuesta para el alta y para la reprogramacion del cliente
+        (B1-19): antes el router tenia su propia copia (dos metodos privados
+        de aca, un lock y una consulta de choque a mano) y las dos divergieron
+        (B1-05 orden del lock, B1-07 buffer). Si devuelve ``None`` el
+        profesional queda lockeado hasta el commit.
+        """
+        if staff_id not in await self._staff_ids_with_schedule_for_slot(
             [staff_id], starts_at, ends_at
+        ):
+            return RangeRejection.OUT_OF_SCHEDULE
+        return await self._lock_and_recheck(
+            staff_id,
+            starts_at,
+            ends_at,
+            buffer_minutes=buffer_minutes,
+            exclude_appointment_id=exclude_appointment_id,
         )
 
-    async def _staff_has_overlapping_block(
-        self, staff_id: str, starts_at: datetime, ends_at: datetime
-    ) -> bool:
-        return staff_id in await self._staff_ids_with_overlapping_block(
-            [staff_id], starts_at, ends_at
+    async def _lock_and_recheck(
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        buffer_minutes: int,
+        exclude_appointment_id: str | None = None,
+    ) -> RangeRejection | None:
+        """Lock del profesional y, BAJO el lock, bloqueo y choque (regla 4).
+
+        El lock va antes de la lectura que decide: leer el bloqueo sin el lock
+        dejaba colar una reserva dentro de un bloqueo recien creado (carrera
+        reproducida en tests/postgres/test_pg_bloqueos.py).
+        """
+        await self.db.execute(
+            select(Staff).where(Staff.id == staff_id).with_for_update()
         )
+        if await self._staff_ids_with_overlapping_block([staff_id], starts_at, ends_at):
+            return RangeRejection.BLOCKED
+        if await self._staff_ids_with_conflicting_appointment(
+            [staff_id],
+            starts_at,
+            ends_at,
+            buffer_minutes,
+            exclude_appointment_id=exclude_appointment_id,
+        ):
+            return RangeRejection.TAKEN
+        return None
 
     async def _staff_ids_with_schedule_for_slot(
         self, staff_ids: list[str], starts_at: datetime, ends_at: datetime
@@ -265,11 +319,14 @@ class PublicRepository:
         starts_at: datetime,
         ends_at: datetime,
         buffer_minutes: int,
+        *,
+        exclude_appointment_id: str | None = None,
     ) -> set[str]:
         """Profesionales (de ``staff_ids``) con un turno activo que choca. Una consulta.
 
         Mismo criterio que el panel (get_conflicting_appointment): el turno
-        vecino se ensancha por el buffer de la tienda a cada lado.
+        vecino se ensancha por el buffer de la tienda a cada lado. Al
+        reprogramar se excluye el turno que se esta moviendo.
         """
         if not staff_ids:
             return set()
@@ -287,6 +344,11 @@ class PublicRepository:
                 ),
                 Appointment.starts_at < ends_at + buffer,
                 Appointment.ends_at > starts_at - buffer,
+                *(
+                    [Appointment.id != exclude_appointment_id]
+                    if exclude_appointment_id
+                    else []
+                ),
             )
             .distinct()
         )
@@ -327,18 +389,10 @@ class PublicRepository:
         for staff in candidates:
             if staff.id not in with_schedule or staff.id in taken:
                 continue
-            # Lock ANTES de la lectura que decide: leer el bloqueo sin el lock
-            # dejaba colar una reserva dentro de un bloqueo recien creado
-            # (carrera reproducida en tests/postgres/test_pg_bloqueos.py).
-            await self.db.execute(
-                select(Staff).where(Staff.id == staff.id).with_for_update()
-            )
-            if await self._staff_ids_with_overlapping_block(
-                [staff.id], starts_at, ends_at
-            ):
-                continue
-            if await self._staff_ids_with_conflicting_appointment(
-                [staff.id], starts_at, ends_at, buffer_minutes
+            # El horario ya se leyo en lote: decide la relectura bajo lock,
+            # la misma que usa staff_can_take_range (B1-19).
+            if await self._lock_and_recheck(
+                staff.id, starts_at, ends_at, buffer_minutes=buffer_minutes
             ):
                 continue
             return staff
