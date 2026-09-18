@@ -66,7 +66,6 @@ ignore = [
 "main.py" = ["E402"]
 "modules/appointments/router.py" = ["E402"]
 "modules/appointments/model.py" = ["F401"]
-"modules/staff/model.py" = ["F401"]
 "modules/users/model.py" = ["F401"]
 "run_migrations.py" = ["E402"]
 "scripts/bootstrap_superadmin.py" = ["E402"]
