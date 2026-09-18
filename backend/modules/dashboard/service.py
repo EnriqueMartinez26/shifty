@@ -84,7 +84,7 @@ class DashboardService:
         self.repository = repository
 
     async def _occupancy_today(self, today: date, window: _Window) -> float:
-        """Minutos reservados hoy sobre minutos de agenda del dia de la semana."""
+        """Minutos reservados hoy sobre la agenda del dia del staff activo."""
         booked = await self.repository.booked_minutes_between(
             window.desde, window.hasta
         )
