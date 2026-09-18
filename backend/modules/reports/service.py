@@ -233,6 +233,19 @@ def _client_stats(aggregation: _SummaryAggregation) -> ReportClientStats:
     )
 
 
+def _weekday_count(from_date: date, total_days: int, weekday: int) -> int:
+    """Cuantas fechas de ``[from_date, from_date + total_days)`` caen en ``weekday``.
+
+    Aritmetica de calendario (B5-20): cada semana completa aporta una, y el
+    resto de ``total_days % 7`` dias aporta otra si ``weekday`` esta entre los
+    primeros dias de la semana parcial, contados desde ``from_date``. Antes se
+    recorria el rango fecha por fecha por cada horario de cada profesional.
+    """
+    full_weeks, remainder = divmod(total_days, 7)
+    offset = (weekday - from_date.weekday()) % 7
+    return full_weeks + (1 if offset < remainder else 0)
+
+
 def _available_minutes(
     schedules: list[Schedule], from_date: date, total_days: int
 ) -> int:
@@ -246,11 +259,7 @@ def _available_minutes(
             ).total_seconds()
             // 60
         )
-        matching_days = sum(
-            1
-            for offset in range(total_days)
-            if (from_date + timedelta(days=offset)).weekday() == schedule.day_of_week
-        )
+        matching_days = _weekday_count(from_date, total_days, schedule.day_of_week)
         available_minutes += daily_minutes * matching_days
     return available_minutes
 
