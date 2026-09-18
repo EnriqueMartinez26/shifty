@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
 from urllib.parse import urlencode, urlparse
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 import httpx
@@ -259,6 +260,42 @@ async def _get_gateway_config(
     return result.scalar_one_or_none()
 
 
+# Configuracion del gateway ya resuelta por tienda. La arma un lote una sola
+# vez (load_gateway_configs) y la pasa hacia abajo: cada request HTTP a MP
+# arrastraba su propia consulta a payment_gateway_configs, y el inbox la
+# repetia por cada webhook (regla 12; 2026-09-17, B2-13).
+GatewayConfigs = Mapping[str, PaymentGatewayConfig]
+
+
+async def load_gateway_configs(
+    db: AsyncSession, store_ids: Iterable[str | None]
+) -> dict[str, PaymentGatewayConfig]:
+    """Una lectura con ``in_()`` para todas las tiendas del lote.
+
+    Una tienda sin fila queda fuera del dict: ``configs.get(store_id)`` es
+    None, igual que lo que devolvia ``_get_gateway_config``.
+    """
+    ids = {store_id for store_id in store_ids if store_id}
+    if not ids:
+        return {}
+    result = await db.execute(
+        select(PaymentGatewayConfig).where(
+            PaymentGatewayConfig.store_id.in_(ids),
+            PaymentGatewayConfig.provider == "mercadopago",
+        )
+    )
+    return {config.store_id: config for config in result.scalars().all()}
+
+
+async def resolve_gateway_config(
+    db: AsyncSession, store_id: str, configs: GatewayConfigs | None = None
+) -> PaymentGatewayConfig | None:
+    """La config del lote si vino; si no, la consulta de siempre."""
+    if configs is not None:
+        return configs.get(store_id)
+    return await _get_gateway_config(db, store_id)
+
+
 async def _get_store(db: AsyncSession, store_id: str) -> Store | None:
     result = await db.execute(select(Store).where(Store.id == store_id))
     return result.scalar_one_or_none()
@@ -418,8 +455,9 @@ async def _mercadopago_api_request_for_store(
     method: str,
     path: str,
     json_body: dict[str, JsonValue] | None = None,
+    configs: GatewayConfigs | None = None,
 ) -> dict[str, JsonValue] | None:
-    config = await _get_gateway_config(db, store_id)
+    config = await resolve_gateway_config(db, store_id, configs)
     access_token = _resolve_access_token(config)
     if not access_token:
         return None
@@ -553,13 +591,18 @@ async def expire_mercadopago_preference(
 
 
 async def fetch_mercadopago_payment(
-    db: AsyncSession, *, store_id: str, payment_id: str
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment_id: str,
+    configs: GatewayConfigs | None = None,
 ) -> dict[str, JsonValue] | None:
     return await _mercadopago_api_request_for_store(
         db,
         store_id=store_id,
         method="GET",
         path=f"/v1/payments/{payment_id}",
+        configs=configs,
     )
 
 

@@ -12,13 +12,14 @@ from modules.notifications.model import NotificationType
 from modules.payments.model import (
     OutboxMessage,
     Payment,
-    PaymentGatewayConfig,
     PaymentStatus,
 )
 from modules.payments.model import JsonValue
 from modules.services.model import Service
 from modules.payments.service import (
+    GatewayConfigs,
     fetch_mercadopago_payment,
+    resolve_gateway_config,
     stamp_payment_from_status,
     sync_appointment_with_payment,
 )
@@ -61,6 +62,7 @@ async def enrich_mercadopago_webhook_payload(
     *,
     store_id: str,
     payload: dict[str, Any],
+    configs: GatewayConfigs | None = None,
 ) -> dict[str, Any]:
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -70,7 +72,7 @@ async def enrich_mercadopago_webhook_payload(
 
     try:
         payment_details = await fetch_mercadopago_payment(
-            db, store_id=store_id, payment_id=payment_id
+            db, store_id=store_id, payment_id=payment_id, configs=configs
         )
     except Exception:
         return payload
@@ -174,6 +176,7 @@ async def _validate_payment_integrity(
     store_id: str,
     payment: Payment,
     payload: dict[str, Any],
+    configs: GatewayConfigs | None = None,
 ) -> None:
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -214,13 +217,7 @@ async def _validate_payment_integrity(
     ):
         raise RuntimeError("La preferencia acreditada no coincide con la esperada")
 
-    config_result = await db.execute(
-        select(PaymentGatewayConfig).where(
-            PaymentGatewayConfig.store_id == store_id,
-            PaymentGatewayConfig.provider == "mercadopago",
-        )
-    )
-    config = config_result.scalar_one_or_none()
+    config = await resolve_gateway_config(db, store_id, configs)
     collector_id = str(data.get("collector_id") or "").strip()
     if config and config.oauth_user_id and collector_id:
         if collector_id != config.oauth_user_id:
@@ -255,7 +252,11 @@ async def _notify_payment_approved(
 
 
 async def apply_mercadopago_webhook_payload(
-    db: AsyncSession, *, store_id: str, payload: dict[str, Any]
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payload: dict[str, Any],
+    configs: GatewayConfigs | None = None,
 ) -> bool:
     payment = await find_payment_for_webhook(db, store_id, payload)
     payment_status = resolve_payment_status(payload)
@@ -263,7 +264,7 @@ async def apply_mercadopago_webhook_payload(
         return False
 
     await _validate_payment_integrity(
-        db, store_id=store_id, payment=payment, payload=payload
+        db, store_id=store_id, payment=payment, payload=payload, configs=configs
     )
 
     raw_data = payload.get("data")
