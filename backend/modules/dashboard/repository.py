@@ -95,9 +95,18 @@ class DashboardRepository:
         return float(result.scalar() or 0)
 
     async def schedules_for_weekday(self, day_of_week: int) -> list[Schedule]:
+        """Horarios del dia de la semana del staff ACTIVO (capacidad de hoy).
+
+        B5-11: sin el join, los horarios de un profesional dado de baja seguian
+        sumando minutos disponibles y diluian ``occupancy_rate``. Mismo criterio
+        que el reporte por profesional (``Staff.is_active``).
+        """
         result = await self.db.execute(
-            select(Schedule).where(
+            select(Schedule)
+            .join(Staff, Schedule.staff_id == Staff.id)
+            .where(
                 Schedule.day_of_week == day_of_week,
+                Staff.is_active.is_(True),
                 *_store_scope(self.store_id, Schedule.store_id),
             )
         )
