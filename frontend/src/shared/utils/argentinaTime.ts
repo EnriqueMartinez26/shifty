@@ -94,6 +94,21 @@ export const formatArgentinaDateDisplay = (iso: string): string => {
 }
 
 /**
+ * Minutos transcurridos desde la medianoche argentina de un instante ISO.
+ * `null` si el ISO no se puede leer. Es lo que necesita la grilla del
+ * calendario para ubicar una tarjeta: la posicion vertical se calcula sobre
+ * la hora de pared argentina, igual que el rotulo que la acompania.
+ */
+export const argentinaMinutesOfDay = (iso: string): number | null => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return soloFecha.hour * 60 + soloFecha.minute
+  const instant = parseInstant(iso)
+  if (!instant) return null
+  const wall = wallClockInArgentina(instant)
+  return wall.hour * 60 + wall.minute
+}
+
+/**
  * Convierte una fecha `yyyy-MM-dd` y una hora `HH:mm` tipeadas en hora
  * argentina al instante UTC en ISO (con `Z`). Es la inversa de
  * `formatArgentinaDate`/`formatArgentinaTime` y no depende de la zona del

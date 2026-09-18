@@ -1,5 +1,6 @@
 import {
   argentinaLocalToUtcIso,
+  argentinaMinutesOfDay,
   formatArgentinaDate,
   formatArgentinaDateDisplay,
   formatArgentinaTime
@@ -37,6 +38,26 @@ describe('argentinaTime', () => {
   it('rechaza entradas malformadas', () => {
     expect(() => argentinaLocalToUtcIso('2026-13', '09:00')).toThrow()
     expect(() => argentinaLocalToUtcIso('2026-09-15', 'nueve')).toThrow()
+  })
+})
+
+describe('argentinaMinutesOfDay', () => {
+  it('cuenta los minutos desde la medianoche argentina, no la UTC', () => {
+    expect(argentinaMinutesOfDay('2026-09-15T12:00:00Z')).toBe(9 * 60)
+    expect(argentinaMinutesOfDay('2026-09-15T12:30:00Z')).toBe(9 * 60 + 30)
+  })
+
+  it('un instante de 00:00Z son las 21:00 del dia anterior', () => {
+    expect(argentinaMinutesOfDay('2026-09-16T00:00:00Z')).toBe(21 * 60)
+  })
+
+  it('devuelve null ante un ISO ilegible, para que el llamador decida', () => {
+    expect(argentinaMinutesOfDay('no-es-una-fecha')).toBeNull()
+    expect(argentinaMinutesOfDay('')).toBeNull()
+  })
+
+  it('una fecha sin hora vale medianoche, igual que los demas formateadores', () => {
+    expect(argentinaMinutesOfDay('2026-09-27')).toBe(0)
   })
 })
 

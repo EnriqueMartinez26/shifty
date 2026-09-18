@@ -6,7 +6,6 @@ import {
   endOfMonth,
   endOfWeek,
   format,
-  isSameDay,
   startOfDay,
   startOfMonth,
   startOfWeek,
@@ -28,6 +27,7 @@ import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMe
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
+  formatArgentinaDateDisplay,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
@@ -60,6 +60,7 @@ import {
 } from '../hooks/useCalendarAgenda'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
+import { MIN_APPOINTMENT_MINUTES, gridPlacement } from '../lib/calendarGrid'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
@@ -122,8 +123,18 @@ const fieldStyle = {
   color: colors2000s.text.primary
 }
 
-const toDateInput = (date: Date) => formatArgentinaDate(date.toISOString())
-const toTimeInput = (date: Date) => formatArgentinaTime(date.toISOString())
+/**
+ * `toISOString()` de un `Date` invalido no devuelve vacio: lanza `RangeError`.
+ * En un camino de render eso tumba la agenda entera por un solo turno con
+ * fecha corrupta, asi que la cadena vacia entra a los formateadores de
+ * `argentinaTime`, que ya la resuelven como "sin dato".
+ */
+const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.toISOString())
+
+const toDateInput = (date: Date) => formatArgentinaDate(toInstantIso(date))
+const toTimeInput = (date: Date) => formatArgentinaTime(toInstantIso(date))
+/** `dd/MM` en hora argentina, sin el anio: la lista ya esta acotada al rango. */
+const toDayMonthLabel = (iso: string) => formatArgentinaDateDisplay(iso).slice(0, 5)
 
 const eventPriority = (event: UnifiedCalendarEvent) => {
   if (event.type === 'block') return 0
@@ -246,7 +257,9 @@ export const CalendarContainer: React.FC = () => {
   }, [blocksQuery.data, rangeEnd, rangeStart])
 
   const blocksForSelectedDate = useMemo(() => {
-    return blocksInRange.filter((block) => block.starts_at.slice(0, 10) === dateStr)
+    // `starts_at` es UTC: recortar sus 10 primeros caracteres daba el dia UTC,
+    // asi que un bloqueo de 21:00 o mas tarde desaparecia del dia elegido.
+    return blocksInRange.filter((block) => formatArgentinaDate(block.starts_at) === dateStr)
   }, [blocksInRange, dateStr])
 
   const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
@@ -297,20 +310,19 @@ export const CalendarContainer: React.FC = () => {
 
   const appointmentCards = useMemo(() => {
     return unifiedEvents
-      .filter((event) => event.type !== 'block' && isSameDay(event.startsAt, selectedDate))
+      .filter(
+        (event) =>
+          event.type !== 'block' && formatArgentinaDate(toInstantIso(event.startsAt)) === dateStr
+      )
       .map((event) => {
-        const startMinutes = event.startsAt.getUTCHours() * 60 + event.startsAt.getUTCMinutes()
-        const endMinutes = event.endsAt.getUTCHours() * 60 + event.endsAt.getUTCMinutes()
-        const offsetMinutes = startMinutes - 4 * 60
-        const durationMinutes = Math.max(endMinutes - startMinutes, 30)
+        const startIso = toInstantIso(event.startsAt)
         return {
           ...event,
-          top: `${Math.max(offsetMinutes / 15, 0) * 64}px`,
-          height: `${Math.max((durationMinutes / 15) * 64, 64)}px`,
-          timeLabel: format(event.startsAt, 'HH:mm')
+          ...gridPlacement(startIso, toInstantIso(event.endsAt), MIN_APPOINTMENT_MINUTES),
+          timeLabel: formatArgentinaTime(startIso)
         }
       })
-  }, [selectedDate, unifiedEvents])
+  }, [dateStr, unifiedEvents])
 
   const timelineEvents = useMemo(() => {
     return unifiedEvents.filter((event) => event.type === 'block' || event.type === 'absence')
@@ -584,7 +596,8 @@ export const CalendarContainer: React.FC = () => {
           {event.title}
         </p>
         <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
-          {format(event.startsAt, 'HH:mm')} - {format(event.endsAt, 'HH:mm')} · {event.staffName}
+          {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
+          {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
         </p>
         {renderActions(event, compact)}
         {renderClientWhatsApp(event, compact)}
@@ -672,11 +685,7 @@ export const CalendarContainer: React.FC = () => {
                     {blocksForSelectedDate
                       .filter((block) => block.staff_id === staff.id && block.is_active)
                       .map((block) => {
-                        const start = new Date(block.starts_at)
-                        const end = new Date(block.ends_at)
-                        const startMinutes = start.getUTCHours() * 60 + start.getUTCMinutes()
-                        const endMinutes = end.getUTCHours() * 60 + end.getUTCMinutes()
-                        const offsetMinutes = startMinutes - 4 * 60
+                        const placement = gridPlacement(block.starts_at, block.ends_at)
                         return (
                           <button
                             key={block.public_id}
@@ -684,8 +693,7 @@ export const CalendarContainer: React.FC = () => {
                             onClick={() => handleEditBlock(block)}
                             className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] text-left"
                             style={{
-                              top: `${Math.max(offsetMinutes / 15, 0) * 64}px`,
-                              height: `${Math.max(((endMinutes - startMinutes) / 15) * 64, 64)}px`,
+                              ...placement,
                               background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
                               borderColor: '#fb923c',
                               borderLeftColor: '#c2410c',
@@ -696,7 +704,8 @@ export const CalendarContainer: React.FC = () => {
                               {block.reason}
                             </p>
                             <p className="text-[10px] font-black text-orange-900">
-                              {format(start, 'HH:mm')} - {format(end, 'HH:mm')}
+                              {formatArgentinaTime(block.starts_at)} -{' '}
+                              {formatArgentinaTime(block.ends_at)}
                             </p>
                           </button>
                         )
@@ -767,7 +776,10 @@ export const CalendarContainer: React.FC = () => {
         className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
       >
         {daysInRange.map((day) => {
-          const dayEvents = unifiedEvents.filter((event) => isSameDay(event.startsAt, day))
+          const dayKey = format(day, 'yyyy-MM-dd')
+          const dayEvents = unifiedEvents.filter(
+            (event) => formatArgentinaDate(toInstantIso(event.startsAt)) === dayKey
+          )
           return (
             <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
               <div className="mb-3">
@@ -1097,8 +1109,9 @@ export const CalendarContainer: React.FC = () => {
                       className="text-[11px] font-bold"
                       style={{ color: colors2000s.text.secondary }}
                     >
-                      {format(event.startsAt, 'dd/MM HH:mm')} - {format(event.endsAt, 'HH:mm')} ·{' '}
-                      {event.staffName}
+                      {toDayMonthLabel(toInstantIso(event.startsAt))}{' '}
+                      {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
+                      {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
                     </p>
                   </div>
                   <span
