@@ -22,6 +22,7 @@ from core.exceptions import (
     AuthenticationException,
     InvalidTokenException,
     PermissionDeniedException,
+    ResourceNotFoundException,
     RateLimitedException,
     UserNotFoundException,
 )
@@ -541,7 +542,7 @@ async def revoke_own_session(session_id: str, user: User, db: AsyncSession) -> N
     )
     session = result.scalar_one_or_none()
     if session is None:
-        raise UserNotFoundException(identifier=session_id)
+        raise ResourceNotFoundException(resource="Sesión", identifier=session_id)
     if session.revoked_at is None:
         session.revoked_at = datetime.now(timezone.utc)
         await db.commit()
