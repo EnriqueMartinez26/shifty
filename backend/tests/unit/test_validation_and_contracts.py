@@ -83,3 +83,38 @@ def test_appointment_create_rejects_control_chars_in_notes() -> None:
 def test_appointment_notes_staff_update_rejects_control_chars_in_notes() -> None:
     with pytest.raises(ValueError, match="caracteres de control"):
         AppointmentNotesStaffUpdate(notes_staff="Nota mala\x0e")
+
+
+def test_montos_de_promocion_tienen_techo_de_negocio() -> None:
+    """Regla 9: todo numero de la API lleva ge Y le.
+
+    2026-09-17, hallazgo B2-15: ``value`` y ``min_service_amount`` de
+    promotions/schemas.py tenian cota inferior y no superior. Un cupon
+    "fixed" de mil millones se aceptaba y despues se recortaba en silencio en
+    ``_calculate_discount``. El techo es el mismo 10_000_000 que ya usan
+    payments/schemas.py y ledger/schemas.py.
+    """
+    from decimal import Decimal
+
+    from pydantic import ValidationError
+
+    from modules.promotions.schemas import PromotionCreate, PromotionUpdate
+
+    base: dict[str, object] = {
+        "code": "TOPE10",
+        "title": "Tope",
+        "promotion_type": "fixed",
+    }
+    PromotionCreate.model_validate({**base, "value": Decimal("10000000")})
+    PromotionCreate.model_validate(
+        {**base, "value": Decimal("1"), "min_service_amount": Decimal("10000000")}
+    )
+
+    excedido = Decimal("10000000.01")
+    for campo in ("value", "min_service_amount"):
+        with pytest.raises(ValidationError):
+            PromotionCreate.model_validate(
+                {**base, "value": Decimal("1"), campo: excedido}
+            )
+        with pytest.raises(ValidationError):
+            PromotionUpdate.model_validate({campo: excedido})
