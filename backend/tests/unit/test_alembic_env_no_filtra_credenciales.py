@@ -79,8 +79,9 @@ def test_parse_db_url_no_incluye_usuario_ni_password_en_el_error(
     mensaje = str(excinfo.value)
     assert "S3cr3t" not in mensaje
     assert "shifty_user" not in mensaje
-    # Lo no sensible sigue ahi para diagnosticar: el esquema que no matcheo.
-    assert "'postgres'" in mensaje
+    # Lo no sensible sigue ahi para diagnosticar: el esquema que no matcheo,
+    # con la misma redaccion que run_migrations.py (helper unico, S-01).
+    assert "postgres://[redacted]@" in mensaje
 
 
 def test_env_py_con_migration_url_invalida_no_filtra_la_password(

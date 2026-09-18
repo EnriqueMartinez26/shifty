@@ -282,13 +282,50 @@ class Settings(BaseSettings):
     )
 
 
-def redact_url(value: str) -> str:
-    """Tapa toda URL embebida dejando solo el esquema.
+_ESQUEMA = r"([a-zA-Z][a-zA-Z0-9+.-]*://)"
+_URL_ENTERA = re.compile(_ESQUEMA + r"[^\s]+")
+# Del esquema hasta el ULTIMO `@` del token: una contrasena generada puede
+# traer `/`, `+` o `@` sin escapar, y cortar en el primero de ellos dejaba el
+# resto de la contrasena afuera (o la URL entera, si el corte caia antes del
+# `@`: rechazo V-diff de S-01, 2026-09-18). Peca por tapar de mas: si la ruta
+# o la query traen otro `@`, se tapa tambien el host.
+_CREDENCIALES_DE_URL = re.compile(_ESQUEMA + r"[^\s]*@")
+_DESDE_EL_ESQUEMA_HASTA_EL_FINAL = re.compile(_ESQUEMA + r".*", re.DOTALL)
+_MARCA = "[redacted]"
+
+
+def _queda_un_arroba_tras_un_esquema(value: str) -> bool:
+    sin_marcas = value.replace(_MARCA + "@", "")
+    esquema = re.search(_ESQUEMA, sin_marcas)
+    return esquema is not None and "@" in sin_marcas[esquema.end() :]
+
+
+def redact_url(value: str, *, keep_target: bool = False) -> str:
+    """Unica redaccion de URLs con credenciales del repo (S-01).
 
     Una ``DATABASE_URL`` lleva ``usuario:contraseña@host``; ningun mensaje de
-    error (settings, scripts de migracion) debe cruzarla entera a un log.
+    error ni log la cruza entera (regla 20). Dos niveles, un solo helper:
+
+    * ``keep_target=True`` (scripts y migraciones): tapa ``usuario:contraseña``
+      y deja esquema, host, puerto y base, que es lo que hace falta para saber
+      contra que deploy se estaba apuntando.
+    * por defecto (error de settings): tapa todo lo que sigue al esquema. Ese
+      texto sale en el 503 publico de arranque, donde tampoco va el hostname
+      interno.
+
+    Red de seguridad para los dos: si despues de redactar todavia queda un
+    `@` detras de un esquema (una contrasena con un espacio parte la URL en
+    dos tokens), no se sabe donde terminan las credenciales y se tapa desde
+    el esquema hasta el final del texto. Se pierde el destino, nunca un
+    pedazo de la contrasena.
     """
-    return re.sub(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^\s]+", r"\1[redacted]", value)
+    if keep_target:
+        redactada = _CREDENCIALES_DE_URL.sub(r"\1" + _MARCA + "@", value)
+    else:
+        redactada = _URL_ENTERA.sub(r"\1" + _MARCA, value)
+    if _queda_un_arroba_tras_un_esquema(redactada):
+        return _DESDE_EL_ESQUEMA_HASTA_EL_FINAL.sub(r"\1" + _MARCA, value)
+    return redactada
 
 
 def _sanitize_settings_error(value: str) -> str:
