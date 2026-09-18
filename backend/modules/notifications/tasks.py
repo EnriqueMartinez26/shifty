@@ -275,7 +275,11 @@ def rebook_url(base: str, slug: str | None, service: Any, staff: Any) -> str:
         return ""
     params = []
     service_id = getattr(service, "public_id", None)
-    staff_id = getattr(staff, "public_id", None) or getattr(staff, "id", None)
+    # B4-11 (2026-09-18): sin fallback a ``staff.id``. Con el modelo real no
+    # se alcanzaba (``Staff.public_id`` devuelve ``id``) y sugeria que un id
+    # interno podia salir en el link al cliente. ``getattr`` porque el
+    # profesional puede faltar (``waitlist/offers.py`` lo obtiene con db.get).
+    staff_id = getattr(staff, "public_id", None)
     if service_id:
         params.append(f"service={service_id}")
     if staff_id:

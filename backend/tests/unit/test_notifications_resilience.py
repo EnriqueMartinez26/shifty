@@ -51,7 +51,9 @@ def _fila(now: datetime, horas_hasta: float) -> tuple[Any, Any, Any, Any, Any]:
         client_name="Cliente",
     )
     service = SimpleNamespace(name="Consulta", public_id="svc-1")
-    staff = SimpleNamespace(display_name="Pro Demo", id="st-1", kind="person")
+    staff = SimpleNamespace(
+        display_name="Pro Demo", id="st-1", public_id="st-1", kind="person"
+    )
     client = SimpleNamespace(email="cliente@example.com", phone="+5491100000000")
     store = SimpleNamespace(send_email_reminders=True, slug="demo", name="Demo")
     return (appointment, service, staff, client, store)
