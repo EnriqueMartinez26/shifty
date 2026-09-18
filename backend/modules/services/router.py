@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import Depends, Path, Response, status
+from fastapi import Depends, Path, Query, Response, status
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from core.exceptions import ServiceNotFoundException
+from core.roles import STORE_MANAGERS, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
@@ -33,10 +34,22 @@ async def create_service(
 
 @router.get("/", response_model=list[ServiceResponse])
 async def list_services(
-    user: User = Depends(get_current_staff), db: AsyncSession = Depends(get_db)
+    # B6-06: sin esto un servicio borrado (soft delete) no se podia enumerar
+    # para reactivarlo. Default False = la respuesta de siempre (el front no
+    # lo manda). Ver inactivos es gestion del catalogo: mismos roles que
+    # borran/reactivan.
+    include_inactive: bool = Query(False),
+    user: User = Depends(get_current_staff),
+    db: AsyncSession = Depends(get_db),
 ) -> list[ServiceResponse]:
+    if include_inactive:
+        require_roles(
+            user,
+            STORE_MANAGERS,
+            "Solo un administrador de tienda ve servicios inactivos",
+        )
     repo = ServiceRepository(db)
-    services = await repo.get_all(user.store_id)
+    services = await repo.get_all(user.store_id, only_active=not include_inactive)
     return [to_service_response(service) for service in services]
 
 
