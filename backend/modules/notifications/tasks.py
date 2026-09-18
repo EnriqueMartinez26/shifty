@@ -5,6 +5,8 @@ import httpx
 import re
 import smtplib
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Any, cast
@@ -86,23 +88,100 @@ def _header_safe(value: str) -> str:
     return " ".join(value.split()) if value else value
 
 
-async def _send_email(to: str, subject: str, body: str) -> bool:
-    def _send() -> bool:
-        message = EmailMessage()
-        message["Subject"] = _header_safe(subject)
-        message["From"] = settings.EMAILS_FROM_EMAIL
-        message["To"] = _header_safe(to)
-        message.set_content(body)
+def _build_message(to: str, subject: str, body: str) -> EmailMessage:
+    message = EmailMessage()
+    message["Subject"] = _header_safe(subject)
+    message["From"] = settings.EMAILS_FROM_EMAIL
+    message["To"] = _header_safe(to)
+    message.set_content(body)
+    return message
 
+
+# El servidor respondio con un error (destinatario rechazado, 5xx al DATA): la
+# conversacion sigue coherente y la conexion se puede seguir usando.
+_SMTP_REPLIES: tuple[type[Exception], ...] = (
+    smtplib.SMTPRecipientsRefused,
+    smtplib.SMTPResponseException,
+)
+
+
+class SmtpSession:
+    """Una conexion SMTP (conexion + STARTTLS + LOGIN) para varios envios.
+
+    B4-08 (2026-09-18): ``_send_email`` abria conexion, STARTTLS y LOGIN por
+    cada mensaje, y el lote de recordatorios pagaba N handshakes en serie
+    contra el time limit de Celery. Decision del coordinador: una sesion
+    reutilizable a lo largo del lote (no una API de lista), para conservar el
+    ciclo de B4-02 por turno (presupuesto -> reclamo -> envio -> liberacion).
+
+    La conexion se abre en el primer envio, no al entrar: un lote sin mails
+    no toca el SMTP, y el cierre nunca ocurre con el lote de la base sin
+    commitear.
+
+    Revision V-diff (2026-09-18): una conexion YA USADA se sondea con ``NOOP``
+    antes de cada envio; si esta muerta se descarta y se abre otra. Un fallo
+    del envio en si NUNCA se reintenta: smtplib convierte en
+    ``SMTPServerDisconnected`` hasta el timeout esperando el ``250`` del
+    DATA, y si el servidor ya habia aceptado el mensaje, reenviarlo le
+    mandaba el recordatorio dos veces al cliente. ``send`` devuelve False y
+    el llamador libera su reclamo como en B4-02.
+    """
+
+    def __init__(self) -> None:
+        self._smtp: smtplib.SMTP | None = None
+
+    def _connect(self) -> smtplib.SMTP:
+        smtp = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
         try:
-            with smtplib.SMTP(
-                settings.SMTP_HOST, settings.SMTP_PORT, timeout=10
-            ) as smtp:
-                smtp.starttls()
-                smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
-                smtp.send_message(message)
+            smtp.starttls()
+            smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
+        except Exception:
+            smtp.close()
+            raise
+        return smtp
+
+    def _discard(self) -> None:
+        smtp, self._smtp = self._smtp, None
+        if smtp is not None:
+            try:
+                smtp.close()
+            except Exception:
+                pass
+
+    def _probe(self) -> None:
+        """Descarta la conexion reusada si no responde al NOOP."""
+        if self._smtp is None:
+            return
+        try:
+            code, _ = self._smtp.noop()
+        except Exception as exc:
+            logger.warning("smtp_session_reconnect", error_type=type(exc).__name__)
+            self._discard()
+            return
+        if code != 250:
+            logger.warning("smtp_session_reconnect", noop_code=code)
+            self._discard()
+
+    def _send_sync(self, message: EmailMessage) -> None:
+        self._probe()
+        if self._smtp is None:
+            self._smtp = self._connect()
+        try:
+            self._smtp.send_message(message)
+        except Exception as exc:
+            # Sin reintento: el DATA pudo haber llegado. Si el servidor
+            # respondio con un error la conversacion sigue coherente; si no,
+            # la conexion queda en estado incierto y se descarta.
+            if not isinstance(exc, _SMTP_REPLIES):
+                self._discard()
+            raise
+
+    async def send(self, to: str, subject: str, body: str) -> bool:
+        message = _build_message(to, subject, body)
+        try:
+            await asyncio.to_thread(self._send_sync, message)
             return True
-        except Exception as exc:  # pragma: no cover - depende de SMTP real
+        except Exception as exc:
             logger.error(
                 "smtp_send_failed",
                 to=_mask_email(to),
@@ -111,7 +190,33 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
             )
             return False
 
-    return await asyncio.to_thread(_send)
+    def close(self) -> None:
+        smtp, self._smtp = self._smtp, None
+        if smtp is None:
+            return
+        try:
+            smtp.quit()
+        except Exception:
+            try:
+                smtp.close()
+            except Exception:
+                pass
+
+
+@asynccontextmanager
+async def smtp_session() -> AsyncIterator[SmtpSession]:
+    """Sesion SMTP para un lote; se cierra al salir aunque el lote falle."""
+    session = SmtpSession()
+    try:
+        yield session
+    finally:
+        await asyncio.to_thread(session.close)
+
+
+async def _send_email(to: str, subject: str, body: str) -> bool:
+    """Envio suelto: abre y cierra su propia sesion."""
+    async with smtp_session() as session:
+        return await session.send(to, subject, body)
 
 
 def is_deliverable_email(email: str | None) -> bool:
@@ -409,13 +514,19 @@ async def _send_whatsapp(to_phone: str, body: str) -> bool:
 
 
 async def notify_client_reminder(
-    *, phone: str | None, email: str | None, details: dict[str, Any]
+    *,
+    phone: str | None,
+    email: str | None,
+    details: dict[str, Any],
+    smtp: SmtpSession | None = None,
 ) -> dict[str, str]:
     """Avisa al cliente por el mejor canal disponible.
 
     WhatsApp primero: el telefono es obligatorio al reservar y el mail no, asi
     que antes quien reservaba sin mail no recibia ningun recordatorio. Si
     WhatsApp no esta configurado o falla, se cae al mail.
+
+    ``smtp`` es la sesion del lote (B4-08); sin ella el mail sale suelto.
     """
     cuerpo = _reminder_body(details)
 
@@ -432,7 +543,12 @@ async def notify_client_reminder(
         email = None
 
     if email:
-        if await _send_email(email, _reminder_subject(details), cuerpo):
+        asunto = _reminder_subject(details)
+        if smtp is not None:
+            enviado = await smtp.send(email, asunto, cuerpo)
+        else:
+            enviado = await _send_email(email, asunto, cuerpo)
+        if enviado:
             logger.info(
                 "reminder_sent", canal="email", appointment=details.get("public_id")
             )
@@ -594,7 +710,11 @@ async def enqueue_confirmation_email(
 
 
 async def _dispatch_reminder(
-    repo: Any, row: tuple[Any, Any, Any, Any, Any], stage: ReminderStage, now: datetime
+    repo: Any,
+    row: tuple[Any, Any, Any, Any, Any],
+    stage: ReminderStage,
+    now: datetime,
+    smtp: SmtpSession | None = None,
 ) -> bool:
     """Reclama la marca durable y manda una etapa. Devuelve si se envio."""
     appointment, service, staff, client, store = row
@@ -608,6 +728,7 @@ async def _dispatch_reminder(
             phone=getattr(client, "phone", None),
             email=getattr(client, "email", None),
             details=details,
+            smtp=smtp,
         )
     except Exception as exc:
         # Se libera la marca para reintentar en la proxima corrida.
@@ -658,25 +779,29 @@ async def process_due_appointment_reminders(
             )
             # Lote lleno: puede haber mas turnos pendientes afuera del tope.
             batch_full = len(rows) >= limit
-            for index, row in enumerate(rows):
-                if time.monotonic() >= deadline:
-                    # Presupuesto agotado: no se reclama ni uno mas. Los que
-                    # quedan siguen en NULL y salen en el proximo tick.
-                    unexamined = len(rows) - index
-                    logger.warning(
-                        "reminders_time_budget_exhausted",
-                        unexamined=unexamined,
-                        published=published,
-                        budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
-                    )
-                    break
-                appointment, _service, _staff, _client, store = row
-                if not getattr(store, "send_email_reminders", True):
-                    skipped += 1
-                    continue
-                for stage in due_stages(appointment, now):
-                    if await _dispatch_reminder(repo, row, stage, now):
-                        published += 1
+            # B4-08: una sola conexion SMTP para todo el lote. El ciclo por
+            # turno de B4-02 no cambia (presupuesto -> reclamo -> envio ->
+            # liberacion ante fallo); solo el envio reusa la conexion.
+            async with smtp_session() as smtp:
+                for index, row in enumerate(rows):
+                    if time.monotonic() >= deadline:
+                        # Presupuesto agotado: no se reclama ni uno mas. Los que
+                        # quedan siguen en NULL y salen en el proximo tick.
+                        unexamined = len(rows) - index
+                        logger.warning(
+                            "reminders_time_budget_exhausted",
+                            unexamined=unexamined,
+                            published=published,
+                            budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
+                        )
+                        break
+                    appointment, _service, _staff, _client, store = row
+                    if not getattr(store, "send_email_reminders", True):
+                        skipped += 1
+                        continue
+                    for stage in due_stages(appointment, now):
+                        if await _dispatch_reminder(repo, row, stage, now, smtp):
+                            published += 1
         finally:
             set_tenant_context(None, False)
 

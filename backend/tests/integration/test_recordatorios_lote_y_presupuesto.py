@@ -90,7 +90,11 @@ async def test_presupuesto_agotado_deja_de_reclamar_y_no_pierde_recordatorios(
     tardanza = notification_tasks.REMINDER_TIME_BUDGET_SECONDS * 0.6
 
     async def envio_lento(
-        *, phone: str | None, email: str | None, details: dict[str, Any]
+        *,
+        phone: str | None,
+        email: str | None,
+        details: dict[str, Any],
+        smtp: Any = None,
     ) -> dict[str, str]:
         reloj.ahora += tardanza
         enviados.append(details)
