@@ -60,10 +60,12 @@ import {
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
 import {
-  GRID_SLOT_LABELS,
   MIN_APPOINTMENT_MINUTES,
   SLOT_HEIGHT_PX,
-  gridPlacement
+  buildDayGrid,
+  gridPlacement,
+  parseHhMm,
+  rangeFromInstants
 } from '../lib/calendarGrid'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
@@ -95,6 +97,9 @@ type UnifiedCalendarEvent =
       endsAt: Date
       status: 'blocked'
     }
+
+/** Claves de `business_hours`, en el orden de `Date.getDay()` (0 = domingo). */
+const BUSINESS_HOURS_DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
 const VIEW_LABELS: Record<CalendarView, string> = {
   day: 'Dia',
@@ -226,6 +231,15 @@ export const CalendarContainer: React.FC = () => {
   const releaseAppointment = useReleaseAppointment()
   const previewBlock = useBlockPreview()
   const [blockPreview, setBlockPreview] = useState<BlockPreviewResult | null>(null)
+  /** Huecos de la jornada partida que el dueno decidio ver a escala real. */
+  const [expandedGaps, setExpandedGaps] = useState<ReadonlySet<string>>(() => new Set())
+
+  const toggleGap = (key: string) =>
+    setExpandedGaps((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
   const confirmAppointment = useConfirmAppointment()
   const completeAppointment = useCompleteAppointment()
   const markAbsentAppointment = useMarkAbsentAppointment()
@@ -305,15 +319,43 @@ export const CalendarContainer: React.FC = () => {
     })
   }, [agendaQuery.data, blocksInRange, staffMembers])
 
+  const eventsForSelectedDate = useMemo(
+    () =>
+      unifiedEvents.filter(
+        (event) => formatArgentinaDate(toInstantIso(event.startsAt)) === dateStr
+      ),
+    [dateStr, unifiedEvents]
+  )
+
+  /**
+   * El rango visible es la union de los horarios de atencion y los eventos del
+   * dia. Acotar la grilla solo con los horarios volveria a esconder lo que
+   * queda afuera: un turno movido a mano, uno heredado de un horario viejo, un
+   * bloqueo cargado fuera de hora.
+   */
+  const dayGrid = useMemo(() => {
+    const dayKey = BUSINESS_HOURS_DAY_KEYS[selectedDate.getDay()]
+    const openRanges = (storeSettings?.business_hours?.[dayKey ?? ''] ?? []).flatMap((period) => {
+      const startMinutes = parseHhMm(period.open)
+      const endMinutes = parseHhMm(period.close)
+      return startMinutes === null || endMinutes === null ? [] : [{ startMinutes, endMinutes }]
+    })
+
+    const eventRanges = eventsForSelectedDate.flatMap((event) => {
+      const eventRange = rangeFromInstants(toInstantIso(event.startsAt), toInstantIso(event.endsAt))
+      return eventRange ? [eventRange] : []
+    })
+
+    return buildDayGrid([...openRanges, ...eventRanges], expandedGaps)
+  }, [eventsForSelectedDate, expandedGaps, selectedDate, storeSettings?.business_hours])
+
   const appointmentCards = useMemo(() => {
-    return unifiedEvents
-      .filter(
-        (event) =>
-          event.type !== 'block' && formatArgentinaDate(toInstantIso(event.startsAt)) === dateStr
-      )
+    return eventsForSelectedDate
+      .filter((event) => event.type !== 'block')
       .flatMap((event) => {
         const startIso = toInstantIso(event.startsAt)
         const placement = gridPlacement(
+          dayGrid,
           startIso,
           toInstantIso(event.endsAt),
           MIN_APPOINTMENT_MINUTES
@@ -323,7 +365,7 @@ export const CalendarContainer: React.FC = () => {
         if (!placement) return []
         return [{ ...event, ...placement, timeLabel: formatArgentinaTime(startIso) }]
       })
-  }, [dateStr, unifiedEvents])
+  }, [dayGrid, eventsForSelectedDate])
 
   const timelineEvents = useMemo(() => {
     return unifiedEvents.filter((event) => event.type === 'block' || event.type === 'absence')
@@ -663,15 +705,39 @@ export const CalendarContainer: React.FC = () => {
                 className="w-20 flex-shrink-0 bg-white sticky left-0 z-10 border-r"
                 style={{ borderColor: colors2000s.border.light }}
               >
-                {GRID_SLOT_LABELS.map((time) => (
-                  <div
-                    key={time}
-                    className="border-b border-gray-50 flex items-start justify-center pt-2"
-                    style={{ height: SLOT_HEIGHT_PX }}
-                  >
-                    <span className="text-[10px] font-black text-gray-400">{time}</span>
-                  </div>
-                ))}
+                <div className="relative" style={{ height: dayGrid.totalHeightPx }}>
+                  {dayGrid.bands.map((band) =>
+                    band.kind === 'open' ? (
+                      band.labels.map((label) => (
+                        <div
+                          key={label.text}
+                          className="absolute inset-x-0 border-b border-gray-50 flex items-start justify-center pt-2"
+                          style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
+                        >
+                          <span className="text-[10px] font-black text-gray-400">{label.text}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <button
+                        key={band.key}
+                        type="button"
+                        onClick={() => toggleGap(band.key)}
+                        title={`Cerrado ${band.label}`}
+                        aria-expanded={band.expanded}
+                        className="absolute inset-x-0 border-y border-dashed flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest"
+                        style={{
+                          top: band.topPx,
+                          height: band.heightPx,
+                          background: colors2000s.bg.disabled,
+                          borderColor: colors2000s.border.default,
+                          color: colors2000s.text.secondary
+                        }}
+                      >
+                        {band.expanded ? '▾' : '▸'} Cerrado
+                      </button>
+                    )
+                  )}
+                </div>
               </div>
 
               <div className="flex flex-1">
@@ -680,18 +746,36 @@ export const CalendarContainer: React.FC = () => {
                     key={staff.id}
                     className="flex-1 min-w-[150px] relative border-r border-gray-50"
                   >
-                    {GRID_SLOT_LABELS.map((time) => (
-                      <div
-                        key={time}
-                        className="border-b border-gray-50/50"
-                        style={{ height: SLOT_HEIGHT_PX }}
-                      />
-                    ))}
+                    {dayGrid.bands.map((band) =>
+                      band.kind === 'open' ? (
+                        band.labels.map((label) => (
+                          <div
+                            key={label.text}
+                            className="absolute inset-x-0 border-b border-gray-50/50"
+                            style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
+                          />
+                        ))
+                      ) : (
+                        <div
+                          key={band.key}
+                          className="absolute inset-x-0 border-y border-dashed flex items-center justify-center text-[9px] font-black uppercase tracking-widest"
+                          style={{
+                            top: band.topPx,
+                            height: band.heightPx,
+                            background: colors2000s.bg.disabled,
+                            borderColor: colors2000s.border.default,
+                            color: colors2000s.text.secondary
+                          }}
+                        >
+                          {band.label}
+                        </div>
+                      )
+                    )}
 
                     {blocksForSelectedDate
                       .filter((block) => block.staff_id === staff.id && block.is_active)
                       .flatMap((block) => {
-                        const placement = gridPlacement(block.starts_at, block.ends_at)
+                        const placement = gridPlacement(dayGrid, block.starts_at, block.ends_at)
                         if (!placement) return []
                         return (
                           <button
