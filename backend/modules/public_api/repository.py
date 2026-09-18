@@ -197,43 +197,152 @@ class PublicRepository:
     async def _staff_has_schedule_for_slot(
         self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> bool:
-        # El horario del profesional esta cargado en hora ARGENTINA (09:00 a
-        # 18:00); el turno llega como instante UTC. Comparar en UTC rechazaba
-        # las ultimas 3 horas de cada jornada y todo turno posterior a las
-        # 21:00 (cae en el dia UTC siguiente). 2026-09-10.
-        local_start = starts_at.astimezone(ARGENTINA_TZ)
-        local_end = ends_at.astimezone(ARGENTINA_TZ)
-        weekday = local_start.weekday()
-        start_time = local_start.time().replace(tzinfo=None)
-        end_time = local_end.time().replace(tzinfo=None)
-        schedules_result = await self.db.execute(
-            select(Schedule).where(
-                Schedule.staff_id == staff_id, Schedule.day_of_week == weekday
-            )
-        )
-        schedules = list(schedules_result.scalars().all())
-        return any(
-            schedule.start_time <= start_time and schedule.end_time >= end_time
-            for schedule in schedules
+        return staff_id in await self._staff_ids_with_schedule_for_slot(
+            [staff_id], starts_at, ends_at
         )
 
     async def _staff_has_overlapping_block(
         self, staff_id: str, starts_at: datetime, ends_at: datetime
     ) -> bool:
-        # Pregunta de existencia, no de unicidad: dos bloqueos solapados del
-        # mismo profesional (el alta lo permite) hacian que scalar_one_or_none
-        # levantara MultipleResultsFound y la reserva saliera 500 (B1-02).
+        return staff_id in await self._staff_ids_with_overlapping_block(
+            [staff_id], starts_at, ends_at
+        )
+
+    async def _staff_ids_with_schedule_for_slot(
+        self, staff_ids: list[str], starts_at: datetime, ends_at: datetime
+    ) -> set[str]:
+        """Profesionales (de ``staff_ids``) cuya agenda cubre el rango. Una consulta.
+
+        El horario del profesional esta cargado en hora ARGENTINA (09:00 a
+        18:00); el turno llega como instante UTC. Comparar en UTC rechazaba
+        las ultimas 3 horas de cada jornada y todo turno posterior a las
+        21:00 (cae en el dia UTC siguiente). 2026-09-10.
+        """
+        if not staff_ids:
+            return set()
+        local_start = starts_at.astimezone(ARGENTINA_TZ)
+        local_end = ends_at.astimezone(ARGENTINA_TZ)
+        start_time = local_start.time().replace(tzinfo=None)
+        end_time = local_end.time().replace(tzinfo=None)
+        schedules_result = await self.db.execute(
+            select(Schedule).where(
+                Schedule.staff_id.in_(staff_ids),
+                Schedule.day_of_week == local_start.weekday(),
+            )
+        )
+        return {
+            schedule.staff_id
+            for schedule in schedules_result.scalars().all()
+            if schedule.start_time <= start_time and schedule.end_time >= end_time
+        }
+
+    async def _staff_ids_with_overlapping_block(
+        self, staff_ids: list[str], starts_at: datetime, ends_at: datetime
+    ) -> set[str]:
+        """Profesionales (de ``staff_ids``) con un bloqueo activo que solapa. Una consulta.
+
+        Pregunta de existencia, no de unicidad: dos bloqueos solapados del
+        mismo profesional (el alta lo permite) hacian que scalar_one_or_none
+        levantara MultipleResultsFound y la reserva saliera 500 (B1-02).
+        """
+        if not staff_ids:
+            return set()
         blocks_result = await self.db.execute(
-            select(StaffBlock)
+            select(StaffBlock.staff_id)
             .where(
-                StaffBlock.staff_id == staff_id,
+                StaffBlock.staff_id.in_(staff_ids),
                 StaffBlock.is_active.is_(True),
                 StaffBlock.starts_at < ends_at,
                 StaffBlock.ends_at > starts_at,
             )
-            .limit(1)
+            .distinct()
         )
-        return blocks_result.scalar_one_or_none() is not None
+        return set(blocks_result.scalars().all())
+
+    async def _staff_ids_with_conflicting_appointment(
+        self,
+        staff_ids: list[str],
+        starts_at: datetime,
+        ends_at: datetime,
+        buffer_minutes: int,
+    ) -> set[str]:
+        """Profesionales (de ``staff_ids``) con un turno activo que choca. Una consulta.
+
+        Mismo criterio que el panel (get_conflicting_appointment): el turno
+        vecino se ensancha por el buffer de la tienda a cada lado.
+        """
+        if not staff_ids:
+            return set()
+        buffer = timedelta(minutes=max(0, buffer_minutes))
+        conflict_res = await self.db.execute(
+            select(Appointment.staff_id)
+            .where(
+                Appointment.staff_id.in_(staff_ids),
+                Appointment.status.in_(
+                    [
+                        AppointmentStatus.PENDING.value,
+                        AppointmentStatus.PENDING_PAYMENT.value,
+                        AppointmentStatus.CONFIRMED.value,
+                    ]
+                ),
+                Appointment.starts_at < ends_at + buffer,
+                Appointment.ends_at > starts_at - buffer,
+            )
+            .distinct()
+        )
+        return set(conflict_res.scalars().all())
+
+    async def _pick_staff_for_slot(
+        self,
+        candidates: list[Staff],
+        starts_at: datetime,
+        ends_at: datetime,
+        buffer_minutes: int,
+    ) -> Staff | None:
+        """Primer candidato (en el orden dado) que puede tomar el rango, ya lockeado.
+
+        Horarios, bloqueos y choques de TODOS los candidatos se leen en lote
+        (regla 12, B1-13): antes eran hasta 4 consultas y un ``FOR UPDATE``
+        por candidato, y los locks de los descartados quedaban tomados hasta
+        el commit. La lectura en lote solo DESCARTA: el elegido se lockea y
+        bajo el lock se releen bloqueo y choque (regla 4), porque entre la
+        lectura y el lock otra transaccion pudo ocuparlo. El bucle solo da
+        mas de una vuelta cuando eso pasa.
+        """
+        ids = [member.id for member in candidates]
+        with_schedule = await self._staff_ids_with_schedule_for_slot(
+            ids, starts_at, ends_at
+        )
+        ids = [staff_id for staff_id in ids if staff_id in with_schedule]
+        # Con un solo candidato (profesional elegido por el cliente) el
+        # descarte previo no ahorra nada: decide directo la relectura.
+        taken: set[str] = set()
+        if len(ids) > 1:
+            taken = await self._staff_ids_with_overlapping_block(
+                ids, starts_at, ends_at
+            )
+            taken |= await self._staff_ids_with_conflicting_appointment(
+                ids, starts_at, ends_at, buffer_minutes
+            )
+        for staff in candidates:
+            if staff.id not in with_schedule or staff.id in taken:
+                continue
+            # Lock ANTES de la lectura que decide: leer el bloqueo sin el lock
+            # dejaba colar una reserva dentro de un bloqueo recien creado
+            # (carrera reproducida en tests/postgres/test_pg_bloqueos.py).
+            await self.db.execute(
+                select(Staff).where(Staff.id == staff.id).with_for_update()
+            )
+            if await self._staff_ids_with_overlapping_block(
+                [staff.id], starts_at, ends_at
+            ):
+                continue
+            if await self._staff_ids_with_conflicting_appointment(
+                [staff.id], starts_at, ends_at, buffer_minutes
+            ):
+                continue
+            return staff
+        return None
 
     async def create_appointment(
         self,
@@ -283,45 +392,9 @@ class PublicRepository:
         if not candidates:
             raise ValueError("No hay profesionales disponibles para este servicio")
 
-        selected_staff: Staff | None = None
-        for staff in candidates:
-            if not await self._staff_has_schedule_for_slot(
-                staff.id, starts_at, ends_at
-            ):
-                continue
-
-            # Lock ANTES de leer bloqueos y conflictos: leer el bloqueo sin el
-            # lock dejaba colar una reserva dentro de un bloqueo recien creado
-            # (carrera reproducida en tests/postgres/test_pg_bloqueos.py).
-            await self.db.execute(
-                select(Staff).where(Staff.id == staff.id).with_for_update()
-            )
-            if await self._staff_has_overlapping_block(staff.id, starts_at, ends_at):
-                continue
-            # Mismo criterio que el panel (get_conflicting_appointment): el
-            # turno vecino se ensancha por el buffer de la tienda a cada lado.
-            buffer = timedelta(minutes=max(0, buffer_minutes))
-            conflict_res = await self.db.execute(
-                select(Appointment)
-                .where(
-                    Appointment.staff_id == staff.id,
-                    Appointment.status.in_(
-                        [
-                            AppointmentStatus.PENDING.value,
-                            AppointmentStatus.PENDING_PAYMENT.value,
-                            AppointmentStatus.CONFIRMED.value,
-                        ]
-                    ),
-                    Appointment.starts_at < ends_at + buffer,
-                    Appointment.ends_at > starts_at - buffer,
-                )
-                .limit(1)
-            )
-            if conflict_res.scalar_one_or_none():
-                continue
-
-            selected_staff = staff
-            break
+        selected_staff = await self._pick_staff_for_slot(
+            candidates, starts_at, ends_at, buffer_minutes
+        )
 
         if not selected_staff:
             if staff_public_id:

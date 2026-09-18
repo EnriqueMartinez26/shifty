@@ -148,3 +148,57 @@ async def test_slots_distintos_no_se_bloquean_entre_si(
         (c, r.text[:120]) for c, r in zip(codigos, respuestas)
     ]
     assert await _turnos_activos(owner_engine, staff) == len(slots)
+
+
+@pytest.mark.asyncio
+async def test_rafaga_con_cualquier_profesional_llena_cada_agenda_una_sola_vez(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """B1-13 (2026-09-18): el alta con "cualquier profesional" lee en lote.
+
+    Horarios, bloqueos y choques de todos los candidatos se leen sin lock y
+    solo se lockea al elegido, con relectura bajo el lock (regla 4). Si la
+    relectura faltara, dos requests que vieron libre al mismo profesional
+    chocarian contra la exclusion GiST en vez de pasar al siguiente: con dos
+    profesionales y una rafaga sobre el mismo slot tiene que haber
+    EXACTAMENTE dos reservas (una por agenda), el resto 409 y cero 5xx.
+    """
+    store, token = await register_and_login(
+        client, app_sessions, slug="cualquiera", email="cualquiera@demo.com"
+    )
+    service = await create_service(client, token)
+    dia = datetime.now(timezone.utc) + timedelta(days=5)
+    staffs: list[str] = []
+    for nombre in ("uno", "dos"):
+        staff = await create_staff(
+            client, token, service, email=f"pro-{nombre}-cualquiera@demo.com"
+        )
+        await add_staff_schedule(client, token, staff, target_date=dia)
+        staffs.append(staff)
+    slot = dia.replace(hour=11, minute=0, second=0, microsecond=0)
+
+    respuestas = await asyncio.gather(
+        *(
+            client.post(
+                "/public/appointments",
+                json={
+                    **_reserva(
+                        store, service, staffs[0], slot, i, f"pg-cualquiera-{i:02d}"
+                    ),
+                    "staff_id": None,
+                },
+            )
+            for i in range(RAFAGA)
+        )
+    )
+    codigos = sorted(r.status_code for r in respuestas)
+
+    assert all(c < 500 for c in codigos), codigos
+    assert codigos.count(201) == 2, codigos
+    assert set(codigos) <= {201, 409}, codigos
+    elegidos = sorted(r.json()["staff_id"] for r in respuestas if r.status_code == 201)
+    assert elegidos == sorted(staffs), elegidos
+    for staff in staffs:
+        assert await _turnos_activos(owner_engine, staff) == 1
