@@ -104,7 +104,7 @@ async def test_presupuesto_agotado_deja_de_reclamar_y_no_pierde_recordatorios(
     # ya esta vencido y NO se reclama: la marca queda en NULL para el proximo
     # tick en vez de quedar "enviado" sin mail bajo el SIGKILL de Celery.
     assert result["published"] == 2
-    assert result["deferred"] == 3
+    assert result["unexamined"] == 3
     assert len(enviados) == 2
     assert _FakeRepo.claims == [
         ("appt-0", "reminder_24h_sent_at"),
@@ -123,7 +123,7 @@ async def test_sin_presion_de_tiempo_el_lote_se_drena_entero(
     result = await notification_tasks.process_due_appointment_reminders(now=now)
 
     assert result["published"] == 5
-    assert result["deferred"] == 0
+    assert result["unexamined"] == 0
     assert len(enviados) == 5
 
 

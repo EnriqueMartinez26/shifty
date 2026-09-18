@@ -33,6 +33,13 @@ logger = structlog.get_logger()
 # TODAS las tiendas) y un presupuesto de tiempo que se revisa ANTES de reclamar
 # el siguiente. Lo que no entra queda con la marca en NULL y espera al tick
 # siguiente (beat cada 15 minutos); el reclamo sigue siendo la exclusion.
+#
+# S-06 (2026-09-18): el resultado decia ``deferred`` y contaba solo las filas
+# TRAIDAS que el presupuesto no alcanzo a revisar; lo que quedaba afuera del
+# tope (o bloqueado por otra corrida, SKIP LOCKED) no aparecia. Saberlo exige
+# otra consulta, asi que el numero se llama por lo que es: ``unexamined``
+# (filas del lote sin revisar) y ``batch_full`` avisa que el lote vino lleno
+# y puede haber mas turnos pendientes afuera del tope.
 REMINDER_BATCH_LIMIT = 200
 REMINDER_TIME_BUDGET_SECONDS = 90
 
@@ -633,7 +640,8 @@ async def process_due_appointment_reminders(
 
     published = 0
     skipped = 0
-    deferred = 0
+    unexamined = 0
+    batch_full = False
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
         # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
@@ -648,14 +656,16 @@ async def process_due_appointment_reminders(
                 starts_before=window_end,
                 limit=limit,
             )
+            # Lote lleno: puede haber mas turnos pendientes afuera del tope.
+            batch_full = len(rows) >= limit
             for index, row in enumerate(rows):
                 if time.monotonic() >= deadline:
                     # Presupuesto agotado: no se reclama ni uno mas. Los que
                     # quedan siguen en NULL y salen en el proximo tick.
-                    deferred = len(rows) - index
+                    unexamined = len(rows) - index
                     logger.warning(
                         "reminders_time_budget_exhausted",
-                        deferred=deferred,
+                        unexamined=unexamined,
                         published=published,
                         budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
                     )
@@ -674,7 +684,8 @@ async def process_due_appointment_reminders(
         "reminders_processed",
         published=published,
         skipped=skipped,
-        deferred=deferred,
+        unexamined=unexamined,
+        batch_full=batch_full,
         window_start=window_start.isoformat(),
         window_end=window_end.isoformat(),
     )
@@ -682,7 +693,8 @@ async def process_due_appointment_reminders(
         "status": "processed",
         "published": published,
         "skipped": skipped,
-        "deferred": deferred,
+        "unexamined": unexamined,
+        "batch_full": batch_full,
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
     }
