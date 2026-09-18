@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 from pytest import MonkeyPatch
 
@@ -208,3 +209,60 @@ def test_backup_restore_drill_records_failed_backup_without_database(
         for step in evidence["steps"]
     )
     assert any(step["name"] == "locate-backup" for step in evidence["steps"])
+
+
+def test_el_drill_lanza_sus_subprocesos_con_el_interprete_y_rutas_absolutas(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Defecto real (2026-09-17, C-17): `_run` usaba "python" y rutas relativas.
+
+    Sintoma: `_run` no fijaba `cwd` ni usaba `sys.executable`; funcionaba solo
+    porque el workflow mensual pone `working-directory: backend` y `uv run`
+    deja el venv en el PATH. Desde la raiz del repo,
+    `uv run python backend/scripts/backup_restore_drill.py --run-backup` moria
+    con "can't open file 'scripts/backup_db.py'". El runbook de backup gatea
+    releases (CLAUDE.md §6).
+    """
+    drill = load_script("backup_restore_drill")
+    lanzados: list[dict[str, object]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        lanzados.append({"command": list(command), "cwd": kwargs.get("cwd")})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(drill.subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "backup_restore_drill.py",
+            "--backup-dir",
+            str(tmp_path / "backups"),
+            "--evidence-dir",
+            str(tmp_path / "evidence"),
+            "--run-backup",
+            "--database-url",
+            "postgresql://u:p@localhost:5432/d",
+        ],
+    )
+
+    drill.main()
+
+    assert lanzados, "el drill no lanzo ningun subproceso"
+    lanzamiento = lanzados[0]
+    command = lanzamiento["command"]
+    assert isinstance(command, list)
+    assert command[0] == sys.executable, (
+        f"el drill invoca {command[0]!r} en vez del interprete que lo corre"
+    )
+    assert Path(command[1]).is_absolute(), (
+        f"el drill pasa una ruta relativa al cwd: {command[1]!r}"
+    )
+    assert Path(command[1]).exists(), f"la ruta no existe: {command[1]!r}"
+    assert lanzamiento["cwd"] == BACKEND_ROOT, (
+        f"el drill no fija cwd en la raiz del backend: {lanzamiento['cwd']!r}"
+    )
+    # Con cwd fijo, un --output-dir relativo al cwd del drill caeria en otro
+    # directorio que el que despues revisa _latest_backup.
+    salida = command[command.index("--output-dir") + 1]
+    assert Path(salida).is_absolute(), f"--output-dir relativo: {salida!r}"
