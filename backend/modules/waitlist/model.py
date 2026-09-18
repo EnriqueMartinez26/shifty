@@ -121,9 +121,5 @@ class WaitlistEntry(BaseEntity):
     def public_id(self) -> str:
         return self.id
 
-    @property
-    def is_open(self) -> bool:
-        return self.status in OPEN_WAITLIST_STATUSES
-
 
 __all__ = ["OPEN_WAITLIST_STATUSES", "WaitlistEntry", "WaitlistStatus"]
