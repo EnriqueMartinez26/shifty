@@ -37,7 +37,7 @@ class StaffRepository:
         services = list(result.scalars().all())
         if len(services) != len(set(service_public_ids)):
             raise ValueError(
-                "Uno o m?s servicios no existen o no pertenecen al negocio"
+                "Uno o más servicios no existen o no pertenecen al negocio"
             )
         return services
 

@@ -99,7 +99,7 @@ async def update_my_store(
     # cuyo role no sea 'admin' quedaba afuera, y era una segunda llave de rol
     # como la que auth/dependencies.py ya elimino.
     if not has_any_role(user, STORE_MANAGERS):
-        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     update_data = data.model_dump(exclude_unset=True)
@@ -197,7 +197,7 @@ async def update_my_store_feature_flags(
     db: AsyncSession = Depends(get_db),
 ) -> StoreFeatureFlagsResponse:
     if not has_any_role(user, STORE_MANAGERS):
-        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     updates = data.model_dump(exclude_unset=True)
