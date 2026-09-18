@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -27,6 +27,22 @@ def _normalize_code(value: str) -> str:
     return value.strip().upper()
 
 
+def _vigencia_en_utc(value: datetime | None) -> datetime | None:
+    """Sin offset se toma como UTC; con offset se lleva a UTC.
+
+    Mismo criterio que appointments/schemas.py (F11b-02, 2026-09-18). La
+    columna es timestamptz y el service compara contra now(UTC); un naive
+    mezclado con un aware levantaba TypeError (500, no 422) en el
+    ``valid_from >= valid_until`` del schema y en el PATCH contra la fecha
+    guardada. Pasar de hora argentina a UTC es trabajo del front.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 class PromotionBase(BaseModel):
     code: str = Field(..., min_length=3, max_length=30, pattern=PROMOTION_CODE_PATTERN)
     title: str = Field(..., min_length=2, max_length=120)
@@ -40,6 +56,11 @@ class PromotionBase(BaseModel):
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     is_active: bool = True
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def vigencia_en_utc(cls, value: datetime | None) -> datetime | None:
+        return _vigencia_en_utc(value)
 
     @field_validator("code")
     @classmethod
@@ -76,6 +97,11 @@ class PromotionUpdate(BaseModel):
     valid_from: datetime | None = None
     valid_until: datetime | None = None
     is_active: bool | None = None
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def vigencia_en_utc(cls, value: datetime | None) -> datetime | None:
+        return _vigencia_en_utc(value)
 
     @field_validator("code")
     @classmethod
