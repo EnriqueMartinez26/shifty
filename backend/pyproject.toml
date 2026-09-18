@@ -62,12 +62,9 @@ ignore = [
 "fastapi.exceptions.HTTPException".msg = "Use custom exceptions from core.exceptions instead of raw HTTPException."
 
 [tool.ruff.lint.per-file-ignores]
-"alembic/env.py" = ["F401"]
 "main.py" = ["E402"]
 "modules/appointments/router.py" = ["E402"]
-"modules/appointments/model.py" = ["F401"]
 "modules/staff/model.py" = ["F401"]
-"modules/users/model.py" = ["F401"]
 "run_migrations.py" = ["E402"]
 "scripts/bootstrap_superadmin.py" = ["E402"]
 "scripts/seed_simulation.py" = ["E402"]
