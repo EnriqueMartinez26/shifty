@@ -135,7 +135,7 @@ async def process_outbox_batch(
             message.error = None
             processed += 1
         except Exception as exc:
-            message.error = str(exc)[:1000]
+            message.register_failure(str(exc))
             failed += 1
 
     await db.commit()

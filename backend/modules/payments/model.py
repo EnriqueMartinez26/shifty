@@ -226,7 +226,23 @@ class OutboxMessage(BaseEntity):
     processed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Mismo contador y mismo techo que WebhookInbox (regla 7): el intento es
+    # del mensaje, no del lote. Sin esto un mensaje que siempre falla se
+    # reintentaba cada minuto para siempre (2026-09-17, B2-12).
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def register_failure(self, reason: str) -> None:
+        """Cuenta un intento fallido y abandona el mensaje al agotar los reintentos.
+
+        Mientras queden intentos ``processed_at`` sigue en NULL y el beat lo
+        vuelve a tomar. Al agotarlos se da por procesado (con ``error``
+        anotado) para que deje de ocupar lugar en cada lote.
+        """
+        self.attempts = (self.attempts or 0) + 1
+        self.error = reason[:1000]
+        if self.attempts >= WEBHOOK_INBOX_MAX_ATTEMPTS:
+            self.processed_at = datetime.now(timezone.utc)
 
 
 __all__ = [
