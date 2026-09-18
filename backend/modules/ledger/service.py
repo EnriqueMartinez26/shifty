@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import ResourceNotFoundException, ValidationException
 from modules.ledger.model import CustomerLedger
+from modules.users.repository import UserRepository
 
 
 async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -> None:
@@ -49,6 +50,23 @@ async def _previous_balance(db: AsyncSession, store_id: str, client_id: str) -> 
     return previous.balance_after if previous else Decimal("0.00")
 
 
+async def _ensure_store_client(
+    db: AsyncSession, *, store_id: str, client_id: str
+) -> None:
+    """El movimiento se carga contra un usuario de ESTA tienda, o no se carga.
+
+    2026-09-17, hallazgo B2-11: el alta aceptaba cualquier id que matcheara
+    PUBLIC_ID_PATTERN y lo persistia, asi que una fila de fiado podia quedar
+    apuntando al usuario de otra tienda. En Postgres la RLS de `users` lo
+    tapa, pero la suite corre en SQLite (CLAUDE.md §4) y §2 exige el filtro
+    `store_id` como defensa en profundidad junto a la RLS, no en su lugar. Un
+    id inexistente pasa de 409 generico (por FK) a 404 explicito.
+    """
+    cliente = await UserRepository(db).get_by_public_id(client_id, store_id)
+    if cliente is None:
+        raise ResourceNotFoundException("Cliente", client_id)
+
+
 async def add_movement(
     db: AsyncSession,
     *,
@@ -60,6 +78,7 @@ async def add_movement(
     notes: str | None = None,
 ) -> CustomerLedger:
     """Carga un movimiento y devuelve el saldo resultante, ya commiteado."""
+    await _ensure_store_client(db, store_id=store_id, client_id=client_id)
     # Lock por cliente antes de leer el saldo previo: evita que dos movimientos
     # concurrentes calculen balance_after sobre el mismo saldo y se pisen.
     await _lock_client_ledger(db, store_id, client_id)

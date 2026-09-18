@@ -468,12 +468,50 @@ async def test_outbox_stats_and_manual_process(
     assert stats_after.json()["pending"] == 0
 
 
+async def _cliente_de_la_tienda(client: AsyncClient, token: str, store: str) -> str:
+    """Un cliente real de la tienda, nacido de una reserva publica.
+
+    El fiado se carga contra un usuario de la tienda (B2-11): un id inventado
+    como "CLIENTE-001" pasaba solo porque SQLite no aplica la FK a users.
+    """
+    service = await create_service(client, token)
+    staff = await create_staff(client, token, service)
+    dia = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store,
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": dia.replace(
+                hour=15, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente Fiado",
+            "client_phone": "+5491100022233",
+            "idempotency_key": "ledger-cliente-real",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    search = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
+    return cast(
+        str,
+        next(
+            item
+            for item in search.json()["results"]
+            if item["public_id"] == booking.json()["public_id"]
+        )["client_id"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_ledger_feature_flag_and_running_balance(client: AsyncClient) -> None:
-    _, token = await register_and_login(
+    store, token = await register_and_login(
         client, slug="tienda-ledger", email="ledger@test.com"
     )
-    client_id = "CLIENTE-001"
+    client_id = await _cliente_de_la_tienda(client, token, store)
 
     blocked = await client.post(
         f"/ledger/customers/{client_id}/movements",
