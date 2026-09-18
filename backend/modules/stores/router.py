@@ -1,7 +1,7 @@
 from datetime import time
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Depends, File, Form, UploadFile
+from fastapi import Depends, File, Form, Path, UploadFile
 from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
 from sqlalchemy import delete, select
@@ -14,6 +14,8 @@ from core.exceptions import (
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
+from core.roles import STORE_MANAGERS, has_any_role
+from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
 from modules.stores.media import (
@@ -34,9 +36,12 @@ from modules.stores.schemas import (
     StoreSubscriptionStatusResponse,
     StoreUpdate,
 )
-from modules.users.model import User, UserRole
+from modules.users.model import User
 
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
 # Ya validado por BusinessHourPeriod: horas reales y open < close.
 BusinessHoursPayload = dict[str, list[dict[str, time]]]
@@ -90,8 +95,11 @@ async def update_my_store(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreResponse:
-    if user.role != UserRole.ADMIN:
-        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
+    # Rol canonico de core/roles.py, no el enum crudo (B3-18): un superadmin
+    # cuyo role no sea 'admin' quedaba afuera, y era una segunda llave de rol
+    # como la que auth/dependencies.py ya elimino.
+    if not has_any_role(user, STORE_MANAGERS):
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     update_data = data.model_dump(exclude_unset=True)
@@ -188,8 +196,8 @@ async def update_my_store_feature_flags(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreFeatureFlagsResponse:
-    if user.role != UserRole.ADMIN:
-        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
+    if not has_any_role(user, STORE_MANAGERS):
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     updates = data.model_dump(exclude_unset=True)
@@ -221,7 +229,7 @@ async def upload_store_media(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreMediaUploadResponse:
-    if user.role != UserRole.ADMIN:
+    if not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("cambiar la imagen del negocio")
     if kind not in ALLOWED_KINDS:
         raise AppException(
@@ -295,7 +303,9 @@ async def upload_store_media(
 
 @router.get("/media/{media_id}")
 async def serve_store_media(
-    media_id: str,
+    # Validado como el resto de los path params (B3-17): la ruta es publica y
+    # consulta bajo bypass de RLS; un id fuera del patron no llega a la base.
+    media_id: PublicIdPath,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     # Publico: el portal de reservas muestra el logo sin login. Se lee por id
