@@ -1,7 +1,10 @@
 .PHONY: dev test migrate build down clean shell
 
+# --renew-anon-volumes: /app/.venv es un volumen anonimo y sin esto el
+# contenedor sigue con el venv viejo aunque la imagen traiga una dependencia
+# nueva (CLAUDE.md §1).
 dev:
-	DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
+	DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build --renew-anon-volumes
 
 down:
 	docker compose down

@@ -55,3 +55,32 @@ def test_los_atajos_de_dev_piden_el_grupo_dev() -> None:
                 f"`make {objetivo}` corre `uv run` sin --frozen y puede reescribir "
                 f"uv.lock en el bind-mount: {comando!r}"
             )
+
+
+def test_el_arranque_con_build_renueva_el_venv_anonimo() -> None:
+    """Defecto real (2026-09-18, C-20): `make dev` no renovaba `/app/.venv`.
+
+    docker-compose.yml monta `/app/.venv` como volumen anonimo encima del
+    bind-mount del codigo. `docker compose up --build` reconstruye la imagen
+    pero reutiliza ese volumen: una dependencia nueva queda en la imagen y no
+    en el contenedor. Sintoma: `make build && make dev` verde y despues
+    `ModuleNotFoundError`. CLAUDE.md §1 exige `--renew-anon-volumes`; el
+    unico lugar del repo que lo nombraba era CLAUDE.md.
+    """
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    # Si el volumen anonimo desaparece, este contrato pierde su motivo.
+    assert "- /app/.venv" in compose
+
+    arranques = [
+        comando
+        for linea in MAKEFILE.read_text(encoding="utf-8").splitlines()
+        if linea.startswith("\t")
+        for comando in [linea.strip()]
+        if " up " in f" {comando} " and "--build" in comando
+    ]
+    assert arranques, "el Makefile no tiene ningun `docker compose up --build`"
+    for comando in arranques:
+        assert "--renew-anon-volumes" in comando, (
+            "`up --build` sin --renew-anon-volumes reutiliza el .venv viejo: "
+            f"{comando!r}"
+        )
