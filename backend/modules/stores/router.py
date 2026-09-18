@@ -14,6 +14,7 @@ from core.exceptions import (
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
+from core.roles import STORE_MANAGERS, has_any_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
@@ -35,7 +36,7 @@ from modules.stores.schemas import (
     StoreSubscriptionStatusResponse,
     StoreUpdate,
 )
-from modules.users.model import User, UserRole
+from modules.users.model import User
 
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
 PublicIdPath = Annotated[
@@ -94,7 +95,10 @@ async def update_my_store(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreResponse:
-    if user.role != UserRole.ADMIN:
+    # Rol canonico de core/roles.py, no el enum crudo (B3-18): un superadmin
+    # cuyo role no sea 'admin' quedaba afuera, y era una segunda llave de rol
+    # como la que auth/dependencies.py ya elimino.
+    if not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("cambiar la configuraci?n del negocio")
 
     store = await _get_current_store(user, db)
@@ -192,7 +196,7 @@ async def update_my_store_feature_flags(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreFeatureFlagsResponse:
-    if user.role != UserRole.ADMIN:
+    if not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("cambiar la configuraci?n del negocio")
 
     store = await _get_current_store(user, db)
@@ -225,7 +229,7 @@ async def upload_store_media(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreMediaUploadResponse:
-    if user.role != UserRole.ADMIN:
+    if not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("cambiar la imagen del negocio")
     if kind not in ALLOWED_KINDS:
         raise AppException(
