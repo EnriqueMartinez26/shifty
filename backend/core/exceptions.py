@@ -31,7 +31,11 @@ def _hhmm_local(moment: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+# eq=False: igualdad por identidad y `__hash__` de `Exception`. Con el `eq`
+# por defecto el dataclass generaba `__eq__` por valor y dejaba `__hash__ =
+# None`: toda excepcion de dominio era inhashable y dos instancias distintas
+# con los mismos datos comparaban iguales (B7-10).
+@dataclass(eq=False)
 class AppException(Exception):
     """
     Excepción base del dominio de Shifty.
