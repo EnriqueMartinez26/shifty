@@ -7,7 +7,7 @@ from core.router import CanonicalAPIRouter
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.database import get_db, tenant_bypass
 from core.exceptions import (
     AppException,
     PermissionDeniedException,
@@ -301,13 +301,9 @@ async def serve_store_media(
     # Publico: el portal de reservas muestra el logo sin login. Se lee por id
     # bajando el filtro RLS por tienda (como el resto de las lecturas publicas);
     # el id es un ULID no adivinable y la imagen es publica por naturaleza.
-    set_tenant_context(None, is_admin=True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         result = await db.execute(select(StoreMedia).where(StoreMedia.id == media_id))
         media = result.scalar_one_or_none()
-    finally:
-        set_tenant_context(None, False)
 
     if media is None:
         raise AppException(
