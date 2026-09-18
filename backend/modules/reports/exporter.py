@@ -1,5 +1,7 @@
 import csv
+import unicodedata
 from io import BytesIO, StringIO
+from typing import Any
 
 from modules.reports.schemas import ReportSummaryResponse
 
@@ -126,6 +128,47 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
     return buffer.read()
 
 
+# Columnas de la tabla de turnos del PDF (B5-19): (x, ancho) en puntos sobre
+# A4 (595 pt, margenes de 40). Antes era un solo string cortado en 110
+# caracteres y el precio, al final, era lo primero que se perdia. Ahora cada
+# campo tiene su columna, los textos se recortan con "..." dentro de la suya y
+# el precio va alineado a la derecha y nunca se recorta.
+_PDF_FONT_SIZE = 8
+_PDF_TEXT_COLUMNS = ((40, 68), (110, 66), (178, 106), (288, 88), (378, 108))
+_PDF_PRICE_RIGHT_EDGE = 555
+_PDF_HEADERS = ("Fecha", "Estado", "Servicio", "Profesional", "Cliente", "Precio")
+_ELLIPSIS = "..."
+
+
+def _pdf_text(value: object) -> str:
+    """Texto sin caracteres de control (regla 19): NUL, saltos de linea, bidi,
+    zero-width y BOM (categoria Unicode C*) no llegan al PDF."""
+    return "".join(
+        char for char in str(value) if not unicodedata.category(char).startswith("C")
+    ).strip()
+
+
+def _fit_pdf_text(text: str, width: float, font: str, string_width: Any) -> str:
+    """Recorta ``text`` para que entre en ``width`` puntos, marcando el corte."""
+    if string_width(text, font, _PDF_FONT_SIZE) <= width:
+        return text
+    while text and string_width(text + _ELLIPSIS, font, _PDF_FONT_SIZE) > width:
+        text = text[:-1]
+    return text.rstrip() + _ELLIPSIS
+
+
+def _draw_pdf_row(
+    pdf: Any, y: float, cells: tuple[object, ...], *, font: str = "Helvetica"
+) -> None:
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    pdf.setFont(font, _PDF_FONT_SIZE)
+    *texts, price = cells
+    for (x, width), value in zip(_PDF_TEXT_COLUMNS, texts, strict=True):
+        pdf.drawString(x, y, _fit_pdf_text(_pdf_text(value), width, font, stringWidth))
+    pdf.drawRightString(_PDF_PRICE_RIGHT_EDGE, y, _pdf_text(price))
+
+
 def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
     try:
         from reportlab.lib.pagesizes import A4
@@ -165,18 +208,22 @@ def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawString(40, y, "Turnos")
     y -= 16
-    pdf.setFont("Helvetica", 8)
+    _draw_pdf_row(pdf, y, _PDF_HEADERS, font="Helvetica-Bold")
+    y -= 12
 
     for item in summary.appointments:
-        line = (
-            f"{item.starts_at.strftime('%Y-%m-%d %H:%M')} | {item.status} | "
-            f"{item.service_name} | {item.staff_name} | {item.client_name} | ${item.service_price}"
+        cells = (
+            item.starts_at.strftime("%Y-%m-%d %H:%M"),
+            item.status,
+            item.service_name,
+            item.staff_name,
+            item.client_name,
+            f"${item.service_price}",
         )
-        pdf.drawString(40, y, line[:110])
+        _draw_pdf_row(pdf, y, cells)
         y -= 11
         if y < 40:
             pdf.showPage()
-            pdf.setFont("Helvetica", 8)
             y = 800
 
     pdf.save()
