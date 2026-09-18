@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.utils import now_utc
 from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
 from modules.stores.schemas import StoreCustomField
 
@@ -107,8 +108,11 @@ class PublicBookingCreate(BaseModel):
     @field_validator("starts_at")
     @classmethod
     def must_be_future(cls, value: datetime) -> datetime:
-        now = datetime.now(value.tzinfo) if value.tzinfo else datetime.now()
-        if value <= now:
+        # Sin offset se asume UTC, una sola vez y aca (regla 24, B1-11): antes
+        # se comparaba contra la hora local del proceso.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        if value <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado")
         return value
 
@@ -221,8 +225,10 @@ class ClientRescheduleRequest(BaseModel):
     @field_validator("new_starts_at")
     @classmethod
     def validate_new_starts_at(cls, value: datetime) -> datetime:
-        now = datetime.now(value.tzinfo) if value.tzinfo else datetime.now()
-        if value <= now:
+        # Mismo criterio que PublicBookingCreate.starts_at (B1-11).
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        if value <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro")
         return value
 
