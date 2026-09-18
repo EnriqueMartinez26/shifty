@@ -1177,9 +1177,12 @@ async def client_cancel_appointment(
         )
         # La tienda se entera de que le cancelaron: antes el cliente cancelaba
         # y el dueno solo lo notaba mirando la agenda.
-        servicio_cancelado = await db.execute(
+        # Una sola lectura del servicio: la usan el aviso y la respuesta
+        # (B1-21: antes se repetia la misma consulta despues del commit).
+        svc_res = await db.execute(
             select(Service).where(Service.id == appointment.service_id)
         )
+        service = svc_res.scalar_one_or_none()
         db.add(
             OutboxMessage(
                 store_id=appointment.store_id,
@@ -1187,9 +1190,7 @@ async def client_cancel_appointment(
                 payload={
                     "appointment_id": appointment.id,
                     "client_name": client.full_name or "Un cliente",
-                    "service_name": getattr(
-                        servicio_cancelado.scalar_one_or_none(), "name", ""
-                    ),
+                    "service_name": getattr(service, "name", ""),
                     "starts_at": appointment.starts_at.isoformat(),
                 },
             )
@@ -1197,10 +1198,6 @@ async def client_cancel_appointment(
         await db.commit()
         await db.refresh(appointment)
 
-        svc_res = await db.execute(
-            select(Service).where(Service.id == appointment.service_id)
-        )
-        service = svc_res.scalar_one_or_none()
         await invalidate_availability(
             redis, appointment.store_id, appointment.starts_at
         )
