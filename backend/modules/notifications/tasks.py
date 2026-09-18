@@ -219,6 +219,17 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
         return await session.send(to, subject, body)
 
 
+async def send_email(to: str, subject: str, body: str) -> bool:
+    """Envio suelto para otros modulos (p. ej. el OTP). Devuelve si salio.
+
+    B4-12 (2026-09-18): ``otp`` importaba ``_send_email`` dentro de la
+    funcion. Esta es la entrada publica; delega en ``_send_email`` al momento
+    de la llamada (no es un alias ligado al importar), asi el sink SMTP sigue
+    siendo uno solo y los tests que lo reemplazan cubren tambien este camino.
+    """
+    return await _send_email(to, subject, body)
+
+
 def is_deliverable_email(email: str | None) -> bool:
     """Descarta vacios y los emails tecnicos ``{tel}@store{id}.noreply``.
 

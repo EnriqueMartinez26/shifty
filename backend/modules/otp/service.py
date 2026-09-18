@@ -15,6 +15,7 @@ from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from core.redis import get_redis
 from core.security import hash_otp_code
+from modules.notifications.tasks import send_email
 from modules.otp.model import OtpVerification
 
 logger = structlog.get_logger()
@@ -66,8 +67,6 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
 
 
 async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> None:
-    from modules.notifications.tasks import _send_email
-
     tienda = store_name or "Shifty"
     asunto = f"Tu codigo de verificacion - {tienda}"
     cuerpo = (
@@ -78,7 +77,7 @@ async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> Non
         "- El equipo de Shifty"
     )
     try:
-        enviado = await _send_email(email, asunto, cuerpo)
+        enviado = await send_email(email, asunto, cuerpo)
     except Exception as exc:  # nunca propaga: la respuesta debe ser neutra
         logger.warning("otp_email_dispatch_error", error_type=type(exc).__name__)
         return
