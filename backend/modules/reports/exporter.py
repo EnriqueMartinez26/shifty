@@ -60,7 +60,9 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
             ]
         )
 
-    return buffer.getvalue().encode("utf-8")
+    # utf-8-sig antepone el BOM: sin el, Excel es-AR abre el CSV como ANSI y
+    # los acentos salen rotos ("Corte clÃ¡sico"). B5-16.
+    return buffer.getvalue().encode("utf-8-sig")
 
 
 def export_to_excel(summary: ReportSummaryResponse) -> bytes:

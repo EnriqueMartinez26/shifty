@@ -93,8 +93,27 @@ def _summary(*, con_datos: bool = True) -> ReportSummaryResponse:
     )
 
 
+BOM_UTF8 = b"\xef\xbb\xbf"
+
+
+def _csv_texto(resumen: ReportSummaryResponse) -> str:
+    """Decodifica el CSV exigiendo el BOM y UTF-8 estricto en el resto.
+
+    2026-09-18, hallazgo B5-16: el CSV salia sin BOM y estos tests lo
+    decodificaban con ``utf-8-sig``, que acepta bytes CON o SIN BOM, asi que
+    pasaban igual. Sin BOM, Excel es-AR abre el archivo como ANSI y el dueno ve
+    ``Corte clÃ¡sico``.
+    """
+    contenido = export_to_csv(resumen)
+    assert contenido[:3] == BOM_UTF8, "el CSV no arranca con el BOM de UTF-8"
+    cuerpo = contenido[3:]
+    assert BOM_UTF8 not in cuerpo, "el BOM va una sola vez, al inicio"
+    return cuerpo.decode("utf-8")
+
+
 def test_csv_incluye_los_datos_del_resumen() -> None:
-    contenido = export_to_csv(_summary()).decode("utf-8-sig")
+    contenido = _csv_texto(_summary())
+    assert contenido.startswith("from_date,2026-01-01")
     assert "Corte clásico" in contenido
     assert "Ana Pérez" in contenido
     assert "48500.5" in contenido or "48500,5" in contenido
@@ -105,7 +124,7 @@ def test_csv_neutraliza_inyeccion_de_formula() -> None:
     resumen = _summary()
     resumen.appointments[0].client_name = "=cmd|'/c calc'!A1"
     resumen.appointments[0].service_name = "+SUM(1+1)"
-    contenido = export_to_csv(resumen).decode("utf-8-sig")
+    contenido = _csv_texto(resumen)
     # La celda peligrosa queda prefijada con apostrofo, no arranca con =/+.
     assert "'=cmd" in contenido
     assert "'+SUM(1+1)" in contenido
