@@ -249,12 +249,18 @@ class AppointmentRepository:
     # Listados
     # ------------------------------------------------------------------
 
-    async def get_by_date(self, target_date: date) -> list[AppointmentAgendaRow]:
+    async def get_by_date(
+        self, target_date: date, store_id: str
+    ) -> list[AppointmentAgendaRow]:
         """Lista turnos de una fecha para la agenda diaria.
 
         La fecha es un dia calendario argentino, no una ventana UTC (regla
         24): cortar en UTC mandaba los turnos de 21:00 a 23:59 locales a la
         agenda del dia siguiente (B1-08). Mismo criterio que availability.
+
+        ``store_id`` es obligatorio (B1-09): RLS es la garantia y este filtro
+        la defensa en profundidad (CLAUDE.md §2); sin el, un contexto de
+        tenant sin aplicar devolvia la agenda de todas las tiendas.
         """
         day_start = local_to_utc(target_date, time.min)
         day_end = local_to_utc(target_date + timedelta(days=1), time.min)
@@ -265,6 +271,7 @@ class AppointmentRepository:
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
             .where(
+                Appointment.store_id == store_id,
                 Appointment.starts_at >= day_start,
                 Appointment.starts_at < day_end,
             )

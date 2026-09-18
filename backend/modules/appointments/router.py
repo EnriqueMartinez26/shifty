@@ -106,7 +106,7 @@ async def list_appointments_by_date(
     from modules.appointments.repository import AppointmentRepository
 
     repo = AppointmentRepository(db)
-    rows = await repo.get_by_date(date)
+    rows = await repo.get_by_date(date, user.store_id)
     # El telefono del cliente solo lo ve un administrador (dato personal).
     show_phone = has_any_role(user, STORE_MANAGERS)
     return [
