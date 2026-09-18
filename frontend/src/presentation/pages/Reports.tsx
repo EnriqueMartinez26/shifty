@@ -12,6 +12,7 @@ import {
   Wallet
 } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import {
   formatArgentinaDate,
   formatArgentinaDateDisplay,
@@ -38,22 +39,34 @@ const ReportsPage: React.FC = () => {
   const summaryQuery = useReportSummary(fromDate, toDate)
   const professionalsQuery = useProfessionalReports(fromDate, toDate)
   const exportMutation = useExportReport()
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const summary = summaryQuery.data
   const stats = useMemo(() => summary?.stats, [summary])
   const clientStats = summary?.client_stats
   const debtSummary = summary?.debt_summary
 
+  /**
+   * Sin este `catch`, un export rechazado quedaba en nada: la promesa se
+   * descartaba con `void`, `isPending` volvia a false y el boton no decia
+   * nada. Un rango mayor a REPORT_MAX_RANGE_DAYS devuelve 400 con el motivo
+   * exacto; el usuario no lo veia y volvia a apretar.
+   */
   const downloadFile = async (formatName: ReportExportFormat) => {
-    const result = await exportMutation.mutateAsync({ format: formatName, fromDate, toDate })
-    const url = window.URL.createObjectURL(result.blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = result.filename
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    window.URL.revokeObjectURL(url)
+    setExportError(null)
+    try {
+      const result = await exportMutation.mutateAsync({ format: formatName, fromDate, toDate })
+      const url = window.URL.createObjectURL(result.blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (error: unknown) {
+      setExportError(getErrorMessage(error, 'No se pudo exportar el reporte'))
+    }
   }
 
   const inputStyle = create2000sInputStyle()
@@ -292,6 +305,21 @@ const ReportsPage: React.FC = () => {
           <FileText className="w-4 h-4 mr-2" /> Exportar PDF
         </button>
       </div>
+
+      {exportError && (
+        <div
+          role="alert"
+          className="text-sm p-4 rounded-lg font-bold"
+          style={{
+            background: '#ffeeee',
+            border: '1px solid #ffcccc',
+            color: '#cc0000',
+            boxShadow: colors2000s.shadows.insetDark
+          }}
+        >
+          {exportError}
+        </div>
+      )}
 
       <div className="grid xl:grid-cols-3 gap-6">
         <div className="rounded-lg overflow-hidden" style={create2000sListCardStyle()}>
