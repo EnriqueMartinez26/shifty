@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 
-import { format, subDays } from 'date-fns'
+import { subDays } from 'date-fns'
 import {
   ArrowUpRight,
   CalendarClock,
@@ -26,6 +26,12 @@ import type {
   ReportTopServiceItem,
   ReportTrendPoint
 } from '@application/services/ReportsService'
+
+import {
+  formatArgentinaDate,
+  formatArgentinaDayMonth,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import SalesDonut from '../components/organisms/dashboard/SalesDonut'
@@ -338,7 +344,7 @@ const getTopProfessional = (items: ProfessionalReportItem[] | undefined) =>
 const mapAgenda = (appointments: UpcomingAppointment[] | undefined): AgendaItem[] =>
   (appointments ?? []).map((appointment) => ({
     id: appointment.public_id,
-    time: format(new Date(appointment.starts_at), 'HH:mm'),
+    time: formatArgentinaTime(appointment.starts_at),
     title: appointment.client_name,
     subtitle: `${appointment.service_name} - ${appointment.staff_name}`,
     status: appointment.status,
@@ -360,7 +366,7 @@ const mapTransactions = (items: ReportAppointmentItem[] | undefined): Transactio
     .map((item) => ({
       id: item.public_id,
       title: item.client_name,
-      subtitle: `${item.service_name} - ${format(new Date(item.starts_at), 'dd/MM HH:mm')}`,
+      subtitle: `${item.service_name} - ${formatArgentinaDayMonth(item.starts_at)} ${formatArgentinaTime(item.starts_at)}`,
       amount: formatCurrency(item.service_price),
       status: item.status,
       tone: getAppointmentTone(item.status)
@@ -372,8 +378,10 @@ const Dashboard = () => {
   const isGlobalAdmin = Boolean(user?.is_global_admin)
   const reportsAllowed = canViewReports(user?.role, isGlobalAdmin)
   const financialAdminAllowed = canViewFinancialAdmin(user?.role, isGlobalAdmin)
-  const fromDate = useMemo(() => format(subDays(new Date(), 7), 'yyyy-MM-dd'), [])
-  const toDate = useMemo(() => format(new Date(), 'yyyy-MM-dd'), [])
+  // El rango del reporte es un dia de negocio argentino: con `format` de
+  // date-fns, un navegador en otra zona pedia el dia equivocado.
+  const fromDate = useMemo(() => formatArgentinaDate(subDays(new Date(), 7).toISOString()), [])
+  const toDate = useMemo(() => formatArgentinaDate(new Date().toISOString()), [])
 
   const summaryQuery = useDashboardSummary(Boolean(token))
   const featureFlagsQuery = useStoreFeatureFlags()

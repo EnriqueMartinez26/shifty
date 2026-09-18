@@ -93,6 +93,10 @@ export const formatArgentinaDateDisplay = (iso: string): string => {
   return `${pad(wall.day)}/${pad(wall.month)}/${wall.year}`
 }
 
+/** `dd/MM` en hora argentina, para listas ya acotadas a un rango conocido. */
+export const formatArgentinaDayMonth = (iso: string): string =>
+  formatArgentinaDateDisplay(iso).slice(0, 5)
+
 /**
  * Minutos transcurridos desde la medianoche argentina de un instante ISO.
  * `null` si el ISO no se puede leer. Es lo que necesita la grilla del

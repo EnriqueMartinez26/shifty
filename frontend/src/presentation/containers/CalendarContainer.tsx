@@ -27,7 +27,7 @@ import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMe
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
-  formatArgentinaDateDisplay,
+  formatArgentinaDayMonth,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
@@ -133,8 +133,6 @@ const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.t
 
 const toDateInput = (date: Date) => formatArgentinaDate(toInstantIso(date))
 const toTimeInput = (date: Date) => formatArgentinaTime(toInstantIso(date))
-/** `dd/MM` en hora argentina, sin el anio: la lista ya esta acotada al rango. */
-const toDayMonthLabel = (iso: string) => formatArgentinaDateDisplay(iso).slice(0, 5)
 
 const eventPriority = (event: UnifiedCalendarEvent) => {
   if (event.type === 'block') return 0
@@ -1109,7 +1107,7 @@ export const CalendarContainer: React.FC = () => {
                       className="text-[11px] font-bold"
                       style={{ color: colors2000s.text.secondary }}
                     >
-                      {toDayMonthLabel(toInstantIso(event.startsAt))}{' '}
+                      {formatArgentinaDayMonth(toInstantIso(event.startsAt))}{' '}
                       {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
                       {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
                     </p>

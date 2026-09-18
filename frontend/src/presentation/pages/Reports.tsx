@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 
-import { format, subDays } from 'date-fns'
+import { subDays } from 'date-fns'
 import {
   Download,
   FileSpreadsheet,
@@ -12,6 +12,12 @@ import {
   Wallet
 } from 'lucide-react'
 
+import {
+  formatArgentinaDate,
+  formatArgentinaDateDisplay,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
+
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
@@ -22,7 +28,9 @@ import {
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
-const toInputDate = (date: Date) => format(date, 'yyyy-MM-dd')
+/** El rango del reporte es un dia de negocio argentino, no el del navegador. */
+const toInputDate = (date: Date) => formatArgentinaDate(date.toISOString())
+
 const ReportsPage: React.FC = () => {
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
@@ -468,7 +476,8 @@ const ReportsPage: React.FC = () => {
               {summary?.appointments.map((item) => (
                 <tr key={item.public_id} className="hover:bg-zinc-50 transition-colors">
                   <td className="px-6 py-4 font-bold" style={{ color: colors2000s.text.primary }}>
-                    {format(new Date(item.starts_at), 'dd/MM/yyyy HH:mm')}
+                    {formatArgentinaDateDisplay(item.starts_at)}{' '}
+                    {formatArgentinaTime(item.starts_at)}
                   </td>
                   <td className="px-6 py-4">
                     <span

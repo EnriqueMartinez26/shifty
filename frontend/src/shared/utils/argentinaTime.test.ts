@@ -3,6 +3,7 @@ import {
   argentinaMinutesOfDay,
   formatArgentinaDate,
   formatArgentinaDateDisplay,
+  formatArgentinaDayMonth,
   formatArgentinaTime
 } from './argentinaTime'
 
@@ -38,6 +39,20 @@ describe('argentinaTime', () => {
   it('rechaza entradas malformadas', () => {
     expect(() => argentinaLocalToUtcIso('2026-13', '09:00')).toThrow()
     expect(() => argentinaLocalToUtcIso('2026-09-15', 'nueve')).toThrow()
+  })
+})
+
+describe('formatArgentinaDayMonth', () => {
+  it('imprime dd/MM en hora argentina, sin el anio', () => {
+    expect(formatArgentinaDayMonth('2026-09-15T12:00:00Z')).toBe('15/09')
+  })
+
+  it('un instante de 00:00Z pertenece al dia anterior', () => {
+    expect(formatArgentinaDayMonth('2026-09-16T00:00:00Z')).toBe('15/09')
+  })
+
+  it('devuelve vacio ante un ISO ilegible', () => {
+    expect(formatArgentinaDayMonth('no-es-una-fecha')).toBe('')
   })
 })
 
