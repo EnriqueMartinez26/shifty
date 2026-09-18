@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import secrets
 import smtplib
-from typing import TypedDict
+from typing import NoReturn, TypedDict
 
 import structlog
 from fastapi import status
@@ -340,6 +340,30 @@ async def login_user(
         set_tenant_context(None, False)
 
 
+async def _handle_refresh_reuse(
+    db: AsyncSession, user_id: str, ip: str | None
+) -> NoReturn:
+    """Reuso de un refresh ya rotado: se revoca la familia entera y se deja rastro.
+
+    Lo detectan dos ramas de ``refresh_session`` -- el token llega ya revocado,
+    y el UPDATE condicional de la rotacion que pierde la carrera -- y cada una
+    tenia su copia LITERAL de este bloque (B3-09, 2026-09-17): una metrica o un
+    cambio de politica agregado en una se olvidaba en la otra. Devuelve
+    ``NoReturn`` para que mypy impida el ``return`` donde va un ``raise``.
+
+    Regla 15: la revocacion de la familia no cambia; solo vive en un lugar.
+    """
+    revoked = await revoke_sessions_for_user(db, user_id)
+    await db.commit()
+    logger.warning(
+        "refresh_token_reuse_detected",
+        user_id=user_id,
+        revoked_sessions=revoked,
+        ip=ip,
+    )
+    raise AuthenticationException(message="Sesion expirada")
+
+
 async def refresh_session(
     refresh_token: str | None, db: AsyncSession, context: SessionClientContext
 ) -> AuthTokenPair:
@@ -360,15 +384,7 @@ async def refresh_session(
             # Reuso de un refresh ya rotado: la señal clasica de robo (el
             # atacante y la victima tienen el mismo token; el segundo en llegar
             # cae aca). Se revoca la familia entera y se deja rastro.
-            revoked = await revoke_sessions_for_user(db, session.user_id)
-            await db.commit()
-            logger.warning(
-                "refresh_token_reuse_detected",
-                user_id=session.user_id,
-                revoked_sessions=revoked,
-                ip=context.ip_address,
-            )
-            raise AuthenticationException(message="Sesion expirada")
+            await _handle_refresh_reuse(db, session.user_id, context.ip_address)
 
         expires_at = session.expires_at if session else None
         if expires_at is not None and expires_at.tzinfo is None:
@@ -403,15 +419,7 @@ async def refresh_session(
             .values(revoked_at=now)
         )
         if (getattr(claim, "rowcount", 0) or 0) != 1:
-            revoked = await revoke_sessions_for_user(db, session.user_id)
-            await db.commit()
-            logger.warning(
-                "refresh_token_reuse_detected",
-                user_id=session.user_id,
-                revoked_sessions=revoked,
-                ip=context.ip_address,
-            )
-            raise AuthenticationException(message="Sesion expirada")
+            await _handle_refresh_reuse(db, session.user_id, context.ip_address)
 
         new_refresh_token = generate_refresh_token()
         new_session = _new_auth_session(user, new_refresh_token, context)
