@@ -263,6 +263,7 @@ const SettingsPage: React.FC = () => {
   const handleSave = async () => {
     if (!formData) return
     setSaveStatus('saving')
+    setErrorMessage('')
     try {
       const { feature_flags, ...storePayload } = formData
       if (activeTab === 'features') {
@@ -280,6 +281,7 @@ const SettingsPage: React.FC = () => {
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
+    setErrorMessage('')
     if (passwordForm.new !== passwordForm.confirm) {
       setErrorMessage('Las contraseñas no coinciden')
       return
@@ -399,7 +401,14 @@ const SettingsPage: React.FC = () => {
         ))}
       </div>
 
-      {saveStatus === 'error' && (
+      {/*
+        La condicion era `saveStatus === 'error'`, pero cuatro caminos escriben
+        errorMessage sin tocar saveStatus: el "las contrasenas no coinciden" y
+        los tres de Mercado Pago. Con saveStatus en 'idle' el cartel no se
+        montaba y el usuario no recibia ninguna senal. El mensaje es ahora su
+        propia condicion de render; saveStatus queda solo para el boton.
+      */}
+      {errorMessage && (
         <div
           className="p-4 rounded-lg flex items-center gap-3 text-xs font-bold"
           style={{
