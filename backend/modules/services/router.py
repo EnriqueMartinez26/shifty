@@ -39,6 +39,12 @@ async def list_services(
     # lo manda). Ver inactivos es gestion del catalogo: mismos roles que
     # borran/reactivan.
     include_inactive: bool = Query(False),
+    # B6-10: mismas cotas que users/router.py (regla 9: ge Y le). El default
+    # es el techo (500) para que la respuesta sin parametros siga siendo la
+    # lista completa del catalogo de cualquier tienda real; el front no los
+    # manda.
+    limit: int = Query(500, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=1_000_000),
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> list[ServiceResponse]:
@@ -49,7 +55,12 @@ async def list_services(
             "Solo un administrador de tienda ve servicios inactivos",
         )
     repo = ServiceRepository(db)
-    services = await repo.get_all(user.store_id, only_active=not include_inactive)
+    services = await repo.get_all(
+        user.store_id,
+        only_active=not include_inactive,
+        limit=limit,
+        offset=offset,
+    )
     return [to_service_response(service) for service in services]
 
 

@@ -18,11 +18,22 @@ class ServiceRepository:
         await self.db.refresh(new_service)
         return new_service
 
-    async def get_all(self, store_id: str, only_active: bool = True) -> list[Service]:
+    async def get_all(
+        self,
+        store_id: str,
+        only_active: bool = True,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[Service]:
         query = select(Service).where(Service.store_id == store_id)
         if only_active:
             query = query.where(Service.is_active == True)
 
+        # Orden de alta explicito: sin ORDER BY, LIMIT/OFFSET no es estable
+        # entre paginas. El id (ULID) desempata altas del mismo instante.
+        query = (
+            query.order_by(Service.created_at, Service.id).limit(limit).offset(offset)
+        )
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
