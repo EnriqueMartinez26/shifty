@@ -95,7 +95,11 @@ def _preparar(
     enviados: list[dict[str, Any]] = []
 
     async def fake_notify_client_reminder(
-        *, phone: str | None, email: str | None, details: dict[str, Any]
+        *,
+        phone: str | None,
+        email: str | None,
+        details: dict[str, Any],
+        smtp: Any = None,
     ) -> dict[str, str]:
         enviados.append(details)
         return {"status": "sent", "channel": "email", "to": email or ""}

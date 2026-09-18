@@ -414,6 +414,14 @@ class AppointmentRepository:
         ``limit`` acota el lote por corrida (B4-02, 2026-09-17): el orden por
         ``starts_at`` hace que los mas proximos salgan primero y el resto
         espere al tick siguiente.
+
+        ``FOR UPDATE OF appointments SKIP LOCKED`` (S-06, 2026-09-18, regla
+        8): una corrida solapada saltea los turnos que otra tiene tomados en
+        vez de recorrerlos o esperarlos. Se bloquea solo la fila del turno,
+        no la tienda ni el cliente del JOIN. El lock dura hasta el primer
+        commit de la sesion (``claim_reminder`` commitea por turno y etapa):
+        la exclusion entre workers sigue siendo el reclamo ``UPDATE ... WHERE
+        col IS NULL``; SKIP LOCKED achica el solapamiento, no lo reemplaza.
         """
         query = (
             select(Appointment, Service, Staff, User, Store)
@@ -437,6 +445,7 @@ class AppointmentRepository:
                 ),
             )
             .order_by(Appointment.starts_at.asc())
+            .with_for_update(of=Appointment, skip_locked=True)
         )
         if limit is not None:
             query = query.limit(limit)
