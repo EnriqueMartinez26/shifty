@@ -6,6 +6,9 @@ from core.validation import PUBLIC_ID_PATTERN
 from modules.services.schemas import ServiceResponse
 
 PublicId = Annotated[str, Field(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
+# Tope de servicios por profesional: lo comparten el alta y
+# PATCH /staff/{id}/services (B3-14).
+MAX_SERVICE_IDS = 100
 
 
 class ScheduleBase(BaseModel):
@@ -54,7 +57,9 @@ class StaffCreate(StaffBase):
     first_name: str | None = Field(None, max_length=100)
     last_name: str | None = Field(None, max_length=100)
     email: EmailStr | None = None
-    service_ids: list[PublicId] = Field(default_factory=list, max_length=100)
+    service_ids: list[PublicId] = Field(
+        default_factory=list, max_length=MAX_SERVICE_IDS
+    )
 
     @model_validator(mode="after")
     def validate_by_kind(self) -> "StaffCreate":

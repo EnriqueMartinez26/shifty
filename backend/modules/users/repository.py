@@ -1,7 +1,8 @@
+"""Consultas y escrituras de usuarios del panel. Sin commit: lo hace UserService."""
+
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
@@ -14,6 +15,7 @@ class UserRepository:
         self.db = db
 
     async def create(self, data: dict[str, Any], store_id: str | None) -> User:
+        """Alta sin commit (lo hace UserService)."""
         if store_id is None:
             raise ValueError("No se pudo determinar el store del administrador")
 
@@ -35,14 +37,8 @@ class UserRepository:
             full_name=f"{first_name} {last_name}".strip(),
         )
         self.db.add(new_user)
-
-        try:
-            await self.db.commit()
-            await self.db.refresh(new_user)
-            return new_user
-        except IntegrityError:
-            await self.db.rollback()
-            raise ValueError("Ya existe un usuario con ese email")
+        await self.db.flush()
+        return new_user
 
     async def get_all(
         self,
@@ -80,6 +76,7 @@ class UserRepository:
         return result.scalar_one_or_none()
 
     async def update(self, user: User, data: dict[str, Any]) -> User:
+        """Edicion sin commit (lo hace UserService)."""
         payload = data.copy()
         password = payload.pop("password", None)
 
@@ -106,19 +103,15 @@ class UserRepository:
         ):
             await revoke_sessions_for_user(self.db, user.id)
 
-        try:
-            await self.db.commit()
-            await self.db.refresh(user)
-            return user
-        except IntegrityError:
-            await self.db.rollback()
-            raise ValueError("No se pudo actualizar el usuario")
+        await self.db.flush()
+        return user
 
     async def soft_delete(self, user: User) -> None:
+        """Baja sin commit (lo hace UserService)."""
         user.is_active = False
         user.password_reset_token_hash = None
         user.password_reset_expires_at = None
         # La baja revoca las sesiones: si el usuario se reactiva mas adelante,
         # sus refresh tokens viejos no deben revivir con el.
         await revoke_sessions_for_user(self.db, user.id)
-        await self.db.commit()
+        await self.db.flush()
