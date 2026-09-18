@@ -13,6 +13,7 @@ from fastapi import status
 from redis.exceptions import RedisError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import settings
 from core.database import _apply_tenant_context, set_tenant_context
@@ -247,23 +248,29 @@ async def revoke_sessions_for_user(
     conservar la sesion desde la que el propio usuario hizo el cambio.
     NO commitea: corre dentro de la transaccion del flujo que la llama.
     """
-    preserve_hash = (
-        hash_token(preserve_refresh_token) if preserve_refresh_token else None
-    )
-    result = await db.execute(
-        select(AuthSession).where(
-            AuthSession.user_id == user_id,
-            AuthSession.revoked_at.is_(None),
+    condiciones: list[ColumnElement[bool]] = [AuthSession.user_id == user_id]
+    if preserve_refresh_token:
+        condiciones.append(
+            AuthSession.refresh_token_hash != hash_token(preserve_refresh_token)
         )
+    return await _revoke_sessions(db, *condiciones)
+
+
+async def _revoke_sessions(db: AsyncSession, *conditions: ColumnElement[bool]) -> int:
+    """Revoca con un solo UPDATE las sesiones vivas que cumplen ``conditions``.
+
+    Las cuatro revocaciones hacian SELECT de todas las sesiones vivas, asignaban
+    ``revoked_at`` en un ``for`` y contaban a mano; ``revoke_all_sessions`` (el
+    boton de panico) hidrataba todas las de todas las tiendas y emitia un UPDATE
+    por fila (B3-10, 2026-09-17). Es el mismo patron que ya usa la rotacion de
+    ``refresh_session``. NO commitea: corre en la transaccion del llamador.
+    """
+    result = await db.execute(
+        update(AuthSession)
+        .where(AuthSession.revoked_at.is_(None), *conditions)
+        .values(revoked_at=datetime.now(timezone.utc))
     )
-    now = datetime.now(timezone.utc)
-    affected = 0
-    for session in result.scalars().all():
-        if preserve_hash and session.refresh_token_hash == preserve_hash:
-            continue
-        session.revoked_at = now
-        affected += 1
-    return affected
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 def _new_auth_session(
@@ -469,17 +476,9 @@ async def revoke_store_sessions(
     set_tenant_context(None, True)
     try:
         await _apply_tenant_context(db)
-        result = await db.execute(
-            select(AuthSession).where(
-                AuthSession.store_id == current_user.store_id,
-                AuthSession.revoked_at.is_(None),
-            )
+        affected = await _revoke_sessions(
+            db, AuthSession.store_id == current_user.store_id
         )
-        now = datetime.now(timezone.utc)
-        affected = 0
-        for session in result.scalars().all():
-            session.revoked_at = now
-            affected += 1
         await db.commit()
         return {"revoked_sessions": affected}
     finally:
@@ -510,16 +509,7 @@ async def revoke_user_sessions(
         target = user_result.scalar_one_or_none()
         if not target:
             raise UserNotFoundException(identifier=user_public_id)
-        sessions_result = await db.execute(
-            select(AuthSession).where(
-                AuthSession.user_id == target.id, AuthSession.revoked_at.is_(None)
-            )
-        )
-        now = datetime.now(timezone.utc)
-        affected = 0
-        for session in sessions_result.scalars().all():
-            session.revoked_at = now
-            affected += 1
+        affected = await _revoke_sessions(db, AuthSession.user_id == target.id)
         await db.commit()
         return {"revoked_sessions": affected}
     finally:
@@ -535,14 +525,7 @@ async def revoke_all_sessions(
     set_tenant_context(None, True)
     try:
         await _apply_tenant_context(db)
-        result = await db.execute(
-            select(AuthSession).where(AuthSession.revoked_at.is_(None))
-        )
-        now = datetime.now(timezone.utc)
-        affected = 0
-        for session in result.scalars().all():
-            session.revoked_at = now
-            affected += 1
+        affected = await _revoke_sessions(db)
         await db.commit()
         return {"revoked_sessions": affected}
     finally:
