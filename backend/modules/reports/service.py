@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 
@@ -77,6 +77,27 @@ def _add_months(month_start: date, delta: int) -> date:
     year = month_start.year + month_index // 12
     month = month_index % 12 + 1
     return date(year, month, 1)
+
+
+def _local_month_key(
+    month_starts: list[date], bounds: list[datetime]
+) -> ColumnElement[str]:
+    """``'YYYY-MM'`` del mes ARGENTINO en que empieza el turno (S-05).
+
+    ``bounds[i]`` es la medianoche argentina del dia 1 de ``month_starts[i]``
+    como instante UTC (``local_day_start``). Con el turno ya acotado a
+    ``[bounds[0], bounds[-1])``, el primer limite que supera a ``starts_at``
+    define su mes. Es SQL portable (Postgres y SQLite) y la zona la resuelve
+    zoneinfo en Python, sin corrimiento fijo de -3 horas (regla 24). Antes era
+    ``date_trunc('month', starts_at)``: mes UTC, y el 31 a las 22:30 ART caia
+    en el mes siguiente.
+    """
+    return case(
+        *(
+            (Appointment.starts_at < bounds[i + 1], month_starts[i].strftime("%Y-%m"))
+            for i in range(len(month_starts) - 1)
+        )
+    )
 
 
 @dataclass
@@ -909,9 +930,9 @@ class ReportService:
     ) -> ReportTrendResponse:
         """Serie mensual de turnos (total / completados / cancelados).
 
-        Agrupa por mes calendario en la base (date_trunc, no en Python) y
-        rellena con ceros los meses sin turnos para que el grafico de barras
-        del dashboard no tenga huecos.
+        Agrupa por mes calendario ARGENTINO en la base (GROUP BY, no en
+        Python) y rellena con ceros los meses sin turnos para que el grafico
+        de barras del dashboard no tenga huecos.
         """
         if months < 1:
             raise ValueError("months debe ser mayor a 0")
@@ -919,25 +940,26 @@ class ReportService:
         today = today_local()
         current_month_start = date(today.year, today.month, 1)
         start_month = _add_months(current_month_start, -(months - 1))
-        # Cubrir el mes actual completo (no solo hasta "hoy"): un turno futuro
+        # months + 1 limites: el ultimo es el inicio del mes siguiente, para
+        # cubrir el mes actual completo (no solo hasta "hoy"): un turno futuro
         # ya agendado dentro del mes en curso tiene que contar en su bucket.
-        end_month_exclusive = _add_months(current_month_start, 1)
-        start_dt = datetime.combine(start_month, time.min)
-        end_dt = datetime.combine(end_month_exclusive, time.min)
+        month_starts = [_add_months(start_month, i) for i in range(months + 1)]
+        bounds = [local_day_start(month) for month in month_starts]
 
-        month_expr = func.date_trunc("month", Appointment.starts_at)
-        query = (
-            select(month_expr, Appointment.status, func.count(Appointment.id))
-            .where(
-                Appointment.starts_at >= start_dt,
-                Appointment.starts_at < end_dt,
-                *self._store_scope(Appointment.store_id),
-            )
-            .group_by(month_expr, Appointment.status)
+        month_key = _local_month_key(month_starts, bounds).label("month")
+        in_range = select(month_key, Appointment.status.label("status")).where(
+            Appointment.starts_at >= bounds[0],
+            Appointment.starts_at < bounds[-1],
+            *self._store_scope(Appointment.store_id),
         )
         if staff_id:
-            query = query.where(Appointment.staff_id == staff_id)
-        result = await self.db.execute(query)
+            in_range = in_range.where(Appointment.staff_id == staff_id)
+        rows = in_range.subquery()
+        result = await self.db.execute(
+            select(rows.c.month, rows.c.status, func.count()).group_by(
+                rows.c.month, rows.c.status
+            )
+        )
 
         buckets: dict[str, MetricBucket] = {}
         cursor = start_month
@@ -949,10 +971,7 @@ class ReportService:
             }
             cursor = _add_months(cursor, 1)
 
-        for month_value, status, count in result.all():
-            # func.date_trunc vuelve aware (TIMESTAMPTZ); solo se formatea, no
-            # se compara, asi que no hace falta normalizar.
-            key = month_value.strftime("%Y-%m")
+        for key, status, count in result.all():
             bucket = buckets.setdefault(
                 key, {"total": 0, "completed": 0, "cancelled": 0}
             )
