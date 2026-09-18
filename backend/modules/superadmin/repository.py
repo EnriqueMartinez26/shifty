@@ -2,7 +2,9 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
+from sqlalchemy.engine import Row
+from sqlalchemy.sql import Subquery
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +41,142 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, list):
         return [_json_safe(item) for item in value]
     return value
+
+
+# --- Resumen de tiendas para el listado del superadmin -----------------------
+# Antes cada columna era una subconsulta correlacionada contra ``Store`` que la
+# base evaluaba por fila: nueve por tienda, ~450 con el limite de 50 del router
+# (B3-07, 2026-09-17). Ahora son tres subconsultas agregadas que se unen una
+# sola vez. Se usa ``row_number()`` en lugar de ``DISTINCT ON``/``LATERAL``
+# porque la suite de integracion corre sobre SQLite y necesita ser portable.
+
+_ADMIN_ROLES = (UserRole.ADMIN.value,)
+
+
+def _user_stats_subquery() -> Subquery:
+    """Un ``GROUP BY store_id`` en lugar de tres conteos correlacionados."""
+    es_admin = or_(User.role.in_(_ADMIN_ROLES), User.is_global_admin.is_(True))
+    return (
+        select(
+            User.store_id.label("store_id"),
+            func.count().label("users_count"),
+            func.sum(case((User.is_active.is_(True), 1), else_=0)).label(
+                "active_users_count"
+            ),
+            func.sum(case((es_admin, 1), else_=0)).label("admins_count"),
+        )
+        .where(User.store_id.is_not(None))
+        .group_by(User.store_id)
+        .subquery()
+    )
+
+
+def _latest_subscription_subquery() -> Subquery:
+    """La suscripcion activa mas reciente por tienda, una sola vez.
+
+    Antes eran tres subconsultas con el mismo ``ORDER BY created_at DESC
+    LIMIT 1`` (estado, fin de periodo y nombre del plan) mas una cuarta que
+    contaba para el filtro ``has_subscription``.
+    """
+    ranked = (
+        select(
+            StoreSubscription.store_id.label("store_id"),
+            StoreSubscription.status.label("status"),
+            StoreSubscription.plan_id.label("plan_id"),
+            StoreSubscription.current_period_end.label("current_period_end"),
+            func.row_number()
+            .over(
+                partition_by=StoreSubscription.store_id,
+                order_by=StoreSubscription.created_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(StoreSubscription.is_active.is_(True))
+        .subquery()
+    )
+    return select(ranked).where(ranked.c.rn == 1).subquery()
+
+
+def _last_redemption_subquery() -> Subquery:
+    return (
+        select(
+            CouponRedemption.store_id.label("store_id"),
+            func.max(CouponRedemption.created_at).label("last_redemption_at"),
+        )
+        .group_by(CouponRedemption.store_id)
+        .subquery()
+    )
+
+
+def _store_row(store: Store, row: Row[Any]) -> dict[str, Any]:
+    return {
+        "public_id": store.public_id,
+        "name": store.name,
+        "slug": store.slug,
+        "logo_url": store.logo_url,
+        "primary_color": store.primary_color,
+        "cancellation_hours": store.cancellation_hours,
+        "buffer_minutes": store.buffer_minutes,
+        "send_email_confirmation": store.send_email_confirmation,
+        "send_email_reminders": store.send_email_reminders,
+        "is_active": store.is_active,
+        "created_at": store.created_at,
+        "updated_at": store.updated_at,
+        "admins_count": int(row.admins_count or 0),
+        "users_count": int(row.users_count or 0),
+        "active_users_count": int(row.active_users_count or 0),
+        "has_subscription": row.subscription_store_id is not None,
+        "subscription_status": row.subscription_status,
+        "current_plan_name": row.current_plan_name,
+        "current_period_end": row.current_period_end,
+        "last_redemption_at": row.last_redemption_at,
+    }
+
+
+def _assert_coupon_redeemable(
+    coupon: SaaSCoupon,
+    subscription: StoreSubscription,
+    now: datetime,
+    previous_redemption: CouponRedemption | None,
+) -> None:
+    """Elegibilidad de un canje: funcion pura sobre (cupon, suscripcion, ahora).
+
+    Estaba embebida en ``redeem_coupon`` como ocho ``raise`` consecutivos
+    detras de dos ``SELECT ... FOR UPDATE``, asi que no habia forma de probar
+    la maquina de elegibilidad sin base (B3-07/B3-08, 2026-09-17). Corre
+    DESPUES del lock: moverla antes reabriria la carrera de ``current_uses``.
+    """
+    period_end = _utc(subscription.current_period_end)
+    if subscription.status != "active":
+        raise ValueError("La suscripción de la tienda no está activa")
+    if period_end and period_end < now:
+        raise ValueError("La suscripción de la tienda está vencida")
+    if not coupon.is_active:
+        raise ValueError("El cupón no está activo")
+    if coupon.valid_from and coupon.valid_from > now:
+        raise ValueError("El cupón todavía no está vigente")
+    if coupon.valid_until and coupon.valid_until < now:
+        raise ValueError("El cupón está vencido")
+    if coupon.max_uses is not None and coupon.current_uses >= coupon.max_uses:
+        raise ValueError("El cupón ya alcanzó su límite de usos")
+    if coupon.currency and coupon.currency != subscription.currency:
+        raise ValueError("La moneda del cupón no coincide con la suscripción")
+    if coupon.one_time_per_store and previous_redemption is not None:
+        raise ValueError("Esta tienda ya canjeó ese cupón")
+
+
+def _compute_discount(
+    coupon: SaaSCoupon, base_amount: Decimal
+) -> tuple[Decimal, Decimal]:
+    """Descuento y total final; el descuento nunca supera la base."""
+    if coupon.coupon_type == "percent":
+        discount_amount = _money(base_amount * _money(coupon.value) / Decimal("100"))
+    elif coupon.coupon_type == "fixed":
+        discount_amount = _money(coupon.value)
+    else:
+        raise ValueError("Tipo de cupón inválido")
+    discount_amount = min(discount_amount, base_amount)
+    return discount_amount, _money(base_amount - discount_amount)
 
 
 class _BaseAdminRepository:
@@ -80,92 +218,26 @@ class StoreAdminRepository(_BaseAdminRepository):
         limit: int,
         offset: int,
     ) -> list[dict[str, Any]]:
-        admin_roles = (UserRole.ADMIN.value,)
-        admins_count = (
-            select(func.count())
-            .select_from(User)
-            .where(
-                User.store_id == Store.id,
-                or_(User.role.in_(admin_roles), User.is_global_admin.is_(True)),
-            )
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        users_count = (
-            select(func.count())
-            .select_from(User)
-            .where(User.store_id == Store.id)
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        active_users_count = (
-            select(func.count())
-            .select_from(User)
-            .where(User.store_id == Store.id, User.is_active.is_(True))
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        has_subscription_query = (
-            select(func.count())
-            .select_from(StoreSubscription)
-            .where(
-                StoreSubscription.store_id == Store.id,
-                StoreSubscription.is_active.is_(True),
-            )
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        subscription_status = (
-            select(StoreSubscription.status)
-            .where(
-                StoreSubscription.store_id == Store.id,
-                StoreSubscription.is_active.is_(True),
-            )
-            .order_by(StoreSubscription.created_at.desc())
-            .limit(1)
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        current_period_end = (
-            select(StoreSubscription.current_period_end)
-            .where(
-                StoreSubscription.store_id == Store.id,
-                StoreSubscription.is_active.is_(True),
-            )
-            .order_by(StoreSubscription.created_at.desc())
-            .limit(1)
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        current_plan_name = (
-            select(Plan.name)
-            .join(StoreSubscription, Plan.id == StoreSubscription.plan_id)
-            .where(
-                StoreSubscription.store_id == Store.id,
-                StoreSubscription.is_active.is_(True),
-            )
-            .order_by(StoreSubscription.created_at.desc())
-            .limit(1)
-            .correlate(Store)
-            .scalar_subquery()
-        )
-        last_redemption_at = (
-            select(func.max(CouponRedemption.created_at))
-            .where(CouponRedemption.store_id == Store.id)
-            .correlate(Store)
-            .scalar_subquery()
-        )
+        usuarios = _user_stats_subquery()
+        suscripcion = _latest_subscription_subquery()
+        canjes = _last_redemption_subquery()
 
-        query = select(
-            Store,
-            admins_count.label("admins_count"),
-            users_count.label("users_count"),
-            active_users_count.label("active_users_count"),
-            has_subscription_query.label("has_subscription_count"),
-            subscription_status.label("subscription_status"),
-            current_plan_name.label("current_plan_name"),
-            current_period_end.label("current_period_end"),
-            last_redemption_at.label("last_redemption_at"),
+        query = (
+            select(
+                Store,
+                usuarios.c.admins_count,
+                usuarios.c.users_count,
+                usuarios.c.active_users_count,
+                suscripcion.c.store_id.label("subscription_store_id"),
+                suscripcion.c.status.label("subscription_status"),
+                suscripcion.c.current_period_end,
+                Plan.name.label("current_plan_name"),
+                canjes.c.last_redemption_at,
+            )
+            .outerjoin(usuarios, usuarios.c.store_id == Store.id)
+            .outerjoin(suscripcion, suscripcion.c.store_id == Store.id)
+            .outerjoin(Plan, Plan.id == suscripcion.c.plan_id)
+            .outerjoin(canjes, canjes.c.store_id == Store.id)
         )
         if is_active is not None:
             query = query.where(Store.is_active.is_(is_active))
@@ -175,39 +247,13 @@ class StoreAdminRepository(_BaseAdminRepository):
                 (Store.name.ilike(pattern)) | (Store.slug.ilike(pattern))
             )
         if has_subscription is True:
-            query = query.where(has_subscription_query > 0)
+            query = query.where(suscripcion.c.store_id.is_not(None))
         elif has_subscription is False:
-            query = query.where(has_subscription_query == 0)
+            query = query.where(suscripcion.c.store_id.is_(None))
         query = query.order_by(Store.created_at.desc()).offset(offset).limit(limit)
+
         result = await self.db.execute(query)
-        rows: list[dict[str, Any]] = []
-        for row in result.all():
-            store = row[0]
-            rows.append(
-                {
-                    "public_id": store.public_id,
-                    "name": store.name,
-                    "slug": store.slug,
-                    "logo_url": store.logo_url,
-                    "primary_color": store.primary_color,
-                    "cancellation_hours": store.cancellation_hours,
-                    "buffer_minutes": store.buffer_minutes,
-                    "send_email_confirmation": store.send_email_confirmation,
-                    "send_email_reminders": store.send_email_reminders,
-                    "is_active": store.is_active,
-                    "created_at": store.created_at,
-                    "updated_at": store.updated_at,
-                    "admins_count": int(row.admins_count or 0),
-                    "users_count": int(row.users_count or 0),
-                    "active_users_count": int(row.active_users_count or 0),
-                    "has_subscription": bool(row.has_subscription_count),
-                    "subscription_status": row.subscription_status,
-                    "current_plan_name": row.current_plan_name,
-                    "current_period_end": row.current_period_end,
-                    "last_redemption_at": row.last_redemption_at,
-                }
-            )
-        return rows
+        return [_store_row(row[0], row) for row in result.all()]
 
     async def get_store(self, public_id: str) -> Store | None:
         result = await self.db.execute(
@@ -675,56 +721,16 @@ class CouponAdminRepository(_BaseAdminRepository):
     ) -> CouponRedemption:
         if not store.is_active:
             raise ValueError("No se puede canjear un cupón sobre una tienda inactiva")
-        coupon_result = await self.db.execute(
-            select(SaaSCoupon).where(SaaSCoupon.id == coupon.id).with_for_update()
-        )
-        coupon = coupon_result.scalar_one()
-        subscription_result = await self.db.execute(
-            select(StoreSubscription)
-            .where(StoreSubscription.id == subscription.id)
-            .with_for_update()
-        )
-        subscription = subscription_result.scalar_one()
+        coupon = await self._lock_coupon(coupon.id)
+        subscription = await self._lock_subscription(subscription.id)
 
-        now = datetime.now(timezone.utc)
-        period_end = _utc(subscription.current_period_end)
-        if subscription.status != "active":
-            raise ValueError("La suscripción de la tienda no está activa")
-        if period_end and period_end < now:
-            raise ValueError("La suscripción de la tienda está vencida")
-        if not coupon.is_active:
-            raise ValueError("El cupón no está activo")
-        if coupon.valid_from and coupon.valid_from > now:
-            raise ValueError("El cupón todavía no está vigente")
-        if coupon.valid_until and coupon.valid_until < now:
-            raise ValueError("El cupón está vencido")
-        if coupon.max_uses is not None and coupon.current_uses >= coupon.max_uses:
-            raise ValueError("El cupón ya alcanzó su límite de usos")
-        if coupon.currency and coupon.currency != subscription.currency:
-            raise ValueError("La moneda del cupón no coincide con la suscripción")
-        if coupon.one_time_per_store:
-            previous = await self.db.execute(
-                select(CouponRedemption).where(
-                    CouponRedemption.coupon_id == coupon.id,
-                    CouponRedemption.store_id == store.id,
-                    CouponRedemption.is_active.is_(True),
-                )
-            )
-            if previous.scalar_one_or_none():
-                raise ValueError("Esta tienda ya canjeó ese cupón")
+        previous = await self._previous_redemption(coupon, store)
+        _assert_coupon_redeemable(
+            coupon, subscription, datetime.now(timezone.utc), previous
+        )
 
         base_amount = _money(subscription.base_amount)
-        if coupon.coupon_type == "percent":
-            discount_amount = _money(
-                base_amount * _money(coupon.value) / Decimal("100")
-            )
-        elif coupon.coupon_type == "fixed":
-            discount_amount = _money(coupon.value)
-        else:
-            raise ValueError("Tipo de cupón inválido")
-
-        discount_amount = min(discount_amount, base_amount)
-        final_amount = _money(base_amount - discount_amount)
+        discount_amount, final_amount = _compute_discount(coupon, base_amount)
 
         coupon.current_uses += 1
         subscription.coupon_id = coupon.id
@@ -761,6 +767,44 @@ class CouponAdminRepository(_BaseAdminRepository):
         await self.db.commit()
         await self.db.refresh(redemption)
         return redemption
+
+    # populate_existing en los dos locks: el router ya cargo el cupon y la
+    # suscripcion en esta sesion, y sin eso el FOR UPDATE devuelve la instancia
+    # del identity map SIN refrescar: current_uses se validaba y se
+    # incrementaba con el valor leido antes del lock y dos canjes concurrentes
+    # pasaban el tope max_uses (S-08, 2026-09-18). Mismo patron que
+    # payments/jobs.py.
+    async def _lock_coupon(self, coupon_id: str) -> SaaSCoupon:
+        result = await self.db.execute(
+            select(SaaSCoupon)
+            .where(SaaSCoupon.id == coupon_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one()
+
+    async def _lock_subscription(self, subscription_id: str) -> StoreSubscription:
+        result = await self.db.execute(
+            select(StoreSubscription)
+            .where(StoreSubscription.id == subscription_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one()
+
+    async def _previous_redemption(
+        self, coupon: SaaSCoupon, store: Store
+    ) -> CouponRedemption | None:
+        if not coupon.one_time_per_store:
+            return None
+        result = await self.db.execute(
+            select(CouponRedemption).where(
+                CouponRedemption.coupon_id == coupon.id,
+                CouponRedemption.store_id == store.id,
+                CouponRedemption.is_active.is_(True),
+            )
+        )
+        return result.scalar_one_or_none()
 
     async def list_store_redemptions(
         self, store_id: str, limit: int | None = None
