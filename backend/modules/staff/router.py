@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, Path, Response, status
+from fastapi import Body, Depends, Path, Response, status
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,8 @@ from modules.staff.mappers import to_schedule_response, to_staff_response
 from modules.staff.repository import StaffRepository
 from modules.staff.service import StaffService
 from modules.staff.schemas import (
+    MAX_SERVICE_IDS,
+    PublicId,
     ScheduleCreate,
     ScheduleUpdate,
     ScheduleResponse,
@@ -156,7 +158,11 @@ async def delete_staff_schedule(
 @router.patch("/{public_id}/services")
 async def update_staff_services(
     public_id: PublicIdPath,
-    service_ids: list[str],
+    # Mismo tipo y tope que el alta (StaffCreate.service_ids). Antes era
+    # list[str] sin patron ni tope: un array de 100.000 strings llegaba al
+    # in_() del repositorio (B3-14, 2026-09-17). El body sigue siendo un
+    # array JSON crudo: el contrato con el panel no cambia.
+    service_ids: Annotated[list[PublicId], Body(max_length=MAX_SERVICE_IDS)],
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
