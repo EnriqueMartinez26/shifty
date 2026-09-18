@@ -51,16 +51,32 @@ if not DATABASE_URL:
 DATABASE_URL = str(DATABASE_URL)
 
 
+# Roles cuya contrasena vino de SEED_PASSWORD_*: esa nunca se imprime.
+PASSWORDS_DEL_ENTORNO: set[str] = set()
+
+
 def _seed_password(role: str) -> str:
     """Sin credenciales quemadas en el repo: o vienen por env, o se generan
-    aleatorias y se imprimen una unica vez. Un seed con 'admin123' que toque
-    staging es una cuenta admin publica."""
+    aleatorias y se imprimen una unica vez, aca. Un seed con 'admin123' que
+    toque staging es una cuenta admin publica."""
     env_value = os.environ.get(f"SEED_PASSWORD_{role.upper()}")
     if env_value:
+        PASSWORDS_DEL_ENTORNO.add(role)
         return env_value
     generated = secrets.token_urlsafe(12) + "9a"
     print(f"[seed] password {role}: {generated}")
     return generated
+
+
+def _credencial(role: str) -> str:
+    """Lo que el resumen final muestra en lugar de la contrasena.
+
+    Nunca el valor: la del entorno no debe llegar a un log (misma clase de fuga
+    que cerro C-04) y la generada ya se imprimio una vez en `_seed_password`.
+    """
+    if role in PASSWORDS_DEL_ENTORNO:
+        return f"(SEED_PASSWORD_{role.upper()})"
+    return f"(generada: ver '[seed] password {role}' arriba)"
 
 
 PASSWORDS = {
@@ -1084,12 +1100,16 @@ async def seed_simulation() -> None:
         print("[COUNTS]")
         for key in sorted(summary):
             print(f"  - {key}: {summary[key]}")
+        # Antes imprimia literales que ninguna cuenta tiene ('admin123'...) y
+        # confundia al operador (C-05, 2026-09-17). Ahora dice de DONDE sale cada
+        # contrasena, sin repetir el valor: la del entorno no se imprime nunca y
+        # la generada sale una unica vez, en `_seed_password`.
         print("[CREDENTIALS]")
-        print("  - global-admin@shifty.com / global123")
-        print("  - admin@barberia-sentinel.com / admin123")
-        print("  - admin@salon-sentinel.com / admin123")
-        print("  - Any staff email seeded / staff123")
-        print("  - Any client email seeded / client123")
+        print(f"  - global-admin@shifty.com / {_credencial('global_admin')}")
+        print(f"  - admin@barberia-sentinel.com / {_credencial('admin')}")
+        print(f"  - admin@salon-sentinel.com / {_credencial('admin')}")
+        print(f"  - Any staff email seeded / {_credencial('staff')}")
+        print(f"  - Any client email seeded / {_credencial('client')}")
 
     await engine.dispose()
 
