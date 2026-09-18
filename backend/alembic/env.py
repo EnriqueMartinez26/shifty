@@ -13,7 +13,7 @@ from alembic import context
 
 # Base + TODOS los modelos, desde el registro unico: una lista parcial hace
 # que autogenerate proponga borrar las tablas que no vio.
-from core.config import settings
+from core.config import redact_url, settings
 from core.model_registry import load_all_models
 from core.models import Base
 
@@ -36,11 +36,12 @@ def parse_db_url(url: str) -> dict[str, Any]:
     """
     parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
     if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
-        # Sin la URL en el mensaje: es la del rol dueno de la base y el
+        # Nunca las credenciales: es la URL del rol dueno de la base y el
         # traceback queda en los logs de compose y de CI (C-01, 2026-09-16).
+        # Misma redaccion que run_migrations.py, del helper unico (S-01).
         raise ValueError(
-            "No se pudo parsear MIGRATION_DATABASE_URL "
-            f"(esquema={parsed.scheme!r}, host={parsed.hostname!r})"
+            "No se pudo parsear MIGRATION_DATABASE_URL: "
+            f"{redact_url(url, keep_target=True)}"
         )
 
     query = parse_qs(parsed.query)
