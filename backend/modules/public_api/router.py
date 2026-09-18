@@ -14,6 +14,7 @@ import structlog
 from fastapi import Depends, Path, Query, Request, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -133,7 +134,9 @@ async def _bypass_rls(db: AsyncSession) -> None:
     await _apply_tenant_context(db)
 
 
-async def _revert_failed_booking(db: AsyncSession, appointment_id: str) -> None:
+async def _revert_failed_booking(
+    db: AsyncSession, redis: Redis, appointment: Appointment
+) -> None:
     """Compensa un booking cuyo link de pago fallo DESPUES del commit.
 
     Como el link de Mercado Pago se genera fuera de la transaccion que sostiene
@@ -141,7 +144,14 @@ async def _revert_failed_booking(db: AsyncSession, appointment_id: str) -> None:
     falla. Se revierten para no dejar el slot retenido ni un pago sin link, y
     para que un reintento pueda crear el turno limpio. Reemplaza al rollback del
     savepoint que existia cuando el HTTP corria dentro de la transaccion.
+
+    La agenda vuelve atras, asi que se invalida la disponibilidad (B1-10):
+    sin eso, quien la hubiera leido entre el commit y la compensacion dejaba
+    el slot cacheado como ocupado hasta que vencia el TTL.
     """
+    appointment_id = appointment.id
+    store_id = appointment.store_id
+    starts_at = appointment.starts_at
     await db.execute(
         delete(PromotionRedemption).where(
             PromotionRedemption.appointment_id == appointment_id
@@ -150,6 +160,17 @@ async def _revert_failed_booking(db: AsyncSession, appointment_id: str) -> None:
     await db.execute(delete(Payment).where(Payment.appointment_id == appointment_id))
     await db.execute(delete(Appointment).where(Appointment.id == appointment_id))
     await db.commit()
+    # Best-effort: la compensacion en base ya quedo commiteada. Un Redis caido
+    # aca no puede tapar el 502/503 del llamador ni saltear la liberacion de
+    # la idempotencia; en el peor caso el slot se ve ocupado hasta el TTL.
+    try:
+        await invalidate_availability(redis, store_id, starts_at)
+    except RedisError as exc:
+        logger.warning(
+            "revert_booking_cache_invalidation_failed",
+            appointment_id=appointment_id,
+            error_type=type(exc).__name__,
+        )
 
 
 def _normalize_custom_field_value(value: object) -> str:
@@ -884,7 +905,7 @@ async def create_public_booking(
                 )
                 await db.commit()
             except CircuitBreakerOpenError as exc:
-                await _revert_failed_booking(db, appointment.id)
+                await _revert_failed_booking(db, redis, appointment)
                 await idempotency_release(idempotency_key, redis)
                 raise AppException(
                     message=f"Proveedor de pagos temporalmente no disponible: {exc}",
@@ -892,7 +913,7 @@ async def create_public_booking(
                     error_code="PAYMENT_PROVIDER_UNAVAILABLE",
                 )
             except RuntimeError as exc:
-                await _revert_failed_booking(db, appointment.id)
+                await _revert_failed_booking(db, redis, appointment)
                 await idempotency_release(idempotency_key, redis)
                 raise AppException(
                     message=f"No se pudo iniciar el cobro online: {exc}",
