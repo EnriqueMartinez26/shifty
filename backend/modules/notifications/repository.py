@@ -7,7 +7,9 @@ y este filtro es la defensa en profundidad (CLAUDE.md §2). El commit es del
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.notifications.model import Notification
@@ -63,18 +65,23 @@ class NotificationRepository:
         return updated
 
     async def mark_all_read(self, store_id: str) -> int:
-        """Marca todas las no leidas activas de la tienda. Devuelve cuantas."""
+        """Marca todas las no leidas activas de la tienda. Devuelve cuantas.
+
+        B4-06 (2026-09-18): un solo ``UPDATE ... WHERE``; antes se traian
+        todas las no leidas como objetos ORM y se emitia un UPDATE por fila.
+        ``read_at IS NULL`` conserva la semantica de ``Notification.mark_read``
+        (no pisa un ``read_at`` previo).
+        """
         result = await self.db.execute(
-            select(Notification).where(
+            update(Notification)
+            .where(
                 Notification.store_id == store_id,
                 Notification.read_at.is_(None),
                 Notification.is_active.is_(True),
             )
+            .values(read_at=datetime.now(timezone.utc))
         )
-        notifications = list(result.scalars().all())
-        for notification in notifications:
-            notification.mark_read()
-        return len(notifications)
+        return int(getattr(result, "rowcount", 0) or 0)
 
 
 __all__ = ["NotificationRepository"]
