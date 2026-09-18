@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import httpx
+import re
 import smtplib
 import time
 from datetime import datetime, timedelta, timezone
@@ -45,6 +46,32 @@ def _mask_email(email: str | None) -> str:
     return f"{visible}***@{dominio}"
 
 
+# Direcciones dentro de un texto libre (p. ej. el ``str`` de
+# ``SMTPRecipientsRefused``, que repite el destinatario rechazado). Cualquier
+# token sin espacios ni ``<>"'`` a cada lado del ``@``: toma locales no ASCII
+# y direcciones entre comillas; peca por tapar de mas, nunca de menos.
+_EMAIL_IN_TEXT = re.compile(r"[^\s<>\"']+@[^\s<>\"']+")
+# Telefonos dentro de un texto libre (Twilio repite el ``To`` en su error):
+# 8 o mas digitos, con separadores habituales entre medio.
+_PHONE_IN_TEXT = re.compile(r"\+?\d(?:[\s\-().]?\d){7,}")
+
+
+def _mask_emails_in_text(text: str) -> str:
+    """Enmascara cada direccion de un mensaje de error antes de loguearlo."""
+    return _EMAIL_IN_TEXT.sub(lambda match: _mask_email(match.group(0)), text)
+
+
+def _mask_phone(phone: str) -> str:
+    """Deja solo los ultimos 4 digitos."""
+    digits = re.sub(r"\D", "", phone)
+    return f"***{digits[-4:]}"
+
+
+def _mask_phones_in_text(text: str) -> str:
+    """Enmascara cada telefono de un mensaje de error antes de loguearlo."""
+    return _PHONE_IN_TEXT.sub(lambda match: _mask_phone(match.group(0)), text)
+
+
 def _header_safe(value: str) -> str:
     """Colapsa CR/LF/TAB a espacio: el Subject interpola nombres de servicio/
     tienda controlados por el usuario, y un CRLF ahi inyecta cabeceras (Bcc,
@@ -69,7 +96,12 @@ async def _send_email(to: str, subject: str, body: str) -> bool:
                 smtp.send_message(message)
             return True
         except Exception as exc:  # pragma: no cover - depende de SMTP real
-            logger.error("smtp_send_failed", to=to, error=str(exc))
+            logger.error(
+                "smtp_send_failed",
+                to=_mask_email(to),
+                error_type=type(exc).__name__,
+                error=_mask_emails_in_text(str(exc)),
+            )
             return False
 
     return await asyncio.to_thread(_send)
@@ -304,7 +336,9 @@ async def send_appointment_confirmation(
     email: str, details: dict[str, Any]
 ) -> dict[str, str]:
     logger.info(
-        "sending_confirmation_email", email=email, appointment=details.get("public_id")
+        "sending_confirmation_email",
+        email=_mask_email(email),
+        appointment=details.get("public_id"),
     )
     success = await _send_email(
         email, _confirmation_subject(details), _confirmation_body(details)
@@ -319,7 +353,9 @@ async def send_appointment_reminder(
     email: str, details: dict[str, Any]
 ) -> dict[str, str]:
     logger.info(
-        "sending_reminder_email", email=email, appointment=details.get("public_id")
+        "sending_reminder_email",
+        email=_mask_email(email),
+        appointment=details.get("public_id"),
     )
     success = await _send_email(
         email, _reminder_subject(details), _reminder_body(details)
@@ -359,7 +395,7 @@ async def _send_whatsapp(to_phone: str, body: str) -> bool:
         logger.warning(
             "whatsapp_send_rejected",
             status=resp.status_code,
-            detail=resp.text[:200],
+            detail=_mask_phones_in_text(resp.text[:200]),
         )
         return False
     return True
@@ -539,7 +575,7 @@ async def enqueue_confirmation_email(
         # Confirmations are operational side effects; they must never abort bookings.
         logger.warning(
             "confirmation_email_dispatch_failed",
-            email=email,
+            email=_mask_email(email),
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
             error=str(exc),
@@ -709,7 +745,7 @@ async def send_store_notification_email(
     except Exception as exc:
         logger.warning(
             "store_notification_email_failed",
-            email=email,
+            email=_mask_email(email),
             error_type=type(exc).__name__,
         )
         return {"status": "failed", "reason": type(exc).__name__}
