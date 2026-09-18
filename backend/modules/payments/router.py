@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 import hmac
+import re
 from typing import Annotated, Any, AsyncGenerator
 
 from core.router import CanonicalAPIRouter
@@ -81,6 +82,7 @@ router = CanonicalAPIRouter(prefix="/payments", tags=["Payments"])
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+_PUBLIC_ID_RE = re.compile(PUBLIC_ID_PATTERN)
 
 
 async def get_uow(
@@ -210,7 +212,13 @@ def _webhook_event_id(payload: dict[str, Any]) -> str:
 async def _resolve_store_for_webhook(
     db: AsyncSession, store_reference: str | None
 ) -> tuple[str, PaymentGatewayConfig]:
-    if not store_reference:
+    # La forma se valida ANTES de tocar la base (B2-18): es el unico dato de
+    # un request externo sin autenticar que llega a un WHERE. El rechazo es
+    # el MISMO que el de una tienda inexistente (400, mismo mensaje): no
+    # revela si la tienda existe ni cambia lo que ve Mercado Pago (regla 7).
+    # No va como Query(pattern=...) porque FastAPI responderia 422 con otro
+    # cuerpo, distinguible del de una tienda inexistente.
+    if not store_reference or not _PUBLIC_ID_RE.fullmatch(store_reference):
         raise WebhookException(message="store_id invalido para webhook")
 
     config_result = await db.execute(
