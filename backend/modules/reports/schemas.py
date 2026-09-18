@@ -9,11 +9,6 @@ from core.validation import SAFE_FILENAME_PREFIX_PATTERN
 ExportFormat = Literal["csv", "excel", "pdf"]
 
 
-class ReportQueryParams(BaseModel):
-    from_date: date | None = None
-    to_date: date | None = None
-
-
 class ReportSummaryStats(BaseModel):
     total_appointments: int
     completed_appointments: int
