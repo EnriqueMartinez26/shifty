@@ -37,6 +37,7 @@ from core.exceptions import (
 )
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AbstractUnitOfWork
+from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import build_client_details, is_deliverable_email
@@ -266,36 +267,63 @@ class AppointmentBlockService:
     ) -> StaffBlock:
         block = await self._get_block(public_id)
         previous: Range = (block.start_time, block.end_time)
+        was_active = bool(block.is_active)
         if "starts_at" in changes and changes["starts_at"] is not None:
             block.start_time = changes["starts_at"]  # type: ignore[assignment]
         if "ends_at" in changes and changes["ends_at"] is not None:
             block.end_time = changes["ends_at"]  # type: ignore[assignment]
-        if block.start_time >= block.end_time:
+        if ensure_utc_aware(block.start_time) >= ensure_utc_aware(block.end_time):
             raise ValidationException("El inicio debe ser anterior al fin")
         for key in ("reason", "is_active"):
             if key in changes and changes[key] is not None:
                 setattr(block, key, changes[key])
+        self._publish_released(block, previous, was_active)
         await self.uow.commit()
         await self.uow.session.refresh(block)
         await self._invalidate([previous, (block.start_time, block.end_time)])
         return block
 
     async def delete_block(self, public_id: str) -> None:
-        block = await self._get_block(public_id)
-        block.is_active = False
-        # El rango bloqueado vuelve a estar libre: la lista de espera se entera.
-        self.uow.outbox.publish(
-            store_id=self.actor.store_id,
-            event_type=EVENT_SLOT_RELEASED,
-            payload=slot_released_payload(
-                staff_id=block.staff_id,
-                starts_at=block.start_time,
-                ends_at=block.end_time,
-                reason="block_deleted",
-            ),
-        )
-        await self.uow.commit()
-        await self._invalidate([(block.start_time, block.end_time)])
+        # Borrar es desactivar: un solo camino decide que tramo queda libre y
+        # se lo avisa a la lista de espera (B1-18).
+        await self.update_block(public_id, {"is_active": False})
+
+    def _publish_released(
+        self, block: StaffBlock, previous: Range, was_active: bool
+    ) -> None:
+        """Publica cada tramo que el bloqueo dejo de cubrir.
+
+        Antes solo ``delete`` avisaba: ``PATCH`` con ``is_active=false`` (el
+        mismo estado final) o achicando/moviendo el rango liberaba agenda sin
+        que nadie de la lista se enterara (B1-18). El motivo es siempre
+        ``block_deleted``: un rango liberado no cae en la grilla, se le avisa
+        al duenio y no se le ofrece al cliente (``ReleasedSlot.aligned_to_grid``).
+        """
+        if not was_active:
+            return  # no bloqueaba nada: no hay nada que liberar
+        prev_start = ensure_utc_aware(previous[0])
+        prev_end = ensure_utc_aware(previous[1])
+        freed: list[Range] = []
+        if not block.is_active:
+            freed.append((prev_start, prev_end))
+        else:
+            new_start = ensure_utc_aware(block.start_time)
+            new_end = ensure_utc_aware(block.end_time)
+            if prev_start < new_start:
+                freed.append((prev_start, min(prev_end, new_start)))
+            if new_end < prev_end:
+                freed.append((max(prev_start, new_end), prev_end))
+        for starts_at, ends_at in freed:
+            self.uow.outbox.publish(
+                store_id=self.actor.store_id,
+                event_type=EVENT_SLOT_RELEASED,
+                payload=slot_released_payload(
+                    staff_id=block.staff_id,
+                    starts_at=starts_at,
+                    ends_at=ends_at,
+                    reason="block_deleted",
+                ),
+            )
 
     async def _invalidate(self, ranges: list[Range]) -> None:
         for starts_at, ends_at in ranges:
