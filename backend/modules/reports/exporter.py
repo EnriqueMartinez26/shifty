@@ -1,14 +1,30 @@
 import csv
 import unicodedata
 from io import BytesIO, StringIO
+from datetime import datetime
 from typing import Any
 
+from core.utils import ARGENTINA_TZ, ensure_utc_aware
 from modules.reports.schemas import ReportSummaryResponse
 
 # Caracteres con los que Excel/Sheets arrancan una FORMULA. client_name lo
 # controla un atacante anonimo via la reserva publica: una celda que empieza con
 # alguno de estos puede exfiltrar datos o ejecutar DDE al abrir el export.
 _FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+
+# Toda hora que ve el dueno sale en hora argentina (regla 24, S-13). Antes el
+# PDF formateaba el instante UTC sin zona (22:30 ART salia como 01:30 del dia
+# siguiente) y CSV/Excel exportaban ISO UTC. Para las planillas se eligio hora
+# local legible con la zona explicita en el encabezado de la columna.
+_LOCAL_ZONE_LABEL = "America/Argentina/Buenos_Aires"
+_STARTS_AT_HEADER = f"starts_at ({_LOCAL_ZONE_LABEL})"
+_ENDS_AT_HEADER = f"ends_at ({_LOCAL_ZONE_LABEL})"
+
+
+def _local_datetime(value: datetime) -> str:
+    """``YYYY-MM-DD HH:MM`` en hora argentina; un naive se toma como UTC."""
+    return ensure_utc_aware(value).astimezone(ARGENTINA_TZ).strftime("%Y-%m-%d %H:%M")
 
 
 def _neutralize_cell(value: object) -> object:
@@ -38,8 +54,8 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
     writer.writerow(
         [
             "public_id",
-            "starts_at",
-            "ends_at",
+            _STARTS_AT_HEADER,
+            _ENDS_AT_HEADER,
             "status",
             "service_name",
             "staff_name",
@@ -52,8 +68,8 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
         writer.writerow(
             [
                 item.public_id,
-                item.starts_at.isoformat(),
-                item.ends_at.isoformat(),
+                _local_datetime(item.starts_at),
+                _local_datetime(item.ends_at),
                 _neutralize_cell(item.status),
                 _neutralize_cell(item.service_name),
                 _neutralize_cell(item.staff_name),
@@ -99,8 +115,8 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
     appointments_sheet.append(
         [
             "public_id",
-            "starts_at",
-            "ends_at",
+            _STARTS_AT_HEADER,
+            _ENDS_AT_HEADER,
             "status",
             "service_name",
             "staff_name",
@@ -112,8 +128,8 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
         appointments_sheet.append(
             [
                 item.public_id,
-                item.starts_at.isoformat(),
-                item.ends_at.isoformat(),
+                _local_datetime(item.starts_at),
+                _local_datetime(item.ends_at),
                 _neutralize_cell(item.status),
                 _neutralize_cell(item.service_name),
                 _neutralize_cell(item.staff_name),
@@ -213,7 +229,7 @@ def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
 
     for item in summary.appointments:
         cells = (
-            item.starts_at.strftime("%Y-%m-%d %H:%M"),
+            _local_datetime(item.starts_at),
             item.status,
             item.service_name,
             item.staff_name,
