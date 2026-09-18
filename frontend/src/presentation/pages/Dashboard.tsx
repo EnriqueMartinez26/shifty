@@ -19,6 +19,8 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
+import type { BookingStatusValue } from '@domain/value-objects/BookingStatus'
+
 import type { UpcomingAppointment } from '@application/services/DashboardService'
 import type {
   ProfessionalReportItem,
@@ -287,12 +289,30 @@ const canViewReports = (role: string | undefined, isGlobalAdmin: boolean) =>
 const canViewFinancialAdmin = (role: string | undefined, isGlobalAdmin: boolean) =>
   isGlobalAdmin || role === ROLE_STORE_ADMIN || role === ROLE_SUPER_ADMIN
 
-const getAppointmentTone = (status: string): Tone => {
-  if (['CANCELLED', 'EXPIRED', 'REJECTED'].includes(status)) return 'danger'
-  if (['PENDING', 'PENDING_PAYMENT'].includes(status)) return 'warning'
-  if (['CONFIRMED', 'COMPLETED'].includes(status)) return 'success'
-  return 'neutral'
+/**
+ * La API manda los estados en minusculas (`appointments/model.py`); esto los
+ * comparaba en MAYUSCULAS, asi que las tres ramas eran codigo muerto y todo
+ * caia en 'neutral': un turno cancelado se pintaba igual que uno confirmado.
+ *
+ * El mapa completo reemplaza a los tres `includes`: si el backend agrega un
+ * estado, `BookingStatusValue` cambia y esto deja de compilar, en vez de
+ * volver al gris en silencio. `'REJECTED'` no existia en el enum, y `absent`
+ * no estaba en ninguna de las tres listas.
+ */
+const APPOINTMENT_TONES: Record<BookingStatusValue, Tone> = {
+  pending: 'warning',
+  pending_payment: 'warning',
+  confirmed: 'success',
+  completed: 'success',
+  cancelled: 'danger',
+  absent: 'danger',
+  expired: 'danger'
 }
+
+const isKnownStatus = (status: string): status is BookingStatusValue => status in APPOINTMENT_TONES
+
+const getAppointmentTone = (status: string): Tone =>
+  isKnownStatus(status) ? APPOINTMENT_TONES[status] : 'neutral'
 
 const toneTokens = (tone: Tone = 'neutral') => {
   if (tone === 'primary') {
