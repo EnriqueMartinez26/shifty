@@ -68,9 +68,18 @@ async def get_store_promotion(
     code: str,
     for_update: bool = False,
 ) -> StorePromotion | None:
-    statement = select(StorePromotion).where(
-        StorePromotion.store_id == store_id,
-        StorePromotion.code == code,
+    # Con el indice unico parcial (B2-14) un codigo puede repetirse entre una
+    # promocion activa y varias dadas de baja: manda la activa; si no hay,
+    # la baja mas reciente (asi el canje sigue diciendo "no esta activa" en
+    # vez de reventar con MultipleResultsFound).
+    statement = (
+        select(StorePromotion)
+        .where(
+            StorePromotion.store_id == store_id,
+            StorePromotion.code == code,
+        )
+        .order_by(StorePromotion.is_active.desc(), StorePromotion.created_at.desc())
+        .limit(1)
     )
     if for_update:
         statement = statement.with_for_update()
@@ -164,13 +173,15 @@ async def create_store_promotion(
     db: AsyncSession, *, store_id: str, data: PromotionCreate
 ) -> StorePromotion:
     """Alta de una promocion. Dueña de la transaccion (CLAUDE.md §2)."""
-    duplicate = await db.execute(
-        select(StorePromotion).where(
-            StorePromotion.store_id == store_id,
-            StorePromotion.code == data.code,
+    if data.is_active:
+        duplicate = await db.execute(
+            select(StorePromotion).where(
+                StorePromotion.store_id == store_id,
+                StorePromotion.code == data.code,
+                StorePromotion.is_active.is_(True),
+            )
         )
-    )
-    _assert_codigo_libre(duplicate.scalar_one_or_none())
+        _assert_codigo_libre(duplicate.scalar_one_or_none())
 
     promotion = StorePromotion(store_id=store_id, **data.model_dump())
     db.add(promotion)
@@ -185,13 +196,20 @@ async def update_store_promotion(
     """Edicion parcial: valida codigo, tope porcentual y ventana, y persiste."""
     payload = data.model_dump(exclude_unset=True)
 
-    candidate_code = payload.get("code")
-    if candidate_code and candidate_code != promotion.code:
+    # Solo compite por el codigo una promocion que queda activa: cambiarle el
+    # codigo o reactivarla no puede pisar a otra activa con el mismo codigo.
+    candidate_code = payload.get("code") or promotion.code
+    candidate_active = payload.get("is_active", promotion.is_active)
+    toca_unicidad = candidate_code != promotion.code or (
+        candidate_active and not promotion.is_active
+    )
+    if candidate_active and toca_unicidad:
         duplicate = await db.execute(
             select(StorePromotion).where(
                 StorePromotion.store_id == promotion.store_id,
                 StorePromotion.code == candidate_code,
                 StorePromotion.id != promotion.id,
+                StorePromotion.is_active.is_(True),
             )
         )
         _assert_codigo_libre(duplicate.scalar_one_or_none())
