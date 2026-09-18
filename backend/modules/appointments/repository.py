@@ -245,6 +245,45 @@ class AppointmentRepository:
         )
         return res.scalar_one_or_none()
 
+    async def list_active_blocks_in_window(
+        self, staff_id: str, window_start: datetime, window_end: datetime
+    ) -> list[StaffBlock]:
+        """Bloqueos activos del profesional que solapan la ventana, por inicio.
+
+        Una sola consulta para que ``_find_suggestion`` recorra en memoria en
+        vez de preguntar por cada hueco (regla 12, B1-15).
+        """
+        res = await self.db.execute(
+            select(StaffBlock)
+            .where(
+                StaffBlock.staff_id == staff_id,
+                StaffBlock.is_active.is_(True),
+                StaffBlock.starts_at < window_end,
+                StaffBlock.ends_at > window_start,
+            )
+            .order_by(StaffBlock.starts_at.asc())
+        )
+        return list(res.scalars().all())
+
+    async def list_active_appointments_in_window(
+        self, staff_id: str, window_start: datetime, window_end: datetime
+    ) -> list[Appointment]:
+        """Turnos activos del profesional que solapan la ventana, por inicio.
+
+        Mismo filtro de estados que ``get_conflicting_appointment`` (B1-15).
+        """
+        res = await self.db.execute(
+            select(Appointment)
+            .where(
+                Appointment.staff_id == staff_id,
+                Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+                Appointment.starts_at < window_end,
+                Appointment.ends_at > window_start,
+            )
+            .order_by(Appointment.starts_at.asc())
+        )
+        return list(res.scalars().all())
+
     # ------------------------------------------------------------------
     # Listados
     # ------------------------------------------------------------------
