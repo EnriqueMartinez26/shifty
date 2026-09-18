@@ -133,7 +133,10 @@ async def test_store_request_refreshes_oauth_token_after_401(
         return {"status": "ok", "path": path}
 
     async def fake_refresh(
-        db: AsyncSession, *, config: PaymentGatewayConfig
+        db: AsyncSession,
+        *,
+        config: PaymentGatewayConfig,
+        persist: object = None,  # hook de persistencia del job (S-02)
     ) -> PaymentGatewayConfig:
         config.encrypted_access_token = encrypt_secret("fresh-token") or "fresh-token"
         config.encrypted_refresh_token = (
@@ -165,3 +168,42 @@ async def test_store_request_refreshes_oauth_token_after_401(
 
     assert result == {"status": "ok", "path": "/v1/payments/123"}
     assert decrypt_secret(config.encrypted_access_token) == "fresh-token"
+
+
+@pytest.mark.asyncio
+async def test_el_lock_del_job_invalida_la_conexion_si_no_puede_soltarlo() -> None:
+    """S-02: si pg_advisory_unlock falla, la conexion no vuelve al pool con el
+    lock de sesion tomado: se invalida y Postgres suelta el lock al cerrarla."""
+    from modules.payments.jobs import JOB_LOCK_NAMESPACE, _release_job_lock
+
+    class ConexionQueFalla:
+        def __init__(self) -> None:
+            self.invalidada = False
+
+        async def execute(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("unlock fallo")
+
+        async def invalidate(self) -> None:
+            self.invalidada = True
+
+    conexion = ConexionQueFalla()
+    await _release_job_lock(
+        cast(Any, conexion),
+        {"namespace": JOB_LOCK_NAMESPACE, "clave": "job:prueba"},
+    )
+    assert conexion.invalidada
+
+
+def test_el_lock_del_job_usa_la_forma_de_dos_int4() -> None:
+    """S-02: (namespace, id) no comparte espacio con los locks de un bigint
+    (pg_advisory_xact_lock(hashtext('ledger:...')) del fiado)."""
+    import inspect
+
+    from modules.payments import jobs
+
+    fuente = inspect.getsource(jobs._exclusive_job) + inspect.getsource(
+        jobs._release_job_lock
+    )
+    assert "pg_try_advisory_lock(:namespace, hashtext(:clave))" in fuente
+    assert "pg_advisory_unlock(:namespace, hashtext(:clave))" in fuente
+    assert -(2**31) <= jobs.JOB_LOCK_NAMESPACE < 2**31

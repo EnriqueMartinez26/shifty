@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any
 
 import structlog
 from redis.exceptions import RedisError
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, or_, select, text
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
+from core.database import _apply_tenant_context
 from core.redis import get_redis
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
@@ -38,6 +40,8 @@ from modules.users.model import User, UserRole
 from modules.waitlist.events import EVENT_SLOT_RELEASED, publish_slot_released
 from modules.waitlist.offers import ReleasedSlot, offer_released_slot
 from modules.payments.service import (
+    GatewayConfigs,
+    PersistRefresh,
     fetch_mercadopago_payment,
     load_gateway_configs,
     stamp_payment_from_status,
@@ -56,6 +60,21 @@ logger = structlog.get_logger()
 # misma funcion de envio de siempre con sus argumentos ya fijados: conserva
 # is_deliverable_email y el best-effort de cada camino.
 PendingEmail = Callable[[], Awaitable[object]]
+
+
+def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
+    """De que tienda y turno es un mail del outbox, para el log si no sale.
+
+    Solo identificadores: ni email ni nombre del cliente (S-04, 2026-09-18;
+    se habian perdido al sacar los envios de la transaccion en B2-01).
+    """
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    turno = payload.get("appointment_id") or payload.get("public_id")
+    return {
+        "store_id": message.store_id,
+        "appointment_id": str(turno) if turno else None,
+        "event_type": message.event_type,
+    }
 
 
 async def process_outbox_batch(
@@ -86,9 +105,10 @@ async def process_outbox_batch(
     failed = 0
     # Ningun mail sale dentro del lote: el cuerpo del for solo persiste y
     # acumula; todo se despacha despues del unico commit (2026-09-16, B2-01).
-    mails_pendientes: list[PendingEmail] = []
+    mails_pendientes: list[tuple[PendingEmail, dict[str, str | None]]] = []
 
     for message in messages:
+        contexto = _contexto_del_mail(message)
         try:
             if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
                 # Lista de espera: aviso al dueno y oferta a una persona por vez.
@@ -101,20 +121,26 @@ async def process_outbox_batch(
                 )
                 if oferta.pending_email:
                     mails_pendientes.append(
-                        partial(
-                            enqueue_waitlist_offer_email,
-                            email=oferta.pending_email.email,
-                            details=oferta.pending_email.details,
+                        (
+                            partial(
+                                enqueue_waitlist_offer_email,
+                                email=oferta.pending_email.email,
+                                details=oferta.pending_email.details,
+                            ),
+                            contexto,
                         )
                     )
             elif message.event_type == "appointment.cancelled_by_block":
                 # Aviso al cliente (no al dueno, que fue quien bloqueo).
                 payload = dict(message.payload or {})
                 mails_pendientes.append(
-                    partial(
-                        enqueue_cancellation_email,
-                        email=str(payload.get("client_email") or "") or None,
-                        details=payload,
+                    (
+                        partial(
+                            enqueue_cancellation_email,
+                            email=str(payload.get("client_email") or "") or None,
+                            details=payload,
+                        ),
+                        contexto,
                     )
                 )
             else:
@@ -123,7 +149,10 @@ async def process_outbox_batch(
                     # La notificacion in-app es la fuente durable; el mail es
                     # un efecto secundario que sale despues del commit.
                     db.add(notification)
-                    mails_pendientes.extend(await _store_owner_mails(db, notification))
+                    mails_pendientes.extend(
+                        (mail, contexto)
+                        for mail in await _store_owner_mails(db, notification)
+                    )
                     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
                         # La sena acreditada confirma el turno: el cliente
                         # tambien se entera.
@@ -131,7 +160,7 @@ async def process_outbox_batch(
                             db, notification.appointment_id
                         )
                         if confirmacion is not None:
-                            mails_pendientes.append(confirmacion)
+                            mails_pendientes.append((confirmacion, contexto))
             message.processed_at = now
             message.error = None
             processed += 1
@@ -143,11 +172,13 @@ async def process_outbox_batch(
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
     # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
     # como fallido ni duplica envios.
-    for enviar in mails_pendientes:
+    for enviar, contexto in mails_pendientes:
         try:
             await enviar()
         except Exception as exc:
-            logger.warning("outbox_email_skipped", error_type=type(exc).__name__)
+            logger.warning(
+                "outbox_email_skipped", error_type=type(exc).__name__, **contexto
+            )
     return {"processed": processed, "failed": failed, "inspected": len(messages)}
 
 
@@ -392,19 +423,26 @@ async def reconcile_pending_payments(
 
 
 async def _fetch_remote_payment(
-    db: AsyncSession, payment: Payment
+    db: AsyncSession,
+    payment: Payment,
+    configs: GatewayConfigs | None = None,
+    persist_refresh: PersistRefresh | None = None,
 ) -> dict[str, Any] | None:
     if payment.external_payment_id:
         return await fetch_mercadopago_payment(
             db,
             store_id=payment.store_id,
             payment_id=payment.external_payment_id,
+            configs=configs,
+            persist_refresh=persist_refresh,
         )
 
     candidates = await search_mercadopago_payments(
         db,
         store_id=payment.store_id,
         external_reference=payment.appointment_id,
+        configs=configs,
+        persist_refresh=persist_refresh,
     )
     if not candidates:
         return None
@@ -438,8 +476,85 @@ def _expired_holds_query(
     )
 
 
+# Advisory locks de jobs: forma de DOS int4 (namespace, id). Postgres guarda
+# esas claves aparte de las de un solo bigint (pg_locks.objsubid = 2 frente a
+# 1), asi que no pueden chocar con pg_advisory_xact_lock(hashtext('ledger:...'))
+# del fiado ni con ningun otro lock de un argumento. El namespace es fijo y
+# reservado para jobs; el id es hashtext(nombre del job).
+JOB_LOCK_NAMESPACE = 7001
+EXPIRE_JOB_LOCK = "job:expire_unpaid_appointments"
+
+
+async def _release_job_lock(conn: AsyncConnection, params: dict[str, object]) -> None:
+    """Suelta el lock de sesion; si no puede, invalida la conexion.
+
+    Si ``pg_advisory_unlock`` falla por algo que no es una desconexion, la
+    conexion volveria al pool con el lock de sesion tomado y ninguna corrida
+    siguiente lo conseguiria. ``invalidate()`` la saca del pool: Postgres
+    cierra la sesion y con ella suelta el lock. No se re-levanta: el trabajo
+    del job ya esta hecho y el lock queda liberado igual.
+    """
+    try:
+        await conn.execute(
+            text("SELECT pg_advisory_unlock(:namespace, hashtext(:clave))"), params
+        )
+    except Exception as exc:
+        logger.warning(
+            "job_lock_unlock_failed",
+            job=params.get("clave"),
+            error_type=type(exc).__name__,
+        )
+        await conn.invalidate()
+
+
+@asynccontextmanager
+async def _exclusive_job(db: AsyncSession, name: str) -> AsyncIterator[bool]:
+    """Advisory lock de SESION por tarea: una sola corrida del job a la vez.
+
+    Se toma con ``pg_try_advisory_lock(namespace, id)`` en una conexion propia
+    en AUTOCOMMIT, asi que sobrevive a los commits de la sesion del job y no
+    deja ninguna transaccion abierta mientras se habla con Mercado Pago. Un
+    lock de transaccion (``pg_try_advisory_xact_lock``) moriria en el commit
+    previo al HTTP, y el ``FOR UPDATE SKIP LOCKED`` de la fase B tampoco
+    alcanza: la fase A no bloquea nada, asi que sin esto dos corridas
+    solapadas le preguntaban a MP dos veces por el mismo cobro. Se libera con
+    ``pg_advisory_unlock`` al salir (o invalidando la conexion si eso falla);
+    si el proceso muere, al cerrarse la conexion. En SQLite (tests) no hay
+    concurrencia real: es no-op.
+    """
+    bind = db.bind
+    if not isinstance(bind, AsyncEngine) or bind.dialect.name != "postgresql":
+        yield True
+        return
+    async with bind.connect() as conn:
+        conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        params: dict[str, object] = {"namespace": JOB_LOCK_NAMESPACE, "clave": name}
+        tomado = bool(
+            await conn.scalar(
+                text("SELECT pg_try_advisory_lock(:namespace, hashtext(:clave))"),
+                params,
+            )
+        )
+        try:
+            yield tomado
+        finally:
+            if tomado:
+                await _release_job_lock(conn, params)
+
+
 async def expire_unpaid_appointments(
     db: AsyncSession, *, limit: int = 100
+) -> dict[str, int]:
+    async with _exclusive_job(db, EXPIRE_JOB_LOCK) as tomado:
+        if not tomado:
+            # Otra corrida del beat sigue adentro (MP lento): esta no hace nada.
+            logger.info("expire_unpaid_appointments_overlap_skipped")
+            return {"expired": 0, "rescued": 0, "inspected": 0}
+        return await _expire_unpaid_appointments(db, limit=limit)
+
+
+async def _expire_unpaid_appointments(
+    db: AsyncSession, *, limit: int
 ) -> dict[str, int]:
     now = datetime.now(timezone.utc)
     vencidos = _expired_holds_query(now, limit)
@@ -449,9 +564,23 @@ async def expire_unpaid_appointments(
     # bloqueadas: con MP degradado una corrida sostenia 100 turnos bloqueados
     # durante minutos (regla 5; incidente 2026-09-04). 2026-09-16, B2-02.
     candidatos = list((await db.execute(vencidos)).all())
+    pendientes = [payment for _, payment in candidatos if payment is not None]
+    # Tampoco con una transaccion abierta (S-02, 2026-09-18): la config del
+    # gateway se lee ACA, una vez por tienda, y la transaccion de lectura se
+    # cierra antes del HTTP. Sin esto la sesion quedaba "idle in transaction"
+    # toda la fase y el idle_in_transaction_session_timeout (60 s) del rol la
+    # mataba a mitad del job. Commit de AsyncSession y no de TenantSession: el
+    # de TenantSession reaplica el contexto y con eso reabre otra transaccion
+    # en el acto; el contexto se reaplica recien en la fase B.
+    configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
+    await AsyncSession.commit(db)
     remotos = await _fetch_remote_payments(
-        db, [payment for _, payment in candidatos if payment is not None]
+        pendientes,
+        db=db,
+        configs=configs,
+        persist_refresh=partial(_persist_refresh_in_short_transaction, db),
     )
+    await _apply_tenant_context(db)
 
     # Fase B, CON lock: decidir con el resultado ya en memoria. Postgres
     # rechaza FOR UPDATE sobre el lado nullable de un OUTER JOIN, asi que se
@@ -505,8 +634,37 @@ async def expire_unpaid_appointments(
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 
 
+async def _persist_refresh_in_short_transaction(
+    db: AsyncSession, config: PaymentGatewayConfig
+) -> None:
+    """Persiste en el acto la config que un 401 hizo refrescar, en una
+    transaccion corta propia, y la cierra antes de la siguiente llamada a MP.
+
+    Revision de S-02 (2026-09-18): el refresh hacia ``db.flush()`` en una
+    transaccion NUEVA, sin el contexto de la tarea. En Postgres la RLS de
+    ``payment_gateway_configs`` dejaba el UPDATE en 0 filas (StaleDataError),
+    la sesion quedaba inactiva y la corrida moria para todas las tiendas; y
+    en cualquier motor esa transaccion seguia abierta durante el resto del
+    HTTP. Se persiste YA (no en la fase B) porque MP puede rotar el refresh
+    token: si la corrida muriera antes, la conexion OAuth de la tienda
+    quedaria rota. Si la escritura falla se deshace sin reaplicar contexto
+    (nada queda abierto) y el error sigue al llamador, que saltea ese cobro.
+    """
+    try:
+        await _apply_tenant_context(db)
+        await db.flush([config])
+        await AsyncSession.commit(db)
+    except Exception:
+        await AsyncSession.rollback(db)
+        raise
+
+
 async def _fetch_remote_payments(
-    db: AsyncSession, payments: list[Payment]
+    payments: list[Payment],
+    *,
+    db: AsyncSession,
+    configs: GatewayConfigs,
+    persist_refresh: PersistRefresh | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Una request HTTP a Mercado Pago por cobro pendiente: {payment.id: pago remoto}.
 
@@ -519,7 +677,7 @@ async def _fetch_remote_payments(
         if payment.provider != "mercadopago":
             continue
         try:
-            remote = await _fetch_remote_payment(db, payment)
+            remote = await _fetch_remote_payment(db, payment, configs, persist_refresh)
         except Exception:
             continue
         if remote:

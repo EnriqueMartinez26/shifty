@@ -32,14 +32,18 @@ from core.database import (
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 # Los modulos que hacian el reset a medias. dependencies.py ya lo hacia bien y
 # no entra: alli el reset es intermedio y lo sigue un contexto real.
-# S-09 (2026-09-18) suma los bloques del portal publico: reserva, "mis
-# turnos", lista de espera y la disponibilidad anonima del panel.
+# S-09 (2026-09-18) suma los bloques del portal publico (reserva, "mis
+# turnos", lista de espera y la disponibilidad anonima del panel) y los dos
+# bloques de payments/router.py (callback OAuth de Mercado Pago y webhook).
+# Las tasks de Celery de payments/tasks.py no entran: bypass de tarea entera
+# por diseno, con la sesion cerrandose enseguida.
 SIN_RESET_A_MEDIAS = (
     "modules/auth/service.py",
     "modules/stores/router.py",
     "modules/public_api/router.py",
     "modules/waitlist/public_router.py",
     "modules/appointments/router.py",
+    "modules/payments/router.py",
 )
 
 

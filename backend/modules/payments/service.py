@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
 from urllib.parse import urlencode, urlparse
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import cast
 
 import httpx
@@ -266,6 +266,11 @@ async def _get_gateway_config(
 # repetia por cada webhook (regla 12; 2026-09-17, B2-13).
 GatewayConfigs = Mapping[str, PaymentGatewayConfig]
 
+# Como se persiste una config refrescada por OAuth. None (el default) es el
+# camino de siempre: flush dentro de la transaccion del llamador (requests).
+# Un job que habla con MP sin transaccion abierta pasa el suyo (S-02).
+PersistRefresh = Callable[[PaymentGatewayConfig], Awaitable[None]]
+
 
 async def load_gateway_configs(
     db: AsyncSession, store_ids: Iterable[str | None]
@@ -401,6 +406,7 @@ async def refresh_mercadopago_oauth_connection(
     db: AsyncSession,
     *,
     config: PaymentGatewayConfig,
+    persist: PersistRefresh | None = None,
 ) -> PaymentGatewayConfig:
     refresh_token = _resolve_refresh_token(config)
     if not refresh_token:
@@ -415,7 +421,10 @@ async def refresh_mercadopago_oauth_connection(
         }
     )
     apply_mercadopago_oauth_payload(config, token_payload)
-    await db.flush()
+    if persist is None:
+        await db.flush()
+    else:
+        await persist(config)
     return config
 
 
@@ -456,6 +465,7 @@ async def _mercadopago_api_request_for_store(
     path: str,
     json_body: dict[str, JsonValue] | None = None,
     configs: GatewayConfigs | None = None,
+    persist_refresh: PersistRefresh | None = None,
 ) -> dict[str, JsonValue] | None:
     config = await resolve_gateway_config(db, store_id, configs)
     access_token = _resolve_access_token(config)
@@ -478,7 +488,7 @@ async def _mercadopago_api_request_for_store(
             and mercadopago_oauth_is_configured()
         ):
             refreshed_config = await refresh_mercadopago_oauth_connection(
-                db, config=config
+                db, config=config, persist=persist_refresh
             )
             refreshed_access_token = _resolve_access_token(refreshed_config)
             if not refreshed_access_token:
@@ -596,6 +606,7 @@ async def fetch_mercadopago_payment(
     store_id: str,
     payment_id: str,
     configs: GatewayConfigs | None = None,
+    persist_refresh: PersistRefresh | None = None,
 ) -> dict[str, JsonValue] | None:
     return await _mercadopago_api_request_for_store(
         db,
@@ -603,11 +614,17 @@ async def fetch_mercadopago_payment(
         method="GET",
         path=f"/v1/payments/{payment_id}",
         configs=configs,
+        persist_refresh=persist_refresh,
     )
 
 
 async def search_mercadopago_payments(
-    db: AsyncSession, *, store_id: str, external_reference: str
+    db: AsyncSession,
+    *,
+    store_id: str,
+    external_reference: str,
+    configs: GatewayConfigs | None = None,
+    persist_refresh: PersistRefresh | None = None,
 ) -> list[dict[str, JsonValue]]:
     """Busca en Mercado Pago los pagos asociados a un turno.
 
@@ -627,6 +644,8 @@ async def search_mercadopago_payments(
         store_id=store_id,
         method="GET",
         path=f"/v1/payments/search?{query}",
+        configs=configs,
+        persist_refresh=persist_refresh,
     )
     if not response:
         return []
