@@ -21,6 +21,7 @@ on:
 
 env:
   NODE_VERSION: "26.5.0"
+  NPM_VERSION: "11.17.0"
 
 jobs:
   reserva-movil:
@@ -38,6 +39,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      # frontend/.npmrc tiene engine-strict=true y package.json acota npm a
+      # "11.16.0 || 11.17.0": sin fijarlo, npm ci aborta con EBADENGINE.
+      - name: Setup npm
+        run: npm install --global "npm@${NPM_VERSION}"
       - name: Install dependencies
         run: npm ci
       - name: Instalar Chromium
