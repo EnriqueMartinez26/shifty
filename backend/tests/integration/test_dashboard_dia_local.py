@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import core.utils
-import modules.dashboard.router
+import modules.dashboard.service
 from core.utils import local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.model import Payment, PaymentStatus
@@ -104,7 +104,7 @@ async def test_hoy_y_la_semana_del_panel_son_dias_argentinos(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(core.utils, "datetime", _RelojCongelado)
-    monkeypatch.setattr(modules.dashboard.router, "datetime", _RelojCongelado)
+    monkeypatch.setattr(modules.dashboard.service, "datetime", _RelojCongelado)
 
     store_public_id, token = await register_and_login(
         client, slug="b504-panel", email="b504@test.com"

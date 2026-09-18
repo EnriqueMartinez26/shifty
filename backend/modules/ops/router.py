@@ -64,18 +64,10 @@ async def readiness(
     }
 
 
-@router.get("/slo")
-async def slo_status(
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
-    role = canonical_role(user)
-    if role != ROLE_SUPER_ADMIN and not has_any_role(user, STORE_MANAGERS):
-        raise PermissionDeniedException("ver SLO")
-
-    is_global = role == ROLE_SUPER_ADMIN or bool(user.is_global_admin)
-    store_filter = [] if is_global else [WebhookInbox.store_id == user.store_id]
-    outbox_filter = [] if is_global else [OutboxMessage.store_id == user.store_id]
+async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]:
+    """Webhooks pendientes / fallidos y outbox pendiente; ``None`` = global."""
+    store_filter = [] if store_id is None else [WebhookInbox.store_id == store_id]
+    outbox_filter = [] if store_id is None else [OutboxMessage.store_id == store_id]
 
     pending_webhooks_res = await db.execute(
         select(func.count(WebhookInbox.id)).where(
@@ -99,54 +91,64 @@ async def slo_status(
             *outbox_filter,
         )
     )
+    return {
+        "pending_webhooks": int(pending_webhooks_res.scalar_one() or 0),
+        "failed_webhooks": int(failed_webhooks_res.scalar_one() or 0),
+        "pending_outbox": int(pending_outbox_res.scalar_one() or 0),
+    }
 
-    pending_webhooks = int(pending_webhooks_res.scalar_one() or 0)
-    failed_webhooks = int(failed_webhooks_res.scalar_one() or 0)
-    pending_outbox = int(pending_outbox_res.scalar_one() or 0)
 
-    alerts: list[dict[str, str | int]] = []
-    if pending_webhooks > settings.SLO_MAX_PENDING_WEBHOOKS:
-        alerts.append(
-            {
-                "code": "pending_webhooks_high",
-                "severity": "critical",
-                "value": pending_webhooks,
-                "threshold": settings.SLO_MAX_PENDING_WEBHOOKS,
-            }
-        )
-    if failed_webhooks > settings.SLO_MAX_FAILED_WEBHOOKS:
-        alerts.append(
-            {
-                "code": "failed_webhooks_high",
-                "severity": "critical",
-                "value": failed_webhooks,
-                "threshold": settings.SLO_MAX_FAILED_WEBHOOKS,
-            }
-        )
-    if pending_outbox > settings.SLO_MAX_PENDING_OUTBOX:
-        alerts.append(
-            {
-                "code": "pending_outbox_high",
-                "severity": "warning",
-                "value": pending_outbox,
-                "threshold": settings.SLO_MAX_PENDING_OUTBOX,
-            }
-        )
+def _slo_thresholds() -> dict[str, int]:
+    return {
+        "pending_webhooks": settings.SLO_MAX_PENDING_WEBHOOKS,
+        "failed_webhooks": settings.SLO_MAX_FAILED_WEBHOOKS,
+        "pending_outbox": settings.SLO_MAX_PENDING_OUTBOX,
+    }
+
+
+# Metrica -> (codigo de alerta, severidad), en el orden en que se reportan.
+_SLO_ALERTS = (
+    ("pending_webhooks", "pending_webhooks_high", "critical"),
+    ("failed_webhooks", "failed_webhooks_high", "critical"),
+    ("pending_outbox", "pending_outbox_high", "warning"),
+)
+
+
+def _slo_alerts(
+    metrics: dict[str, int], thresholds: dict[str, int]
+) -> list[dict[str, str | int]]:
+    return [
+        {
+            "code": code,
+            "severity": severity,
+            "value": metrics[metric],
+            "threshold": thresholds[metric],
+        }
+        for metric, code, severity in _SLO_ALERTS
+        if metrics[metric] > thresholds[metric]
+    ]
+
+
+@router.get("/slo")
+async def slo_status(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    role = canonical_role(user)
+    if role != ROLE_SUPER_ADMIN and not has_any_role(user, STORE_MANAGERS):
+        raise PermissionDeniedException("ver SLO")
+
+    is_global = role == ROLE_SUPER_ADMIN or bool(user.is_global_admin)
+    metrics = await _slo_metrics(db, None if is_global else user.store_id)
+    thresholds = _slo_thresholds()
+    alerts = _slo_alerts(metrics, thresholds)
 
     return {
         "scope": "global" if is_global else "store",
         "store_id": None if is_global else user.store_id,
         "status": "ok" if not alerts else "degraded",
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "metrics": {
-            "pending_webhooks": pending_webhooks,
-            "failed_webhooks": failed_webhooks,
-            "pending_outbox": pending_outbox,
-        },
-        "thresholds": {
-            "pending_webhooks": settings.SLO_MAX_PENDING_WEBHOOKS,
-            "failed_webhooks": settings.SLO_MAX_FAILED_WEBHOOKS,
-            "pending_outbox": settings.SLO_MAX_PENDING_OUTBOX,
-        },
+        "metrics": metrics,
+        "thresholds": thresholds,
         "alerts": alerts,
     }

@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.utils import today_local
 from modules.reports.schemas import ReportDebtSummary
 from modules.reports.service import ReportService
 
@@ -67,16 +68,17 @@ async def test_report_trend_fills_gaps_and_counts_by_status() -> None:
     fake_db = SimpleNamespace()
     service = ReportService(db=cast(AsyncSession, fake_db), store_id="store-1")
 
-    today = datetime.now(timezone.utc).date()
-    current_month = datetime(today.year, today.month, 1, tzinfo=timezone.utc)
+    # La consulta devuelve la clave 'YYYY-MM' del mes ARGENTINO (S-05), ya
+    # calculada en SQL; el mes en curso es el del calendario local.
+    current_key = today_local().strftime("%Y-%m")
 
     async def fake_execute(*args: Any, **kwargs: Any) -> SimpleNamespace:
         # Solo el mes actual tiene turnos: 2 completados, 1 cancelado, 1 pendiente.
         return SimpleNamespace(
             all=lambda: [
-                (current_month, "completed", 2),
-                (current_month, "cancelled", 1),
-                (current_month, "pending", 1),
+                (current_key, "completed", 2),
+                (current_key, "cancelled", 1),
+                (current_key, "pending", 1),
             ]
         )
 
@@ -88,7 +90,6 @@ async def test_report_trend_fills_gaps_and_counts_by_status() -> None:
         point.month for point in trend.points
     )
     assert len(trend.points) == 3
-    current_key = current_month.strftime("%Y-%m")
     current_point = next(p for p in trend.points if p.month == current_key)
     assert current_point.total_appointments == 4
     assert current_point.completed_appointments == 2
