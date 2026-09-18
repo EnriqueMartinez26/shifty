@@ -37,9 +37,9 @@ from modules.audit.model import AuditAction
 from modules.stores.model import Store
 from modules.notifications.tasks import (
     build_client_details,
-    enqueue_confirmation_email,
-    enqueue_rebook_email,
-    enqueue_reschedule_email,
+    send_confirmation_email,
+    send_rebook_email,
+    send_reschedule_email,
 )
 from modules.payments.model import PaymentStatus
 from modules.payments.service import expire_mercadopago_preference
@@ -191,7 +191,7 @@ class AppointmentService:
         await self.uow.commit()
 
         # 5. Notificación (fuera de transacción, no blocking) ---------------
-        await enqueue_confirmation_email(
+        await send_confirmation_email(
             email=actor.email,
             details={
                 "public_id": appointment.public_id,
@@ -293,9 +293,7 @@ class AppointmentService:
         details = build_client_details(
             appointment, appointment.service, appointment.staff, store
         )
-        await enqueue_confirmation_email(
-            email=appointment.client_email, details=details
-        )
+        await send_confirmation_email(email=appointment.client_email, details=details)
 
     async def complete(self, *, public_id: str, actor: User) -> Appointment:
         """Marca un turno como completado."""
@@ -339,7 +337,7 @@ class AppointmentService:
         details = build_client_details(
             appointment, appointment.service, appointment.staff, store
         )
-        await enqueue_rebook_email(email=appointment.client_email, details=details)
+        await send_rebook_email(email=appointment.client_email, details=details)
 
     async def mark_absent(self, *, public_id: str, actor: User) -> Appointment:
         """
@@ -637,7 +635,7 @@ class AppointmentService:
         # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
         # le corresponde y sin este mail no se enteraba por ningun canal.
         store = await self.uow.session.get(Store, store_id)
-        await enqueue_reschedule_email(
+        await send_reschedule_email(
             email=new_appointment.client_email,
             details=build_client_details(new_appointment, service, staff, store),
         )

@@ -76,7 +76,7 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
     monkeypatch.setattr(smtplib, "SMTP", _SmtpCaido)
     with capture_logs() as eventos_fallo:
         assert await tasks._send_email(EMAIL, "Asunto", "cuerpo") is False
-        resultado = await tasks.enqueue_confirmation_email(
+        resultado = await tasks.send_confirmation_email(
             email=EMAIL, details=dict(DETAILS)
         )
         assert resultado["status"] == "failed"
@@ -112,7 +112,7 @@ async def test_guardas_del_sink_siguen_vivas(monkeypatch: pytest.MonkeyPatch) ->
     _SmtpOk.enviados = []
     monkeypatch.setattr(smtplib, "SMTP", _SmtpOk)
 
-    saltado = await tasks.enqueue_confirmation_email(
+    saltado = await tasks.send_confirmation_email(
         email="5491100000000@store1.noreply", details=dict(DETAILS)
     )
     assert saltado == {"status": "skipped", "reason": "no-deliverable"}
@@ -120,7 +120,7 @@ async def test_guardas_del_sink_siguen_vivas(monkeypatch: pytest.MonkeyPatch) ->
 
     hostil = dict(DETAILS, service="Corte\r\nBcc: victima@example.com")
     with capture_logs() as eventos:
-        enviado = await tasks.enqueue_confirmation_email(email=EMAIL, details=hostil)
+        enviado = await tasks.send_confirmation_email(email=EMAIL, details=hostil)
     assert enviado["status"] == "sent"
     assert len(_SmtpOk.enviados) == 1
     asunto = str(_SmtpOk.enviados[0]["Subject"])

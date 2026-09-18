@@ -31,7 +31,7 @@ async def test_el_warning_del_mail_fallido_lleva_tienda_y_turno_sin_datos_person
     async def smtp_caido(**kwargs: Any) -> None:
         raise ConnectionRefusedError("smtp caido")
 
-    monkeypatch.setattr(jobs, "enqueue_cancellation_email", smtp_caido)
+    monkeypatch.setattr(jobs, "send_cancellation_email", smtp_caido)
     test_session.add(
         OutboxMessage(
             store_id="tienda-s04",

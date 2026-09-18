@@ -371,7 +371,14 @@ def _rescheduled_body(details: dict[str, Any]) -> str:
     )
 
 
-async def enqueue_reschedule_email(
+# B4-04 (2026-09-18): los ``send_*_email`` se llamaban ``enqueue_*_email`` y no
+# encolaban nada: mandan SMTP ahora, en el camino del llamador (el llamador
+# espera la respuesta del servidor de correo). Van siempre despues del commit
+# y fuera de cualquier lock (regla 5; outbox: ``OfferResult.pending_email`` y
+# los ``partial`` de payments/jobs). Quien necesite asincronia despacha una
+# tarea de verdad; ``tests/architecture/test_enqueue_encola_de_verdad.py``
+# impide que vuelva un ``enqueue_*`` que mande en linea.
+async def send_reschedule_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "te movimos el turno". Nunca aborta la reprogramacion."""
@@ -594,7 +601,7 @@ async def send_appointment_registration(
     return {"status": "sent", "to": email}
 
 
-async def enqueue_registration_email(
+async def send_registration_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "reserva registrada" al crear un turno pendiente. Nunca aborta."""
@@ -612,7 +619,7 @@ async def enqueue_registration_email(
         return {"status": "failed", "reason": type(exc).__name__}
 
 
-async def enqueue_cancellation_email(
+async def send_cancellation_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "turno cancelado" (p.ej. por un bloqueo de agenda). Nunca aborta."""
@@ -635,7 +642,7 @@ async def enqueue_cancellation_email(
     return {"status": "sent", "to": email}
 
 
-async def enqueue_rebook_email(
+async def send_rebook_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "reserva tu proximo turno" al completar. Nunca aborta."""
@@ -678,7 +685,7 @@ def _waitlist_offer_body(details: dict[str, Any]) -> str:
     )
 
 
-async def enqueue_waitlist_offer_email(
+async def send_waitlist_offer_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "se libero un turno" a quien esta en lista de espera. Nunca aborta."""
@@ -701,9 +708,10 @@ async def enqueue_waitlist_offer_email(
     return {"status": "sent", "to": email}
 
 
-async def enqueue_confirmation_email(
+async def send_confirmation_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
+    """Mail "turno confirmado". Nunca aborta la confirmacion."""
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None

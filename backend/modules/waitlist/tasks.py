@@ -8,7 +8,7 @@ from typing import Any, cast
 from core.celery_app import celery_app
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
 from core.worker_loop import run_in_worker_loop
-from modules.notifications.tasks import enqueue_waitlist_offer_email
+from modules.notifications.tasks import send_waitlist_offer_email
 from modules.waitlist.offers import expire_lapsed_offers
 
 
@@ -27,7 +27,7 @@ async def process_waitlist_offers_once(
             set_tenant_context(None, False)
     # Los mails salen con la transaccion ya cerrada (regla 5).
     for pendiente in resultado.pending_emails:
-        await enqueue_waitlist_offer_email(
+        await send_waitlist_offer_email(
             email=pendiente.email, details=pendiente.details
         )
     return resultado.counters()

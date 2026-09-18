@@ -10,7 +10,7 @@ import modules.notifications.tasks as notification_tasks
 
 
 @pytest.mark.asyncio
-async def test_confirmation_enqueue_returns_failed_when_smtp_send_fails(
+async def test_confirmation_send_returns_failed_when_smtp_send_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def smtp_failure(*args: Any, **kwargs: Any) -> bool:
@@ -18,7 +18,7 @@ async def test_confirmation_enqueue_returns_failed_when_smtp_send_fails(
 
     monkeypatch.setattr(notification_tasks, "_send_email", smtp_failure)
 
-    result = await notification_tasks.enqueue_confirmation_email(
+    result = await notification_tasks.send_confirmation_email(
         email="cliente@example.com",
         details={"public_id": "appt-1", "service": "Consulta", "staff": "Pro Demo"},
     )
