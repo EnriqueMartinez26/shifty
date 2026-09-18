@@ -537,13 +537,3 @@ class PublicRepository:
             .order_by(Appointment.starts_at.desc())
         )
         return list(result.scalars().all())
-
-    async def get_appointment_by_public_id_and_client(
-        self, public_id: str, client_id: str
-    ) -> Appointment | None:
-        result = await self.db.execute(
-            select(Appointment)
-            .where(Appointment.id == public_id, Appointment.client_id == client_id)
-            .options(selectinload(Appointment.service), selectinload(Appointment.staff))
-        )
-        return result.scalar_one_or_none()
