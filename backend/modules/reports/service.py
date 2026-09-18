@@ -96,6 +96,204 @@ class _SummaryAggregation:
     inactive_clients: int = 0
 
 
+@dataclass
+class _ClientCohorts:
+    """Lo que el historico de clientes aporta al resumen (B5-09).
+
+    ``first_seen``: primera visita de cada cliente; ``seen_before_range``: los
+    que ya habian venido antes del inicio del rango; ``known_names``: nombre a
+    usar si un turno del rango no trae uno propio.
+    """
+
+    first_seen: dict[str, datetime] = field(default_factory=dict)
+    seen_before_range: set[str] = field(default_factory=set)
+    known_names: dict[str, str] = field(default_factory=dict)
+
+
+def _client_cohorts(historical_rows: list[Any], start_dt: datetime) -> _ClientCohorts:
+    """Cohortes a partir de ``(client_id, nombre, apellido, email, MIN(starts_at))``.
+
+    Las filas ya vienen agregadas por cliente desde la base (regla 11).
+    """
+    cohorts = _ClientCohorts()
+    for client_id, first_name, last_name, email, starts_at in historical_rows:
+        if not client_id:
+            continue
+        # start_dt es UTC aware (ver _range_bounds). Postgres devuelve
+        # func.min(starts_at) aware; SQLite, naive: se normaliza a aware antes
+        # de comparar (aca y via first_seen) o explota con "can't compare
+        # offset-naive and offset-aware datetimes".
+        starts_at = ensure_utc_aware(starts_at)
+        cohorts.first_seen.setdefault(client_id, starts_at)
+        if starts_at < start_dt:
+            cohorts.seen_before_range.add(client_id)
+        resolved_name = _report_client_name(
+            None,
+            fallback=(
+                f"{first_name or ''} {last_name or ''}".strip()
+                if first_name or last_name
+                else ""
+            )
+            or email,
+        )
+        if resolved_name and resolved_name.strip():
+            cohorts.known_names.setdefault(client_id, resolved_name.strip())
+    return cohorts
+
+
+# Estado del turno (en mayusculas) -> contador del resumen. Absent y expired
+# solo cuentan en el total.
+_STATUS_COUNTERS = {
+    "COMPLETED": "completed",
+    "CANCELLED": "cancelled",
+    "PENDING": "pending",
+    "PENDING_PAYMENT": "pending",
+    "CONFIRMED": "confirmed",
+}
+
+
+def _unpack_row(row: Any) -> tuple[Appointment, Service, Staff, User | None]:
+    if len(row) == 4:
+        appointment, service, staff, client = row
+        return appointment, service, staff, client
+    appointment, service, staff = row
+    return appointment, service, staff, None
+
+
+def _appointment_item(
+    appointment: Appointment, service: Service, staff: Staff, client_name: str
+) -> ReportAppointmentItem:
+    return ReportAppointmentItem(
+        public_id=appointment.public_id,
+        starts_at=appointment.starts_at,
+        ends_at=appointment.ends_at,
+        status=appointment.status,
+        service_name=service.name,
+        staff_name=staff.display_name,
+        client_name=client_name,
+        # Precio del turno: el congelado al reservar; si es un turno viejo sin
+        # snapshot, el precio de lista actual.
+        service_price=float(
+            appointment.price_amount
+            if appointment.price_amount is not None
+            else service.price
+        ),
+    )
+
+
+def _summary_stats(
+    aggregation: _SummaryAggregation, total_revenue: Decimal
+) -> ReportSummaryStats:
+    revenue = float(total_revenue)
+    total = aggregation.total_appointments
+    return ReportSummaryStats(
+        total_appointments=total,
+        completed_appointments=aggregation.completed,
+        cancelled_appointments=aggregation.cancelled,
+        pending_appointments=aggregation.pending,
+        confirmed_appointments=aggregation.confirmed,
+        total_revenue=round(revenue, 2),
+        average_ticket=round(revenue / total, 2) if total else 0.0,
+    )
+
+
+def _client_stats(aggregation: _SummaryAggregation) -> ReportClientStats:
+    return ReportClientStats(
+        total_clients=aggregation.total_clients,
+        new_clients=aggregation.new_clients,
+        returning_clients=aggregation.returning_clients,
+        inactive_clients=aggregation.inactive_clients,
+    )
+
+
+def _available_minutes(
+    schedules: list[Schedule], from_date: date, total_days: int
+) -> int:
+    """Minutos de agenda del profesional en los ``total_days`` dias del rango."""
+    available_minutes = 0
+    for schedule in schedules:
+        daily_minutes = int(
+            (
+                datetime.combine(date.min, schedule.end_time)
+                - datetime.combine(date.min, schedule.start_time)
+            ).total_seconds()
+            // 60
+        )
+        matching_days = sum(
+            1
+            for offset in range(total_days)
+            if (from_date + timedelta(days=offset)).weekday() == schedule.day_of_week
+        )
+        available_minutes += daily_minutes * matching_days
+    return available_minutes
+
+
+def _blocked_minutes(
+    blocks: list[StaffBlock], start_dt: datetime, end_dt: datetime
+) -> int:
+    """Minutos bloqueados, recortando cada bloqueo a ``[start_dt, end_dt)``."""
+    blocked_minutes = 0
+    for block in blocks:
+        clipped_start = max(ensure_utc_aware(block.starts_at), start_dt)
+        clipped_end = min(ensure_utc_aware(block.ends_at), end_dt)
+        if clipped_end > clipped_start:
+            blocked_minutes += int((clipped_end - clipped_start).total_seconds() // 60)
+    return blocked_minutes
+
+
+# Estado del turno -> contador del reporte por profesional.
+_PROFESSIONAL_STATUS_COUNTERS = {
+    AppointmentStatus.COMPLETED.value: "completed",
+    AppointmentStatus.CONFIRMED.value: "confirmed",
+    AppointmentStatus.ABSENT.value: "absent",
+    AppointmentStatus.CANCELLED.value: "cancelled",
+}
+_NOT_USING_TIME = {
+    AppointmentStatus.CANCELLED.value,
+    AppointmentStatus.EXPIRED.value,
+}
+
+
+def _professional_item(
+    staff: Staff,
+    appointments: list[Appointment],
+    *,
+    available_minutes: int,
+    blocked_minutes: int,
+    revenue: float,
+) -> ProfessionalReportItem:
+    counts: dict[str, int] = defaultdict(int)
+    used_minutes = 0
+    for appointment in appointments:
+        if appointment.status not in _NOT_USING_TIME:
+            used_minutes += int(appointment.duration_minutes)
+        counter = _PROFESSIONAL_STATUS_COUNTERS.get(appointment.status)
+        if counter:
+            counts[counter] += 1
+
+    effective_minutes = max(available_minutes - blocked_minutes, 0)
+    occupancy_rate = (
+        round((used_minutes / effective_minutes) * 100, 2) if effective_minutes else 0.0
+    )
+    return ProfessionalReportItem(
+        staff_id=staff.public_id,
+        staff_name=staff.display_name,
+        appointments=len(appointments),
+        completed_appointments=counts["completed"],
+        confirmed_appointments=counts["confirmed"],
+        absent_appointments=counts["absent"],
+        cancelled_appointments=counts["cancelled"],
+        used_minutes=used_minutes,
+        used_hours=round(used_minutes / 60, 2),
+        available_minutes=available_minutes,
+        available_hours=round(available_minutes / 60, 2),
+        blocked_minutes=blocked_minutes,
+        blocked_hours=round(blocked_minutes / 60, 2),
+        occupancy_rate=occupancy_rate,
+        revenue=round(revenue, 2),
+    )
+
+
 class ReportService:
     def __init__(self, db: AsyncSession, *, store_id: str | None):
         self.db = db
@@ -461,6 +659,42 @@ class ReportService:
             )
         return items
 
+    async def _historical_clients(
+        self, *, end_dt: datetime, staff_id: str | None
+    ) -> list[Any]:
+        """Primera visita y contacto de cada cliente hasta el fin del rango.
+
+        Antes se traia TODO el historial de turnos de la tienda (sin cota
+        inferior) para calcular cohortes en Python. Solo hace falta, por
+        cliente, la PRIMERA visita (MIN(starts_at)) y sus datos de contacto: eso
+        es una agregacion, asi que se resuelve en la DB y vuelven O(clientes)
+        filas en vez de O(turnos) ("visto antes del rango" == min < inicio).
+        """
+        query = (
+            select(
+                Appointment.client_id,
+                User.first_name,
+                User.last_name,
+                User.email,
+                func.min(Appointment.starts_at),
+            )
+            .join(User, Appointment.client_id == User.id)
+            .where(
+                Appointment.client_id.is_not(None),
+                Appointment.starts_at < end_dt,
+                *self._store_scope(Appointment.store_id),
+            )
+            .group_by(
+                Appointment.client_id, User.first_name, User.last_name, User.email
+            )
+        )
+        if staff_id:
+            query = query.where(Appointment.staff_id == staff_id)
+        # Con GROUP BY cada cliente aparece una sola vez, asi que el orden no
+        # importa (_client_cohorts usa setdefault sobre la primera visita).
+        result = await self.db.execute(query)
+        return list(result.all())
+
     async def get_summary(
         self,
         from_date: date | None,
@@ -491,61 +725,13 @@ class ReportService:
         top_clients = await self._top_clients(
             start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
         )
-        # Antes se traia TODO el historial de turnos de la tienda (sin cota
-        # inferior) para calcular cohortes en Python. El loop solo necesita, por
-        # cliente, la PRIMERA visita (MIN(starts_at)) y sus datos de contacto:
-        # eso es una agregacion, asi que se resuelve en la DB y vuelven O(clientes)
-        # filas en vez de O(turnos). La forma de la fila se mantiene para que
-        # _aggregate_summary no cambie ("visto antes del rango" == min < inicio).
-        historical_clients_query = (
-            select(
-                Appointment.client_id,
-                User.first_name,
-                User.last_name,
-                User.email,
-                func.min(Appointment.starts_at),
-            )
-            .join(User, Appointment.client_id == User.id)
-            .where(
-                Appointment.client_id.is_not(None),
-                Appointment.starts_at < end_dt,
-                *self._store_scope(Appointment.store_id),
-            )
-            .group_by(
-                Appointment.client_id, User.first_name, User.last_name, User.email
-            )
-        )
-        if staff_id:
-            historical_clients_query = historical_clients_query.where(
-                Appointment.staff_id == staff_id
-            )
-        # Con GROUP BY cada cliente aparece una sola vez, asi que el orden ya no
-        # importa (el loop usa setdefault sobre la primera visita).
-        historical_clients_result = await self.db.execute(historical_clients_query)
-
         aggregation = self._aggregate_summary(
             rows=rows,
-            historical_rows=list(historical_clients_result.all()),
+            historical_rows=await self._historical_clients(
+                end_dt=end_dt, staff_id=staff_id
+            ),
             start_dt=start_dt,
             end_dt=end_dt,
-        )
-
-        revenue = float(total_revenue)
-        total = aggregation.total_appointments
-        stats = ReportSummaryStats(
-            total_appointments=total,
-            completed_appointments=aggregation.completed,
-            cancelled_appointments=aggregation.cancelled,
-            pending_appointments=aggregation.pending,
-            confirmed_appointments=aggregation.confirmed,
-            total_revenue=round(revenue, 2),
-            average_ticket=round(revenue / total, 2) if total else 0.0,
-        )
-        client_stats = ReportClientStats(
-            total_clients=aggregation.total_clients,
-            new_clients=aggregation.new_clients,
-            returning_clients=aggregation.returning_clients,
-            inactive_clients=aggregation.inactive_clients,
         )
         debt_summary = (
             self._empty_debt_summary() if staff_id else await self._build_debt_summary()
@@ -554,8 +740,8 @@ class ReportService:
         return ReportSummaryResponse(
             from_date=resolved_from,
             to_date=resolved_to,
-            stats=stats,
-            client_stats=client_stats,
+            stats=_summary_stats(aggregation, total_revenue),
+            client_stats=_client_stats(aggregation),
             top_services=top_services,
             top_clients=top_clients,
             debt_summary=debt_summary,
@@ -577,114 +763,88 @@ class ReportService:
         resultado listo para envolver en DTOs. El dinero y los top-5 no pasan
         por aca: se agregan en SQL (regla 11).
         """
+        cohorts = _client_cohorts(historical_rows, start_dt)
+        known_client_names = cohorts.known_names
         items: list[ReportAppointmentItem] = []
-        completed = 0
-        cancelled = 0
-        pending = 0
-        confirmed = 0
+        status_counts: dict[str, int] = defaultdict(int)
         clients_in_range: set[str] = set()
-        clients_seen_before_range: set[str] = set()
-        first_seen_by_client: dict[str, datetime] = {}
-        known_client_names: dict[str, str] = {}
-
-        for (
-            client_id,
-            first_name,
-            last_name,
-            email,
-            starts_at,
-        ) in historical_rows:
-            if not client_id:
-                continue
-            # start_dt/end_dt son UTC aware (ver _range_bounds). Postgres
-            # devuelve func.min(starts_at) aware; SQLite, naive: se normaliza a
-            # aware antes de comparar (aca y via first_seen_by_client) o explota
-            # con "can't compare offset-naive and offset-aware datetimes".
-            starts_at = ensure_utc_aware(starts_at)
-            first_seen_by_client.setdefault(client_id, starts_at)
-            if starts_at < start_dt:
-                clients_seen_before_range.add(client_id)
-            resolved_name = _report_client_name(
-                None,
-                fallback=(
-                    f"{first_name or ''} {last_name or ''}".strip()
-                    if first_name or last_name
-                    else ""
-                )
-                or email,
-            )
-            if resolved_name and resolved_name.strip():
-                known_client_names.setdefault(client_id, resolved_name.strip())
 
         for row in rows:
-            if len(row) == 4:
-                appointment, service, staff, client = row
-            else:
-                appointment, service, staff = row
-                client = None
-            status = appointment.status
-            status_upper = status.upper() if status else ""
+            appointment, service, staff, client = _unpack_row(row)
             client_id = appointment.client_id
-            client_key = client_id or ""
+            current_name = _report_client_name(client, appointment.client_name)
             if client_id:
                 clients_in_range.add(client_id)
-                current_name = _report_client_name(client, appointment.client_name)
                 if current_name:
                     known_client_names[client_id] = current_name
-
-            if status_upper == "COMPLETED":
-                completed += 1
-            elif status_upper == "CANCELLED":
-                cancelled += 1
-            elif status_upper in {"PENDING", "PENDING_PAYMENT"}:
-                pending += 1
-            elif status_upper == "CONFIRMED":
-                confirmed += 1
-
+            counter = _STATUS_COUNTERS.get((appointment.status or "").upper())
+            if counter:
+                status_counts[counter] += 1
             resolved_client_name = (
-                _report_client_name(client, appointment.client_name)
-                or known_client_names.get(client_key, "")
-                or "Cliente"
+                current_name or known_client_names.get(client_id or "", "") or "Cliente"
             )
-
             items.append(
-                ReportAppointmentItem(
-                    public_id=appointment.public_id,
-                    starts_at=appointment.starts_at,
-                    ends_at=appointment.ends_at,
-                    status=status,
-                    service_name=service.name,
-                    staff_name=staff.display_name,
-                    client_name=resolved_client_name,
-                    # Precio del turno: el congelado al reservar; si es un turno
-                    # viejo sin snapshot, el precio de lista actual.
-                    service_price=float(
-                        appointment.price_amount
-                        if appointment.price_amount is not None
-                        else service.price
-                    ),
-                )
+                _appointment_item(appointment, service, staff, resolved_client_name)
             )
 
-        total = len(items)
         new_clients = sum(
             1
             for client_id in clients_in_range
-            if start_dt <= first_seen_by_client.get(client_id, start_dt) < end_dt
+            if start_dt <= cohorts.first_seen.get(client_id, start_dt) < end_dt
         )
-
         return _SummaryAggregation(
             items=items,
-            total_appointments=total,
-            completed=completed,
-            cancelled=cancelled,
-            pending=pending,
-            confirmed=confirmed,
+            total_appointments=len(items),
+            completed=status_counts["completed"],
+            cancelled=status_counts["cancelled"],
+            pending=status_counts["pending"],
+            confirmed=status_counts["confirmed"],
             total_clients=len(clients_in_range),
             new_clients=new_clients,
             returning_clients=max(len(clients_in_range) - new_clients, 0),
-            inactive_clients=len(clients_seen_before_range - clients_in_range),
+            inactive_clients=len(cohorts.seen_before_range - clients_in_range),
         )
+
+    async def _active_staff(self, only_staff_id: str | None) -> list[Staff]:
+        query = select(Staff).where(
+            Staff.is_active.is_(True), *self._store_scope(Staff.store_id)
+        )
+        if only_staff_id:
+            query = query.where(Staff.id == only_staff_id)
+        result = await self.db.execute(query.order_by(Staff.display_name.asc()))
+        return list(result.scalars().all())
+
+    async def _schedules_by_staff(
+        self, staff_ids: list[str]
+    ) -> dict[str, list[Schedule]]:
+        result = await self.db.execute(
+            select(Schedule).where(
+                Schedule.staff_id.in_(staff_ids),
+                *self._store_scope(Schedule.store_id),
+            )
+        )
+        by_staff: dict[str, list[Schedule]] = defaultdict(list)
+        for schedule in result.scalars().all():
+            by_staff[schedule.staff_id].append(schedule)
+        return by_staff
+
+    async def _blocks_by_staff(
+        self, staff_ids: list[str], *, start_dt: datetime, end_dt: datetime
+    ) -> dict[str, list[StaffBlock]]:
+        """Bloqueos activos que se superponen con el rango, por profesional."""
+        result = await self.db.execute(
+            select(StaffBlock).where(
+                StaffBlock.staff_id.in_(staff_ids),
+                StaffBlock.is_active.is_(True),
+                StaffBlock.starts_at < end_dt,
+                StaffBlock.ends_at > start_dt,
+                *self._store_scope(StaffBlock.store_id),
+            )
+        )
+        by_staff: dict[str, list[StaffBlock]] = defaultdict(list)
+        for block in result.scalars().all():
+            by_staff[block.staff_id].append(block)
+        return by_staff
 
     async def get_professionals(
         self,
@@ -696,141 +856,45 @@ class ReportService:
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
 
-        staff_query = select(Staff).where(
-            Staff.is_active.is_(True), *self._store_scope(Staff.store_id)
-        )
-        if only_staff_id:
-            staff_query = staff_query.where(Staff.id == only_staff_id)
-        staff_result = await self.db.execute(
-            staff_query.order_by(Staff.display_name.asc())
-        )
-        staff_members = list(staff_result.scalars().all())
+        staff_members = await self._active_staff(only_staff_id)
         staff_ids = [staff.id for staff in staff_members]
         if not staff_ids:
             return ProfessionalReportsResponse(
                 from_date=resolved_from, to_date=resolved_to, professionals=[]
             )
 
-        schedules_result = await self.db.execute(
-            select(Schedule).where(
-                Schedule.staff_id.in_(staff_ids),
-                *self._store_scope(Schedule.store_id),
-            )
-        )
-        blocks_result = await self.db.execute(
-            select(StaffBlock).where(
-                StaffBlock.staff_id.in_(staff_ids),
-                StaffBlock.is_active.is_(True),
-                StaffBlock.starts_at < end_dt,
-                StaffBlock.ends_at > start_dt,
-                *self._store_scope(StaffBlock.store_id),
-            )
+        schedules_by_staff = await self._schedules_by_staff(staff_ids)
+        blocks_by_staff = await self._blocks_by_staff(
+            staff_ids, start_dt=start_dt, end_dt=end_dt
         )
         rows = await self._fetch_rows(
             from_date=resolved_from, to_date=resolved_to, staff_id=only_staff_id
         )
-
-        schedules_by_staff: dict[str, list[Schedule]] = defaultdict(list)
-        for schedule in schedules_result.scalars().all():
-            schedules_by_staff[schedule.staff_id].append(schedule)
-
-        blocks_by_staff: dict[str, list[StaffBlock]] = defaultdict(list)
-        for block in blocks_result.scalars().all():
-            blocks_by_staff[block.staff_id].append(block)
-
-        appointments_by_staff: dict[str, list[tuple[Appointment, Service, Staff]]] = (
-            defaultdict(list)
-        )
+        appointments_by_staff: dict[str, list[Appointment]] = defaultdict(list)
         for row in rows:
-            appointment, service, staff = row[:3]
-            appointments_by_staff[staff.id].append((appointment, service, staff))
+            appointment, _, staff = row[:3]
+            appointments_by_staff[staff.id].append(appointment)
 
         # Mismo criterio que el resumen: ingreso = plata acreditada, sumada
         # por profesional en la base (regla 11), no turno a turno en Python.
         revenue_by_staff = await self._accredited_revenue_by_staff(
             start_dt=start_dt, end_dt=end_dt, staff_id=only_staff_id
         )
-
-        items: list[ProfessionalReportItem] = []
         total_days = (resolved_to - resolved_from).days + 1
-
-        for staff in staff_members:
-            available_minutes = 0
-            for schedule in schedules_by_staff.get(staff.id, []):
-                daily_minutes = int(
-                    (
-                        datetime.combine(date.min, schedule.end_time)
-                        - datetime.combine(date.min, schedule.start_time)
-                    ).total_seconds()
-                    // 60
-                )
-                matching_days = sum(
-                    1
-                    for offset in range(total_days)
-                    if (resolved_from + timedelta(days=offset)).weekday()
-                    == schedule.day_of_week
-                )
-                available_minutes += daily_minutes * matching_days
-
-            blocked_minutes = 0
-            for block in blocks_by_staff.get(staff.id, []):
-                clipped_start = max(ensure_utc_aware(block.starts_at), start_dt)
-                clipped_end = min(ensure_utc_aware(block.ends_at), end_dt)
-                if clipped_end > clipped_start:
-                    blocked_minutes += int(
-                        (clipped_end - clipped_start).total_seconds() // 60
-                    )
-
-            total_appointments = 0
-            completed = 0
-            confirmed = 0
-            absent = 0
-            cancelled = 0
-            used_minutes = 0
-            revenue = float(revenue_by_staff.get(staff.id, Decimal("0.00")))
-
-            for appointment, service, _ in appointments_by_staff.get(staff.id, []):
-                total_appointments += 1
-                if appointment.status not in {
-                    AppointmentStatus.CANCELLED.value,
-                    AppointmentStatus.EXPIRED.value,
-                }:
-                    used_minutes += int(appointment.duration_minutes)
-                if appointment.status == AppointmentStatus.COMPLETED.value:
-                    completed += 1
-                elif appointment.status == AppointmentStatus.CONFIRMED.value:
-                    confirmed += 1
-                elif appointment.status == AppointmentStatus.ABSENT.value:
-                    absent += 1
-                elif appointment.status == AppointmentStatus.CANCELLED.value:
-                    cancelled += 1
-
-            effective_minutes = max(available_minutes - blocked_minutes, 0)
-            occupancy_rate = (
-                round((used_minutes / effective_minutes) * 100, 2)
-                if effective_minutes
-                else 0.0
+        items = [
+            _professional_item(
+                staff,
+                appointments_by_staff.get(staff.id, []),
+                available_minutes=_available_minutes(
+                    schedules_by_staff.get(staff.id, []), resolved_from, total_days
+                ),
+                blocked_minutes=_blocked_minutes(
+                    blocks_by_staff.get(staff.id, []), start_dt, end_dt
+                ),
+                revenue=float(revenue_by_staff.get(staff.id, Decimal("0.00"))),
             )
-            items.append(
-                ProfessionalReportItem(
-                    staff_id=staff.public_id,
-                    staff_name=staff.display_name,
-                    appointments=total_appointments,
-                    completed_appointments=completed,
-                    confirmed_appointments=confirmed,
-                    absent_appointments=absent,
-                    cancelled_appointments=cancelled,
-                    used_minutes=used_minutes,
-                    used_hours=round(used_minutes / 60, 2),
-                    available_minutes=available_minutes,
-                    available_hours=round(available_minutes / 60, 2),
-                    blocked_minutes=blocked_minutes,
-                    blocked_hours=round(blocked_minutes / 60, 2),
-                    occupancy_rate=occupancy_rate,
-                    revenue=round(revenue, 2),
-                )
-            )
-
+            for staff in staff_members
+        ]
         return ProfessionalReportsResponse(
             from_date=resolved_from,
             to_date=resolved_to,
