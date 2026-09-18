@@ -50,7 +50,13 @@ _EXCLUDED_FROM_TOPS = [
 
 
 def _report_client_name(client: User | None, fallback: str | None = None) -> str:
-    """Nombre a mostrar de un cliente en el reporte (o el fallback ya limpio)."""
+    """Nombre a mostrar de un cliente en todo el reporte (B5-18).
+
+    Unica regla, la misma del panel (``dashboard/service.py``): nombre
+    completo, si no email, si no el ``fallback`` (el snapshot del turno). El
+    telefono NO es un nombre: es PII que el reporte no expone. Los llamadores
+    sin fallback usan el ``client_id`` como ultimo recurso.
+    """
     if client is None:
         return (fallback or "").strip()
     return client.full_name or client.email or (fallback or "").strip()
@@ -375,25 +381,6 @@ class ReportService:
             top_debtors=[],
         )
 
-    def _user_display_name(
-        self,
-        user: User | None,
-        *,
-        fallback: str | None = None,
-        client_id: str | None = None,
-    ) -> str:
-        if user:
-            full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-            if full_name:
-                return full_name
-            if user.email:
-                return user.email
-            if user.phone:
-                return user.phone
-        if fallback:
-            return fallback
-        return client_id or "Cliente"
-
     async def _build_debt_summary(self) -> ReportDebtSummary:
         # Solo el ultimo movimiento por cliente, resuelto en la DB (row_number
         # sobre la particion por client_id) en vez de traer todo el ledger y
@@ -454,7 +441,9 @@ class ReportService:
         top_debtor_items = [
             ReportDebtClientItem(
                 client_id=client_id or "",
-                client_name=self._user_display_name(user, client_id=client_id or ""),
+                # Misma regla que top_clients y el panel (B5-18): nunca el
+                # telefono, que antes aparecia como nombre del deudor.
+                client_name=_report_client_name(user) or client_id or "Cliente",
                 balance=round(float(Decimal(str(balance or 0))), 2),
             )
             for client_id, balance, user in top_result.all()
