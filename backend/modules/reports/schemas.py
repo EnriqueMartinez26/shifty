@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -127,3 +127,20 @@ class ReportExportRequest(BaseModel):
         max_length=50,
         pattern=SAFE_FILENAME_PREFIX_PATTERN,
     )
+
+
+class AuditLogItem(BaseModel):
+    """Una entrada de la auditoria de turnos y bloqueos de la tienda (B5-12).
+
+    Sin ``context`` ni ids internos del actor: lo que ya ve un admin en el
+    panel (quien, que turno, que cambio).
+    """
+
+    id: str
+    created_at: datetime
+    actor_email: str | None
+    resource_type: str
+    resource_id: str
+    action: str
+    payload_before: dict[str, Any] | list[Any] | str | int | float | bool | None
+    payload_after: dict[str, Any] | list[Any] | str | int | float | bool | None

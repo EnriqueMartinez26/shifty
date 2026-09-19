@@ -177,6 +177,7 @@ class AppointmentService:
             action=AuditAction.CREATE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_after={
                 "status": appointment.status,
@@ -229,6 +230,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={"status": appointment.status},
@@ -261,6 +263,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={"status": appointment.status},
@@ -312,6 +315,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={
@@ -359,6 +363,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={"status": appointment.status},
@@ -433,6 +438,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before={"status": previous_status},
             payload_after={
@@ -477,6 +483,7 @@ class AppointmentService:
             action=AuditAction.UPDATE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={"notes_staff": notes_staff},
@@ -582,6 +589,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=original.public_id,
+            store_id=original.store_id,
             actor=actor,
             payload_before={"status": "prev"},
             payload_after={
@@ -618,6 +626,7 @@ class AppointmentService:
             action=AuditAction.CREATE,
             resource_type="Appointment",
             resource_id=new_appointment.public_id,
+            store_id=new_appointment.store_id,
             actor=actor,
             payload_after={
                 "status": new_appointment.status,
