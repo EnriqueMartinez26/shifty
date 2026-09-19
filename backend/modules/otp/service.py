@@ -39,6 +39,21 @@ def normalize_phone(raw_phone: str) -> str:
     return cleaned
 
 
+def canonical_phone_forms(normalized_phone: str) -> list[str]:
+    """Las formas en que ese telefono puede estar guardado en ``users.phone``.
+
+    AUD2-B4-03 (2026-09-19): ``normalize_phone`` canoniza el prefijo (``00``
+    pasa a ``+``), pero el alta publica guarda los digitos TAL CUAL, con el
+    ``00`` adelante (``public_api/schemas.py`` solo saca separadores y ``+``).
+    La guarda del OTP comparaba contra dos formas y no encontraba al cliente
+    que habia reservado con ``0054...``: el codigo salia al email tipeado y el
+    secuestro de contacto volvia a abrirse. Hasta unificar el guardado (ver el
+    reporte: exige migrar datos), la BUSQUEDA compara las tres formas.
+    """
+    digits = normalized_phone.lstrip("+")
+    return [digits, f"+{digits}", f"00{digits}"]
+
+
 def _budget_key(kind: str, store_id: str, phone: str) -> str:
     material = f"{store_id}:{phone}".encode("utf-8")
     return f"otp:{kind}:{hashlib.sha256(material).hexdigest()[:32]}"
@@ -107,16 +122,17 @@ class OtpService:
     ) -> str | None:
         """Email entregable del cliente de la tienda duenio de ese telefono.
 
-        La reserva publica guarda el telefono del cliente solo con digitos;
-        ``normalize_phone`` le agrega ``+``. Se buscan las dos formas.
+        La reserva publica guarda el telefono del cliente solo con digitos y
+        conserva el prefijo ``00``; ``normalize_phone`` lo canoniza a ``+``.
+        Se buscan todas las formas equivalentes (AUD2-B4-03): si la guarda no
+        encuentra al cliente, falla ABIERTA (manda al email tipeado).
         """
-        digits = normalized_phone.lstrip("+")
         result = await self.db.execute(
             select(User.email)
             .where(
                 User.store_id == store_id,
                 User.role == UserRole.CLIENT.value,
-                User.phone.in_([digits, normalized_phone]),
+                User.phone.in_(canonical_phone_forms(normalized_phone)),
             )
             .order_by(User.created_at.desc())
             .limit(1)

@@ -318,3 +318,82 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
     # Ninguno manda en linea; el camino "email distinto" no encola nada.
     assert buzon.enviados == []
     assert (envios_ok, envios_neutros, envios_nuevo) == (1, 0, 1)
+
+
+# ---------------------------------------------------------------------------
+# AUD2-B4-03 (2026-09-19): la guarda buscaba al cliente con normalize_phone
+# (que convierte el prefijo "00" en "+"), mientras el alta publica guarda los
+# digitos tal cual, con el "00" adelante. Un cliente que reservo tipeando
+# "0054 9 11 5555-1234" no se encontraba: el codigo salia al email tipeado y
+# el secuestro de contacto volvia a estar abierto.
+# ---------------------------------------------------------------------------
+
+TELEFONO_CON_00 = "005491155559999"
+
+
+@pytest.mark.parametrize(
+    "tipeado",
+    [
+        "005491155559999",  # como lo guardo el alta publica
+        "+5491155559999",  # forma internacional
+        "5491155559999",  # digitos sueltos
+        "0054 9 11 5555-9999",  # con separadores
+    ],
+)
+@pytest.mark.asyncio
+async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    tipeado: str,
+) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    publica, _ = await register_and_login(
+        client, slug="otp-00-prefijo", email="otp-00-prefijo@example.com"
+    )
+    store_id = await test_session.scalar(
+        select(Store.id).where(Store.public_id == publica)
+    )
+    assert store_id is not None
+    test_session.add(
+        User(
+            email=EMAIL_CLIENTE,
+            hashed_password="!",
+            role=UserRole.CLIENT.value,
+            store_id=store_id,
+            phone=TELEFONO_CON_00,
+            full_name="Duenio del telefono",
+        )
+    )
+    await test_session.commit()
+
+    respuesta = await client.post(
+        "/public/otp/request",
+        headers={"x-raw-response": "false"},
+        json={
+            "store_public_id": publica,
+            "phone": tipeado,
+            "channel": "email",
+            "email": "atacante@example.com",
+        },
+    )
+    assert respuesta.status_code == 200, respuesta.text
+    assert buzon.enviados == [], (
+        "el codigo salio al email del atacante: el cliente guardado con 00 "
+        "no se encontro"
+    )
+
+    # Y con el email del cliente, en la misma forma de telefono, si sale.
+    ok = await client.post(
+        "/public/otp/request",
+        headers={"x-raw-response": "false"},
+        json={
+            "store_public_id": publica,
+            "phone": tipeado,
+            "channel": "email",
+            "email": EMAIL_CLIENTE,
+        },
+    )
+    assert ok.status_code == 200, ok.text
+    assert [destino for destino, _, _ in buzon.enviados] == [EMAIL_CLIENTE]
