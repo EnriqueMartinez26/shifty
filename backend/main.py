@@ -290,6 +290,16 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
     contra un cierre de tienda): son carreras entre dos actores, como el
     optimistic locking, y el cliente reintenta. Sin detalles internos (regla
     20). Cualquier otro error de base es un 500, como antes.
+
+    Ese 500 NO se responde aca: la excepcion se re-levanta. Starlette atiende
+    los handlers de clases concretas en `ExceptionMiddleware`, la capa interna,
+    que no re-levanta; devolver la respuesta desde aca dejaba mudo a todo error
+    de base que no fuera una carrera -conexion perdida, pool agotado, timeouts
+    y violacion de politica RLS (42501)-: sin traceback en uvicorn y sin evento
+    en Sentry, porque su integracion de Starlette solo reporta excepciones con
+    `status_code` (AUD2-B7-01, 2026-09-19). Al subir, la atiende
+    `ServerErrorMiddleware` como cualquier otra excepcion: mismo 500 neutro,
+    traceback y captura, igual que antes de S-18.
     """
     sqlstate = _sqlstate(exc)
     if sqlstate in _CONCURRENCY_SQLSTATES:
@@ -300,7 +310,15 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
             sqlstate=sqlstate,
         )
         return _concurrent_modification_response()
-    return await unhandled_exception_handler(request, exc)
+    logger.error(
+        "db_error",
+        path=str(request.url.path),
+        method=request.method,
+        error_type=type(exc).__name__,
+        sqlstate=sqlstate,
+        exc_info=True,
+    )
+    raise exc
 
 
 @app.exception_handler(IntegrityError)
