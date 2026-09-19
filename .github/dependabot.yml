@@ -1,0 +1,80 @@
+# Actualizaciones automaticas de dependencias.
+#
+# Las ACTUALIZACIONES DE VERSION (las de este archivo) abren PRs semanales.
+# Las ALERTAS DE SEGURIDAD y sus PRs automaticos NO se configuran aca: se
+# activan desde la configuracion del repositorio en GitHub (Settings >
+# Advanced Security: Dependency graph, Dependabot alerts y Dependabot security
+# updates). Ese paso lo hace el dueno del repo; sin el, este archivo solo trae
+# los bumps de version.
+#
+# CLAUDE.md §1 sigue rigiendo para toda dependencia nueva: hay que verificarla
+# a mano en el registro oficial (slopsquatting), y un paquete de Python nuevo
+# exige rebuild de las imagenes con --renew-anon-volumes; un PR verde de
+# Dependabot no reemplaza esa verificacion.
+version: 2
+
+updates:
+  # Backend. El proyecto usa uv y el lockfile es backend/uv.lock: el
+  # ecosistema "uv" es el unico que lo entiende. Si la instancia de Dependabot
+  # todavia no lo soporta, el PR de configuracion falla con "unknown package
+  # ecosystem"; en ese caso cambiar a `package-ecosystem: "pip"` con el mismo
+  # directorio, teniendo en cuenta que pip lee pyproject.toml y NO actualiza
+  # uv.lock (habria que correr `uv lock` a mano en cada PR).
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      # Un solo PR por semana con todo lo menor y de parche: sin esto son
+      # decenas de PRs y nadie los revisa.
+      backend-menores:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      frontend-menores:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+    ignore:
+      # Node y npm estan fijados con versiones exactas en package.json,
+      # .node-version y los workflows (engine-strict=true): un bump suelto aca
+      # rompe `npm ci` en CI. Se cambian a mano, alineando todos los lugares.
+      - dependency-name: "node"
+      - dependency-name: "npm"
+
+  # Acciones de CI: el repo las fija por version exacta (actions/checkout@v7.0.0,
+  # astral-sh/setup-uv@v8.3.2, ...), incluida la composite de
+  # .github/actions/setup-python-uv.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      acciones-menores:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(ci)"
