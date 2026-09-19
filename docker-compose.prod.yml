@@ -9,16 +9,87 @@
 #     permitia, desde el host, saltear nginx y spoofear X-Forwarded-For para
 #     evadir el rate limiting.
 #   - Agrega el 443 con TLS real (certs montados desde ./nginx/certs).
+#   - Define su PROPIO entorno (abajo): antes no tocaba `environment`, asi que
+#     los tres procesos heredaban el ancla de desarrollo del compose base
+#     (AUD2-C-01, 2026-09-19).
+#
+# Entorno de PRODUCCION. Dos mitades, y las dos hacen falta:
+#
+#   1. `env_file: .env` lleva al contenedor TODA clave del .env del operador,
+#      incluidas las que ningun ancla lista (COOKIE_SAMESITE, TRUST_PROXY_HEADERS,
+#      RATE_LIMIT_FAIL_CLOSED, CELERY_TASK_*, ACCESS_TOKEN_EXPIRE_MINUTES...).
+#      Antes se ignoraban en silencio.
+#   2. Este bloque repite TODAS las claves del ancla de desarrollo. No alcanza
+#      con el env_file: compose le da mas precedencia a `environment` que a
+#      `env_file`, y las claves del ancla base se fusionan por clave. La que no
+#      se repita aca se queda con el valor de desarrollo.
+#
+# Las criticas van con `:?`: si falta una, el stack no levanta, en vez de
+# arrancar contra la base equivocada. DATABASE_URL, REDIS_URL y el broker salen
+# del .env sin cablear los servicios del compose, porque en produccion pueden
+# ser administrados. COOKIE_SECURE, EXPOSE_API_DOCS, OTP_PROVIDER y
+# OTP_DEBUG_EXPOSE_CODE no pueden traer el valor de desarrollo: como
+# apply_production_defaults usa setdefault, un valor explicito de compose le
+# gana al default de produccion.
+x-app-environment-prod: &app_environment_prod
+  ENV: production
+  SENTRY_DSN: ${SENTRY_DSN:-}
+  SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
+  # La app conecta con el rol sin superusuario; las migraciones, con el dueno.
+  DATABASE_URL: ${DATABASE_URL:?Falta DATABASE_URL en .env (rol de la app, ver backend/.env.production.example)}
+  MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Falta MIGRATION_DATABASE_URL en .env (rol dueno, con DDL)}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
+  REDIS_URL: ${REDIS_URL:?Falta REDIS_URL en .env}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:?Falta CELERY_BROKER_URL en .env}
+  CELERY_RESULT_BACKEND_URL: ${CELERY_RESULT_BACKEND_URL:?Falta CELERY_RESULT_BACKEND_URL en .env}
+  FRONTEND_URL: ${FRONTEND_URL:?Falta FRONTEND_URL en .env}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:?Falta PUBLIC_API_URL en .env}
+  MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:-}
+  MERCADOPAGO_OAUTH_CLIENT_SECRET: ${MERCADOPAGO_OAUTH_CLIENT_SECRET:-}
+  MERCADOPAGO_OAUTH_REDIRECT_URI: ${MERCADOPAGO_OAUTH_REDIRECT_URI:-}
+  MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET:-}
+  # Regla 17: sin `*` ni localhost. El arranque lo verifica.
+  CORS_ORIGINS: ${CORS_ORIGINS:?Falta CORS_ORIGINS en .env (los origenes del front, sin * ni localhost)}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+  TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
+  EXPOSE_API_DOCS: ${EXPOSE_API_DOCS:-false}
+  # `console` esta prohibido en produccion: el arranque lo rechaza.
+  OTP_PROVIDER: ${OTP_PROVIDER:?Falta OTP_PROVIDER en .env (console esta prohibido en produccion)}
+  OTP_DEBUG_EXPOSE_CODE: ${OTP_DEBUG_EXPOSE_CODE:-false}
+  SMTP_HOST: ${SMTP_HOST:?Falta SMTP_HOST en .env}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:?Falta SMTP_USER en .env}
+  SMTP_PASS: ${SMTP_PASS:?Falta SMTP_PASS en .env}
+  EMAILS_FROM_EMAIL: ${EMAILS_FROM_EMAIL:?Falta EMAILS_FROM_EMAIL en .env}
+  MAX_REQUEST_BODY_BYTES: ${MAX_REQUEST_BODY_BYTES:-32768}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  # true: si Redis cae, mejor 503 en auth que quedar sin ningun limite.
+  RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-true}
+  RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-240}
+  RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-12}
+  RATE_LIMIT_PUBLIC_READ_PER_MINUTE: ${RATE_LIMIT_PUBLIC_READ_PER_MINUTE:-120}
+  RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE: ${RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE:-20}
 
 services:
   backend:
+    env_file:
+      - .env
+    environment: *app_environment_prod
     volumes: []
     ports: []
 
   celery_worker:
+    env_file:
+      - .env
+    environment: *app_environment_prod
     volumes: []
 
   celery_beat:
+    env_file:
+      - .env
+    environment: *app_environment_prod
     volumes: []
 
   frontend:

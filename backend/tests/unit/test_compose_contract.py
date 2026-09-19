@@ -85,3 +85,107 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
                 f"{nombre} arranca contra {dependencia} sin esperar su healthcheck: "
                 f"{deps.get(dependencia)!r}"
             )
+
+
+# --- Override de produccion (AUD2-C-01, 2026-09-19) ---------------------------
+#
+# Sintoma: docker-compose.prod.yml no declaraba environment ni env_file, asi que
+# los tres procesos heredaban el ancla de DESARROLLO. Dos consecuencias: las
+# claves que el ancla lista llegaban con su default de desarrollo de forma
+# explicita (COOKIE_SECURE=false, EXPOSE_API_DOCS=true, OTP_PROVIDER=console,
+# OTP_DEBUG_EXPOSE_CODE=true), lo que anula apply_production_defaults porque usa
+# setdefault; y las que el ancla NO lista se ignoraban aunque estuvieran en el
+# .env, incluida DATABASE_URL, que el ancla construye contra el `db` del
+# compose. Un operador que siga .env.production.example arrancaba contra el
+# Postgres del contenedor en vez de su base administrada, sin ningun error.
+
+COMPOSE_PROD = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
+
+SERVICIOS_DE_LA_APP = ("backend", "celery_worker", "celery_beat")
+
+# Sin estas no se arranca: tienen que venir del entorno con `:?`, nunca con un
+# valor por default.
+CRITICAS_EN_PRODUCCION = (
+    "SECRET_KEY",
+    "FIELD_ENCRYPTION_KEY",
+    "DATABASE_URL",
+    "MIGRATION_DATABASE_URL",
+    "APP_DB_PASSWORD",
+    "REDIS_URL",
+    "CELERY_BROKER_URL",
+    "CELERY_RESULT_BACKEND_URL",
+    "CORS_ORIGINS",
+)
+
+# Valor de desarrollo que no puede aparecer como default en produccion.
+DEFAULTS_DE_DESARROLLO_PROHIBIDOS = {
+    "COOKIE_SECURE": "false",
+    "EXPOSE_API_DOCS": "true",
+    "OTP_PROVIDER": "console",
+    "OTP_DEBUG_EXPOSE_CODE": "true",
+}
+
+
+def _servicios_prod() -> dict[str, dict[str, object]]:
+    data = yaml.safe_load(COMPOSE_PROD.read_text(encoding="utf-8"))
+    return dict(data["services"])
+
+
+def _env_prod(servicio: str) -> dict[str, str]:
+    env = _servicios_prod()[servicio].get("environment") or {}
+    assert isinstance(env, dict), f"{servicio} declara environment como lista"
+    return {str(k): str(v) for k, v in env.items()}
+
+
+def test_produccion_no_hereda_el_entorno_de_desarrollo() -> None:
+    del_ancla = _env_keys(_services()["backend"])
+    for servicio in SERVICIOS_DE_LA_APP:
+        faltan = del_ancla - set(_env_prod(servicio))
+        assert not faltan, (
+            f"{servicio} en produccion hereda del ancla de desarrollo: {sorted(faltan)}"
+        )
+
+
+def test_produccion_le_pasa_el_env_del_operador_a_los_tres_servicios() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        env_file = _servicios_prod()[servicio].get("env_file")
+        assert env_file, f"{servicio} no declara env_file: el .env no llega entero"
+        archivos = env_file if isinstance(env_file, list) else [env_file]
+        assert ".env" in [str(a) for a in archivos], f"{servicio}: {archivos}"
+
+
+def test_produccion_exige_las_criticas_y_no_inventa_defaults() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        env = _env_prod(servicio)
+        for clave in CRITICAS_EN_PRODUCCION:
+            valor = env.get(clave, "")
+            assert f"${{{clave}:?" in valor, (
+                f"{servicio}.{clave} no es obligatoria en produccion: {valor!r}"
+            )
+
+
+def test_produccion_no_repite_ningun_valor_de_desarrollo() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        env = _env_prod(servicio)
+        for clave, prohibido in DEFAULTS_DE_DESARROLLO_PROHIBIDOS.items():
+            valor = env.get(clave, "")
+            assert f":-{prohibido}" not in valor and valor != prohibido, (
+                f"{servicio}.{clave} usa el valor de desarrollo: {valor!r}"
+            )
+        # Los servicios del compose no pueden quedar cableados: en produccion
+        # la base, Redis y el broker pueden ser administrados.
+        for clave in ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL"):
+            valor = env.get(clave, "")
+            for host in ("@db:", "//redis:", "@rabbitmq:"):
+                assert host not in valor, (
+                    f"{servicio}.{clave} apunta al contenedor del compose: {valor!r}"
+                )
+
+
+def test_los_tres_servicios_comparten_el_entorno_tambien_en_produccion() -> None:
+    # Regla 22: la paridad vale para el override igual que para el base.
+    api = set(_env_prod("backend"))
+    assert api
+    for servicio in ("celery_worker", "celery_beat"):
+        faltan = api - set(_env_prod(servicio))
+        assert not faltan, f"{servicio} no recibe en produccion: {sorted(faltan)}"
