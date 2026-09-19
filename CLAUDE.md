@@ -6,7 +6,8 @@ TypeScript/React con Clean Architecture.
 
 Este archivo se carga en cada sesión y es contexto autoritativo para
 cualquier cambio. Está escrito para el asistente de IA tanto como para las
-personas: cada afirmación fue verificada contra el código (2026-09-09) y
+personas: cada afirmación fue verificada contra el código (2026-09-09;
+re-verificada el 2026-09-19 contra las derivas D del audit) y
 cada regla dura cita el archivo o el test que la sostiene. Si un cambio
 choca con algo de acá, se frena y se avisa; no se rodea. Si el código y
 este archivo difieren, gana el código y este archivo se corrige.
@@ -56,13 +57,25 @@ Una instrucción en lenguaje natural no es una garantía.
 - Capas por módulo: `router.py` (solo HTTP y validación de entrada) →
   `service.py` (orquestación, dueño de la transacción) → `repository.py`
   (consultas puras, sin reglas de negocio). `core/uow.py` agrupa repos por
-  transacción.
-- **`appointments` es el módulo de referencia** y el único que cumple
-  "commit solo en service". Hoy commitean también `public_api/router.py`,
-  `payments/router.py`, `stores/router.py` y `superadmin/repository.py`.
-  Es deuda declarada: no se agrega un commit nuevo en router ni repo, y
-  cuando se toca uno de esos módulos se migra hacia el patrón, no se
-  extiende la excepción.
+  transacción. Es el destino, no el estado de todos: `services` y
+  `superadmin` no tienen `service.py`, `stores` es solo router y `otp` solo
+  service.
+- **`appointments` es el módulo de referencia** de "commit solo en service"
+  (con una excepción propia: `claim_reminder`/`release_reminder` de su
+  repositorio commitean como operación técnica atómica). Los archivos que
+  todavía commitean en router o repositorio NO se listan acá: la lista es
+  `COMMITS_DECLARADOS_FUERA_DE_SERVICE` en
+  `tests/architecture/test_boundaries.py`, un techo por archivo que solo
+  puede bajar (falla si un archivo commitea más o si aparece uno nuevo). Entre
+  ellos está `services/repository.py`, excepción declarada hasta que se toque
+  el módulo (B6-05). Los módulos ya migrados (`ledger`, `promotions`,
+  `public_api`: la reserva y la autogestión viven en
+  `public_api/service.py::PublicBookingService`) los fija
+  `tests/architecture/test_transaccion_en_service.py`, y `staff`/`users`
+  `tests/architecture/test_commits_en_service.py`. Es deuda declarada: no se
+  agrega un commit nuevo en router ni repo, y cuando se toca uno de esos
+  módulos se migra hacia el patrón y se baja su número, no se extiende la
+  excepción.
 - `modules/appointments/domain_service.py` es libre de framework (sin
   FastAPI/Pydantic/SQLAlchemy). Lo exige
   `tests/architecture/test_boundaries.py`.
@@ -70,22 +83,33 @@ Una instrucción en lenguaje natural no es una garantía.
   `ALLOWED_STATUS_TRANSITIONS` en
   `infrastructure/persistence/models/appointment.py` y
   `ALLOWED_PAYMENT_TRANSITIONS` en `modules/payments/model.py`. La entidad
-  aplica su transición (`apply_status_transition`); `status` es propiedad
-  de solo lectura y asignarla directo levanta `AttributeError`.
+  aplica su transición (`Appointment.apply_status_transition`,
+  `Payment.apply_status`); en las dos `status` es propiedad de solo lectura
+  y asignarla directo levanta `AttributeError`
+  (`test_statechart_invariants.py`, `test_payment_status_solo_lectura.py`).
+  El grafo de turnos lo repite un trigger de Postgres; el de pagos vive
+  solo en Python (sin trigger ni `CHECK`).
 - **Multi-tenancy = RLS en Postgres + ContextVars, MÁS filtros `store_id`
-  en los repositorios.** Las dos capas conviven a propósito: RLS es la
+  en las consultas.** Las dos capas conviven a propósito: RLS es la
   garantía (rol `shifty_app` sin BYPASSRLS, `main.py` aborta si el rol
-  puede saltarla) y los 38 filtros `store_id` son defensa en profundidad.
-  No se quita ninguno de los dos. Los jobs de Celery fijan bypass explícito
-  (`set_tenant_context(None, True)` + `_apply_tenant_context`).
+  puede saltarla) y los filtros `store_id` de repositorios, reportes y panel
+  son defensa en profundidad (`test_aislamiento_multitenant.py`,
+  `test_reportes_aislamiento_por_tienda.py`; la cuenta de filtros no es un
+  control, cambia con cada consulta). No se quita ninguno de los dos. Los
+  jobs de Celery fijan bypass explícito (`set_tenant_context(None, True)` +
+  `_apply_tenant_context`).
 - **Outbox/Inbox** para efectos secundarios y webhooks (`OutboxMessage`,
   `WebhookInbox`), procesados por Celery beat cada minuto.
-- **Circuit breaker** (`core/circuit_breaker.py`) y **rate limit**
-  (`core/rate_limit.py`) envuelven Mercado Pago y los endpoints sensibles.
-  No se llama al SDK del proveedor desde un camino nuevo.
-- Todos los modelos ORM están en `core/model_registry.py`; el worker y
-  `alembic/env.py` cargan desde ahí. `test_model_registry` falla si aparece
-  un `__tablename__` fuera de la lista.
+- **Circuit breaker** (`core/circuit_breaker.py`) envuelve Mercado Pago. No
+  se llama al SDK del proveedor desde un camino nuevo. El **rate limit**
+  (`core/rate_limit.py`) es un middleware por IP con política propia solo
+  para `/auth/` y `/public/` (el resto, `/payments/*` incluido, cae en la
+  global), más `enforce_rate_limit` puntual en `auth/router.py`,
+  `public_api/router.py` y `waitlist/public_router.py`.
+- Todos los modelos ORM están en `core/model_registry.py`; el worker,
+  `alembic/env.py`, los scripts y el conftest de integración cargan desde
+  ahí. `test_model_registry` falla si aparece un `__tablename__` fuera de
+  la lista.
 
 ### Frontend (`frontend/src/`)
 
@@ -118,13 +142,17 @@ Una instrucción en lenguaje natural no es una garantía.
 1. **Contexto de tienda y rol desde la base, nunca del JWT.** `store_id` e
    `is_global_admin` se releen por request en
    `modules/auth/dependencies.py`. (`test_aislamiento_multitenant.py`)
-2. **El grafo de estados es fijo.** Un estado o arista nueva exige: dict en
-   Python + migración que reemplace la función del trigger de Postgres +
-   actualizar `test_trigger_matches_python_graph` (lee el SQL de una
-   migración concreta por ruta). (`test_statechart_invariants.py`)
+2. **El grafo de estados es fijo.** Una arista o estado nuevo de turnos
+   exige: dict en Python + migración que reemplace la función del trigger de
+   Postgres + actualizar `tests/unit/test_trigger_matches_python_graph.py`,
+   que compara el dict con el SQL de una migración concreta leída por ruta
+   (hoy `b2c3d4e5f6a7_statechart_hardening.py`).
+   `test_statechart_invariants.py` cubre el grafo en Python (terminales
+   absorbentes, una sola fuente por región).
 3. **Un turno con pago pendiente no se cancela directo.** Pasa por
-   `AppointmentService.release_pending` (`modules/appointments/service.py`)
-   para anular antes la preferencia de MP; la guarda es
+   `AppointmentService.release_pending` (`modules/appointments/service.py`),
+   que vence el pago y publica `payment.preference.expire` en la misma
+   transacción; el link de MP lo anula después el outbox; la guarda es
    `reject_cancellation_while_awaiting_payment` en
    `modules/appointments/guards.py`.
 4. **Lock pesimista antes de cualquier transición o reserva.**
@@ -136,8 +164,12 @@ Una instrucción en lenguaje natural no es una garantía.
    simplificar".
 5. **Llamadas externas (MP, mail, WhatsApp) fuera de la transacción que
    sostiene un lock.** Commit → llamada → compensación ante fallo
-   (`_revert_failed_booking`). (2026-09-04: MP dentro del `FOR UPDATE`
-   agotaba el pool.)
+   (`public_api/service.py::revert_failed_booking`). (2026-09-04: MP dentro
+   del `FOR UPDATE` agotaba el pool.) Liberar un turno no llama a MP: el
+   vencimiento del link lo hace el outbox en dos fases (reclamo con `SKIP
+   LOCKED` y commit, llamada sin lock, resultado en otra transacción;
+   `payments/jobs.py::_claim_and_expire_preferences`, B1-04,
+   `test_pg_vencimiento_preferencia.py`).
 6. **Idempotencia de mutaciones por `core/idempotency.py`** (Redis;
    fail-open documentado si Redis cae: `RedisError` → sigue sin
    protección). `idempotency_key` único en el turno. No se inventan claves
@@ -148,8 +180,9 @@ Una instrucción en lenguaje natural no es una garantía.
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`).
 8. **Jobs de Celery**: un loop por proceso (`core/worker_loop`), nunca
-   `asyncio.run` por tarea; `SKIP LOCKED` en los batches. (2026-09-08: el
-   pool quedaba atado a un loop cerrado.)
+   `asyncio.run` por tarea; `SKIP LOCKED` en los batches, recordatorios
+   incluidos. (2026-09-08: el pool quedaba atado a un loop cerrado.)
+   (`test_pg_lotes_skip_locked.py`, `test_pg_recordatorios_skip_locked.py`)
 9. **Todo parámetro numérico de la API lleva `ge` Y `le`.** Un solo lado
    deja un 500 alcanzable (desborde de bigint con `offset`, 2026-09-04).
 
@@ -159,15 +192,24 @@ Una instrucción en lenguaje natural no es una garantía.
     exclusión**, no dos columnas comparadas en Python.
 11. **Dinero y cohortes se agregan en SQL** (`GROUP BY`, funciones de
     ventana), nunca cargando la lista a memoria. (2026-09-04: ledger y
-    reportes sumaban en Python.)
+    reportes sumaban en Python.) (`test_reportes_dinero_en_sql.py`,
+    `test_fiado_resumen_en_sql.py`)
 12. **Un `await db.execute` dentro de un `for` es N+1 hasta demostrar lo
     contrario**; se resuelve con `in_()` o join.
     `availability.get_available_slots` se auditó el 2026-09-16: carga
     horarios, turnos y bloqueos con `in_()` y agrupa en memoria; no tiene N+1.
-13. **Migraciones con `upgrade` y `downgrade` reales**, probadas desde base
-    vacía y con `downgrade -1 / upgrade head`. Head único (CI
-    `contract-and-migrations`). Los timeouts del rol de la app viven en la
-    migración `app_role_timeouts`.
+13. **Migraciones solo para Postgres, con `upgrade` y `downgrade` reales.**
+    La suite de SQLite no corre Alembic (`create_all` en
+    `tests/integration/conftest.py`): las guardas de dialecto que tienen
+    algunas migraciones no prueban soporte SQLite. CI las corre desde base
+    vacía hasta head y baja y vuelve a subir SOLO la última
+    (`tests/postgres/test_pg_migraciones.py`); la cadena completa de
+    downgrades nunca se probó. `d5ec116d06a3` es irreversible (pasa ids a
+    ULID y borra columnas con datos): su `downgrade` levanta
+    `NotImplementedError` y se vuelve desde backup. Head único:
+    `tests/architecture/test_migrations.py` en el job
+    `contract-and-migrations` (`alembic heads` solo lista). Los timeouts del
+    rol de la app viven en la migración `app_role_timeouts`.
 
 ### Seguridad
 
@@ -180,19 +222,40 @@ Una instrucción en lenguaje natural no es una garantía.
 16. **Alta de admins solo por superadmin, con email normalizado a
     minúsculas y rechazo del duplicado case-insensitive antes del insert**:
     el login usa `lower(email)` con `scalar_one_or_none` y dos filas que
-    difieran en mayúsculas lo rompen con 500. (`test_superadmin.py`)
+    difieran en mayúsculas lo rompen con 500. Todo camino de alta normaliza
+    con `auth.service.normalize_email` y el índice `uq_users_email_lower` lo
+    sostiene en la base. Un admin de tienda no crea ni asciende admins por
+    `/users/` (`core/roles.py::assert_can_grant_role`), no ve ni edita la
+    cuenta de un superadmin y no cambia clave, estado, rol ni email de otro
+    admin (`assert_can_change_access`, también por `/staff/`).
+    (`test_superadmin.py`, `test_alta_de_admin_solo_superadmin.py`,
+    `test_email_unico_apoyado_en_indice.py`,
+    `test_panel_no_toca_superadmin.py`, `test_staff_no_toca_cuentas_admin.py`)
 17. **Config de producción falla cerrada** (`core/config.py`,
     `test_config_production_guards.py`): sin placeholders en `SECRET_KEY` /
     `FIELD_ENCRYPTION_KEY`, CORS sin `*` ni localhost,
     `RATE_LIMIT_FAIL_CLOSED`, docs apagados, OTP no `console`. No se agrega
-    un default que deje pasar uno de estos en prod.
+    un default que deje pasar uno de estos en prod. La URL de la base se lee
+    en un solo lugar (`core/config.py::parse_db_url`, parámetro `ssl` de
+    asyncpg, `require` si la URL no dice nada); las URLs locales y de CI
+    llevan `?ssl=disable` explícito y compose lo toma de `POSTGRES_SSL`.
+    `APP_DB_PASSWORD` no tiene default en el repo: compose y la migración de
+    RLS fallan sin ella (`test_parse_db_url_unico.py`,
+    `test_app_db_password_sin_default.py`). El header `x-raw-response` se
+    ignora en producción (`test_raw_response_solo_fuera_de_produccion.py`).
+    La API no hace DDL al arrancar: el esquema es de las migraciones
+    (`test_sin_ddl_en_el_arranque.py`).
 18. **Content-Type restringido a JSON** salvo el upload de medios
     (autenticado con Bearer, `core/security_middleware.py`). Es anti-CSRF:
     un endpoint form-encoded nuevo pasa por esa misma excepción.
-19. **Entrada hostil**: `reject_control_chars` (NUL, bidi, zero-width) en
-    todo texto libre público; imágenes por magic bytes, tope de bytes y de
-    píxeles, nunca SVG; asuntos de mail sin CRLF; fórmulas neutralizadas en
-    CSV/Excel.
+19. **Entrada hostil**: `reject_control_chars` (NUL, bidi, zero-width,
+    `core/validation.py`) en todo texto libre que se publica, lo tipee un
+    anónimo o un admin (turnos, reserva y lista de espera públicas, tienda,
+    personal, catálogo), validado al escribir
+    (`test_texto_publicado_sin_control_chars.py`,
+    `test_servicios_control_chars.py`); imágenes por magic bytes, tope de
+    bytes y de píxeles, nunca SVG; asuntos de mail sin CRLF; fórmulas
+    neutralizadas en CSV/Excel.
 20. **Errores neutros hacia afuera**: `IntegrityError` → 409 genérico; el
     health check no filtra excepciones; mensajes de validación crudos no
     llegan al usuario final.
@@ -202,8 +265,12 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Todo camino que cambia la agenda invalida el caché con
   `core/availability_cache.invalidate_availability`** (reservar, cancelar,
   liberar, reprogramar, expirar señas, crear/editar/borrar bloqueos). La clave
-  lleva versión por (tienda, día local); nunca `delete` a mano ni comodines.
-  (`test_cache_disponibilidad.py`)
+  lleva versión por (tienda, día local) y una generación por tienda: lo que
+  cambia todos los días (editar o borrar un servicio) usa
+  `invalidate_store_availability`. Las claves de versión y generación tienen
+  TTL y se leen con `GETEX`, que lo estira; nunca `delete` a mano ni
+  comodines. (`test_cache_disponibilidad.py`,
+  `test_generacion_de_cache_por_tienda.py`, `test_version_de_cache_expira.py`)
 - **La hora que ve el cliente es hora argentina.** `start_time`/`end_time` de
   la disponibilidad y todos los mails se formatean con `ARGENTINA_TZ`;
   `starts_at`/`ends_at` siguen en UTC y el front manda el `starts_at` del
@@ -213,10 +280,15 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Mails al cliente**: "reserva registrada" al crear, "turno confirmado"
   desde `confirm()` y desde el pago acreditado; siempre best-effort tras el
   commit, nunca a un email técnico `.noreply` (`is_deliverable_email`).
-  (`test_mails_al_cliente.py`)
+  (`test_mails_al_cliente.py`) Los helpers de `notifications/tasks.py` que
+  mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
+  encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
-  `OTP_PROVIDER=console`. Respuesta neutra ante fallo de envío. El front
-  respeta la ventana de 30 minutos. (`test_otp_por_email.py`)
+  `OTP_PROVIDER=console`. El envío se despacha después de la respuesta
+  (`BackgroundTasks`) y, si el teléfono ya es de un cliente de la tienda con
+  email entregable, el código va SOLO a ese email. Respuesta neutra ante
+  fallo de envío. El front respeta la ventana de 30 minutos.
+  (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`)
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
 
@@ -226,8 +298,10 @@ Una instrucción en lenguaje natural no es una garantía.
   lote toma las filas con `FOR UPDATE SKIP LOCKED` y commitea una sola vez:
   un envío adentro deja el estado a merced del time limit de Celery y
   reenvía lo ya enviado. El trabajo devuelve el mail pendiente y el llamador
-  lo despacha después del commit (`OfferResult.pending_email`).
-  (`test_lista_de_espera_concurrencia.py`)
+  lo despacha después del commit (`OfferResult.pending_email` en la lista de
+  espera; `process_outbox_batch` en `payments/jobs.py` acumula así también
+  los avisos al dueño, la confirmación al cliente y la cancelación por
+  bloqueo). (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`)
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
@@ -239,14 +313,25 @@ Una instrucción en lenguaje natural no es una garantía.
   para siempre la validación de importe del webhook.
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
-  sale sin pasar por `is_deliverable_email`.
+  sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión
+  SMTP (`smtp_session`, sondeada con `NOOP` antes de cada envío) y un envío
+  fallido no se reintenta: el turno se libera
+  (`test_recordatorios_sesion_smtp.py`).
 - **Un rango liberado no es un turno.** Borrar un bloqueo devuelve un rango
   cuyos extremos no caen en la grilla: ese origen avisa al dueño, no le
   ofrece al cliente un horario inexistente (`ReleasedSlot.aligned_to_grid`).
 - **Una tienda suspendida no escribe.** La guarda va a nivel router
-  (`block_writes_when_suspended`) para que un endpoint de escritura nuevo
-  quede cubierto sin acordarse; usa el usuario OPCIONAL porque esos routers
-  tienen GET públicos.
+  (`block_writes_when_suspended`) en TODOS los routers del panel, pagos y
+  ledger incluidos, para que un endpoint de escritura nuevo nazca bloqueado;
+  usa el usuario OPCIONAL porque esos routers tienen GET públicos. Lo que
+  sigue permitido es una tabla explícita por verbo y ruta
+  (`modules/billing/dependencies.py::SUSPENSION_ALLOWED_WRITES`:
+  housekeeping que no genera obligaciones nuevas); permitir algo es
+  agregarlo ahí con su motivo. Exentos por diseño: auth, ops, superadmin y
+  el portal público, que no tiene usuario: ahí solo se bloquean crear una
+  reserva y anotarse en la lista de espera
+  (`reject_new_public_business_when_suspended`, mismo 404 que la vitrina);
+  cancelar y reprogramar siguen. (`test_suspension_por_endpoint.py`)
 - **Anotarse en la lista de espera es anónimo, así que tiene topes.**
   `MAX_OPEN_ENTRIES_PER_PHONE` (3) entradas abiertas por teléfono y tienda, y
   quien deja pasar `MAX_LAPSED_OFFERS` (2) ofertas expira solo
@@ -262,9 +347,11 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Configuración y despliegue
 
 21. **Un proceso con configuración inválida se muere.** La API tolera el
-    respaldo de settings solo para responder 503 con detalle; Celery aborta
-    en `worker_init`/`beat_init`. (2026-09-08: worker y beat corrían
-    "ready" con base inválida.)
+    respaldo de settings solo para responder 503 con detalle
+    (`main.py::BootErrorMiddleware`; con settings de respaldo el lifespan no
+    toca la base, `test_boot_error_lifespan.py`); Celery aborta en
+    `worker_init`/`beat_init`. (2026-09-08: worker y beat corrían "ready"
+    con base inválida.)
 22. **Un solo bloque `x-app-environment` en compose** para API, worker y
     beat; `test_compose_contract` exige paridad. Las imágenes se
     reconstruyen juntas (reconstruir solo `backend` dejó a Celery con la
@@ -276,10 +363,11 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Tiempo
 
 24. Persistencia y cálculo en UTC; la hora local es presentación
-    (`core/utils.ARGENTINA_TZ`, `local_to_utc`). Nunca `datetime.now()`
-    sin `timezone.utc`. "Un día" de negocio es aritmética de calendario con
-    zona, no `timedelta(hours=24)`; Argentina hoy no aplica DST y el código
-    no debe depender de eso.
+    (`core/utils`: `ARGENTINA_TZ`, `local_to_utc`, `today_local`,
+    `local_day_start`; reportes y panel cortan el día con estos). Nunca
+    `datetime.now()` sin `timezone.utc`. "Un día" de negocio es aritmética
+    de calendario con zona, no `timedelta(hours=24)`; Argentina hoy no
+    aplica DST y el código no debe depender de eso.
 
 ### Frontend (ESLint en CI: una violación falla el pipeline)
 
@@ -300,8 +388,14 @@ Una instrucción en lenguaje natural no es una garantía.
 
 ### Tamaño y forma
 
-29. **Función de más de 80 líneas necesita justificación en el PR.** Hay
-    19; `create_public_booking` tiene 331 y es deuda, no permiso. Ante una
+29. **Función de más de 80 líneas necesita justificación en el PR.** En el
+    backend quedan 8 al 2026-09-19 (AST, `end_lineno - lineno + 1 > 80`,
+    sin `tests/` ni `alembic/`): `process_outbox_batch`,
+    `_build_store_notification` y `_claim_and_expire_preferences`
+    (`payments/jobs.py`), `OtpService.request_code`,
+    `ledger/router.py::get_ledger_summary` y tres en `scripts/`. Son deuda,
+    no permiso. `create_public_booking` y `client_reschedule_appointment`
+    se descompusieron (B1-12). El front no está medido acá. Ante una
     validación nueva se extrae, no se apila.
 
 ## 4. Qué cuenta como verde (y qué no)
@@ -309,10 +403,11 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Verde en SQLite no prueba concurrencia, RLS, el trigger de estados ni
   la exclusión GiST.** Toda la suite de integración corre en SQLite en
   memoria. Los tres incidentes más caros de 2026-09 (Celery sin correr,
-  redirect que devolvía HTML, CI en rojo un mes) pasaban la suite. Hasta
-  que exista el job de CI con Postgres, todo cambio que toque estados,
-  disponibilidad, RLS, jobs o migraciones se prueba además contra el
-  contenedor local y se pega la evidencia.
+  redirect que devolvía HTML, CI en rojo un mes) pasaban la suite. El job
+  `backend-postgres` corre `tests/postgres/` contra Postgres real; todo
+  cambio que toque estados, disponibilidad, RLS, jobs o migraciones lleva
+  su prueba ahí o se prueba además contra el contenedor local y se pega la
+  evidencia.
 - **Todo endpoint que reserva, cobra o cambia estado tiene prueba de
   ráfaga** (N idénticas y N sobre el mismo slot a la vez): 1 éxito, N-1
   conflictos, cero 5xx.
@@ -336,16 +431,19 @@ Una instrucción en lenguaje natural no es una garantía.
   `package.json` ni en CI: es código muerto. La única protección viva de
   capas es ESLint. El `IMPORT_RULES.md` que menciona solo existe archivado
   en `docs/archive/refactoring/02-IMPORT_RULES.md`.
-- `docs/ROLE_MATRIX.md`, `docs/DOCUMENTACION_TURNERO.md` y
-  `docs/SETUP_GUIDE.md` declaran deriva contra el código
-  (`docs/AUDIT_MATRIX_SHARED.md`), en particular los permisos de
-  `/reports/professionals` y `/reports/summary|export`. Para un cambio de
-  permisos se verifica en código, no en la doc.
+- `docs/DOCUMENTACION_TURNERO.md` y `docs/SETUP_GUIDE.md` declaran deriva
+  contra el código (`docs/AUDIT_MATRIX_SHARED.md`). `docs/ROLE_MATRIX.md`
+  se re-verificó el 2026-09-19 y separa lo que hace el código del objetivo
+  de producto. Para un cambio de permisos se verifica en código, no en la
+  doc.
 - El pre-commit hook (`.githooks/pre-commit`) existe pero **solo corre si
   cada clon hace `git config core.hooksPath .githooks`**; en este clon no
-  estaba activado. Además `verify-toolchain` exige la versión EXACTA de Node
-  (24.18.0 / 26.5.0) y npm: en una máquina con otra versión (2026-09-16:
-  24.16.0) activarlo bloquea todos los commits, y `npm ci` necesita
+  estaba activado. Además `verify-toolchain` acepta solo un conjunto de
+  versiones exactas (Node 24.18.0 o 26.5.0, npm 11.16.0 u 11.17.0, igual que
+  `engines` de `frontend/package.json`) y valida Node y npm por separado, así
+  que también deja pasar combinaciones que CI no ejercita (Node 24.18.0 con
+  npm 11.17.0). En una máquina con otra versión (2026-09-16: 24.16.0)
+  activarlo bloquea todos los commits, y `npm ci` necesita
   `--engine-strict=false`. Antes de activarlo, alinear el toolchain.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
@@ -360,23 +458,31 @@ Una instrucción en lenguaje natural no es una garantía.
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
   prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
 - Falta todavía: activar el pre-commit hook por clon (`git config
-  core.hooksPath .githooks`, con el toolchain alineado); descomponer las
-  funciones más largas (`create_public_booking`,
-  `client_reschedule_appointment`); zona horaria por tienda; unicidad de
-  email de clientes POR tienda (hoy es global, así que un mismo email no
-  puede ser cliente en dos tiendas); migrar los commits de routers/repos al
-  patrón de `appointments`; pasar CodeQL a bloqueante cuando el ruido inicial
+  core.hooksPath .githooks`, con el toolchain alineado); descomponer las 8
+  funciones de más de 80 líneas que quedan en el backend (regla 29); zona
+  horaria por tienda; unicidad de email de clientes POR tienda (hoy es
+  global, así que un mismo email no puede ser cliente en dos tiendas);
+  migrar los commits de routers/repos que quedan en
+  `COMMITS_DECLARADOS_FUERA_DE_SERVICE` al patrón de `appointments`; medir
+  la cobertura del backend en CI (`fail_under = 80` en `pyproject.toml`,
+  pero CI corre `pytest` sin `--cov`); probar la cadena completa de
+  downgrades (regla 13); pasar CodeQL a bloqueante cuando el ruido inicial
   esté limpio. Cerrado el 2026-09-16: N+1 en `get_available_slots`
   (auditado, no había), teléfono único por tienda y primera corrida del E2E.
+  Cerrado el 2026-09-19: descomposición de `create_public_booking` y
+  `client_reschedule_appointment` y migración de `public_api` al service
+  (B1-12).
 
 ## 6. Compuertas de proceso
 
 - Pre-commit: verificación de toolchain, `npm run check`, `ruff
   format/check` + `mypy`. Cero warnings es la línea base, front y back.
-- CI (`quality.yml`): `standards` (formato + lint + tipos + dead-code) gatea
-  a todos los demás jobs; además `contract-and-migrations` (head único de
-  Alembic, `app.openapi()` importa limpio), backend, integración y front
-  con cobertura.
+- CI (`quality.yml`): `standards` (formato + lint + tipos + dead-code) y
+  `contract-and-migrations` (head único de Alembic con
+  `test_migrations.py`, `app.openapi()` importa limpio) gatean a backend,
+  integración, `backend-postgres` y los dos jobs de front; `dead-code`
+  espera solo a `standards` y `secret-scan` (gitleaks) corre suelto. El
+  front corre con cobertura; el backend no la mide (ver §5).
 - `docs/RELEASE_CHECKLIST.md` y `docs/BACKUP_RESTORE_RUNBOOK.md` (RPO ≤24h,
   RTO ≤4h) gatean releases: un ítem sin marcar necesita excepción explícita
   del dueño, no un salto silencioso.
