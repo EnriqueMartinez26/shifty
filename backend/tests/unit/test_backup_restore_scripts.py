@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -266,3 +267,26 @@ def test_el_drill_lanza_sus_subprocesos_con_el_interprete_y_rutas_absolutas(
     # directorio que el que despues revisa _latest_backup.
     salida = command[command.index("--output-dir") + 1]
     assert Path(salida).is_absolute(), f"--output-dir relativo: {salida!r}"
+
+
+def test_el_directorio_de_backups_esta_ignorado_por_git() -> None:
+    """AUD2-C-06 (2026-09-19): los dumps caian en un directorio versionable.
+
+    El runbook y el workflow escriben en `backups/` de la raiz
+    (`--output-dir ../backups`). Sin esa ruta en .gitignore, un `git add -A`
+    despues de correr el drill local mete un dump completo -- datos de
+    clientes, hashes, tokens de MP cifrados -- en el historial, de donde no se
+    borra con un commit. gitleaks no lo atajaria: es un binario de pg_dump, no
+    un patron de secreto.
+    """
+    repo_root = BACKEND_ROOT.parent
+    for ruta in ("backups/shifty-20260621T120000Z.dump", "backups/evidence/x.json"):
+        resultado = subprocess.run(
+            ["git", "check-ignore", "-q", ruta],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert resultado.returncode == 0, f"git no ignora {ruta}"
