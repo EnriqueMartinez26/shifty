@@ -17,6 +17,11 @@ class ReportSummaryStats(BaseModel):
     confirmed_appointments: int
     total_revenue: float
     average_ticket: float
+    # B5-10: parte de total_revenue que es sena retenida de turnos cancelados
+    # (plata acreditada, no reembolsada). No es ingreso por servicio: ese es
+    # total_revenue - retained_deposit_revenue. Aditivo, con default para no
+    # romper a quien arma el DTO sin el.
+    retained_deposit_revenue: float = 0.0
 
 
 class ReportClientStats(BaseModel):

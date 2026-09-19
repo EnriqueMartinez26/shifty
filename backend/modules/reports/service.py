@@ -37,8 +37,10 @@ from modules.users.model import User
 MetricBucket = dict[str, Any]
 
 # Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
-# cobro manual confirmado). Mismo criterio que modules/dashboard/repository.py.
-_ACCREDITED_PAYMENT_STATUSES = [
+# cobro manual confirmado). Unica definicion de la regla para reportes y panel
+# (B5-10): modules/dashboard/repository.py la importa de aca. Un pago
+# reembolsado pasa a ``refunded`` y deja de contar.
+ACCREDITED_PAYMENT_STATUSES = [
     PaymentStatus.APPROVED.value,
     PaymentStatus.MANUAL_CONFIRMED.value,
 ]
@@ -209,7 +211,9 @@ def _appointment_item(
 
 
 def _summary_stats(
-    aggregation: _SummaryAggregation, total_revenue: Decimal
+    aggregation: _SummaryAggregation,
+    total_revenue: Decimal,
+    retained_deposit_revenue: Decimal,
 ) -> ReportSummaryStats:
     revenue = float(total_revenue)
     total = aggregation.total_appointments
@@ -221,6 +225,7 @@ def _summary_stats(
         confirmed_appointments=aggregation.confirmed,
         total_revenue=round(revenue, 2),
         average_ticket=round(revenue / total, 2) if total else 0.0,
+        retained_deposit_revenue=round(float(retained_deposit_revenue), 2),
     )
 
 
@@ -331,13 +336,13 @@ def _professional_item(
 
 
 class ReportService:
-    def __init__(self, db: AsyncSession, *, store_id: str | None):
+    def __init__(self, db: AsyncSession, *, store_id: str):
         self.db = db
         # Tienda que acota TODAS las consultas del reporte: defensa en
         # profundidad sobre RLS (CLAUDE.md §2), la unica capa que la suite en
-        # SQLite puede ejercitar. None solo para el superadmin, mismo criterio
-        # que la politica RLS (ver core.roles.store_scope_for). Es parametro
-        # obligatorio a proposito: un caller que lo olvide falla al construir,
+        # SQLite puede ejercitar. Tambien para el superadmin, cuya sesion abre
+        # RLS (B5-02; ver core.roles.store_scope_for). Es parametro obligatorio
+        # y nunca None a proposito: un caller que lo olvide falla al construir,
         # no devuelve datos de otras tiendas en silencio.
         self.store_id = store_id
 
@@ -345,8 +350,6 @@ class ReportService:
         self, column: InstrumentedAttribute[str]
     ) -> list[ColumnElement[bool]]:
         """Predicado ``store_id`` para desempacar en el ``where`` de cada query."""
-        if self.store_id is None:
-            return []
         return [column == self.store_id]
 
     def _resolve_date_range(
@@ -511,7 +514,9 @@ class ReportService:
             start_dt=start_dt,
             end_dt=end_dt,
             staff_id=staff_id,
-        ).order_by(Appointment.starts_at.asc())
+            # Desempate por id: el orden tiene que ser estable para que las paginas
+            # del detalle (B5-15) no repitan ni salteen turnos a la misma hora.
+        ).order_by(Appointment.starts_at.asc(), Appointment.id.asc())
         result = await self.db.execute(query)
         return cast(
             list[tuple[Appointment, Service, Staff, User]],
@@ -532,7 +537,7 @@ class ReportService:
                 func.sum(Payment.amount).label("paid"),
             )
             .where(
-                Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
+                Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                 *self._store_scope(Payment.store_id),
             )
             .group_by(Payment.appointment_id)
@@ -551,6 +556,28 @@ class ReportService:
                 end_dt=end_dt,
                 staff_id=staff_id,
             ).join(paid, paid.c.appointment_id == Appointment.id)
+        )
+        return Decimal(str(result.scalar_one() or 0))
+
+    async def _retained_deposit_revenue(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> Decimal:
+        """Sena retenida: plata acreditada de turnos CANCELADOS del rango (B5-10).
+
+        Es parte de ``total_revenue`` (es plata en caja) pero no es ingreso por
+        servicio: se informa aparte. Un escalar sumado en la base (regla 11),
+        con el mismo conjunto de filas y la misma tienda que el total.
+        """
+        paid = self._paid_by_appointment()
+        result = await self.db.execute(
+            self._select_in_range(
+                func.coalesce(func.sum(paid.c.paid), 0),
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            )
+            .join(paid, paid.c.appointment_id == Appointment.id)
+            .where(Appointment.status == AppointmentStatus.CANCELLED.value)
         )
         return Decimal(str(result.scalar_one() or 0))
 
@@ -720,7 +747,11 @@ class ReportService:
         to_date: date | None,
         *,
         staff_id: str | None = None,
+        page: slice | None = None,
     ) -> ReportSummaryResponse:
+        """``page`` acota solo el detalle ``appointments`` (B5-15); los totales,
+        cohortes y top-5 son siempre del rango completo. ``None`` = todo (export).
+        """
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
         rows = await self._fetch_rows(
@@ -738,6 +769,9 @@ class ReportService:
         total_revenue = await self._accredited_revenue(
             start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
         )
+        retained = await self._retained_deposit_revenue(
+            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
+        )
         top_services = await self._top_services(
             start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
         )
@@ -751,6 +785,7 @@ class ReportService:
             ),
             start_dt=start_dt,
             end_dt=end_dt,
+            page=page,
         )
         debt_summary = (
             self._empty_debt_summary() if staff_id else await self._build_debt_summary()
@@ -759,7 +794,7 @@ class ReportService:
         return ReportSummaryResponse(
             from_date=resolved_from,
             to_date=resolved_to,
-            stats=_summary_stats(aggregation, total_revenue),
+            stats=_summary_stats(aggregation, total_revenue, retained),
             client_stats=_client_stats(aggregation),
             top_services=top_services,
             top_clients=top_clients,
@@ -774,6 +809,7 @@ class ReportService:
         historical_rows: list[Any],
         start_dt: datetime,
         end_dt: datetime,
+        page: slice | None = None,
     ) -> _SummaryAggregation:
         """Agrega los turnos del rango en metricas puras (sin tocar la base).
 
@@ -788,7 +824,8 @@ class ReportService:
         status_counts: dict[str, int] = defaultdict(int)
         clients_in_range: set[str] = set()
 
-        for row in rows:
+        in_page = range(len(rows))[page] if page is not None else range(len(rows))
+        for index, row in enumerate(rows):
             appointment, service, staff, client = _unpack_row(row)
             client_id = appointment.client_id
             current_name = _report_client_name(client, appointment.client_name)
@@ -799,6 +836,8 @@ class ReportService:
             counter = _STATUS_COUNTERS.get((appointment.status or "").upper())
             if counter:
                 status_counts[counter] += 1
+            if index not in in_page:
+                continue
             resolved_client_name = (
                 current_name or known_client_names.get(client_id or "", "") or "Cliente"
             )
@@ -813,7 +852,7 @@ class ReportService:
         )
         return _SummaryAggregation(
             items=items,
-            total_appointments=len(items),
+            total_appointments=len(rows),
             completed=status_counts["completed"],
             cancelled=status_counts["cancelled"],
             pending=status_counts["pending"],

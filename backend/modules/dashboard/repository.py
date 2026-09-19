@@ -2,7 +2,7 @@
 
 Acceso puro a datos (CLAUDE.md §2): sin reglas de negocio ni commits. Cada
 consulta lleva el predicado ``store_id`` de la tienda del request aunque RLS
-ya filtre (defensa en profundidad, B5-01); vacio solo para el superadmin.
+ya filtre (defensa en profundidad, B5-01), tambien para el superadmin (B5-02).
 Los instantes se reciben aware en UTC y se comparan naive, como antes.
 """
 
@@ -16,32 +16,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import Payment
+from modules.reports.service import ACCREDITED_PAYMENT_STATUSES
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff
 from modules.users.model import User, UserRole
 
 UpcomingRow: TypeAlias = tuple[Appointment, Service, Staff, User]
 
-# Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
-# cobro manual confirmado). Mismo criterio que modules/reports/service.py.
-_ACCREDITED_PAYMENT_STATUSES = [
-    PaymentStatus.APPROVED.value,
-    PaymentStatus.MANUAL_CONFIRMED.value,
-]
-
 
 def _store_scope(
-    store_id: str | None, column: InstrumentedAttribute[str]
+    store_id: str, column: InstrumentedAttribute[str]
 ) -> list[ColumnElement[bool]]:
     """Predicado ``store_id`` para desempacar en el ``where`` de cada query.
 
     Defensa en profundidad sobre RLS (CLAUDE.md §2): toda consulta del panel
-    lleva la tienda del request aunque la politica de Postgres falle. Vacio
-    solo para el superadmin (ver core.roles.store_scope_for).
+    lleva la tienda del request aunque la politica de Postgres falle, tambien
+    para el superadmin, cuya sesion abre RLS (B5-02; ver
+    core.roles.store_scope_for).
     """
-    if store_id is None:
-        return []
     return [column == store_id]
 
 
@@ -53,7 +46,7 @@ def _starts_between(desde: datetime, hasta: datetime) -> list[ColumnElement[bool
 
 
 class DashboardRepository:
-    def __init__(self, db: AsyncSession, store_id: str | None) -> None:
+    def __init__(self, db: AsyncSession, store_id: str) -> None:
         self.db = db
         self.store_id = store_id
 
@@ -137,7 +130,7 @@ class DashboardRepository:
             .join(Appointment, Payment.appointment_id == Appointment.id)
             .where(
                 *_starts_between(desde, hasta),
-                Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
+                Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                 *self._appointment_scope(),
             )
         )
