@@ -44,6 +44,7 @@ from modules.appointments.guards import (
     reject_cancellation_while_awaiting_payment,
 )
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.billing.service import store_is_suspended
 from modules.otp.service import OtpService
 from modules.payments.deposit_rules import (
@@ -644,6 +645,9 @@ async def create_public_booking(
                 store = await repo.get_store_by_id(store_id)
                 if not store:
                     raise StoreNotFoundException(identifier=str(store_id))
+            # Tienda suspendida: no toma reservas nuevas (B1-06); cancelar y
+            # reprogramar las ya tomadas sigue.
+            await reject_new_public_business_when_suspended(db, store)
 
             # Antelacion minima. El flujo admin ya la validaba, pero el booking
             # publico solo la aplicaba al *mostrar* slots, no al crearlos: un POST

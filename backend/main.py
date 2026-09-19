@@ -16,9 +16,9 @@ from core.database import engine
 from core.middleware import TenantMiddleware
 from core.observability import init_observability
 from core.responses import CanonicalJsonMiddleware, error_response
-from core.runtime_contracts import ensure_runtime_contracts
 from core.exceptions import AppException
 from core.rate_limit import RedisRateLimitMiddleware
+from core.redis import close_redis
 from core.security_middleware import RequestGuardMiddleware, SecurityHeadersMiddleware
 from modules.appointment_blocks.router import router as appointment_blocks_router
 from modules.auth.router import router as auth_router
@@ -116,16 +116,34 @@ async def _assert_rls_capable_role() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Settings de respaldo: no hay base alcanzable y BootErrorMiddleware
-    # responde 503 a toda request. Sin este corte el chequeo de RLS fallaba
-    # contra localhost/invalid y el proceso moria antes de servir el 503.
-    if SETTINGS_BOOT_ERROR is not None:
+    try:
+        # Settings de respaldo: no hay base alcanzable y BootErrorMiddleware
+        # responde 503 a toda request. Sin este corte el chequeo de RLS
+        # fallaba contra localhost/invalid y el proceso moria antes de servir
+        # el 503.
+        if SETTINGS_BOOT_ERROR is not None:
+            yield
+            return
+        await _assert_rls_capable_role()
+        # Sin DDL en el arranque: el esquema lo crean las migraciones (regla
+        # 13). El `create_all` + `ALTER TABLE` de runtime_contracts se borro
+        # (B7-07/X-18, 2026-09-19).
         yield
-        return
-    await _assert_rls_capable_role()
-    if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
-        await ensure_runtime_contracts(engine)
-    yield
+    finally:
+        await _close_redis_on_shutdown()
+
+
+async def _close_redis_on_shutdown() -> None:
+    """Cierre ordenado del pool de Redis compartido (X-16, 2026-09-19).
+
+    Sin esto las conexiones del pool quedaban abiertas del lado de Redis hasta
+    su timeout en cada deploy o reinicio. Un Redis que ya no responde no puede
+    trabar el apagado: se registra y se sigue.
+    """
+    try:
+        await close_redis()
+    except Exception:
+        logger.warning("redis_close_failed_on_shutdown", exc_info=True)
 
 
 # Sentry se inicializa antes de construir la app para que sus integraciones
@@ -315,24 +333,37 @@ app.add_middleware(
 )
 
 # 3. Registrar Routers
-app.include_router(auth_router)
 # Una tienda suspendida no escribe desde el panel (la lectura sigue). Va a
-# nivel router para que un endpoint de escritura nuevo quede cubierto solo.
+# nivel router para que un endpoint de escritura nuevo quede cubierto solo;
+# el housekeeping permitido esta por endpoint y verbo en
+# SUSPENSION_ALLOWED_WRITES (modules/billing/dependencies.py). TODO router del
+# panel lleva la guarda; los unicos exentos son los de abajo, con su motivo, y
+# tests/integration/test_suspension_por_endpoint.py falla si aparece una
+# escritura fuera de las dos listas (B7-02, 2026-09-19).
 _SUSPENSION_GUARD = [Depends(block_writes_when_suspended)]
+# Exento: login, logout, sesiones y contrasena (el dueno tiene que poder entrar
+# a pagar).
+app.include_router(auth_router)
 app.include_router(services_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(staff_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(appointments_router, dependencies=_SUSPENSION_GUARD)
-app.include_router(dashboard_router)
-app.include_router(users_router)
-app.include_router(reports_router)
+app.include_router(dashboard_router, dependencies=_SUSPENSION_GUARD)
+app.include_router(users_router, dependencies=_SUSPENSION_GUARD)
+app.include_router(reports_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(stores_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(appointment_blocks_router, dependencies=_SUSPENSION_GUARD)
-app.include_router(payments_router)
-app.include_router(notifications_router)
+# Pagos lleva la guarda: sus escrituras de panel (cobrar turnos ya tomados,
+# operar la pasarela) estan permitidas una por una en SUSPENSION_ALLOWED_WRITES
+# y un endpoint de pagos nuevo nace bloqueado. El webhook es anonimo y pasa.
+app.include_router(payments_router, dependencies=_SUSPENSION_GUARD)
+app.include_router(notifications_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(promotions_router, dependencies=_SUSPENSION_GUARD)
-app.include_router(ledger_router)
+app.include_router(ledger_router, dependencies=_SUSPENSION_GUARD)
+# Exentos: operacion interna y el superadmin (es quien reactiva la tienda).
 app.include_router(ops_router)
 app.include_router(superadmin_router)
+# Exentos: portal publico anonimo (no hay usuario del que sacar la tienda); la
+# regla vive en los handlers que crean obligaciones (B1-06).
 app.include_router(public_router)
 app.include_router(waitlist_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(public_waitlist_router)

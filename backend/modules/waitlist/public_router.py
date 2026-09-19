@@ -18,6 +18,7 @@ from core.exceptions import ResourceNotFoundException, StoreNotFoundException
 from core.rate_limit import enforce_rate_limit
 from core.router import CanonicalAPIRouter
 from core.validation import PUBLIC_ID_PATTERN
+from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.public_api.repository import PublicRepository
 from modules.public_api.router import _require_recent_client_otp
 from modules.stores.model import Store
@@ -60,6 +61,9 @@ async def join_waitlist(
     )
     async with tenant_bypass(db):
         store = await _store(db, data.store_public_id)
+        # Tienda suspendida: no toma altas nuevas (B1-06); ver y dejar la
+        # lista (`/mine`, `/leave`) sigue.
+        await reject_new_public_business_when_suspended(db, store)
         row = await WaitlistService(db).join(
             store=store,
             service_public_id=data.service_id,

@@ -4,6 +4,7 @@ import secrets
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -202,7 +203,6 @@ class Settings(BaseSettings):
     SLO_MAX_FAILED_WEBHOOKS: int = 20
     SLO_MAX_PENDING_OUTBOX: int = 200
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
-    RUN_RUNTIME_CONTRACTS_ON_STARTUP: bool = False
 
     DATABASE_URL: str
     # Las migraciones necesitan DDL y CREATE EXTENSION, asi que corren con el
@@ -406,6 +406,59 @@ def redact_url(value: str, *, keep_target: bool = False) -> str:
     if _queda_un_arroba_tras_un_esquema(redactada):
         return _DESDE_EL_ESQUEMA_HASTA_EL_FINAL.sub(r"\1" + _MARCA, value)
     return redactada
+
+
+# Modos TLS que entienden a la vez asyncpg (`ssl=`) y psycopg2/libpq
+# (`sslmode=`). Cualquier otro valor es un error, no se adivina.
+_SSL_MODES = frozenset(
+    {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+)
+# Sin nada en la URL, la migracion exige TLS: una base administrada lo tiene y
+# el entorno local/CI lo apaga explicito con `?ssl=disable`.
+DEFAULT_SSL_MODE = "require"
+
+
+def parse_db_url(url: str, *, label: str = "DATABASE_URL") -> dict[str, Any]:
+    """Componentes de conexion para migrar con psycopg2 (B7-11, S-10).
+
+    Unica lectura del repo: la usan `run_migrations.py` y `alembic/env.py`,
+    que antes tenian cada uno su copia con otro `sslmode` por defecto
+    (`require` y `disable`). Las URLs del repo son de asyncpg, cuyo parametro
+    es `ssl` (`sslmode=` en esa URL rompe el engine de la API); se lee `ssl`,
+    se acepta `sslmode` por compatibilidad y, si falta, `require`. La URL de
+    produccion de ejemplo (`?ssl=require`) antes se ignoraba y Alembic migraba
+    sin TLS.
+
+    Ningun error lleva usuario ni contrasena (regla 20): la URL sale por
+    `redact_url(..., keep_target=True)`.
+    """
+    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
+    if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
+        raise ValueError(
+            f"No se pudo parsear {label}: {redact_url(url, keep_target=True)}"
+        )
+
+    query = parse_qs(parsed.query)
+    pedidos = {query[clave][0] for clave in ("ssl", "sslmode") if query.get(clave)}
+    if len(pedidos) > 1:
+        raise ValueError(
+            f"{label} pide dos modos TLS distintos (ssl y sslmode): "
+            f"{redact_url(url, keep_target=True)}"
+        )
+    sslmode = pedidos.pop() if pedidos else DEFAULT_SSL_MODE
+    if sslmode not in _SSL_MODES:
+        raise ValueError(
+            f"{label} trae un modo TLS invalido ({sslmode!r}): "
+            f"{redact_url(url, keep_target=True)}"
+        )
+    return {
+        "user": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "host": parsed.hostname,
+        "port": int(parsed.port or 5432),
+        "dbname": parsed.path.lstrip("/"),
+        "sslmode": sslmode,
+    }
 
 
 def _sanitize_settings_error(value: str) -> str:

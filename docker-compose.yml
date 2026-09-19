@@ -9,10 +9,15 @@ x-app-environment: &app_environment
   SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
   # La app usa un rol sin superusuario para que RLS la alcance.
-  DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
+  # `ssl` (parametro de asyncpg): las migraciones exigen TLS si la URL no dice
+  # nada (core.config.parse_db_url). El `db` de este compose no tiene TLS, asi
+  # que el default aca es `disable`; POSTGRES_SSL=require solo si esa base tiene
+  # TLS configurado (B7-11, 2026-09-19).
+  # Sin default (C-02): la contrasena del rol shifty_app viene del .env local.
+  DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   # Las migraciones necesitan DDL: van con el dueno de la base.
-  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
-  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-shifty_app_password}
+  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
   REDIS_URL: redis://redis:6379/0
   CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
   CELERY_RESULT_BACKEND_URL: redis://redis:6379/1

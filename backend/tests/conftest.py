@@ -49,7 +49,6 @@ _TEST_ENV = {
     "SLO_MAX_FAILED_WEBHOOKS": "20",
     "SLO_MAX_PENDING_OUTBOX": "200",
     "MERCADOPAGO_WEBHOOK_SECRET": "",
-    "RUN_RUNTIME_CONTRACTS_ON_STARTUP": "false",
     "DATABASE_URL": "sqlite+aiosqlite:///:memory:",
     "REDIS_URL": "redis://localhost:6379/15",
     "CELERY_BROKER_URL": "memory://",

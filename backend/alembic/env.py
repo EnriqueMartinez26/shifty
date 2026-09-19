@@ -5,15 +5,16 @@ Usa psycopg2 (sync) en lugar de asyncpg para evitar el bug WinError 64
 con el ProactorEventLoop de Python 3.13 en Windows.
 """
 
-from urllib.parse import parse_qs, unquote, urlparse
 from logging.config import fileConfig
-from typing import Any
 from sqlalchemy import Engine, create_engine, pool
 from alembic import context
 
 # Base + TODOS los modelos, desde el registro unico: una lista parcial hace
 # que autogenerate proponga borrar las tablas que no vio.
-from core.config import redact_url, settings
+# Unica lectura de la URL del repo (B7-11): lee `ssl`, acepta `sslmode` y
+# usa `require` cuando falta. Antes esta copia tenia `disable` por defecto
+# y no leia `ssl`: la URL de produccion `?ssl=require` migraba sin TLS.
+from core.config import parse_db_url, settings
 from core.model_registry import load_all_models
 from core.models import Base
 
@@ -29,38 +30,15 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
-def parse_db_url(url: str) -> dict[str, Any]:
-    """
-    Parsea la DATABASE_URL y extrae los componentes.
-    Soporta formato: postgresql+asyncpg://user:pass@host:port/db
-    """
-    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
-    if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
-        # Nunca las credenciales: es la URL del rol dueno de la base y el
-        # traceback queda en los logs de compose y de CI (C-01, 2026-09-16).
-        # Misma redaccion que run_migrations.py, del helper unico (S-01).
-        raise ValueError(
-            "No se pudo parsear MIGRATION_DATABASE_URL: "
-            f"{redact_url(url, keep_target=True)}"
-        )
-
-    query = parse_qs(parsed.query)
-    return {
-        "user": unquote(parsed.username or ""),
-        "password": unquote(parsed.password or ""),
-        "host": parsed.hostname,
-        "port": int(parsed.port or 5432),
-        "dbname": parsed.path.lstrip("/"),
-        "sslmode": query.get("sslmode", ["disable"])[0],
-    }
-
-
 def get_sync_engine() -> Engine:
     """
     Crea un engine síncrono con psycopg2 usando parámetros explícitos.
     Evita el UnicodeDecodeError al no construir un DSN string.
     """
-    params = parse_db_url(settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL)
+    params = parse_db_url(
+        settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL,
+        label="MIGRATION_DATABASE_URL",
+    )
 
     engine = create_engine(
         "postgresql+psycopg2://",
@@ -80,7 +58,10 @@ def get_sync_engine() -> Engine:
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    params = parse_db_url(settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL)
+    params = parse_db_url(
+        settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL,
+        label="MIGRATION_DATABASE_URL",
+    )
     url = (
         f"postgresql+psycopg2://{params['user']}:{params['password']}"
         f"@{params['host']}:{params['port']}/{params['dbname']}"
