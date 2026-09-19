@@ -20,13 +20,6 @@ class ApiSuccess(BaseModel, Generic[T]):
     meta: dict[str, Any] | None = None
 
 
-class ApiError(BaseModel):
-    success: bool = False
-    error_code: str
-    message: str
-    detail: Any | None = None
-
-
 def success_payload(data: Any, meta: dict[str, Any] | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"success": True, "data": jsonable_encoder(data)}
     if meta is not None:
