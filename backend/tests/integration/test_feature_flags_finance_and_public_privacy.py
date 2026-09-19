@@ -27,7 +27,6 @@ from main import app
 import modules.appointments.model
 import modules.audit.model
 import modules.auth.session_model
-import modules.budget.model
 import modules.ledger.model
 import modules.otp.model
 import modules.payments.model
