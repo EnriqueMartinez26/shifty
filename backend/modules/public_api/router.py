@@ -1362,6 +1362,12 @@ async def client_reschedule_appointment(
                         notes=original.notes,
                         intake_answers=original.intake_answers or {},
                         idempotency_key=data.idempotency_key,
+                        # Mismo criterio que el alta publica para un turno sin
+                        # cobro online: retiene el horario hasta que empieza y
+                        # despues lo levanta el job de expiracion si nadie lo
+                        # confirmo. Antes nacia en NULL y quedaba vivo para
+                        # siempre (B1-22).
+                        expires_at=data.new_starts_at,
                     )
                     db.add(new_appointment)
                     await db.flush()
