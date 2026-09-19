@@ -21,6 +21,7 @@ from core.roles import STORE_MANAGERS, has_any_role, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.repository import AppointmentAgendaRow
 from modules.appointments.schemas import (
     AppointmentCreate,
     AppointmentFilterParams,
@@ -415,33 +416,37 @@ async def search_appointments(
 
     repo = AppointmentRepository(db)
     total, rows = await repo.search_appointments(filters, user.store_id)
+    # El telefono del cliente solo lo ve un administrador (dato personal).
     show_phone = has_any_role(user, STORE_MANAGERS)
-
-    results = [
-        AppointmentSearchResult(
-            public_id=appointment.public_id,
-            starts_at=appointment.starts_at,
-            ends_at=appointment.ends_at,
-            status=AppointmentStatus(appointment.status),
-            notes=appointment.notes,
-            notes_staff=appointment.notes_staff,
-            intake_answers=appointment.intake_answers or {},
-            cancelled_at=appointment.cancelled_at,
-            completed_at=appointment.completed_at,
-            service_name=service.name,
-            service_id=service.public_id,
-            staff_name=staff.display_name,
-            staff_id=staff.public_id,
-            client_name=client.full_name or client.email,
-            client_id=client.public_id,
-            client_phone=client.phone if show_phone else None,
-        )
-        for appointment, service, staff, client in rows
-    ]
+    results = [_to_search_result(row, show_phone=show_phone) for row in rows]
 
     return AppointmentSearchResponse(
         total=total,
         page=filters.page,
         page_size=filters.page_size,
         results=results,
+    )
+
+
+def _to_search_result(
+    row: AppointmentAgendaRow, *, show_phone: bool
+) -> AppointmentSearchResult:
+    appointment, service, staff, client = row
+    return AppointmentSearchResult(
+        public_id=appointment.public_id,
+        starts_at=appointment.starts_at,
+        ends_at=appointment.ends_at,
+        status=AppointmentStatus(appointment.status),
+        notes=appointment.notes,
+        notes_staff=appointment.notes_staff,
+        intake_answers=appointment.intake_answers or {},
+        cancelled_at=appointment.cancelled_at,
+        completed_at=appointment.completed_at,
+        service_name=service.name,
+        service_id=service.public_id,
+        staff_name=staff.display_name,
+        staff_id=staff.public_id,
+        client_name=client.full_name or client.email,
+        client_id=client.public_id,
+        client_phone=client.phone if show_phone else None,
     )

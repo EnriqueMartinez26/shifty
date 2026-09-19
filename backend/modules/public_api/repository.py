@@ -398,6 +398,34 @@ class PublicRepository:
             return staff
         return None
 
+    async def _candidates(
+        self, store_id: str, service_public_id: str, staff_public_id: str | None
+    ) -> list[Staff]:
+        """Profesionales que pueden tomar el turno, en el orden de desempate.
+
+        Con profesional elegido, solo ese (si hace el servicio); con "cualquier
+        profesional", todos los que lo hacen por display_name y public_id.
+        """
+        qualified_staff = await self.get_staff(
+            store_id, service_public_id=service_public_id
+        )
+        if staff_public_id:
+            candidates = [
+                member
+                for member in qualified_staff
+                if member.public_id == staff_public_id
+            ]
+            if not candidates:
+                raise ValueError("El profesional no realiza el servicio seleccionado")
+        else:
+            candidates = sorted(
+                qualified_staff,
+                key=lambda member: (member.display_name or "", member.public_id),
+            )
+        if not candidates:
+            raise ValueError("No hay profesionales disponibles para este servicio")
+        return candidates
+
     async def create_appointment(
         self,
         store_id: str,
@@ -425,27 +453,9 @@ class PublicRepository:
             raise ValueError("Servicio no encontrado")
 
         ends_at = starts_at + timedelta(minutes=service.duration_minutes)
-        qualified_staff = await self.get_staff(
-            store_id, service_public_id=service_public_id
+        candidates = await self._candidates(
+            store_id, service_public_id, staff_public_id
         )
-
-        if staff_public_id:
-            candidates = [
-                member
-                for member in qualified_staff
-                if member.public_id == staff_public_id
-            ]
-            if not candidates:
-                raise ValueError("El profesional no realiza el servicio seleccionado")
-        else:
-            candidates = sorted(
-                qualified_staff,
-                key=lambda member: (member.display_name or "", member.public_id),
-            )
-
-        if not candidates:
-            raise ValueError("No hay profesionales disponibles para este servicio")
-
         selected_staff = await self._pick_staff_for_slot(
             candidates, starts_at, ends_at, buffer_minutes
         )

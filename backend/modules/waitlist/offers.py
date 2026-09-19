@@ -262,28 +262,7 @@ async def offer_released_slot(
         minutes=int(service.duration_minutes)
     )
 
-    pendiente: PendingOfferEmail | None = None
-    if is_deliverable_email(entry.client_email) and entry.client_email:
-        base = settings.FRONTEND_URL.rstrip("/")
-        slug = getattr(store, "slug", None)
-        fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
-        link = rebook_url(base, slug, service, staff)
-        pendiente = PendingOfferEmail(
-            email=entry.client_email,
-            details={
-                "public_id": entry.id,
-                "client_name": entry.client_name,
-                "service": service.name,
-                "staff": staff_name,
-                "staff_kind": getattr(staff, "kind", None) or "person",
-                "starts_at": slot.starts_at.isoformat(),
-                "store_name": getattr(store, "name", "") or "",
-                "store_phone": getattr(store, "whatsapp_number", None) or "",
-                "booking_url": f"{base}/b/{slug}" if slug else "",
-                "offer_url": f"{link}&date={fecha_iso}" if link else "",
-                "offer_minutes": settings.WAITLIST_OFFER_MINUTES,
-            },
-        )
+    pendiente = _offer_email(entry, service, staff, store, slot, staff_name)
     logger.info(
         "waitlist_slot_offered",
         store_id=slot.store_id,
@@ -295,6 +274,39 @@ async def offer_released_slot(
         offered_entry_id=entry.id,
         owner_notified=notify_owner,
         pending_email=pendiente,
+    )
+
+
+def _offer_email(
+    entry: WaitlistEntry,
+    service: Service,
+    staff: Staff | None,
+    store: Store | None,
+    slot: ReleasedSlot,
+    staff_name: str,
+) -> PendingOfferEmail | None:
+    """Arma (no manda) el mail de la oferta; None si no hay a donde mandarlo."""
+    if not (is_deliverable_email(entry.client_email) and entry.client_email):
+        return None
+    base = settings.FRONTEND_URL.rstrip("/")
+    slug = getattr(store, "slug", None)
+    fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
+    link = rebook_url(base, slug, service, staff)
+    return PendingOfferEmail(
+        email=entry.client_email,
+        details={
+            "public_id": entry.id,
+            "client_name": entry.client_name,
+            "service": service.name,
+            "staff": staff_name,
+            "staff_kind": getattr(staff, "kind", None) or "person",
+            "starts_at": slot.starts_at.isoformat(),
+            "store_name": getattr(store, "name", "") or "",
+            "store_phone": getattr(store, "whatsapp_number", None) or "",
+            "booking_url": f"{base}/b/{slug}" if slug else "",
+            "offer_url": f"{link}&date={fecha_iso}" if link else "",
+            "offer_minutes": settings.WAITLIST_OFFER_MINUTES,
+        },
     )
 
 
