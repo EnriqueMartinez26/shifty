@@ -25,7 +25,38 @@ class ServiceBase(BaseModel):
         return reject_unsafe_url(value)
 
 
+DEPOSIT_FIELDS = ("deposit_mode", "deposit_type", "deposit_amount")
+
+
+def deposit_policy_error(
+    deposit_mode: str, deposit_type: str, deposit_amount: float | None
+) -> str | None:
+    """Valida la terna de sena como un solo dato (B6-02).
+
+    ``percent`` es un porcentaje del precio: mas de 100 cobraba mas que el
+    servicio. ``required`` u ``optional`` con ``percent``/``fixed`` sin monto
+    calculaba una sena de 0: el turno se reservaba sin cobrar, o se ofrecia
+    una sena opcional de 0. ``full`` no necesita monto; ``none`` no cobra.
+    """
+    if deposit_type == "percent" and deposit_amount is not None:
+        if deposit_amount > 100:
+            return "deposit_amount: un porcentaje de sena no puede superar 100"
+    if deposit_mode != "none" and deposit_type != "full":
+        if deposit_amount is None or deposit_amount <= 0:
+            return "deposit_amount: una sena necesita un monto mayor a 0"
+    return None
+
+
 class ServiceCreate(ServiceBase):
+    @model_validator(mode="after")
+    def validate_deposit_policy(self) -> Self:
+        error = deposit_policy_error(
+            self.deposit_mode, self.deposit_type, self.deposit_amount
+        )
+        if error:
+            raise ValueError(error)
+        return self
+
     @field_validator("name", "description")
     @classmethod
     def reject_control_chars_in_text(cls, value: str | None) -> str | None:
