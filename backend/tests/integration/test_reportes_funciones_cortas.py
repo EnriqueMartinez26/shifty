@@ -272,6 +272,8 @@ async def test_resumen_cohortes_y_profesionales_no_cambian(
         "confirmed_appointments": 1,
         "total_revenue": 15000.0,
         "average_ticket": 2142.86,
+        # B5-10 (aditivo): el cancelado t3 no tiene pago, no hay sena retenida.
+        "retained_deposit_revenue": 0.0,
     }
     assert resumen["client_stats"] == {
         "total_clients": 2,

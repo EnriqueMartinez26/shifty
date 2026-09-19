@@ -16,19 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import Payment
+from modules.reports.service import ACCREDITED_PAYMENT_STATUSES
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff
 from modules.users.model import User, UserRole
 
 UpcomingRow: TypeAlias = tuple[Appointment, Service, Staff, User]
-
-# Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
-# cobro manual confirmado). Mismo criterio que modules/reports/service.py.
-_ACCREDITED_PAYMENT_STATUSES = [
-    PaymentStatus.APPROVED.value,
-    PaymentStatus.MANUAL_CONFIRMED.value,
-]
 
 
 def _store_scope(
@@ -136,7 +130,7 @@ class DashboardRepository:
             .join(Appointment, Payment.appointment_id == Appointment.id)
             .where(
                 *_starts_between(desde, hasta),
-                Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
+                Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                 *self._appointment_scope(),
             )
         )

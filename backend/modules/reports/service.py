@@ -37,8 +37,10 @@ from modules.users.model import User
 MetricBucket = dict[str, Any]
 
 # Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
-# cobro manual confirmado). Mismo criterio que modules/dashboard/repository.py.
-_ACCREDITED_PAYMENT_STATUSES = [
+# cobro manual confirmado). Unica definicion de la regla para reportes y panel
+# (B5-10): modules/dashboard/repository.py la importa de aca. Un pago
+# reembolsado pasa a ``refunded`` y deja de contar.
+ACCREDITED_PAYMENT_STATUSES = [
     PaymentStatus.APPROVED.value,
     PaymentStatus.MANUAL_CONFIRMED.value,
 ]
@@ -209,7 +211,9 @@ def _appointment_item(
 
 
 def _summary_stats(
-    aggregation: _SummaryAggregation, total_revenue: Decimal
+    aggregation: _SummaryAggregation,
+    total_revenue: Decimal,
+    retained_deposit_revenue: Decimal,
 ) -> ReportSummaryStats:
     revenue = float(total_revenue)
     total = aggregation.total_appointments
@@ -221,6 +225,7 @@ def _summary_stats(
         confirmed_appointments=aggregation.confirmed,
         total_revenue=round(revenue, 2),
         average_ticket=round(revenue / total, 2) if total else 0.0,
+        retained_deposit_revenue=round(float(retained_deposit_revenue), 2),
     )
 
 
@@ -530,7 +535,7 @@ class ReportService:
                 func.sum(Payment.amount).label("paid"),
             )
             .where(
-                Payment.status.in_(_ACCREDITED_PAYMENT_STATUSES),
+                Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                 *self._store_scope(Payment.store_id),
             )
             .group_by(Payment.appointment_id)
@@ -549,6 +554,28 @@ class ReportService:
                 end_dt=end_dt,
                 staff_id=staff_id,
             ).join(paid, paid.c.appointment_id == Appointment.id)
+        )
+        return Decimal(str(result.scalar_one() or 0))
+
+    async def _retained_deposit_revenue(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> Decimal:
+        """Sena retenida: plata acreditada de turnos CANCELADOS del rango (B5-10).
+
+        Es parte de ``total_revenue`` (es plata en caja) pero no es ingreso por
+        servicio: se informa aparte. Un escalar sumado en la base (regla 11),
+        con el mismo conjunto de filas y la misma tienda que el total.
+        """
+        paid = self._paid_by_appointment()
+        result = await self.db.execute(
+            self._select_in_range(
+                func.coalesce(func.sum(paid.c.paid), 0),
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            )
+            .join(paid, paid.c.appointment_id == Appointment.id)
+            .where(Appointment.status == AppointmentStatus.CANCELLED.value)
         )
         return Decimal(str(result.scalar_one() or 0))
 
@@ -736,6 +763,9 @@ class ReportService:
         total_revenue = await self._accredited_revenue(
             start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
         )
+        retained = await self._retained_deposit_revenue(
+            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
+        )
         top_services = await self._top_services(
             start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
         )
@@ -757,7 +787,7 @@ class ReportService:
         return ReportSummaryResponse(
             from_date=resolved_from,
             to_date=resolved_to,
-            stats=_summary_stats(aggregation, total_revenue),
+            stats=_summary_stats(aggregation, total_revenue, retained),
             client_stats=_client_stats(aggregation),
             top_services=top_services,
             top_clients=top_clients,
