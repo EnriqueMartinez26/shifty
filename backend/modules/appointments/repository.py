@@ -165,6 +165,22 @@ class AppointmentRepository:
         transacciones que lockean conjuntos solapados nunca se esperan en
         ciclo (S-11). Lockearlos de a uno en el orden de otra consulta (sin
         ``ORDER BY``) permitia el deadlock entre dos altas de bloqueos.
+
+        Orden de locks vigente y riesgo residual (S-18, documentado; no se
+        reordena):
+
+        - Alta de bloqueos: profesionales (aca, por id) -> turnos del rango
+          (``list_active_overlapping(lock=True)``).
+        - Reprogramar (panel y cliente): turno original -> profesional. No se
+          invierte porque el estado del turno se valida bajo su lock antes de
+          tocar la agenda; cambiarlo cambia el orden de validacion.
+        - Alta publica: un profesional por vez en orden de desempate; solo
+          toma un segundo si el primero falla la relectura bajo lock.
+
+        Si una reprogramacion de un turno que cae en el rango se cruza con un
+        alta de bloqueos, o el segundo lock del alta publica con un cierre de
+        tienda, Postgres detecta el ciclo y aborta una transaccion (40P01):
+        el handler de ``main.py`` responde 409 neutro y el cliente reintenta.
         """
         if not staff_ids:
             return
