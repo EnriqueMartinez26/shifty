@@ -14,6 +14,10 @@ es el mismo de antes y lo fijan los tests de caracterizacion
   leer disponibilidad (``PublicRepository.create_appointment``, regla 4);
 - commit del alta -> invalidacion del cache -> link de Mercado Pago fuera de
   la transaccion -> compensacion si falla (regla 5, B1-10).
+
+La autogestion del cliente (cancelar y reprogramar, antes 111 y 200 lineas
+en el router) vive tambien aca; la fijan los tests de
+``tests/integration/test_caracterizacion_autogestion.py``.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ import structlog
 from fastapi import status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import invalidate_availability
@@ -34,13 +38,18 @@ from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
 from core.exceptions import (
     AppException,
+    AppointmentConflictException,
+    AppointmentNotFoundException,
     BookingNoticeException,
     OTPException,
+    PermissionDeniedException,
     ServiceNotFoundException,
+    StaffNotFoundException,
     StoreNotFoundException,
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
+from modules.appointments.guards import reject_cancellation_while_awaiting_payment
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
@@ -57,15 +66,22 @@ from modules.payments.deposit_rules import (
     DepositRules,
     decide_deposit,
 )
-from modules.payments.model import OutboxMessage, Payment
+from modules.payments.model import JsonValue, OutboxMessage, Payment, PaymentStatus
 from modules.payments.service import ensure_payment_preference
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import PromotionQuote, quote_promotion, redeem_promotion
-from modules.public_api.repository import PublicRepository
-from modules.public_api.schemas import PublicBookingCreate, PublicBookingResponse
+from modules.public_api.repository import PublicRepository, RangeRejection
+from modules.public_api.schemas import (
+    ClientCancelRequest,
+    ClientRescheduleRequest,
+    PublicBookingCreate,
+    PublicBookingResponse,
+)
 from modules.services.model import Service
 from modules.staff.model import Staff
 from modules.stores.model import Store
+from modules.users.model import User
+from modules.waitlist.events import publish_slot_released
 from modules.waitlist.offers import mark_booked
 
 logger = structlog.get_logger()
@@ -182,6 +198,25 @@ def resolve_payment_requirement(
             )
         return False
     return viable  # "auto"
+
+
+async def require_recent_client_otp(
+    db: AsyncSession, *, store_id: str, phone: str
+) -> None:
+    is_verified = await OtpService(db).is_recently_verified(
+        store_id=store_id, phone=phone
+    )
+    if not is_verified:
+        raise OTPException(
+            message="Se requiere validar OTP antes de autogestionar turnos",
+            error_code="OTP_VERIFICATION_REQUIRED",
+            http_status=status.HTTP_403_FORBIDDEN,
+        )
+
+
+def now_compatible_with(value: datetime) -> datetime:
+    now = datetime.now(timezone.utc)
+    return now if value.tzinfo else now.replace(tzinfo=None)
 
 
 def decide(
@@ -673,6 +708,302 @@ class PublicBookingService:
         except Exception as exc:
             await self.db.rollback()
             logger.warning("waitlist_mark_booked_failed", error_type=type(exc).__name__)
+
+    # ------------------------------------------------------------------
+    # Autogestion del cliente
+    # ------------------------------------------------------------------
+
+    async def cancel_by_client(
+        self, public_id: str, data: ClientCancelRequest
+    ) -> PublicBookingResponse:
+        """El cliente cancela su turno: commit -> invalidacion -> respuesta."""
+        appointment, client = await self._lock_client_appointment(public_id, data.phone)
+        # Mismo guard que la via administrativa: un turno con cobro vivo solo
+        # se suelta por release(), que vence antes la preferencia en MP.
+        reject_cancellation_while_awaiting_payment(appointment)
+        await self._check_cancellation_window(appointment)
+
+        appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        publish_slot_released(
+            self.db,
+            store_id=appointment.store_id,
+            staff_id=appointment.staff_id,
+            service_id=appointment.service_id,
+            appointment_id=appointment.id,
+            starts_at=appointment.starts_at,
+            ends_at=appointment.ends_at,
+            reason="client_cancelled",
+        )
+        service = await self._notify_owner_of_cancellation(
+            appointment, client, data.reason
+        )
+        await self.db.commit()
+        await self.db.refresh(appointment)
+
+        await invalidate_availability(
+            self.cache, appointment.store_id, appointment.starts_at
+        )
+        stf_res = await self.db.execute(
+            select(Staff).where(Staff.id == appointment.staff_id)
+        )
+        return _self_service_response(
+            appointment, service, stf_res.scalar_one_or_none(), client, data.phone
+        )
+
+    async def reschedule_by_client(
+        self, public_id: str, data: ClientRescheduleRequest
+    ) -> PublicBookingResponse:
+        """Reprograma: cancela el original y crea el nuevo en un savepoint.
+
+        El llamador maneja la idempotencia (reserva, liberacion y replay).
+        """
+        original, client = await self._lock_client_appointment(public_id, data.phone)
+        # Reprogramar cancela el turno original: le corresponde el mismo guard.
+        reject_cancellation_while_awaiting_payment(original)
+        await self._reject_paid_reschedule(original)
+        service, staff = await self._service_and_staff(original)
+        new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
+        await self._check_new_slot(original, staff, data.new_starts_at, new_ends_at)
+
+        async with self.db.begin_nested():
+            original.apply_status_transition(AppointmentStatus.CANCELLED)
+            publish_slot_released(
+                self.db,
+                store_id=original.store_id,
+                staff_id=original.staff_id,
+                service_id=original.service_id,
+                appointment_id=original.id,
+                starts_at=original.starts_at,
+                ends_at=original.ends_at,
+                reason="client_rescheduled",
+            )
+            new_appointment = _rescheduled_copy(
+                original, client, service, data, new_ends_at
+            )
+            self.db.add(new_appointment)
+            await self.db.flush()
+
+        await self.db.commit()
+        await self.db.refresh(new_appointment)
+
+        await invalidate_availability(
+            self.cache, original.store_id, original.starts_at, data.new_starts_at
+        )
+        return _self_service_response(
+            new_appointment, service, staff, client, data.phone
+        )
+
+    async def _lock_client_appointment(
+        self, public_id: str, phone: str
+    ) -> tuple[Appointment, User]:
+        """Lock del turno (TOCTOU), titularidad y OTP, en ese orden.
+
+        Titularidad + OTP ANTES de cualquier chequeo que revele estado del
+        turno: sin esto, quien solo conozca el public_id sabria si esta
+        esperando pago (fuga menor de estado).
+        """
+        appt_res = await self.db.execute(
+            select(Appointment).where(Appointment.id == public_id).with_for_update()
+        )
+        appointment = appt_res.scalar_one_or_none()
+        if not appointment:
+            raise AppointmentNotFoundException(public_id=public_id)
+
+        client = await self.repo.get_client_by_phone(appointment.store_id, phone)
+        if not client or client.id != appointment.client_id:
+            raise PermissionDeniedException(
+                action="El teléfono no coincide con el titular del turno"
+            )
+
+        await require_recent_client_otp(
+            self.db, store_id=appointment.store_id, phone=phone
+        )
+        return appointment, client
+
+    async def _check_cancellation_window(self, appointment: Appointment) -> None:
+        store = await self.repo.get_store_by_id(appointment.store_id)
+        cancellation_hours = getattr(store, "cancellation_hours", 2) if store else 2
+        hours_until = (
+            appointment.starts_at - now_compatible_with(appointment.starts_at)
+        ).total_seconds() / 3600
+        if hours_until < cancellation_hours:
+            raise AppException(
+                message=f"Solo se puede cancelar con {cancellation_hours}h de anticipación",
+                http_status=409,
+                error_code="CANCELLATION_WINDOW_EXPIRED",
+            )
+
+    async def _notify_owner_of_cancellation(
+        self, appointment: Appointment, client: User, reason: str | None
+    ) -> Service | None:
+        """Aviso al duenio por outbox; devuelve el servicio (se lee una vez).
+
+        La tienda se entera de que le cancelaron: antes el cliente cancelaba y
+        el dueno solo lo notaba mirando la agenda. Una sola lectura del
+        servicio: la usan el aviso y la respuesta (B1-21).
+        """
+        svc_res = await self.db.execute(
+            select(Service).where(Service.id == appointment.service_id)
+        )
+        service = svc_res.scalar_one_or_none()
+        aviso: dict[str, JsonValue] = {
+            "appointment_id": appointment.id,
+            "client_name": client.full_name or "Un cliente",
+            "service_name": getattr(service, "name", ""),
+            "starts_at": appointment.starts_at.isoformat(),
+        }
+        # El motivo que dejo el cliente viaja al aviso del duenio en una sola
+        # linea: sin CR/LF no puede partir la notificacion ni el mail (B1-23).
+        motivo = " ".join((reason or "").split())
+        if motivo:
+            aviso["reason"] = motivo
+        self.db.add(
+            OutboxMessage(
+                store_id=appointment.store_id,
+                event_type=NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value,
+                payload=aviso,
+            )
+        )
+        return service
+
+    async def _reject_paid_reschedule(self, original: Appointment) -> None:
+        # Un turno con pago acreditado no se reprograma desde el cliente: el
+        # Payment quedaria huerfano apuntando al turno cancelado y el nuevo
+        # apareceria como impago. Que lo maneje la tienda.
+        paid_res = await self.db.execute(
+            select(Payment.id).where(
+                Payment.appointment_id == original.id,
+                Payment.status.in_(
+                    [
+                        PaymentStatus.APPROVED.value,
+                        PaymentStatus.MANUAL_CONFIRMED.value,
+                    ]
+                ),
+            )
+        )
+        if paid_res.scalar_one_or_none() is not None:
+            raise AppException(
+                message=(
+                    "Este turno ya tiene un pago registrado; contactá a la tienda "
+                    "para reprogramarlo."
+                ),
+                http_status=status.HTTP_409_CONFLICT,
+                error_code="PAID_APPOINTMENT_RESCHEDULE_DENIED",
+            )
+
+    async def _service_and_staff(self, original: Appointment) -> tuple[Service, Staff]:
+        svc_res = await self.db.execute(
+            select(Service).where(Service.id == original.service_id)
+        )
+        service = svc_res.scalar_one_or_none()
+        if not service:
+            raise ServiceNotFoundException(identifier=str(original.service_id))
+
+        stf_res = await self.db.execute(
+            select(Staff).where(Staff.id == original.staff_id)
+        )
+        staff = stf_res.scalar_one_or_none()
+        if not staff:
+            raise StaffNotFoundException(identifier=str(original.staff_id))
+        return service, staff
+
+    async def _check_new_slot(
+        self,
+        original: Appointment,
+        staff: Staff,
+        new_starts_at: datetime,
+        new_ends_at: datetime,
+    ) -> None:
+        """El nuevo horario respeta las MISMAS reglas que una reserva nueva.
+
+        Antelacion minima, agenda del profesional, bloqueos y choques. Horario,
+        bloqueo y choque salen de la MISMA funcion que el alta publica (B1-19);
+        el lock del profesional y la relectura bajo lock quedan en el
+        repositorio (regla 4); el turno que se mueve no choca consigo mismo.
+        """
+        new_starts_utc = (
+            new_starts_at
+            if new_starts_at.tzinfo
+            else new_starts_at.replace(tzinfo=timezone.utc)
+        )
+        store = await self.repo.get_store_by_id(original.store_id)
+        notice_hours = getattr(store, "min_booking_notice_hours", 2) or 0
+        if new_starts_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
+            raise BookingNoticeException(notice_hours)
+        rechazo = await self.repo.staff_can_take_range(
+            staff.id,
+            new_starts_at,
+            new_ends_at,
+            buffer_minutes=getattr(store, "buffer_minutes", 0) or 0,
+            exclude_appointment_id=original.id,
+        )
+        if rechazo is RangeRejection.OUT_OF_SCHEDULE:
+            raise AppException(
+                message="El profesional no atiende en ese horario",
+                http_status=status.HTTP_409_CONFLICT,
+                error_code="OUT_OF_SCHEDULE",
+            )
+        if rechazo is RangeRejection.BLOCKED:
+            raise AppException(
+                message="Ese horario esta bloqueado en la agenda",
+                http_status=status.HTTP_409_CONFLICT,
+                error_code="SCHEDULE_BLOCKED",
+            )
+        if rechazo is RangeRejection.TAKEN:
+            raise AppointmentConflictException()
+
+
+def _rescheduled_copy(
+    original: Appointment,
+    client: User,
+    service: Service,
+    data: ClientRescheduleRequest,
+    new_ends_at: datetime,
+) -> Appointment:
+    return Appointment(
+        store_id=original.store_id,
+        staff_id=original.staff_id,
+        service_id=original.service_id,
+        client_id=original.client_id,
+        starts_at=data.new_starts_at,
+        ends_at=new_ends_at,
+        duration_minutes=service.duration_minutes,
+        # Preservar el precio congelado del turno original.
+        price_amount=original.price_amount,
+        client_name=client.full_name or client.email,
+        client_email=client.email,
+        client_phone=client.phone,
+        notes=original.notes,
+        intake_answers=original.intake_answers or {},
+        idempotency_key=data.idempotency_key,
+        # Mismo criterio que el alta publica para un turno sin cobro online:
+        # retiene el horario hasta que empieza y despues lo levanta el job de
+        # expiracion si nadie lo confirmo (B1-22).
+        expires_at=data.new_starts_at,
+    )
+
+
+def _self_service_response(
+    appointment: Appointment,
+    service: Service | None,
+    staff: Staff | None,
+    client: User,
+    phone: str,
+) -> PublicBookingResponse:
+    return PublicBookingResponse(
+        public_id=appointment.public_id,
+        service_id=service.public_id if service else str(appointment.service_id),
+        service_name=service.name if service else "",
+        staff_id=staff.public_id if staff else str(appointment.staff_id),
+        staff_name=staff.display_name if staff else "",
+        starts_at=appointment.starts_at,
+        ends_at=appointment.ends_at,
+        status=appointment.status,
+        client_name=client.full_name or "Cliente",
+        client_phone=phone,
+        notes=appointment.notes,
+        custom_fields=appointment.intake_answers or {},
+    )
 
 
 def _booking_response(

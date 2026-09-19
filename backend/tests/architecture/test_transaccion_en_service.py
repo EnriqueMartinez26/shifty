@@ -20,7 +20,8 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 # Modulos que ya migraron al patron de `appointments`: el router no commitea.
-MODULOS_MIGRADOS = ("ledger", "promotions")
+# public_api: B1-12 (2026-09-19), la reserva y la autogestion del portal.
+MODULOS_MIGRADOS = ("ledger", "promotions", "public_api")
 
 
 def _llamadas_a_commit(path: Path) -> list[int]:
