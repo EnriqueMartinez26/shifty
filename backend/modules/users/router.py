@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import AppException, UserNotFoundException
 from core.database import get_db
+from core.roles import assert_can_change_access, assert_can_grant_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.users.model import User
@@ -25,6 +26,8 @@ async def create_user(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
+    # Regla 16: un admin de tienda no da de alta a otro admin (B3-02).
+    assert_can_grant_role(admin, data.role)
     try:
         return UserResponse.model_validate(
             await UserService(db).create(data.model_dump(), admin.store_id)
@@ -54,6 +57,7 @@ async def list_users(
         role=role,
         limit=limit,
         offset=offset,
+        include_global_admins=admin.is_global_admin,
     )
     return [UserResponse.model_validate(user) for user in users]
 
@@ -65,7 +69,9 @@ async def get_user(
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
     repo = UserRepository(db)
-    user = await repo.get_by_public_id(public_id, admin.store_id)
+    user = await repo.get_by_public_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not user:
         raise UserNotFoundException(public_id)
     return UserResponse.model_validate(user)
@@ -89,9 +95,17 @@ async def update_user(
         )
 
     repo = UserRepository(db)
-    user = await repo.get_by_public_id(public_id, admin.store_id)
+    user = await repo.get_by_public_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not user:
         raise UserNotFoundException(public_id)
+    # Regla 16: un admin de tienda no asciende a nadie a admin (B3-02).
+    assert_can_grant_role(admin, data.role, current=user.role)
+    # S-15: ni clave, ni estado, ni rol de OTRO admin de tienda.
+    assert_can_change_access(
+        admin, user, password=data.password, is_active=data.is_active, role=data.role
+    )
 
     try:
         return UserResponse.model_validate(
@@ -115,9 +129,13 @@ async def delete_user(
         )
 
     repo = UserRepository(db)
-    user = await repo.get_by_public_id(public_id, admin.store_id)
+    user = await repo.get_by_public_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not user:
         raise UserNotFoundException(public_id)
+    # La baja es un cambio de estado: tampoco sobre OTRO admin de tienda (S-15).
+    assert_can_change_access(admin, user, is_active=False)
 
     await UserService(db).soft_delete(user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

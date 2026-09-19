@@ -298,6 +298,13 @@ class StaffRepository:
         await self.db.flush()
         return staff
 
+    async def get_linked_user(self, staff: Staff) -> User | None:
+        """Cuenta de login del profesional (Staff.id == User.id). Un recurso no tiene."""
+        if getattr(staff, "kind", STAFF_KIND_PERSON) != STAFF_KIND_PERSON:
+            return None
+        result = await self.db.execute(select(User).where(User.id == staff.id))
+        return result.scalar_one_or_none()
+
     async def soft_delete(self, staff: Staff) -> None:
         """Baja sin commit (lo hace StaffService)."""
         staff.is_active = False
