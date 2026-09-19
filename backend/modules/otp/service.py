@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import re
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -15,8 +16,9 @@ from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from core.redis import get_redis
 from core.security import hash_otp_code
-from modules.notifications.tasks import send_email
+from modules.notifications.tasks import is_deliverable_email, send_email
 from modules.otp.model import OtpVerification
+from modules.users.model import User, UserRole
 
 logger = structlog.get_logger()
 
@@ -85,9 +87,42 @@ async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> Non
         logger.warning("otp_email_dispatch_failed")
 
 
+# Agenda un trabajo para DESPUES de la respuesta: ``BackgroundTasks.add_task``
+# en el router (mismo mecanismo que auth/router.py). Firma: (func, *args).
+DispatchScheduler = Callable[..., None]
+
+
+def _same_email(typed: str | None, registered: str) -> bool:
+    if not typed:
+        return False
+    return typed.strip().lower() == registered.strip().lower()
+
+
 class OtpService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _registered_client_email(
+        self, store_id: str, normalized_phone: str
+    ) -> str | None:
+        """Email entregable del cliente de la tienda duenio de ese telefono.
+
+        La reserva publica guarda el telefono del cliente solo con digitos;
+        ``normalize_phone`` le agrega ``+``. Se buscan las dos formas.
+        """
+        digits = normalized_phone.lstrip("+")
+        result = await self.db.execute(
+            select(User.email)
+            .where(
+                User.store_id == store_id,
+                User.role == UserRole.CLIENT.value,
+                User.phone.in_([digits, normalized_phone]),
+            )
+            .order_by(User.created_at.desc())
+            .limit(1)
+        )
+        registered = result.scalar_one_or_none()
+        return registered if is_deliverable_email(registered) else None
 
     async def request_code(
         self,
@@ -97,7 +132,12 @@ class OtpService:
         channel: str,
         email: str | None = None,
         store_name: str = "",
+        schedule_dispatch: DispatchScheduler,
     ) -> dict[str, object]:
+        """Genera y guarda el codigo; el envio lo corre ``schedule_dispatch``
+        despues de la respuesta (B4-01, 2026-09-19): la respuesta no espera
+        al SMTP y su tiempo no depende del destino. Obligatorio a proposito,
+        para que ningun llamador vuelva a mandar en linea."""
         normalized_phone = normalize_phone(phone)
         if channel not in {"email", "whatsapp", "sms"}:
             raise ValidationException("Canal invalido")
@@ -114,6 +154,23 @@ class OtpService:
         await _consume_budget(
             "req", store_id, normalized_phone, settings.OTP_MAX_REQUESTS_PER_HOUR
         )
+
+        # B4-01 (2026-09-18): el codigo prueba posesion del EMAIL al que llega
+        # y la marca queda en el TELEFONO. Con el email del payload, cualquiera
+        # "verificaba" el telefono de otro. Si el telefono ya es de un cliente
+        # de la tienda con email entregable, el codigo solo va a ESE email y el
+        # tipeado tiene que coincidir; si no coincide, respuesta neutra con la
+        # misma forma y el mismo trabajo de base, y nadie recibe el codigo.
+        # Telefono nuevo o cliente sin email entregable: como siempre.
+        destination = email
+        withheld = False
+        if channel == "email":
+            registered = await self._registered_client_email(store_id, normalized_phone)
+            if registered is not None:
+                withheld = not _same_email(email, registered)
+                destination = None if withheld else registered
+                if withheld:
+                    logger.info("otp_request_email_mismatch_for_known_client")
 
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
@@ -147,15 +204,20 @@ class OtpService:
         await self.db.commit()
         await self.db.refresh(otp)
 
-        if channel == "email" and email:
-            # Fuera de la transaccion (ya commiteada) y best-effort: la
-            # respuesta es la misma haya salido o no, para no revelar si el
-            # telefono existe ni convertir el SMTP en un oraculo.
-            await _dispatch_code_by_email(email, code, store_name)
+        if channel == "email" and destination:
+            # Despues del commit (el codigo ya esta guardado cuando llega el
+            # mail) y fuera del request: la respuesta es la misma, y tarda lo
+            # mismo, haya envio o no, para no revelar si el telefono es
+            # cliente ni convertir el SMTP en un oraculo. El envio no toca la
+            # base; un fallo se loguea en _dispatch_code_by_email.
+            schedule_dispatch(_dispatch_code_by_email, destination, code, store_name)
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:
-            response["debug_code"] = code
+            # Retenido: un codigo de mentira con la misma forma y siempre
+            # distinto del guardado, que no lo conoce nadie (ni en debug).
+            decoy = (int(code) + 1 + secrets.randbelow(999_999)) % 1_000_000
+            response["debug_code"] = f"{decoy:06d}" if withheld else code
         return response
 
     async def verify_code(

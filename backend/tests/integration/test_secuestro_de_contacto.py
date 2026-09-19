@@ -179,6 +179,8 @@ async def test_con_el_telefono_verificado_por_otp_si_se_adopta_el_email(
         channel="email",
         email="real@example.com",
         store_name="Demo",
+        # El envio (post-respuesta desde B4-01) no importa aca.
+        schedule_dispatch=lambda *args: None,
     )
     verificado = await servicio_otp.verify_code(
         store_id=tienda.store_id,

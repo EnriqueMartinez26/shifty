@@ -98,7 +98,12 @@ async def test_verificaciones_exitosas_o_no_consumen_el_presupuesto_y_frenan(
 
     async def pedir() -> str:
         respuesta = await servicio.request_code(
-            store_id=TIENDA, phone=TELEFONO, channel="email", email="c@example.com"
+            store_id=TIENDA,
+            phone=TELEFONO,
+            channel="email",
+            email="c@example.com",
+            # El envio (post-respuesta desde B4-01) no importa aca.
+            schedule_dispatch=lambda *args: None,
         )
         return str(respuesta["debug_code"])
 

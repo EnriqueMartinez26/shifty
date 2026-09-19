@@ -38,8 +38,13 @@ async def test_el_codigo_llega_por_email_y_verifica(
         client, slug="otp-mail", email="otp-mail@example.com"
     )
 
+    # B4-01 (2026-09-19): el envio corre como background task, despues de la
+    # respuesta. Sin ``x-raw-response`` para que el desenvuelto de tests de
+    # core/router.py no descarte las background tasks (el camino normal, el
+    # de produccion, las conserva).
     pedido = await client.post(
         "/public/otp/request",
+        headers={"x-raw-response": "false"},
         json={
             "store_public_id": store,
             "phone": "+54 9 11 5555-0042",
@@ -52,7 +57,7 @@ async def test_el_codigo_llega_por_email_y_verifica(
     destino, asunto, cuerpo = buzon.enviados[0]
     assert destino == "cliente@example.com"
     assert "codigo" in asunto.lower()
-    codigo = pedido.json()["debug_code"]  # expuesto solo en tests/desarrollo
+    codigo = pedido.json()["data"]["debug_code"]  # solo en tests/desarrollo
     assert codigo in cuerpo
 
     verificado = await client.post(
