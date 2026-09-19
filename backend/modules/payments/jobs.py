@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 from core.availability_cache import invalidate_availability
 from core.database import _apply_tenant_context
 from core.redis import get_redis
+from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
@@ -40,8 +42,10 @@ from modules.users.model import User, UserRole
 from modules.waitlist.events import EVENT_SLOT_RELEASED, publish_slot_released
 from modules.waitlist.offers import ReleasedSlot, offer_released_slot
 from modules.payments.service import (
+    EVENT_PREFERENCE_EXPIRE,
     GatewayConfigs,
     PersistRefresh,
+    expire_mercadopago_preference,
     fetch_mercadopago_payment,
     load_gateway_configs,
     stamp_payment_from_status,
@@ -53,6 +57,41 @@ from modules.payments.service import (
 RECONCILIATION_LOOKBACK_DAYS = 30
 
 logger = structlog.get_logger()
+
+# Vencimiento del link de MP en dos fases (B1-04). El lote del outbox RECLAMA
+# el evento (processed_at provisorio + este marcador en ``error``) y commitea;
+# la llamada a MP corre despues, sin lock ni transaccion abierta; el resultado
+# se anota en una transaccion nueva (exito: se limpia el marcador; fallo:
+# vuelve a la cola con register_failure y su techo de B2-12). Si el worker
+# muere entre el reclamo y el resultado, el reclamo vence a los
+# PREFERENCE_EXPIRE_LEASE y la corrida siguiente lo retoma: un crash solo
+# demora el reintento, no deja el link vivo. El lease tiene que ser mayor que
+# lo que puede tardar una corrida (timeout HTTP de MP por evento del lote).
+PREFERENCE_EXPIRE_CLAIM = "claimed:" + EVENT_PREFERENCE_EXPIRE
+PREFERENCE_EXPIRE_LEASE = timedelta(minutes=10)
+# Peor caso de un reclamo: el timeout de httpx de cada request a MP
+# (``_perform_mercadopago_request`` y el token OAuth usan 20 s) por las tres
+# requests que puede hacer un vencimiento (PUT con 401, refresh OAuth, PUT de
+# nuevo). El tope de reclamos por corrida hace que el peor caso de la corrida
+# entera, mas un margen para leer la config y anotar resultados, entre en el
+# lease: ``MAX_CLAIMS * WORST_CASE_PER_CLAIM + MARGIN < LEASE`` (lo verifica
+# test_el_peor_caso_de_una_corrida_entra_en_el_lease). Lo que no entra en una
+# corrida espera a la siguiente, un minuto despues.
+MP_REQUEST_TIMEOUT = timedelta(seconds=20.0)
+PREFERENCE_EXPIRE_WORST_CASE_PER_CLAIM = 3 * MP_REQUEST_TIMEOUT
+PREFERENCE_EXPIRE_MARGIN = timedelta(minutes=1)
+PREFERENCE_EXPIRE_MAX_CLAIMS = 8
+
+
+@dataclass(frozen=True)
+class _PreferenceExpireClaim:
+    message_id: str
+    store_id: str
+    preference_id: str
+    # Instante del reclamo: si al anotar el resultado ``processed_at`` ya no
+    # es este, otra corrida lo retomo y el resultado no es de esta.
+    claimed_at: datetime
+
 
 # Mail listo para mandar DESPUES del commit del lote (regla 5). Adentro de la
 # transaccion quedaria bajo el FOR UPDATE SKIP LOCKED y, si Celery mata la
@@ -86,6 +125,10 @@ async def process_outbox_batch(
     filters: list[ColumnElement[bool]] = [
         OutboxMessage.processed_at.is_(None),
         OutboxMessage.is_active.is_(True),
+        # Los vencimientos de links de MP tienen su propio paso (abajo): asi
+        # los mails de este lote no esperan a Mercado Pago (B1-04). Es un
+        # predicado mas sobre las filas del indice parcial ix_outbox_pending.
+        OutboxMessage.event_type != EVENT_PREFERENCE_EXPIRE,
     ]
     if store_id:
         filters.append(OutboxMessage.store_id == store_id)
@@ -179,7 +222,198 @@ async def process_outbox_batch(
             logger.warning(
                 "outbox_email_skipped", error_type=type(exc).__name__, **contexto
             )
-    return {"processed": processed, "failed": failed, "inspected": len(messages)}
+    # Despues de los mails, el paso propio de los vencimientos de MP.
+    vencimientos = await _claim_and_expire_preferences(db, store_id=store_id)
+    return {
+        "processed": processed + vencimientos["processed"],
+        "failed": failed + vencimientos["failed"],
+        "inspected": len(messages) + vencimientos["inspected"],
+    }
+
+
+async def _claim_and_expire_preferences(
+    db: AsyncSession, *, store_id: str | None = None
+) -> dict[str, int]:
+    """Vence los links de MP de ``payment.preference.expire`` (B1-04).
+
+    Paso propio, separado del lote comun para que los mails de ese lote no
+    esperen a Mercado Pago. Reclamo y llamadas quedan pegados, asi el lease
+    se cuenta desde justo antes de llamar:
+
+    1. Toma con ``FOR UPDATE SKIP LOCKED`` hasta PREFERENCE_EXPIRE_MAX_CLAIMS
+       eventos: primero los reclamos con lease vencido (worker muerto), despues
+       los pendientes. Dos consultas: los pendientes usan el indice parcial
+       ``ix_outbox_pending``; un ``OR`` con los reclamos lo rompia.
+    2. Marca el reclamo y commitea.
+    3. Llama a MP sin lock ni transaccion abierta.
+    4. Anota el resultado en una transaccion nueva, releyendo cada fila.
+    """
+    now = datetime.now(timezone.utc)
+    alcance: list[ColumnElement[bool]] = [
+        OutboxMessage.event_type == EVENT_PREFERENCE_EXPIRE,
+        OutboxMessage.is_active.is_(True),
+    ]
+    if store_id:
+        alcance.append(OutboxMessage.store_id == store_id)
+    retomados = list(
+        (
+            await db.execute(
+                select(OutboxMessage)
+                .where(
+                    *alcance,
+                    OutboxMessage.error == PREFERENCE_EXPIRE_CLAIM,
+                    OutboxMessage.processed_at < now - PREFERENCE_EXPIRE_LEASE,
+                )
+                .order_by(OutboxMessage.processed_at.asc())
+                .limit(PREFERENCE_EXPIRE_MAX_CLAIMS)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    pendientes: list[OutboxMessage] = []
+    if len(retomados) < PREFERENCE_EXPIRE_MAX_CLAIMS:
+        pendientes = list(
+            (
+                await db.execute(
+                    select(OutboxMessage)
+                    .where(*alcance, OutboxMessage.processed_at.is_(None))
+                    .order_by(OutboxMessage.created_at.asc())
+                    .limit(PREFERENCE_EXPIRE_MAX_CLAIMS - len(retomados))
+                    .with_for_update(skip_locked=True)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    mensajes = retomados + pendientes
+    if not mensajes:
+        await db.commit()
+        return {"processed": 0, "failed": 0, "inspected": 0}
+
+    reclamos: list[_PreferenceExpireClaim] = []
+    procesados = 0
+    abandonados = 0
+    for message in mensajes:
+        reclamo = _claim_preference_expire(message, now)
+        if reclamo is not None:
+            reclamos.append(reclamo)
+        elif message.processed_at is not None:
+            # Agoto los intentos con reclamos vencidos: queda con error.
+            abandonados += 1
+        else:
+            # Sin preference_id no hay link que vencer.
+            message.processed_at = now
+            message.error = None
+            procesados += 1
+    await db.commit()
+
+    vencidos, fallidos = await _expire_claimed_preferences(db, reclamos)
+    return {
+        "processed": procesados + vencidos,
+        "failed": abandonados + fallidos,
+        "inspected": len(mensajes),
+    }
+
+
+def _claim_preference_expire(
+    message: OutboxMessage, now: datetime
+) -> _PreferenceExpireClaim | None:
+    """Marca el reclamo del vencimiento, sin llamar a nadie.
+
+    ``processed_at`` provisorio saca el evento de las otras corridas y el
+    marcador en ``error`` lo distingue de uno procesado de verdad (el lease
+    lo devuelve si el worker muere). Un reclamo vencido cuenta como intento
+    fallido: con el techo de B2-12 alcanzado se abandona (devuelve None y
+    queda procesado con error). Sin datos para llamar a MP devuelve None y
+    no toca nada: no hay link que vencer.
+    """
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    preference_id = str(payload.get("preference_id") or "")
+    if not preference_id or not message.store_id:
+        return None
+    if message.error == PREFERENCE_EXPIRE_CLAIM:
+        message.processed_at = None
+        message.register_failure("reclamo vencido sin resultado")
+        if message.processed_at is not None:
+            return None
+    message.processed_at = now
+    message.error = PREFERENCE_EXPIRE_CLAIM
+    return _PreferenceExpireClaim(
+        message_id=message.id,
+        store_id=message.store_id,
+        preference_id=preference_id,
+        claimed_at=now,
+    )
+
+
+async def _expire_claimed_preferences(
+    db: AsyncSession, reclamos: list[_PreferenceExpireClaim]
+) -> tuple[int, int]:
+    """Vence los links ya reclamados (y commiteados) y anota el resultado.
+
+    La config del gateway se lee antes y la transaccion de lectura se cierra
+    ANTES del HTTP (mismo patron que ``_expire_unpaid_appointments``, S-02):
+    ninguna llamada a MP corre con lock ni con transaccion abierta. El
+    resultado se escribe en una transaccion nueva. Devuelve (vencidos,
+    fallidos).
+    """
+    if not reclamos:
+        return 0, 0
+    configs = await load_gateway_configs(db, (r.store_id for r in reclamos))
+    await AsyncSession.commit(db)
+    errores: dict[str, tuple[_PreferenceExpireClaim, str | None]] = {}
+    for reclamo in reclamos:
+        try:
+            await expire_mercadopago_preference(
+                db,
+                store_id=reclamo.store_id,
+                preference_id=reclamo.preference_id,
+                configs=configs,
+                persist_refresh=partial(_persist_refresh_in_short_transaction, db),
+            )
+            errores[reclamo.message_id] = (reclamo, None)
+        except Exception as exc:
+            logger.warning(
+                "preference_expire_failed",
+                store_id=reclamo.store_id,
+                message_id=reclamo.message_id,
+                error_type=type(exc).__name__,
+            )
+            errores[reclamo.message_id] = (reclamo, f"{type(exc).__name__}: {exc}")
+
+    await _apply_tenant_context(db)
+    vencidos = 0
+    fallidos = 0
+    for message_id, (reclamo, error) in errores.items():
+        # Se relee DE LA BASE y con lock: ``db.get`` devolvia la instancia en
+        # memoria (expire_on_commit=False) y nunca veia que otra corrida lo
+        # habia retomado (revision de B1-04).
+        message = (
+            await db.execute(
+                select(OutboxMessage)
+                .where(OutboxMessage.id == message_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if (
+            message is None
+            or message.error != PREFERENCE_EXPIRE_CLAIM
+            or message.processed_at is None
+            or ensure_utc_aware(message.processed_at) != reclamo.claimed_at
+        ):
+            continue  # ya no es nuestro reclamo
+        if error is None:
+            message.error = None
+            vencidos += 1
+        else:
+            message.processed_at = None
+            message.register_failure(error)
+            fallidos += 1
+    await db.commit()
+    return vencidos, fallidos
 
 
 def _build_store_notification(message: OutboxMessage) -> Notification | None:
