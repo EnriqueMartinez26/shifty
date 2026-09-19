@@ -898,14 +898,8 @@ async def _upsert_payment_preference(
         )
         db.add(payment)
         await db.flush()
+        # Sin evento payment.preference.created: nadie lo consumia (B2-17).
         should_refresh_provider_link = True
-        db.add(
-            OutboxMessage(
-                store_id=store_id,
-                event_type="payment.preference.created",
-                payload={"appointment_id": appointment.id, "payment_id": payment.id},
-            )
-        )
 
     if create_provider_link and should_refresh_provider_link:
         await _attach_provider_link(

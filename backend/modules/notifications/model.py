@@ -12,6 +12,11 @@ class NotificationType(str, enum.Enum):
 
     APPOINTMENT_PENDING_CONFIRMATION = "appointment.pending_confirmation"
     PAYMENT_APPROVED = "payment.approved"
+    # Pago acreditado de un turno que ya se habia liberado (S-16): la plata
+    # entro pero el turno no revive; el dueno decide devolverla o reasignarla.
+    PAYMENT_ON_RELEASED_APPOINTMENT = "payment.received_on_released_appointment"
+    # Registro de un reembolso hecho fuera de Shifty (B2-05 / B2-17).
+    PAYMENT_REFUNDED = "payment.refunded"
     WAITLIST_SLOT_RELEASED = "waitlist.slot_released"
     SUBSCRIPTION_EXPIRING = "subscription.expiring"
     APPOINTMENT_CANCELLED_BY_CLIENT = "appointment.cancelled_by_client"
