@@ -127,6 +127,70 @@ class AppointmentRepository:
             select(Staff).where(Staff.id == staff_id).with_for_update()
         )
 
+    async def lock_and_read_range(
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        buffer_minutes: int,
+        exclude_appointment_id: str | None = None,
+    ) -> tuple[StaffBlock | None, Appointment | None]:
+        """Choca este rango con la agenda del profesional? Unica respuesta (S-07).
+
+        Toma el ``FOR UPDATE`` del profesional y, BAJO el lock (regla 4), lee
+        el primer bloqueo activo que solapa y el primer turno activo que choca
+        (ensanchado por ``buffer_minutes`` a cada lado, sin contar
+        ``exclude_appointment_id``: el turno que se esta moviendo). Devuelve
+        los dos; que hacer con ellos (sugerencia, codigo de error) es de cada
+        llamador. La usan el panel (``AppointmentService``) y el portal
+        (``PublicRepository``), que antes tenian cada uno su copia.
+        """
+        await self.lock_staff_row(staff_id)
+        block = await self.get_overlapping_block(staff_id, starts_at, ends_at)
+        conflict = await self.get_conflicting_appointment(
+            staff_id,
+            starts_at,
+            ends_at,
+            exclude_appointment_id=exclude_appointment_id,
+            buffer_minutes=buffer_minutes,
+        )
+        return block, conflict
+
+    async def lock_staff_rows(self, staff_ids: list[str]) -> None:
+        """``FOR UPDATE`` sobre varios profesionales, en orden total por id.
+
+        Una sola sentencia ``... WHERE id IN (...) ORDER BY id FOR UPDATE``:
+        Postgres toma los locks en el orden de salida, asi que dos
+        transacciones que lockean conjuntos solapados nunca se esperan en
+        ciclo (S-11). Lockearlos de a uno en el orden de otra consulta (sin
+        ``ORDER BY``) permitia el deadlock entre dos altas de bloqueos.
+
+        Orden de locks vigente y riesgo residual (S-18, documentado; no se
+        reordena):
+
+        - Alta de bloqueos: profesionales (aca, por id) -> turnos del rango
+          (``list_active_overlapping(lock=True)``).
+        - Reprogramar (panel y cliente): turno original -> profesional. No se
+          invierte porque el estado del turno se valida bajo su lock antes de
+          tocar la agenda; cambiarlo cambia el orden de validacion.
+        - Alta publica: un profesional por vez en orden de desempate; solo
+          toma un segundo si el primero falla la relectura bajo lock.
+
+        Si una reprogramacion de un turno que cae en el rango se cruza con un
+        alta de bloqueos, o el segundo lock del alta publica con un cierre de
+        tienda, Postgres detecta el ciclo y aborta una transaccion (40P01):
+        el handler de ``main.py`` responde 409 neutro y el cliente reintenta.
+        """
+        if not staff_ids:
+            return
+        await self.db.execute(
+            select(Staff.id)
+            .where(Staff.id.in_(staff_ids))
+            .order_by(Staff.id)
+            .with_for_update()
+        )
+
     async def get_conflicting_appointment(
         self,
         staff_id: str,
@@ -143,9 +207,10 @@ class AppointmentRepository:
         preparación): se ensancha la ventana del turno nuevo ese tanto a cada
         lado, de modo que quede al menos ``buffer`` de separación con cualquier
         turno vecino.
-        """
-        from sqlalchemy.orm import joinedload
 
+        Sin ``joinedload(service)``: los llamadores solo leen ``starts_at`` y
+        ``ends_at`` del choque (S-07; el eager load armaba un JOIN inutil).
+        """
         # Filtro base: mismo staff y no cancelado
         conditions = [
             Appointment.staff_id == staff_id,
@@ -165,7 +230,6 @@ class AppointmentRepository:
 
         query = (
             select(Appointment)
-            .options(joinedload(Appointment.service))
             .where(and_(*conditions))
             .order_by(Appointment.starts_at.asc())
             .limit(1)

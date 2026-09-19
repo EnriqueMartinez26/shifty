@@ -6,7 +6,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import structlog
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm.exc import StaleDataError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -236,6 +236,18 @@ async def validation_exception_handler(
     )
 
 
+def _concurrent_modification_response() -> JSONResponse:
+    return error_response(
+        status_code=409,
+        error_code="CONCURRENT_MODIFICATION",
+        message=(
+            "Alguien mas modifico este registro mientras lo editabas. "
+            "Actualiza la vista y volve a intentar."
+        ),
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.exception_handler(StaleDataError)
 async def stale_data_exception_handler(
     request: Request, exc: StaleDataError
@@ -249,15 +261,46 @@ async def stale_data_exception_handler(
     logger.info(
         "stale_data_conflict", path=str(request.url.path), method=request.method
     )
-    return error_response(
-        status_code=409,
-        error_code="CONCURRENT_MODIFICATION",
-        message=(
-            "Alguien mas modifico este registro mientras lo editabas. "
-            "Actualiza la vista y volve a intentar."
-        ),
-        headers={"Cache-Control": "no-store"},
-    )
+    return _concurrent_modification_response()
+
+
+# SQLSTATE de Postgres que son carreras legitimas entre transacciones, no
+# fallos del servidor: deadlock_detected y serialization_failure.
+_CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001"})
+
+
+def _sqlstate(exc: DBAPIError) -> str | None:
+    """SQLSTATE del error del driver (asyncpg: ``sqlstate``; psycopg: ``pgcode``)."""
+    candidatos = [exc.orig, getattr(exc.orig, "__cause__", None)]
+    for error in candidatos:
+        for atributo in ("sqlstate", "pgcode"):
+            valor = getattr(error, atributo, None)
+            if isinstance(valor, str):
+                return valor
+    return None
+
+
+@app.exception_handler(DBAPIError)
+async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
+    """Deadlock o falla de serializacion de Postgres: 409 neutro (S-18).
+
+    Postgres ya aborto la transaccion; el handler solo responde. Quedan dos
+    cruces de locks posibles (reprogramar turno -> profesional contra el alta
+    de bloqueos profesionales -> turnos, y el segundo lock del alta publica
+    contra un cierre de tienda): son carreras entre dos actores, como el
+    optimistic locking, y el cliente reintenta. Sin detalles internos (regla
+    20). Cualquier otro error de base es un 500, como antes.
+    """
+    sqlstate = _sqlstate(exc)
+    if sqlstate in _CONCURRENCY_SQLSTATES:
+        logger.warning(
+            "db_concurrency_conflict",
+            path=str(request.url.path),
+            method=request.method,
+            sqlstate=sqlstate,
+        )
+        return _concurrent_modification_response()
+    return await unhandled_exception_handler(request, exc)
 
 
 @app.exception_handler(IntegrityError)
