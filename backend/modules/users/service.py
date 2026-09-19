@@ -4,10 +4,10 @@ Hasta el 2026-09-17 (B3-06) ``UserRepository`` commiteaba por su cuenta y no
 estaba en la lista de deuda declarada de CLAUDE.md. Ahora el repositorio solo
 hace ``flush`` y este service, como ``appointments``, cierra la transaccion.
 
-La traduccion de ``IntegrityError`` a ``ValueError`` se mueve tal cual desde el
-repositorio: el contrato HTTP (400 con el mismo mensaje) no cambia aca; si
-conviene dejar subir la ``IntegrityError`` al 409 neutro es la pregunta abierta
-de B3-12, que este movimiento no decide.
+En el alta, un ``IntegrityError`` ya no se traduce: sube al handler global de
+``main.py``, que responde 409 neutro (regla 20). Antes salia 400 "Ya existe un
+usuario con ese email" aunque la restriccion violada fuera otra (el telefono
+unico de cliente por tienda): una causa falsa (B3-12, 2026-09-18).
 """
 
 from __future__ import annotations
@@ -31,8 +31,10 @@ class UserService:
             user = await self.repo.create(data, store_id)
             await self.db.commit()
         except IntegrityError:
+            # Rollback para dejar la sesion sana y re-raise: el handler global
+            # responde 409 neutro sin nombrar la columna en conflicto.
             await self.db.rollback()
-            raise ValueError("Ya existe un usuario con ese email")
+            raise
         await self.db.refresh(user)
         return user
 
