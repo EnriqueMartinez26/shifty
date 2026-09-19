@@ -2,7 +2,7 @@
 
 Acceso puro a datos (CLAUDE.md §2): sin reglas de negocio ni commits. Cada
 consulta lleva el predicado ``store_id`` de la tienda del request aunque RLS
-ya filtre (defensa en profundidad, B5-01); vacio solo para el superadmin.
+ya filtre (defensa en profundidad, B5-01), tambien para el superadmin (B5-02).
 Los instantes se reciben aware en UTC y se comparan naive, como antes.
 """
 
@@ -32,16 +32,15 @@ _ACCREDITED_PAYMENT_STATUSES = [
 
 
 def _store_scope(
-    store_id: str | None, column: InstrumentedAttribute[str]
+    store_id: str, column: InstrumentedAttribute[str]
 ) -> list[ColumnElement[bool]]:
     """Predicado ``store_id`` para desempacar en el ``where`` de cada query.
 
     Defensa en profundidad sobre RLS (CLAUDE.md §2): toda consulta del panel
-    lleva la tienda del request aunque la politica de Postgres falle. Vacio
-    solo para el superadmin (ver core.roles.store_scope_for).
+    lleva la tienda del request aunque la politica de Postgres falle, tambien
+    para el superadmin, cuya sesion abre RLS (B5-02; ver
+    core.roles.store_scope_for).
     """
-    if store_id is None:
-        return []
     return [column == store_id]
 
 
@@ -53,7 +52,7 @@ def _starts_between(desde: datetime, hasta: datetime) -> list[ColumnElement[bool
 
 
 class DashboardRepository:
-    def __init__(self, db: AsyncSession, store_id: str | None) -> None:
+    def __init__(self, db: AsyncSession, store_id: str) -> None:
         self.db = db
         self.store_id = store_id
 

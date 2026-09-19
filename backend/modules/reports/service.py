@@ -331,13 +331,13 @@ def _professional_item(
 
 
 class ReportService:
-    def __init__(self, db: AsyncSession, *, store_id: str | None):
+    def __init__(self, db: AsyncSession, *, store_id: str):
         self.db = db
         # Tienda que acota TODAS las consultas del reporte: defensa en
         # profundidad sobre RLS (CLAUDE.md §2), la unica capa que la suite en
-        # SQLite puede ejercitar. None solo para el superadmin, mismo criterio
-        # que la politica RLS (ver core.roles.store_scope_for). Es parametro
-        # obligatorio a proposito: un caller que lo olvide falla al construir,
+        # SQLite puede ejercitar. Tambien para el superadmin, cuya sesion abre
+        # RLS (B5-02; ver core.roles.store_scope_for). Es parametro obligatorio
+        # y nunca None a proposito: un caller que lo olvide falla al construir,
         # no devuelve datos de otras tiendas en silencio.
         self.store_id = store_id
 
@@ -345,8 +345,6 @@ class ReportService:
         self, column: InstrumentedAttribute[str]
     ) -> list[ColumnElement[bool]]:
         """Predicado ``store_id`` para desempacar en el ``where`` de cada query."""
-        if self.store_id is None:
-            return []
         return [column == self.store_id]
 
     def _resolve_date_range(
