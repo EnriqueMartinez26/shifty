@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
-from core.availability_cache import SLOTS_TTL_SECONDS, current_version, slots_key
+from core.availability_cache import SLOTS_TTL_SECONDS, resolve_slots_key
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
@@ -35,6 +35,80 @@ class AvailabilitySlot(TypedDict):
     end_time: str
     status: str
     reason: str | None
+
+
+Range = tuple[datetime, datetime]
+
+# Paso de la grilla de horarios: un slot empieza cada SLOT_STEP desde el
+# inicio del horario del profesional.
+SLOT_STEP = timedelta(minutes=15)
+
+
+def _first_grid_start(origin: datetime, instant: datetime) -> datetime:
+    """Primer inicio de la grilla (``origin`` + k * SLOT_STEP) en o despues de ``instant``."""
+    if instant <= origin:
+        return origin
+    pasos = -((origin - instant) // SLOT_STEP)  # techo de la division
+    return origin + pasos * SLOT_STEP
+
+
+def free_window(
+    start: datetime,
+    end: datetime,
+    *,
+    window_start: datetime,
+    window_end: datetime,
+    obstacles: list[Range],
+) -> Range:
+    """Hueco libre que contiene al slot libre ``[start, end)``.
+
+    Va desde el obstaculo anterior (o el inicio del horario) hasta el
+    siguiente (o el fin). Los obstaculos son turnos ensanchados por el
+    buffer, bloqueos y la ventana de antelacion minima.
+    """
+    free_from = max(
+        [window_start] + [o_end for _o, o_end in obstacles if o_end <= start]
+    )
+    free_until = min(
+        [window_end] + [o_start for o_start, _o in obstacles if o_start >= end]
+    )
+    return free_from, free_until
+
+
+def leaves_unsellable_gap(
+    start: datetime,
+    duration: timedelta,
+    *,
+    free_from: datetime,
+    free_until: datetime,
+    grid_origin: datetime,
+) -> bool:
+    """El slot deja un hueco que ningun turno del servicio puede ocupar.
+
+    Criterio de "strict gap filtering" (B1-01/B6-03, decision del brief:
+    no ofrecer huecos irreservables, no esconder todo). La adyacencia se mide
+    por paso de grilla real, no por igualdad de strings ISO:
+
+    - Un slot pegado a un borde de su hueco (el primer inicio de grilla desde
+      ``free_from``, o el ultimo que todavia entra antes de ``free_until``)
+      siempre se ofrece: lo que sobra es menor que un paso y no se evita.
+    - Uno del medio se ofrece si a cada lado todavia entra otro turno del
+      mismo servicio alineado a la grilla.
+
+    Antes se exigia que el fin de un slot coincidiera con el inicio de otro:
+    con duraciones que no son multiplo de 15 (40, 50, 70 minutos) nunca
+    pasaba y del dia solo quedaban el primer y el ultimo slot.
+    """
+    primer_inicio = _first_grid_start(grid_origin, free_from)
+    pegado_al_inicio = start == primer_inicio
+    pegado_al_fin = start + SLOT_STEP + duration > free_until
+    if pegado_al_inicio or pegado_al_fin:
+        return False
+    entra_antes = primer_inicio + duration <= start
+    entra_despues = (
+        _first_grid_start(grid_origin, start + duration) + duration <= free_until
+    )
+    return not (entra_antes and entra_despues)
 
 
 class AvailabilityService:
@@ -55,11 +129,11 @@ class AvailabilityService:
         respetando horarios, turnos ocupados y bloqueos de agenda.
         """
         # 1. Caché check ----------------------------------------------------
-        version = await current_version(self.redis, store_id, search_date)
-        cache_key = slots_key(
+        # Generacion de la tienda (B6-08) + version del dia (B7-09).
+        cache_key = await resolve_slots_key(
+            self.redis,
             store_id,
             search_date,
-            version,
             service_public_id,
             force_all=force_all,
             hide_private_reasons=hide_private_reasons,
@@ -185,11 +259,27 @@ class AvailabilityService:
             # 6. Bloqueos de agenda (StaffBlock) ------------------------------
             blocks = blocks_by_staff.get(staff.id, [])
 
-            # 7. Cálculo de slots (granularidad 15 min) -----------------------
+            # Lo que corta un hueco libre, para el filtro de huecos (B1-01).
+            obstacles: list[Range] = [
+                (appt_start - buffer, appt_end + buffer)
+                for appt_start, appt_end in booked
+            ] + [
+                (ensure_utc_aware(b.starts_at), ensure_utc_aware(b.ends_at))
+                for b in blocks
+            ]
+
+            # 7. Cálculo de slots (granularidad SLOT_STEP) --------------------
             for sched in schedules:
                 # El horario del staff esta cargado en hora local argentina.
                 current = local_to_utc(search_date, sched.start_time)
                 end = local_to_utc(search_date, sched.end_time)
+                grid_origin = current
+                # Lo anterior a la antelacion minima tampoco se puede vender.
+                sched_obstacles = obstacles + (
+                    [(current, min_bookable_time)]
+                    if min_bookable_time > current
+                    else []
+                )
 
                 while current + duration <= end:
                     slot_end = current + duration
@@ -228,6 +318,27 @@ class AvailabilityService:
                         status = "blocked"
                         reason = f"Requiere {notice_hours}h de antelación"
 
+                    # Sin force_all no se ofrece un slot libre que deje un
+                    # hueco invendible (B1-01). Los ocupados/bloqueados se
+                    # muestran igual: informan, no se venden.
+                    if not force_all and status == "available":
+                        free_from, free_until = free_window(
+                            current,
+                            slot_end,
+                            window_start=grid_origin,
+                            window_end=end,
+                            obstacles=sched_obstacles,
+                        )
+                        if leaves_unsellable_gap(
+                            current,
+                            duration,
+                            free_from=free_from,
+                            free_until=free_until,
+                            grid_origin=grid_origin,
+                        ):
+                            current += SLOT_STEP
+                            continue
+
                     all_slots.append(
                         {
                             "staff_id": staff.public_id,
@@ -250,31 +361,8 @@ class AvailabilityService:
                         }
                     )
 
-                    current += timedelta(minutes=15)
+                    current += SLOT_STEP
 
         # 8. Caché por 5 minutos --------------------------------------------
-        # Apply strict gap filtering unless force_all is True
-        if not force_all:
-            # Build mapping per staff for quick adjacency checks
-            slots_by_staff: dict[str, list[AvailabilitySlot]] = {}
-            for slot in all_slots:
-                slots_by_staff.setdefault(slot["staff_id"], []).append(slot)
-            filtered_slots = []
-            for staff_id, staff_slots in slots_by_staff.items():
-                # Index by start time for fast lookup
-                start_index = {s["starts_at"]: s for s in staff_slots}
-                end_index = {s["ends_at"]: s for s in staff_slots}
-                for slot in staff_slots:
-                    # Keep if at day bounds or adjacent to another slot
-                    is_first = slot["starts_at"] == start_index[slot["starts_at"]][
-                        "starts_at"
-                    ] and slot["starts_at"] == min(start_index.keys())
-                    is_last = slot["ends_at"] == max(end_index.keys())
-                    adjacent = (
-                        slot["ends_at"] in start_index or slot["starts_at"] in end_index
-                    )
-                    if is_first or is_last or adjacent:
-                        filtered_slots.append(slot)
-            all_slots = filtered_slots
         await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, json.dumps(all_slots))
         return all_slots

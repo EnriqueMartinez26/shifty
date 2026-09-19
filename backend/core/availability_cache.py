@@ -12,6 +12,12 @@ es incrementar ese numero con una sola llamada (``INCR``) y cubre todos los
 servicios y todas las variantes de flags de ese dia; no hace falta enumerar
 claves ni usar comodines. Leer cuesta un ``GET`` extra por consulta.
 
+Ademas la clave lleva una GENERACION por tienda (B6-08, 2026-09-19): editar o
+borrar un servicio cambia la disponibilidad de todos los dias, y la version
+por dia no alcanza (la disponibilidad publica acepta cualquier fecha). Un
+solo ``INCR`` de la generacion invalida la tienda entera; la version por dia
+sigue siendo la invalidacion de turnos y bloqueos.
+
 La fecha es la LOCAL de Argentina: la disponibilidad se consulta por dia
 local, y un turno de 22:00 cae en el dia UTC siguiente. Se invalida el dia
 local del turno y, por si acaso, el dia UTC cuando difiere.
@@ -97,6 +103,24 @@ async def current_version(
     return raw.decode() if isinstance(raw, bytes) else str(raw)
 
 
+def store_generation_key(store_id: str) -> str:
+    return f"availability:g:{store_id}"
+
+
+async def current_store_generation(
+    client: AvailabilityCacheClient, store_id: str
+) -> str:
+    """Generacion vigente de la tienda, estirando su vencimiento al leerla.
+
+    Mismas reglas que ``current_version`` (B7-09): el GETEX impide que la
+    generacion venza y se recicle bajo un slot vivo; si no existe es "0".
+    """
+    raw = await client.getex(store_generation_key(store_id), ex=VERSION_TTL_SECONDS)
+    if raw is None:
+        return "0"
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
+
+
 def slots_key(
     store_id: str,
     day: date,
@@ -105,10 +129,41 @@ def slots_key(
     *,
     force_all: bool,
     hide_private_reasons: bool,
+    generation: str = "0",
 ) -> str:
+    """Clave de los slots. En produccion se arma con ``resolve_slots_key``.
+
+    ``generation`` tiene default "0" (el valor de una tienda nunca
+    invalidada) solo para que los tests que arman claves a mano sigan
+    compilando; un llamador nuevo usa ``resolve_slots_key`` y no puede
+    olvidarse de la generacion.
+    """
     return (
-        f"availability:{store_id}:{day.isoformat()}:v{version}:"
+        f"availability:{store_id}:{day.isoformat()}:g{generation}:v{version}:"
         f"{service_public_id}:{int(force_all)}:{int(hide_private_reasons)}"
+    )
+
+
+async def resolve_slots_key(
+    client: AvailabilityCacheClient,
+    store_id: str,
+    day: date,
+    service_public_id: str,
+    *,
+    force_all: bool,
+    hide_private_reasons: bool,
+) -> str:
+    """Lee generacion de la tienda y version del dia y arma la clave vigente."""
+    generation = await current_store_generation(client, store_id)
+    version = await current_version(client, store_id, day)
+    return slots_key(
+        store_id,
+        day,
+        version,
+        service_public_id,
+        force_all=force_all,
+        hide_private_reasons=hide_private_reasons,
+        generation=generation,
     )
 
 
@@ -158,3 +213,18 @@ async def invalidate_availability_range(
     seen |= local_days_touched(starts_at, ends_at)
     for touched in seen:
         await _bump_version(client, store_id, touched)
+
+
+async def invalidate_store_availability(
+    client: AvailabilityCacheClient, store_id: str
+) -> None:
+    """Invalida la disponibilidad de TODOS los dias de la tienda (B6-08).
+
+    Para cambios que no tienen un instante: editar o borrar un servicio. Un
+    ``INCR`` de la generacion + ``EXPIRE`` (como ``_bump_version``); no se
+    borra ninguna clave ni se usan comodines. Igual que
+    ``invalidate_availability``, el llamador decide si envuelve en try/except.
+    """
+    key = store_generation_key(store_id)
+    await client.incr(key)
+    await client.expire(key, VERSION_TTL_SECONDS)
