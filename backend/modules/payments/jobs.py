@@ -211,6 +211,9 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
     if message.event_type == NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value:
         cuando = payload.get("starts_at")
         fecha, hora = format_local_datetime(cuando) if cuando else ("", "")
+        # El motivo del cliente va al cuerpo, nunca al titulo (que es el
+        # asunto del mail), y en una sola linea, sin CR/LF (B1-23).
+        motivo = " ".join(str(payload.get("reason") or "").split())
         return Notification(
             store_id=message.store_id,
             type=message.event_type,
@@ -219,6 +222,7 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
                 f"{client_name} cancelo {service_name}"
                 + (f" del {fecha} a las {hora}" if fecha else "")
                 + ". El horario volvio a estar disponible."
+                + (f" Motivo: {motivo}" if motivo else "")
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
         )

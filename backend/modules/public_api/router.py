@@ -54,7 +54,7 @@ from modules.payments.deposit_rules import (
     decide_deposit,
 )
 from modules.payments.service import ensure_payment_preference
-from modules.payments.model import OutboxMessage, Payment, PaymentStatus
+from modules.payments.model import JsonValue, OutboxMessage, Payment, PaymentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import (
     build_client_details,
@@ -1161,16 +1161,22 @@ async def client_cancel_appointment(
             select(Service).where(Service.id == appointment.service_id)
         )
         service = svc_res.scalar_one_or_none()
+        aviso: dict[str, JsonValue] = {
+            "appointment_id": appointment.id,
+            "client_name": client.full_name or "Un cliente",
+            "service_name": getattr(service, "name", ""),
+            "starts_at": appointment.starts_at.isoformat(),
+        }
+        # El motivo que dejo el cliente viaja al aviso del duenio en una sola
+        # linea: sin CR/LF no puede partir la notificacion ni el mail (B1-23).
+        motivo = " ".join((data.reason or "").split())
+        if motivo:
+            aviso["reason"] = motivo
         db.add(
             OutboxMessage(
                 store_id=appointment.store_id,
                 event_type=NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value,
-                payload={
-                    "appointment_id": appointment.id,
-                    "client_name": client.full_name or "Un cliente",
-                    "service_name": getattr(service, "name", ""),
-                    "starts_at": appointment.starts_at.isoformat(),
-                },
+                payload=aviso,
             )
         )
         await db.commit()

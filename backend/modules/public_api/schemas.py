@@ -5,7 +5,11 @@ import re
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from core.utils import now_utc
-from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    reject_control_chars,
+    reject_payload_control_chars,
+)
 from modules.stores.schemas import StoreCustomField
 
 
@@ -202,6 +206,13 @@ class ClientCancelRequest(BaseModel):
     @classmethod
     def normalize_phone(cls, value: str) -> str:
         return re.sub(r"[\s\-\(\)\+]", "", value)
+
+    @field_validator("reason")
+    @classmethod
+    def reject_control_chars_in_reason(cls, value: str | None) -> str | None:
+        # Texto libre de un anonimo que termina en el aviso al duenio
+        # (regla 19, B1-23): sin NUL, bidi ni zero-width.
+        return reject_control_chars(value)
 
 
 class ClientRescheduleRequest(BaseModel):
