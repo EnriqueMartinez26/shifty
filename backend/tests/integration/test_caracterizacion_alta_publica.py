@@ -303,9 +303,9 @@ async def test_reserva_con_mp_commit_antes_del_link(
     ).scalar_one()
     hold = ensure_utc_aware(turno.expires_at)  # type: ignore[arg-type]
     assert datetime.now(timezone.utc) < hold < t.slot
-    assert [e[0] for e in await _eventos(test_session)] == [
-        "payment.preference.created"
-    ]
+    # B2-17 (2026-09-19): payment.preference.created dejo de publicarse (no
+    # tenia consumidor); el alta con cobro no deja eventos en el outbox.
+    assert [e[0] for e in await _eventos(test_session)] == []
 
 
 @pytest.mark.asyncio
@@ -349,10 +349,9 @@ async def test_mp_falla_despues_del_commit_y_se_compensa(
     assert orden == ["commit", "cache", "mp:POST", "commit", "cache"], orden
     assert await _contar(test_session, Appointment) == 0
     assert await _contar(test_session, Payment) == 0
-    # El aviso de preferencia creada queda (la compensacion no lo borra).
-    assert [e[0] for e in await _eventos(test_session)] == [
-        "payment.preference.created"
-    ]
+    # B2-17 (2026-09-19): payment.preference.created dejo de publicarse, asi
+    # que la compensacion no deja ningun evento huerfano en el outbox.
+    assert [e[0] for e in await _eventos(test_session)] == []
     assert await redis.get(f"idempotency:{clave}") is None
     assert buzon.enviados == []
 
