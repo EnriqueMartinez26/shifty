@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import functools
 import inspect
-import json
 from typing import Any, Callable
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from fastapi.datastructures import DefaultPlaceholder
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 from fastapi.routing import APIRoute
 
-from core.responses import ApiSuccess, _clone_response
+from core.responses import ApiSuccess
 
 
 class CanonicalRoute(APIRoute):
@@ -80,48 +79,6 @@ class CanonicalRoute(APIRoute):
             response_model=wrapped_response_model,
             **kwargs,
         )
-
-    def get_route_handler(self) -> Callable[..., Any]:
-        original_route_handler = super().get_route_handler()
-
-        async def custom_route_handler(request: Request) -> Response:
-            response = await original_route_handler(request)
-            if request.headers.get("x-raw-response") == "true":
-                if (
-                    response.status_code >= 200
-                    and response.status_code < 300
-                    and "application/json"
-                    in response.headers.get("content-type", "").lower()
-                ):
-                    body = bytes(response.body)
-
-                    try:
-                        payload = json.loads(body)
-                        if (
-                            isinstance(payload, dict)
-                            and payload.get("success") is True
-                            and "data" in payload
-                        ):
-                            unwrapped = JSONResponse(
-                                content=payload["data"],
-                                status_code=response.status_code,
-                            )
-                            # Anexar los headers originales en crudo (sin
-                            # content-type/length, que ya puso JSONResponse):
-                            # un dict colapsaria Set-Cookie duplicados.
-                            unwrapped.raw_headers = list(unwrapped.raw_headers) + [
-                                (k, v)
-                                for k, v in response.raw_headers
-                                if k not in (b"content-length", b"content-type")
-                            ]
-                            return unwrapped
-                    except Exception:
-                        pass
-
-                    return _clone_response(response, body)
-            return response
-
-        return custom_route_handler
 
 
 class CanonicalAPIRouter(APIRouter):
