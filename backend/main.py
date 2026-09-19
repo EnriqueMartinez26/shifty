@@ -19,6 +19,7 @@ from core.responses import CanonicalJsonMiddleware, error_response
 from core.runtime_contracts import ensure_runtime_contracts
 from core.exceptions import AppException
 from core.rate_limit import RedisRateLimitMiddleware
+from core.redis import close_redis
 from core.security_middleware import RequestGuardMiddleware, SecurityHeadersMiddleware
 from modules.appointment_blocks.router import router as appointment_blocks_router
 from modules.auth.router import router as auth_router
@@ -116,16 +117,33 @@ async def _assert_rls_capable_role() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Settings de respaldo: no hay base alcanzable y BootErrorMiddleware
-    # responde 503 a toda request. Sin este corte el chequeo de RLS fallaba
-    # contra localhost/invalid y el proceso moria antes de servir el 503.
-    if SETTINGS_BOOT_ERROR is not None:
+    try:
+        # Settings de respaldo: no hay base alcanzable y BootErrorMiddleware
+        # responde 503 a toda request. Sin este corte el chequeo de RLS
+        # fallaba contra localhost/invalid y el proceso moria antes de servir
+        # el 503.
+        if SETTINGS_BOOT_ERROR is not None:
+            yield
+            return
+        await _assert_rls_capable_role()
+        if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
+            await ensure_runtime_contracts(engine)
         yield
-        return
-    await _assert_rls_capable_role()
-    if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
-        await ensure_runtime_contracts(engine)
-    yield
+    finally:
+        await _close_redis_on_shutdown()
+
+
+async def _close_redis_on_shutdown() -> None:
+    """Cierre ordenado del pool de Redis compartido (X-16, 2026-09-19).
+
+    Sin esto las conexiones del pool quedaban abiertas del lado de Redis hasta
+    su timeout en cada deploy o reinicio. Un Redis que ya no responde no puede
+    trabar el apagado: se registra y se sigue.
+    """
+    try:
+        await close_redis()
+    except Exception:
+        logger.warning("redis_close_failed_on_shutdown", exc_info=True)
 
 
 # Sentry se inicializa antes de construir la app para que sus integraciones
