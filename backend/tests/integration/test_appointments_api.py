@@ -36,7 +36,6 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 
 import modules.appointments.model  # noqa: F401
 import modules.audit.model  # noqa: F401
-import modules.budget.model  # noqa: F401
 import modules.services.model  # noqa: F401
 import modules.staff.model  # noqa: F401
 import modules.stores.model  # noqa: F401

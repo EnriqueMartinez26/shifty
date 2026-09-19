@@ -12,6 +12,14 @@ Cualquier proceso que use la base fuera de la API (worker, beat, alembic,
 scripts) debe llamar a ``load_all_models()`` antes de la primera query.
 ``tests/unit/test_model_registry.py`` falla si aparece un modelo nuevo que
 no este en esta lista.
+
+CUIDADO con ``alembic revision --autogenerate``: la tabla ``budgets`` SIGUE
+EXISTIENDO en la base (con sus politicas RLS) y ya no tiene modelo, asi que
+autogenerate va a proponer ``op.drop_table("budgets")``. NO aceptar ese drop
+sin querer: el borrado de la tabla es una migracion pendiente y deliberada
+(X-04, segundo paso), que se hace recien cuando el usuario confirme que
+produccion tiene cero filas. Lo mismo vale para cualquier otra tabla que
+quede sin modelo a proposito.
 """
 
 import importlib
@@ -26,7 +34,6 @@ MODEL_MODULES: tuple[str, ...] = (
     "infrastructure.persistence.models.user",
     "modules.audit.model",
     "modules.billing.model",
-    "modules.budget.model",
     "modules.ledger.model",
     "modules.notifications.model",
     "modules.otp.model",

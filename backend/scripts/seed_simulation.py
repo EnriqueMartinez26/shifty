@@ -25,7 +25,6 @@ from core.model_registry import load_all_models
 from core.security import hash_password
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditAction, AuditLog
-from modules.budget.model import Budget
 from modules.billing.model import (
     CouponRedemption,
     SaaSCoupon,
@@ -242,24 +241,6 @@ STORE_SCENARIOS = [
                 "phone": "+54 11 6000-3004",
             },
         ],
-        "budgets": [
-            {
-                "title": "Campana Invierno Barberia",
-                "improvement_description": "Landing de promos, automatizacion de recordatorios y ajuste de agenda.",
-                "estimated_hours": 18,
-                "hourly_rate": 22000,
-                "status": "approved",
-                "notes": "Prioridad alta por temporada de invierno.",
-            },
-            {
-                "title": "Optimizacion de Checkout",
-                "improvement_description": "Reserva publica con menos pasos y mejor recupero de pagos.",
-                "estimated_hours": 24,
-                "hourly_rate": 24000,
-                "status": "draft",
-                "notes": "Esperando feedback del admin del local.",
-            },
-        ],
     },
     {
         "slug": "salon-sentinel",
@@ -368,16 +349,6 @@ STORE_SCENARIOS = [
                 "first_name": "Romina",
                 "last_name": "Paz",
                 "phone": "+54 11 6000-4003",
-            },
-        ],
-        "budgets": [
-            {
-                "title": "Programa Fidelizacion Salon",
-                "improvement_description": "Bonos por recurrencia, gift cards y referidos.",
-                "estimated_hours": 20,
-                "hourly_rate": 23000,
-                "status": "approved",
-                "notes": "Se implementa en dos etapas.",
             },
         ],
     },
@@ -496,7 +467,6 @@ async def cleanup_seed(session: AsyncSession) -> None:
     await session.execute(
         delete(StoreSchedule).where(StoreSchedule.store_id.in_(store_ids))
     )
-    await session.execute(delete(Budget).where(Budget.store_id.in_(store_ids)))
     await session.execute(
         delete(PaymentGatewayConfig).where(PaymentGatewayConfig.store_id.in_(store_ids))
     )
@@ -804,25 +774,6 @@ async def ensure_block(
     return block
 
 
-async def ensure_budget(
-    session: AsyncSession, store_id: str, budget_data: dict[str, Any]
-) -> Budget:
-    budget = await get_by(
-        session,
-        Budget,
-        Budget.store_id == store_id,
-        Budget.title == budget_data["title"],
-    )
-    attrs = {"store_id": store_id, **budget_data}
-    if budget is None:
-        budget = Budget(**attrs)
-        session.add(budget)
-        await session.flush()
-    else:
-        apply_attrs(budget, **attrs)
-    return budget
-
-
 async def ensure_audit_log(
     session: AsyncSession,
     *,
@@ -987,9 +938,6 @@ async def seed_store(session: AsyncSession, scenario: dict[str, Any]) -> dict[st
             notes_staff="Chequeado por el admin." if extra_index % 2 == 0 else None,
         )
 
-    for budget_data in scenario["budgets"]:
-        await ensure_budget(session, store.id, budget_data)
-
     await ensure_audit_log(
         session,
         actor=admin_user,
@@ -1054,7 +1002,6 @@ async def summarize_counts(session: AsyncSession) -> dict[str, int]:
         ("schedules", Schedule),
         ("appointments", Appointment),
         ("appointment_blocks", StaffBlock),
-        ("budgets", Budget),
         ("audit_logs", AuditLog),
         ("users", User),
     ]
