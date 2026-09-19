@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, TypedDict
 import ulid
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
-from core.circuit_breaker import CircuitBreakerOpenError
 from core.utils import ensure_utc_aware
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
@@ -42,7 +41,7 @@ from modules.notifications.tasks import (
     send_reschedule_email,
 )
 from modules.payments.model import PaymentStatus
-from modules.payments.service import expire_mercadopago_preference
+from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
@@ -371,9 +370,15 @@ class AppointmentService:
     async def release_pending(self, *, public_id: str, actor: User) -> Appointment:
         """Libera un turno pendiente y vence su pago en curso.
 
-        Cruza dos agregados (turno + pago) y toca el gateway de Mercado Pago;
-        por eso es un caso de uso de servicio y no del router. Un turno con pago
-        ya acreditado no se libera: primero hay que reembolsar.
+        Cruza dos agregados (turno + pago); por eso es un caso de uso de
+        servicio y no del router. Un turno con pago ya acreditado no se libera:
+        primero hay que reembolsar.
+
+        El link de Mercado Pago NO se vence aca (B1-04, regla 5): antes el PUT
+        a MP corria con el turno y el pago bajo ``FOR UPDATE`` y, con MP caido,
+        el turno no se liberaba (502 ``PAYMENT_PREFERENCE_EXPIRATION_FAILED``).
+        Ahora se publica ``payment.preference.expire`` en la misma transaccion
+        y el outbox lo vence despues, sin lock, con reintento.
         """
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
         appointment = await self.uow.appointments.get_by_public_id(
@@ -404,21 +409,16 @@ class AppointmentService:
             )
         if payment and payment.status == PaymentStatus.PENDING.value:
             if payment.preference_id:
-                try:
-                    await expire_mercadopago_preference(
-                        self.uow.session,
-                        store_id=actor.store_id,
-                        preference_id=payment.preference_id,
-                    )
-                except (RuntimeError, CircuitBreakerOpenError) as exc:
-                    raise AppException(
-                        message=(
-                            "No se libero el turno porque Mercado Pago no pudo "
-                            "vencer el enlace de pago"
-                        ),
-                        http_status=HTTPStatus.BAD_GATEWAY,
-                        error_code="PAYMENT_PREFERENCE_EXPIRATION_FAILED",
-                    ) from exc
+                # Se vence despues del commit, desde el outbox (B1-04).
+                self.uow.outbox.publish(
+                    store_id=actor.store_id,
+                    event_type=EVENT_PREFERENCE_EXPIRE,
+                    payload={
+                        "appointment_id": appointment.id,
+                        "payment_id": payment.id,
+                        "preference_id": payment.preference_id,
+                    },
+                )
             payment.apply_status(
                 PaymentStatus.EXPIRED.value,
                 payload={

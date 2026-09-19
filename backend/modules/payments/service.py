@@ -575,11 +575,19 @@ async def create_mercadopago_preference(
     )
 
 
+# Evento del outbox: "vencer este link de pago en Mercado Pago". Lo publica
+# quien libera un turno en la misma transaccion y lo consume
+# process_outbox_batch fuera de todo lock (B1-04).
+EVENT_PREFERENCE_EXPIRE = "payment.preference.expire"
+
+
 async def expire_mercadopago_preference(
     db: AsyncSession,
     *,
     store_id: str,
     preference_id: str,
+    configs: GatewayConfigs | None = None,
+    persist_refresh: PersistRefresh | None = None,
 ) -> None:
     if _is_placeholder_preference(preference_id):
         return
@@ -593,6 +601,8 @@ async def expire_mercadopago_preference(
             "expires": True,
             "expiration_date_to": expiration,
         },
+        configs=configs,
+        persist_refresh=persist_refresh,
     )
     if response is None:
         raise RuntimeError(

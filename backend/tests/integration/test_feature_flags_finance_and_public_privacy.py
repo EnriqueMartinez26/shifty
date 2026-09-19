@@ -1796,6 +1796,12 @@ async def test_store_owner_can_release_pending_mercadopago_booking(
     )
     assert release.status_code == 200, release.text
     assert release.json()["status"] == "expired"
+    # B1-04 (2026-09-18): el link ya no se vence dentro del request que
+    # sostiene los locks; lo vence el outbox despues del commit.
+    assert [call[0] for call in calls] == ["POST"]
+    from modules.payments.jobs import process_outbox_batch
+
+    await process_outbox_batch(test_session)
     assert [call[0] for call in calls] == ["POST", "PUT"]
 
     payment_result = await test_session.execute(
