@@ -37,13 +37,6 @@ def local_day_start(day: _date) -> datetime:
     return local_to_utc(day, _time.min)
 
 
-def to_utc_naive(dt: datetime) -> datetime:
-    """Convierte un datetime a UTC y le quita la info de timezone (para DBs antiguas o legacy)."""
-    if dt.tzinfo is None:
-        return dt
-    return dt.astimezone(timezone.utc).replace(tzinfo=None)
-
-
 def ensure_utc_aware(value: datetime) -> datetime:
     """SQLite devuelve naive aun con DateTime(timezone=True); Postgres, aware.
 
