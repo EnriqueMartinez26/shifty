@@ -177,8 +177,9 @@ class AppointmentBlockService:
     ) -> BlockCreationResult:
         members = await self._staff_for(staff_id)
         staff_ids = [m.id for m in members]
-        for member_id in staff_ids:
-            await self.uow.appointments.lock_staff_row(member_id)
+        # Orden total por id en una sentencia (S-11): dos altas simultaneas
+        # sobre los mismos profesionales no pueden cruzarse en deadlock.
+        await self.uow.appointments.lock_staff_rows(staff_ids)
 
         appointments = await self.uow.appointments.list_active_overlapping(
             self.actor.store_id, staff_ids, ranges, lock=True

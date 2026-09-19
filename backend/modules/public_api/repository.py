@@ -370,6 +370,16 @@ class PublicRepository:
         bajo el lock se releen bloqueo y choque (regla 4), porque entre la
         lectura y el lock otra transaccion pudo ocuparlo. El bucle solo da
         mas de una vuelta cuando eso pasa.
+
+        Orden de los locks (S-11): aca se lockea de a uno y en el orden de
+        desempate (display_name, public_id), no por id como el alta de
+        bloqueos (``lock_staff_rows``). En el camino normal se toma UN solo
+        lock y no puede haber ciclo. Un segundo lock solo aparece si el
+        elegido fallo la relectura bajo lock; en ese caso, y solo si a la vez
+        un cierre de tienda tiene tomado al segundo y espera al primero,
+        Postgres detecta el deadlock y aborta una de las dos transacciones.
+        No se unifica el orden porque lockear por id cambiaria a quien se le
+        asigna el turno o volveria a lockear a todos los candidatos (B1-13).
         """
         ids = [member.id for member in candidates]
         with_schedule = await self._staff_ids_with_schedule_for_slot(

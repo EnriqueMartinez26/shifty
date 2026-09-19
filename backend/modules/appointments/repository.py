@@ -127,6 +127,24 @@ class AppointmentRepository:
             select(Staff).where(Staff.id == staff_id).with_for_update()
         )
 
+    async def lock_staff_rows(self, staff_ids: list[str]) -> None:
+        """``FOR UPDATE`` sobre varios profesionales, en orden total por id.
+
+        Una sola sentencia ``... WHERE id IN (...) ORDER BY id FOR UPDATE``:
+        Postgres toma los locks en el orden de salida, asi que dos
+        transacciones que lockean conjuntos solapados nunca se esperan en
+        ciclo (S-11). Lockearlos de a uno en el orden de otra consulta (sin
+        ``ORDER BY``) permitia el deadlock entre dos altas de bloqueos.
+        """
+        if not staff_ids:
+            return
+        await self.db.execute(
+            select(Staff.id)
+            .where(Staff.id.in_(staff_ids))
+            .order_by(Staff.id)
+            .with_for_update()
+        )
+
     async def get_conflicting_appointment(
         self,
         staff_id: str,
