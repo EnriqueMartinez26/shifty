@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
 from sqlalchemy.exc import IntegrityError
@@ -179,6 +180,23 @@ def _compute_discount(
     return discount_amount, _money(base_amount - discount_amount)
 
 
+def _apply_patch(entity: Any, payload: dict[str, Any]) -> None:
+    """Aplica un PATCH respetando el null explicito (B3-19, 2026-09-18).
+
+    El router ya descarto lo que no vino (``model_dump(exclude_unset=True)``),
+    asi que cada clave del payload es algo que el cliente mando. Un ``null``
+    borra el valor si la columna admite NULL (logo, descripcion, vencimiento);
+    en una columna NOT NULL se ignora como antes, en vez de terminar en 409.
+    """
+    columnas = sa_inspect(type(entity)).columns
+    for key, value in payload.items():
+        if value is None:
+            columna = columnas.get(key)
+            if columna is None or not columna.nullable:
+                continue
+        setattr(entity, key, value)
+
+
 class _BaseAdminRepository:
     """Base de los repositorios de superadmin: sesión + auditoría común."""
 
@@ -291,9 +309,7 @@ class StoreAdminRepository(_BaseAdminRepository):
         self, store: Store, payload: dict[str, Any], actor: User
     ) -> Store:
         before = {"name": store.name, "slug": store.slug, "is_active": store.is_active}
-        for key, value in payload.items():
-            if value is not None:
-                setattr(store, key, value)
+        _apply_patch(store, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -409,10 +425,8 @@ class UserAdminRepository(_BaseAdminRepository):
             "is_active": user.is_active,
             "is_global_admin": user.is_global_admin,
         }
-        for key, value in data.items():
-            if value is not None:
-                setattr(user, key, value)
-        if data.get("first_name") is not None or data.get("last_name") is not None:
+        _apply_patch(user, data)
+        if "first_name" in data or "last_name" in data:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if password:
             user.hashed_password = hash_password(password)
@@ -513,9 +527,7 @@ class PlanAdminRepository(_BaseAdminRepository):
             "price": str(plan.price),
             "is_active": plan.is_active,
         }
-        for key, value in payload.items():
-            if value is not None:
-                setattr(plan, key, value)
+        _apply_patch(plan, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -668,8 +680,13 @@ class CouponAdminRepository(_BaseAdminRepository):
             "is_active": coupon.is_active,
             "current_uses": coupon.current_uses,
         }
-        candidate_type = payload.get("coupon_type", coupon.coupon_type)
-        candidate_value = payload.get("value", coupon.value)
+        # coupon_type y value son NOT NULL: un null se ignora (_apply_patch),
+        # asi que el candidato es el valor actual. Antes {"value": null}
+        # llegaba aca como None y "None > 100" terminaba en 500.
+        candidate_type = payload.get("coupon_type") or coupon.coupon_type
+        candidate_value = (
+            payload["value"] if payload.get("value") is not None else coupon.value
+        )
         candidate_valid_from = payload.get("valid_from", coupon.valid_from)
         candidate_valid_until = payload.get("valid_until", coupon.valid_until)
         if candidate_type == "percent" and candidate_value > 100:
@@ -680,9 +697,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             and candidate_valid_from >= candidate_valid_until
         ):
             raise ValueError("valid_from debe ser anterior a valid_until")
-        for key, value in payload.items():
-            if value is not None:
-                setattr(coupon, key, value)
+        _apply_patch(coupon, payload)
         try:
             await self.db.flush()
             self._audit(
