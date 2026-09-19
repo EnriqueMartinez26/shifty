@@ -127,6 +127,36 @@ class AppointmentRepository:
             select(Staff).where(Staff.id == staff_id).with_for_update()
         )
 
+    async def lock_and_read_range(
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        buffer_minutes: int,
+        exclude_appointment_id: str | None = None,
+    ) -> tuple[StaffBlock | None, Appointment | None]:
+        """Choca este rango con la agenda del profesional? Unica respuesta (S-07).
+
+        Toma el ``FOR UPDATE`` del profesional y, BAJO el lock (regla 4), lee
+        el primer bloqueo activo que solapa y el primer turno activo que choca
+        (ensanchado por ``buffer_minutes`` a cada lado, sin contar
+        ``exclude_appointment_id``: el turno que se esta moviendo). Devuelve
+        los dos; que hacer con ellos (sugerencia, codigo de error) es de cada
+        llamador. La usan el panel (``AppointmentService``) y el portal
+        (``PublicRepository``), que antes tenian cada uno su copia.
+        """
+        await self.lock_staff_row(staff_id)
+        block = await self.get_overlapping_block(staff_id, starts_at, ends_at)
+        conflict = await self.get_conflicting_appointment(
+            staff_id,
+            starts_at,
+            ends_at,
+            exclude_appointment_id=exclude_appointment_id,
+            buffer_minutes=buffer_minutes,
+        )
+        return block, conflict
+
     async def lock_staff_rows(self, staff_ids: list[str]) -> None:
         """``FOR UPDATE`` sobre varios profesionales, en orden total por id.
 
@@ -161,9 +191,10 @@ class AppointmentRepository:
         preparación): se ensancha la ventana del turno nuevo ese tanto a cada
         lado, de modo que quede al menos ``buffer`` de separación con cualquier
         turno vecino.
-        """
-        from sqlalchemy.orm import joinedload
 
+        Sin ``joinedload(service)``: los llamadores solo leen ``starts_at`` y
+        ``ends_at`` del choque (S-07; el eager load armaba un JOIN inutil).
+        """
         # Filtro base: mismo staff y no cancelado
         conditions = [
             Appointment.staff_id == staff_id,
@@ -183,7 +214,6 @@ class AppointmentRepository:
 
         query = (
             select(Appointment)
-            .options(joinedload(Appointment.service))
             .where(and_(*conditions))
             .order_by(Appointment.starts_at.asc())
             .limit(1)

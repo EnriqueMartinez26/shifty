@@ -20,6 +20,7 @@ import ulid
 
 from core.security import hash_password
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.repository import AppointmentRepository
 from modules.payments.deposit_rules import ClientHistory
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock
@@ -245,20 +246,21 @@ class PublicRepository:
 
         El lock va antes de la lectura que decide: leer el bloqueo sin el lock
         dejaba colar una reserva dentro de un bloqueo recien creado (carrera
-        reproducida en tests/postgres/test_pg_bloqueos.py).
+        reproducida en tests/postgres/test_pg_bloqueos.py). El lock y las dos
+        lecturas son las del panel (``AppointmentRepository.lock_and_read_range``,
+        S-07); aca solo se traducen a ``RangeRejection``.
         """
-        await self.db.execute(
-            select(Staff).where(Staff.id == staff_id).with_for_update()
-        )
-        if await self._staff_ids_with_overlapping_block([staff_id], starts_at, ends_at):
-            return RangeRejection.BLOCKED
-        if await self._staff_ids_with_conflicting_appointment(
-            [staff_id],
+        block, conflict = await AppointmentRepository(self.db).lock_and_read_range(
+            staff_id,
             starts_at,
             ends_at,
-            buffer_minutes,
+            buffer_minutes=max(0, buffer_minutes),
             exclude_appointment_id=exclude_appointment_id,
-        ):
+        )
+        # Mismo orden de prioridad que el panel: el bloqueo gana al choque.
+        if block is not None:
+            return RangeRejection.BLOCKED
+        if conflict is not None:
             return RangeRejection.TAKEN
         return None
 
@@ -295,6 +297,9 @@ class PublicRepository:
     ) -> set[str]:
         """Profesionales (de ``staff_ids``) con un bloqueo activo que solapa. Una consulta.
 
+        Lectura en lote SIN lock que solo descarta candidatos (B1-13); la
+        decision bajo lock es ``lock_and_read_range`` (S-07).
+
         Pregunta de existencia, no de unicidad: dos bloqueos solapados del
         mismo profesional (el alta lo permite) hacian que scalar_one_or_none
         levantara MultipleResultsFound y la reserva saliera 500 (B1-02).
@@ -319,14 +324,12 @@ class PublicRepository:
         starts_at: datetime,
         ends_at: datetime,
         buffer_minutes: int,
-        *,
-        exclude_appointment_id: str | None = None,
     ) -> set[str]:
         """Profesionales (de ``staff_ids``) con un turno activo que choca. Una consulta.
 
-        Mismo criterio que el panel (get_conflicting_appointment): el turno
-        vecino se ensancha por el buffer de la tienda a cada lado. Al
-        reprogramar se excluye el turno que se esta moviendo.
+        Solo la lectura en lote SIN lock que DESCARTA candidatos del alta
+        (B1-13); la decision bajo lock es ``lock_and_read_range`` (S-07). Mismo
+        criterio: estados activos y el turno vecino ensanchado por el buffer.
         """
         if not staff_ids:
             return set()
@@ -344,11 +347,6 @@ class PublicRepository:
                 ),
                 Appointment.starts_at < ends_at + buffer,
                 Appointment.ends_at > starts_at - buffer,
-                *(
-                    [Appointment.id != exclude_appointment_id]
-                    if exclude_appointment_id
-                    else []
-                ),
             )
             .distinct()
         )

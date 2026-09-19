@@ -170,17 +170,13 @@ class AppointmentService:
         y el INSERT dejaba un turno adentro (2026-09-10; en la reprogramacion,
         B1-05). Lo comparten ``book`` y ``reschedule``.
         """
-        await self.uow.appointments.lock_staff_row(staff_id)
-        block = await self.uow.appointments.get_overlapping_block(
-            staff_id, starts_at, ends_at
-        )
         buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
-        conflict = await self.uow.appointments.get_conflicting_appointment(
+        block, conflict = await self.uow.appointments.lock_and_read_range(
             staff_id,
             starts_at,
             ends_at,
-            exclude_appointment_id=exclude_appointment_id,
             buffer_minutes=buffer_minutes,
+            exclude_appointment_id=exclude_appointment_id,
         )
         await self._validate_or_suggest(
             staff_id=staff_id,
