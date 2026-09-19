@@ -88,7 +88,8 @@ async def update_service(
     service = await repo.get_by_id(public_id, admin.store_id)
     if not service:
         raise ServiceNotFoundException(public_id)
-    updated = await repo.update(service, data.model_dump())
+    # B6-04: solo los campos enviados; un null explicito borra el opcional.
+    updated = await repo.update(service, data.model_dump(exclude_unset=True))
     return to_service_response(updated)
 
 

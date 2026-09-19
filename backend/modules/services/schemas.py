@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from typing import Self
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from core.validation import reject_control_chars, reject_unsafe_url
 
@@ -34,6 +36,17 @@ class ServiceCreate(ServiceBase):
         return reject_control_chars(value)
 
 
+# Columnas NOT NULL de services que el PATCH puede tocar.
+_NOT_NULL_FIELDS = (
+    "name",
+    "duration_minutes",
+    "price",
+    "deposit_mode",
+    "deposit_type",
+    "is_active",
+)
+
+
 class ServiceUpdate(BaseModel):
     name: str | None = Field(None, min_length=2, max_length=255)
     description: str | None = Field(None, max_length=1000)
@@ -51,6 +64,16 @@ class ServiceUpdate(BaseModel):
     @classmethod
     def reject_control_chars_in_text(cls, value: str | None) -> str | None:
         return reject_control_chars(value)
+
+    @model_validator(mode="after")
+    def reject_null_in_required_columns(self) -> Self:
+        # B6-04: el PATCH aplica solo los campos enviados (exclude_unset), asi
+        # que un null explicito BORRA. En las columnas NOT NULL eso no es un
+        # borrado posible: 422 aca y no un IntegrityError en la base.
+        for field in _NOT_NULL_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser null")
+        return self
 
     @field_validator("image_url", "youtube_trailer_url")
     @classmethod
