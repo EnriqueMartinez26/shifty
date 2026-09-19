@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
-from core.availability_cache import SLOTS_TTL_SECONDS, current_version, slots_key
+from core.availability_cache import SLOTS_TTL_SECONDS, resolve_slots_key
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
@@ -129,11 +129,11 @@ class AvailabilityService:
         respetando horarios, turnos ocupados y bloqueos de agenda.
         """
         # 1. Caché check ----------------------------------------------------
-        version = await current_version(self.redis, store_id, search_date)
-        cache_key = slots_key(
+        # Generacion de la tienda (B6-08) + version del dia (B7-09).
+        cache_key = await resolve_slots_key(
+            self.redis,
             store_id,
             search_date,
-            version,
             service_public_id,
             force_all=force_all,
             hide_private_reasons=hide_private_reasons,

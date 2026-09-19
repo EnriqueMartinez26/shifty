@@ -1,11 +1,16 @@
 from typing import Annotated
 
+import structlog
 from fastapi import Depends, Path, Query, Response, status
 from core.router import CanonicalAPIRouter
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.availability_cache import invalidate_store_availability
 from core.database import get_db
 from core.exceptions import ServiceNotFoundException
+from core.redis import get_redis
 from core.roles import STORE_MANAGERS, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
@@ -15,6 +20,7 @@ from modules.services.repository import ServiceRepository
 from modules.services.schemas import ServiceCreate, ServiceResponse, ServiceUpdate
 from modules.users.model import User
 
+logger = structlog.get_logger()
 router = CanonicalAPIRouter(prefix="/services", tags=["Services"])
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
@@ -83,12 +89,14 @@ async def update_service(
     data: ServiceUpdate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> ServiceResponse:
     repo = ServiceRepository(db)
     service = await repo.get_by_id(public_id, admin.store_id)
     if not service:
         raise ServiceNotFoundException(public_id)
     updated = await repo.update(service, data.model_dump())
+    await _invalidate_store_cache(redis, str(updated.store_id))
     return to_service_response(updated)
 
 
@@ -97,10 +105,29 @@ async def delete_service(
     public_id: PublicIdPath,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> Response:
     repo = ServiceRepository(db)
     service = await repo.get_by_id(public_id, admin.store_id)
     if not service:
         raise ServiceNotFoundException(public_id)
     await repo.soft_delete(service)
+    await _invalidate_store_cache(redis, str(service.store_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _invalidate_store_cache(redis: Redis, store_id: str) -> None:
+    """B6-08: un servicio cambia la disponibilidad de todos los dias.
+
+    Va despues del commit (el repo ya commiteo). Best-effort: un Redis caido
+    no rompe la edicion ya guardada; en el peor caso la pagina publica
+    muestra lo viejo hasta el TTL de los slots (300 s).
+    """
+    try:
+        await invalidate_store_availability(redis, store_id)
+    except RedisError as exc:
+        logger.warning(
+            "service_cache_invalidation_failed",
+            store_id=store_id,
+            error_type=type(exc).__name__,
+        )
