@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
 from sqlalchemy.exc import IntegrityError
@@ -179,6 +180,23 @@ def _compute_discount(
     return discount_amount, _money(base_amount - discount_amount)
 
 
+def _apply_patch(entity: Any, payload: dict[str, Any]) -> None:
+    """Aplica un PATCH respetando el null explicito (B3-19, 2026-09-18).
+
+    El router ya descarto lo que no vino (``model_dump(exclude_unset=True)``),
+    asi que cada clave del payload es algo que el cliente mando. Un ``null``
+    borra el valor si la columna admite NULL (logo, descripcion, vencimiento);
+    en una columna NOT NULL se ignora como antes, en vez de terminar en 409.
+    """
+    columnas = sa_inspect(type(entity)).columns
+    for key, value in payload.items():
+        if value is None:
+            columna = columnas.get(key)
+            if columna is None or not columna.nullable:
+                continue
+        setattr(entity, key, value)
+
+
 class _BaseAdminRepository:
     """Base de los repositorios de superadmin: sesión + auditoría común."""
 
@@ -193,7 +211,11 @@ class _BaseAdminRepository:
         action: str,
         before: Any = None,
         after: Any = None,
+        *,
+        store_id: str | None,
     ) -> None:
+        # store_id es obligatorio (keyword) para que cada llamada decida a que
+        # tienda pertenece la accion; None solo para lo global (B3-11).
         self.db.add(
             AuditLog(
                 actor_id=actor.id,
@@ -201,6 +223,7 @@ class _BaseAdminRepository:
                 actor_email=actor.email,
                 resource_type=resource_type,
                 resource_id=resource_id,
+                store_id=store_id,
                 action=action,
                 payload_before=_json_safe(before),
                 payload_after=_json_safe(after),
@@ -272,6 +295,7 @@ class StoreAdminRepository(_BaseAdminRepository):
                 "Store",
                 store.public_id,
                 AuditAction.CREATE.value,
+                store_id=store.id,
                 after={"slug": store.slug, "name": store.name},
             )
             await self.db.commit()
@@ -285,9 +309,7 @@ class StoreAdminRepository(_BaseAdminRepository):
         self, store: Store, payload: dict[str, Any], actor: User
     ) -> Store:
         before = {"name": store.name, "slug": store.slug, "is_active": store.is_active}
-        for key, value in payload.items():
-            if value is not None:
-                setattr(store, key, value)
+        _apply_patch(store, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -295,6 +317,7 @@ class StoreAdminRepository(_BaseAdminRepository):
                 "Store",
                 store.public_id,
                 AuditAction.UPDATE.value,
+                store_id=store.id,
                 before=before,
                 after=payload,
             )
@@ -308,43 +331,17 @@ class StoreAdminRepository(_BaseAdminRepository):
             )
 
     async def list_store_audit_logs(self, store: Store, limit: int) -> list[AuditLog]:
-        user_ids_result = await self.db.execute(
-            select(User.id).where(User.store_id == store.id)
-        )
-        user_public_ids = set(user_ids_result.scalars().all())
-
-        logs_result = await self.db.execute(
+        # Filtro en SQL con LIMIT real (B3-11, regla 11). Antes se traian las
+        # limit*4 entradas de superadmin de TODAS las tiendas y se filtraba en
+        # Python: sin ninguna de esta tienda en esa ventana, el panel mostraba
+        # "sin actividad" para una tienda que si la tuvo.
+        result = await self.db.execute(
             select(AuditLog)
-            .where(AuditLog.context == "superadmin")
+            .where(AuditLog.context == "superadmin", AuditLog.store_id == store.id)
             .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
-            .limit(max(limit * 4, limit))
+            .limit(limit)
         )
-        logs = list(logs_result.scalars().all())
-
-        relevant: list[AuditLog] = []
-        for log in logs:
-            payload_after = (
-                log.payload_after if isinstance(log.payload_after, dict) else {}
-            )
-            payload_before = (
-                log.payload_before if isinstance(log.payload_before, dict) else {}
-            )
-            linked_store_ids = {
-                payload_after.get("store_id"),
-                payload_before.get("store_id"),
-            }
-            is_store_log = (
-                log.resource_type == "Store" and log.resource_id == store.public_id
-            )
-            is_user_log = (
-                log.resource_type == "User" and log.resource_id in user_public_ids
-            )
-            is_store_scoped_payload = store.id in linked_store_ids
-            if is_store_log or is_user_log or is_store_scoped_payload:
-                relevant.append(log)
-            if len(relevant) >= limit:
-                break
-        return relevant
+        return list(result.scalars().all())
 
 
 class UserAdminRepository(_BaseAdminRepository):
@@ -397,6 +394,7 @@ class UserAdminRepository(_BaseAdminRepository):
             "User",
             user.public_id,
             AuditAction.CREATE.value,
+            store_id=user.store_id,
             after={"email": user.email, "store_id": store.id, "role": "admin"},
         )
         await self.db.commit()
@@ -427,10 +425,8 @@ class UserAdminRepository(_BaseAdminRepository):
             "is_active": user.is_active,
             "is_global_admin": user.is_global_admin,
         }
-        for key, value in data.items():
-            if value is not None:
-                setattr(user, key, value)
-        if data.get("first_name") is not None or data.get("last_name") is not None:
+        _apply_patch(user, data)
+        if "first_name" in data or "last_name" in data:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if password:
             user.hashed_password = hash_password(password)
@@ -443,6 +439,7 @@ class UserAdminRepository(_BaseAdminRepository):
                 "User",
                 user.public_id,
                 AuditAction.UPDATE.value,
+                store_id=user.store_id,
                 before=before,
                 after=data,
             )
@@ -481,6 +478,7 @@ class UserAdminRepository(_BaseAdminRepository):
             "User",
             user.public_id,
             AuditAction.UPDATE.value,
+            store_id=user.store_id,
             before=before,
             after={"is_global_admin": enabled},
         )
@@ -511,6 +509,7 @@ class PlanAdminRepository(_BaseAdminRepository):
                 "Plan",
                 plan.public_id,
                 AuditAction.CREATE.value,
+                store_id=None,
                 after={"name": plan.name, "price": str(plan.price)},
             )
             await self.db.commit()
@@ -528,9 +527,7 @@ class PlanAdminRepository(_BaseAdminRepository):
             "price": str(plan.price),
             "is_active": plan.is_active,
         }
-        for key, value in payload.items():
-            if value is not None:
-                setattr(plan, key, value)
+        _apply_patch(plan, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -538,6 +535,7 @@ class PlanAdminRepository(_BaseAdminRepository):
                 "Plan",
                 plan.public_id,
                 AuditAction.UPDATE.value,
+                store_id=None,
                 before=before,
                 after=payload,
             )
@@ -621,6 +619,7 @@ class SubscriptionAdminRepository(_BaseAdminRepository):
             "StoreSubscription",
             subscription.public_id,
             action,
+            store_id=subscription.store_id,
             before=before,
             after={
                 "store_id": store.id,
@@ -663,6 +662,7 @@ class CouponAdminRepository(_BaseAdminRepository):
                 "SaaSCoupon",
                 coupon.public_id,
                 AuditAction.CREATE.value,
+                store_id=None,
                 after={"code": coupon.code, "type": coupon.coupon_type},
             )
             await self.db.commit()
@@ -680,8 +680,13 @@ class CouponAdminRepository(_BaseAdminRepository):
             "is_active": coupon.is_active,
             "current_uses": coupon.current_uses,
         }
-        candidate_type = payload.get("coupon_type", coupon.coupon_type)
-        candidate_value = payload.get("value", coupon.value)
+        # coupon_type y value son NOT NULL: un null se ignora (_apply_patch),
+        # asi que el candidato es el valor actual. Antes {"value": null}
+        # llegaba aca como None y "None > 100" terminaba en 500.
+        candidate_type = payload.get("coupon_type") or coupon.coupon_type
+        candidate_value = (
+            payload["value"] if payload.get("value") is not None else coupon.value
+        )
         candidate_valid_from = payload.get("valid_from", coupon.valid_from)
         candidate_valid_until = payload.get("valid_until", coupon.valid_until)
         if candidate_type == "percent" and candidate_value > 100:
@@ -692,9 +697,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             and candidate_valid_from >= candidate_valid_until
         ):
             raise ValueError("valid_from debe ser anterior a valid_until")
-        for key, value in payload.items():
-            if value is not None:
-                setattr(coupon, key, value)
+        _apply_patch(coupon, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -702,6 +705,7 @@ class CouponAdminRepository(_BaseAdminRepository):
                 "SaaSCoupon",
                 coupon.public_id,
                 AuditAction.UPDATE.value,
+                store_id=None,
                 before=before,
                 after=payload,
             )
@@ -757,6 +761,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             "CouponRedemption",
             redemption.public_id,
             AuditAction.CREATE.value,
+            store_id=store.id,
             after={
                 "store_id": store.id,
                 "code": coupon.code,

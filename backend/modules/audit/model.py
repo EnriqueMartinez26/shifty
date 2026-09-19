@@ -69,6 +69,12 @@ class AuditLog(Base):
         String(26), index=True
     )  # public_id del recurso
 
+    # Tienda a la que pertenece la accion (B3-11, 2026-09-18). NULL para lo
+    # global (planes, cupones) y para filas cuyo recurso no permitio derivarla.
+    # Sin FK a proposito: un log es inmutable y sobrevive a su recurso. La
+    # tabla sigue fuera de RLS (c3d4e5f6a7b8_rls_efectivo).
+    store_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+
     # Qué acción se realizó
     action: Mapped[str] = mapped_column(String(50))  # AuditAction value
 
