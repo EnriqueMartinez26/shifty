@@ -260,14 +260,16 @@ def test_ensure_payment_preference_entra_en_el_limite_de_lineas() -> None:
         encoding="utf-8"
     )
     arbol = ast.parse(fuente)
-    funcion = next(
-        nodo
-        for nodo in arbol.body
-        if isinstance(nodo, ast.AsyncFunctionDef)
-        and nodo.name == "ensure_payment_preference"
-    )
-    largo = (funcion.end_lineno or funcion.lineno) - funcion.lineno + 1
-    assert largo <= LIMITE_DE_LINEAS, f"{largo} lineas"
+    # S-17: el cuerpo vive en _upsert_payment_preference (ensure_payment_
+    # preference es la envoltura publica): el limite vale para los dos.
+    for nombre in ("ensure_payment_preference", "_upsert_payment_preference"):
+        funcion = next(
+            nodo
+            for nodo in arbol.body
+            if isinstance(nodo, ast.AsyncFunctionDef) and nodo.name == nombre
+        )
+        largo = (funcion.end_lineno or funcion.lineno) - funcion.lineno + 1
+        assert largo <= LIMITE_DE_LINEAS, f"{nombre}: {largo} lineas"
 
 
 def test_un_cobro_con_deposit_rule_conserva_su_importe() -> None:
