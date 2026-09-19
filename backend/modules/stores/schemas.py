@@ -10,7 +10,12 @@ from pydantic import (
 )
 
 from core.business_types import BusinessType, DEFAULT_BUSINESS_TYPE
-from core.validation import SLUG_PATTERN, reject_unsafe_url
+from core.validation import (
+    SLUG_PATTERN,
+    reject_control_chars,
+    reject_payload_control_chars,
+    reject_unsafe_url,
+)
 
 # Techos de los enteros expuestos por la API.
 #
@@ -108,6 +113,25 @@ class StoreUpdate(BaseModel):
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
+
+    @field_validator("name", "description", "whatsapp_number", "deposit_policy")
+    @classmethod
+    def reject_control_chars_in_text(cls, value: str | None) -> str | None:
+        # Regla 19 leida como "texto que se publica" (B3-15): sale al portal
+        # publico. Va en el schema de entrada, no en una base que herede la
+        # respuesta: una fila legada con un invisible se sigue leyendo.
+        return reject_control_chars(value)
+
+    @field_validator("custom_client_fields")
+    @classmethod
+    def reject_control_chars_in_custom_fields(
+        cls, value: Optional[List[StoreCustomField]]
+    ) -> Optional[List[StoreCustomField]]:
+        # Etiquetas, ayudas y opciones del formulario de reserva: tambien se
+        # publican. StoreCustomField no se toca porque la respuesta lo reusa.
+        if value is not None:
+            reject_payload_control_chars([campo.model_dump() for campo in value])
+        return value
 
 
 class StoreMediaUploadResponse(BaseModel):

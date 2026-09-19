@@ -5,7 +5,12 @@ from typing import Any, Literal
 from core.validation import validate_password_strength
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN, reject_unsafe_url
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    SLUG_PATTERN,
+    reject_control_chars,
+    reject_unsafe_url,
+)
 from modules.users.model import UserRole
 
 # Techos de los enteros expuestos por la API.
@@ -37,6 +42,12 @@ class StoreCreate(BaseModel):
     def validate_logo_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
 
+    @field_validator("name")
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        # El nombre de la tienda sale al portal publico (B3-15, regla 19).
+        return reject_control_chars(value)
+
 
 class StoreGlobalUpdate(BaseModel):
     name: str | None = Field(None, min_length=2, max_length=255)
@@ -53,6 +64,12 @@ class StoreGlobalUpdate(BaseModel):
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
+
+    @field_validator("name")
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        # El nombre de la tienda sale al portal publico (B3-15, regla 19).
+        return reject_control_chars(value)
 
 
 class StoreGlobalResponse(BaseModel):
