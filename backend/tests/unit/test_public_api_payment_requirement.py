@@ -11,7 +11,9 @@ from decimal import Decimal
 import pytest
 
 from core.exceptions import ValidationException
-from modules.public_api.router import _resolve_payment_requirement
+from modules.public_api.service import (
+    resolve_payment_requirement as _resolve_payment_requirement,
+)
 
 
 class TestMercadopago:

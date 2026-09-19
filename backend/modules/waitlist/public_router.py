@@ -20,7 +20,9 @@ from core.router import CanonicalAPIRouter
 from core.validation import PUBLIC_ID_PATTERN
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.public_api.repository import PublicRepository
-from modules.public_api.router import _require_recent_client_otp
+from modules.public_api.service import (
+    require_recent_client_otp as _require_recent_client_otp,
+)
 from modules.stores.model import Store
 from modules.waitlist.schemas import (
     WaitlistClientQuery,

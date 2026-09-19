@@ -9,6 +9,7 @@ un slot es libre solo si:
 """
 
 import json
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import TypedDict, cast
 
@@ -111,6 +112,18 @@ def leaves_unsellable_gap(
     return not (entra_antes and entra_despues)
 
 
+@dataclass
+class _DayAgenda:
+    """Todo lo que la grilla de un dia necesita, leido en lote (sin N+1)."""
+
+    notice_hours: int
+    buffer: timedelta
+    min_bookable_time: datetime
+    schedules: dict[str, list[Schedule]]
+    booked: dict[str, list[Range]]
+    blocks: dict[str, list[StaffBlock]]
+
+
 class AvailabilityService:
     def __init__(self, db: AsyncSession, redis: Redis) -> None:
         self.db = db
@@ -127,9 +140,12 @@ class AvailabilityService:
         """
         Calcula los slots disponibles para un servicio en una fecha dada,
         respetando horarios, turnos ocupados y bloqueos de agenda.
+
+        Partida en pasos (B1-12, antes 250 lineas); el orden de las consultas
+        y la salida son los mismos de siempre
+        (``tests/integration/test_caracterizacion_disponibilidad.py``).
         """
-        # 1. Caché check ----------------------------------------------------
-        # Generacion de la tienda (B6-08) + version del dia (B7-09).
+        # 1. Caché: generacion de la tienda (B6-08) + version del dia (B7-09).
         cache_key = await resolve_slots_key(
             self.redis,
             store_id,
@@ -142,7 +158,7 @@ class AvailabilityService:
         if cached:
             return cast(list[AvailabilitySlot], json.loads(cached))
 
-        # 2. Resolver servicio -----------------------------------------------
+        # 2. Servicio activo de la tienda (sin servicio no se cachea nada).
         svc_res = await self.db.execute(
             select(Service).where(
                 Service.public_id == service_public_id,
@@ -154,14 +170,41 @@ class AvailabilityService:
         if not service:
             return []
 
+        # 3. Staff que realiza el servicio.
+        staff_members = await self._staff_for_service(store_id, service_public_id)
+        if not staff_members:
+            await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, "[]")
+            return []
+
+        # 4 a 6. Reglas de la tienda, horarios, turnos y bloqueos del dia.
+        agenda = await self._load_day(
+            store_id, [member.id for member in staff_members], search_date
+        )
         duration = timedelta(minutes=service.duration_minutes)
 
-        # La fecha que pide el cliente es un dia calendario argentino, no una
-        # ventana UTC: se traduce a sus limites reales en UTC.
-        day_start = local_to_utc(search_date, time.min)
-        day_end = local_to_utc(search_date, time.max)
+        # 7. Grilla por profesional y por franja horaria.
+        all_slots: list[AvailabilitySlot] = []
+        for staff in staff_members:
+            for sched in agenda.schedules.get(staff.id, []):
+                all_slots.extend(
+                    _schedule_slots(
+                        staff,
+                        sched,
+                        search_date,
+                        duration,
+                        agenda,
+                        force_all=force_all,
+                        hide_private_reasons=hide_private_reasons,
+                    )
+                )
 
-        # 3. Staff que realiza el servicio ------------------------------------
+        # 8. Caché por 5 minutos
+        await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, json.dumps(all_slots))
+        return all_slots
+
+    async def _staff_for_service(
+        self, store_id: str, service_public_id: str
+    ) -> list[Staff]:
         staff_res = await self.db.execute(
             select(Staff)
             .options(selectinload(Staff.services))
@@ -170,18 +213,24 @@ class AvailabilityService:
                 Staff.is_active.is_(True),
             )
         )
-        all_store_staff = staff_res.scalars().all()
-        staff_members = [
+        return [
             member
-            for member in all_store_staff
+            for member in staff_res.scalars().all()
             if service_public_id in (member.service_ids or [])
         ]
-        if not staff_members:
-            await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, "[]")
-            return []
-        staff_ids = [member.id for member in staff_members]
 
-        # 4. Resolver reglas del Store ----------------------------------------
+    async def _load_day(
+        self, store_id: str, staff_ids: list[str], search_date: date
+    ) -> _DayAgenda:
+        """Reglas de la tienda y agenda del dia de todos los profesionales.
+
+        La fecha que pide el cliente es un dia calendario argentino, no una
+        ventana UTC: se traduce a sus limites reales en UTC. Una consulta por
+        tabla con ``in_()`` (regla 12).
+        """
+        day_start = local_to_utc(search_date, time.min)
+        day_end = local_to_utc(search_date, time.max)
+
         store_res = await self.db.execute(select(Store).where(Store.id == store_id))
         store = store_res.scalar_one_or_none()
         notice_hours = getattr(store, "min_booking_notice_hours", 2)
@@ -195,19 +244,30 @@ class AvailabilityService:
 
         min_bookable_time = now_utc() + timedelta(hours=notice_hours)
 
-        all_slots: list[AvailabilitySlot] = []
-        day_of_week = search_date.weekday()
-
         schedules_res = await self.db.execute(
             select(Schedule).where(
                 Schedule.staff_id.in_(staff_ids),
-                Schedule.day_of_week == day_of_week,
+                Schedule.day_of_week == search_date.weekday(),
             )
         )
-        schedules_by_staff: dict[str, list[Schedule]] = {}
+        schedules: dict[str, list[Schedule]] = {}
         for schedule in schedules_res.scalars().all():
-            schedules_by_staff.setdefault(schedule.staff_id, []).append(schedule)
+            schedules.setdefault(schedule.staff_id, []).append(schedule)
 
+        booked, blocks = await self._load_occupancy(staff_ids, day_start, day_end)
+        return _DayAgenda(
+            notice_hours=notice_hours,
+            buffer=buffer,
+            min_bookable_time=min_bookable_time,
+            schedules=schedules,
+            booked=booked,
+            blocks=blocks,
+        )
+
+    async def _load_occupancy(
+        self, staff_ids: list[str], day_start: datetime, day_end: datetime
+    ) -> tuple[dict[str, list[Range]], dict[str, list[StaffBlock]]]:
+        """Turnos activos y bloqueos del dia, una consulta cada uno."""
         from sqlalchemy.orm import joinedload
 
         appt_res = await self.db.execute(
@@ -224,9 +284,9 @@ class AvailabilityService:
         )
         # Rangos ocupados normalizados a UTC aware: SQLite devuelve naive y la
         # comparacion con los slots (aware) explotaba.
-        booked_by_staff: dict[str, list[tuple[datetime, datetime]]] = {}
+        booked: dict[str, list[Range]] = {}
         for appointment in appt_res.scalars().all():
-            booked_by_staff.setdefault(appointment.staff_id, []).append(
+            booked.setdefault(appointment.staff_id, []).append(
                 (
                     ensure_utc_aware(appointment.starts_at),
                     ensure_utc_aware(appointment.ends_at),
@@ -243,126 +303,126 @@ class AvailabilityService:
                 )
             )
         )
-        blocks_by_staff: dict[str, list[StaffBlock]] = {}
+        blocks: dict[str, list[StaffBlock]] = {}
         for block in block_res.scalars().all():
-            blocks_by_staff.setdefault(block.staff_id, []).append(block)
+            blocks.setdefault(block.staff_id, []).append(block)
 
-        for staff in staff_members:
-            # 4. Horario del staff ese día -----------------------------------
-            schedules = schedules_by_staff.get(staff.id, [])
-            if not schedules:
-                continue  # El staff no trabaja ese día
+        return booked, blocks
 
-            # 5. Turnos ya reservados ----------------------------------------
-            booked = booked_by_staff.get(staff.id, [])
 
-            # 6. Bloqueos de agenda (StaffBlock) ------------------------------
-            blocks = blocks_by_staff.get(staff.id, [])
+def _schedule_slots(
+    staff: Staff,
+    sched: Schedule,
+    search_date: date,
+    duration: timedelta,
+    agenda: _DayAgenda,
+    *,
+    force_all: bool,
+    hide_private_reasons: bool,
+) -> list[AvailabilitySlot]:
+    """Slots (granularidad SLOT_STEP) de una franja horaria de un profesional."""
+    booked = agenda.booked.get(staff.id, [])
+    blocks = agenda.blocks.get(staff.id, [])
+    # Lo que corta un hueco libre, para el filtro de huecos (B1-01).
+    obstacles: list[Range] = [
+        (appt_start - agenda.buffer, appt_end + agenda.buffer)
+        for appt_start, appt_end in booked
+    ] + [(ensure_utc_aware(b.starts_at), ensure_utc_aware(b.ends_at)) for b in blocks]
 
-            # Lo que corta un hueco libre, para el filtro de huecos (B1-01).
-            obstacles: list[Range] = [
-                (appt_start - buffer, appt_end + buffer)
-                for appt_start, appt_end in booked
-            ] + [
-                (ensure_utc_aware(b.starts_at), ensure_utc_aware(b.ends_at))
-                for b in blocks
-            ]
+    # El horario del staff esta cargado en hora local argentina.
+    current = local_to_utc(search_date, sched.start_time)
+    end = local_to_utc(search_date, sched.end_time)
+    grid_origin = current
+    # Lo anterior a la antelacion minima tampoco se puede vender.
+    sched_obstacles = obstacles + (
+        [(current, agenda.min_bookable_time)]
+        if agenda.min_bookable_time > current
+        else []
+    )
 
-            # 7. Cálculo de slots (granularidad SLOT_STEP) --------------------
-            for sched in schedules:
-                # El horario del staff esta cargado en hora local argentina.
-                current = local_to_utc(search_date, sched.start_time)
-                end = local_to_utc(search_date, sched.end_time)
-                grid_origin = current
-                # Lo anterior a la antelacion minima tampoco se puede vender.
-                sched_obstacles = obstacles + (
-                    [(current, min_bookable_time)]
-                    if min_bookable_time > current
-                    else []
-                )
+    slots: list[AvailabilitySlot] = []
+    while current + duration <= end:
+        slot_end = current + duration
+        status, reason = _slot_status(
+            current,
+            slot_end,
+            booked,
+            blocks,
+            agenda,
+            hide_private_reasons=hide_private_reasons,
+        )
+        # Sin force_all no se ofrece un slot libre que deje un hueco
+        # invendible (B1-01). Los ocupados/bloqueados se muestran igual:
+        # informan, no se venden.
+        if not force_all and status == "available":
+            free_from, free_until = free_window(
+                current,
+                slot_end,
+                window_start=grid_origin,
+                window_end=end,
+                obstacles=sched_obstacles,
+            )
+            if leaves_unsellable_gap(
+                current,
+                duration,
+                free_from=free_from,
+                free_until=free_until,
+                grid_origin=grid_origin,
+            ):
+                current += SLOT_STEP
+                continue
+        slots.append(_slot(staff, current, slot_end, status, reason))
+        current += SLOT_STEP
+    return slots
 
-                while current + duration <= end:
-                    slot_end = current + duration
 
-                    # Verificar conflicto con turnos (ensanchando el turno
-                    # vecino por el buffer a cada lado).
-                    blocked_by_appt = any(
-                        not (
-                            slot_end <= appt_start - buffer
-                            or current >= appt_end + buffer
-                        )
-                        for appt_start, appt_end in booked
-                    )
+def _slot_status(
+    current: datetime,
+    slot_end: datetime,
+    booked: list[Range],
+    blocks: list[StaffBlock],
+    agenda: _DayAgenda,
+    *,
+    hide_private_reasons: bool,
+) -> tuple[str, str | None]:
+    """Turno (ensanchado por el buffer) > bloqueo > antelacion > libre."""
+    buffer = agenda.buffer
+    if any(
+        not (slot_end <= appt_start - buffer or current >= appt_end + buffer)
+        for appt_start, appt_end in booked
+    ):
+        return "booked", None
+    overlapping_block = next(
+        (b for b in blocks if b.overlaps_with(current, slot_end)), None
+    )
+    if overlapping_block:
+        return "blocked", (
+            "No disponible" if hide_private_reasons else overlapping_block.note
+        )
+    # Forcing Function: min_booking_notice
+    if current < agenda.min_bookable_time:
+        return "blocked", f"Requiere {agenda.notice_hours}h de antelación"
+    return "available", None
 
-                    # Verificar conflicto con bloqueos de agenda
-                    overlapping_block = next(
-                        (b for b in blocks if b.overlaps_with(current, slot_end)), None
-                    )
 
-                    # Forcing Function: min_booking_notice
-                    too_soon = current < min_bookable_time
-
-                    status = "available"
-                    reason = None
-
-                    if blocked_by_appt:
-                        status = "booked"
-                    elif overlapping_block:
-                        status = "blocked"
-                        reason = (
-                            "No disponible"
-                            if hide_private_reasons
-                            else overlapping_block.note
-                        )
-                    elif too_soon:
-                        status = "blocked"
-                        reason = f"Requiere {notice_hours}h de antelación"
-
-                    # Sin force_all no se ofrece un slot libre que deje un
-                    # hueco invendible (B1-01). Los ocupados/bloqueados se
-                    # muestran igual: informan, no se venden.
-                    if not force_all and status == "available":
-                        free_from, free_until = free_window(
-                            current,
-                            slot_end,
-                            window_start=grid_origin,
-                            window_end=end,
-                            obstacles=sched_obstacles,
-                        )
-                        if leaves_unsellable_gap(
-                            current,
-                            duration,
-                            free_from=free_from,
-                            free_until=free_until,
-                            grid_origin=grid_origin,
-                        ):
-                            current += SLOT_STEP
-                            continue
-
-                    all_slots.append(
-                        {
-                            "staff_id": staff.public_id,
-                            "staff_name": staff.display_name,
-                            # starts_at/ends_at: instante en UTC (fuente de
-                            # verdad para reservar). start_time/end_time: lo
-                            # que ve el cliente, en hora argentina. Antes
-                            # salian en UTC y el front mostraba "12:00" para
-                            # un turno de 09:00 (2026-09-10).
-                            "starts_at": current.isoformat(),
-                            "ends_at": slot_end.isoformat(),
-                            "start_time": current.astimezone(ARGENTINA_TZ)
-                            .time()
-                            .isoformat(timespec="seconds"),
-                            "end_time": slot_end.astimezone(ARGENTINA_TZ)
-                            .time()
-                            .isoformat(timespec="seconds"),
-                            "status": status,
-                            "reason": reason,
-                        }
-                    )
-
-                    current += SLOT_STEP
-
-        # 8. Caché por 5 minutos --------------------------------------------
-        await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, json.dumps(all_slots))
-        return all_slots
+def _slot(
+    staff: Staff, current: datetime, slot_end: datetime, status: str, reason: str | None
+) -> AvailabilitySlot:
+    return {
+        "staff_id": staff.public_id,
+        "staff_name": staff.display_name,
+        # starts_at/ends_at: instante en UTC (fuente de verdad para reservar).
+        # start_time/end_time: lo que ve el cliente, en hora argentina. Antes
+        # salian en UTC y el front mostraba "12:00" para un turno de 09:00
+        # (2026-09-10).
+        "starts_at": current.isoformat(),
+        "ends_at": slot_end.isoformat(),
+        "start_time": current.astimezone(ARGENTINA_TZ)
+        .time()
+        .isoformat(timespec="seconds"),
+        "end_time": slot_end.astimezone(ARGENTINA_TZ)
+        .time()
+        .isoformat(timespec="seconds"),
+        "status": status,
+        "reason": reason,
+    }
