@@ -269,14 +269,23 @@ def test_el_drill_lanza_sus_subprocesos_con_el_interprete_y_rutas_absolutas(
     assert Path(salida).is_absolute(), f"--output-dir relativo: {salida!r}"
 
 
+# Lo que devuelve psql cuando el restore trajo una base con esquema y datos:
+# version de alembic y los conteos de las tablas criticas.
+VERIFICACION_OK = "d2f4a6b8c0e2|3|12|5"
+
+
 def _drill_con_subprocess_falso(
     monkeypatch: MonkeyPatch,
+    verificacion: tuple[int, str, str] = (0, VERIFICACION_OK, ""),
 ) -> tuple[ModuleType, list[list[str]]]:
     drill = load_script("backup_restore_drill")
     lanzados: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
         lanzados.append(list(command))
+        if command and command[0] == "psql":
+            code, out, err = verificacion
+            return SimpleNamespace(returncode=code, stdout=out, stderr=err)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(drill.subprocess, "run", fake_run)
@@ -377,3 +386,117 @@ def test_el_drill_restaura_cuando_el_destino_es_otra_base(
 
     assert drill.main() == 0
     assert any("restore_backup.py" in " ".join(c) for c in lanzados)
+
+
+def _argv_de_restore(tmp_path: Path, backup_dir: Path) -> list[str]:
+    return [
+        "backup_restore_drill.py",
+        "--backup-dir",
+        str(backup_dir),
+        "--evidence-dir",
+        str(tmp_path / "evidence"),
+        "--run-restore",
+        "--database-url",
+        "postgresql://u:p@prod.example.com:5432/shifty",
+        "--restore-database-url",
+        "postgresql://u:p@drill.example.com:5432/shifty_drill",
+    ]
+
+
+def _evidencia(tmp_path: Path) -> dict[str, object]:
+    archivo = next((tmp_path / "evidence").glob("drill-*.json"))
+    datos = json.loads(archivo.read_text(encoding="utf-8"))
+    assert isinstance(datos, dict)
+    return datos
+
+
+def test_el_drill_consulta_la_base_restaurada_y_lo_deja_en_la_evidencia(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """AUD2-C-04 (2026-09-19): el drill no miraba lo restaurado.
+
+    Sintoma: escribia `status: ok` con el exit code de pg_restore y nada mas.
+    Un dump valido de una base VACIA, o de la base equivocada, producia
+    evidencia identica a la de un dump bueno; y el runbook usa esa evidencia
+    para autorizar releases, prometiendo un health-check que nunca existio.
+    """
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, lanzados = _drill_con_subprocess_falso(monkeypatch)
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 0
+
+    consulta = next(c for c in lanzados if c[0] == "psql")
+    sql = consulta[-1]
+    assert "alembic_version" in sql
+    for tabla in ("stores", "appointments", "payments"):
+        assert f"count(*) from {tabla}" in sql
+    # La consulta va contra el DESTINO del drill, no contra el origen.
+    assert "drill.example.com" in consulta
+
+    evidencia = _evidencia(tmp_path)
+    assert evidencia["status"] == "ok"
+    assert evidencia["restored_alembic_version"] == "d2f4a6b8c0e2"
+    assert evidencia["restored_rows"] == {
+        "stores": "3",
+        "appointments": "12",
+        "payments": "5",
+    }
+
+
+def test_un_restore_sin_esquema_no_da_evidencia_ok(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # Base vacia: alembic_version no devuelve nada.
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, _ = _drill_con_subprocess_falso(monkeypatch, verificacion=(0, "|0|0|0", ""))
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 1
+
+    evidencia = _evidencia(tmp_path)
+    assert evidencia["status"] == "failed"
+    pasos = evidencia["steps"]
+    assert isinstance(pasos, list)
+    paso = next(p for p in pasos if p["name"] == "verify-restore")
+    assert paso["ok"] is False
+    assert "alembic_version" in paso["stderr"]
+
+
+def test_una_tabla_critica_que_falta_no_da_evidencia_ok(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, _ = _drill_con_subprocess_falso(
+        monkeypatch,
+        verificacion=(1, "", 'ERROR:  relation "payments" does not exist'),
+    )
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 1
+
+    evidencia = _evidencia(tmp_path)
+    assert evidencia["status"] == "failed"
+    pasos = evidencia["steps"]
+    assert isinstance(pasos, list)
+    paso = next(p for p in pasos if p["name"] == "verify-restore")
+    assert "does not exist" in paso["stderr"]
+
+
+def test_si_la_guarda_frena_el_restore_no_se_verifica_nada(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    # AUD2-C-05 + C-04: si el destino es el origen no se lanza nada, tampoco
+    # la consulta de verificacion.
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, lanzados = _drill_con_subprocess_falso(monkeypatch)
+    argv = _argv_de_restore(tmp_path, backup_dir)
+    argv[-1] = "postgresql://u:p@prod.example.com:5432/shifty"
+    monkeypatch.setattr("sys.argv", argv)
+
+    assert drill.main() == 1
+    assert lanzados == []
