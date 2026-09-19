@@ -158,12 +158,13 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # La migracion de RLS crea el rol shifty_app con esta contrasena.
-      APP_DB_PASSWORD: shifty_app_password
+      # La migracion de RLS crea el rol shifty_app con esta contrasena. Es un
+      # valor de prueba de este job, no un secreto de produccion (C-02).
+      APP_DB_PASSWORD: ci_solo_prueba_app_password
       # El Postgres del job no tiene TLS y las migraciones exigen TLS si la URL
       # no dice nada (core.config.parse_db_url, B7-11): `ssl=disable` explicito.
       TEST_POSTGRES_MIGRATION_URL: postgresql+asyncpg://shifty_user:shifty_password@localhost:5432/shifty_test?ssl=disable
-      TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:shifty_app_password@localhost:5432/shifty_test?ssl=disable
+      TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:ci_solo_prueba_app_password@localhost:5432/shifty_test?ssl=disable
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
