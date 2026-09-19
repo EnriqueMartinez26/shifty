@@ -56,17 +56,6 @@ async def test_el_esquema_queda_completo_y_en_head(owner_engine: AsyncEngine) ->
                 )
             ).all()
         }
-        politicas = (
-            await conn.execute(text("select count(*) from pg_policies"))
-        ).scalar_one()
-        forzadas = (
-            await conn.execute(
-                text(
-                    "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace "
-                    "where n.nspname='public' and c.relkind='r' and c.relforcerowsecurity"
-                )
-            )
-        ).scalar_one()
         constraints = {
             r[0]
             for r in (
@@ -104,8 +93,6 @@ async def test_el_esquema_queda_completo_y_en_head(owner_engine: AsyncEngine) ->
     }
     assert criticas <= tablas, sorted(criticas - tablas)
     assert len(tablas) >= 25, sorted(tablas)
-    assert politicas >= 25, politicas
-    assert forzadas >= 20, forzadas
     assert "ex_appointments_no_active_overlap" in constraints
     assert {
         "trg_appointment_transition_guard",
@@ -131,3 +118,91 @@ async def test_la_ultima_migracion_es_reversible(owner_engine: AsyncEngine) -> N
     up = alembic("upgrade", "head")
     assert up.returncode == 0, up.stderr[-2000:]
     assert _current() == head
+
+
+# Tablas con store_id que son globales A PROPOSITO y por eso no llevan RLS.
+# `audit_logs` la deja afuera la migracion c3d4e5f6a7b8, que lo dice: "es
+# global por diseno y la consulta el panel de superadministracion, que necesita
+# ver todas las tiendas". Agregar una tabla aca es una decision del dueno, no
+# del test: si aparece una nueva, este test falla y hay que justificarla.
+SIN_RLS_A_PROPOSITO = {"audit_logs"}
+
+
+@pytest.mark.asyncio
+async def test_toda_tabla_con_store_id_tiene_rls_forzado_y_politica(
+    owner_engine: AsyncEngine,
+) -> None:
+    """AUD2-C-11 (2026-09-19): el esquema se validaba con pisos globales.
+
+    Sintoma: el test de esquema pedia `politicas >= 25` y `forzadas >= 20`,
+    conteos sobre el total. Con 27 tablas y 23 columnas store_id habia holgura
+    de sobra: una tabla multi-tenant nueva a la que se le olvidara
+    ENABLE/FORCE ROW LEVEL SECURITY y su policy no bajaba ningun numero por
+    debajo del piso y el job pasaba verde. CLAUDE.md: "RLS es la garantia", y
+    la garantia se verificaba por conteo.
+    """
+    async with owner_engine.connect() as conn:
+        con_store_id = {
+            r[0]
+            for r in (
+                await conn.execute(
+                    text(
+                        "select table_name from information_schema.columns "
+                        "where table_schema='public' and column_name='store_id'"
+                    )
+                )
+            ).all()
+        }
+        estado = {
+            r[0]: (r[1], r[2])
+            for r in (
+                await conn.execute(
+                    text(
+                        "select c.relname, c.relrowsecurity, c.relforcerowsecurity "
+                        "from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+                        "where n.nspname='public' and c.relkind='r'"
+                    )
+                )
+            ).all()
+        }
+        con_politica = {
+            r[0]
+            for r in (
+                await conn.execute(
+                    text(
+                        "select distinct tablename from pg_policies where schemaname='public'"
+                    )
+                )
+            ).all()
+        }
+
+    assert con_store_id, "ninguna tabla tiene store_id: la consulta no sirve"
+
+    faltan_rls: list[str] = []
+    faltan_force: list[str] = []
+    faltan_politica: list[str] = []
+    for tabla in sorted(con_store_id - SIN_RLS_A_PROPOSITO):
+        habilitada, forzada = estado.get(tabla, (False, False))
+        if not habilitada:
+            faltan_rls.append(tabla)
+        if not forzada:
+            faltan_force.append(tabla)
+        if tabla not in con_politica:
+            faltan_politica.append(tabla)
+
+    assert not faltan_rls, (
+        f"tablas con store_id sin ENABLE ROW LEVEL SECURITY: {faltan_rls}"
+    )
+    assert not faltan_force, (
+        "tablas con store_id sin FORCE ROW LEVEL SECURITY (el dueno de la tabla "
+        f"las lee enteras): {faltan_force}"
+    )
+    assert not faltan_politica, (
+        f"tablas con store_id sin ninguna policy: {faltan_politica}"
+    )
+
+    # La lista de excepciones no puede crecer sola ni quedar obsoleta.
+    assert SIN_RLS_A_PROPOSITO <= con_store_id, (
+        "la excepcion nombra tablas que ya no tienen store_id: "
+        f"{sorted(SIN_RLS_A_PROPOSITO - con_store_id)}"
+    )
