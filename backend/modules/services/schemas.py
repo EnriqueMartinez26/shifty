@@ -1,4 +1,5 @@
 from datetime import datetime
+from decimal import Decimal
 
 from typing import Self
 
@@ -23,6 +24,21 @@ class ServiceBase(BaseModel):
     @classmethod
     def validate_media_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
+
+
+_CENT = Decimal("0.01")
+
+
+def reject_sub_cent(value: float | None) -> float | None:
+    """Importes con hasta 2 decimales, sin cambiar el tipo (B6-07).
+
+    No se usa ``Field(multiple_of=0.01)``: con ``float`` rechaza importes
+    validos por precision (p. ej. 9624539.79). ``Decimal(str(v))`` compara el
+    numero tal como llego en el JSON.
+    """
+    if value is not None and Decimal(str(value)) % _CENT != 0:
+        raise ValueError("el importe admite hasta 2 decimales")
+    return value
 
 
 DEPOSIT_FIELDS = ("deposit_mode", "deposit_type", "deposit_amount")
@@ -56,6 +72,14 @@ class ServiceCreate(ServiceBase):
         if error:
             raise ValueError(error)
         return self
+
+    @field_validator("price", "deposit_amount")
+    @classmethod
+    def reject_sub_cent_amounts(cls, value: float | None) -> float | None:
+        # En los schemas de entrada y no en ServiceBase: ServiceResponse
+        # hereda de la base y una fila vieja con 3 decimales (SQLite) tiene
+        # que seguir leyendose.
+        return reject_sub_cent(value)
 
     @field_validator("name", "description")
     @classmethod
@@ -95,6 +119,11 @@ class ServiceUpdate(BaseModel):
     @classmethod
     def reject_control_chars_in_text(cls, value: str | None) -> str | None:
         return reject_control_chars(value)
+
+    @field_validator("price", "deposit_amount")
+    @classmethod
+    def reject_sub_cent_amounts(cls, value: float | None) -> float | None:
+        return reject_sub_cent(value)
 
     @model_validator(mode="after")
     def reject_null_in_required_columns(self) -> Self:
