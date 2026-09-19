@@ -224,10 +224,25 @@ async def _validate_payment_integrity(
             raise RuntimeError("El cobro pertenece a otra cuenta de Mercado Pago")
 
 
+# Estados de un turno cuyo horario ya se solto: un pago que llega despues no
+# lo revive (el horario pudo tomarlo otra persona). S-16, 2026-09-19.
+_TURNO_LIBERADO = {
+    AppointmentStatus.EXPIRED.value,
+    AppointmentStatus.CANCELLED.value,
+}
+
+
 async def _notify_payment_approved(
-    db: AsyncSession, *, store_id: str, payment: Payment
+    db: AsyncSession, *, store_id: str, payment: Payment, turno_liberado: bool
 ) -> None:
-    """Deja en el outbox el aviso de seña acreditada para el panel de la tienda."""
+    """Deja en el outbox el aviso de seña acreditada para el panel de la tienda.
+
+    Si el turno ya estaba liberado el evento es otro
+    (``payment.received_on_released_appointment``): antes se publicaba
+    ``payment.approved`` y el dueno leia "el turno quedo confirmado
+    automaticamente" de un turno que no existia, y el cliente recibia el
+    mail de "turno confirmado".
+    """
     result = await db.execute(
         select(Appointment, Service)
         .join(Service, Appointment.service_id == Service.id)
@@ -239,7 +254,11 @@ async def _notify_payment_approved(
     db.add(
         OutboxMessage(
             store_id=store_id,
-            event_type=NotificationType.PAYMENT_APPROVED.value,
+            event_type=(
+                NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value
+                if turno_liberado
+                else NotificationType.PAYMENT_APPROVED.value
+            ),
             payload={
                 "appointment_id": payment.appointment_id,
                 "payment_id": payment.id,
@@ -282,8 +301,6 @@ async def apply_mercadopago_webhook_payload(
         payment_status,
         payload=cast(dict[str, JsonValue], payload),
     )
-    if not was_settled and payment.status == PaymentStatus.APPROVED.value:
-        await _notify_payment_approved(db, store_id=store_id, payment=payment)
     appointment_result = await db.execute(
         select(Appointment)
         .where(
@@ -303,4 +320,14 @@ async def apply_mercadopago_webhook_payload(
         ):
             appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         sync_appointment_with_payment(appointment, payment.status)
+    # El aviso sale despues de sincronizar el turno: recien ahi se sabe si el
+    # pago confirmo el turno o llego tarde sobre uno ya liberado (S-16). El
+    # pago queda acreditado igual: la plata entro y hay que poder devolverla.
+    if not was_settled and payment.status == PaymentStatus.APPROVED.value:
+        await _notify_payment_approved(
+            db,
+            store_id=store_id,
+            payment=payment,
+            turno_liberado=appointment is None or appointment.status in _TURNO_LIBERADO,
+        )
     return True

@@ -489,6 +489,23 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
             appointment_id=str(appointment_id) if appointment_id else None,
         )
 
+    if message.event_type == NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value:
+        # S-16: pago acreditado de un turno que ya se habia liberado. No se
+        # confirma nada ni se avisa al cliente: el dueno decide.
+        amount = payload.get("amount")
+        amount_label = f" de ${amount}" if amount else ""
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Pago recibido de un turno ya liberado",
+            body=(
+                f"{client_name} pago la seña{amount_label} de {service_name}, "
+                "pero el turno ya se habia liberado. Devolvele la plata "
+                "(registra el reembolso) o reasignale un turno."
+            ),
+            appointment_id=str(appointment_id) if appointment_id else None,
+        )
+
     return None
 
 
