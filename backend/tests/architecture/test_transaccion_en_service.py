@@ -5,9 +5,10 @@
 en los handlers HTTP, junto con la logica de negocio: el saldo incremental con
 su advisory lock, el chequeo de codigos duplicados y la ventana de vigencia.
 
-CLAUDE.md §2 declara la deuda acotada a ``public_api/router.py``,
-``payments/router.py``, ``stores/router.py`` y ``superadmin/repository.py``:
-ledger y promotions la habian extendido a dos modulos mas. El costo concreto
+CLAUDE.md §2 declaraba entonces la deuda acotada a ``public_api/router.py``,
+``payments/router.py``, ``stores/router.py`` y ``superadmin/repository.py``
+(desde 2026-09-19 remite a ``COMMITS_DECLARADOS_FUERA_DE_SERVICE`` y a este
+test): ledger y promotions la habian extendido a dos modulos mas. El costo concreto
 era que el lock que serializa ``balance_after`` quedaba en la capa equivocada y
 no se podia ejercer sin levantar HTTP.
 """
