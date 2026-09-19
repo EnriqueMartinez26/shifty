@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import AppException, UserNotFoundException
 from core.database import get_db
 from core.roles import assert_can_change_access, assert_can_grant_role
+from modules.users.guards import assert_deactivation_allowed
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.users.model import User
@@ -106,6 +107,9 @@ async def update_user(
     assert_can_change_access(
         admin, user, password=data.password, is_active=data.is_active, role=data.role
     )
+    # Regla 14: tambien por aca se llegaba a dejar la plataforma sin SuperAdmin
+    # activo (AUD2-B3-01).
+    await assert_deactivation_allowed(db, admin, user, is_active=data.is_active)
 
     try:
         return UserResponse.model_validate(
@@ -136,6 +140,7 @@ async def delete_user(
         raise UserNotFoundException(public_id)
     # La baja es un cambio de estado: tampoco sobre OTRO admin de tienda (S-15).
     assert_can_change_access(admin, user, is_active=False)
+    await assert_deactivation_allowed(db, admin, user, is_active=False)
 
     await UserService(db).soft_delete(user)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

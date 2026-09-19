@@ -15,6 +15,7 @@ from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
 from modules.stores.model import Store
+from modules.users.guards import assert_deactivation_allowed
 from modules.users.model import User, UserRole
 
 
@@ -406,20 +407,11 @@ class UserAdminRepository(_BaseAdminRepository):
     ) -> User:
         data = payload.copy()
         password = data.pop("password", None)
-        # La guarda de "ultimo superadmin" vivia solo en set_global_admin;
-        # update_user podia desactivar al ultimo global admin activo (o a uno
-        # mismo) y brickear el panel (is_active=false -> get_current_user lo
-        # rechaza). Se replica aca antes de aplicar los cambios.
-        if user.is_global_admin and data.get("is_active") is False:
-            if user.id == actor.id:
-                raise ValueError("No podés desactivar tu propio acceso SuperAdmin")
-            activos = await self.db.execute(
-                select(func.count())
-                .select_from(User)
-                .where(User.is_active.is_(True), User.is_global_admin.is_(True))
-            )
-            if int(activos.scalar_one()) <= 1:
-                raise ValueError("No se puede desactivar el último SuperAdmin activo")
+        # Regla 14, en el unico lugar donde vive (AUD2-B3-01): la misma guarda
+        # corre en PATCH /users/{id} y en DELETE /users/{id}.
+        await assert_deactivation_allowed(
+            self.db, actor, user, is_active=data.get("is_active")
+        )
         before = {
             "role": user.role,
             "is_active": user.is_active,
