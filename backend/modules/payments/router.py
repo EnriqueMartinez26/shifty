@@ -99,19 +99,6 @@ def get_payment_service(
     return PaymentService(uow=uow)
 
 
-def _gateway_config_response(
-    config: PaymentGatewayConfig | None,
-) -> GatewayConfigResponse:
-    if not config:
-        return GatewayConfigResponse(provider="mercadopago", configured=False)
-    return GatewayConfigResponse(
-        provider=config.provider,
-        configured=True,
-        public_key=config.public_key,
-        access_token_masked="********",
-    )
-
-
 def _payment_preference_response(payment: Payment) -> PaymentPreferenceResponse:
     return PaymentPreferenceResponse(
         payment_public_id=payment.id,
