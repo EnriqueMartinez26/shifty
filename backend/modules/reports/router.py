@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from datetime import date
 from io import BytesIO
 
@@ -10,6 +11,7 @@ from core.exceptions import AppException, PermissionDeniedException
 
 from core.database import get_db
 from core.roles import (
+    REPORT_EXPORTERS,
     REPORT_VIEWERS,
     ROLE_PROFESSIONAL,
     canonical_role,
@@ -32,9 +34,13 @@ router = CanonicalAPIRouter(prefix="/reports", tags=["Reports"])
 SUMMARY_DETAIL_DEFAULT_LIMIT = 2000
 
 
-def _report_scope_for(user: User) -> str | None:
-    if not has_any_role(user, REPORT_VIEWERS):
-        raise PermissionDeniedException("ver reportes")
+def _report_scope_for(
+    user: User,
+    allowed: Iterable[str] = REPORT_VIEWERS,
+    action: str = "ver reportes",
+) -> str | None:
+    if not has_any_role(user, allowed):
+        raise PermissionDeniedException(action)
     # Rol canonico, no el literal legacy "staff" (B5-07): si el vocabulario
     # persistido cambia, el profesional sigue acotado a sus turnos en vez de
     # caer en None y ver la tienda completa.
@@ -106,7 +112,11 @@ async def export_report(
     db: AsyncSession = Depends(get_db),
 ) -> StreamingResponse:
     service = ReportService(db, store_id=store_scope_for(user))
-    staff_scope = _report_scope_for(user)
+    # Exportar es de admins (B5-06): REPORT_EXPORTERS, no REPORT_VIEWERS. El
+    # profesional ve su reporte en pantalla pero no baja el archivo.
+    staff_scope = _report_scope_for(
+        user, allowed=REPORT_EXPORTERS, action="exportar reportes"
+    )
     try:
         summary = await service.get_summary(
             payload.from_date, payload.to_date, staff_id=staff_scope
