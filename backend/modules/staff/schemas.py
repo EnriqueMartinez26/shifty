@@ -1,8 +1,8 @@
 from typing import Literal, Annotated
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from datetime import time
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
 from modules.services.schemas import ServiceResponse
 
 PublicId = Annotated[str, Field(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)]
@@ -61,6 +61,14 @@ class StaffCreate(StaffBase):
         default_factory=list, max_length=MAX_SERVICE_IDS
     )
 
+    @field_validator("display_name", "first_name", "last_name")
+    @classmethod
+    def reject_control_chars_in_names(cls, value: str | None) -> str | None:
+        # Regla 19 leida como "texto que se publica" (B3-15): sale al portal
+        # publico. Va en el schema de entrada, no en StaffBase, que hereda
+        # StaffResponse: una fila legada con un invisible se sigue leyendo.
+        return reject_control_chars(value)
+
     @model_validator(mode="after")
     def validate_by_kind(self) -> "StaffCreate":
         if self.kind == "person":
@@ -85,6 +93,11 @@ class StaffUpdate(BaseModel):
     display_name: str | None = Field(None, min_length=2, max_length=255)
     service_ids: list[PublicId] | None = Field(None, max_length=100)
     is_active: bool | None = None
+
+    @field_validator("display_name", "first_name", "last_name")
+    @classmethod
+    def reject_control_chars_in_names(cls, value: str | None) -> str | None:
+        return reject_control_chars(value)
 
 
 class StaffResponse(StaffBase):
