@@ -27,6 +27,12 @@ REPO_ROOT = BACKEND_ROOT.parent
 MIGRACION = BACKEND_ROOT / "alembic" / "versions" / "c3d4e5f6a7b8_rls_efectivo.py"
 DEFAULT_PUBLICADO = "shifty_app_password"
 
+# AUD2-C-02 (2026-09-19): C-02 cerro solo la del rol shifty_app, que es el
+# MENOS privilegiado. El rol dueno de la base (tiene DDL y RLS no lo alcanza) y
+# el broker seguian con su default publicado en el repo.
+CREDENCIALES = ("APP_DB_PASSWORD", "POSTGRES_PASSWORD", "RABBITMQ_DEFAULT_PASS")
+DEFAULTS_PUBLICADOS = ("shifty_app_password", "shifty_password")
+
 
 def _migracion_con_op_simulado(
     monkeypatch: pytest.MonkeyPatch,
@@ -212,3 +218,46 @@ def test_la_contrasena_no_puede_cerrar_el_bloque_do(
         migracion.upgrade()
 
     assert op.execute.call_count == 0
+
+
+@pytest.mark.parametrize("variable", CREDENCIALES)
+def test_ninguna_credencial_tiene_default_en_compose(variable: str) -> None:
+    for compose in sorted(REPO_ROOT.glob("docker-compose*.yml")):
+        texto = compose.read_text(encoding="utf-8")
+        usos = re.findall(r"\$\{" + variable + r"(?P<resto>[^}]*)\}", texto)
+        for resto in usos:
+            assert resto.startswith(":?"), (
+                f"{compose.name}: {variable} con {resto!r} resuelve sin la "
+                "variable; tiene que ser la forma :? con mensaje"
+            )
+
+
+@pytest.mark.parametrize("variable", CREDENCIALES)
+def test_cada_credencial_esta_documentada_en_el_env_de_ejemplo(variable: str) -> None:
+    ejemplo = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert f"\n{variable}=" in ejemplo, (
+        f"{variable} no esta en .env.example: quien copie el ejemplo no sabe "
+        "que tiene que definirla"
+    )
+
+
+def test_ningun_default_publicado_vive_en_la_app_ni_en_la_config() -> None:
+    candidatos = [
+        *REPO_ROOT.glob("docker-compose*.yml"),
+        REPO_ROOT / ".env.example",
+        BACKEND_ROOT / ".env.production.example",
+        *(
+            ruta
+            for ruta in BACKEND_ROOT.rglob("*.py")
+            if "tests" not in ruta.relative_to(BACKEND_ROOT).parts
+            and ".venv" not in ruta.relative_to(BACKEND_ROOT).parts
+        ),
+    ]
+    con_default = [
+        f"{ruta.relative_to(REPO_ROOT)}: {publicado}"
+        for ruta in candidatos
+        if ruta.is_file()
+        for publicado in DEFAULTS_PUBLICADOS
+        if publicado in ruta.read_text(encoding="utf-8")
+    ]
+    assert not con_default, f"credenciales publicadas todavia en el repo: {con_default}"

@@ -16,10 +16,10 @@ x-app-environment: &app_environment
   # Sin default (C-02): la contrasena del rol shifty_app viene del .env local.
   DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   # Las migraciones necesitan DDL: van con el dueno de la base.
-  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
+  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
   REDIS_URL: redis://redis:6379/0
-  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
+  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}@rabbitmq:5672//
   CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
@@ -51,7 +51,8 @@ services:
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-shifty_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shifty_password}
+      # Sin default (AUD2-C-02): es el rol DUENO, con DDL y sin RLS.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}
       POSTGRES_DB: ${POSTGRES_DB:-shifty_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -97,7 +98,7 @@ services:
     restart: always
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shifty}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-shifty_password}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}
     ports:
       - "127.0.0.1:5672:5672"
       - "127.0.0.1:15672:15672"
