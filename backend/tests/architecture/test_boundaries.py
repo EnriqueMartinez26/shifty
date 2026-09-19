@@ -43,7 +43,7 @@ COMMITS_DECLARADOS_FUERA_DE_SERVICE: dict[str, int] = {
     "modules/notifications/router.py": 2,
     "modules/payments/router.py": 6,
     "modules/promotions/router.py": 3,
-    "modules/public_api/router.py": 6,
+    "modules/public_api/router.py": 2,
     "modules/services/repository.py": 3,
     "modules/staff/repository.py": 4,
     "modules/stores/router.py": 3,
