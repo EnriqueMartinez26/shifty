@@ -73,6 +73,11 @@ class AppointmentBlockUpdate(BaseModel):
     ends_at: datetime | None = None
     reason: str | None = Field(None, max_length=255)
     is_active: bool | None = None
+    # Si el bloqueo pasa a cubrir turnos reservados (moverlo, agrandarlo,
+    # reactivarlo), sin este flag el PATCH responde 409 con la cantidad; con
+    # el flag (solo administradores) se cancelan los que se pueden y se avisa
+    # al cliente. Mismo contrato que el alta (AUD2-B1-01).
+    cancel_affected: bool = False
 
 
 class AppointmentBlockResponse(BaseModel):
