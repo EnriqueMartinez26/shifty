@@ -48,3 +48,40 @@ def test_el_ejemplo_es_el_perfil_de_desarrollo() -> None:
         "`.env.example` es el perfil de desarrollo; el de produccion es "
         f"backend/.env.production.example. ENV={valores.get('ENV')!r}"
     )
+
+
+# --- Las dos URLs de base (AUD2-C-03, 2026-09-19) ----------------------------
+#
+# alembic/env.py migra con `MIGRATION_DATABASE_URL or DATABASE_URL`, y la
+# segunda tiene default None. El ejemplo de produccion documentaba solo
+# DATABASE_URL, y ahi el USER es el rol shifty_app: siguiendo ese archivo,
+# `alembic upgrade head` corre sin DDL y falla en CREATE EXTENSION / CREATE
+# ROLE. Y si el operador pone el rol dueno en DATABASE_URL para que las
+# migraciones pasen, la API se niega a arrancar (_assert_rls_capable_role). O
+# sea: con lo documentado, o no migras o no arranca.
+
+PRODUCCION = REPO_ROOT / "backend" / ".env.production.example"
+
+
+def _claves(ruta: Path) -> set[str]:
+    claves = set()
+    for linea in ruta.read_text(encoding="utf-8").splitlines():
+        limpia = linea.strip()
+        if limpia and not limpia.startswith("#") and "=" in limpia:
+            claves.add(limpia.split("=", 1)[0].strip())
+    return claves
+
+
+def test_el_ejemplo_de_produccion_documenta_las_dos_urls_de_base() -> None:
+    claves = _claves(PRODUCCION)
+    for variable in ("DATABASE_URL", "MIGRATION_DATABASE_URL"):
+        assert variable in claves, (
+            f"{variable} no esta en backend/.env.production.example: un despliegue "
+            "que copie ese archivo no puede migrar y arrancar a la vez"
+        )
+
+
+def test_el_ejemplo_de_produccion_explica_por_que_son_dos_roles() -> None:
+    texto = PRODUCCION.read_text(encoding="utf-8")
+    assert "DDL" in texto, "no dice por que las migraciones necesitan otro rol"
+    assert "shifty_app" in texto
