@@ -5,7 +5,9 @@ B4-07 (2026-09-18): ``modules/notifications/tasks.py`` define ``_mask_email``
 eventos; en otros cinco (``smtp_send_failed``, ``sending_confirmation_email``,
 ``sending_reminder_email``, ``confirmation_email_dispatch_failed`` y
 ``store_notification_email_failed``) iba el email completo a los logs de
-produccion.
+produccion. ``sending_reminder_email`` desaparecio con X-08 (se borro
+``send_appointment_reminder``, sin llamadores); el recordatorio vivo sale por
+``notify_client_reminder``, que no loguea el email.
 
 El segundo test deja constancia de que las guardas del sink siguen vivas en
 el mismo camino: nunca a un email tecnico ``.noreply`` (is_deliverable_email)
@@ -71,12 +73,16 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
     monkeypatch.setattr(smtplib, "SMTP", _SmtpOk)
     with capture_logs() as eventos:
         await tasks.send_appointment_confirmation(EMAIL, dict(DETAILS))
-        await tasks.send_appointment_reminder(EMAIL, dict(DETAILS))
+        # El recordatorio sale por notify_client_reminder (X-08 borro el
+        # gemelo send_appointment_reminder): no loguea el email.
+        await tasks.notify_client_reminder(
+            phone=None, email=EMAIL, details=dict(DETAILS)
+        )
 
     monkeypatch.setattr(smtplib, "SMTP", _SmtpCaido)
     with capture_logs() as eventos_fallo:
         assert await tasks._send_email(EMAIL, "Asunto", "cuerpo") is False
-        resultado = await tasks.enqueue_confirmation_email(
+        resultado = await tasks.send_confirmation_email(
             email=EMAIL, details=dict(DETAILS)
         )
         assert resultado["status"] == "failed"
@@ -95,7 +101,6 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
     por_nombre = {evento["event"]: evento for evento in todos}
     esperados = {
         "sending_confirmation_email": "email",
-        "sending_reminder_email": "email",
         "smtp_send_failed": "to",
         "confirmation_email_dispatch_failed": "email",
         "store_notification_email_failed": "email",
@@ -112,7 +117,7 @@ async def test_guardas_del_sink_siguen_vivas(monkeypatch: pytest.MonkeyPatch) ->
     _SmtpOk.enviados = []
     monkeypatch.setattr(smtplib, "SMTP", _SmtpOk)
 
-    saltado = await tasks.enqueue_confirmation_email(
+    saltado = await tasks.send_confirmation_email(
         email="5491100000000@store1.noreply", details=dict(DETAILS)
     )
     assert saltado == {"status": "skipped", "reason": "no-deliverable"}
@@ -120,7 +125,7 @@ async def test_guardas_del_sink_siguen_vivas(monkeypatch: pytest.MonkeyPatch) ->
 
     hostil = dict(DETAILS, service="Corte\r\nBcc: victima@example.com")
     with capture_logs() as eventos:
-        enviado = await tasks.enqueue_confirmation_email(email=EMAIL, details=hostil)
+        enviado = await tasks.send_confirmation_email(email=EMAIL, details=hostil)
     assert enviado["status"] == "sent"
     assert len(_SmtpOk.enviados) == 1
     asunto = str(_SmtpOk.enviados[0]["Subject"])

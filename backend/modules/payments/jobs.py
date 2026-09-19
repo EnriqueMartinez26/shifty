@@ -19,10 +19,10 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
     build_client_details,
-    enqueue_waitlist_offer_email,
+    send_waitlist_offer_email,
     format_local_datetime,
-    enqueue_cancellation_email,
-    enqueue_confirmation_email,
+    send_cancellation_email,
+    send_confirmation_email,
     send_store_notification_email,
 )
 from modules.payments.model import (
@@ -123,7 +123,7 @@ async def process_outbox_batch(
                     mails_pendientes.append(
                         (
                             partial(
-                                enqueue_waitlist_offer_email,
+                                send_waitlist_offer_email,
                                 email=oferta.pending_email.email,
                                 details=oferta.pending_email.details,
                             ),
@@ -136,7 +136,7 @@ async def process_outbox_batch(
                 mails_pendientes.append(
                     (
                         partial(
-                            enqueue_cancellation_email,
+                            send_cancellation_email,
                             email=str(payload.get("client_email") or "") or None,
                             details=payload,
                         ),
@@ -281,7 +281,7 @@ async def _client_confirmation_mail(
         appointment, appointment.service, appointment.staff, store
     )
     return partial(
-        enqueue_confirmation_email, email=appointment.client_email, details=details
+        send_confirmation_email, email=appointment.client_email, details=details
     )
 
 

@@ -241,7 +241,7 @@ async def test_el_cupo_se_ofrece_a_una_sola_persona_y_pasa_a_la_siguiente(
     # El mail vuelve pendiente: se manda FUERA de la transaccion (regla 5).
     assert [p.email for p in resumen.pending_emails] == ["marta@example.com"]
     for pendiente in resumen.pending_emails:
-        await tasks.enqueue_waitlist_offer_email(
+        await tasks.send_waitlist_offer_email(
             email=pendiente.email, details=pendiente.details
         )
     assert any(e[0] == "marta@example.com" for e in buzon.enviados)

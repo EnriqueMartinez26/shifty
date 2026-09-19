@@ -58,8 +58,8 @@ from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import (
     build_client_details,
-    enqueue_confirmation_email,
-    enqueue_registration_email,
+    send_confirmation_email,
+    send_registration_email,
 )
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import quote_promotion, redeem_promotion
@@ -910,11 +910,11 @@ async def create_public_booking(
             # crear, y "turno confirmado" solo si ya nacio confirmado.
             detalles_cliente = build_client_details(appointment, service, staff, store)
             if appointment.status == AppointmentStatus.CONFIRMED.value:
-                await enqueue_confirmation_email(
+                await send_confirmation_email(
                     email=appointment.client_email, details=detalles_cliente
                 )
             else:
-                await enqueue_registration_email(
+                await send_registration_email(
                     email=appointment.client_email, details=detalles_cliente
                 )
             response = PublicBookingResponse(

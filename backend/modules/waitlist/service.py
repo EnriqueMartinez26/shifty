@@ -16,7 +16,7 @@ from core.exceptions import AppException, ResourceNotFoundException
 from core.utils import ensure_utc_aware
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.notifications.tasks import build_client_details, enqueue_confirmation_email
+from modules.notifications.tasks import build_client_details, send_confirmation_email
 from modules.public_api.repository import PublicRepository
 from modules.services.model import Service
 from modules.staff.model import Staff
@@ -219,7 +219,7 @@ class WaitlistService:
         )
         await self.db.commit()
         await invalidate_availability(cache, store.id, appointment.starts_at)
-        await enqueue_confirmation_email(
+        await send_confirmation_email(
             email=entry.client_email,
             details=build_client_details(appointment, service, staff, store),
         )

@@ -178,8 +178,8 @@ async def test_los_tres_mails_del_lote_salen_con_el_evento_ya_commiteado(
         return {"status": "sent"}
 
     monkeypatch.setattr(payments_jobs, "send_store_notification_email", dueno)
-    monkeypatch.setattr(payments_jobs, "enqueue_cancellation_email", cancelacion)
-    monkeypatch.setattr(payments_jobs, "enqueue_confirmation_email", confirmacion)
+    monkeypatch.setattr(payments_jobs, "send_cancellation_email", cancelacion)
+    monkeypatch.setattr(payments_jobs, "send_confirmation_email", confirmacion)
 
     stats = await process_outbox_batch(test_session)
     assert stats["failed"] == 0, stats

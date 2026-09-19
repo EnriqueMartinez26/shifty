@@ -371,7 +371,14 @@ def _rescheduled_body(details: dict[str, Any]) -> str:
     )
 
 
-async def enqueue_reschedule_email(
+# B4-04 (2026-09-18): los ``send_*_email`` se llamaban ``enqueue_*_email`` y no
+# encolaban nada: mandan SMTP ahora, en el camino del llamador (el llamador
+# espera la respuesta del servidor de correo). Van siempre despues del commit
+# y fuera de cualquier lock (regla 5; outbox: ``OfferResult.pending_email`` y
+# los ``partial`` de payments/jobs). Quien necesite asincronia despacha una
+# tarea de verdad; ``tests/architecture/test_enqueue_encola_de_verdad.py``
+# impide que vuelva un ``enqueue_*`` que mande en linea.
+async def send_reschedule_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "te movimos el turno". Nunca aborta la reprogramacion."""
@@ -476,23 +483,6 @@ async def send_appointment_confirmation(
     return {"status": "sent", "to": email}
 
 
-async def send_appointment_reminder(
-    email: str, details: dict[str, Any]
-) -> dict[str, str]:
-    logger.info(
-        "sending_reminder_email",
-        email=_mask_email(email),
-        appointment=details.get("public_id"),
-    )
-    success = await _send_email(
-        email, _reminder_subject(details), _reminder_body(details)
-    )
-    if not success:
-        raise RuntimeError("SMTP send failed")
-    logger.info("reminder_email_sent", email=_mask_email(email))
-    return {"status": "sent", "to": email}
-
-
 async def _send_whatsapp(to_phone: str, body: str) -> bool:
     """Envia un WhatsApp por la API REST de Twilio.
 
@@ -594,7 +584,7 @@ async def send_appointment_registration(
     return {"status": "sent", "to": email}
 
 
-async def enqueue_registration_email(
+async def send_registration_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "reserva registrada" al crear un turno pendiente. Nunca aborta."""
@@ -612,7 +602,7 @@ async def enqueue_registration_email(
         return {"status": "failed", "reason": type(exc).__name__}
 
 
-async def enqueue_cancellation_email(
+async def send_cancellation_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "turno cancelado" (p.ej. por un bloqueo de agenda). Nunca aborta."""
@@ -635,7 +625,7 @@ async def enqueue_cancellation_email(
     return {"status": "sent", "to": email}
 
 
-async def enqueue_rebook_email(
+async def send_rebook_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "reserva tu proximo turno" al completar. Nunca aborta."""
@@ -678,7 +668,7 @@ def _waitlist_offer_body(details: dict[str, Any]) -> str:
     )
 
 
-async def enqueue_waitlist_offer_email(
+async def send_waitlist_offer_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
     """Mail "se libero un turno" a quien esta en lista de espera. Nunca aborta."""
@@ -701,9 +691,10 @@ async def enqueue_waitlist_offer_email(
     return {"status": "sent", "to": email}
 
 
-async def enqueue_confirmation_email(
+async def send_confirmation_email(
     *, email: str | None, details: dict[str, Any]
 ) -> dict[str, str]:
+    """Mail "turno confirmado". Nunca aborta la confirmacion."""
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
