@@ -14,9 +14,11 @@ from core.config import settings
 from core.utils import ensure_utc_aware, local_day_start, today_local
 
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.audit.repository import AuditRepository
 from modules.ledger.model import CustomerLedger
 from modules.payments.model import Payment, PaymentStatus
 from modules.reports.schemas import (
+    AuditLogItem,
     ReportClientStats,
     ReportDebtClientItem,
     ReportDebtSummary,
@@ -35,6 +37,11 @@ from modules.staff.model import Schedule, Staff, StaffBlock
 from modules.users.model import User
 
 MetricBucket = dict[str, Any]
+
+# Recursos cuya auditoria expone el panel (B5-12): los que escribe
+# AuditRepository.log desde appointments y appointment_blocks. Las acciones
+# del superadmin sobre la tienda (Store, User, suscripciones) quedan afuera.
+AUDITED_SCHEDULE_RESOURCES = ("Appointment", "AppointmentBlock")
 
 # Un pago cuenta como ingreso solo si esta acreditado (Mercado Pago aprobado o
 # cobro manual confirmado). Mismo criterio que modules/dashboard/repository.py.
@@ -989,3 +996,34 @@ class ReportService:
             for key in sorted(buckets.keys())
         ]
         return ReportTrendResponse(points=points)
+
+    async def get_audit_logs(
+        self, *, limit: int, offset: int, resource_id: str | None = None
+    ) -> list[AuditLogItem]:
+        """Auditoria de turnos y bloqueos de la tienda del reporte (B5-12).
+
+        ``audit_logs`` no tiene RLS: sin tienda no hay lectura posible.
+        """
+        store_id = self.store_id
+        if store_id is None:
+            raise ValueError("La auditoria siempre se lee acotada a una tienda")
+        logs = await AuditRepository(self.db).list_store_resource_logs(
+            store_id=store_id,
+            resource_types=AUDITED_SCHEDULE_RESOURCES,
+            limit=limit,
+            offset=offset,
+            resource_id=resource_id,
+        )
+        return [
+            AuditLogItem(
+                id=str(log.id),
+                created_at=log.created_at,
+                actor_email=log.actor_email,
+                resource_type=log.resource_type,
+                resource_id=log.resource_id,
+                action=log.action,
+                payload_before=log.payload_before,
+                payload_after=log.payload_after,
+            )
+            for log in logs
+        ]

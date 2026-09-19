@@ -230,6 +230,7 @@ class AppointmentBlockService:
             action=AuditAction.CREATE,
             resource_type="AppointmentBlock",
             resource_id=result.blocks[0].id if result.blocks else "",
+            store_id=self.actor.store_id,
             actor=self.actor,
             payload_after={
                 "reason": reason,
@@ -256,6 +257,7 @@ class AppointmentBlockService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=self.actor,
             payload_before=payload_before,
             payload_after={

@@ -10,6 +10,7 @@ from core.exceptions import AppException, PermissionDeniedException
 
 from core.database import get_db
 from core.roles import (
+    STORE_MANAGERS,
     REPORT_VIEWERS,
     ROLE_PROFESSIONAL,
     canonical_role,
@@ -19,6 +20,7 @@ from core.roles import (
 from modules.auth.dependencies import get_current_user
 from modules.reports.exporter import export_to_csv, export_to_excel, export_to_pdf
 from modules.reports.schemas import (
+    AuditLogItem,
     ProfessionalReportsResponse,
     ReportExportRequest,
     ReportSummaryResponse,
@@ -26,6 +28,7 @@ from modules.reports.schemas import (
 )
 from modules.reports.service import ReportService
 from modules.users.model import User
+from core.validation import PUBLIC_ID_PATTERN
 
 router = CanonicalAPIRouter(prefix="/reports", tags=["Reports"])
 
@@ -124,4 +127,30 @@ async def export_report(
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
     return StreamingResponse(
         BytesIO(file_bytes), media_type=media_type, headers=headers
+    )
+
+
+@router.get("/audit-logs", response_model=list[AuditLogItem])
+async def list_audit_logs(
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=10_000),
+    resource_id: str | None = Query(
+        default=None, max_length=64, pattern=PUBLIC_ID_PATTERN
+    ),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AuditLogItem]:
+    """Auditoria de turnos y bloqueos de la tienda, mas reciente primero (B5-12).
+
+    Solo admins (STORE_MANAGERS): el modulo de turnos no acota al profesional
+    a sus propios turnos, asi que no hay un recorte "solo lo mio" que imitar.
+    La tienda es SIEMPRE la del usuario, tambien para el superadmin (mismo
+    criterio que B5-02: sin consolidado) y va en el WHERE: ``audit_logs`` no
+    tiene RLS, asi que ese filtro es la unica guarda entre tiendas.
+    """
+    if not has_any_role(user, STORE_MANAGERS):
+        raise PermissionDeniedException("ver la auditoria")
+    service = ReportService(db, store_id=str(user.store_id))
+    return await service.get_audit_logs(
+        limit=limit, offset=offset, resource_id=resource_id
     )
