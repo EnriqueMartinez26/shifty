@@ -18,6 +18,7 @@ from decimal import Decimal
 from core.exceptions import ValidationException
 from core.uow import AbstractUnitOfWork
 from modules.appointments.model import Appointment
+from modules.notifications.model import NotificationType
 from modules.payments.model import Payment, PaymentStatus
 from modules.payments.service import (
     calculate_service_payment_amount,
@@ -69,11 +70,8 @@ class PaymentService:
             payload={"notes": notes} if notes else None,
         )
         sync_appointment_with_payment(appointment, payment.status)
-        self.uow.outbox.publish(
-            store_id=actor.store_id,
-            event_type="payment.manual_confirmed",
-            payload={"appointment_id": appointment.id, "payment_id": payment.id},
-        )
+        # Sin evento de outbox: payment.manual_confirmed no tenia consumidor y
+        # se republicaba en cada doble clic (B2-17, 2026-09-19).
         await self.uow.commit()
         return payment
 
@@ -110,10 +108,16 @@ class PaymentService:
         )
         if appointment:
             sync_appointment_with_payment(appointment, payment.status)
+        # Consumidor: aviso "Reembolso registrado" en el panel (B2-17).
         self.uow.outbox.publish(
             store_id=actor.store_id,
-            event_type="payment.refunded",
-            payload={"payment_id": payment.id, "reason": reason},
+            event_type=NotificationType.PAYMENT_REFUNDED.value,
+            payload={
+                "payment_id": payment.id,
+                "appointment_id": payment.appointment_id,
+                "amount": str(refund_amount),
+                "reason": reason,
+            },
         )
         await self.uow.commit()
         return payment

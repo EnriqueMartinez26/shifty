@@ -419,8 +419,10 @@ async def _expire_claimed_preferences(
 def _build_store_notification(message: OutboxMessage) -> Notification | None:
     """Traduce un evento del outbox en una notificacion para el panel de la tienda.
 
-    Los eventos que no le aportan nada al dueño (por ejemplo, la creacion del link
-    de pago) se consumen sin generar ruido en la campanita.
+    Un evento sin rama aca se consume sin aviso. Desde B2-17 (2026-09-19) todo
+    evento de pago que se publica tiene su rama: los que no le servian a nadie
+    (payment.manual_confirmed, payment.preference.created) dejaron de
+    publicarse.
     """
     if not message.store_id:
         return None
@@ -485,6 +487,20 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
             body=(
                 f"{client_name} pago la seña{amount_label} de {service_name}. "
                 "El turno quedo confirmado automaticamente."
+            ),
+            appointment_id=str(appointment_id) if appointment_id else None,
+        )
+
+    if message.event_type == NotificationType.PAYMENT_REFUNDED.value:
+        amount = payload.get("amount")
+        amount_label = f" de ${amount}" if amount else ""
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Reembolso registrado",
+            body=(
+                f"Se registro un reembolso{amount_label}. Shifty no mueve la plata: "
+                "la devolucion se hace desde Mercado Pago o en efectivo."
             ),
             appointment_id=str(appointment_id) if appointment_id else None,
         )
