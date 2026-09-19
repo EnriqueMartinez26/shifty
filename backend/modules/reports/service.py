@@ -514,7 +514,9 @@ class ReportService:
             start_dt=start_dt,
             end_dt=end_dt,
             staff_id=staff_id,
-        ).order_by(Appointment.starts_at.asc())
+            # Desempate por id: el orden tiene que ser estable para que las paginas
+            # del detalle (B5-15) no repitan ni salteen turnos a la misma hora.
+        ).order_by(Appointment.starts_at.asc(), Appointment.id.asc())
         result = await self.db.execute(query)
         return cast(
             list[tuple[Appointment, Service, Staff, User]],
@@ -745,7 +747,11 @@ class ReportService:
         to_date: date | None,
         *,
         staff_id: str | None = None,
+        page: slice | None = None,
     ) -> ReportSummaryResponse:
+        """``page`` acota solo el detalle ``appointments`` (B5-15); los totales,
+        cohortes y top-5 son siempre del rango completo. ``None`` = todo (export).
+        """
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
         rows = await self._fetch_rows(
@@ -779,6 +785,7 @@ class ReportService:
             ),
             start_dt=start_dt,
             end_dt=end_dt,
+            page=page,
         )
         debt_summary = (
             self._empty_debt_summary() if staff_id else await self._build_debt_summary()
@@ -802,6 +809,7 @@ class ReportService:
         historical_rows: list[Any],
         start_dt: datetime,
         end_dt: datetime,
+        page: slice | None = None,
     ) -> _SummaryAggregation:
         """Agrega los turnos del rango en metricas puras (sin tocar la base).
 
@@ -816,7 +824,8 @@ class ReportService:
         status_counts: dict[str, int] = defaultdict(int)
         clients_in_range: set[str] = set()
 
-        for row in rows:
+        in_page = range(len(rows))[page] if page is not None else range(len(rows))
+        for index, row in enumerate(rows):
             appointment, service, staff, client = _unpack_row(row)
             client_id = appointment.client_id
             current_name = _report_client_name(client, appointment.client_name)
@@ -827,6 +836,8 @@ class ReportService:
             counter = _STATUS_COUNTERS.get((appointment.status or "").upper())
             if counter:
                 status_counts[counter] += 1
+            if index not in in_page:
+                continue
             resolved_client_name = (
                 current_name or known_client_names.get(client_id or "", "") or "Cliente"
             )
@@ -841,7 +852,7 @@ class ReportService:
         )
         return _SummaryAggregation(
             items=items,
-            total_appointments=len(items),
+            total_appointments=len(rows),
             completed=status_counts["completed"],
             cancelled=status_counts["cancelled"],
             pending=status_counts["pending"],

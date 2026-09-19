@@ -29,6 +29,8 @@ from modules.users.model import User
 
 router = CanonicalAPIRouter(prefix="/reports", tags=["Reports"])
 
+SUMMARY_DETAIL_DEFAULT_LIMIT = 2000
+
 
 def _report_scope_for(user: User) -> str | None:
     if not has_any_role(user, REPORT_VIEWERS):
@@ -45,13 +47,23 @@ def _report_scope_for(user: User) -> str | None:
 async def get_report_summary(
     from_date: date | None = None,
     to_date: date | None = None,
+    # B5-15: el detalle `appointments` se pagina; totales y top-5 no. Default
+    # 2000: el panel pide 7 dias y un mes de 40 turnos/dia son ~1.240, asi que
+    # la respuesta de hoy no cambia para rangos normales. Ambas cotas (regla 9).
+    limit: int = Query(default=SUMMARY_DETAIL_DEFAULT_LIMIT, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0, le=100_000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ReportSummaryResponse:
     service = ReportService(db, store_id=store_scope_for(user))
     staff_scope = _report_scope_for(user)
     try:
-        return await service.get_summary(from_date, to_date, staff_id=staff_scope)
+        return await service.get_summary(
+            from_date,
+            to_date,
+            staff_id=staff_scope,
+            page=slice(offset, offset + limit),
+        )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
 
