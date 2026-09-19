@@ -202,7 +202,6 @@ class Settings(BaseSettings):
     SLO_MAX_FAILED_WEBHOOKS: int = 20
     SLO_MAX_PENDING_OUTBOX: int = 200
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
-    RUN_RUNTIME_CONTRACTS_ON_STARTUP: bool = False
 
     DATABASE_URL: str
     # Las migraciones necesitan DDL y CREATE EXTENSION, asi que corren con el

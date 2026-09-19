@@ -16,7 +16,6 @@ from core.database import engine
 from core.middleware import TenantMiddleware
 from core.observability import init_observability
 from core.responses import CanonicalJsonMiddleware, error_response
-from core.runtime_contracts import ensure_runtime_contracts
 from core.exceptions import AppException
 from core.rate_limit import RedisRateLimitMiddleware
 from core.redis import close_redis
@@ -126,8 +125,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             yield
             return
         await _assert_rls_capable_role()
-        if settings.RUN_RUNTIME_CONTRACTS_ON_STARTUP:
-            await ensure_runtime_contracts(engine)
+        # Sin DDL en el arranque: el esquema lo crean las migraciones (regla
+        # 13). El `create_all` + `ALTER TABLE` de runtime_contracts se borro
+        # (B7-07/X-18, 2026-09-19).
         yield
     finally:
         await _close_redis_on_shutdown()
