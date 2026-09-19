@@ -160,8 +160,10 @@ jobs:
     env:
       # La migracion de RLS crea el rol shifty_app con esta contrasena.
       APP_DB_PASSWORD: shifty_app_password
-      TEST_POSTGRES_MIGRATION_URL: postgresql+asyncpg://shifty_user:shifty_password@localhost:5432/shifty_test
-      TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:shifty_app_password@localhost:5432/shifty_test
+      # El Postgres del job no tiene TLS y las migraciones exigen TLS si la URL
+      # no dice nada (core.config.parse_db_url, B7-11): `ssl=disable` explicito.
+      TEST_POSTGRES_MIGRATION_URL: postgresql+asyncpg://shifty_user:shifty_password@localhost:5432/shifty_test?ssl=disable
+      TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:shifty_app_password@localhost:5432/shifty_test?ssl=disable
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0

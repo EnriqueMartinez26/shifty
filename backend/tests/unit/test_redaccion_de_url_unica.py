@@ -77,10 +77,16 @@ def test_el_error_de_settings_sigue_tapando_hasta_el_hostname() -> None:
 
 
 def test_los_dos_consumidores_usan_el_mismo_helper() -> None:
-    """La proxima vez que haga falta se importa; no se reescribe el regex."""
+    """La proxima vez que haga falta se importa; no se reescribe el regex.
+
+    Desde B7-11 los dos consumidores delegan el parseo (y con el la redaccion
+    `keep_target=True` del error) en `core.config.parse_db_url`.
+    """
+    helper = (BACKEND / "core" / "config.py").read_text(encoding="utf-8")
+    assert "redact_url(url, keep_target=True)" in helper
     for archivo in CONSUMIDORES:
         fuente = archivo.read_text(encoding="utf-8")
-        assert "redact_url(url, keep_target=True)" in fuente, archivo
+        assert "from core.config import parse_db_url" in fuente, archivo
         assert "re.sub" not in fuente, f"{archivo} reimplementa la redaccion"
 
 
