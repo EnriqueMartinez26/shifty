@@ -34,9 +34,9 @@ FORBIDDEN_FRAMEWORK_IMPORTS = {
 # migrar commits al service, bajar el numero (o borrar la entrada si llega a
 # 0) es deseable para que la deuda no vuelva a crecer, pero no obligatorio:
 # varias ramas migran en paralelo y la igualdad estricta rompia al integrarlas
-# aunque la deuda hubiera bajado. CLAUDE.md §2 nombra solo cuatro de estos
-# archivos (public_api, payments, stores, superadmin); el codigo tenia once, y
-# gana el codigo.
+# aunque la deuda hubiera bajado. CLAUDE.md §2 nombraba solo cuatro de estos
+# archivos (public_api, payments, stores, superadmin) cuando el codigo tenia
+# once; desde 2026-09-19 no los lista y remite a esta tabla.
 COMMITS_DECLARADOS_FUERA_DE_SERVICE: dict[str, int] = {
     "modules/appointments/repository.py": 2,
     "modules/ledger/router.py": 2,
