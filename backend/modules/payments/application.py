@@ -48,6 +48,13 @@ class PaymentService:
 
         El monto por defecto es el precio congelado del turno (no el de lista de
         hoy); recien despues cae al calculo por servicio para turnos historicos.
+
+        Un cobro que nacio con la regla de sena (snapshot ``deposit_rule``) NO
+        se re-tarifa: registrarlo a mano pasaba su importe de la sena al total,
+        borraba ``promotion_code``, dejaba el snapshot mintiendo y pisaba el
+        ``preference_id`` real con el placeholder, dejando vivo en Mercado Pago
+        un checkout que Shifty ya no podia reconocer (AUD2-B2-01, 2026-09-19).
+        El ``amount`` explicito del pedido es el unico que re-tarifa.
         """
         resolved = amount
         if resolved is None and appointment.price_amount is not None:
@@ -64,6 +71,7 @@ class PaymentService:
             store_id=actor.store_id,
             amount_override=resolved,
             create_provider_link=False,
+            keep_existing_amount=amount is None,
         )
         payment.apply_status(
             PaymentStatus.MANUAL_CONFIRMED.value,
