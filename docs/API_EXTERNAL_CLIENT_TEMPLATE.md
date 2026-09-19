@@ -85,7 +85,7 @@ This switch exists for the backend test suites and is **ignored when `ENV=produc
 ```
 
 ### 3.3. Error Response Envelope
-Unsuccessful requests (status codes `4xx` and `5xx`) return a structured `ApiError` envelope. Error payloads are **never** affected by the `x-raw-response` header.
+Unsuccessful requests (status codes `4xx` and `5xx`) return a structured error envelope with the shape below (`success`, `error_code`, `message` and an optional `detail`). Error payloads are **never** affected by the `x-raw-response` header.
 ```json
 {
   "success": false,
