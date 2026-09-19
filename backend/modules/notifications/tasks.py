@@ -483,23 +483,6 @@ async def send_appointment_confirmation(
     return {"status": "sent", "to": email}
 
 
-async def send_appointment_reminder(
-    email: str, details: dict[str, Any]
-) -> dict[str, str]:
-    logger.info(
-        "sending_reminder_email",
-        email=_mask_email(email),
-        appointment=details.get("public_id"),
-    )
-    success = await _send_email(
-        email, _reminder_subject(details), _reminder_body(details)
-    )
-    if not success:
-        raise RuntimeError("SMTP send failed")
-    logger.info("reminder_email_sent", email=_mask_email(email))
-    return {"status": "sent", "to": email}
-
-
 async def _send_whatsapp(to_phone: str, body: str) -> bool:
     """Envia un WhatsApp por la API REST de Twilio.
 

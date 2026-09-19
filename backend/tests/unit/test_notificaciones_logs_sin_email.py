@@ -5,7 +5,9 @@ B4-07 (2026-09-18): ``modules/notifications/tasks.py`` define ``_mask_email``
 eventos; en otros cinco (``smtp_send_failed``, ``sending_confirmation_email``,
 ``sending_reminder_email``, ``confirmation_email_dispatch_failed`` y
 ``store_notification_email_failed``) iba el email completo a los logs de
-produccion.
+produccion. ``sending_reminder_email`` desaparecio con X-08 (se borro
+``send_appointment_reminder``, sin llamadores); el recordatorio vivo sale por
+``notify_client_reminder``, que no loguea el email.
 
 El segundo test deja constancia de que las guardas del sink siguen vivas en
 el mismo camino: nunca a un email tecnico ``.noreply`` (is_deliverable_email)
@@ -71,7 +73,11 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
     monkeypatch.setattr(smtplib, "SMTP", _SmtpOk)
     with capture_logs() as eventos:
         await tasks.send_appointment_confirmation(EMAIL, dict(DETAILS))
-        await tasks.send_appointment_reminder(EMAIL, dict(DETAILS))
+        # El recordatorio sale por notify_client_reminder (X-08 borro el
+        # gemelo send_appointment_reminder): no loguea el email.
+        await tasks.notify_client_reminder(
+            phone=None, email=EMAIL, details=dict(DETAILS)
+        )
 
     monkeypatch.setattr(smtplib, "SMTP", _SmtpCaido)
     with capture_logs() as eventos_fallo:
@@ -95,7 +101,6 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
     por_nombre = {evento["event"]: evento for evento in todos}
     esperados = {
         "sending_confirmation_email": "email",
-        "sending_reminder_email": "email",
         "smtp_send_failed": "to",
         "confirmation_email_dispatch_failed": "email",
         "store_notification_email_failed": "email",
