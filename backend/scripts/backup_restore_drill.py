@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 # Raiz del backend derivada del propio archivo: el drill se invoca tanto con
 # `working-directory: backend` (workflow mensual) como desde la raiz del repo,
@@ -144,6 +145,25 @@ def _paso_verificar_checksum(backup_dir: Path, evidence: dict[str, Any]) -> Path
     return latest
 
 
+def _mismo_destino(una: str, otra: str) -> bool:
+    """Si las dos URLs apuntan a la misma base, sin mirar credenciales.
+
+    Compara host, puerto (5432 si no esta) y nombre de base. El driver
+    (`+asyncpg`), el usuario y los parametros de la query no cuentan: el
+    peligro es el destino fisico.
+    """
+
+    def destino(url: str) -> tuple[str, int, str]:
+        partes = urlsplit(url)
+        return (
+            (partes.hostname or "").lower(),
+            partes.port or 5432,
+            partes.path.lstrip("/"),
+        )
+
+    return destino(una) == destino(otra)
+
+
 def _paso_restore(
     args: argparse.Namespace, latest: Path | None, evidence: dict[str, Any]
 ) -> None:
@@ -153,6 +173,23 @@ def _paso_restore(
     if not args.restore_database_url:
         _add_step(
             evidence, "restore", False, stderr="DRILL_DATABASE_URL no configurado"
+        )
+        return
+    # `pg_restore --clean --if-exists` dropea cada objeto antes de recargarlo:
+    # contra la base de origen es un borrado de produccion, y este drill corre
+    # solo, por cron, sin revision humana (AUD2-C-05, 2026-09-19).
+    if args.database_url and _mismo_destino(
+        args.database_url, args.restore_database_url
+    ):
+        _add_step(
+            evidence,
+            "restore",
+            False,
+            stderr=(
+                "DRILL_DATABASE_URL apunta a la misma base que el origen "
+                "(mismo host, puerto y nombre): pg_restore --clean la borraria. "
+                "El destino del drill tiene que ser una base aparte."
+            ),
         )
         return
     code, out, err = _run(
