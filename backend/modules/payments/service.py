@@ -11,7 +11,7 @@ import httpx
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.circuit_breaker import AsyncCircuitBreaker
+from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 from core.config import settings
 from core.crypto import decrypt_secret, encrypt_secret
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -823,20 +823,50 @@ async def ensure_payment_preference(
     deposit_rule: dict[str, JsonValue] | None = None,
     keep_existing_amount: bool = False,
 ) -> Payment:
+    payment, _creado = await _upsert_payment_preference(
+        db,
+        appointment=appointment,
+        service=service,
+        store_id=store_id,
+        amount_override=amount_override,
+        original_amount=original_amount,
+        discount_amount=discount_amount,
+        promotion_code=promotion_code,
+        create_provider_link=create_provider_link,
+        deposit_rule=deposit_rule,
+        keep_existing_amount=keep_existing_amount,
+    )
+    return payment
+
+
+async def _upsert_payment_preference(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    amount_override: Decimal | None,
+    original_amount: Decimal | None,
+    discount_amount: Decimal | None,
+    promotion_code: str | None,
+    create_provider_link: bool,
+    deposit_rule: dict[str, JsonValue] | None,
+    keep_existing_amount: bool,
+) -> tuple[Payment, bool]:
+    """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17)."""
     amount, original_amount, discount_amount = _resolve_amounts(
         service,
         amount_override=amount_override,
         original_amount=original_amount,
         discount_amount=discount_amount,
     )
-
     result = await db.execute(
         select(Payment).where(
             Payment.appointment_id == appointment.id, Payment.store_id == store_id
         )
     )
     payment = result.scalar_one_or_none()
-
+    creado = payment is None
     if payment:
         importe_cambio = _reprice_existing_payment(
             payment,
@@ -848,9 +878,8 @@ async def ensure_payment_preference(
         )
         if deposit_rule is not None:
             payment.deposit_rule = deposit_rule
-        # Reabrir el cobro solo si el grafo lo permite: un pago acreditado o
-        # devuelto no vuelve a pendiente porque se recalcule el importe. Lo
-        # decide la entidad (devuelve False y no toca nada si es ilegal).
+        # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
+        # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
         payment.apply_status(PaymentStatus.PENDING.value)
         should_refresh_provider_link = _needs_provider_link(
             payment,
@@ -888,11 +917,11 @@ async def ensure_payment_preference(
             amount=amount,
         )
 
-    return payment
+    return payment, creado
 
 
 async def _discard_orphan_payment(
-    db: AsyncSession, *, store_id: str, payment_id: str
+    db: AsyncSession, *, store_id: str, payment_id: str, appointment_id: str
 ) -> None:
     """Compensacion: borra el cobro que creo la fase 1 y lo que encolo para el.
 
@@ -901,16 +930,27 @@ async def _discard_orphan_payment(
     total_pending_amount de la conciliacion y el job lo consultaba a MP en
     cada corrida. Transaccion propia, como _revert_failed_booking en
     public_api.
+
+    Solo borra si el cobro sigue con el link placeholder: si otra request
+    concurrente ya le sello un link real, el cobro es de ella y queda (S-17).
     """
+    placeholder, _ = _placeholder_link(appointment_id)
+    borrado = await db.execute(
+        delete(Payment).where(
+            Payment.id == payment_id,
+            Payment.store_id == store_id,
+            Payment.preference_id == placeholder,
+        )
+    )
+    if not getattr(borrado, "rowcount", 0):
+        await db.commit()
+        return
     await db.execute(
         delete(OutboxMessage).where(
             OutboxMessage.store_id == store_id,
             OutboxMessage.event_type == "payment.preference.created",
             OutboxMessage.payload["payment_id"].as_string() == payment_id,
         )
-    )
-    await db.execute(
-        delete(Payment).where(Payment.id == payment_id, Payment.store_id == store_id)
     )
     await db.commit()
 
@@ -935,25 +975,26 @@ async def create_panel_payment_preference(
     refresca. Antes las dos fases vivian en la misma transaccion, con la
     conexion del pool tomada durante la request externa (regla 5).
     """
-    ya_existia = (
-        await db.execute(
-            select(Payment.id).where(
-                Payment.appointment_id == appointment.id,
-                Payment.store_id == store_id,
-            )
-        )
-    ).scalar_one_or_none() is not None
-
-    payment = await ensure_payment_preference(
+    # "Lo cree yo" sale del INSERT mismo, no de un SELECT previo (S-17,
+    # 2026-09-19): entre ese SELECT y el de la fase 1 otra request podia
+    # commitear el cobro; esta lo tomaba por propio y, si su fase 2 chocaba
+    # con la de la otra, borraba un cobro ajeno (rafaga -> cero cobros).
+    payment, creado = await _upsert_payment_preference(
         db,
         appointment=appointment,
         service=service,
         store_id=store_id,
         amount_override=amount_override,
-        keep_existing_amount=True,
+        original_amount=None,
+        discount_amount=None,
+        promotion_code=None,
         create_provider_link=False,
+        deposit_rule=None,
+        keep_existing_amount=True,
     )
-    payment_id = payment.id
+    # Leidos antes del commit: tras un rollback las instancias quedan
+    # expiradas y leerlas de nuevo seria IO fuera de lugar.
+    payment_id, appointment_id = payment.id, appointment.id
     await db.commit()
 
     try:
@@ -970,10 +1011,22 @@ async def create_panel_payment_preference(
             create_provider_link=True,
         )
         await db.commit()
-    except Exception:
+    except RuntimeError, CircuitBreakerOpenError:
+        # Fallo del PROVEEDOR (MercadoPagoAPIError es RuntimeError): si el
+        # cobro lo inserto esta llamada, se compensa borrandolo.
         await db.rollback()
-        if not ya_existia:
-            await _discard_orphan_payment(db, store_id=store_id, payment_id=payment_id)
+        if creado:
+            await _discard_orphan_payment(
+                db,
+                store_id=store_id,
+                payment_id=payment_id,
+                appointment_id=appointment_id,
+            )
+        raise
+    except Exception:
+        # Conflicto de concurrencia (StaleDataError, IntegrityError): otra
+        # request esta trabajando sobre el mismo cobro. No se borra nada.
+        await db.rollback()
         raise
     await db.refresh(payment)
     return payment
