@@ -1,19 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Depends
+from fastapi import Depends, status
+from fastapi.responses import JSONResponse
 from core.router import CanonicalAPIRouter
-from redis.asyncio import Redis
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import PermissionDeniedException
 
+import core.database
+import core.redis
 from core.config import settings
 from core.database import get_db
-from core.redis import get_redis
+from core.responses import error_response
 from core.roles import ROLE_SUPER_ADMIN, STORE_MANAGERS, canonical_role, has_any_role
 from modules.auth.dependencies import get_current_user
 from modules.payments.model import OutboxMessage, WebhookInbox
@@ -29,24 +32,45 @@ async def liveness() -> dict[str, str]:
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 
-@router.get("/health/ready")
-async def readiness(
-    db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
-) -> dict[str, object]:
+# Tope de cada chequeo de readiness (B5-17). Sin el, asyncpg espera hasta 60 s
+# la conexion (mas el pool_timeout), SELECT 1 hasta el statement_timeout y
+# Redis reintenta: el curl del healthcheck (--max-time 4) cortaba la sonda
+# pero la corrutina quedaba colgada en el servidor. 2 s por componente, en
+# paralelo, deja la respuesta por debajo de ese --max-time.
+READINESS_CHECK_TIMEOUT_SECONDS = 2.0
+
+
+async def _database_ready() -> bool:
+    """``SELECT 1`` con sesion propia, abierta DENTRO del try.
+
+    No usa ``Depends(get_db)``: esa dependencia abre la conexion (contexto de
+    tenant) antes del endpoint, y con Postgres caido la respuesta era un 500
+    que nunca llegaba al 503. ``SELECT 1`` no toca tablas: no necesita tenant.
+    """
+    try:
+        async with asyncio.timeout(READINESS_CHECK_TIMEOUT_SECONDS):
+            async with core.database.SessionLocal() as session:
+                await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+
+
+async def _redis_ready() -> bool:
+    """``PING`` con el cliente compartido, obtenido DENTRO del try."""
+    try:
+        async with asyncio.timeout(READINESS_CHECK_TIMEOUT_SECONDS):
+            client = await core.redis.get_redis()
+            await client.ping()
+        return True
+    except Exception:
+        return False
+
+
+@router.get("/health/ready", response_model=None)
+async def readiness() -> dict[str, object] | JSONResponse:
     now = datetime.now(timezone.utc).isoformat()
-    db_ok = True
-    redis_ok = True
-
-    try:
-        await db.execute(text("SELECT 1"))
-    except Exception:  # pragma: no cover
-        db_ok = False
-
-    try:
-        await redis.ping()
-    except Exception:  # pragma: no cover
-        redis_ok = False
+    db_ok, redis_ok = await asyncio.gather(_database_ready(), _redis_ready())
 
     status_value = "ok" if db_ok and redis_ok else "degraded"
 
@@ -54,14 +78,22 @@ async def readiness(
     # componentes ni -antes- el nombre de clase de la excepcion (info util para
     # un atacante anonimo que sondea la infra). El nombre de clase se elimino en
     # ambos casos.
-    if not settings.OPS_ENABLE_PUBLIC_HEALTH:
-        return {"status": status_value, "time": now}
+    body: dict[str, object] = {"status": status_value, "time": now}
+    if settings.OPS_ENABLE_PUBLIC_HEALTH:
+        body["components"] = {"db": db_ok, "redis": redis_ok}
 
-    return {
-        "status": status_value,
-        "time": now,
-        "components": {"db": db_ok, "redis": redis_ok},
-    }
+    # B5-17: el estado de salud ES el codigo HTTP. Con 200 + "degraded" nada
+    # podia sacar la instancia de rotacion; el healthcheck del backend en
+    # docker-compose.yml (curl -f) depende de este 503. El cuerpo va en la
+    # forma canonica de error, con el mismo detalle que antes y sin excepcion.
+    if status_value != "ok":
+        return error_response(
+            "SERVICE_NOT_READY",
+            "El servicio no esta listo",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=body,
+        )
+    return body
 
 
 async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]:

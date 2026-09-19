@@ -129,6 +129,16 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+    # Readiness real (B5-17): /ops/health/ready responde 503 si Postgres o
+    # Redis no contestan, y curl -f convierte ese 503 en un chequeo fallido.
+    # El liveness (/ops/health/live) no se usa aca: no mira dependencias.
+    healthcheck:
+      test:
+        ["CMD", "curl", "-fsS", "-o", "/dev/null", "--max-time", "4", "http://127.0.0.1:8000/ops/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - shifty_network
     deploy:
