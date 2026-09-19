@@ -689,7 +689,17 @@ async def manual_confirm_payment(
     return _payment_response(payment)
 
 
-@router.post("/{payment_id}/refund", response_model=PaymentResponse)
+@router.post(
+    "/{payment_id}/refund",
+    response_model=PaymentResponse,
+    summary="Registro de reembolso hecho fuera de Shifty",
+    description=(
+        "Registra un reembolso que el dueno ya hizo por su cuenta (desde Mercado "
+        "Pago o en efectivo) y pasa el cobro a refunded. NO llama a Mercado Pago "
+        "ni mueve plata: exige manual=true. Un cobro ya reembolsado no se "
+        "reembolsa dos veces (B2-05)."
+    ),
+)
 async def refund_payment(
     payment_id: PublicIdPath,
     data: RefundRequest,
