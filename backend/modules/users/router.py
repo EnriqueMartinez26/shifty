@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import AppException, UserNotFoundException
 from core.database import get_db
+from core.roles import assert_can_grant_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.users.model import User
@@ -25,6 +26,8 @@ async def create_user(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> UserResponse:
+    # Regla 16: un admin de tienda no da de alta a otro admin (B3-02).
+    assert_can_grant_role(admin, data.role)
     try:
         return UserResponse.model_validate(
             await UserService(db).create(data.model_dump(), admin.store_id)
@@ -92,6 +95,8 @@ async def update_user(
     user = await repo.get_by_public_id(public_id, admin.store_id)
     if not user:
         raise UserNotFoundException(public_id)
+    # Regla 16: un admin de tienda no asciende a nadie a admin (B3-02).
+    assert_can_grant_role(admin, data.role, current=user.role)
 
     try:
         return UserResponse.model_validate(
