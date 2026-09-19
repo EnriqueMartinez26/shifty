@@ -86,7 +86,23 @@ class PaymentService:
         reason: str | None = None,
         manual: bool = False,
     ) -> Payment:
-        """Reembolsa un pago acreditado. No pisa el monto historico del cobro."""
+        """REGISTRA un reembolso hecho fuera de Shifty. No pisa el monto historico.
+
+        B2-05 (2026-09-18, decision del dueno): Shifty no mueve plata en
+        Mercado Pago. Antes, con ``manual`` ausente o ``false``, el cobro
+        quedaba ``refunded`` y la conciliacion lo contaba como devuelto
+        mientras la plata seguia en la cuenta de MP de la tienda. Ahora solo
+        se acepta el registro explicito (``manual=True``) de un reembolso que
+        el dueno ya hizo por su cuenta; un reembolso automatico real es
+        irreversible y necesita compensacion probada (regla 5), no es esta
+        pasada. No se llama a Mercado Pago en ningun caso.
+        """
+        if not manual:
+            raise ValidationException(
+                "Shifty solo registra reembolsos hechos fuera de Shifty: hace la "
+                "devolucion desde Mercado Pago (o en efectivo) y registrala con "
+                "manual=true"
+            )
         # Solo se puede devolver plata que efectivamente entro.
         if payment.status not in _ACCREDITED:
             raise ValidationException(

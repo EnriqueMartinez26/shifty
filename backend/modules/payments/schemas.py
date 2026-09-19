@@ -52,7 +52,13 @@ class RefundRequest(BaseModel):
         None, ge=0, le=10_000_000, max_digits=12, decimal_places=2
     )
     reason: str | None = Field(None, max_length=500)
-    manual: bool = False
+    # Tiene que venir en true: el endpoint solo registra reembolsos hechos
+    # fuera de Shifty (B2-05). El default se conserva para que un pedido sin
+    # el campo reciba el 422 de negocio con el motivo, no el de validacion.
+    manual: bool = Field(
+        False,
+        description="Debe ser true: registro de un reembolso hecho fuera de Shifty.",
+    )
 
 
 class PaymentResponse(BaseModel):
