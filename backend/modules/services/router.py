@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import Depends, Path, Query, Response, status
@@ -9,15 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import invalidate_store_availability
 from core.database import get_db
-from core.exceptions import ServiceNotFoundException
+from core.exceptions import ServiceNotFoundException, ValidationException
 from core.redis import get_redis
 from core.roles import STORE_MANAGERS, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
 from modules.services.mappers import to_service_response
+from modules.services.model import Service
 from modules.services.repository import ServiceRepository
-from modules.services.schemas import ServiceCreate, ServiceResponse, ServiceUpdate
+from modules.services.schemas import (
+    DEPOSIT_FIELDS,
+    ServiceCreate,
+    ServiceResponse,
+    ServiceUpdate,
+    deposit_policy_error,
+)
 from modules.users.model import User
 
 logger = structlog.get_logger()
@@ -95,9 +102,33 @@ async def update_service(
     service = await repo.get_by_id(public_id, admin.store_id)
     if not service:
         raise ServiceNotFoundException(public_id)
-    updated = await repo.update(service, data.model_dump())
+    # B6-04: solo los campos enviados; un null explicito borra el opcional.
+    changes = data.model_dump(exclude_unset=True)
+    _validate_deposit_patch(service, changes)
+    updated = await repo.update(service, changes)
     await _invalidate_store_cache(redis, str(updated.store_id))
     return to_service_response(updated)
+
+
+def _validate_deposit_patch(service: Service, changes: dict[str, Any]) -> None:
+    """B6-02: el PATCH es parcial, asi que la terna se valida contra la fila.
+
+    Solo si el PATCH toca la sena: un servicio viejo con una terna invalida
+    sigue pudiendo cambiar de nombre o de precio.
+    """
+    if not any(field in changes for field in DEPOSIT_FIELDS):
+        return
+    merged = {
+        field: changes.get(field, getattr(service, field)) for field in DEPOSIT_FIELDS
+    }
+    amount = merged["deposit_amount"]
+    error = deposit_policy_error(
+        str(merged["deposit_mode"]),
+        str(merged["deposit_type"]),
+        None if amount is None else float(amount),
+    )
+    if error:
+        raise ValidationException(error)
 
 
 @router.delete("/{public_id}", status_code=status.HTTP_204_NO_CONTENT)

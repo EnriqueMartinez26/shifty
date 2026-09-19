@@ -47,9 +47,10 @@ class ServiceRepository:
         return result.scalar_one_or_none()
 
     async def update(self, service: Service, update_data: dict[str, Any]) -> Service:
+        # Aplica lo que recibe: el router ya manda solo los campos enviados
+        # (exclude_unset), asi que un None aca es un null explicito (B6-04).
         for key, value in update_data.items():
-            if value is not None:
-                setattr(service, key, value)
+            setattr(service, key, value)
 
         await self.db.commit()
         await self.db.refresh(service)
