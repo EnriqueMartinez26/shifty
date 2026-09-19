@@ -154,7 +154,32 @@ def test_el_trinquete_es_un_techo() -> None:
     assert _violaciones_de_la_deuda({"modules/b/repository.py": 1}, techo)
 
 
-def test_el_router_publico_no_usa_metodos_privados_del_repositorio() -> None:
+# Archivos del portal que usan PublicRepository: el router y, desde B1-12,
+# el service que se quedo con la reserva y la autogestion.
+PORTAL_PUBLICO = ("modules/public_api/router.py", "modules/public_api/service.py")
+_NOMBRES_DEL_REPO = {"repo", "_repo"}
+
+
+def _accesos_privados_al_repo(fuente: str) -> list[str]:
+    """``repo._x``, ``self.repo._x`` y ``self._repo._x``, con su linea."""
+    encontrados: list[str] = []
+    for node in ast.walk(ast.parse(fuente)):
+        if not (isinstance(node, ast.Attribute) and node.attr.startswith("_")):
+            continue
+        dueno = node.value
+        if isinstance(dueno, ast.Name) and dueno.id in _NOMBRES_DEL_REPO:
+            encontrados.append(f"{dueno.id}.{node.attr} (linea {node.lineno})")
+        elif (
+            isinstance(dueno, ast.Attribute)
+            and dueno.attr in _NOMBRES_DEL_REPO
+            and isinstance(dueno.value, ast.Name)
+            and dueno.value.id == "self"
+        ):
+            encontrados.append(f"self.{dueno.attr}.{node.attr} (linea {node.lineno})")
+    return sorted(encontrados)
+
+
+def test_el_portal_publico_no_usa_metodos_privados_del_repositorio() -> None:
     """Audit B1-19 (2026-09-18): la agenda del alta y de la reprogramacion.
 
     ``client_reschedule_appointment`` llamaba ``repo._staff_has_schedule_for_slot``
@@ -163,17 +188,35 @@ def test_el_router_publico_no_usa_metodos_privados_del_repositorio() -> None:
     rango" con reglas que divergieron (B1-05 y B1-07 afectaron a una sola).
     Ahora hay una funcion publica en el repositorio y la relectura bajo lock
     (regla 4) queda de ese lado.
+
+    Desde B1-12 (2026-09-19) la reprogramacion vive en
+    ``public_api/service.py`` y usa ``self.repo``: la guarda recorre los dos
+    archivos y tambien los accesos por atributo.
     """
     backend_root = Path(__file__).resolve().parents[2]
-    path = backend_root / "modules/public_api/router.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-
-    privados = sorted(
-        f"repo.{node.attr} (linea {node.lineno})"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute)
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "repo"
-        and node.attr.startswith("_")
+    privados = {
+        ruta: _accesos_privados_al_repo(
+            (backend_root / ruta).read_text(encoding="utf-8")
+        )
+        for ruta in PORTAL_PUBLICO
+    }
+    assert not any(privados.values()), (
+        f"el portal usa metodos privados del repositorio: {privados}"
     )
-    assert not privados, f"el router usa metodos privados del repo: {privados}"
+
+
+def test_la_guarda_de_privados_ve_todas_las_formas_de_acceso() -> None:
+    """Sin esto, la guarda podria pasar por no mirar donde hay que mirar."""
+    fuente = (
+        "async def f(self, repo):\n"
+        "    await repo._staff_has_x()\n"
+        "    await self.repo._staff_has_x()\n"
+        "    await self._repo._staff_has_x()\n"
+        "    await self.repo.staff_can_take_range()\n"
+        "    await self.otro._privado()\n"
+    )
+    assert _accesos_privados_al_repo(fuente) == [
+        "repo._staff_has_x (linea 2)",
+        "self._repo._staff_has_x (linea 4)",
+        "self.repo._staff_has_x (linea 3)",
+    ]
