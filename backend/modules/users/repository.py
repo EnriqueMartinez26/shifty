@@ -48,10 +48,15 @@ class UserRepository:
         role: str | None = None,
         limit: int = 200,
         offset: int = 0,
+        include_global_admins: bool = False,
     ) -> list[User]:
         query = select(User).where(
             User.store_id == store_id,
         )
+        if not include_global_admins:
+            # Para el panel de una tienda la cuenta del superadmin no existe
+            # aunque su store_id sea esta tienda (S-15, reglas 14 y 16).
+            query = query.where(User.is_global_admin.is_(False))
         if only_active:
             query = query.where(User.is_active.is_(True))
         if email:
@@ -66,13 +71,19 @@ class UserRepository:
         result = await self.db.execute(query)
         return list(result.scalars().all())
 
-    async def get_by_public_id(self, public_id: str, store_id: str) -> User | None:
-        result = await self.db.execute(
-            select(User).where(
-                User.id == public_id,
-                User.store_id == store_id,
-            )
+    async def get_by_public_id(
+        self, public_id: str, store_id: str, *, include_global_admins: bool = False
+    ) -> User | None:
+        query = select(User).where(
+            User.id == public_id,
+            User.store_id == store_id,
         )
+        if not include_global_admins:
+            # Por defecto oculto: quien no lo pide explicitamente (el panel de
+            # un admin de tienda, el fiado) no puede ver ni tocar la cuenta
+            # global (S-15). Solo el superadmin la incluye.
+            query = query.where(User.is_global_admin.is_(False))
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def update(self, user: User, data: dict[str, Any]) -> User:

@@ -483,12 +483,13 @@ async def revoke_user_sessions(
         )
 
     async with tenant_bypass(db):
-        user_result = await db.execute(
-            select(User).where(
-                User.id == user_public_id, User.store_id == current_user.store_id
-            )
+        consulta = select(User).where(
+            User.id == user_public_id, User.store_id == current_user.store_id
         )
-        target = user_result.scalar_one_or_none()
+        if not current_user.is_global_admin:
+            # La cuenta del superadmin no existe para un admin de tienda (S-15).
+            consulta = consulta.where(User.is_global_admin.is_(False))
+        target = (await db.execute(consulta)).scalar_one_or_none()
         if not target:
             raise UserNotFoundException(identifier=user_public_id)
         affected = await _revoke_sessions(db, AuthSession.user_id == target.id)

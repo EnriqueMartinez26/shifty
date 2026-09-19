@@ -11,10 +11,12 @@ from core.exceptions import (
     StaffNotFoundException,
     ValidationException,
 )
+from core.roles import assert_can_change_access
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
 from modules.staff.mappers import to_schedule_response, to_staff_response
+from modules.staff.model import Staff
 from modules.staff.repository import StaffRepository
 from modules.staff.service import StaffService
 from modules.staff.schemas import (
@@ -178,6 +180,30 @@ async def update_staff_services(
     return {"message": "Servicios actualizados correctamente"}
 
 
+async def _guardar_cuenta_vinculada(
+    repo: StaffRepository,
+    staff: Staff,
+    admin: User,
+    public_id: str,
+    *,
+    email: str | None = None,
+    is_active: bool | None = None,
+) -> None:
+    """Misma regla que /users/ para la cuenta de login del profesional (S-15).
+
+    Staff.id es el User.id y la edicion sincroniza email e is_active en el User:
+    sin esto, un profesional ascendido a admin o a superadmin quedaba expuesto
+    por /staff/ aunque /users/ lo protegiera. La cuenta global no existe para un
+    admin de tienda (404); email de login y estado de otro admin, 403.
+    """
+    cuenta = await repo.get_linked_user(staff)
+    if cuenta is None:
+        return
+    if cuenta.is_global_admin and not admin.is_global_admin:
+        raise StaffNotFoundException(identifier=public_id)
+    assert_can_change_access(admin, cuenta, email=email, is_active=is_active)
+
+
 @router.put("/{public_id}", response_model=StaffResponse)
 @router.patch("/{public_id}", response_model=StaffResponse)
 async def update_staff(
@@ -190,6 +216,9 @@ async def update_staff(
     staff = await repo.get_by_id(public_id, admin.store_id)
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
+    await _guardar_cuenta_vinculada(
+        repo, staff, admin, public_id, email=data.email, is_active=data.is_active
+    )
 
     try:
         updated = await StaffService(db).update_profile(
@@ -224,5 +253,7 @@ async def delete_staff(
     staff = await repo.get_by_id(public_id, admin.store_id)
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
+    # La baja desactiva la cuenta de login vinculada.
+    await _guardar_cuenta_vinculada(repo, staff, admin, public_id, is_active=False)
     await StaffService(db).soft_delete(staff)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
