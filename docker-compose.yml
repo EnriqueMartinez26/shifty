@@ -157,6 +157,20 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A core.celery_app worker --loglevel=info
+    # Un worker vivo que dejo de consumir se veia igual que uno sano
+    # (AUD2-C-09; es el incidente de 2026-09-08). `inspect ping` pregunta por
+    # ESTE worker: si no responde, el contenedor queda unhealthy. $$HOSTNAME
+    # va escapado para que lo expanda el shell del contenedor y no compose.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A core.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10",
+        ]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
     container_name: shifty_celery
     restart: always
     environment: *app_environment
@@ -182,6 +196,20 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A core.celery_app beat --loglevel=info
+    # beat no es un worker: no responde `inspect ping`. Lo que prueba que
+    # sigue agendando es que su archivo de schedule se siga sincronizando;
+    # las tareas del beat corren cada minuto, asi que 15 minutos sin tocarlo
+    # es que dejo de trabajar. La ventana es amplia a proposito.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /app -maxdepth 1 -name 'celerybeat-schedule*' -newermt '-15 minutes' | grep -q .",
+        ]
+      interval: 300s
+      timeout: 15s
+      retries: 2
+      start_period: 120s
     container_name: shifty_celery_beat
     restart: always
     environment: *app_environment

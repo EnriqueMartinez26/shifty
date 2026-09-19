@@ -189,3 +189,34 @@ def test_los_tres_servicios_comparten_el_entorno_tambien_en_produccion() -> None
     for servicio in ("celery_worker", "celery_beat"):
         faltan = api - set(_env_prod(servicio))
         assert not faltan, f"{servicio} no recibe en produccion: {sorted(faltan)}"
+
+
+def _prueba_del_healthcheck(servicio: str) -> str:
+    healthcheck = _services()[servicio].get("healthcheck")
+    assert isinstance(healthcheck, dict), f"{servicio} no declara healthcheck"
+    return str(healthcheck["test"])
+
+
+def test_los_procesos_de_celery_declaran_healthcheck() -> None:
+    """AUD2-C-09 (2026-09-19): un worker vivo que no consume se veia sano.
+
+    db, redis, rabbitmq y backend tenian healthcheck; los dos procesos de
+    Celery, ninguno. Con restart: always, un worker que dejo de consumir o un
+    beat que dejo de agendar se ven igual que uno sano en `docker compose ps`.
+    Es el incidente de 2026-09-08 que este mismo archivo describe: "ningun job
+    corria, y en silencio: el worker se declaraba ready".
+    """
+    worker = _prueba_del_healthcheck("celery_worker")
+    assert "inspect ping" in worker, (
+        f"el healthcheck del worker no pregunta si consume: {worker!r}"
+    )
+
+    beat = _prueba_del_healthcheck("celery_beat")
+    assert "celerybeat-schedule" in beat, (
+        f"el healthcheck del beat no mira su schedule: {beat!r}"
+    )
+
+    for prueba in (worker, beat):
+        assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
+            f"$HOSTNAME sin escapar lo interpola compose, no el shell: {prueba!r}"
+        )
