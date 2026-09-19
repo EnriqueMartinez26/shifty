@@ -111,6 +111,8 @@ async def _verificar_telefono(
         channel="email",
         email="cliente@example.com",
         store_name="Demo",
+        # El envio (post-respuesta desde B4-01) no importa aca.
+        schedule_dispatch=lambda *args: None,
     )
     await servicio.verify_code(
         store_id=tienda.store_id,
