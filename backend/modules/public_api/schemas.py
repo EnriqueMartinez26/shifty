@@ -61,14 +61,6 @@ class PublicStaffResponse(BaseModel):
         from_attributes = True
 
 
-class AvailabilitySlot(BaseModel):
-    staff_id: str
-    staff_name: str
-    starts_at: str
-    ends_at: str
-    status: str
-
-
 class PublicBookingCreate(BaseModel):
     store_public_id: Optional[str] = Field(
         None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
