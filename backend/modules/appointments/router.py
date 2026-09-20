@@ -142,7 +142,11 @@ async def get_availability(
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> list[object]:
-    """Consulta slots disponibles para un servicio en una fecha."""
+    """Consulta slots disponibles para un servicio en una fecha.
+
+    Sin token la respuesta es la del portal: un bloqueo sale como "No
+    disponible" y nunca con el motivo que tipeo el duenio (AUD2-B1-04).
+    """
     svc = AvailabilityService(db, redis)
     if user is None:
         async with tenant_bypass(db):
@@ -150,8 +154,13 @@ async def get_availability(
             service = await repo.get_service_by_public_id(service_id)
             if not service:
                 return []
+            # El motivo de un bloqueo es un dato personal del profesional y
+            # esta ruta es anonima (el service_id sale de /public/services):
+            # regla 20, mismo criterio que public_api/router.py.
             return list(
-                await svc.get_available_slots(service.store_id, service_id, date)
+                await svc.get_available_slots(
+                    service.store_id, service_id, date, hide_private_reasons=True
+                )
             )
 
     return list(await svc.get_available_slots(user.store_id, service_id, date))
