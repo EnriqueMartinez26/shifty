@@ -44,3 +44,11 @@ Thumbs.db
 
 # Artefactos de Playwright MCP
 .playwright-mcp/
+
+# Dumps y evidencias del drill de backup (docs/BACKUP_RESTORE_RUNBOOK.md y
+# .github/workflows/monthly-backup-drill.yml escriben aca). Un .dump trae datos
+# de clientes, hashes y tokens cifrados: en el historial no se borra con un
+# commit, y gitleaks no lo detecta porque es un binario de pg_dump.
+backups/
+*.dump
+*.dump.sha256
