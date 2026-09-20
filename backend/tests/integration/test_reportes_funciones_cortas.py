@@ -419,9 +419,11 @@ async def test_slo_no_cambia(
     }
     assert (cuerpo["scope"], cuerpo["store_id"], cuerpo["status"]) == (
         "store",
-        store.id,
+        # AUD2-B5-19: el public_id, no el ULID interno de stores.id.
+        store.public_id,
         "degraded",
     )
+    assert store.id not in res.text
     assert cuerpo["metrics"] == {
         "pending_webhooks": 3,
         "failed_webhooks": 1,
