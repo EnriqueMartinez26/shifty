@@ -17,6 +17,13 @@ from modules.users.model import User, UserRole
 import ulid
 
 
+# Carga de la relacion que deja SOLO los servicios activos (AUD2-B6-01).
+# Filtra en el JOIN, asi que la coleccion nunca se re-asigna: re-asignar una
+# relacion `secondary` marca las filas sobrantes de `staff_services` para
+# DELETE y se perdia la asignacion (y su `rating`) del servicio desactivado.
+_ACTIVE_SERVICES = selectinload(Staff.services.and_(Service.is_active == True))
+
+
 class StaffRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -40,15 +47,6 @@ class StaffRepository:
                 "Uno o más servicios no existen o no pertenecen al negocio"
             )
         return services
-
-    async def _hydrate_services(self, member: Staff) -> None:
-        if member.service_ids:
-            member.services = await self._get_services_for_store(
-                member.service_ids,
-                member.store_id,
-            )
-        else:
-            member.services = []
 
     async def create(
         self, data: dict[str, Any], store_id: str, service_public_ids: list[str]
@@ -121,16 +119,13 @@ class StaffRepository:
             )
             .options(
                 selectinload(Staff.schedules),
-                selectinload(Staff.services),
+                _ACTIVE_SERVICES,
             )
         )
-        staff_members = list(result.scalars().all())
-        # ``services`` ya viene cargado por selectinload en una sola query.
-        # Antes esto re-consultaba por cada miembro (N+1); ahora se filtra en
-        # memoria a los activos, que es lo unico que agregaba la re-consulta.
-        for member in staff_members:
-            member.services = [s for s in member.services if s.is_active]
-        return staff_members
+        # La carga ya trae solo los activos: no se filtra ni se re-asigna nada.
+        # Re-asignar una relacion `secondary` marca las filas sobrantes de
+        # `staff_services` para DELETE (AUD2-B6-02).
+        return list(result.scalars().all())
 
     async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:
         result = await self.db.execute(
@@ -141,13 +136,13 @@ class StaffRepository:
             )
             .options(
                 selectinload(Staff.schedules),
-                selectinload(Staff.services),
+                _ACTIVE_SERVICES,
             )
         )
-        member = result.scalar_one_or_none()
-        if member:
-            await self._hydrate_services(member)
-        return member
+        # Antes esto re-consultaba con `_get_services_for_store`, que exige que
+        # TODOS los ids existan y esten activos: un servicio borrado dejaba en
+        # 500 la ficha del profesional y todo lo que la usa (AUD2-B6-01).
+        return result.scalar_one_or_none()
 
     async def _assert_no_overlap(
         self,
