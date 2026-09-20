@@ -28,6 +28,8 @@ from core.utils import ensure_utc_aware
 from main import app
 from modules.appointments.model import Appointment
 from modules.payments.model import OutboxMessage, Payment
+from modules.public_api.router import _booking_cache_key
+from modules.public_api.schemas import PublicBookingCreate
 from modules.users.model import User
 from modules.waitlist.model import WaitlistEntry
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -102,6 +104,17 @@ def _reserva(t: _Tienda, clave: str, **extra: Any) -> dict[str, Any]:
 
 async def _redis() -> Any:
     return await app.dependency_overrides[get_redis]()
+
+
+def _clave_redis(cuerpo: dict[str, Any]) -> str:
+    """La clave real que el alta usa en Redis, namespaceada (AUD2-B1-06).
+
+    Antes era la cadena cruda del cliente; afirmar sobre
+    ``idempotency:{clave}`` ahora daria siempre ``None`` y la asercion de
+    liberacion no probaria nada.
+    """
+    data = PublicBookingCreate(**cuerpo)
+    return "idempotency:" + _booking_cache_key(data, cuerpo["idempotency_key"])
 
 
 async def _contar(session: AsyncSession, modelo: Any) -> int:
@@ -337,11 +350,8 @@ async def test_mp_falla_despues_del_commit_y_se_compensa(
     mp.falla = falla
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
 
-    clave = f"carac-falla-{codigo}-0001"
-    res = await client.post(
-        "/public/appointments",
-        json=_reserva(t, clave, payment_method="mercadopago"),
-    )
+    cuerpo = _reserva(t, f"carac-falla-{codigo}-0001", payment_method="mercadopago")
+    res = await client.post("/public/appointments", json=cuerpo)
 
     assert res.status_code == codigo, res.text
     assert res.json()["error_code"] == error_code
@@ -352,7 +362,7 @@ async def test_mp_falla_despues_del_commit_y_se_compensa(
     # B2-17 (2026-09-19): payment.preference.created dejo de publicarse, asi
     # que la compensacion no deja ningun evento huerfano en el outbox.
     assert [e[0] for e in await _eventos(test_session)] == []
-    assert await redis.get(f"idempotency:{clave}") is None
+    assert await redis.get(_clave_redis(cuerpo)) is None
     assert buzon.enviados == []
 
 
@@ -367,22 +377,20 @@ async def test_slot_ocupado_409_libera_la_clave_y_no_escribe(
     assert primera.status_code == 201, primera.text
     redis = await _redis()
 
-    segunda = await client.post(
-        "/public/appointments",
-        json=_reserva(
-            t,
-            "carac-ch-2",
-            client_phone="+5491155558002",
-            client_email="otro-carac@example.com",
-        ),
+    cuerpo = _reserva(
+        t,
+        "carac-ch-2",
+        client_phone="+5491155558002",
+        client_email="otro-carac@example.com",
     )
+    segunda = await client.post("/public/appointments", json=cuerpo)
 
     assert segunda.status_code == 409, segunda.text
     assert segunda.json()["error_code"] == "APPOINTMENT_CONFLICT"
     assert segunda.json()["message"] == (
         "El horario ya esta ocupado. Por favor elegi otro."
     )
-    assert await redis.get("idempotency:carac-ch-2") is None
+    assert await redis.get(_clave_redis(cuerpo)) is None
     assert await _contar(test_session, Appointment) == 1
     # El cliente nuevo tampoco quedo: el savepoint se deshizo entero.
     telefonos = (
@@ -446,15 +454,14 @@ async def test_rechazos_previos_a_toda_escritura(
     clientes_antes = await _contar(test_session, User)
     redis = await _redis()
 
-    res = await client.post(
-        "/public/appointments", json=_reserva(t, f"carac-rz-{caso}", **extra)
-    )
+    cuerpo = _reserva(t, f"carac-rz-{caso}", **extra)
+    res = await client.post("/public/appointments", json=cuerpo)
 
     assert (res.status_code, res.json()["error_code"]) == esperado, res.text
     assert await _contar(test_session, Appointment) == 0
     assert await _contar(test_session, User) == clientes_antes
     assert await _eventos(test_session) == []
-    assert await redis.get(f"idempotency:carac-rz-{caso}") is None
+    assert await redis.get(_clave_redis(cuerpo)) is None
 
 
 @pytest.mark.asyncio

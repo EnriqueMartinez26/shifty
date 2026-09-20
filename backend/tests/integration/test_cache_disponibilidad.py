@@ -6,10 +6,13 @@ mostraban el estado viejo despues de reservar, cancelar o bloquear.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
 
+from modules.public_api.router import _booking_cache_key
+from modules.public_api.schemas import PublicBookingCreate
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -268,24 +271,25 @@ async def test_redis_caido_en_la_compensacion_no_convierte_el_502_en_500(
         payments_service, "_mercadopago_api_request", mp_que_falla_y_tira_redis
     )
 
-    clave = "cache-mp-redis-0001"
-    reserva = await client.post(
-        "/public/appointments",
-        json={
-            "store_public_id": store,
-            "service_id": service,
-            "staff_id": staff,
-            "starts_at": slot.isoformat(),
-            "client_name": "Redis Caido",
-            "client_phone": "+5491155550077",
-            "payment_method": "mercadopago",
-            "idempotency_key": clave,
-        },
-    )
+    cuerpo: dict[str, Any] = {
+        "store_public_id": store,
+        "service_id": service,
+        "staff_id": staff,
+        "starts_at": slot.isoformat(),
+        "client_name": "Redis Caido",
+        "client_phone": "+5491155550077",
+        "payment_method": "mercadopago",
+        "idempotency_key": "cache-mp-redis-0001",
+    }
+    reserva = await client.post("/public/appointments", json=cuerpo)
 
     assert reserva.status_code == 502, reserva.text
     assert reserva.json()["error_code"] == "PAYMENT_LINK_CREATION_FAILED"
-    # La idempotencia se libero: un reintento no queda trabado.
+    # La idempotencia se libero: un reintento no queda trabado. La clave de
+    # Redis es la namespaceada (AUD2-B1-06), no la cadena cruda del cliente.
+    clave = _booking_cache_key(
+        PublicBookingCreate(**cuerpo), str(cuerpo["idempotency_key"])
+    )
     assert await redis_de_test.get(f"idempotency:{clave}") is None
     redis_caido = False
     assert await _estado_del_slot(client, store, service, staff, slot) == "available"

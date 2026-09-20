@@ -26,6 +26,8 @@ from core.config import settings
 from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment
 from modules.payments.model import Payment
+from modules.public_api.router import _reschedule_cache_key
+from modules.public_api.schemas import ClientRescheduleRequest
 from tests.integration.test_caracterizacion_alta_publica import (
     _contar,
     _espiar_orden,
@@ -377,18 +379,20 @@ async def test_reprogramar_rechazos_liberan_la_clave_y_no_escriben(
     turnos_antes = await _contar(test_session, Appointment)
     estado_antes = (await _turno(test_session, turno)).status
     redis = await _redis()
-    clave = f"carac-rr-{caso}-clave"
+    cuerpo: dict[str, Any] = {
+        "phone": telefono,
+        "new_starts_at": nuevo_inicio.isoformat(),
+        "idempotency_key": f"carac-rr-{caso}-clave",
+    }
 
     res = await client.patch(
-        f"/public/client/appointments/{objetivo}/reschedule",
-        json={
-            "phone": telefono,
-            "new_starts_at": nuevo_inicio.isoformat(),
-            "idempotency_key": clave,
-        },
+        f"/public/client/appointments/{objetivo}/reschedule", json=cuerpo
     )
 
     assert (res.status_code, res.json()["error_code"]) == esperado, res.text
+    # La clave de Redis es la namespaceada por turno y telefono (AUD2-B1-06),
+    # no la cadena cruda que manda el cliente.
+    clave = _reschedule_cache_key(objetivo, ClientRescheduleRequest(**cuerpo))
     assert await redis.get(f"idempotency:{clave}") is None
     assert await _eventos(test_session) == antes
     assert await _contar(test_session, Appointment) == turnos_antes
