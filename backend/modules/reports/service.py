@@ -50,9 +50,16 @@ ACCREDITED_PAYMENT_STATUSES = [
     PaymentStatus.APPROVED.value,
     PaymentStatus.MANUAL_CONFIRMED.value,
 ]
-# Un turno cancelado o vencido no cuenta para los top-5 de servicios/clientes.
-_EXCLUDED_FROM_TOPS = [
+# Turnos que NO se prestaron. Su plata acreditada es sena retenida, no ingreso
+# por servicio, asi que quedan fuera de los top-5 y entran en
+# retained_deposit_revenue. Las dos mitades usan el MISMO conjunto para que
+# sean complementarias: ingreso por servicio == total_revenue - retenido
+# (AUD2-B5-06). El ausente pago la sena y no vino —el caso por el que existe
+# la sena—; el vencido con pago acreditado es la carrera entre el expirador y
+# el webhook aprobado.
+_NOT_SERVED_STATUSES = [
     AppointmentStatus.CANCELLED.value,
+    AppointmentStatus.ABSENT.value,
     AppointmentStatus.EXPIRED.value,
 ]
 
@@ -525,11 +532,15 @@ class ReportService:
     async def _retained_deposit_revenue(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> Decimal:
-        """Sena retenida: plata acreditada de turnos CANCELADOS del rango (B5-10).
+        """Sena retenida del rango: plata acreditada de turnos que NO se
+        prestaron —cancelado, ausente o vencido— (B5-10, AUD2-B5-06).
 
         Es parte de ``total_revenue`` (es plata en caja) pero no es ingreso por
-        servicio: se informa aparte. Un escalar sumado en la base (regla 11),
-        con el mismo conjunto de filas y la misma tienda que el total.
+        servicio: se informa aparte. Es la mitad complementaria de los top-5,
+        que excluyen exactamente esos mismos estados, asi que vale la identidad
+        ``ingreso por servicio == total_revenue - retenido``. Un escalar sumado
+        en la base (regla 11), con el mismo conjunto de filas y la misma tienda
+        que el total.
         """
         paid = self._paid_by_appointment()
         result = await self.db.execute(
@@ -540,7 +551,7 @@ class ReportService:
                 staff_id=staff_id,
             )
             .join(paid, paid.c.appointment_id == Appointment.id)
-            .where(Appointment.status == AppointmentStatus.CANCELLED.value)
+            .where(Appointment.status.in_(_NOT_SERVED_STATUSES))
         )
         return Decimal(str(result.scalar_one() or 0))
 
@@ -593,7 +604,7 @@ class ReportService:
                 staff_id=staff_id,
             )
             .outerjoin(paid, paid.c.appointment_id == Appointment.id)
-            .where(Appointment.status.not_in(_EXCLUDED_FROM_TOPS))
+            .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(Service.id, Service.public_id, Service.name)
             # Mismo desempate que el orden anterior en Python (estable sobre
             # turnos ascendentes): a igual conteo e ingreso, el visto primero.
@@ -640,7 +651,7 @@ class ReportService:
                 staff_id=staff_id,
             )
             .outerjoin(paid, paid.c.appointment_id == Appointment.id)
-            .where(Appointment.status.not_in(_EXCLUDED_FROM_TOPS))
+            .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(
                 Appointment.client_id, User.first_name, User.last_name, User.email
             )

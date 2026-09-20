@@ -291,11 +291,14 @@ async def test_resumen_cohortes_y_profesionales_no_cambian(
             s["revenue"],
         )
         for s in resumen["top_services"]
-    ] == [("Consulta", 3, 1, 10000.0), ("Largo", 2, 0, 5000.0)]
+        # AUD2-B5-06: el ausente t4 dejo de contar en los tops, igual que el
+        # cancelado y el vencido: son turnos que no se prestaron.
+    ] == [("Consulta", 2, 1, 10000.0), ("Largo", 2, 0, 5000.0)]
     assert [
         (c["client_name"], c["appointments"], c["completed_appointments"], c["revenue"])
         for c in resumen["top_clients"]
-    ] == [("Ana Alvarez", 3, 1, 10000.0), ("Beto Blanco", 2, 0, 5000.0)]
+        # Idem: Ana pasa de 3 a 2 turnos porque t4 quedo ausente.
+    ] == [("Ana Alvarez", 2, 1, 10000.0), ("Beto Blanco", 2, 0, 5000.0)]
     assert resumen["debt_summary"] == {
         "outstanding_balance": 0.0,
         "debtors_count": 0,
