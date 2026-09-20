@@ -280,7 +280,7 @@ async def test_el_recordatorio_prefiere_whatsapp(
         enviados.append(("whatsapp", to))
         return True
 
-    async def fake_email(to: str, subject: str, body: str) -> bool:
+    async def fake_email(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append(("email", to))
         return True
 
@@ -305,7 +305,7 @@ async def test_sin_whatsapp_el_recordatorio_cae_al_mail(
     async def sin_whatsapp(to: str, body: str) -> bool:
         return False
 
-    async def fake_email(to: str, subject: str, body: str) -> bool:
+    async def fake_email(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         return True
 
     monkeypatch.setattr(tasks, "_send_whatsapp", sin_whatsapp)

@@ -28,7 +28,7 @@ async def test_el_unico_camino_no_manda_al_email_tecnico(
 ) -> None:
     enviados: list[str] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append(to)
         return True
 

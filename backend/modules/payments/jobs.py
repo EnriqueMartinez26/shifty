@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from modules.notifications.tasks import (
     send_cancellation_email,
     send_confirmation_email,
     send_store_notification_email,
+    smtp_session,
 )
 from modules.payments.model import (
     OutboxMessage,
@@ -98,7 +100,26 @@ class _PreferenceExpireClaim:
 # tarea antes del commit, la corrida siguiente reenviaria lo ya enviado. Es la
 # misma funcion de envio de siempre con sus argumentos ya fijados: conserva
 # is_deliverable_email y el best-effort de cada camino.
-PendingEmail = Callable[[], Awaitable[object]]
+PendingEmail = Callable[..., Awaitable[object]]
+
+# AUD2-B4-02 (2026-09-20): el despacho post-commit no tenia tope. El lote trae
+# hasta 100 mensajes (500 por el endpoint del panel) y cada mensaje puede
+# generar varios mails; con un SMTP lento el hard time limit de Celery (150 s)
+# mataba el proceso con los ``processed_at`` YA persistidos, asi que los mails
+# que faltaban no salian nunca y no quedaba rastro. Ahora el despacho corre con
+# una sola conexion SMTP y con presupuesto: lo que no entra se anota en SU
+# mensaje con ``attempts`` (el contador de B2-12) en una transaccion nueva.
+OUTBOX_EMAIL_BUDGET_SECONDS = 90
+OUTBOX_EMAIL_BUDGET_REASON = "outbox_email_budget_exhausted"
+
+
+@dataclass
+class _MailDelLote:
+    """Un mail listo para mandar y el mensaje del outbox que lo genero."""
+
+    message: OutboxMessage
+    enviar: PendingEmail
+    contexto: dict[str, str | None]
 
 
 def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
@@ -114,6 +135,71 @@ def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
         "appointment_id": str(turno) if turno else None,
         "event_type": message.event_type,
     }
+
+
+async def _plan_outbox_message(
+    db: AsyncSession, message: OutboxMessage, now: datetime
+) -> list[_MailDelLote]:
+    """Aplica un evento del outbox y devuelve los mails que deja pendientes.
+
+    Solo persiste y acumula: ningun mail sale dentro de la transaccion del
+    lote (2026-09-16, B2-01). Extraida de ``process_outbox_batch`` con
+    AUD2-B4-02 para no apilar el despacho encima de una funcion ya larga
+    (regla 29).
+    """
+    contexto = _contexto_del_mail(message)
+    if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
+        # Lista de espera: aviso al dueno y oferta a una persona por vez.
+        oferta = await offer_released_slot(
+            db,
+            ReleasedSlot.from_payload(message.store_id, dict(message.payload or {})),
+            now=now,
+        )
+        if not oferta.pending_email:
+            return []
+        return [
+            _MailDelLote(
+                message,
+                partial(
+                    send_waitlist_offer_email,
+                    email=oferta.pending_email.email,
+                    details=oferta.pending_email.details,
+                ),
+                contexto,
+            )
+        ]
+
+    if message.event_type == "appointment.cancelled_by_block":
+        # Aviso al cliente (no al dueno, que fue quien bloqueo).
+        payload = dict(message.payload or {})
+        return [
+            _MailDelLote(
+                message,
+                partial(
+                    send_cancellation_email,
+                    email=str(payload.get("client_email") or "") or None,
+                    details=payload,
+                ),
+                contexto,
+            )
+        ]
+
+    notification = _build_store_notification(message)
+    if notification is None:
+        return []
+    # La notificacion in-app es la fuente durable; el mail es un efecto
+    # secundario que sale despues del commit.
+    db.add(notification)
+    mails = [
+        _MailDelLote(message, mail, contexto)
+        for mail in await _store_owner_mails(db, notification)
+    ]
+    if message.event_type == NotificationType.PAYMENT_APPROVED.value:
+        # La sena acreditada confirma el turno: el cliente tambien se entera.
+        confirmacion = await _client_confirmation_mail(db, notification.appointment_id)
+        if confirmacion is not None:
+            mails.append(_MailDelLote(message, confirmacion, contexto))
+    return mails
 
 
 async def process_outbox_batch(
@@ -148,62 +234,11 @@ async def process_outbox_batch(
     failed = 0
     # Ningun mail sale dentro del lote: el cuerpo del for solo persiste y
     # acumula; todo se despacha despues del unico commit (2026-09-16, B2-01).
-    mails_pendientes: list[tuple[PendingEmail, dict[str, str | None]]] = []
+    mails_pendientes: list[_MailDelLote] = []
 
     for message in messages:
-        contexto = _contexto_del_mail(message)
         try:
-            if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
-                # Lista de espera: aviso al dueno y oferta a una persona por vez.
-                oferta = await offer_released_slot(
-                    db,
-                    ReleasedSlot.from_payload(
-                        message.store_id, dict(message.payload or {})
-                    ),
-                    now=now,
-                )
-                if oferta.pending_email:
-                    mails_pendientes.append(
-                        (
-                            partial(
-                                send_waitlist_offer_email,
-                                email=oferta.pending_email.email,
-                                details=oferta.pending_email.details,
-                            ),
-                            contexto,
-                        )
-                    )
-            elif message.event_type == "appointment.cancelled_by_block":
-                # Aviso al cliente (no al dueno, que fue quien bloqueo).
-                payload = dict(message.payload or {})
-                mails_pendientes.append(
-                    (
-                        partial(
-                            send_cancellation_email,
-                            email=str(payload.get("client_email") or "") or None,
-                            details=payload,
-                        ),
-                        contexto,
-                    )
-                )
-            else:
-                notification = _build_store_notification(message)
-                if notification is not None:
-                    # La notificacion in-app es la fuente durable; el mail es
-                    # un efecto secundario que sale despues del commit.
-                    db.add(notification)
-                    mails_pendientes.extend(
-                        (mail, contexto)
-                        for mail in await _store_owner_mails(db, notification)
-                    )
-                    if message.event_type == NotificationType.PAYMENT_APPROVED.value:
-                        # La sena acreditada confirma el turno: el cliente
-                        # tambien se entera.
-                        confirmacion = await _client_confirmation_mail(
-                            db, notification.appointment_id
-                        )
-                        if confirmacion is not None:
-                            mails_pendientes.append((confirmacion, contexto))
+            mails_pendientes.extend(await _plan_outbox_message(db, message, now))
             message.processed_at = now
             message.error = None
             processed += 1
@@ -215,13 +250,7 @@ async def process_outbox_batch(
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
     # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
     # como fallido ni duplica envios.
-    for enviar, contexto in mails_pendientes:
-        try:
-            await enviar()
-        except Exception as exc:
-            logger.warning(
-                "outbox_email_skipped", error_type=type(exc).__name__, **contexto
-            )
+    await _dispatch_pending_emails(db, mails_pendientes)
     # Despues de los mails, el paso propio de los vencimientos de MP.
     vencimientos = await _claim_and_expire_preferences(db, store_id=store_id)
     return {
@@ -229,6 +258,74 @@ async def process_outbox_batch(
         "failed": failed + vencimientos["failed"],
         "inspected": len(messages) + vencimientos["inspected"],
     }
+
+
+async def _dispatch_pending_emails(
+    db: AsyncSession, pendientes: list[_MailDelLote]
+) -> None:
+    """Manda los mails del lote fuera de toda transaccion, con UNA sesion SMTP.
+
+    AUD2-B4-02 (2026-09-20). Tres decisiones del coordinador:
+
+    - Una conexion SMTP para todo el lote, como el lote de recordatorios desde
+      B4-08. Antes cada ``send_*_email`` pagaba conexion + STARTTLS + LOGIN.
+    - Presupuesto de tiempo: el hard limit de Celery no puede seguir cortando
+      el despacho en silencio.
+    - Lo que no sale se declara en SU mensaje con ``attempts`` (B2-12) y nunca
+      se lleva el resto del lote.
+
+    El mensaje NO revive: ``processed_at`` ya quedo commiteado y reprocesarlo
+    duplicaria la notificacion in-app (y la oferta de lista de espera). El
+    contador y el ``error`` dejan el hueco visible en la fila, que es lo que
+    antes no existia.
+
+    Las filas se tocan recien al final, en una transaccion nueva: mientras se
+    manda no hay ninguna abierta (regla 5).
+    """
+    if not pendientes:
+        return
+    deadline = time.monotonic() + OUTBOX_EMAIL_BUDGET_SECONDS
+    fallados: dict[str, tuple[OutboxMessage, str]] = {}
+    async with smtp_session() as smtp:
+        for indice, pendiente in enumerate(pendientes):
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "outbox_email_budget_exhausted",
+                    sin_despachar=len(pendientes) - indice,
+                    budget_seconds=OUTBOX_EMAIL_BUDGET_SECONDS,
+                )
+                for restante in pendientes[indice:]:
+                    fallados[restante.message.id] = (
+                        restante.message,
+                        OUTBOX_EMAIL_BUDGET_REASON,
+                    )
+                break
+            motivo = await _send_one_pending_email(pendiente, smtp)
+            if motivo is not None:
+                fallados[pendiente.message.id] = (pendiente.message, motivo)
+    if not fallados:
+        return
+    for message, motivo in fallados.values():
+        message.register_failure(motivo)
+    await db.commit()
+
+
+async def _send_one_pending_email(pendiente: _MailDelLote, smtp: Any) -> str | None:
+    """Manda un mail del lote. Devuelve el motivo si no salio, o None."""
+    try:
+        resultado = await pendiente.enviar(smtp=smtp)
+    except Exception as exc:
+        logger.warning(
+            "outbox_email_skipped",
+            error_type=type(exc).__name__,
+            **pendiente.contexto,
+        )
+        return type(exc).__name__
+    if not isinstance(resultado, dict) or resultado.get("status") != "failed":
+        return None
+    # El sink ya logueo el error con el destinatario enmascarado.
+    logger.warning("outbox_email_skipped", error_type="smtp", **pendiente.contexto)
+    return str(resultado.get("reason") or "smtp")
 
 
 async def _claim_and_expire_preferences(

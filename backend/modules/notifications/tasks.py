@@ -213,8 +213,21 @@ async def smtp_session() -> AsyncIterator[SmtpSession]:
         await asyncio.to_thread(session.close)
 
 
-async def _send_email(to: str, subject: str, body: str) -> bool:
-    """Envio suelto: abre y cierra su propia sesion."""
+async def _send_email(
+    to: str, subject: str, body: str, smtp: SmtpSession | None = None
+) -> bool:
+    """Sink unico de correo: con la sesion del lote la reusa, sin ella abre
+    y cierra la suya.
+
+    AUD2-B4-02 (2026-09-20): el consumidor del outbox despachaba su lista de
+    mails post-commit abriendo conexion + STARTTLS + LOGIN por mensaje. Todos
+    los ``send_*_email`` aceptan ahora la sesion del lote (B4-08), asi que un
+    mail nuevo en el outbox no reintroduce el handshake por mail. El parametro
+    vive aca y no en un helper aparte para que el sink -y el punto donde los
+    tests lo reemplazan- siga siendo uno solo.
+    """
+    if smtp is not None:
+        return await smtp.send(to, subject, body)
     async with smtp_session() as session:
         return await session.send(to, subject, body)
 
@@ -379,7 +392,7 @@ def _rescheduled_body(details: dict[str, Any]) -> str:
 # tarea de verdad; ``tests/architecture/test_enqueue_encola_de_verdad.py``
 # impide que vuelva un ``enqueue_*`` que mande en linea.
 async def send_reschedule_email(
-    *, email: str | None, details: dict[str, Any]
+    *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "te movimos el turno". Nunca aborta la reprogramacion."""
     if not is_deliverable_email(email):
@@ -387,7 +400,7 @@ async def send_reschedule_email(
     assert email is not None
     try:
         success = await _send_email(
-            email, _rescheduled_subject(details), _rescheduled_body(details)
+            email, _rescheduled_subject(details), _rescheduled_body(details), smtp
         )
     except Exception as exc:
         logger.warning(
@@ -467,7 +480,7 @@ def _rebook_body(details: dict[str, Any]) -> str:
 
 
 async def send_appointment_confirmation(
-    email: str, details: dict[str, Any]
+    email: str, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     logger.info(
         "sending_confirmation_email",
@@ -475,7 +488,7 @@ async def send_appointment_confirmation(
         appointment=details.get("public_id"),
     )
     success = await _send_email(
-        email, _confirmation_subject(details), _confirmation_body(details)
+        email, _confirmation_subject(details), _confirmation_body(details), smtp
     )
     if not success:
         raise RuntimeError("SMTP send failed")
@@ -549,10 +562,7 @@ async def notify_client_reminder(
 
     if email:
         asunto = _reminder_subject(details)
-        if smtp is not None:
-            enviado = await smtp.send(email, asunto, cuerpo)
-        else:
-            enviado = await _send_email(email, asunto, cuerpo)
+        enviado = await _send_email(email, asunto, cuerpo, smtp)
         if enviado:
             logger.info(
                 "reminder_sent", canal="email", appointment=details.get("public_id")
@@ -569,7 +579,7 @@ async def notify_client_reminder(
 
 
 async def send_appointment_registration(
-    email: str, details: dict[str, Any]
+    email: str, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     logger.info(
         "sending_registration_email",
@@ -577,7 +587,7 @@ async def send_appointment_registration(
         appointment=details.get("public_id"),
     )
     success = await _send_email(
-        email, _registration_subject(details), _registration_body(details)
+        email, _registration_subject(details), _registration_body(details), smtp
     )
     if not success:
         raise RuntimeError("SMTP send failed")
@@ -585,14 +595,14 @@ async def send_appointment_registration(
 
 
 async def send_registration_email(
-    *, email: str | None, details: dict[str, Any]
+    *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "reserva registrada" al crear un turno pendiente. Nunca aborta."""
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
-        return await send_appointment_registration(email, details)
+        return await send_appointment_registration(email, details, smtp)
     except Exception as exc:
         logger.warning(
             "registration_email_dispatch_failed",
@@ -603,7 +613,7 @@ async def send_registration_email(
 
 
 async def send_cancellation_email(
-    *, email: str | None, details: dict[str, Any]
+    *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "turno cancelado" (p.ej. por un bloqueo de agenda). Nunca aborta."""
     if not is_deliverable_email(email):
@@ -611,7 +621,7 @@ async def send_cancellation_email(
     assert email is not None
     try:
         success = await _send_email(
-            email, _cancellation_subject(details), _cancellation_body(details)
+            email, _cancellation_subject(details), _cancellation_body(details), smtp
         )
     except Exception as exc:
         logger.warning(
@@ -626,7 +636,7 @@ async def send_cancellation_email(
 
 
 async def send_rebook_email(
-    *, email: str | None, details: dict[str, Any]
+    *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "reserva tu proximo turno" al completar. Nunca aborta."""
     if not is_deliverable_email(email):
@@ -634,7 +644,7 @@ async def send_rebook_email(
     assert email is not None
     try:
         success = await _send_email(
-            email, _rebook_subject(details), _rebook_body(details)
+            email, _rebook_subject(details), _rebook_body(details), smtp
         )
     except Exception as exc:
         logger.warning(
@@ -669,7 +679,7 @@ def _waitlist_offer_body(details: dict[str, Any]) -> str:
 
 
 async def send_waitlist_offer_email(
-    *, email: str | None, details: dict[str, Any]
+    *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "se libero un turno" a quien esta en lista de espera. Nunca aborta."""
     if not is_deliverable_email(email):
@@ -677,7 +687,7 @@ async def send_waitlist_offer_email(
     assert email is not None
     try:
         success = await _send_email(
-            email, _waitlist_offer_subject(details), _waitlist_offer_body(details)
+            email, _waitlist_offer_subject(details), _waitlist_offer_body(details), smtp
         )
     except Exception as exc:
         logger.warning(
@@ -692,14 +702,14 @@ async def send_waitlist_offer_email(
 
 
 async def send_confirmation_email(
-    *, email: str | None, details: dict[str, Any]
+    *, email: str | None, details: dict[str, Any], smtp: SmtpSession | None = None
 ) -> dict[str, str]:
     """Mail "turno confirmado". Nunca aborta la confirmacion."""
     if not is_deliverable_email(email):
         return {"status": "skipped", "reason": "no-deliverable"}
     assert email is not None
     try:
-        return await send_appointment_confirmation(email, details)
+        return await send_appointment_confirmation(email, details, smtp)
     except Exception as exc:
         # Confirmations are operational side effects; they must never abort bookings.
         logger.warning(
@@ -876,7 +886,11 @@ def _store_notification_body(title: str, body: str | None) -> str:
 
 
 async def send_store_notification_email(
-    *, email: str, title: str, body: str | None = None
+    *,
+    email: str,
+    title: str,
+    body: str | None = None,
+    smtp: SmtpSession | None = None,
 ) -> dict[str, str]:
     """Avisa por mail al dueño de la tienda.
 
@@ -889,7 +903,7 @@ async def send_store_notification_email(
     """
     try:
         delivered = await _send_email(
-            email, f"Shifty - {title}", _store_notification_body(title, body)
+            email, f"Shifty - {title}", _store_notification_body(title, body), smtp
         )
         return {"status": "sent" if delivered else "failed"}
     except Exception as exc:

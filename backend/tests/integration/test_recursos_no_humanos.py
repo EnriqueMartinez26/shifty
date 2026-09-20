@@ -8,6 +8,8 @@ lock, exclusion, bloqueos) que ya estaba indexada por staff_id.
 
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
@@ -80,7 +82,7 @@ async def test_se_reserva_una_cancha_por_el_flujo_publico_y_el_mail_dice_en(
 ) -> None:
     enviados: list[tuple[str, str, str]] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append((to, subject, body))
         return True
 

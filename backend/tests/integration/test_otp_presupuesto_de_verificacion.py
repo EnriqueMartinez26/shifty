@@ -86,7 +86,7 @@ async def test_verificaciones_exitosas_o_no_consumen_el_presupuesto_y_frenan(
     async def fake_get_redis() -> _RedisContador:
         return redis
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         return True
 
     monkeypatch.setattr(otp_service, "get_redis", fake_get_redis)

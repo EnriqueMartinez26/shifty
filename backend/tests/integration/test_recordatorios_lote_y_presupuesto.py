@@ -139,7 +139,7 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
 ) -> None:
     # El alta publica manda "reserva registrada" contra el SMTP configurado;
     # aca no hay ninguno y cada intento espera el timeout.
-    async def sin_smtp(to: str, subject: str, body: str) -> bool:
+    async def sin_smtp(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         return True
 
     monkeypatch.setattr(notification_tasks, "_send_email", sin_smtp)

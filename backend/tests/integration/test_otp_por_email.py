@@ -6,6 +6,8 @@ tienda que activaba "OTP en reserva publica" se quedaba sin reservas. Email
 es el unico canal con envio real; whatsapp/sms quedan para desarrollo.
 """
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 
@@ -21,7 +23,9 @@ class Buzon:
         self.enviados: list[tuple[str, str, str]] = []
         self.falla = falla
 
-    async def __call__(self, to: str, subject: str, body: str) -> bool:
+    async def __call__(
+        self, to: str, subject: str, body: str, smtp: Any = None
+    ) -> bool:
         if self.falla:
             return False
         self.enviados.append((to, subject, body))

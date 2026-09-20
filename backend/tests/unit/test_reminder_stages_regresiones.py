@@ -46,7 +46,7 @@ async def test_el_recordatorio_no_se_manda_al_email_tecnico_noreply(
 ) -> None:
     enviados: list[str] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append(to)
         return True
 

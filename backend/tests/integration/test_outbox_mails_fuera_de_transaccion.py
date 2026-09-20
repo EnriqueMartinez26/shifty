@@ -154,7 +154,7 @@ async def test_los_tres_mails_del_lote_salen_con_el_evento_ya_commiteado(
     vistos: dict[str, list[datetime | None]] = {}
 
     async def dueno(
-        *, email: str, title: str, body: str | None = None
+        *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
         vistos["dueno"] = await _processed_at_en_base(
             test_session, NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value
@@ -162,7 +162,7 @@ async def test_los_tres_mails_del_lote_salen_con_el_evento_ya_commiteado(
         return {"status": "sent"}
 
     async def cancelacion(
-        *, email: str | None, details: dict[str, Any]
+        *, email: str | None, details: dict[str, Any], smtp: Any = None
     ) -> dict[str, str]:
         vistos["cancelacion"] = await _processed_at_en_base(
             test_session, "appointment.cancelled_by_block"
@@ -170,7 +170,7 @@ async def test_los_tres_mails_del_lote_salen_con_el_evento_ya_commiteado(
         return {"status": "sent"}
 
     async def confirmacion(
-        *, email: str | None, details: dict[str, Any]
+        *, email: str | None, details: dict[str, Any], smtp: Any = None
     ) -> dict[str, str]:
         vistos["confirmacion"] = await _processed_at_en_base(
             test_session, NotificationType.PAYMENT_APPROVED.value
@@ -221,7 +221,7 @@ async def test_un_corte_durante_los_envios_no_reenvia_lo_ya_enviado(
     matar_en_el_segundo = True
 
     async def dueno(
-        *, email: str, title: str, body: str | None = None
+        *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
         if matar_en_el_segundo and enviados:
             raise ProcesoMuerto()
