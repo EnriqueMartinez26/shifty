@@ -15,7 +15,10 @@ from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
 from modules.stores.model import Store
-from modules.users.guards import assert_deactivation_allowed
+from modules.users.guards import (
+    assert_deactivation_allowed,
+    assert_global_admin_revocation_allowed,
+)
 from modules.users.model import User, UserRole
 
 
@@ -443,19 +446,11 @@ class UserAdminRepository(_BaseAdminRepository):
             raise ValueError("No se pudo actualizar el usuario")
 
     async def set_global_admin(self, user: User, enabled: bool, actor: User) -> User:
-        if not enabled and user.id == actor.id:
-            raise ValueError("No podés revocar tu propio acceso SuperAdmin")
-        if not enabled and user.is_global_admin:
-            result = await self.db.execute(
-                select(func.count())
-                .select_from(User)
-                .where(
-                    User.is_active.is_(True),
-                    User.is_global_admin.is_(True),
-                )
-            )
-            if int(result.scalar_one()) <= 1:
-                raise ValueError("No se puede revocar el último SuperAdmin activo")
+        # Regla 14, en el unico lugar donde vive (AUD2-B3-12): el conteo era
+        # "leer y despues actuar" y aca tenia su cuarta copia. Revocar el flag
+        # deja la plataforma sin SuperAdmin igual que desactivar la cuenta.
+        if not enabled:
+            await assert_global_admin_revocation_allowed(self.db, actor, user)
         before = {"is_global_admin": user.is_global_admin}
         user.is_global_admin = enabled
         if enabled:
