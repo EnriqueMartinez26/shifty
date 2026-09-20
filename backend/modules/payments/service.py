@@ -746,6 +746,38 @@ def _needs_provider_link(
     )
 
 
+def _expire_replaced_preference(
+    db: AsyncSession, *, payment: Payment, previa: str | None
+) -> None:
+    """Manda a vencer en MP el link REAL que este cobro deja de usar (AUD2-B2-03).
+
+    Publica ``payment.preference.expire``, que consume
+    ``_claim_and_expire_preferences`` fuera de todo lock (B1-04). Hasta ahora
+    solo lo publicaba ``release_pending``: los demas caminos que reemplazan un
+    ``preference_id`` real (re-tarifar desde el panel, confirmar a mano con
+    otro importe) dejaban vivo un checkout que Shifty ya no reconocia, y el
+    pago de ese link se rechazaba por preferencia e importe hasta agotar los
+    reintentos del inbox: plata en la cuenta de la tienda sin registro.
+
+    Un placeholder no existe en Mercado Pago, asi que no se vence nada.
+    """
+    if not previa or _is_placeholder_preference(previa):
+        return
+    if payment.preference_id == previa:
+        return
+    db.add(
+        OutboxMessage(
+            store_id=payment.store_id,
+            event_type=EVENT_PREFERENCE_EXPIRE,
+            payload={
+                "appointment_id": payment.appointment_id,
+                "payment_id": payment.id,
+                "preference_id": previa,
+            },
+        )
+    )
+
+
 async def _attach_provider_link(
     db: AsyncSession,
     *,
@@ -867,6 +899,8 @@ async def _upsert_payment_preference(
     )
     payment = result.scalar_one_or_none()
     creado = payment is None
+    # Un id REAL que se deja de usar hay que vencerlo en MP (AUD2-B2-03).
+    preferencia_previa = None if payment is None else payment.preference_id
     if payment:
         importe_cambio = _reprice_existing_payment(
             payment,
@@ -911,6 +945,7 @@ async def _upsert_payment_preference(
             amount=amount,
         )
 
+    _expire_replaced_preference(db, payment=payment, previa=preferencia_previa)
     return payment, creado
 
 
