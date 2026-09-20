@@ -76,11 +76,17 @@ class DashboardRepository:
         return int(result.scalar() or 0)
 
     async def booked_minutes_between(self, desde: datetime, hasta: datetime) -> float:
-        """Minutos de servicio reservados (no cancelados) en el rango."""
+        """Minutos reservados (no cancelados) en el rango, segun el turno.
+
+        AUD2-B5-10: sumaba ``Service.duration_minutes``, la duracion de lista
+        de HOY, asi que alargar un servicio recalculaba hacia atras la
+        ocupacion de una agenda que no cambio y la separaba del reporte por
+        profesional, que usa el snapshot. Misma razon por la que el turno
+        congela ``price_amount``.
+        """
         result = await self.db.execute(
-            select(func.coalesce(func.sum(Service.duration_minutes), 0))
+            select(func.coalesce(func.sum(Appointment.duration_minutes), 0))
             .select_from(Appointment)
-            .join(Service, Appointment.service_id == Service.id)
             .where(
                 *_starts_between(desde, hasta),
                 Appointment.status != AppointmentStatus.CANCELLED.value,
@@ -139,11 +145,14 @@ class DashboardRepository:
         return float(result.scalar() or 0)
 
     async def average_duration_between(self, desde: datetime, hasta: datetime) -> float:
-        """Duracion promedio de servicio de los turnos no cancelados del rango."""
+        """Duracion promedio de los turnos no cancelados del rango.
+
+        Sobre el snapshot del turno, por lo mismo que ``booked_minutes_between``
+        (AUD2-B5-10).
+        """
         result = await self.db.execute(
-            select(func.coalesce(func.avg(Service.duration_minutes), 0))
+            select(func.coalesce(func.avg(Appointment.duration_minutes), 0))
             .select_from(Appointment)
-            .join(Service, Appointment.service_id == Service.id)
             .where(
                 *_starts_between(desde, hasta),
                 Appointment.status != AppointmentStatus.CANCELLED.value,
