@@ -14,6 +14,7 @@ from typing import cast
 
 import pytest
 
+from core.roles import ROLE_SUPER_ADMIN, canonical_role
 from modules.reports.router import _report_scope_for
 from modules.users.model import User
 
@@ -44,3 +45,17 @@ def test_admin_de_tienda_ve_la_tienda_completa(role: str) -> None:
 
 def test_superadmin_no_queda_acotado_aunque_su_rol_sea_staff() -> None:
     assert _report_scope_for(_usuario("staff", is_global_admin=True)) is None
+
+
+def test_el_superadmin_nunca_es_rol_profesional() -> None:
+    """2026-09-20, AUD2-B5-17: por que el guard no necesita is_global_admin.
+
+    ``_report_scope_for`` acotaba con
+    ``canonical_role(user) == ROLE_PROFESSIONAL and not user.is_global_admin``.
+    El segundo termino era inalcanzable: ``canonical_role`` devuelve
+    ``ROLE_SUPER_ADMIN`` en cuanto ``is_global_admin`` es true, asi que la
+    comparacion de la izquierda ya es falsa. Codigo muerto que sugeria una
+    combinacion de permisos que no existe; esta asercion es la razon por la
+    que se puede borrar sin cambiar el comportamiento.
+    """
+    assert canonical_role(_usuario("staff", is_global_admin=True)) == ROLE_SUPER_ADMIN

@@ -46,8 +46,11 @@ def _report_scope_for(
         raise PermissionDeniedException(action)
     # Rol canonico, no el literal legacy "staff" (B5-07): si el vocabulario
     # persistido cambia, el profesional sigue acotado a sus turnos en vez de
-    # caer en None y ver la tienda completa.
-    if canonical_role(user) == ROLE_PROFESSIONAL and not user.is_global_admin:
+    # caer en None y ver la tienda completa. No hace falta excluir al
+    # superadmin: canonical_role ya devuelve ROLE_SUPER_ADMIN cuando
+    # is_global_admin es true, asi que este brazo no lo alcanza (AUD2-B5-17;
+    # lo fija test_superadmin_no_queda_acotado_aunque_su_rol_sea_staff).
+    if canonical_role(user) == ROLE_PROFESSIONAL:
         return user.id
     return None
 
