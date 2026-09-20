@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from functools import partial
 import hashlib
 import hmac
 import re
@@ -18,7 +19,7 @@ from modules.payments.application import PaymentService
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
 from core.crypto import encrypt_secret
-from core.database import get_db, tenant_bypass
+from core.database import _apply_tenant_context, get_db, tenant_bypass
 from core.redis import get_redis
 from core.exceptions import (
     AppException,
@@ -34,7 +35,7 @@ from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
-from modules.payments.jobs import process_outbox_batch
+from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
 from modules.payments.model import (
     OutboxMessage,
     Payment,
@@ -53,10 +54,12 @@ from modules.payments.oauth_state import (
     parse_mercadopago_oauth_state,
 )
 from modules.payments.service import (
+    GatewayConfigs,
     apply_mercadopago_oauth_payload,
     build_mercadopago_oauth_authorization_url,
     calculate_service_payment_amount,
     create_panel_payment_preference,
+    load_gateway_configs,
     exchange_mercadopago_oauth_code,
     mercadopago_oauth_is_configured,
     refresh_mercadopago_oauth_connection,
@@ -721,6 +724,42 @@ async def refund_payment(
     return _payment_response(payment)
 
 
+async def _enriquecer_sin_transaccion_abierta(
+    db: AsyncSession, *, store_id: str, payload: dict[str, Any]
+) -> tuple[dict[str, Any], GatewayConfigs]:
+    """Le pide a Mercado Pago el detalle del evento, sin transaccion abierta.
+
+    Antes el handler consultaba a MP (``GET /v1/payments/{id}``, hasta
+    MP_REQUEST_TIMEOUT, mas un refresh OAuth si da 401) con la transaccion que
+    habian abierto las consultas de la firma: la sesion quedaba ``idle in
+    transaction`` todo ese rato y, con
+    ``idle_in_transaction_session_timeout = 60s`` y MP degradado, Postgres
+    mataba la conexion, el webhook salia 500 y la fila del inbox se perdia con
+    el rollback (AUD2-B2-08, 2026-09-20; regla 5, mismo patron que S-02 y
+    AUD2-B2-02).
+
+    Fase A: la config del gateway es la ultima lectura antes de la red; como
+    la firma, es de solo lectura, asi que cortar aca no deja nada a medias. El
+    commit es de ``AsyncSession`` y no de ``TenantSession`` porque el de
+    ``TenantSession`` reaplica el contexto y con eso reabre otra transaccion
+    en el acto (S-02). Fase B: se reaplica el contexto para volver a escribir.
+    """
+    configs = await load_gateway_configs(db, [store_id])
+    await AsyncSession.commit(db)
+    enriquecido = await enrich_mercadopago_webhook_payload(
+        db,
+        store_id=store_id,
+        payload=payload,
+        configs=configs,
+        # Un 401 refresca el OAuth: se persiste en su propia transaccion corta,
+        # que se cierra antes del segundo HTTP. Sin esto el default hace
+        # db.flush() y reabre la transaccion justo ahi.
+        persist_refresh=partial(persist_gateway_refresh, db),
+    )
+    await _apply_tenant_context(db)
+    return enriquecido, configs
+
+
 @router.post("/webhooks/mercadopago")
 async def mercadopago_webhook(
     request: Request,
@@ -741,10 +780,8 @@ async def mercadopago_webhook(
             request=request,
             store_reference=store_id,
         )
-        payload = await enrich_mercadopago_webhook_payload(
-            db,
-            store_id=resolved_store_id,
-            payload=payload,
+        payload, configs = await _enriquecer_sin_transaccion_abierta(
+            db, store_id=resolved_store_id, payload=payload
         )
 
         event_id = _webhook_event_id(payload)
@@ -773,7 +810,7 @@ async def mercadopago_webhook(
         # el cobro de forma permanente.
         try:
             applied = await apply_mercadopago_webhook_payload(
-                db, store_id=resolved_store_id, payload=payload
+                db, store_id=resolved_store_id, payload=payload, configs=configs
             )
         except RuntimeError as exc:
             # 2026-09-16 (B2-04): un importe, moneda, referencia o collector

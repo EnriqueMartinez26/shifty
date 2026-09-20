@@ -388,7 +388,7 @@ async def _expire_claimed_preferences(
                 store_id=reclamo.store_id,
                 preference_id=reclamo.preference_id,
                 configs=configs,
-                persist_refresh=partial(_persist_refresh_in_short_transaction, db),
+                persist_refresh=partial(persist_gateway_refresh, db),
             )
             errores[reclamo.message_id] = (reclamo, None)
         except Exception as exc:
@@ -719,7 +719,7 @@ async def _enrich_inbox_payloads(
     Un evento que no se puede enriquecer conserva su payload crudo: ``enrich``
     ya devuelve el original ante cualquier fallo, y la fase B decide con eso.
     """
-    persistir = partial(_persist_refresh_in_short_transaction, db)
+    persistir = partial(persist_gateway_refresh, db)
     enriquecidos: dict[str, dict[str, JsonValue]] = {}
     for inbox in pendientes:
         if inbox.provider != "mercadopago" or not inbox.store_id:
@@ -835,7 +835,7 @@ async def _remote_payments_for_reconciliation(
 
     Corre en la fase A: sin lock y con la transaccion cerrada.
     """
-    persistir = partial(_persist_refresh_in_short_transaction, db)
+    persistir = partial(persist_gateway_refresh, db)
     remotos: dict[str, dict[str, Any]] = {}
     fallidos = 0
     for payment in pendientes:
@@ -1010,7 +1010,7 @@ async def _expire_unpaid_appointments(
         pendientes,
         db=db,
         configs=configs,
-        persist_refresh=partial(_persist_refresh_in_short_transaction, db),
+        persist_refresh=partial(persist_gateway_refresh, db),
     )
     await _apply_tenant_context(db)
 
@@ -1066,11 +1066,17 @@ async def _expire_unpaid_appointments(
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 
 
-async def _persist_refresh_in_short_transaction(
+async def persist_gateway_refresh(
     db: AsyncSession, config: PaymentGatewayConfig
 ) -> None:
     """Persiste en el acto la config que un 401 hizo refrescar, en una
     transaccion corta propia, y la cierra antes de la siguiente llamada a MP.
+
+    Publica desde AUD2-B2-08: la usa tambien el handler del webhook, que
+    ahora consulta a MP con la transaccion del request cerrada y necesita la
+    misma garantia (sin esto, ``refresh_mercadopago_oauth_connection`` cae al
+    ``db.flush()`` por defecto y reabre la transaccion justo antes del
+    segundo HTTP).
 
     Revision de S-02 (2026-09-18): el refresh hacia ``db.flush()`` en una
     transaccion NUEVA, sin el contexto de la tarea. En Postgres la RLS de
