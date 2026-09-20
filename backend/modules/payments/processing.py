@@ -341,18 +341,23 @@ async def apply_mercadopago_webhook_payload(
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
-    if external_payment_id:
-        payment.external_payment_id = external_payment_id
-
     was_settled = payment.status in {
         PaymentStatus.APPROVED.value,
         PaymentStatus.MANUAL_CONFIRMED.value,
     }
-    stamp_payment_from_status(
+    aplicada = stamp_payment_from_status(
         payment,
         payment_status,
         payload=cast(dict[str, JsonValue], payload),
     )
+    # El id del pago de MP se escribe DESPUES de la transicion y solo si la
+    # entidad la acepto (AUD2-B2-05, 2026-09-20). Antes se escribia primero:
+    # con un reintento del cliente (pago A aprobado, pago B rechazado sobre la
+    # misma preferencia) el webhook de B se descartaba por el grafo pero ya
+    # habia dejado el id de B, contra un raw_payload que seguia siendo el de
+    # A. Un cobro sin id lo toma igual: es la unica trazabilidad que hay.
+    if external_payment_id and (aplicada or not payment.external_payment_id):
+        payment.external_payment_id = external_payment_id
     appointment_result = await db.execute(
         select(Appointment)
         .where(

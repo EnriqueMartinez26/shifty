@@ -1098,9 +1098,13 @@ def stamp_payment_from_status(
     payment_status: str,
     *,
     payload: dict[str, JsonValue] | None = None,
-) -> None:
+) -> bool:
     # El grafo decide: una transicion ilegal se ignora (el webhook se reentrega
     # y no queremos romper por un duplicado), pero nunca se aplica. La regla y la
     # mutacion viven en la entidad (Payment.apply_status); esto es solo el wrapper
     # que conservan los llamadores (router, webhook, conciliacion).
-    payment.apply_status(payment_status, payload=payload)
+    #
+    # Devuelve si la transicion se aplico: el llamador que escribe otros campos
+    # del cobro (el external_payment_id del webhook) tiene que enterarse de que
+    # la entidad la descarto (AUD2-B2-05).
+    return payment.apply_status(payment_status, payload=payload)
