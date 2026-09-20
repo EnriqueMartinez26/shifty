@@ -1,18 +1,29 @@
-"""El dia del panel es el dia argentino, con la sesion de Postgres en ART.
+"""El corte de dia del panel es el dia argentino, contra Postgres de verdad.
 
-2026-09-20, hallazgo AUD2-B5-07: ``DashboardRepository`` comparaba los limites
-del rango contra ``appointments.starts_at`` (``timestamptz``) despues de
-hacerles ``.replace(tzinfo=None)``. asyncpg codifica un datetime naive contra
-``timestamptz`` con ``obj.astimezone(utc)``, o sea interpretando el naive como
-hora local DEL PROCESO: con ``TZ=America/Argentina/Buenos_Aires`` la ventana de
-"hoy" se corria tres horas y dejaba de coincidir con ``/reports``, que manda
-aware. En SQLite naive y aware dan lo mismo, asi que la suite de integracion no
-puede ver la diferencia; este test la ve.
+QUE PRUEBA: que ``GET /dashboard/summary`` cuenta como "hoy" el turno de las
+22:30 ART del 16/09 —que se persiste a las 01:30Z del 17— con el reloj
+congelado al 16/09 15:00 ART. Es el caso que distingue "dia argentino" de "dia
+UTC", y aca recorre el tipo posta (``timestamptz``), el driver posta (asyncpg)
+y RLS, que es lo que SQLite no tiene. Eso es todo lo que afirma.
 
-El turno de las 22:30 ART del 16/09 se persiste a las 01:30Z del 17: es el caso
-que distingue "dia argentino" de "dia UTC". Con el reloj congelado al 16/09
-15:00 ART tiene que contar como turno de hoy, y la sesion de la base corre en
-``America/Argentina/Buenos_Aires`` para que un naive mal codificado se note.
+QUE NO PRUEBA, y queda escrito para que nadie lo lea de mas: este test NO
+ejercita el defecto naive/aware de AUD2-B5-07. Tenia un
+``SET TIME ZONE 'America/Argentina/Buenos_Aires'`` que sugeria lo contrario y
+se saco, por dos razones independientes:
+
+1. Un ``SET TIME ZONE`` de sesion no cambia como asyncpg codifica un datetime
+   naive contra ``timestamptz``: el driver hace ``obj.astimezone(utc)``, que
+   resuelve la zona en el proceso de PYTHON, no en la sesion de la base.
+2. Iba en la sesion de la SEMILLA, no en la del request, asi que ni siquiera
+   alcanzaba a la consulta del panel.
+
+Un test que finge cubrir algo es peor que no tenerlo (CLAUDE.md §4). La
+evidencia real del defecto es ``tests/unit/test_panel_instantes_aware.py``, que
+exige que el parametro que se le pasa a la base viaje aware y que el
+repositorio no vuelva a descartar la zona. Reproducir el sintoma end-to-end
+exigiria fijar la TZ del PROCESO de Python antes de que arranque el interprete
+(la variable ``TZ`` del contenedor); ``time.tzset()`` no sirve porque no existe
+en Windows.
 """
 
 from datetime import date, time, timedelta
@@ -20,7 +31,7 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import core.utils
@@ -62,9 +73,6 @@ async def test_el_turno_de_las_2230_cuenta_en_el_dia_argentino_en_postgres(
     )
 
     async with app_sessions() as session:
-        # La sesion en hora argentina: si un limite viaja naive, asyncpg lo
-        # interpreta en esta zona y la ventana se corre tres horas.
-        await session.execute(text("SET TIME ZONE 'America/Argentina/Buenos_Aires'"))
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(session)
