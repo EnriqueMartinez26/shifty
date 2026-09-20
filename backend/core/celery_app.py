@@ -6,8 +6,10 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import beat_init, worker_init
 from core.config import SETTINGS_BOOT_ERROR, settings
+from core.database import assert_rls_capable_role, engine
 from core.model_registry import load_all_models
 from core.observability import init_observability
+from core.worker_loop import run_in_worker_loop
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +37,37 @@ def _start_worker_process(**_: object) -> None:
 
     La configuracion se valida ANTES de Sentry: el DSN sale de esos mismos
     settings, y con settings de respaldo el proceso tiene que morir igual
-    (regla 21).
+    (regla 21). El chequeo del rol va al final, porque es el unico que abre una
+    conexion a la base.
     """
     _abort_if_settings_are_fallback()
     init_observability("worker")
+    _abort_if_role_can_bypass_rls()
+
+
+def _abort_if_role_can_bypass_rls() -> None:
+    """El worker y beat tampoco pueden correr con un rol que saltea RLS.
+
+    Los tres procesos usan la MISMA ``DATABASE_URL``, del mismo bloque de
+    compose que ``MIGRATION_DATABASE_URL``: confundirlas es un typo de una
+    palabra. Con el chequeo solo en el lifespan de FastAPI, la API moria
+    ruidosamente y Celery seguia trabajando sin aislamiento multi-tenant, en
+    silencio, sobre turnos, pagos y outbox de TODAS las tiendas (AUD2-B7-08,
+    2026-09-20).
+
+    Cualquier fallo se traduce a ``SystemExit``: el despachador de signals de
+    Celery se traga las ``Exception``, asi que un rol equivocado o una base que
+    no responde dejarian al proceso "ready" sin haber verificado nada. Cuesta
+    una conexion durante ``worker_init``, que es el precio de la garantia que
+    CLAUDE.md §2 dice tener.
+    """
+    try:
+        run_in_worker_loop(assert_rls_capable_role(engine))
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        logger.critical("Celery no arranca, no se pudo verificar el rol: %s", exc)
+        raise SystemExit(f"Celery no arranca, no se pudo verificar el rol: {exc}")
 
 
 def _abort_if_settings_are_fallback() -> None:
