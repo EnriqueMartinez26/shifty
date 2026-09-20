@@ -376,14 +376,8 @@ async def integrity_error_handler(
     )
 
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.error(
-        "unhandled_exception",
-        path=str(request.url.path),
-        method=request.method,
-        error_type=type(exc).__name__,
-    )
+def _internal_error_response() -> JSONResponse:
+    """El 500 neutro, sin log: lo arman dos capas y el evento se registra una."""
     return error_response(
         status_code=500,
         error_code="INTERNAL_SERVER_ERROR",
@@ -392,14 +386,78 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "unhandled_exception",
+        path=str(request.url.path),
+        method=request.method,
+        error_type=type(exc).__name__,
+    )
+    return _internal_error_response()
+
+
+class LastResortErrorMiddleware:
+    """Emite el 500 no manejado DENTRO del stack, no por encima de el.
+
+    El handler de ``Exception`` lo atiende ``ServerErrorMiddleware``, que
+    Starlette pone como capa MAS externa de todas: por encima de
+    ``CORSMiddleware`` y de ``SecurityHeadersMiddleware``, que solo son las mas
+    externas de las de usuario. Esa respuesta salia entonces sin
+    ``access-control-allow-origin`` y sin un solo header de seguridad: un
+    navegador en otro origen (el dev server de Vite, cualquier cliente
+    cross-origin) veia un error de CORS en vez del sobre canonico y el front no
+    podia ni mostrar "Error interno del servidor". Ademas el mismo 500 salia
+    con headers distintos segun de que capa viniera (AUD2-B7-11, 2026-09-20).
+
+    Esta capa va por dentro de CORS y de los security headers, asi que la
+    respuesta los recibe como cualquier otra. La excepcion se RE-LEVANTA igual:
+    ``ServerErrorMiddleware`` ve la respuesta ya empezada, no la duplica, y la
+    vuelve a levantar para que uvicorn imprima el traceback y el middleware
+    ASGI de Sentry capture el evento (la garantia de AUD2-B7-01). El log lo
+    escribe el handler de arriba, una sola vez.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracked_send)
+        except Exception:
+            if response_started:
+                # Con la respuesta a medio camino no hay nada que reemplazar:
+                # el error sube y el servidor corta la conexion.
+                raise
+            await _internal_error_response()(scope, receive, send)
+            raise
+
+
 # IMPORTANTE: En Starlette/FastAPI, los middlewares se ejecutan en orden INVERSO al de registro.
 # Registramos de lo más interno a lo más externo:
-# tenant -> rate limit -> request guard -> boot error -> canonical JSON -> security headers -> CORS.
+# tenant -> rate limit -> request guard -> boot error -> canonical JSON ->
+# last resort -> security headers -> CORS.
 app.add_middleware(TenantMiddleware)
 app.add_middleware(RedisRateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 app.add_middleware(BootErrorMiddleware)
 app.add_middleware(CanonicalJsonMiddleware)
+# Justo por dentro de los headers de seguridad y de CORS: es lo que hace que el
+# 500 no manejado salga con ellos (AUD2-B7-11). Por fuera del sobre canonico
+# para cubrir tambien lo que reviente ahi.
+app.add_middleware(LastResortErrorMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Configurar CORS como la capa más externa.
