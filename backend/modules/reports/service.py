@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
-from sqlalchemy import ColumnElement, Select, Subquery, and_, case, func, select
+from sqlalchemy import ColumnElement, Select, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -51,9 +50,16 @@ ACCREDITED_PAYMENT_STATUSES = [
     PaymentStatus.APPROVED.value,
     PaymentStatus.MANUAL_CONFIRMED.value,
 ]
-# Un turno cancelado o vencido no cuenta para los top-5 de servicios/clientes.
-_EXCLUDED_FROM_TOPS = [
+# Turnos que NO se prestaron. Su plata acreditada es sena retenida, no ingreso
+# por servicio, asi que quedan fuera de los top-5 y entran en
+# retained_deposit_revenue. Las dos mitades usan el MISMO conjunto para que
+# sean complementarias: ingreso por servicio == total_revenue - retenido
+# (AUD2-B5-06). El ausente pago la sena y no vino —el caso por el que existe
+# la sena—; el vencido con pago acreditado es la carrera entre el expirador y
+# el webhook aprobado.
+_NOT_SERVED_STATUSES = [
     AppointmentStatus.CANCELLED.value,
+    AppointmentStatus.ABSENT.value,
     AppointmentStatus.EXPIRED.value,
 ]
 
@@ -115,85 +121,31 @@ def _local_month_key(
     )
 
 
-@dataclass
-class _SummaryAggregation:
-    """Resultado puro de agregar los turnos del rango. Sin I/O: se calcula a
-    partir de lo ya traido de la base, y por eso se puede testear aislado."""
+class _AccreditedRevenue(NamedTuple):
+    """Plata acreditada del rango y turnos que la generaron.
 
-    items: list[ReportAppointmentItem] = field(default_factory=list)
-    total_appointments: int = 0
-    completed: int = 0
-    cancelled: int = 0
-    pending: int = 0
-    confirmed: int = 0
-    total_clients: int = 0
-    new_clients: int = 0
-    returning_clients: int = 0
-    inactive_clients: int = 0
-
-
-@dataclass
-class _ClientCohorts:
-    """Lo que el historico de clientes aporta al resumen (B5-09).
-
-    ``first_seen``: primera visita de cada cliente; ``seen_before_range``: los
-    que ya habian venido antes del inicio del rango; ``known_names``: nombre a
-    usar si un turno del rango no trae uno propio.
+    Las dos mitades del ticket promedio salen de la misma consulta para que
+    nunca hablen de conjuntos distintos.
     """
 
-    first_seen: dict[str, datetime] = field(default_factory=dict)
-    seen_before_range: set[str] = field(default_factory=set)
-    known_names: dict[str, str] = field(default_factory=dict)
+    total: Decimal
+    appointments: int
 
 
-def _client_cohorts(historical_rows: list[Any], start_dt: datetime) -> _ClientCohorts:
-    """Cohortes a partir de ``(client_id, nombre, apellido, email, MIN(starts_at))``.
-
-    Las filas ya vienen agregadas por cliente desde la base (regla 11).
-    """
-    cohorts = _ClientCohorts()
-    for client_id, first_name, last_name, email, starts_at in historical_rows:
-        if not client_id:
-            continue
-        # start_dt es UTC aware (ver _range_bounds). Postgres devuelve
-        # func.min(starts_at) aware; SQLite, naive: se normaliza a aware antes
-        # de comparar (aca y via first_seen) o explota con "can't compare
-        # offset-naive and offset-aware datetimes".
-        starts_at = ensure_utc_aware(starts_at)
-        cohorts.first_seen.setdefault(client_id, starts_at)
-        if starts_at < start_dt:
-            cohorts.seen_before_range.add(client_id)
-        resolved_name = _report_client_name(
-            None,
-            fallback=(
-                f"{first_name or ''} {last_name or ''}".strip()
-                if first_name or last_name
-                else ""
-            )
-            or email,
-        )
-        if resolved_name and resolved_name.strip():
-            cohorts.known_names.setdefault(client_id, resolved_name.strip())
-    return cohorts
-
-
-# Estado del turno (en mayusculas) -> contador del resumen. Absent y expired
-# solo cuentan en el total.
+# Estado del turno (en mayusculas) -> contador del resumen. Estan los SIETE
+# estados del grafo, asi que los contadores suman total_appointments
+# (AUD2-B5-14: antes absent y expired solo entraban en el total y los numeros
+# de la pantalla no cerraban). pending_payment cuenta como pendiente: para el
+# dueno es el mismo casillero.
 _STATUS_COUNTERS = {
     "COMPLETED": "completed",
     "CANCELLED": "cancelled",
     "PENDING": "pending",
     "PENDING_PAYMENT": "pending",
     "CONFIRMED": "confirmed",
+    "ABSENT": "absent",
+    "EXPIRED": "expired",
 }
-
-
-def _unpack_row(row: Any) -> tuple[Appointment, Service, Staff, User | None]:
-    if len(row) == 4:
-        appointment, service, staff, client = row
-        return appointment, service, staff, client
-    appointment, service, staff = row
-    return appointment, service, staff, None
 
 
 def _appointment_item(
@@ -218,30 +170,29 @@ def _appointment_item(
 
 
 def _summary_stats(
-    aggregation: _SummaryAggregation,
-    total_revenue: Decimal,
+    counts: dict[str, int],
+    cobrado: _AccreditedRevenue,
     retained_deposit_revenue: Decimal,
 ) -> ReportSummaryStats:
-    revenue = float(total_revenue)
-    total = aggregation.total_appointments
+    """Metricas del resumen a partir del conteo por estado que devuelve la base.
+
+    El ticket promedio divide la plata acreditada por los turnos que la
+    generaron, no por los turnos agendados (AUD2-B5-04).
+    """
+    revenue = float(cobrado.total)
     return ReportSummaryStats(
-        total_appointments=total,
-        completed_appointments=aggregation.completed,
-        cancelled_appointments=aggregation.cancelled,
-        pending_appointments=aggregation.pending,
-        confirmed_appointments=aggregation.confirmed,
+        total_appointments=counts.get("total", 0),
+        completed_appointments=counts.get("completed", 0),
+        cancelled_appointments=counts.get("cancelled", 0),
+        pending_appointments=counts.get("pending", 0),
+        confirmed_appointments=counts.get("confirmed", 0),
+        absent_appointments=counts.get("absent", 0),
+        expired_appointments=counts.get("expired", 0),
         total_revenue=round(revenue, 2),
-        average_ticket=round(revenue / total, 2) if total else 0.0,
+        average_ticket=(
+            round(revenue / cobrado.appointments, 2) if cobrado.appointments else 0.0
+        ),
         retained_deposit_revenue=round(float(retained_deposit_revenue), 2),
-    )
-
-
-def _client_stats(aggregation: _SummaryAggregation) -> ReportClientStats:
-    return ReportClientStats(
-        total_clients=aggregation.total_clients,
-        new_clients=aggregation.new_clients,
-        returning_clients=aggregation.returning_clients,
-        inactive_clients=aggregation.inactive_clients,
     )
 
 
@@ -511,7 +462,14 @@ class ReportService:
         from_date: date,
         to_date: date,
         staff_id: str | None = None,
+        page: slice | None = None,
     ) -> list[tuple[Appointment, Service, Staff, User]]:
+        """Turnos del rango para el detalle. ``page`` acota EN SQL.
+
+        AUD2-B5-02: antes traia el rango entero (hasta ~14.800 tuplas de cuatro
+        entidades ORM con el tope de 370 dias) y la pagina se recortaba en
+        Python. ``None`` = sin tope: solo el export, que escribe todo.
+        """
         start_dt, end_dt = self._range_bounds(from_date, to_date)
         query = self._select_in_range(
             Appointment,
@@ -524,67 +482,81 @@ class ReportService:
             # Desempate por id: el orden tiene que ser estable para que las paginas
             # del detalle (B5-15) no repitan ni salteen turnos a la misma hora.
         ).order_by(Appointment.starts_at.asc(), Appointment.id.asc())
+        if page is not None:
+            offset = page.start or 0
+            query = query.offset(offset).limit(page.stop - offset)
         result = await self.db.execute(query)
         return cast(
             list[tuple[Appointment, Service, Staff, User]],
             result.all(),
         )
 
-    def _paid_by_appointment(self) -> Subquery:
-        """Plata acreditada por turno, agregada en la base.
+    def _accredited_payment_join(self) -> ColumnElement[bool]:
+        """Condicion de join a ``payments``: el pago acreditado de ese turno.
 
-        ``GROUP BY appointment_id`` + ``SUM(amount)`` sobre los pagos aprobados
-        o confirmados a mano, acotado a la tienda. Es el bloque que usan el
-        ingreso total, los top-5 y el ingreso por profesional: al proceso nunca
-        vuelve una fila por pago (regla 11; antes se sumaba en un defaultdict).
+        AUD2-B5-08: antes esto era una subconsulta ``GROUP BY appointment_id``
+        sobre TODOS los pagos de la tienda, sin cota de fecha, construida de
+        nuevo en cada una de las cuatro consultas de plata del resumen.
+        Postgres no puede empujar el predicado de rango adentro de ese
+        ``GROUP BY``, asi que el agregado se materializaba entero y el reporte
+        de "los ultimos 7 dias" se volvia mas lento cada mes aunque el rango no
+        cambiara. ``uq_payments_store_appointment`` garantiza a lo sumo UN pago
+        por turno y por tienda, asi que el ``SUM`` no aportaba nada que el join
+        directo no de: ahora el predicado de rango queda del lado de
+        ``appointments`` y el plan usa el indice de ``appointment_id``.
+        El ``store_id`` va igual, por defensa en profundidad (CLAUDE.md §2).
         """
-        return (
-            select(
-                Payment.appointment_id.label("appointment_id"),
-                func.sum(Payment.amount).label("paid"),
-            )
-            .where(
-                Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
-                *self._store_scope(Payment.store_id),
-            )
-            .group_by(Payment.appointment_id)
-            .subquery()
+        return and_(
+            Payment.appointment_id == Appointment.id,
+            Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
+            *self._store_scope(Payment.store_id),
         )
 
     async def _accredited_revenue(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
-    ) -> Decimal:
-        """Ingreso total del rango: un escalar, sumado en la base."""
-        paid = self._paid_by_appointment()
+    ) -> _AccreditedRevenue:
+        """Ingreso del rango y CUANTOS turnos lo generaron, en una consulta.
+
+        AUD2-B5-04: el ticket promedio dividia la plata cobrada por todos los
+        turnos agendados del rango, de cualquier estado. Son dos universos
+        distintos: el denominador tiene que ser el mismo conjunto de filas que
+        el numerador, o sea los turnos con pago acreditado. El join a ``paid``
+        es interno, asi que cada fila contada es un turno cobrado.
+        """
         result = await self.db.execute(
             self._select_in_range(
-                func.coalesce(func.sum(paid.c.paid), 0),
+                func.coalesce(func.sum(Payment.amount), 0),
+                func.count(Payment.id),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
-            ).join(paid, paid.c.appointment_id == Appointment.id)
+            ).join(Payment, self._accredited_payment_join())
         )
-        return Decimal(str(result.scalar_one() or 0))
+        total, cobrados = result.one()
+        return _AccreditedRevenue(Decimal(str(total or 0)), int(cobrados or 0))
 
     async def _retained_deposit_revenue(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> Decimal:
-        """Sena retenida: plata acreditada de turnos CANCELADOS del rango (B5-10).
+        """Sena retenida del rango: plata acreditada de turnos que NO se
+        prestaron —cancelado, ausente o vencido— (B5-10, AUD2-B5-06).
 
         Es parte de ``total_revenue`` (es plata en caja) pero no es ingreso por
-        servicio: se informa aparte. Un escalar sumado en la base (regla 11),
-        con el mismo conjunto de filas y la misma tienda que el total.
+        servicio: se informa aparte. Es la mitad complementaria de los top-5,
+        que excluyen exactamente esos mismos estados, asi que vale la identidad
+        ``ingreso por servicio == total_revenue - retenido``. Un escalar sumado
+        en la base (regla 11), con el mismo conjunto de filas y la misma tienda
+        que el total.
         """
-        paid = self._paid_by_appointment()
         result = await self.db.execute(
             self._select_in_range(
-                func.coalesce(func.sum(paid.c.paid), 0),
+                func.coalesce(func.sum(Payment.amount), 0),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .join(paid, paid.c.appointment_id == Appointment.id)
-            .where(Appointment.status == AppointmentStatus.CANCELLED.value)
+            .join(Payment, self._accredited_payment_join())
+            .where(Appointment.status.in_(_NOT_SERVED_STATUSES))
         )
         return Decimal(str(result.scalar_one() or 0))
 
@@ -592,16 +564,15 @@ class ReportService:
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> dict[str, Decimal]:
         """Ingreso cobrado por profesional: una fila por staff, no por pago."""
-        paid = self._paid_by_appointment()
         result = await self.db.execute(
             self._select_in_range(
                 Appointment.staff_id,
-                func.coalesce(func.sum(paid.c.paid), 0),
+                func.coalesce(func.sum(Payment.amount), 0),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .join(paid, paid.c.appointment_id == Appointment.id)
+            .join(Payment, self._accredited_payment_join())
             .group_by(Appointment.staff_id)
         )
         return {
@@ -612,13 +583,18 @@ class ReportService:
     async def _top_services(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> list[ReportTopServiceItem]:
-        """Top-5 de servicios por turnos e ingreso: GROUP BY + ORDER BY + LIMIT."""
-        paid = self._paid_by_appointment()
+        """Top-5 de servicios por turnos e ingreso: GROUP BY + ORDER BY + LIMIT.
+
+        Es un RANKING, no la definicion del ingreso por servicio: con mas de
+        cinco servicios en el rango su suma es menor que
+        ``total_revenue - retained_deposit_revenue``, que es donde vive esa
+        identidad (AUD2-B5-05).
+        """
         turnos = func.count(Appointment.id)
         completados = func.sum(
             case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
         )
-        ingreso = func.coalesce(func.sum(paid.c.paid), 0)
+        ingreso = func.coalesce(func.sum(Payment.amount), 0)
         result = await self.db.execute(
             self._select_in_range(
                 Service.public_id,
@@ -630,8 +606,8 @@ class ReportService:
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .outerjoin(paid, paid.c.appointment_id == Appointment.id)
-            .where(Appointment.status.not_in(_EXCLUDED_FROM_TOPS))
+            .outerjoin(Payment, self._accredited_payment_join())
+            .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(Service.id, Service.public_id, Service.name)
             # Mismo desempate que el orden anterior en Python (estable sobre
             # turnos ascendentes): a igual conteo e ingreso, el visto primero.
@@ -657,12 +633,11 @@ class ReportService:
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> list[ReportTopClientItem]:
         """Top-5 de clientes por turnos e ingreso: GROUP BY + ORDER BY + LIMIT."""
-        paid = self._paid_by_appointment()
         turnos = func.count(Appointment.id)
         completados = func.sum(
             case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
         )
-        ingreso = func.coalesce(func.sum(paid.c.paid), 0)
+        ingreso = func.coalesce(func.sum(Payment.amount), 0)
         result = await self.db.execute(
             self._select_in_range(
                 Appointment.client_id,
@@ -677,8 +652,8 @@ class ReportService:
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .outerjoin(paid, paid.c.appointment_id == Appointment.id)
-            .where(Appointment.status.not_in(_EXCLUDED_FROM_TOPS))
+            .outerjoin(Payment, self._accredited_payment_join())
+            .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(
                 Appointment.client_id, User.first_name, User.last_name, User.email
             )
@@ -712,24 +687,49 @@ class ReportService:
             )
         return items
 
-    async def _historical_clients(
-        self, *, end_dt: datetime, staff_id: str | None
-    ) -> list[Any]:
-        """Primera visita y contacto de cada cliente hasta el fin del rango.
+    async def _status_counts(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> dict[str, int]:
+        """Turnos por estado del rango: ``GROUP BY status`` (regla 11).
 
-        Antes se traia TODO el historial de turnos de la tienda (sin cota
-        inferior) para calcular cohortes en Python. Solo hace falta, por
-        cliente, la PRIMERA visita (MIN(starts_at)) y sus datos de contacto: eso
-        es una agregacion, asi que se resuelve en la DB y vuelven O(clientes)
-        filas en vez de O(turnos) ("visto antes del rango" == min < inicio).
+        Vuelven a lo sumo siete filas, no una por turno (AUD2-B5-02). El total
+        es la suma de todos los estados, y ``_STATUS_COUNTERS`` los cubre a los
+        siete, asi que los contadores tambien suman el total (AUD2-B5-14).
         """
-        query = (
+        result = await self.db.execute(
+            self._select_in_range(
+                Appointment.status,
+                func.count(Appointment.id),
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            ).group_by(Appointment.status)
+        )
+        counts: dict[str, int] = defaultdict(int)
+        for status, cantidad in result.all():
+            total_estado = int(cantidad)
+            counts["total"] += total_estado
+            bucket = _STATUS_COUNTERS.get((status or "").upper())
+            if bucket:
+                counts[bucket] += total_estado
+        return dict(counts)
+
+    async def _client_cohorts(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> ReportClientStats:
+        """Cohortes de clientes del rango, agregadas en la base (AUD2-B5-02).
+
+        Por cliente: su PRIMERA visita hasta el fin del rango y si vino dentro
+        del rango. Nuevo = vino en el rango y su primera visita cae adentro;
+        inactivo = no vino en el rango pero ya habia venido antes. Vuelve una
+        sola fila; antes se traia una por cliente y se contaba en Python.
+        """
+        por_cliente = (
             select(
-                Appointment.client_id,
-                User.first_name,
-                User.last_name,
-                User.email,
-                func.min(Appointment.starts_at),
+                func.min(Appointment.starts_at).label("first_seen"),
+                func.max(case((Appointment.starts_at >= start_dt, 1), else_=0)).label(
+                    "in_range"
+                ),
             )
             .join(User, Appointment.client_id == User.id)
             .where(
@@ -737,16 +737,32 @@ class ReportService:
                 Appointment.starts_at < end_dt,
                 *self._store_scope(Appointment.store_id),
             )
-            .group_by(
-                Appointment.client_id, User.first_name, User.last_name, User.email
-            )
+            .group_by(Appointment.client_id)
         )
         if staff_id:
-            query = query.where(Appointment.staff_id == staff_id)
-        # Con GROUP BY cada cliente aparece una sola vez, asi que el orden no
-        # importa (_client_cohorts usa setdefault sobre la primera visita).
-        result = await self.db.execute(query)
-        return list(result.all())
+            por_cliente = por_cliente.where(Appointment.staff_id == staff_id)
+        clientes = por_cliente.subquery()
+        en_rango = clientes.c.in_range == 1
+
+        def _contar(condicion: Any) -> Any:
+            return func.coalesce(func.sum(case((condicion, 1), else_=0)), 0)
+
+        result = await self.db.execute(
+            select(
+                _contar(en_rango),
+                _contar(and_(en_rango, clientes.c.first_seen >= start_dt)),
+                _contar(
+                    and_(clientes.c.in_range == 0, clientes.c.first_seen < start_dt)
+                ),
+            )
+        )
+        total, nuevos, inactivos = (int(valor or 0) for valor in result.one())
+        return ReportClientStats(
+            total_clients=total,
+            new_clients=nuevos,
+            returning_clients=max(total - nuevos, 0),
+            inactive_clients=inactivos,
+        )
 
     async def get_summary(
         self,
@@ -756,118 +772,63 @@ class ReportService:
         staff_id: str | None = None,
         page: slice | None = None,
     ) -> ReportSummaryResponse:
-        """``page`` acota solo el detalle ``appointments`` (B5-15); los totales,
-        cohortes y top-5 son siempre del rango completo. ``None`` = todo (export).
+        """``page`` acota el detalle ``appointments`` EN SQL (AUD2-B5-02).
+
+        Los totales, las cohortes y los top-5 son siempre del rango completo y
+        se agregan en la base (regla 11): ninguna consulta trae una fila por
+        turno. ``page`` en ``None`` devuelve el detalle entero (el export).
         """
         resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
         start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
-        rows = await self._fetch_rows(
-            from_date=resolved_from, to_date=resolved_to, staff_id=staff_id
-        )
+        rango: dict[str, Any] = {
+            "start_dt": start_dt,
+            "end_dt": end_dt,
+            "staff_id": staff_id,
+        }
         # Ingreso = plata efectivamente cobrada, no turnos agendados. La fuente
         # de verdad es el pago acreditado (Mercado Pago aprobado, o cobro manual
         # que el dueno confirma por efectivo/WhatsApp). Un turno confirmado pero
         # sin pago acreditado es una reserva, no un ingreso. El monto ya viene
         # con el descuento de la promo aplicado y al precio historico, asi que
         # esto tambien resuelve el precio de lista y las promociones.
-        # Regla 11: total, por servicio y por cliente se agregan en la base; al
-        # proceso vuelven un escalar y cinco filas por dimension, no una fila
-        # por pago ni un acumulador por cada turno del rango.
-        total_revenue = await self._accredited_revenue(
-            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
-        )
-        retained = await self._retained_deposit_revenue(
-            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
-        )
-        top_services = await self._top_services(
-            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
-        )
-        top_clients = await self._top_clients(
-            start_dt=start_dt, end_dt=end_dt, staff_id=staff_id
-        )
-        aggregation = self._aggregate_summary(
-            rows=rows,
-            historical_rows=await self._historical_clients(
-                end_dt=end_dt, staff_id=staff_id
-            ),
-            start_dt=start_dt,
-            end_dt=end_dt,
-            page=page,
-        )
+        counts = await self._status_counts(**rango)
+        cobrado = await self._accredited_revenue(**rango)
+        retained = await self._retained_deposit_revenue(**rango)
+        top_services = await self._top_services(**rango)
+        top_clients = await self._top_clients(**rango)
+        client_stats = await self._client_cohorts(**rango)
         debt_summary = (
             self._empty_debt_summary() if staff_id else await self._build_debt_summary()
         )
+        rows = await self._fetch_rows(
+            from_date=resolved_from,
+            to_date=resolved_to,
+            staff_id=staff_id,
+            page=page,
+        )
+        items = [
+            _appointment_item(
+                appointment,
+                service,
+                staff,
+                _report_client_name(client, appointment.client_name) or "Cliente",
+            )
+            for appointment, service, staff, client in rows
+        ]
+        offset = (page.start or 0) if page is not None else 0
 
         return ReportSummaryResponse(
             from_date=resolved_from,
             to_date=resolved_to,
-            stats=_summary_stats(aggregation, total_revenue, retained),
-            client_stats=_client_stats(aggregation),
+            stats=_summary_stats(counts, cobrado, retained),
+            client_stats=client_stats,
             top_services=top_services,
             top_clients=top_clients,
             debt_summary=debt_summary,
-            appointments=aggregation.items,
-        )
-
-    def _aggregate_summary(
-        self,
-        *,
-        rows: list[Any],
-        historical_rows: list[Any],
-        start_dt: datetime,
-        end_dt: datetime,
-        page: slice | None = None,
-    ) -> _SummaryAggregation:
-        """Agrega los turnos del rango en metricas puras (sin tocar la base).
-
-        Separado de get_summary para que la lógica de conteo/cohortes se pueda
-        leer y testear sin montar queries: recibe lo ya traido y devuelve el
-        resultado listo para envolver en DTOs. El dinero y los top-5 no pasan
-        por aca: se agregan en SQL (regla 11).
-        """
-        cohorts = _client_cohorts(historical_rows, start_dt)
-        known_client_names = cohorts.known_names
-        items: list[ReportAppointmentItem] = []
-        status_counts: dict[str, int] = defaultdict(int)
-        clients_in_range: set[str] = set()
-
-        in_page = range(len(rows))[page] if page is not None else range(len(rows))
-        for index, row in enumerate(rows):
-            appointment, service, staff, client = _unpack_row(row)
-            client_id = appointment.client_id
-            current_name = _report_client_name(client, appointment.client_name)
-            if client_id:
-                clients_in_range.add(client_id)
-                if current_name:
-                    known_client_names[client_id] = current_name
-            counter = _STATUS_COUNTERS.get((appointment.status or "").upper())
-            if counter:
-                status_counts[counter] += 1
-            if index not in in_page:
-                continue
-            resolved_client_name = (
-                current_name or known_client_names.get(client_id or "", "") or "Cliente"
-            )
-            items.append(
-                _appointment_item(appointment, service, staff, resolved_client_name)
-            )
-
-        new_clients = sum(
-            1
-            for client_id in clients_in_range
-            if start_dt <= cohorts.first_seen.get(client_id, start_dt) < end_dt
-        )
-        return _SummaryAggregation(
-            items=items,
-            total_appointments=len(rows),
-            completed=status_counts["completed"],
-            cancelled=status_counts["cancelled"],
-            pending=status_counts["pending"],
-            confirmed=status_counts["confirmed"],
-            total_clients=len(clients_in_range),
-            new_clients=new_clients,
-            returning_clients=max(len(clients_in_range) - new_clients, 0),
-            inactive_clients=len(cohorts.seen_before_range - clients_in_range),
+            appointments=items,
+            # AUD2-B5-01: el corte tiene que ser visible; con esto y
+            # stats.total_appointments el panel puede mostrar "N de M".
+            has_more=offset + len(items) < counts.get("total", 0),
         )
 
     async def _active_staff(self, only_staff_id: str | None) -> list[Staff]:

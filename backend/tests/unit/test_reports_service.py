@@ -14,6 +14,12 @@ from modules.reports.service import ReportService
 
 @pytest.mark.asyncio
 async def test_report_summary_uses_safe_client_name_fallback() -> None:
+    """Un turno sin nombre propio ni cliente con datos se muestra como "Cliente".
+
+    La fila tiene las CUATRO columnas que selecciona ``_fetch_rows``
+    (turno, servicio, profesional, cliente): el cliente existe pero no tiene
+    nombre ni email, y el turno no trae snapshot.
+    """
     fake_db = SimpleNamespace()
     service = ReportService(db=cast(AsyncSession, fake_db), store_id="store-1")
     appointment = SimpleNamespace(
@@ -22,7 +28,7 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
         starts_at=datetime(2026, 6, 15, 10, 0, tzinfo=timezone.utc),
         ends_at=datetime(2026, 6, 15, 10, 30, tzinfo=timezone.utc),
         status="completed",
-        client_id=None,
+        client_id="cli-1",
         client_name=None,
         duration_minutes=30,
         intake_answers=None,
@@ -34,11 +40,12 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
         price=10000,
     )
     staff_model = SimpleNamespace(display_name="Pro Demo")
+    client_model = SimpleNamespace(full_name="", email="")
 
     async def fake_fetch_rows(
-        *, from_date: Any, to_date: Any, staff_id: Any = None
-    ) -> list[tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace]]:
-        return [(appointment, service_model, staff_model)]
+        *, from_date: Any, to_date: Any, staff_id: Any = None, page: Any = None
+    ) -> list[tuple[SimpleNamespace, ...]]:
+        return [(appointment, service_model, staff_model, client_model)]
 
     async def fake_empty_debt_summary() -> ReportDebtSummary:
         return ReportDebtSummary(
@@ -48,9 +55,22 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
             top_debtors=[],
         )
 
+    llamadas: list[int] = []
+
     async def fake_execute(*args: Any, **kwargs: Any) -> SimpleNamespace:
-        # Sin filas para el historico ni los top-5, y 0 de ingreso total.
-        return SimpleNamespace(all=lambda: [], scalar_one=lambda: 0)
+        # Orden de las consultas de get_summary: (1) conteo por estado, con un
+        # turno completado; (2) ingreso acreditado (total, turnos cobrados);
+        # (3) sena retenida; (4) y (5) los top-5, vacios; (6) cohortes. Sin
+        # plata: el ticket promedio no puede dividir por cero.
+        llamadas.append(1)
+        numero = len(llamadas)
+        filas = [("completed", 1)] if numero == 1 else []
+        una_fila = (0, 0) if numero == 2 else (0, 0, 0)
+        return SimpleNamespace(
+            all=lambda: filas,
+            scalar_one=lambda: 0,
+            one=lambda: una_fila,
+        )
 
     fake_db.execute = fake_execute
     service_any = cast(Any, service)
@@ -60,7 +80,10 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
     summary = await service.get_summary(None, None)
 
     assert summary.stats.total_appointments == 1
+    assert summary.stats.completed_appointments == 1
     assert summary.appointments[0].client_name == "Cliente"
+    assert summary.has_more is False
+    assert summary.stats.average_ticket == 0.0
 
 
 @pytest.mark.asyncio

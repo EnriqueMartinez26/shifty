@@ -10,9 +10,15 @@ Decision (OK global del usuario, sugerencia del brief): la sena no
 reembolsada de un turno cancelado ES ingreso, pero categorizada aparte. Campo
 NUEVO ``stats.retained_deposit_revenue`` (aditivo): ``total_revenue`` sigue
 siendo toda la plata acreditada del rango, y el ingreso por servicio es
-``total_revenue - retained_deposit_revenue`` (lo que ya suman ``top_services``).
+``total_revenue - retained_deposit_revenue``.
 Un pago reembolsado deja de estar acreditado y no cuenta en ninguno. Todo se
 agrega en SQL (regla 11) y acotado a la tienda.
+
+2026-09-20, AUD2-B5-05: este docstring decia que ese ingreso por servicio era
+"lo que ya suman top_services" y el test lo afirmaba con ``==``. Es falso:
+``top_services`` lleva ``LIMIT 5``. Pasaba porque la semilla tiene UN solo
+servicio. La igualdad queda acotada a ese caso y el general vive en
+``test_reportes_ingreso_por_servicio.py``.
 """
 
 from datetime import date, time, timedelta
@@ -126,6 +132,19 @@ async def test_la_sena_de_un_cancelado_es_ingreso_pero_va_aparte(
         ("2000", PaymentStatus.REFUNDED),
     )
     await turno("cancelado-sin-pago", 12, AppointmentStatus.CANCELLED, None)
+    # 2026-09-20, AUD2-B5-06: el ausente pago la sena y no vino, y el vencido
+    # se acredito en la carrera entre el expirador y el webhook aprobado. En
+    # los dos casos hay plata en caja y NO hubo servicio prestado: es sena
+    # retenida, igual que el cancelado. Antes el ausente se informaba como
+    # ingreso por servicio (y entraba en los top-5) y el vencido no aparecia
+    # en ningun lado aunque sumaba en total_revenue.
+    await turno("ausente-retiene", 13, AppointmentStatus.ABSENT, ("1500", acreditado))
+    await turno(
+        "vencido-retiene",
+        14,
+        AppointmentStatus.EXPIRED,
+        ("500", PaymentStatus.APPROVED),
+    )
     # Otra tienda con una sena retenida: no puede aparecer en la de A.
     await _turno(
         test_session,
@@ -146,9 +165,13 @@ async def test_la_sena_de_un_cancelado_es_ingreso_pero_va_aparte(
     assert res.status_code == 200, res.text
     stats = res.json()["stats"]
     # Campo existente, sin cambios: toda la plata acreditada del rango.
-    assert stats["total_revenue"] == 13000.0
-    # Campo nuevo: la parte que es sena retenida de turnos cancelados.
-    assert stats["retained_deposit_revenue"] == 3000.0
-    # El ingreso por servicio es la diferencia, y coincide con top_services.
+    assert stats["total_revenue"] == 15000.0
+    # La parte que es sena retenida: turno que NO se presto (cancelado,
+    # ausente o vencido). 3000 + 1500 + 500.
+    assert stats["retained_deposit_revenue"] == 5000.0
+    # El ingreso por servicio es la diferencia entre los dos campos. Con UN
+    # solo servicio sembrado el top-5 no trunca nada, asi que aca ademas
+    # coincide; con mas de cinco no tiene por que (AUD2-B5-05).
+    assert len(res.json()["top_services"]) == 1
     por_servicio = sum(s["revenue"] for s in res.json()["top_services"])
     assert por_servicio == stats["total_revenue"] - stats["retained_deposit_revenue"]

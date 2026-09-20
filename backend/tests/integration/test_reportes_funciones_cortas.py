@@ -271,9 +271,15 @@ async def test_resumen_cohortes_y_profesionales_no_cambian(
         "pending_appointments": 2,
         "confirmed_appointments": 1,
         "total_revenue": 15000.0,
-        "average_ticket": 2142.86,
+        # AUD2-B5-04: 15.000 sobre los DOS turnos que cobraron (t1 y t2), no
+        # sobre los siete agendados (antes daba 2142.86, el precio de nadie).
+        "average_ticket": 7500.0,
         # B5-10 (aditivo): el cancelado t3 no tiene pago, no hay sena retenida.
         "retained_deposit_revenue": 0.0,
+        # AUD2-B5-14 (aditivos): t4 ausente y t7 vencido. Con estos dos los
+        # seis contadores suman total_appointments.
+        "absent_appointments": 1,
+        "expired_appointments": 1,
     }
     assert resumen["client_stats"] == {
         "total_clients": 2,
@@ -289,11 +295,14 @@ async def test_resumen_cohortes_y_profesionales_no_cambian(
             s["revenue"],
         )
         for s in resumen["top_services"]
-    ] == [("Consulta", 3, 1, 10000.0), ("Largo", 2, 0, 5000.0)]
+        # AUD2-B5-06: el ausente t4 dejo de contar en los tops, igual que el
+        # cancelado y el vencido: son turnos que no se prestaron.
+    ] == [("Consulta", 2, 1, 10000.0), ("Largo", 2, 0, 5000.0)]
     assert [
         (c["client_name"], c["appointments"], c["completed_appointments"], c["revenue"])
         for c in resumen["top_clients"]
-    ] == [("Ana Alvarez", 3, 1, 10000.0), ("Beto Blanco", 2, 0, 5000.0)]
+        # Idem: Ana pasa de 3 a 2 turnos porque t4 quedo ausente.
+    ] == [("Ana Alvarez", 2, 1, 10000.0), ("Beto Blanco", 2, 0, 5000.0)]
     assert resumen["debt_summary"] == {
         "outstanding_balance": 0.0,
         "debtors_count": 0,

@@ -17,11 +17,17 @@ class ReportSummaryStats(BaseModel):
     confirmed_appointments: int
     total_revenue: float
     average_ticket: float
-    # B5-10: parte de total_revenue que es sena retenida de turnos cancelados
-    # (plata acreditada, no reembolsada). No es ingreso por servicio: ese es
+    # B5-10: parte de total_revenue que es sena retenida de turnos que NO se
+    # prestaron —cancelado, ausente o vencido— (plata acreditada, no
+    # reembolsada; AUD2-B5-06). No es ingreso por servicio: ese es
     # total_revenue - retained_deposit_revenue. Aditivo, con default para no
     # romper a quien arma el DTO sin el.
     retained_deposit_revenue: float = 0.0
+    # AUD2-B5-14: sin estos dos, los contadores por estado no sumaban el total
+    # y no habia fila "otros" que explicara la diferencia. Aditivos, con
+    # default por la misma razon que el campo de arriba.
+    absent_appointments: int = 0
+    expired_appointments: int = 0
 
 
 class ReportClientStats(BaseModel):
@@ -80,6 +86,9 @@ class ReportSummaryResponse(BaseModel):
     top_clients: list[ReportTopClientItem] = Field(default_factory=list)
     debt_summary: ReportDebtSummary
     appointments: list[ReportAppointmentItem]
+    # AUD2-B5-01: ``appointments`` es una pagina; esto dice si quedan mas
+    # (y con ``stats.total_appointments``, cuantas en total). Aditivo.
+    has_more: bool = False
 
 
 class ProfessionalReportItem(BaseModel):

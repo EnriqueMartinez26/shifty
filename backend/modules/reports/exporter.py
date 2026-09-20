@@ -27,11 +27,62 @@ def _local_datetime(value: datetime) -> str:
     return ensure_utc_aware(value).astimezone(ARGENTINA_TZ).strftime("%Y-%m-%d %H:%M")
 
 
+def _safe_text(value: object) -> str:
+    """Texto sin caracteres de control (regla 19): NUL, saltos de linea, bidi,
+    zero-width y BOM (categoria Unicode C*) no llegan a ningun exportador.
+
+    AUD2-B5-03: la limpieza existia solo para el PDF. Un NUL en el nombre hacia
+    que ``openpyxl`` levantara ``IllegalCharacterError`` —que no es
+    ``RuntimeError``, lo unico que captura el router— y la descarga de Excel
+    terminaba en un 500 opaco; en el CSV el bidi override viajaba intacto.
+    """
+    return "".join(
+        char for char in str(value) if not unicodedata.category(char).startswith("C")
+    ).strip()
+
+
 def _neutralize_cell(value: object) -> object:
-    """Prefija con apostrofo el texto que empieza con un trigger de formula."""
-    if isinstance(value, str) and value and value[0] in _FORMULA_TRIGGERS:
-        return "'" + value
-    return value
+    """Celda de planilla: sin caracteres de control y con apostrofo delante si
+    el texto empieza con un trigger de formula. Los no-texto pasan derecho."""
+    if not isinstance(value, str):
+        return value
+    limpio = _safe_text(value)
+    if limpio and limpio[0] in _FORMULA_TRIGGERS:
+        return "'" + limpio
+    return limpio
+
+
+def _summary_metrics(
+    summary: ReportSummaryResponse,
+) -> tuple[tuple[str, str, object], ...]:
+    """Metricas del encabezado: ``(clave, etiqueta, valor)``, una sola lista.
+
+    AUD2-B5-13: estaba escrita tres veces —una por exportador— y por eso
+    ``retained_deposit_revenue`` (B5-10) se agrego a la pantalla y a ninguno de
+    los tres archivos. El dueno que baja el Excel para su contador no podia
+    descomponer el total en ingreso por servicio y sena retenida. La clave es
+    la que usan CSV y Excel; la etiqueta, la que dibuja el PDF.
+
+    La lista tiene que cubrir TODOS los campos de ``ReportSummaryStats``: si
+    falta uno, los contadores por estado del archivo no suman el total y el
+    dueno ve en la planilla el mismo defecto que AUD2-B5-14 arreglo en la
+    pantalla. Lo fija
+    ``test_report_exporters.py::test_el_archivo_escribe_todos_los_contadores_del_resumen``,
+    que compara estas claves contra ``ReportSummaryStats.model_fields``.
+    """
+    stats = summary.stats
+    return (
+        ("total_appointments", "Total turnos", stats.total_appointments),
+        ("completed_appointments", "Completados", stats.completed_appointments),
+        ("cancelled_appointments", "Cancelados", stats.cancelled_appointments),
+        ("pending_appointments", "Pendientes", stats.pending_appointments),
+        ("confirmed_appointments", "Confirmados", stats.confirmed_appointments),
+        ("absent_appointments", "Ausentes", stats.absent_appointments),
+        ("expired_appointments", "Vencidos", stats.expired_appointments),
+        ("total_revenue", "Ingreso total", stats.total_revenue),
+        ("average_ticket", "Ticket promedio", stats.average_ticket),
+        ("retained_deposit_revenue", "Sena retenida", stats.retained_deposit_revenue),
+    )
 
 
 def export_to_csv(summary: ReportSummaryResponse) -> bytes:
@@ -42,13 +93,8 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
     writer.writerow(["to_date", summary.to_date.isoformat()])
     writer.writerow([])
     writer.writerow(["metric", "value"])
-    writer.writerow(["total_appointments", summary.stats.total_appointments])
-    writer.writerow(["completed_appointments", summary.stats.completed_appointments])
-    writer.writerow(["cancelled_appointments", summary.stats.cancelled_appointments])
-    writer.writerow(["pending_appointments", summary.stats.pending_appointments])
-    writer.writerow(["confirmed_appointments", summary.stats.confirmed_appointments])
-    writer.writerow(["total_revenue", summary.stats.total_revenue])
-    writer.writerow(["average_ticket", summary.stats.average_ticket])
+    for clave, _etiqueta, valor in _summary_metrics(summary):
+        writer.writerow([clave, valor])
     writer.writerow([])
 
     writer.writerow(
@@ -97,19 +143,8 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
     summary_sheet.append(["to_date", summary.to_date.isoformat()])
     summary_sheet.append([])
     summary_sheet.append(["metric", "value"])
-    summary_sheet.append(["total_appointments", summary.stats.total_appointments])
-    summary_sheet.append(
-        ["completed_appointments", summary.stats.completed_appointments]
-    )
-    summary_sheet.append(
-        ["cancelled_appointments", summary.stats.cancelled_appointments]
-    )
-    summary_sheet.append(["pending_appointments", summary.stats.pending_appointments])
-    summary_sheet.append(
-        ["confirmed_appointments", summary.stats.confirmed_appointments]
-    )
-    summary_sheet.append(["total_revenue", summary.stats.total_revenue])
-    summary_sheet.append(["average_ticket", summary.stats.average_ticket])
+    for clave, _etiqueta, valor in _summary_metrics(summary):
+        summary_sheet.append([clave, valor])
 
     appointments_sheet = wb.create_sheet(title="Appointments")
     appointments_sheet.append(
@@ -156,14 +191,6 @@ _PDF_HEADERS = ("Fecha", "Estado", "Servicio", "Profesional", "Cliente", "Precio
 _ELLIPSIS = "..."
 
 
-def _pdf_text(value: object) -> str:
-    """Texto sin caracteres de control (regla 19): NUL, saltos de linea, bidi,
-    zero-width y BOM (categoria Unicode C*) no llegan al PDF."""
-    return "".join(
-        char for char in str(value) if not unicodedata.category(char).startswith("C")
-    ).strip()
-
-
 def _fit_pdf_text(text: str, width: float, font: str, string_width: Any) -> str:
     """Recorta ``text`` para que entre en ``width`` puntos, marcando el corte."""
     if string_width(text, font, _PDF_FONT_SIZE) <= width:
@@ -181,8 +208,8 @@ def _draw_pdf_row(
     pdf.setFont(font, _PDF_FONT_SIZE)
     *texts, price = cells
     for (x, width), value in zip(_PDF_TEXT_COLUMNS, texts, strict=True):
-        pdf.drawString(x, y, _fit_pdf_text(_pdf_text(value), width, font, stringWidth))
-    pdf.drawRightString(_PDF_PRICE_RIGHT_EDGE, y, _pdf_text(price))
+        pdf.drawString(x, y, _fit_pdf_text(_safe_text(value), width, font, stringWidth))
+    pdf.drawRightString(_PDF_PRICE_RIGHT_EDGE, y, _safe_text(price))
 
 
 def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
@@ -206,18 +233,8 @@ def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
     pdf.drawString(40, y, f"Hasta: {summary.to_date.isoformat()}")
     y -= 20
 
-    metrics = [
-        ("Total turnos", summary.stats.total_appointments),
-        ("Completados", summary.stats.completed_appointments),
-        ("Cancelados", summary.stats.cancelled_appointments),
-        ("Pendientes", summary.stats.pending_appointments),
-        ("Confirmados", summary.stats.confirmed_appointments),
-        ("Ingreso total", summary.stats.total_revenue),
-        ("Ticket promedio", summary.stats.average_ticket),
-    ]
-
-    for label, value in metrics:
-        pdf.drawString(40, y, f"{label}: {value}")
+    for _clave, etiqueta, valor in _summary_metrics(summary):
+        pdf.drawString(40, y, f"{etiqueta}: {valor}")
         y -= 14
 
     y -= 8
