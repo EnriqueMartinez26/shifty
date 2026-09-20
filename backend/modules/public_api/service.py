@@ -758,8 +758,12 @@ class PublicBookingService:
         El llamador maneja la idempotencia (reserva, liberacion y replay).
         """
         original, client = await self._lock_client_appointment(public_id, data.phone)
-        # Reprogramar cancela el turno original: le corresponde el mismo guard.
+        # Reprogramar cancela el turno original: le corresponden los mismos
+        # guards que a cancelar, incluida la ventana de la tienda (AUD2-B1-02).
+        # Sin ella, a quien se le paso la hora de cancelar le alcanzaba con
+        # mover el turno a una fecha lejana para liberar el horario igual.
         reject_cancellation_while_awaiting_payment(original)
+        await self._check_cancellation_window(original)
         await self._reject_paid_reschedule(original)
         service, staff = await self._service_and_staff(original)
         new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
