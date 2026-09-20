@@ -1,7 +1,7 @@
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Annotated
 
-from fastapi import Depends, Path
+from fastapi import Depends, Path, Query
 from core.router import CanonicalAPIRouter
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,11 +23,16 @@ from modules.ledger.schemas import (
     LedgerSummaryClientItem,
     LedgerSummaryResponse,
 )
-from modules.ledger.service import add_movement, reverse_movement
+from modules.ledger.service import add_movement, current_balance, reverse_movement
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/ledger", tags=["Customer Ledger"])
+# Tope del historial de un cliente (AUD2-B2-10). Antes no habia ninguno.
+LEDGER_PAGE_MAX = 200
+LEDGER_PAGE_DEFAULT = 50
+# Cota superior del salto: regla 9 exige ge Y le en todo parametro numerico.
+LEDGER_OFFSET_MAX = 100_000
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
@@ -153,27 +158,53 @@ async def get_ledger_summary(
     )
 
 
-@router.get("/customers/{client_id}", response_model=CustomerLedgerResponse)
+@router.get(
+    "/customers/{client_id}",
+    response_model=CustomerLedgerResponse,
+    summary="Historial de fiado de un cliente (paginado)",
+    description=(
+        "Devuelve una pagina del historial, del movimiento mas nuevo al mas "
+        "viejo, mas el saldo vigente y el total de movimientos. El saldo NO "
+        "depende de la pagina: sale del ultimo movimiento del cliente."
+    ),
+)
 async def get_customer_ledger(
     client_id: PublicIdPath,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    limit: Annotated[int, Query(ge=1, le=LEDGER_PAGE_MAX)] = LEDGER_PAGE_DEFAULT,
+    offset: Annotated[int, Query(ge=0, le=LEDGER_OFFSET_MAX)] = 0,
 ) -> CustomerLedgerResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
+    del_cliente = (
+        CustomerLedger.store_id == user.store_id,
+        CustomerLedger.client_id == client_id,
+    )
     result = await db.execute(
         select(CustomerLedger)
-        .where(
-            CustomerLedger.store_id == user.store_id,
-            CustomerLedger.client_id == client_id,
-        )
-        .order_by(CustomerLedger.created_at.asc())
+        .where(*del_cliente)
+        # Mas nuevo primero: con un tope, la pagina util es la reciente.
+        # El id desempata para que dos filas del mismo instante no se
+        # repitan ni se salteen entre paginas.
+        .order_by(CustomerLedger.created_at.desc(), CustomerLedger.id.desc())
+        .limit(limit)
+        .offset(offset)
     )
     movements = list(result.scalars().all())
-    balance = movements[-1].balance_after if movements else Decimal("0.00")
+    # El saldo y el total salen de SQL (regla 11): antes el saldo era
+    # ``movements[-1].balance_after``, que obligaba a traer el historial
+    # entero para leer un solo numero (AUD2-B2-10).
+    balance = await current_balance(db, user.store_id, client_id)
+    total = (
+        await db.execute(
+            select(func.count()).select_from(CustomerLedger).where(*del_cliente)
+        )
+    ).scalar_one()
     return CustomerLedgerResponse(
         client_id=client_id,
         balance=balance,
+        total=int(total or 0),
         movements=[
             LedgerMovementResponse(
                 public_id=item.id,

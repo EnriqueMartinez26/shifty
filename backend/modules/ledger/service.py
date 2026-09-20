@@ -35,8 +35,14 @@ async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -
         )
 
 
-async def _previous_balance(db: AsyncSession, store_id: str, client_id: str) -> Decimal:
-    """Ultimo saldo del cliente (0 si no tiene movimientos). Con el lock tomado."""
+async def current_balance(db: AsyncSession, store_id: str, client_id: str) -> Decimal:
+    """Ultimo saldo del cliente (0 si no tiene movimientos).
+
+    Una sola fila: el saldo es un dato, no el resultado de traer el historial
+    a memoria (regla 11). ``add_movement`` la llama CON el lock tomado; el
+    endpoint de lectura la llama sin lock, que es lo que corresponde a una
+    consulta (AUD2-B2-10).
+    """
     result = await db.execute(
         select(CustomerLedger)
         .where(
@@ -82,7 +88,7 @@ async def add_movement(
     # Lock por cliente antes de leer el saldo previo: evita que dos movimientos
     # concurrentes calculen balance_after sobre el mismo saldo y se pisen.
     await _lock_client_ledger(db, store_id, client_id)
-    previous_balance = await _previous_balance(db, store_id, client_id)
+    previous_balance = await current_balance(db, store_id, client_id)
     movement = CustomerLedger(
         store_id=store_id,
         client_id=client_id,
@@ -141,7 +147,7 @@ async def reverse_movement(
 
     # La entidad decide como se compensa (ajuste con signo opuesto) y marca el
     # candado reverses_id; aca solo calculamos el saldo resultante y persistimos.
-    previous_balance = await _previous_balance(db, store_id, client_id)
+    previous_balance = await current_balance(db, store_id, client_id)
     reversal = original.build_reversal(
         balance_after=previous_balance - original.signed_amount
     )

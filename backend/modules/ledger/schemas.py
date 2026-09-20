@@ -24,6 +24,9 @@ class LedgerMovementResponse(BaseModel):
 class CustomerLedgerResponse(BaseModel):
     client_id: str
     balance: Decimal
+    # Cuantos movimientos tiene el cliente en total: ``movements`` es una
+    # pagina, asi que sin esto el panel no sabe si hay mas (AUD2-B2-10).
+    total: int
     movements: list[LedgerMovementResponse]
 
 
