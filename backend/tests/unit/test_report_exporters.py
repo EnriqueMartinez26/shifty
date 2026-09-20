@@ -38,6 +38,7 @@ def _summary(*, con_datos: bool = True) -> ReportSummaryResponse:
             confirmed_appointments=1,
             total_revenue=48500.5,
             average_ticket=6062.56,
+            retained_deposit_revenue=3500.0,
         ),
         client_stats=ReportClientStats(
             total_clients=9, new_clients=4, returning_clients=5, inactive_clients=1
@@ -205,3 +206,18 @@ def test_excel_neutraliza_inyeccion_de_formula() -> None:
     texto = _texto_del_xlsx(export_to_excel(resumen))
     assert "&#39;=cmd" in texto or "'=cmd" in texto
     assert "&#39;+SUM(1+1)" in texto or "'+SUM(1+1)" in texto
+
+
+# 2026-09-20, AUD2-B5-13: el campo retained_deposit_revenue (B5-10) se ve en
+# pantalla pero no estaba en ninguno de los tres archivos. Sintoma: el dueno
+# baja el Excel para su contador y la plata de senas retenidas no aparece, asi
+# que el total del archivo no se puede descomponer en "ingreso por servicio" y
+# "sena retenida" como si se puede en el panel.
+def test_los_tres_exportadores_escriben_la_sena_retenida() -> None:
+    resumen = _summary()
+    assert "retained_deposit_revenue,3500.0" in _csv_texto(resumen)
+    texto_excel = _texto_del_xlsx(export_to_excel(resumen))
+    assert "retained_deposit_revenue" in texto_excel
+    assert "3500" in texto_excel
+    pdf = export_to_pdf(resumen)
+    assert pdf[:5] == b"%PDF-"

@@ -52,6 +52,30 @@ def _neutralize_cell(value: object) -> object:
     return limpio
 
 
+def _summary_metrics(
+    summary: ReportSummaryResponse,
+) -> tuple[tuple[str, str, object], ...]:
+    """Metricas del encabezado: ``(clave, etiqueta, valor)``, una sola lista.
+
+    AUD2-B5-13: estaba escrita tres veces —una por exportador— y por eso
+    ``retained_deposit_revenue`` (B5-10) se agrego a la pantalla y a ninguno de
+    los tres archivos. El dueno que baja el Excel para su contador no podia
+    descomponer el total en ingreso por servicio y sena retenida. La clave es
+    la que usan CSV y Excel; la etiqueta, la que dibuja el PDF.
+    """
+    stats = summary.stats
+    return (
+        ("total_appointments", "Total turnos", stats.total_appointments),
+        ("completed_appointments", "Completados", stats.completed_appointments),
+        ("cancelled_appointments", "Cancelados", stats.cancelled_appointments),
+        ("pending_appointments", "Pendientes", stats.pending_appointments),
+        ("confirmed_appointments", "Confirmados", stats.confirmed_appointments),
+        ("total_revenue", "Ingreso total", stats.total_revenue),
+        ("average_ticket", "Ticket promedio", stats.average_ticket),
+        ("retained_deposit_revenue", "Sena retenida", stats.retained_deposit_revenue),
+    )
+
+
 def export_to_csv(summary: ReportSummaryResponse) -> bytes:
     buffer = StringIO()
     writer = csv.writer(buffer)
@@ -60,13 +84,8 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
     writer.writerow(["to_date", summary.to_date.isoformat()])
     writer.writerow([])
     writer.writerow(["metric", "value"])
-    writer.writerow(["total_appointments", summary.stats.total_appointments])
-    writer.writerow(["completed_appointments", summary.stats.completed_appointments])
-    writer.writerow(["cancelled_appointments", summary.stats.cancelled_appointments])
-    writer.writerow(["pending_appointments", summary.stats.pending_appointments])
-    writer.writerow(["confirmed_appointments", summary.stats.confirmed_appointments])
-    writer.writerow(["total_revenue", summary.stats.total_revenue])
-    writer.writerow(["average_ticket", summary.stats.average_ticket])
+    for clave, _etiqueta, valor in _summary_metrics(summary):
+        writer.writerow([clave, valor])
     writer.writerow([])
 
     writer.writerow(
@@ -115,19 +134,8 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
     summary_sheet.append(["to_date", summary.to_date.isoformat()])
     summary_sheet.append([])
     summary_sheet.append(["metric", "value"])
-    summary_sheet.append(["total_appointments", summary.stats.total_appointments])
-    summary_sheet.append(
-        ["completed_appointments", summary.stats.completed_appointments]
-    )
-    summary_sheet.append(
-        ["cancelled_appointments", summary.stats.cancelled_appointments]
-    )
-    summary_sheet.append(["pending_appointments", summary.stats.pending_appointments])
-    summary_sheet.append(
-        ["confirmed_appointments", summary.stats.confirmed_appointments]
-    )
-    summary_sheet.append(["total_revenue", summary.stats.total_revenue])
-    summary_sheet.append(["average_ticket", summary.stats.average_ticket])
+    for clave, _etiqueta, valor in _summary_metrics(summary):
+        summary_sheet.append([clave, valor])
 
     appointments_sheet = wb.create_sheet(title="Appointments")
     appointments_sheet.append(
@@ -216,18 +224,8 @@ def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
     pdf.drawString(40, y, f"Hasta: {summary.to_date.isoformat()}")
     y -= 20
 
-    metrics = [
-        ("Total turnos", summary.stats.total_appointments),
-        ("Completados", summary.stats.completed_appointments),
-        ("Cancelados", summary.stats.cancelled_appointments),
-        ("Pendientes", summary.stats.pending_appointments),
-        ("Confirmados", summary.stats.confirmed_appointments),
-        ("Ingreso total", summary.stats.total_revenue),
-        ("Ticket promedio", summary.stats.average_ticket),
-    ]
-
-    for label, value in metrics:
-        pdf.drawString(40, y, f"{label}: {value}")
+    for _clave, etiqueta, valor in _summary_metrics(summary):
+        pdf.drawString(40, y, f"{etiqueta}: {valor}")
         y -= 14
 
     y -= 8
