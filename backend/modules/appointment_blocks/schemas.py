@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
 
+from core.validation import reject_payload_control_chars
+
 
 class AppointmentBlockBase(BaseModel):
     staff_id: str = Field(..., min_length=1, max_length=64)
@@ -13,6 +15,17 @@ class AppointmentBlockBase(BaseModel):
     def validate_range(self) -> "AppointmentBlockBase":
         if self.starts_at >= self.ends_at:
             raise ValueError("El inicio debe ser anterior al fin")
+        return self
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "AppointmentBlockBase":
+        # El motivo lo tipea un admin, pero se PUBLICA: sale como motivo del
+        # slot en la disponibilidad, en el listado del panel y en el cuerpo
+        # del mail de cancelacion en bloque (regla 19: "texto que se publica",
+        # sin importar quien lo tipeo). Se valida al escribir, igual que la
+        # tienda y el personal: una fila legada con un invisible se sigue
+        # leyendo.
+        self.reason = reject_payload_control_chars(self.reason) or ""
         return self
 
 
@@ -35,6 +48,11 @@ class StoreWideBlockCreate(BaseModel):
     def validate_range(self) -> "StoreWideBlockCreate":
         if self.starts_at >= self.ends_at:
             raise ValueError("El inicio debe ser anterior al fin")
+        return self
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "StoreWideBlockCreate":
+        self.reason = reject_payload_control_chars(self.reason) or ""
         return self
 
 
@@ -73,6 +91,11 @@ class AppointmentBlockUpdate(BaseModel):
     ends_at: datetime | None = None
     reason: str | None = Field(None, max_length=255)
     is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "AppointmentBlockUpdate":
+        self.reason = reject_payload_control_chars(self.reason)
+        return self
 
 
 class AppointmentBlockResponse(BaseModel):
