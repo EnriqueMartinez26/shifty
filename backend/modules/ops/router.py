@@ -17,9 +17,16 @@ import core.redis
 from core.config import settings
 from core.database import get_db
 from core.responses import error_response
-from core.roles import ROLE_SUPER_ADMIN, STORE_MANAGERS, canonical_role, has_any_role
+from core.roles import (
+    ROLE_SUPER_ADMIN,
+    STORE_MANAGERS,
+    canonical_role,
+    has_any_role,
+    store_scope_for,
+)
 from modules.auth.dependencies import get_current_user
 from modules.payments.model import OutboxMessage, WebhookInbox
+from modules.stores.model import Store
 from modules.users.model import User
 
 router = CanonicalAPIRouter(prefix="/ops", tags=["Operations"])
@@ -161,23 +168,50 @@ def _slo_alerts(
     ]
 
 
+async def _store_public_id(db: AsyncSession, store_id: str) -> str | None:
+    """``public_id`` de la tienda: el id que expone el resto de la API.
+
+    AUD2-B5-19: el endpoint devolvia ``user.store_id``, o sea el ULID interno
+    de ``stores.id``. Filtrar ids internos es la forma de que empiecen a
+    usarse desde afuera; todos los DTOs del repo exponen ``public_id``.
+    """
+    result = await db.execute(select(Store.public_id).where(Store.id == store_id))
+    return result.scalar_one_or_none()
+
+
 @router.get("/slo")
 async def slo_status(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
+    """Estado de webhooks y outbox contra sus umbrales.
+
+    Alcance: el admin de tienda ve la suya; el superadmin ve el consolidado de
+    la plataforma. Es la EXCEPCION deliberada a B5-02 ("el superadmin ve su
+    propia tienda" en reportes y panel): estas metricas son de
+    infraestructura, no del negocio de una tienda. Queda afirmado en
+    tests/integration/test_ops_slo.py.
+    """
     role = canonical_role(user)
     if role != ROLE_SUPER_ADMIN and not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("ver SLO")
 
-    is_global = role == ROLE_SUPER_ADMIN or bool(user.is_global_admin)
-    metrics = await _slo_metrics(db, None if is_global else user.store_id)
+    # No hace falta mirar is_global_admin aparte: canonical_role ya devuelve
+    # ROLE_SUPER_ADMIN cuando el flag esta, asi que el termino extra era
+    # inalcanzable y sugeria un "global admin que no es superadmin" que no
+    # existe (AUD2-B5-17, mismo patron que reports/router.py). Lo fija
+    # test_el_global_admin_siempre_es_rol_superadmin.
+    is_global = role == ROLE_SUPER_ADMIN
+    # store_scope_for nunca devuelve None: no hay forma de pedir "sin filtro"
+    # desde aca, y el alcance global es una decision de este endpoint.
+    store_id = store_scope_for(user)
+    metrics = await _slo_metrics(db, None if is_global else store_id)
     thresholds = _slo_thresholds()
     alerts = _slo_alerts(metrics, thresholds)
 
     return {
         "scope": "global" if is_global else "store",
-        "store_id": None if is_global else user.store_id,
+        "store_id": None if is_global else await _store_public_id(db, store_id),
         "status": "ok" if not alerts else "degraded",
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "metrics": metrics,
