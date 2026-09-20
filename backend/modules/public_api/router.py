@@ -450,23 +450,25 @@ async def create_public_booking(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{data.client_phone}:{data.service_id}",
     )
-    cache_key: str | None = None
+    idempotency_key = data.idempotency_key or _public_booking_idempotency_key(data)
+    cache_key = _booking_cache_key(data, idempotency_key)
     async with tenant_bypass(db):
+        # La guarda va FUERA del try (AUD2-B1-07, patron de
+        # ``appointments/router.py``): si levanta
+        # ``IdempotencyInProgressException`` la clave es de OTRA peticion en
+        # vuelo y el ``except`` de abajo le borraba el ``PROCESSING``, con lo
+        # que una tercera peticion entraba al alta en paralelo. Solo se libera
+        # la clave que ESTA peticion adquirio.
+        cached = await idempotency_guard(cache_key, redis)
+        if cached:
+            return PublicBookingResponse.model_validate(cached)
         try:
-            idempotency_key = data.idempotency_key or _public_booking_idempotency_key(
-                data
-            )
-            cache_key = _booking_cache_key(data, idempotency_key)
-            cached = await idempotency_guard(cache_key, redis)
-            if cached:
-                return PublicBookingResponse.model_validate(cached)
             response = await PublicBookingService(db, redis).book(data, idempotency_key)
-            await idempotency_save(cache_key, response.model_dump(mode="json"), redis)
-            return response
         except Exception:
-            if cache_key:
-                await idempotency_release(cache_key, redis)
+            await idempotency_release(cache_key, redis)
             raise
+        await idempotency_save(cache_key, response.model_dump(mode="json"), redis)
+        return response
 
 
 @router.get(
@@ -629,15 +631,17 @@ async def client_reschedule_appointment(
     )
     cache_key = _reschedule_cache_key(public_id, data)
     async with tenant_bypass(db):
+        # La guarda va FUERA del try: ver ``create_public_booking``
+        # (AUD2-B1-07). Solo se libera la clave que ESTA peticion adquirio.
+        cached = await idempotency_guard(cache_key, redis)
+        if cached:
+            return PublicBookingResponse.model_validate(cached)
         try:
-            cached = await idempotency_guard(cache_key, redis)
-            if cached:
-                return PublicBookingResponse.model_validate(cached)
             response = await PublicBookingService(db, redis).reschedule_by_client(
                 public_id, data
             )
-            await idempotency_save(cache_key, response.model_dump(mode="json"), redis)
-            return response
         except Exception:
             await idempotency_release(cache_key, redis)
             raise
+        await idempotency_save(cache_key, response.model_dump(mode="json"), redis)
+        return response
