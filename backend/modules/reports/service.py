@@ -132,14 +132,19 @@ class _AccreditedRevenue(NamedTuple):
     appointments: int
 
 
-# Estado del turno (en mayusculas) -> contador del resumen. Absent y expired
-# solo cuentan en el total.
+# Estado del turno (en mayusculas) -> contador del resumen. Estan los SIETE
+# estados del grafo, asi que los contadores suman total_appointments
+# (AUD2-B5-14: antes absent y expired solo entraban en el total y los numeros
+# de la pantalla no cerraban). pending_payment cuenta como pendiente: para el
+# dueno es el mismo casillero.
 _STATUS_COUNTERS = {
     "COMPLETED": "completed",
     "CANCELLED": "cancelled",
     "PENDING": "pending",
     "PENDING_PAYMENT": "pending",
     "CONFIRMED": "confirmed",
+    "ABSENT": "absent",
+    "EXPIRED": "expired",
 }
 
 
@@ -181,6 +186,8 @@ def _summary_stats(
         cancelled_appointments=counts.get("cancelled", 0),
         pending_appointments=counts.get("pending", 0),
         confirmed_appointments=counts.get("confirmed", 0),
+        absent_appointments=counts.get("absent", 0),
+        expired_appointments=counts.get("expired", 0),
         total_revenue=round(revenue, 2),
         average_ticket=(
             round(revenue / cobrado.appointments, 2) if cobrado.appointments else 0.0
@@ -686,7 +693,8 @@ class ReportService:
         """Turnos por estado del rango: ``GROUP BY status`` (regla 11).
 
         Vuelven a lo sumo siete filas, no una por turno (AUD2-B5-02). El total
-        es la suma de todos los estados, incluidos ``absent`` y ``expired``.
+        es la suma de todos los estados, y ``_STATUS_COUNTERS`` los cubre a los
+        siete, asi que los contadores tambien suman el total (AUD2-B5-14).
         """
         result = await self.db.execute(
             self._select_in_range(
