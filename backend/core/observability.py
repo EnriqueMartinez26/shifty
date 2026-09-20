@@ -103,4 +103,28 @@ def init_observability(component: str) -> bool:
     return True
 
 
-__all__ = ["init_observability"]
+def report_exception(exc: BaseException, **context: Any) -> None:
+    """Manda una excepcion tragada a Sentry, con contexto y sin poder romper.
+
+    Para los caminos best-effort: lo que se decide seguir pese al error igual
+    tiene que dejar un evento investigable, porque el log estructurado del
+    contenedor se rota y nadie lo mira (AUD2-B7-03, 2026-09-20). Si Sentry no
+    esta inicializado, ``capture_exception`` no hace nada; si el reporte
+    mismo falla, se registra y se sigue: reportar un problema no puede
+    convertirse en uno.
+    """
+    try:
+        import sentry_sdk
+    except ImportError:  # pragma: no cover - dependencia opcional
+        return
+    try:
+        # Scope propio: el contexto extra no se pega a los eventos siguientes.
+        with sentry_sdk.new_scope() as scope:
+            if context:
+                scope.set_context("shifty", dict(context))
+            sentry_sdk.capture_exception(exc)
+    except Exception:  # pragma: no cover - Sentry nunca rompe el camino
+        logger.warning("sentry_capture_failed", exc_info=True)
+
+
+__all__ = ["init_observability", "report_exception"]
