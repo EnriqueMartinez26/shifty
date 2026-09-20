@@ -63,11 +63,14 @@ async def test_el_lote_manda_todos_los_mails_con_una_sola_conexion(
     test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     commits = {"n": 0}
-    commit_real = test_session.commit
+    commit_real = AsyncSession.commit
 
-    async def contar_commit() -> None:
+    # A nivel de clase: desde el v-diff de AUD2-B4-02 el lote commitea con
+    # ``AsyncSession.commit(db)`` (no con el metodo de la instancia), asi que
+    # un espia sobre ``test_session.commit`` no lo veria.
+    async def contar_commit(self: AsyncSession) -> None:
         commits["n"] += 1
-        await commit_real()
+        await commit_real(self)
 
     class _SmtpEspia(_SmtpFalso):
         commits_al_conectar: list[int] = []
@@ -83,7 +86,7 @@ async def test_el_lote_manda_todos_los_mails_con_una_sola_conexion(
     for mensaje in _mensajes(5):
         test_session.add(mensaje)
     await test_session.commit()
-    monkeypatch.setattr(test_session, "commit", contar_commit)
+    monkeypatch.setattr(AsyncSession, "commit", contar_commit)
 
     resultado = await jobs.process_outbox_batch(test_session)
 
@@ -135,7 +138,7 @@ async def test_el_presupuesto_corta_el_despacho_y_lo_declara_en_cada_mensaje(
 
     resultado = await jobs.process_outbox_batch(test_session)
 
-    # 0 s y 54 s entran; al tercero el presupuesto (90 s) ya vencio.
+    # 0 s y 0.6 del presupuesto entran; al tercero (1.2) ya vencio.
     assert resultado["processed"] == 4
     assert enviados == ["cliente-0@example.com", "cliente-1@example.com"]
     for mensaje in mensajes[:2]:

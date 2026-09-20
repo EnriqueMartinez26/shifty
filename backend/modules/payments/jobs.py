@@ -109,7 +109,15 @@ PendingEmail = Callable[..., Awaitable[object]]
 # que faltaban no salian nunca y no quedaba rastro. Ahora el despacho corre con
 # una sola conexion SMTP y con presupuesto: lo que no entra se anota en SU
 # mensaje con ``attempts`` (el contador de B2-12) en una transaccion nueva.
-OUTBOX_EMAIL_BUDGET_SECONDS = 90
+#
+# 45 s y no 90 (v-diff de AUD2-B4-02, 2026-09-20): el rol de la app tiene
+# ``idle_in_transaction_session_timeout = 60 s`` (migracion app_role_timeouts).
+# El despacho corre sin transaccion abierta, pero el presupuesto tiene que
+# quedar igual por debajo de ese tope con margen: se revisa ANTES de cada envio
+# y el envio en curso puede sumar hasta los 10 s del timeout del SMTP. Si
+# alguna vez vuelve a quedar una transaccion idle durante el despacho, Postgres
+# no llega a matar la conexion antes de anotar los fallos.
+OUTBOX_EMAIL_BUDGET_SECONDS = 45
 OUTBOX_EMAIL_BUDGET_REASON = "outbox_email_budget_exhausted"
 
 
@@ -208,6 +216,27 @@ async def process_outbox_batch(
     limit: int = 100,
     store_id: str | None = None,
 ) -> dict[str, int]:
+    """Procesa un lote del outbox: persiste, commitea, y recien despues manda.
+
+    Contrato del mail que no sale: un mail que falla o no entra en el
+    presupuesto DESPUES del commit del lote se pierde. Queda con huella en
+    su mensaje (``attempts`` y ``error``) pero el mensaje no revive:
+    ``processed_at`` ya esta commiteado y reprocesarlo duplicaria la
+    notificacion in-app y la oferta de lista de espera. Reintentar exigiria
+    un estado propio por mail.
+
+    El commit del lote es el de ``AsyncSession``, no el de ``TenantSession``
+    (v-diff de AUD2-B4-02, 2026-09-20): el de ``TenantSession`` reaplica el
+    contexto y con eso abre en el acto otra transaccion, que quedaba IDLE
+    durante todo el despacho (misma trampa que S-02 en
+    ``_expire_unpaid_appointments``). Con el
+    ``idle_in_transaction_session_timeout`` del rol (60 s) y un presupuesto
+    de 90 s, Postgres mataba la conexion a mitad del despacho, el commit de
+    los fallados reventaba y los fallos no quedaban anotados. El contexto se
+    reaplica recien cuando hay que volver a escribir. Vale igual para el
+    camino HTTP (``POST /payments/outbox/process``): ``get_db`` tambien
+    fabrica ``TenantSession`` y entra por aca.
+    """
     filters: list[ColumnElement[bool]] = [
         OutboxMessage.processed_at.is_(None),
         OutboxMessage.is_active.is_(True),
@@ -246,12 +275,18 @@ async def process_outbox_batch(
             message.register_failure(str(exc))
             failed += 1
 
-    await db.commit()
+    # Commit de AsyncSession y no de TenantSession: el de TenantSession
+    # reaplica el contexto y deja una transaccion idle abierta durante el
+    # despacho (ver docstring).
+    await AsyncSession.commit(db)
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
     # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
     # como fallido ni duplica envios.
     await _dispatch_pending_emails(db, mails_pendientes)
-    # Despues de los mails, el paso propio de los vencimientos de MP.
+    # Despues de los mails, el paso propio de los vencimientos de MP. El
+    # commit plano dejo la conexion sin contexto: se reaplica antes de volver
+    # a leer, o la RLS le esconderia los eventos al job.
+    await _apply_tenant_context(db)
     vencimientos = await _claim_and_expire_preferences(db, store_id=store_id)
     return {
         "processed": processed + vencimientos["processed"],
@@ -279,8 +314,12 @@ async def _dispatch_pending_emails(
     contador y el ``error`` dejan el hueco visible en la fila, que es lo que
     antes no existia.
 
-    Las filas se tocan recien al final, en una transaccion nueva: mientras se
-    manda no hay ninguna abierta (regla 5).
+    Las filas se tocan recien al final, en una transaccion nueva con el
+    contexto reaplicado (patron de ``_expire_claimed_preferences``). Mientras
+    se manda no hay ninguna abierta (regla 5), y eso depende de que el commit
+    previo del lote sea el de ``AsyncSession``: con el de ``TenantSession``
+    la transaccion idle que abre el ``set_config`` acompanaba a todo el
+    despacho (v-diff de AUD2-B4-02).
     """
     if not pendientes:
         return
@@ -305,9 +344,10 @@ async def _dispatch_pending_emails(
                 fallados[pendiente.message.id] = (pendiente.message, motivo)
     if not fallados:
         return
+    await _apply_tenant_context(db)
     for message, motivo in fallados.values():
         message.register_failure(motivo)
-    await db.commit()
+    await AsyncSession.commit(db)
 
 
 async def _send_one_pending_email(pendiente: _MailDelLote, smtp: Any) -> str | None:
