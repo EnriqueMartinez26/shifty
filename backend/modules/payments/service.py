@@ -168,11 +168,6 @@ def calculate_service_payment_amount(
     return Decimal("0.00")
 
 
-def service_requires_payment(service: Service) -> bool:
-    mode = getattr(service, "deposit_mode", "none") or "none"
-    return mode != "none" and calculate_service_payment_amount(service) > 0
-
-
 async def _mercadopago_api_request(
     access_token: str,
     *,
