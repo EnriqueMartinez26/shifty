@@ -670,18 +670,24 @@ async def reconcile_pending_payments(
         .with_for_update(skip_locked=True, of=Payment)
     )
     payments = list(result.scalars().all())
+    # La configuracion es por tienda, no por cobro: una lectura con in_() antes
+    # del for en vez de dos por cobro, una en la consulta a MP y otra en la
+    # validacion de integridad (regla 12; 2026-09-20, AUD2-B2-06). B2-13 lo
+    # habia cerrado solo en el lote del inbox.
+    configs = await load_gateway_configs(db, (p.store_id for p in payments))
 
     reconciled = 0
     failed = 0
     for payment in payments:
         try:
-            remote = await _fetch_remote_payment(db, payment)
+            remote = await _fetch_remote_payment(db, payment, configs)
             if not remote:
                 continue
             applied = await apply_mercadopago_webhook_payload(
                 db,
                 store_id=payment.store_id,
                 payload={"data": remote, "status": remote.get("status")},
+                configs=configs,
             )
             if applied:
                 reconciled += 1
