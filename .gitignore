@@ -44,3 +44,7 @@ Thumbs.db
 
 # Artefactos de Playwright MCP
 .playwright-mcp/
+
+# Indice local de CodeGraph: 32 MB por checkout y no es reutilizable
+# entre clones ni worktrees (sus bytes dependen del arbol indexado).
+.codegraph/
