@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Body, Depends, Path, Response, status
 from core.router import CanonicalAPIRouter
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -11,6 +12,7 @@ from core.exceptions import (
     StaffNotFoundException,
     ValidationException,
 )
+from core.redis import get_redis
 from core.roles import assert_can_change_access
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
@@ -89,6 +91,7 @@ async def add_staff_schedule(
     data: ScheduleCreate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> ScheduleResponse:
     repo = StaffRepository(db)
     staff = await repo.get_by_id(public_id, admin.store_id)
@@ -96,7 +99,7 @@ async def add_staff_schedule(
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        schedule = await StaffService(db).add_schedule(
+        schedule = await StaffService(db, redis).add_schedule(
             staff, data.model_dump(), admin.store_id
         )
     except ValueError as exc:
@@ -111,6 +114,7 @@ async def update_staff_schedule(
     data: ScheduleUpdate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> ScheduleResponse:
     """Corrige una franja horaria mal cargada."""
     repo = StaffRepository(db)
@@ -123,7 +127,7 @@ async def update_staff_schedule(
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
 
     try:
-        actualizado = await StaffService(db).update_schedule(
+        actualizado = await StaffService(db, redis).update_schedule(
             staff, schedule, data.model_dump(exclude_unset=True)
         )
     except ValueError as exc:
@@ -139,6 +143,7 @@ async def delete_staff_schedule(
     schedule_id: PublicIdPath,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> None:
     """Elimina una franja horaria.
 
@@ -154,7 +159,7 @@ async def delete_staff_schedule(
     if not schedule:
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
 
-    await StaffService(db).delete_schedule(schedule)
+    await StaffService(db, redis).delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")
@@ -167,6 +172,7 @@ async def update_staff_services(
     service_ids: Annotated[list[PublicId], Body(max_length=MAX_SERVICE_IDS)],
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> dict[str, str]:
     repo = StaffRepository(db)
     staff = await repo.get_by_id(public_id, admin.store_id)
@@ -174,7 +180,7 @@ async def update_staff_services(
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        await StaffService(db).update_services(staff, service_ids)
+        await StaffService(db, redis).update_services(staff, service_ids)
     except ValueError as exc:
         raise ValidationException(str(exc))
     return {"message": "Servicios actualizados correctamente"}
@@ -211,6 +217,7 @@ async def update_staff(
     data: StaffUpdate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> StaffResponse:
     repo = StaffRepository(db)
     staff = await repo.get_by_id(public_id, admin.store_id)
@@ -221,7 +228,7 @@ async def update_staff(
     )
 
     try:
-        updated = await StaffService(db).update_profile(
+        updated = await StaffService(db, redis).update_profile(
             staff,
             first_name=data.first_name,
             last_name=data.last_name,
@@ -248,6 +255,7 @@ async def delete_staff(
     public_id: PublicIdPath,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> Response:
     repo = StaffRepository(db)
     staff = await repo.get_by_id(public_id, admin.store_id)
@@ -255,5 +263,5 @@ async def delete_staff(
         raise StaffNotFoundException(identifier=public_id)
     # La baja desactiva la cuenta de login vinculada.
     await _guardar_cuenta_vinculada(repo, staff, admin, public_id, is_active=False)
-    await StaffService(db).soft_delete(staff)
+    await StaffService(db, redis).soft_delete(staff)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
