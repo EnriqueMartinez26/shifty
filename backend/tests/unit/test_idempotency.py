@@ -60,20 +60,25 @@ async def test_save_y_release_tampoco_revientan_con_oserror() -> None:
 
 
 def test_el_criterio_de_redis_caido_se_define_una_sola_vez() -> None:
-    """Las dos capas leen la MISMA tupla, no dos literales que se parecen.
+    """Las tres capas leen la MISMA tupla, no literales que se parecen.
 
     Que coincidan hoy por copia es lo que dejo de coincidir antes. El criterio
-    vive en `core.redis` y los dos modulos lo importan.
+    vive en `core.redis` y los modulos que dependen del cliente lo importan.
+    `core.availability_cache` entra en la lista porque AUD2-B7-03 le puso su
+    propio `_REDIS_CAIDO = (RedisError, OSError)`: una cuarta copia del mismo
+    criterio, escrita en paralelo a AUD2-B7-14.
     """
     import inspect
 
+    import core.availability_cache as availability_cache
     import core.idempotency as idempotency
     import core.rate_limit as rate_limit
     from core.redis import REDIS_UNAVAILABLE_ERRORS
 
     assert REDIS_UNAVAILABLE_ERRORS == (RedisError, OSError)
-    for modulo in (idempotency, rate_limit):
+    for modulo in (idempotency, rate_limit, availability_cache):
         fuente = inspect.getsource(modulo)
         assert "except REDIS_UNAVAILABLE_ERRORS" in fuente, modulo.__name__
         assert "except RedisError" not in fuente, modulo.__name__
         assert "except (RedisError" not in fuente, modulo.__name__
+        assert "(RedisError, OSError)" not in fuente, modulo.__name__

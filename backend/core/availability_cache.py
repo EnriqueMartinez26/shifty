@@ -30,9 +30,9 @@ from collections.abc import Awaitable, Iterable
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
-from redis.exceptions import RedisError
 
 from core.observability import report_exception
+from core.redis import REDIS_UNAVAILABLE_ERRORS
 from core.utils import ARGENTINA_TZ
 
 logger = structlog.get_logger()
@@ -183,12 +183,6 @@ def local_days_touched(*instants: datetime) -> set[date]:
     return days
 
 
-# Redis caido: la libreria envuelve casi todo en `RedisError`, pero un socket
-# que se cierra antes o un DNS que no resuelve llegan como `OSError` (el mismo
-# par que ya capturan rate_limit, otp, payments/jobs y auth/service).
-_REDIS_CAIDO = (RedisError, OSError)
-
-
 def _tolerar_redis_caido(operacion: str, store_id: str, exc: Exception) -> None:
     """Invalidar es best-effort, pero no es silencio (AUD2-B7-03, 2026-09-20).
 
@@ -220,7 +214,7 @@ async def _bump_days(
     try:
         for day in days:
             await _bump_version(client, store_id, day)
-    except _REDIS_CAIDO as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         _tolerar_redis_caido(operacion, store_id, exc)
 
 
@@ -281,5 +275,5 @@ async def invalidate_store_availability(
     try:
         await client.incr(key)
         await client.expire(key, VERSION_TTL_SECONDS)
-    except _REDIS_CAIDO as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         _tolerar_redis_caido("invalidate_store_availability", store_id, exc)
