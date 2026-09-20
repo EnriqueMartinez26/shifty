@@ -46,13 +46,15 @@ APPOINTMENT_MANAGERS = {
     ROLE_PROFESSIONAL,
     ROLE_RECEPTIONIST,
 }
-FINANCIAL_OPERATORS = {
-    ROLE_SUPER_ADMIN,
-    ROLE_STORE_ADMIN,
-    ROLE_PROFESSIONAL,
-    ROLE_RECEPTIONIST,
-}
-FINANCIAL_ADMINS = {ROLE_SUPER_ADMIN, ROLE_STORE_ADMIN}
+# Aca NO hay matriz financiera a proposito (AUD2-B3-06, 2026-09-20). Existian
+# FINANCIAL_OPERATORS y FINANCIAL_ADMINS con cero llamadores, y declaraban una
+# politica que el codigo vivo contradice: quien decide quien opera cobros y
+# fiado son _require_payment_manager / _require_payment_admin
+# (modules/payments/router.py) y _require_financial_access
+# (modules/ledger/router.py). Si se vuelve a escribir la matriz aca, esas tres
+# funciones se cablean a ella en el MISMO commit: una constante sin llamador no
+# es una politica, es una afirmacion falsa en el archivo que CLAUDE.md senala
+# como fuente de la matriz de roles.
 REPORT_VIEWERS = {ROLE_SUPER_ADMIN, ROLE_STORE_ADMIN, ROLE_PROFESSIONAL}
 REPORT_EXPORTERS = {ROLE_SUPER_ADMIN, ROLE_STORE_ADMIN}
 
