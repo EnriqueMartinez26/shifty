@@ -11,8 +11,14 @@ class ServiceRepository:
         self.db = db
 
     async def create(self, service_data: dict[str, Any], store_id: str) -> Service:
+        # `public_id` e `id` son dos columnas con su propio `default`, que
+        # SQLAlchemy resuelve por separado en el INSERT. Aca vivia
+        # `new_service.public_id = new_service.id`, que corria ANTES del flush
+        # -con `id` todavia en None- y no hacia nada salvo documentar un
+        # invariante falso: los dos ULID siempre fueron distintos
+        # (AUD2-B6-08 / B6-09, 2026-09-20). Que deban serlo o no es decision
+        # del dueno; esto solo saca la linea muerta.
         new_service = Service(**service_data, store_id=store_id)
-        new_service.public_id = new_service.id
         self.db.add(new_service)
         await self.db.commit()
         await self.db.refresh(new_service)
