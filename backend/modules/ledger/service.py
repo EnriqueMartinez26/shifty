@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import ResourceNotFoundException, ValidationException
+from modules.appointments.model import Appointment
 from modules.ledger.model import CustomerLedger
 from modules.users.repository import UserRepository
 
@@ -73,6 +74,29 @@ async def _ensure_store_client(
         raise ResourceNotFoundException("Cliente", client_id)
 
 
+async def _ensure_store_appointment(
+    db: AsyncSession, *, store_id: str, appointment_id: str
+) -> None:
+    """El turno asociado al movimiento es de ESTA tienda, o el movimiento no se carga.
+
+    2026-09-20, hallazgo AUD2-B2-16: B2-11 cerro la mitad del hueco (el
+    cliente) y dejo el ``appointment_id`` sin comprobar. La FK a
+    ``appointments.id`` no pasa por RLS (Postgres verifica restricciones por
+    fuera de las politicas), asi que una fila de fiado podia quedar apuntando
+    al turno de otra tienda. Mismo criterio que ``_ensure_store_client``:
+    filtro ``store_id`` como defensa en profundidad (CLAUDE.md §2), y un id
+    inexistente pasa de 409 generico (por FK) a 404 explicito.
+    """
+    turno = await db.scalar(
+        select(Appointment.id).where(
+            Appointment.id == appointment_id,
+            Appointment.store_id == store_id,
+        )
+    )
+    if turno is None:
+        raise ResourceNotFoundException("Turno", appointment_id)
+
+
 async def add_movement(
     db: AsyncSession,
     *,
@@ -85,6 +109,10 @@ async def add_movement(
 ) -> CustomerLedger:
     """Carga un movimiento y devuelve el saldo resultante, ya commiteado."""
     await _ensure_store_client(db, store_id=store_id, client_id=client_id)
+    if appointment_id is not None:
+        await _ensure_store_appointment(
+            db, store_id=store_id, appointment_id=appointment_id
+        )
     # Lock por cliente antes de leer el saldo previo: evita que dos movimientos
     # concurrentes calculen balance_after sobre el mismo saldo y se pisen.
     await _lock_client_ledger(db, store_id, client_id)
