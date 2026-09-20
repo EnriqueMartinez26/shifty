@@ -15,8 +15,12 @@ sin el modelo en el metadata, un `alembic revision --autogenerate` propone
 
 from __future__ import annotations
 
-import importlib.util
+import importlib
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from core.model_registry import MODEL_MODULES, load_all_models
 from core.models import Base
@@ -25,18 +29,30 @@ BACKEND = Path(__file__).resolve().parents[2]
 REGISTRO = BACKEND / "core" / "model_registry.py"
 
 
-def _existe(modulo: str) -> bool:
-    """`find_spec` levanta ModuleNotFoundError si falta el paquete padre."""
-    try:
-        return importlib.util.find_spec(modulo) is not None
-    except ModuleNotFoundError:
-        return False
+def test_el_modelo_no_esta_en_el_arbol_de_git() -> None:
+    """Lo que importa es el archivo versionado, no si el nombre del paquete
+    resuelve: una carpeta vacia con `__pycache__` la resuelve igual como
+    paquete de espacio de nombres (2026-09-19, gate de integracion)."""
+    versionados = subprocess.run(
+        ["git", "ls-files", "modules/budget"],
+        cwd=BACKEND,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+    assert versionados == []
 
 
-def test_el_registro_no_carga_el_modulo_de_presupuestos() -> None:
+def test_el_modelo_no_se_puede_importar() -> None:
+    sys.modules.pop("modules.budget.model", None)
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("modules.budget.model")
+
+
+def test_el_registro_no_lista_el_modulo_de_presupuestos() -> None:
     assert "modules.budget.model" not in MODEL_MODULES
-    assert not _existe("modules.budget.model")
-    assert not _existe("modules.budget")
 
 
 def test_el_metadata_no_incluye_la_tabla_budgets() -> None:
