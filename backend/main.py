@@ -265,8 +265,20 @@ async def stale_data_exception_handler(
 
 
 # SQLSTATE de Postgres que son carreras legitimas entre transacciones, no
-# fallos del servidor: deadlock_detected y serialization_failure.
-_CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001"})
+# fallos del servidor: deadlock_detected, serialization_failure y
+# lock_not_available.
+#
+# 55P03 entra porque la migracion `app_role_timeouts` le pone al rol de la app
+# `lock_timeout = '5s'`: en una rafaga sobre el mismo profesional, el que
+# espera mas de ese plazo por el `SELECT ... FOR UPDATE` recibe 55P03. Es la
+# misma carrera entre dos actores que 40P01, provocada por una guarda propia
+# del repo, y salia como 500 (AUD2-B7-02, 2026-09-20). La regla de CLAUDE.md
+# §4 exige cero 5xx en la prueba de rafaga.
+#
+# 57014 (statement_timeout) NO entra: ahi no hay otro actor esperando, es una
+# consulta que tardo demasiado, o sea un problema del servidor que tiene que
+# seguir siendo 500 visible.
+_CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001", "55P03"})
 
 
 def _sqlstate(exc: DBAPIError) -> str | None:
@@ -282,7 +294,7 @@ def _sqlstate(exc: DBAPIError) -> str | None:
 
 @app.exception_handler(DBAPIError)
 async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
-    """Deadlock o falla de serializacion de Postgres: 409 neutro (S-18).
+    """Carrera de locks de Postgres: 409 neutro (S-18, AUD2-B7-02).
 
     Postgres ya aborto la transaccion; el handler solo responde. Quedan dos
     cruces de locks posibles (reprogramar turno -> profesional contra el alta

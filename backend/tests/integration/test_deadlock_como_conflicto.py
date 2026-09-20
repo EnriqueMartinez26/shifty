@@ -7,8 +7,15 @@ tienda. Postgres detecta el ciclo y aborta una transaccion con SQLSTATE 40P01
 (``DeadlockDetectedError``), que SQLAlchemy envuelve en ``DBAPIError``; hoy
 salia por el handler generico como 500. Es una carrera legitima entre dos
 actores, igual que el optimistic locking: 409 neutro, sin detalles internos
-(regla 20). Lo mismo con 40001 (``SerializationFailure``). Cualquier otro
-error de base sigue siendo 500.
+(regla 20). Lo mismo con 40001 (``SerializationFailure``).
+
+Y lo mismo con 55P03 (``lock_not_available``): la migracion
+``app_role_timeouts`` le pone al rol de la app ``lock_timeout = '5s'``, asi
+que en una rafaga sobre el mismo profesional el que espera mas de 5 segundos
+por el ``SELECT ... FOR UPDATE`` recibe ese SQLSTATE. Es la misma carrera
+legitima entre dos actores, provocada por una guarda propia del repo, y salia
+como 500 (AUD2-B7-02, 2026-09-20). Cualquier otro error de base sigue siendo
+500.
 
 La carrera real esta en tests/postgres/test_pg_deadlock_como_conflicto.py; aca
 se simula el error que sube de la base.
@@ -62,6 +69,10 @@ CUERPO_NEUTRO = {
         (DBAPIError, "40P01"),
         (OperationalError, "40P01"),
         (DBAPIError, "40001"),
+        # lock_timeout del rol de la app: esperar el FOR UPDATE mas de 5s no
+        # es un fallo del servidor (AUD2-B7-02, 2026-09-20).
+        (DBAPIError, "55P03"),
+        (OperationalError, "55P03"),
     ],
 )
 async def test_deadlock_o_serializacion_responde_409_neutro(
