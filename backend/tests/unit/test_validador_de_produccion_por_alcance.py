@@ -53,6 +53,9 @@ BASE: dict[str, Any] = {
     "OTP_PROVIDER": "twilio",
     "OTP_DEBUG_EXPOSE_CODE": False,
     "EXPOSE_API_DOCS": False,
+    # El entorno de tests lo pone en "true" para los tests de /ops; produccion
+    # lo exige apagado (AUD2-B7-12), igual que EXPOSE_API_DOCS.
+    "OPS_ENABLE_PUBLIC_HEALTH": False,
 }
 
 # (ENV en el que el chequeo debe dispararse, override que lo rompe, mensaje).
@@ -157,6 +160,11 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"FIELD_ENCRYPTION_KEY": None},
         "FIELD_ENCRYPTION_KEY es obligatorio en produccion",
     ),
+    (
+        "production",
+        {"OPS_ENABLE_PUBLIC_HEALTH": True},
+        "OPS_ENABLE_PUBLIC_HEALTH debe ser false en produccion",
+    ),
     # --- Limites operativos: cualquier entorno, desarrollo incluido (11 `if`) ---
     (
         "development",
@@ -215,11 +223,11 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
     ),
 ]
 
-# 27 condiciones (`if`, con los que recorren las tablas contados por fila)
-# repartidas en 30 filas: SECRET_KEY tiene tres ramas en un mismo `or` y
+# 28 condiciones (`if`, con los que recorren las tablas contados por fila)
+# repartidas en 31 filas: SECRET_KEY tiene tres ramas en un mismo `or` y
 # CORS_ORIGINS/localhost dos. Bajar este numero es borrar una
 # proteccion; subirlo sin agregar la fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 30
+FILAS_ESPERADAS = 31
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 

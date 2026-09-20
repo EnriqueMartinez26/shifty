@@ -136,6 +136,19 @@ _BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
         False,
         "OTP_DEBUG_EXPOSE_CODE debe ser false en produccion",
     ),
+    # `GET /api/ops/health/ready` devolvia a cualquier anonimo el detalle por
+    # componente (`{"db": false, "redis": true}`) y nginx proxea `/api/`
+    # entero, asi que es publico. El propio comentario del endpoint reconoce
+    # que eso es "info util para un atacante anonimo que sondea la infra" y por
+    # eso lo puso detras de un flag... que venia abierto y que ninguna
+    # validacion de produccion miraba (AUD2-B7-12, 2026-09-20). El healthcheck
+    # del compose sondea 127.0.0.1 dentro de la red interna y le alcanza con el
+    # 503; el detalle se mira con `docker compose logs`, no desde afuera.
+    (
+        "OPS_ENABLE_PUBLIC_HEALTH",
+        False,
+        "OPS_ENABLE_PUBLIC_HEALTH debe ser false en produccion",
+    ),
 )
 
 # Una URL publica que apunte a la maquina del deploy deja los mails y los
@@ -226,6 +239,9 @@ class Settings(BaseSettings):
     # Minutos que un cupo liberado se ofrece a UNA persona de la lista de
     # espera antes de pasar a la siguiente (exclusividad blanda).
     WAITLIST_OFFER_MINUTES: int = 10
+    # Detalle por componente en el readiness publico. Abierto en desarrollo
+    # (diagnosticar es lo que se hace ahi) y cerrado en produccion, donde lo
+    # exige `_BOOLEANOS_DE_PRODUCCION` (AUD2-B7-12).
     OPS_ENABLE_PUBLIC_HEALTH: bool = True
     SLO_MAX_PENDING_WEBHOOKS: int = 200
     SLO_MAX_FAILED_WEBHOOKS: int = 20
@@ -280,6 +296,7 @@ class Settings(BaseSettings):
         production_data.setdefault("COOKIE_SAMESITE", "lax")
         production_data.setdefault("EXPOSE_API_DOCS", False)
         production_data.setdefault("RATE_LIMIT_FAIL_CLOSED", True)
+        production_data.setdefault("OPS_ENABLE_PUBLIC_HEALTH", False)
         return production_data
 
     def _validate_secrets_outside_development(self) -> None:
