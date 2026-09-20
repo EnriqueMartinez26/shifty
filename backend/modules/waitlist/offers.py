@@ -2,9 +2,9 @@
 
 Regla de encaje (decision de producto, 2026-09-10): mismo profesional (o
 "cualquiera") y que el servicio pedido quepa en el hueco, siempre que ese
-profesional de ese servicio. No hace falta que sea el mismo servicio del
-turno cancelado: un hueco de 30 minutos sirve para cualquier servicio de
-hasta 30 minutos.
+profesional de ese servicio y que el servicio siga activo. No hace falta que
+sea el mismo servicio del turno cancelado: un hueco de 30 minutos sirve para
+cualquier servicio de hasta 30 minutos.
 
 Se ofrece a UNA persona por vez, por orden de llegada, durante
 ``WAITLIST_OFFER_MINUTES``. Los cupos dentro de la antelacion minima de la
@@ -123,6 +123,10 @@ async def matching_entries(
         .where(
             WaitlistEntry.store_id == slot.store_id,
             WaitlistEntry.is_active.is_(True),
+            # Un servicio dado de baja no se puede reservar por el portal
+            # (``get_service_by_public_id`` exige ``is_active``): ofrecerlo
+            # manda al cliente a un 404 y encima le gasta una de sus ofertas.
+            Service.is_active.is_(True),
             WaitlistEntry.status == WaitlistStatus.WAITING.value,
             # Quien ya dejo pasar MAX_LAPSED_OFFERS ofertas no recibe mas.
             WaitlistEntry.lapsed_offers < MAX_LAPSED_OFFERS,
