@@ -111,7 +111,7 @@ class DashboardService:
             appointments_today=await repo.count_active_between(
                 today_window.desde, today_window.hasta
             ),
-            pending_confirmations=await repo.count_pending(),
+            pending_confirmations=await repo.count_pending(now),
             occupancy_rate=await self._occupancy_today(today, today_window),
             new_clients_last_30d=await repo.count_new_clients_since(
                 now - timedelta(days=30)

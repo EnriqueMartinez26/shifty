@@ -66,9 +66,19 @@ class DashboardRepository:
         )
         return int(result.scalar() or 0)
 
-    async def count_pending(self) -> int:
+    async def count_pending(self, desde: datetime) -> int:
+        """Turnos pendientes que empiezan de ``desde`` en adelante.
+
+        AUD2-B5-11: antes contaba TODOS los pendientes de la tienda, sin cota.
+        Un pendiente cuya fecha ya paso no cambia de estado solo (el grafo lo
+        lleva a absent/completed por accion del staff), asi que el contador era
+        monotono creciente: a los seis meses mostraba "137 confirmaciones
+        pendientes" donde habia dos reales y dejaba de disparar accion. El
+        horizonte es el mismo que el de ``upcoming``.
+        """
         result = await self.db.execute(
             select(func.count(Appointment.id)).where(
+                Appointment.starts_at >= desde,
                 Appointment.status == AppointmentStatus.PENDING.value,
                 *self._appointment_scope(),
             )
