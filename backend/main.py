@@ -131,6 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await _close_redis_on_shutdown()
+        await _dispose_db_pool_on_shutdown()
 
 
 async def _close_redis_on_shutdown() -> None:
@@ -144,6 +145,26 @@ async def _close_redis_on_shutdown() -> None:
         await close_redis()
     except Exception:
         logger.warning("redis_close_failed_on_shutdown", exc_info=True)
+
+
+async def _dispose_db_pool_on_shutdown() -> None:
+    """Cierre ordenado del pool de Postgres (AUD2-B7-05, 2026-09-20).
+
+    Mismo modo de fallo que X-16 declaro inaceptable para Redis, en el recurso
+    que ademas ya se agoto una vez (regla 5, 2026-09-04): sin esto quedaban
+    hasta DB_POOL_SIZE + DB_MAX_OVERFLOW conexiones abiertas contra Postgres
+    por proceso de uvicorn tras cada apagado, hasta que las cerrara el timeout
+    del servidor. Con `restart: always` y un contenedor de Postgres de 256M,
+    un deploy con reinicios seguidos puede dejar la base sin cupo para el
+    proceso nuevo.
+
+    Va en su propio try y despues del cierre de Redis: una base que ya no
+    responde no puede trabar el apagado, y un cierre no puede tapar al otro.
+    """
+    try:
+        await engine.dispose()
+    except Exception:
+        logger.warning("db_pool_dispose_failed_on_shutdown", exc_info=True)
 
 
 # Sentry se inicializa antes de construir la app para que sus integraciones
