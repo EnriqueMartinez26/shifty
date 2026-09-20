@@ -28,6 +28,11 @@ AppointmentAgendaRow: TypeAlias = tuple[Appointment, Service, Staff, User]
 AppointmentReminderRow: TypeAlias = tuple[Appointment, Service, Staff, User, Store]
 
 
+# Columnas de reclamo de recordatorio que acepta ``get_upcoming_for_reminders``:
+# ``getattr`` sobre el modelo con un nombre de afuera no puede quedar abierto.
+REMINDER_COLUMNS = frozenset({"reminder_24h_sent_at", "reminder_2h_sent_at"})
+
+
 class AppointmentRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -469,11 +474,20 @@ class AppointmentRepository:
         starts_after: datetime,
         starts_before: datetime,
         *,
+        pending_column: str,
         limit: int | None = None,
     ) -> list[AppointmentReminderRow]:
         """
         Devuelve turnos CONFIRMED o PENDING en el rango horario indicado a los
-        que todavia les falta algun recordatorio (24h o 2h).
+        que todavia les falta el recordatorio de ``pending_column``.
+
+        ``pending_column`` es obligatoria (v-diff de AUD2-B4-04, 2026-09-20):
+        la consulta filtraba ``24h IS NULL OR 2h IS NULL``, asi que la ventana
+        de la etapa de 24 h traia tambien los turnos que YA la habian
+        recibido (a todos les falta la de 2 h), ordenados primero por
+        ``starts_at``; con mas de ``limit`` turnos en las proximas 21 h los
+        candidatos frescos quedaban al final y el tope los cortaba. Cada
+        etapa pide SU columna y el tope corta sobre filas que hay que mandar.
 
         ``limit`` acota el lote por corrida (B4-02, 2026-09-17): el orden por
         ``starts_at`` hace que los mas proximos salgan primero y el resto
@@ -487,6 +501,9 @@ class AppointmentRepository:
         la exclusion entre workers sigue siendo el reclamo ``UPDATE ... WHERE
         col IS NULL``; SKIP LOCKED achica el solapamiento, no lo reemplaza.
         """
+        if pending_column not in REMINDER_COLUMNS:
+            raise ValueError(f"columna de recordatorio desconocida: {pending_column}")
+        pendiente = getattr(Appointment, pending_column).is_(None)
         query = (
             select(Appointment, Service, Staff, User, Store)
             .join(Service, Appointment.service_id == Service.id)
@@ -503,10 +520,7 @@ class AppointmentRepository:
                         AppointmentStatus.CONFIRMED.value,
                     ]
                 ),
-                or_(
-                    Appointment.reminder_24h_sent_at.is_(None),
-                    Appointment.reminder_2h_sent_at.is_(None),
-                ),
+                pendiente,
             )
             .order_by(Appointment.starts_at.asc())
             .with_for_update(of=Appointment, skip_locked=True)

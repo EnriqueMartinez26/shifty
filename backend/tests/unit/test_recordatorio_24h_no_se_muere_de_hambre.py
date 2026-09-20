@@ -27,6 +27,12 @@ import modules.notifications.tasks as tasks
 from tests.unit.test_notifications_resilience import _fila, _FakeSessionFactory
 
 
+def _pendiente(turno: Any, pending_column: str | None) -> bool:
+    if pending_column is None:
+        return turno.reminder_24h_sent_at is None or turno.reminder_2h_sent_at is None
+    return getattr(turno, pending_column) is None
+
+
 class _RepoConVentana:
     """Repo que respeta la ventana y el tope, como el SQL real.
 
@@ -37,7 +43,7 @@ class _RepoConVentana:
 
     filas: list[Any] = []
     claims: list[tuple[str, str]] = []
-    consultas: list[tuple[datetime, datetime, int | None]] = []
+    consultas: list[tuple[datetime, datetime, int | None, str | None]] = []
 
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -47,13 +53,23 @@ class _RepoConVentana:
         starts_after: datetime,
         starts_before: datetime,
         *,
+        pending_column: str | None = None,
         limit: int | None = None,
     ) -> list[Any]:
-        _RepoConVentana.consultas.append((starts_after, starts_before, limit))
+        """Filtra por ventana, por columna pendiente y por tope, como el SQL.
+
+        Sin ``pending_column`` reproduce el predicado que tenia la consulta
+        hasta el v-diff de AUD2-B4-04: ``24h IS NULL OR 2h IS NULL``, que
+        deja pasar los turnos que ya recibieron la etapa pedida.
+        """
+        _RepoConVentana.consultas.append(
+            (starts_after, starts_before, limit, pending_column)
+        )
         dentro = [
             fila
             for fila in _RepoConVentana.filas
             if starts_after <= fila[0].starts_at < starts_before
+            and _pendiente(fila[0], pending_column)
         ]
         dentro.sort(key=lambda fila: fila[0].starts_at)
         return dentro[:limit] if limit is not None else dentro
@@ -120,6 +136,41 @@ async def test_los_turnos_de_una_hora_no_le_comen_el_lote_al_de_24h(
 
 
 @pytest.mark.asyncio
+async def test_los_turnos_con_el_24h_ya_mandado_no_le_comen_el_lote_al_fresco(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """V-diff de AUD2-B4-04 (2026-09-20): la inanicion seguia por otro lado.
+
+    Sintoma: la ventana por etapa no alcanzaba. El repositorio conservaba
+    ``OR(reminder_24h_sent_at IS NULL, reminder_2h_sent_at IS NULL)``, asi
+    que la ventana de 24 h ``(now+3h, now+24h]`` devolvia tambien los turnos
+    que YA tenian el de 24 h (todos tienen el de 2 h en NULL), ordenados
+    primero por ``starts_at``. Con mas de ``limit`` turnos en las proximas
+    21 h, los candidatos frescos (a ~23 h) quedaban al final y el tope los
+    cortaba. El fake anterior no modelaba las columnas y no lo veia.
+    """
+    now = datetime.now(timezone.utc)
+    filas = []
+    for i in range(4):
+        fila = _turno(now, 5 + i / 100, f"ya-avisado-{i}")
+        fila[0].reminder_24h_sent_at = now - timedelta(hours=19)
+        filas.append(fila)
+    filas.append(_turno(now, 23, "manana"))
+    enviados = _preparar(monkeypatch, filas)
+
+    await tasks.process_due_appointment_reminders(now=now, limit=3)
+
+    assert "manana" in enviados, "el turno fresco de 24 h quedo afuera del tope"
+    assert ("manana", "reminder_24h_sent_at") in _RepoConVentana.claims
+    # Los ya avisados no vuelven a mandarse ni ocupan lugar en el lote.
+    assert enviados == ["manana"]
+    assert [consulta[3] for consulta in _RepoConVentana.consultas] == [
+        "reminder_2h_sent_at",
+        "reminder_24h_sent_at",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_cada_etapa_pide_su_propia_ventana(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,9 +180,12 @@ async def test_cada_etapa_pide_su_propia_ventana(
     await tasks.process_due_appointment_reminders(now=now, lookahead_hours=48)
 
     assert len(_RepoConVentana.consultas) == 2, "una consulta por etapa"
-    (desde_2h, hasta_2h, tope_2h), (desde_24h, hasta_24h, tope_24h) = (
+    (desde_2h, hasta_2h, tope_2h, col_2h), (desde_24h, hasta_24h, tope_24h, col_24h) = (
         _RepoConVentana.consultas
     )
+    # Cada ventana pide SU columna: la de 24 h no puede traer turnos que ya
+    # recibieron el de 24 h solo porque les falta el de 2 h.
+    assert (col_2h, col_24h) == ("reminder_2h_sent_at", "reminder_24h_sent_at")
     assert desde_2h == now
     assert hasta_2h <= now + timedelta(hours=2, minutes=1)
     # El piso de la etapa de 24 h (3 h) es el arranque de su ventana: un turno
@@ -153,7 +207,7 @@ async def test_lookahead_corto_acota_las_ventanas_y_no_las_invierte(
     )
 
     assert resultado["published"] == 0
-    for desde, hasta, _ in _RepoConVentana.consultas:
+    for desde, hasta, _, _ in _RepoConVentana.consultas:
         assert desde < hasta, "una ventana invertida traeria cualquier cosa"
         assert hasta <= now + timedelta(hours=1, minutes=1)
 

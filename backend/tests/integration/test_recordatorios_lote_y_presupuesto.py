@@ -173,9 +173,28 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
 
     repo = AppointmentRepository(test_session)
     ventana = (dia - timedelta(days=1), dia + timedelta(days=2))
-    todas = await repo.get_upcoming_for_reminders(*ventana)
+    todas = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_24h_sent_at"
+    )
     assert len(todas) == 2
 
-    acotadas = await repo.get_upcoming_for_reminders(*ventana, limit=1)
+    acotadas = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_24h_sent_at", limit=1
+    )
     assert len(acotadas) == 1
     assert acotadas[0][0].starts_at.replace(tzinfo=timezone.utc) == primero
+
+    # V-diff de AUD2-B4-04 (2026-09-20), contra SQL real: la consulta filtra
+    # por LA columna de la etapa. Con el de 24 h ya mandado, ese turno no
+    # vuelve para la etapa de 24 h aunque le falte el de 2 h; antes el OR lo
+    # traia primero y le comia el tope al que si habia que avisar.
+    acotadas[0][0].reminder_24h_sent_at = datetime.now(timezone.utc)
+    await test_session.commit()
+    para_24h = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_24h_sent_at"
+    )
+    assert [f[0].starts_at.replace(tzinfo=timezone.utc) for f in para_24h] == [segundo]
+    para_2h = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_2h_sent_at"
+    )
+    assert len(para_2h) == 2

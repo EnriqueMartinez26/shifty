@@ -921,6 +921,10 @@ async def process_due_appointment_reminders(
                     rows = await repo.get_upcoming_for_reminders(
                         starts_after=ventana.starts_after,
                         starts_before=ventana.starts_before,
+                        # V-diff de AUD2-B4-04: la columna de ESTA etapa. Con
+                        # el OR de antes, los turnos que ya tenian el de 24 h
+                        # ocupaban el tope de su ventana.
+                        pending_column=ventana.stage.column,
                         limit=limit,
                     )
                     totales.windows.append(ventana.stage.name)

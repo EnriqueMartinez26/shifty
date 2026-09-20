@@ -64,7 +64,7 @@ async def test_el_lote_de_recordatorios_bloquea_solo_turnos_con_skip_locked(
     now = datetime.now(timezone.utc)
 
     await AppointmentRepository(test_session).get_upcoming_for_reminders(
-        now, now + timedelta(hours=48), limit=10
+        now, now + timedelta(hours=48), pending_column="reminder_2h_sent_at", limit=10
     )
 
     lotes = [
@@ -87,6 +87,10 @@ async def test_el_lote_de_recordatorios_bloquea_solo_turnos_con_skip_locked(
     assert "FOR UPDATE OF appointments SKIP LOCKED" in sql, sql
     assert "ORDER BY appointments.starts_at" in sql
     assert "LIMIT" in sql
+    # V-diff de AUD2-B4-04: el predicado es el de LA etapa pedida, no un OR
+    # sobre las dos columnas.
+    assert "appointments.reminder_2h_sent_at IS NULL" in sql, sql
+    assert "reminder_24h_sent_at IS NULL" not in sql, sql
 
 
 @pytest.mark.asyncio
