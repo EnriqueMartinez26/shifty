@@ -146,6 +146,11 @@ async def preview_promotion(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PromotionQuoteResponse:
+    # Mismo control que el resto de /promotions: era el unico handler sin el,
+    # y dejaba al personal sondear codigos y distinguir "no existe" de "vencio
+    # / llego al tope" por el mensaje (AUD2-B2-15, 2026-09-20). El mostrador
+    # publico cotiza por /public/promotions/preview, no por aca.
+    _require_admin(user)
     result = await db.execute(
         select(Service).where(
             Service.public_id == service_id,
