@@ -141,6 +141,11 @@ class DashboardRepository:
         Antes sumaba Service.price (precio de lista actual) de turnos CONFIRMED/
         COMPLETED, lo que contaba turnos sin cobrar y a precio equivocado. Ahora
         es consistente con el reporte de ingresos: solo pagos acreditados.
+
+        AUD2-B5-16: era la unica consulta del panel sin el predicado store_id
+        sobre su propia tabla. El aislamiento se sostenia por el join a un
+        appointments ya acotado, pero la defensa en profundidad que promete el
+        docstring del modulo faltaba, y modules/reports si la pone.
         """
         result = await self.db.execute(
             select(func.coalesce(func.sum(Payment.amount), 0))
@@ -150,6 +155,7 @@ class DashboardRepository:
                 *_starts_between(desde, hasta),
                 Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                 *self._appointment_scope(),
+                *_store_scope(self.store_id, Payment.store_id),
             )
         )
         return float(result.scalar() or 0)
