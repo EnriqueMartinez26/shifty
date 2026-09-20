@@ -21,7 +21,7 @@ from typing import Any, cast
 import pytest
 import ulid
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.services.model import Service
@@ -164,6 +164,30 @@ async def test_patch_valida_contra_los_valores_actuales(
 async def test_fila_vieja_invalida_se_edita_si_no_se_toca_la_sena(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
+    """El merge del PATCH sobre una fila invalida de una base PRE-migracion.
+
+    Lo que fija este test es ``_validate_deposit_patch``: un PATCH que NO
+    manda ninguno de los tres campos de la sena no se bloquea aunque la fila
+    vigente sea invalida (renombrar un servicio no puede quedar prohibido
+    para siempre), y en cuanto el PATCH toca uno de los tres se valida la
+    terna resultante y sale 422.
+
+    El escenario es una base ANTERIOR a la migracion ``d1f3b5a7c9e2``
+    (AUD2-B6-03). Despues de migrar esta fila no existe: la migracion aborta
+    con el conteo si encuentra filas invalidas -misma convencion que
+    ``uq_users_client_phone_per_store``, no se usa ``NOT VALID``-, asi que no
+    hay "base migrada con una fila vieja invalida". Por eso se siembra con el
+    CHECK apagado.
+
+    Divergencia SQLite/Postgres, anotada a proposito: SQLite solo evalua un
+    CHECK cuando el UPDATE toca alguna de las columnas que el CHECK
+    referencia, asi que aca el PATCH de ``name`` pasa. Postgres revalida
+    TODOS los CHECK de la fila en cualquier UPDATE, de modo que contra
+    Postgres ese mismo PATCH sobre una fila invalida daria IntegrityError ->
+    409 neutro. Es otra razon para que la migracion se detenga en vez de
+    dejar el CHECK sin validar: una fila invalida que sobreviva a la
+    migracion queda inmutable.
+    """
     _, token = await register_and_login(
         client, slug="b6-02-legado", email="b6-02-legado@example.com"
     )
@@ -171,20 +195,27 @@ async def test_fila_vieja_invalida_se_edita_si_no_se_toca_la_sena(
         await test_session.execute(select(Store.id).where(Store.slug == "b6-02-legado"))
     ).scalar_one()
     servicio_id = str(ulid.ULID())
-    test_session.add(
-        Service(
-            id=servicio_id,
-            public_id=servicio_id,
-            store_id=store_id,
-            name="Legado",
-            duration_minutes=30,
-            price=10000,
-            deposit_mode="optional",
-            deposit_type="percent",
-            deposit_amount=500,
+    # Desde AUD2-B6-03 esta fila no se puede crear: la rechaza el CHECK
+    # `ck_services_deposit_percent_max`. Se siembra con el CHECK apagado para
+    # reconstruir una base PRE-migracion (ver el docstring).
+    await test_session.execute(sa_text("PRAGMA ignore_check_constraints = ON"))
+    try:
+        test_session.add(
+            Service(
+                id=servicio_id,
+                public_id=servicio_id,
+                store_id=store_id,
+                name="Legado",
+                duration_minutes=30,
+                price=10000,
+                deposit_mode="optional",
+                deposit_type="percent",
+                deposit_amount=500,
+            )
         )
-    )
-    await test_session.commit()
+        await test_session.commit()
+    finally:
+        await test_session.execute(sa_text("PRAGMA ignore_check_constraints = OFF"))
 
     res = await client.patch(
         f"/services/{servicio_id}",
