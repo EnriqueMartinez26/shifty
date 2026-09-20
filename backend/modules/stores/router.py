@@ -69,6 +69,9 @@ def _replace_business_hours(
         if day_of_week is None or not periods:
             continue
 
+        # Un solo periodo por dia: ``StoreUpdate.reject_extra_periods`` da 422
+        # ante un segundo, asi que aca ya no se pierde nada en silencio
+        # (AUD2-B3-07). Soportar horario partido es producto, y esta pendiente.
         period = periods[0]
         store.schedules.append(
             StoreSchedule(
