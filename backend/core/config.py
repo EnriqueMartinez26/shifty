@@ -49,9 +49,10 @@ def _looks_like_placeholder(value: str) -> bool:
 
 # Minimos operativos: valen en TODO entorno, desarrollo incluido, porque un
 # valor absurdo aca no es una configuracion insegura sino un proceso que no
-# funciona. Tabla `(campo, minimo, mensaje)` y no nueve `if` identicos: sumar
+# funciona. Tabla `(campo, minimo, mensaje)` y no trece `if` identicos: sumar
 # un limite es sumar una fila, con el mensaje al lado del numero que justifica.
-_MINIMOS_OPERATIVOS: tuple[tuple[str, int, str], ...] = (
+# El minimo es float porque los timeouts de Redis lo son; un int entra igual.
+_MINIMOS_OPERATIVOS: tuple[tuple[str, float, str], ...] = (
     (
         "PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
         1,
@@ -88,6 +89,33 @@ _MINIMOS_OPERATIVOS: tuple[tuple[str, int, str], ...] = (
         "MAX_REQUEST_BODY_BYTES",
         1024,
         "MAX_REQUEST_BODY_BYTES no puede ser menor a 1024 bytes",
+    ),
+    # `_hit_rate_limit` hace `now // window_seconds`: con 0 es un
+    # ZeroDivisionError en CADA request, y no es RedisError ni OSError, asi que
+    # no lo atrapa ningun `except` del modulo (AUD2-B7-06, 2026-09-20).
+    (
+        "RATE_LIMIT_WINDOW_SECONDS",
+        1,
+        "RATE_LIMIT_WINDOW_SECONDS debe ser >= 1",
+    ),
+    # Hermano de MAX_REQUEST_BODY_BYTES: tambien necesita piso, o la subida de
+    # logo/portada queda inutilizable sin que el arranque diga nada.
+    (
+        "MAX_UPLOAD_BODY_BYTES",
+        1024,
+        "MAX_UPLOAD_BODY_BYTES no puede ser menor a 1024 bytes",
+    ),
+    # Un timeout en 0 no significa "sin espera": redis-py lo toma como no
+    # bloqueante y toda operacion falla.
+    (
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+        0.1,
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS debe ser >= 0.1",
+    ),
+    (
+        "REDIS_SOCKET_TIMEOUT_SECONDS",
+        0.1,
+        "REDIS_SOCKET_TIMEOUT_SECONDS debe ser >= 0.1",
     ),
 )
 

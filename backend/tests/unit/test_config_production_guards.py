@@ -89,6 +89,14 @@ def test_produccion_rechaza_configuraciones_inseguras(
         ({"CELERY_TASK_TIME_LIMIT_SECONDS": 10}, "TIME_LIMIT"),
         ({"MAX_REQUEST_BODY_BYTES": 100}, "MAX_REQUEST_BODY_BYTES"),
         ({"MAX_REQUEST_BODY_BYTES": 5 * 1024 * 1024}, "MAX_REQUEST_BODY_BYTES"),
+        # AUD2-B7-06 (2026-09-20): tres numericos que quedaron sin piso.
+        ({"RATE_LIMIT_WINDOW_SECONDS": 0}, "RATE_LIMIT_WINDOW_SECONDS"),
+        ({"MAX_UPLOAD_BODY_BYTES": 100}, "MAX_UPLOAD_BODY_BYTES"),
+        (
+            {"REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS": 0},
+            "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+        ),
+        ({"REDIS_SOCKET_TIMEOUT_SECONDS": 0}, "REDIS_SOCKET_TIMEOUT_SECONDS"),
     ],
 )
 def test_los_limites_operativos_se_validan_en_cualquier_entorno(
@@ -97,6 +105,23 @@ def test_los_limites_operativos_se_validan_en_cualquier_entorno(
     """Estos no dependen de ENV: un valor absurdo rompe el arranque siempre."""
     with pytest.raises(ValueError, match=esperado):
         _build(ENV="development", **override)
+
+
+@pytest.mark.asyncio
+async def test_una_ventana_de_rate_limit_en_cero_revienta_cada_request() -> None:
+    """Por que RATE_LIMIT_WINDOW_SECONDS necesita piso (AUD2-B7-06, 2026-09-20).
+
+    `_hit_rate_limit` hace `now // window_seconds`. Con la ventana en 0 eso es
+    un ZeroDivisionError en CADA request, y no es `RedisError` ni `OSError`, asi
+    que no lo atrapa ni el `except` del middleware ni el de
+    `enforce_rate_limit`: 500 en toda la API. La regla 17 dice que la config de
+    produccion falla cerrada; sin el piso fallaba abierta y el sintoma aparecia
+    en el primer request, no en el arranque.
+    """
+    from core.rate_limit import _hit_rate_limit
+
+    with pytest.raises(ZeroDivisionError):
+        await _hit_rate_limit("ip:1.2.3.4", "global", 10, 0)
 
 
 def test_produccion_aplica_defaults_endurecidos(
