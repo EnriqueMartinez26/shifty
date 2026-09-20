@@ -80,6 +80,9 @@ class ReportSummaryResponse(BaseModel):
     top_clients: list[ReportTopClientItem] = Field(default_factory=list)
     debt_summary: ReportDebtSummary
     appointments: list[ReportAppointmentItem]
+    # AUD2-B5-01: ``appointments`` es una pagina; esto dice si quedan mas
+    # (y con ``stats.total_appointments``, cuantas en total). Aditivo.
+    has_more: bool = False
 
 
 class ProfessionalReportItem(BaseModel):

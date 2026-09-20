@@ -48,8 +48,12 @@ DEUDORES: list[tuple[str, list[tuple[str, str]]]] = [
     ("Hugo Herrera", [("charge", "5.00")]),
     ("Ines Ibarra", [("charge", "80.00"), ("payment", "100.00")]),  # a favor
 ]
-AGREGADOS = ("sum(", "count(", "avg(")
+AGREGADOS = ("sum(", "count(", "avg(", "min(", "max(")
 TABLAS_DE_DINERO = ("payments", "customer_ledger")
+# AUD2-B5-02: el resumen tampoco puede barrer los turnos del rango. Su
+# detalle lleva LIMIT y todo lo demas agrega; /reports/professionals queda
+# aparte, ahi el recorrido por profesional es el resultado.
+TABLAS_DEL_RESUMEN = TABLAS_DE_DINERO + ("appointments",)
 
 
 async def _sembrar_deudores(
@@ -111,12 +115,14 @@ async def _reservar_y_cobrar(
         assert manual.json()["amount"] == "10000.00"
 
 
-def _sin_tope(sentencias: list[str]) -> list[str]:
-    """Sentencias sobre tablas de dinero que ni agregan ni acotan con LIMIT."""
+def _sin_tope(
+    sentencias: list[str], tablas: tuple[str, ...] = TABLAS_DE_DINERO
+) -> list[str]:
+    """Sentencias sobre esas tablas que ni agregan ni acotan con LIMIT."""
     return [
         s
         for s in sentencias
-        if any(t in s for t in TABLAS_DE_DINERO)
+        if any(t in s for t in tablas)
         and not any(f in s for f in AGREGADOS)
         and " limit " not in s
     ]
@@ -143,6 +149,7 @@ async def test_el_dinero_del_reporte_se_agrega_en_sql(
     await _sembrar_deudores(client, test_session, token, store_public_id)
 
     sentencias: list[str] = []
+    sentencias_resumen: list[str] = []
 
     def _capturar(
         conn: Any,
@@ -161,6 +168,8 @@ async def test_el_dinero_del_reporte_se_agrega_en_sql(
         resumen = await client.get(
             "/reports/summary", params=rango, headers=auth_headers(token)
         )
+        del sentencias_resumen[:]
+        sentencias_resumen.extend(sentencias)
         profesionales = await client.get(
             "/reports/professionals", params=rango, headers=auth_headers(token)
         )
@@ -208,3 +217,7 @@ async def test_el_dinero_del_reporte_se_agrega_en_sql(
     assert _sin_tope(sentencias) == [], (
         f"consultas que traen la lista entera: {_sin_tope(sentencias)}"
     )
+    # Y el resumen tampoco trae una fila por turno del rango (AUD2-B5-02).
+    assert any("appointments" in s for s in sentencias_resumen), "consulta turnos"
+    sueltas = _sin_tope(sentencias_resumen, TABLAS_DEL_RESUMEN)
+    assert sueltas == [], f"el resumen barre el rango: {sueltas}"
