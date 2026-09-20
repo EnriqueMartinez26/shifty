@@ -6,30 +6,19 @@ tienda que activaba "OTP en reserva publica" se quedaba sin reservas. Email
 es el unico canal con envio real; whatsapp/sms quedan para desarrollo.
 """
 
+from datetime import datetime, timezone, tzinfo
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from structlog.testing import capture_logs
 
 import modules.notifications.tasks as tasks
+import modules.otp.service as otp_service
 from core.config import settings
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
 )
-
-
-class Buzon:
-    def __init__(self, *, falla: bool = False) -> None:
-        self.enviados: list[tuple[str, str, str]] = []
-        self.falla = falla
-
-    async def __call__(
-        self, to: str, subject: str, body: str, smtp: Any = None
-    ) -> bool:
-        if self.falla:
-            return False
-        self.enviados.append((to, subject, body))
-        return True
 
 
 class Cola:
@@ -96,26 +85,77 @@ async def test_sin_email_el_canal_email_es_422(client: AsyncClient) -> None:
     assert pedido.status_code == 422, pedido.text
 
 
+class _ColaCaida:
+    """Broker caido: el unico fallo de envio que el request puede ver hoy."""
+
+    def delay(self, *_args: object) -> None:
+        raise RuntimeError("broker caido")
+
+
+class _RelojQuieto:
+    """Solo ``now``: es lo unico del reloj que usa el camino del pedido."""
+
+    @staticmethod
+    def now(tz: tzinfo | None = None) -> datetime:
+        return datetime(2026, 9, 20, 12, 0, tzinfo=tz)
+
+
 @pytest.mark.asyncio
-async def test_un_smtp_caido_responde_igual_que_uno_sano(
+async def test_un_fallo_de_envio_responde_byte_a_byte_igual_que_el_camino_sano(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Respuesta neutra: no revela si el telefono existe ni si el mail salio.
-    monkeypatch.setattr(tasks, "_send_email", Buzon(falla=True))
+    """AUD2-B4-11 (2026-09-20): el test anterior ya no probaba lo que decia.
+
+    Sintoma: ``test_un_smtp_caido_responde_igual_que_uno_sano`` afirmaba
+    200 + ``ok: true`` con un ``Buzon`` que fallaba sobre ``_send_email``.
+    Desde B4-01 el envio salio del request y desde AUD2-B4-06 sale del
+    proceso, asi que esas dos aserciones eran verdaderas por construccion y
+    a su ``Buzon`` no lo llamaba nadie (se verifico haciendolo reventar: el
+    test seguia verde). Daba cobertura aparente al invariante "respuesta
+    neutra ante fallo de envio" sin discriminar nada.
+
+    Hoy el fallo de envio que SI puede ver el request es el del encolado.
+    Con el reloj y el codigo de debug quietos, lo unico que podria cambiar
+    entre las dos respuestas es lo que este test quiere vigilar: que el
+    sobre canonico sea identico byte a byte y que el fallo quede en el log
+    sin datos personales.
+    """
+    monkeypatch.setattr(otp_service, "datetime", _RelojQuieto)
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", False)
     store, _ = await register_and_login(
         client, slug="otp-caido", email="otp-caido@example.com"
     )
-    pedido = await client.post(
-        "/public/otp/request",
-        json={
-            "store_public_id": store,
-            "phone": "+5491155550044",
-            "channel": "email",
-            "email": "cliente@example.com",
-        },
-    )
-    assert pedido.status_code == 200, pedido.text
-    assert pedido.json()["ok"] is True
+
+    async def pedir() -> Any:
+        return await client.post(
+            "/public/otp/request",
+            headers={"x-raw-response": "false"},
+            json={
+                "store_public_id": store,
+                "phone": "+5491155550044",
+                "channel": "email",
+                "email": "cliente@example.com",
+            },
+        )
+
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
+    sano = await pedir()
+    monkeypatch.setattr(tasks, "send_otp_email", _ColaCaida())
+    with capture_logs() as eventos:
+        caido = await pedir()
+
+    assert sano.status_code == 200, sano.text
+    assert sano.json()["data"]["ok"] is True
+    assert len(cola.enviados) == 1, "el camino sano encola exactamente un mail"
+    assert caido.status_code == sano.status_code, caido.text
+    assert caido.content == sano.content, "la respuesta cambia cuando falla el envio"
+    assert caido.headers["content-type"] == sano.headers["content-type"]
+
+    aviso = next(e for e in eventos if e["event"] == "otp_email_enqueue_failed")
+    assert aviso["error_type"] == "RuntimeError"
+    assert "cliente@example.com" not in str(aviso)
+    assert "5555" not in str(aviso)
 
 
 @pytest.mark.asyncio
