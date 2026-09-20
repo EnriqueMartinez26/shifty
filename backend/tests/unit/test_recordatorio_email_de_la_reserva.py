@@ -27,7 +27,6 @@ def _destinos(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
 
     async def recordar(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,

@@ -102,7 +102,6 @@ async def test_el_resultado_informa_filas_sin_revisar_y_lote_lleno(
 
     async def envio_lento(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,

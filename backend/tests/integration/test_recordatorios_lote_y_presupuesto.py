@@ -93,7 +93,6 @@ async def test_presupuesto_agotado_deja_de_reclamar_y_no_pierde_recordatorios(
 
     async def envio_lento(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,

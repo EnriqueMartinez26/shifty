@@ -263,100 +263,48 @@ async def test_cerrar_sin_personal_avisa_en_vez_de_fallar(
 
 
 # ---------------------------------------------------------------------------
-# Recordatorios multicanal
+# Recordatorios: un solo canal
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_el_recordatorio_prefiere_whatsapp(
+async def test_el_recordatorio_sale_por_mail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """El telefono es obligatorio al reservar; el mail no."""
+    """AUD2-B4-07 (2026-09-20): WhatsApp era el canal preferido y se saco.
+
+    Twilio responde 2xx al ENCOLAR: un numero sin WhatsApp daba 201, contaba
+    como enviado, marcaba el reclamo y el mail no salia. Ahora el mail es el
+    unico canal y el resultado lo dice.
+    """
     import modules.notifications.tasks as tasks
 
     enviados: list[tuple[str, str]] = []
-
-    async def fake_whatsapp(to: str, body: str) -> bool:
-        enviados.append(("whatsapp", to))
-        return True
 
     async def fake_email(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append(("email", to))
         return True
 
-    monkeypatch.setattr(tasks, "_send_whatsapp", fake_whatsapp)
     monkeypatch.setattr(tasks, "_send_email", fake_email)
 
     res = await tasks.notify_client_reminder(
-        phone="+5491155512345",
         email="cliente@test.com",
         details={"public_id": "A1", "service": "Corte", "staff": "Pro", "date": "hoy"},
     )
-    assert res["channel"] == "whatsapp"
-    assert enviados == [("whatsapp", "+5491155512345")], "no debe mandar los dos"
-
-
-@pytest.mark.asyncio
-async def test_sin_whatsapp_el_recordatorio_cae_al_mail(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import modules.notifications.tasks as tasks
-
-    async def sin_whatsapp(to: str, body: str) -> bool:
-        return False
-
-    async def fake_email(to: str, subject: str, body: str, smtp: Any = None) -> bool:
-        return True
-
-    monkeypatch.setattr(tasks, "_send_whatsapp", sin_whatsapp)
-    monkeypatch.setattr(tasks, "_send_email", fake_email)
-
-    res = await tasks.notify_client_reminder(
-        phone="+5491155512345",
-        email="cliente@test.com",
-        details={"public_id": "A2", "service": "Corte", "staff": "Pro", "date": "hoy"},
-    )
     assert res["channel"] == "email"
+    assert enviados == [("email", "cliente@test.com")]
 
 
 @pytest.mark.asyncio
-async def test_un_cliente_sin_mail_ni_whatsapp_no_rompe_el_lote(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_un_cliente_sin_mail_no_rompe_el_lote() -> None:
     """Antes esto reventaba: se llamaba al mail con None."""
     import modules.notifications.tasks as tasks
 
-    async def sin_whatsapp(to: str, body: str) -> bool:
-        return False
-
-    monkeypatch.setattr(tasks, "_send_whatsapp", sin_whatsapp)
-
     res = await tasks.notify_client_reminder(
-        phone="+5491155512345",
         email=None,
         details={"public_id": "A3", "service": "Corte", "staff": "Pro", "date": "hoy"},
     )
     assert res["status"] == "skipped"
-
-
-@pytest.mark.asyncio
-async def test_sin_credenciales_de_twilio_whatsapp_no_intenta_enviar(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """No puede colgarse llamando a Twilio sin estar configurado."""
-    import modules.notifications.tasks as tasks
-    from core.config import settings
-
-    monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", None)
-    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", None)
-    monkeypatch.setattr(settings, "TWILIO_WHATSAPP_FROM", None)
-
-    def explotar(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("no deberia abrir un cliente HTTP")
-
-    monkeypatch.setattr("modules.notifications.tasks.httpx.AsyncClient", explotar)
-
-    assert await tasks._send_whatsapp("+5491155512345", "hola") is False
 
 
 # ---------------------------------------------------------------------------

@@ -98,7 +98,6 @@ def _preparar(
 
     async def fake_notify_client_reminder(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,

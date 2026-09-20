@@ -73,7 +73,6 @@ def _preparar(monkeypatch: pytest.MonkeyPatch, filas: list[Any]) -> list[str | N
 
     async def recordar(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,

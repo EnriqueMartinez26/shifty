@@ -21,11 +21,8 @@ from collections.abc import MutableMapping
 from email.message import EmailMessage
 from typing import Any
 
-import httpx
 import pytest
 from structlog.testing import capture_logs
-
-from core.config import settings
 
 import modules.notifications.tasks as tasks
 
@@ -75,9 +72,7 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
         await tasks.send_appointment_confirmation(EMAIL, dict(DETAILS))
         # El recordatorio sale por notify_client_reminder (X-08 borro el
         # gemelo send_appointment_reminder): no loguea el email.
-        await tasks.notify_client_reminder(
-            phone=None, email=EMAIL, details=dict(DETAILS)
-        )
+        await tasks.notify_client_reminder(email=EMAIL, details=dict(DETAILS))
 
     monkeypatch.setattr(smtplib, "SMTP", _SmtpCaido)
     with capture_logs() as eventos_fallo:
@@ -180,45 +175,20 @@ def test_el_texto_de_error_tapa_direcciones_no_ascii_y_entre_comillas(
     assert "***@" in enmascarado
 
 
-class _RespuestaTwilio:
-    status_code = 400
-    text = (
-        '{"code": 21211, "message": "The \'To\' number whatsapp:+5491155512345 '
-        'is not a valid phone number.", "more_info": '
-        '"https://www.twilio.com/docs/errors/21211", "status": 400}'
+def test_el_enmascarado_de_telefonos_tapa_el_numero_y_deja_el_resto() -> None:
+    """AUD2-B4-07 (2026-09-20) reemplaza al test del rechazo de Twilio.
+
+    ``_mask_phones_in_text`` nacio para ``whatsapp_send_rejected``, que
+    volcaba el ``resp.text`` donde Twilio repite el ``To`` completo. Ese
+    camino ya no existe, pero el helper sigue vivo y sigue siendo la unica
+    guarda entre un texto de error ajeno y el log, asi que se prueba solo.
+    """
+    texto = (
+        '{"code": 21211, "message": "el numero +5491155512345 no es valido", '
+        '"status": 400}'
     )
-
-
-class _TwilioRechaza:
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-    async def __aenter__(self) -> "_TwilioRechaza":
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        return None
-
-    async def post(self, *args: Any, **kwargs: Any) -> _RespuestaTwilio:
-        return _RespuestaTwilio()
-
-
-@pytest.mark.asyncio
-async def test_el_rechazo_de_whatsapp_no_loguea_el_telefono(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Revision V-diff (2026-09-18): ``whatsapp_send_rejected`` logueaba
-    ``resp.text`` y Twilio repite ahi el numero ``To`` completo."""
-    monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "AC-test")
-    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "token-test")
-    monkeypatch.setattr(settings, "TWILIO_WHATSAPP_FROM", "whatsapp:+10000000000")
-    monkeypatch.setattr(httpx, "AsyncClient", _TwilioRechaza)
-
-    with capture_logs() as eventos:
-        assert await tasks._send_whatsapp("+5491155512345", "hola") is False
-
-    rechazo = next(e for e in eventos if e["event"] == "whatsapp_send_rejected")
-    assert "5491155512345" not in repr(rechazo)
-    assert "***2345" in rechazo["detail"]
-    # El codigo de error de Twilio no es un telefono: se conserva.
-    assert "21211" in rechazo["detail"]
+    enmascarado = tasks._mask_phones_in_text(texto)
+    assert "5491155512345" not in enmascarado
+    assert "***2345" in enmascarado
+    # Un codigo de error no es un telefono: se conserva.
+    assert "21211" in enmascarado

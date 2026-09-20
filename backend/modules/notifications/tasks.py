@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import httpx
 import re
 import smtplib
 import time
@@ -555,64 +554,28 @@ async def send_appointment_confirmation(
     return {"status": "sent", "to": email}
 
 
-async def _send_whatsapp(to_phone: str, body: str) -> bool:
-    """Envia un WhatsApp por la API REST de Twilio.
-
-    Se usa httpx (ya es dependencia) en vez del SDK para no sumar un paquete
-    por tres lineas de HTTP. Si Twilio no esta configurado devuelve False sin
-    romper: el llamador cae al mail.
-    """
-    sid = settings.TWILIO_ACCOUNT_SID
-    token = settings.TWILIO_AUTH_TOKEN
-    origen = settings.TWILIO_WHATSAPP_FROM
-    if not (sid and token and origen):
-        return False
-
-    destino = to_phone if to_phone.startswith("whatsapp:") else f"whatsapp:{to_phone}"
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json",
-                auth=(sid, token),
-                data={"To": destino, "From": origen, "Body": body},
-            )
-    except httpx.RequestError as exc:
-        logger.warning("whatsapp_send_failed", error=str(exc))
-        return False
-
-    if resp.status_code >= 400:
-        logger.warning(
-            "whatsapp_send_rejected",
-            status=resp.status_code,
-            detail=_mask_phones_in_text(resp.text[:200]),
-        )
-        return False
-    return True
-
-
 async def notify_client_reminder(
     *,
-    phone: str | None,
     email: str | None,
     details: dict[str, Any],
     smtp: SmtpSession | None = None,
 ) -> dict[str, str]:
-    """Avisa al cliente por el mejor canal disponible.
+    """Avisa al cliente por mail. Unico canal del recordatorio.
 
-    WhatsApp primero: el telefono es obligatorio al reservar y el mail no, asi
-    que antes quien reservaba sin mail no recibia ningun recordatorio. Si
-    WhatsApp no esta configurado o falla, se cae al mail.
+    AUD2-B4-07 (2026-09-20): antes probaba WhatsApp (API de Twilio) primero y
+    solo caia al mail si el envio devolvia False. Ese camino protegia a quien
+    reserva sin dejar mail -el telefono es obligatorio y el mail no-, pero
+    protegia mal: Twilio responde 2xx al ENCOLAR, no al entregar, asi que un
+    numero sin WhatsApp daba 201, contaba como enviado, marcaba el reclamo y
+    el mail no salia. El cliente no recibia nada y no quedaba rastro. Como el
+    producto difirio WhatsApp (solo email + wa.me manual), el canal se saca:
+    quien reserva sin mail hoy queda sin recordatorio, que es lo que ya
+    pasaba de hecho porque TWILIO_* no esta configurado en produccion, y
+    queda declarado en ``reminder_sin_canal`` en vez de escondido detras de
+    un 201 de Twilio.
 
     ``smtp`` es la sesion del lote (B4-08); sin ella el mail sale suelto.
     """
-    cuerpo = _reminder_body(details)
-
-    if phone and await _send_whatsapp(phone, cuerpo):
-        logger.info(
-            "reminder_sent", canal="whatsapp", appointment=details.get("public_id")
-        )
-        return {"status": "sent", "channel": "whatsapp", "to": phone}
-
     # El email tecnico {tel}@store{id}.noreply no recibe nada: mandarle ahi
     # rebota, ensucia la reputacion del remitente y, como el fallo libera el
     # reclamo, el job reintentaba cada 15 minutos hasta la hora del turno.
@@ -621,7 +584,7 @@ async def notify_client_reminder(
 
     if email:
         asunto = _reminder_subject(details)
-        enviado = await _send_email(email, asunto, cuerpo, smtp)
+        enviado = await _send_email(email, asunto, _reminder_body(details), smtp)
         if enviado:
             logger.info(
                 "reminder_sent", canal="email", appointment=details.get("public_id")
@@ -632,7 +595,7 @@ async def notify_client_reminder(
     logger.warning(
         "reminder_sin_canal",
         appointment=details.get("public_id"),
-        motivo="el cliente no tiene mail y WhatsApp no esta configurado",
+        motivo="el cliente no dejo un mail entregable",
     )
     return {"status": "skipped", "channel": "none"}
 
@@ -800,13 +763,12 @@ async def _dispatch_reminder(
     details["stage"] = stage.name
     try:
         result = await notify_client_reminder(
-            phone=getattr(client, "phone", None),
             # AUD2-B4-01 (2026-09-20): el email de ESTA reserva, como los
             # otros cinco mails al cliente. El registro puede tener una
             # direccion vieja (o una que el titular nunca dio: sin OTP,
             # adopt_contact=False no la actualiza) y el recordatorio era el
             # unico aviso que la usaba. Se cae al registro si el turno no
-            # trae email. El telefono sigue saliendo del registro.
+            # trae email.
             email=getattr(appointment, "client_email", None)
             or getattr(client, "email", None),
             details=details,
