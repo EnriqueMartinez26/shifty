@@ -117,12 +117,69 @@ def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
     }
 
 
+async def _efectos_del_mensaje(
+    db: AsyncSession, message: OutboxMessage, *, now: datetime
+) -> list[PendingEmail]:
+    """Aplica en la base lo que pide un evento y devuelve sus mails.
+
+    Extraido de ``process_outbox_batch`` (regla 29): el lote se queda con el
+    lock, el conteo y el manejo de fallos; el despacho por tipo de evento vive
+    aca. Ningun mail sale desde adentro: se devuelven para despues del commit
+    (B2-01).
+    """
+    if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
+        # Lista de espera: aviso al dueno y oferta a una persona por vez.
+        oferta = await offer_released_slot(
+            db,
+            ReleasedSlot.from_payload(message.store_id, dict(message.payload or {})),
+            now=now,
+        )
+        if oferta.pending_email is None:
+            return []
+        return [
+            partial(
+                send_waitlist_offer_email,
+                email=oferta.pending_email.email,
+                details=oferta.pending_email.details,
+            )
+        ]
+    if message.event_type == "appointment.cancelled_by_block":
+        # Aviso al cliente (no al dueno, que fue quien bloqueo).
+        payload = dict(message.payload or {})
+        return [
+            partial(
+                send_cancellation_email,
+                email=str(payload.get("client_email") or "") or None,
+                details=payload,
+            )
+        ]
+    notification = _build_store_notification(message)
+    if notification is None:
+        return []
+    # La notificacion in-app es la fuente durable; el mail es un efecto
+    # secundario que sale despues del commit.
+    db.add(notification)
+    mails = list(await _store_owner_mails(db, notification))
+    if message.event_type == NotificationType.PAYMENT_APPROVED.value:
+        # La sena acreditada confirma el turno: el cliente tambien se entera.
+        confirmacion = await _client_confirmation_mail(db, notification.appointment_id)
+        if confirmacion is not None:
+            mails.append(confirmacion)
+    return mails
+
+
 async def process_outbox_batch(
     db: AsyncSession,
     *,
     limit: int = 100,
     store_id: str | None = None,
+    incluir_vencimientos: bool = True,
 ) -> dict[str, int]:
+    """Procesa el outbox de la tienda (o de todas) y devuelve el conteo.
+
+    ``incluir_vencimientos=False`` deja afuera el unico paso que sale a la
+    red; lo usa el endpoint del panel (ver abajo, AUD2-B2-07).
+    """
     filters: list[ColumnElement[bool]] = [
         OutboxMessage.processed_at.is_(None),
         OutboxMessage.is_active.is_(True),
@@ -154,57 +211,10 @@ async def process_outbox_batch(
     for message in messages:
         contexto = _contexto_del_mail(message)
         try:
-            if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
-                # Lista de espera: aviso al dueno y oferta a una persona por vez.
-                oferta = await offer_released_slot(
-                    db,
-                    ReleasedSlot.from_payload(
-                        message.store_id, dict(message.payload or {})
-                    ),
-                    now=now,
-                )
-                if oferta.pending_email:
-                    mails_pendientes.append(
-                        (
-                            partial(
-                                send_waitlist_offer_email,
-                                email=oferta.pending_email.email,
-                                details=oferta.pending_email.details,
-                            ),
-                            contexto,
-                        )
-                    )
-            elif message.event_type == "appointment.cancelled_by_block":
-                # Aviso al cliente (no al dueno, que fue quien bloqueo).
-                payload = dict(message.payload or {})
-                mails_pendientes.append(
-                    (
-                        partial(
-                            send_cancellation_email,
-                            email=str(payload.get("client_email") or "") or None,
-                            details=payload,
-                        ),
-                        contexto,
-                    )
-                )
-            else:
-                notification = _build_store_notification(message)
-                if notification is not None:
-                    # La notificacion in-app es la fuente durable; el mail es
-                    # un efecto secundario que sale despues del commit.
-                    db.add(notification)
-                    mails_pendientes.extend(
-                        (mail, contexto)
-                        for mail in await _store_owner_mails(db, notification)
-                    )
-                    if message.event_type == NotificationType.PAYMENT_APPROVED.value:
-                        # La sena acreditada confirma el turno: el cliente
-                        # tambien se entera.
-                        confirmacion = await _client_confirmation_mail(
-                            db, notification.appointment_id
-                        )
-                        if confirmacion is not None:
-                            mails_pendientes.append((confirmacion, contexto))
+            mails_pendientes.extend(
+                (mail, contexto)
+                for mail in await _efectos_del_mensaje(db, message, now=now)
+            )
             message.processed_at = now
             message.error = None
             processed += 1
@@ -223,8 +233,14 @@ async def process_outbox_batch(
             logger.warning(
                 "outbox_email_skipped", error_type=type(exc).__name__, **contexto
             )
-    # Despues de los mails, el paso propio de los vencimientos de MP.
-    vencimientos = await _claim_and_expire_preferences(db, store_id=store_id)
+    # El paso propio de los vencimientos de MP: hasta MAX_CLAIMS llamadas de
+    # WORST_CASE_PER_CLAIM cada una, que ``limit`` no acota. Unico paso que
+    # sale a la red, y por eso el endpoint del panel lo apaga (AUD2-B2-07).
+    vencimientos = (
+        await _claim_and_expire_preferences(db, store_id=store_id)
+        if incluir_vencimientos
+        else {"processed": 0, "failed": 0, "inspected": 0}
+    )
     return {
         "processed": processed + vencimientos["processed"],
         "failed": failed + vencimientos["failed"],

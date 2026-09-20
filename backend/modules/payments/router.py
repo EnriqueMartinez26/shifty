@@ -898,5 +898,11 @@ async def process_outbox(
 ) -> OutboxProcessResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
-    result = await process_outbox_batch(db, store_id=user.store_id, limit=limit)
+    # Sin el paso de vencimiento de links: es el unico que sale a Mercado Pago
+    # y no lo acota el ``limit``, asi que un clic podia colgar el request
+    # varios minutos y devolver un 504 de nginx (AUD2-B2-07, 2026-09-20). Los
+    # eventos siguen en el outbox y el beat los vence cada minuto.
+    result = await process_outbox_batch(
+        db, store_id=user.store_id, limit=limit, incluir_vencimientos=False
+    )
     return OutboxProcessResponse(**result)
