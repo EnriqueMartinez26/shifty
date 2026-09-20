@@ -47,9 +47,19 @@ def resolve_payment_status(payload: dict[str, Any]) -> str | None:
         "accredited": PaymentStatus.APPROVED.value,
         "pending": PaymentStatus.PENDING.value,
         "in_process": PaymentStatus.PENDING.value,
+        # Disputa abierta y fondos retenidos sin capturar: todavia no hay plata
+        # asentada. Antes caian en "no se pudo resolver", el inbox los
+        # reintentaba 10 veces y los abandonaba (AUD2-B2-04, 2026-09-20).
+        "in_mediation": PaymentStatus.PENDING.value,
+        "authorized": PaymentStatus.PENDING.value,
         "rejected": PaymentStatus.REJECTED.value,
         "cancelled": PaymentStatus.REJECTED.value,
         "refunded": PaymentStatus.REFUNDED.value,
+        # Contracargo: la plata volvio al cliente. Contablemente es lo mismo
+        # que un reembolso y el grafo ya admite approved -> refunded, asi que
+        # no hace falta un estado nuevo (regla 2). Lo que si hace falta es que
+        # el dueno se entere: lo avisa _notify_payment_reversed.
+        "charged_back": PaymentStatus.REFUNDED.value,
         "expired": PaymentStatus.EXPIRED.value,
     }
     allowed_statuses = {status.value for status in PaymentStatus}
@@ -238,17 +248,10 @@ _TURNO_LIBERADO = {
 }
 
 
-async def _notify_payment_approved(
-    db: AsyncSession, *, store_id: str, payment: Payment, turno_liberado: bool
+async def _publicar_aviso_de_cobro(
+    db: AsyncSession, *, store_id: str, payment: Payment, event_type: str
 ) -> None:
-    """Deja en el outbox el aviso de seña acreditada para el panel de la tienda.
-
-    Si el turno ya estaba liberado el evento es otro
-    (``payment.received_on_released_appointment``): antes se publicaba
-    ``payment.approved`` y el dueno leia "el turno quedo confirmado
-    automaticamente" de un turno que no existia, y el cliente recibia el
-    mail de "turno confirmado".
-    """
+    """Deja en el outbox un aviso de este cobro para el panel de la tienda."""
     result = await db.execute(
         select(Appointment, Service)
         .join(Service, Appointment.service_id == Service.id)
@@ -260,11 +263,7 @@ async def _notify_payment_approved(
     db.add(
         OutboxMessage(
             store_id=store_id,
-            event_type=(
-                NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value
-                if turno_liberado
-                else NotificationType.PAYMENT_APPROVED.value
-            ),
+            event_type=event_type,
             payload={
                 "appointment_id": payment.appointment_id,
                 "payment_id": payment.id,
@@ -273,6 +272,53 @@ async def _notify_payment_approved(
                 "service_name": service.name if service else None,
             },
         )
+    )
+
+
+async def _notify_payment_approved(
+    db: AsyncSession, *, store_id: str, payment: Payment, turno_liberado: bool
+) -> None:
+    """Deja en el outbox el aviso de seña acreditada para el panel de la tienda.
+
+    Si el turno ya estaba liberado el evento es otro
+    (``payment.received_on_released_appointment``): antes se publicaba
+    ``payment.approved`` y el dueno leia "el turno quedo confirmado
+    automaticamente" de un turno que no existia, y el cliente recibia el
+    mail de "turno confirmado".
+    """
+    await _publicar_aviso_de_cobro(
+        db,
+        store_id=store_id,
+        payment=payment,
+        event_type=(
+            NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value
+            if turno_liberado
+            else NotificationType.PAYMENT_APPROVED.value
+        ),
+    )
+
+
+async def _notify_payment_reversed(
+    db: AsyncSession, *, store_id: str, payment: Payment, contracargo: bool
+) -> None:
+    """Avisa que la plata de un cobro ya acreditado se fue (AUD2-B2-04).
+
+    Un contracargo deja el turno CONFIRMADO (criterio de
+    ``sync_appointment_with_payment`` para ``refunded``, decision escrita del
+    dueno) pero la plata ya no esta: sin este aviso el unico rastro era un
+    numero en ``failed_webhooks``. El evento del contracargo es propio porque
+    el del reembolso dice "la devolucion se hace desde Mercado Pago o en
+    efectivo", que es justo lo que aca NO paso.
+    """
+    await _publicar_aviso_de_cobro(
+        db,
+        store_id=store_id,
+        payment=payment,
+        event_type=(
+            NotificationType.PAYMENT_CHARGED_BACK.value
+            if contracargo
+            else NotificationType.PAYMENT_REFUNDED.value
+        ),
     )
 
 
@@ -335,5 +381,14 @@ async def apply_mercadopago_webhook_payload(
             store_id=store_id,
             payment=payment,
             turno_liberado=appointment is None or appointment.status in _TURNO_LIBERADO,
+        )
+    # La plata que estaba asentada se fue: contracargo o reembolso hecho desde
+    # Mercado Pago. El turno puede seguir confirmado, pero no en silencio.
+    if was_settled and payment.status == PaymentStatus.REFUNDED.value:
+        await _notify_payment_reversed(
+            db,
+            store_id=store_id,
+            payment=payment,
+            contracargo=str(data.get("status") or "").lower() == "charged_back",
         )
     return True

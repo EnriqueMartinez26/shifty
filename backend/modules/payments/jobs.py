@@ -510,6 +510,22 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
             appointment_id=str(appointment_id) if appointment_id else None,
         )
 
+    if message.event_type == NotificationType.PAYMENT_CHARGED_BACK.value:
+        # AUD2-B2-04: el contracargo no es un reembolso que hizo la tienda.
+        amount = payload.get("amount")
+        amount_label = f" de ${amount}" if amount else ""
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Contracargo en Mercado Pago",
+            body=(
+                f"Mercado Pago devolvio el pago{amount_label} de {client_name} "
+                f"por {service_name}: esa plata ya no esta en tu cuenta. El "
+                "turno sigue confirmado; si no lo vas a atender, cancelalo."
+            ),
+            appointment_id=str(appointment_id) if appointment_id else None,
+        )
+
     if message.event_type == NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value:
         # S-16: pago acreditado de un turno que ya se habia liberado. No se
         # confirma nada ni se avisa al cliente: el dueno decide.
