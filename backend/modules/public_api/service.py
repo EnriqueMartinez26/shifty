@@ -769,6 +769,9 @@ class PublicBookingService:
         new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
         await self._check_new_slot(original, staff, data.new_starts_at, new_ends_at)
 
+        # El estado se lee ANTES de cancelar el original: la copia lo conserva
+        # (AUD2-B1-14) y ``apply_status_transition`` ya lo habria pisado.
+        estado_previo = original.status
         async with self.db.begin_nested():
             original.apply_status_transition(AppointmentStatus.CANCELLED)
             publish_slot_released(
@@ -782,7 +785,7 @@ class PublicBookingService:
                 reason="client_rescheduled",
             )
             new_appointment = _rescheduled_copy(
-                original, client, service, data, new_ends_at
+                original, client, service, data, new_ends_at, estado_previo
             )
             self.db.add(new_appointment)
             await self.db.flush()
@@ -963,7 +966,17 @@ def _rescheduled_copy(
     service: Service,
     data: ClientRescheduleRequest,
     new_ends_at: datetime,
+    estado_previo: str,
 ) -> Appointment:
+    # El turno movido conserva el estado del original (AUD2-B1-14): antes
+    # nacia siempre con el default de la columna, asi que un turno confirmado
+    # volvia a "pendiente de confirmar" sin que nadie se enterara y el job de
+    # expiracion lo levantaba a la hora de inicio. A esta altura no hay sena
+    # de por medio -``reject_cancellation_while_awaiting_payment`` frena el
+    # ``pending_payment`` y ``_reject_paid_reschedule`` el pago acreditado-,
+    # asi que lo unico que se conserva es un ``confirmed`` sin cobro, y con el
+    # se va el ``expires_at``: no hay retencion que vencer.
+    confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
     return Appointment(
         store_id=original.store_id,
         staff_id=original.staff_id,
@@ -980,10 +993,15 @@ def _rescheduled_copy(
         notes=original.notes,
         intake_answers=original.intake_answers or {},
         idempotency_key=data.idempotency_key,
+        status=(
+            AppointmentStatus.CONFIRMED.value
+            if confirmado
+            else AppointmentStatus.PENDING.value
+        ),
         # Mismo criterio que el alta publica para un turno sin cobro online:
         # retiene el horario hasta que empieza y despues lo levanta el job de
         # expiracion si nadie lo confirmo (B1-22).
-        expires_at=data.new_starts_at,
+        expires_at=None if confirmado else data.new_starts_at,
     )
 
 
