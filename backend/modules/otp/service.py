@@ -10,12 +10,15 @@ import structlog
 from redis.exceptions import RedisError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from core.redis import get_redis
 from core.security import hash_otp_code
+from modules.notifications.tasks import is_deliverable_email
 from modules.otp.model import OtpVerification
+from modules.users.model import User, UserRole
 
 logger = structlog.get_logger()
 
@@ -23,6 +26,26 @@ logger = structlog.get_logger()
 # "incorrecto" de "expirado/inexistente" le decia a un atacante si un telefono
 # tiene un OTP vivo en esa tienda.
 _OTP_INVALID = OTPException
+
+# Motivo del rechazo, para el LOG DEL SERVIDOR. Nunca viaja al cliente: la
+# respuesta sigue siendo un 403 con el mismo mensaje neutro (regla 20), porque
+# cada motivo es un oraculo anonimo distinto ("ese telefono es cliente", "esa
+# ficha tiene email cargado"). El log es lo unico que permite atender un ticket
+# de un cliente legitimo trabado sin adivinar.
+OTP_GATE_OK = "ok"
+OTP_GATE_NEVER_VERIFIED = "never_verified"
+OTP_GATE_EMAIL_MISMATCH = "verified_against_other_email"
+OTP_GATE_NO_DELIVERABLE_CONTACT = "client_without_deliverable_email"
+
+
+def mask_phone(phone: str | None) -> str:
+    """Ultimos 4 digitos. Alcanza para cruzar con un ticket y no deja el
+    numero completo en los logs; mismo criterio que `_mask_email` en
+    `modules/notifications/tasks.py`."""
+    digits = re.sub(r"\D", "", phone or "")
+    if not digits:
+        return "***"
+    return f"***{digits[-4:]}"
 
 
 def normalize_phone(raw_phone: str) -> str:
@@ -34,6 +57,11 @@ def normalize_phone(raw_phone: str) -> str:
     if len(cleaned) < 8 or len(cleaned) > 20:
         raise ValidationException("Telefono invalido")
     return cleaned
+
+
+def _normalize_email(email: str | None) -> str | None:
+    cleaned = (email or "").strip().lower()
+    return cleaned or None
 
 
 def _budget_key(kind: str, store_id: str, phone: str) -> str:
@@ -116,6 +144,10 @@ class OtpService:
             "req", store_id, normalized_phone, settings.OTP_MAX_REQUESTS_PER_HOUR
         )
 
+        destination = await self._dispatch_destination_for(
+            store_id, normalized_phone, requested_email=email
+        )
+
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
         expires_at = datetime.now(timezone.utc) + timedelta(
@@ -142,17 +174,19 @@ class OtpService:
             # de la tabla (backup, replica).
             code_hash=hash_otp_code(store_id, normalized_phone, code),
             expires_at=expires_at,
+            email=destination,
             provider_message_id="email" if channel == "email" else "console-dispatch",
         )
         self.db.add(otp)
         await self.db.commit()
         await self.db.refresh(otp)
 
-        if channel == "email" and email:
+        if channel == "email" and destination:
             # Fuera de la transaccion (ya commiteada) y best-effort: la
             # respuesta es la misma haya salido o no, para no revelar si el
-            # telefono existe ni convertir el SMTP en un oraculo.
-            await _dispatch_code_by_email(email, code, store_name)
+            # telefono existe ni convertir el SMTP en un oraculo. Tampoco dice
+            # a que buzon fue: eso delataria si el telefono es cliente.
+            await _dispatch_code_by_email(destination, code, store_name)
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:
@@ -195,16 +229,151 @@ class OtpService:
             raise _OTP_INVALID()
 
         otp.consumed_at = now
-        # La UNICA marca valida de "este telefono demostro posesion".
+        # Marca que alguien demostro posesion del EMAIL `otp.email`, NO del
+        # telefono: el codigo viaja a una direccion, y el telefono solo es la
+        # clave con la que se pidio. Cualquier privilegio que dependa del
+        # telefono tiene que mirar tambien contra que email se verifico
+        # (`may_book_with_otp` / `is_client_contact_verified`). 2026-09-20.
         otp.verified_at = now
         await self.db.commit()
         return {"ok": True, "verified_at": now.isoformat(), "phone": normalized_phone}
 
-    async def is_recently_verified(
+    async def client_contact_verification_reason(
+        self, *, store_id: str, phone: str, window_minutes: int = 30
+    ) -> str:
+        """Motivo (para el log) del veredicto de `is_client_contact_verified`."""
+        normalized_phone = normalize_phone(phone)
+        contact = await self._deliverable_client_email(store_id, normalized_phone)
+        if not contact:
+            return OTP_GATE_NO_DELIVERABLE_CONTACT
+        if await self._matches_verified_email(
+            store_id=store_id,
+            normalized_phone=normalized_phone,
+            email=contact,
+            window_minutes=window_minutes,
+        ):
+            return OTP_GATE_OK
+        # Distinguir "nunca verifico" de "verifico contra otro buzon" es lo
+        # unico que separa un cliente que no termino el flujo de un intento de
+        # secuestro. Solo va al log.
+        if await self._matches_verified_email(
+            store_id=store_id,
+            normalized_phone=normalized_phone,
+            email=None,
+            window_minutes=window_minutes,
+        ):
+            return OTP_GATE_EMAIL_MISMATCH
+        return OTP_GATE_NEVER_VERIFIED
+
+    async def is_client_contact_verified(
         self, *, store_id: str, phone: str, window_minutes: int = 30
     ) -> bool:
+        """El email verificado COINCIDE con el contacto guardado de esa ficha.
+
+        Es el unico predicado que habilita autogestion, historial y contacto:
+        listar, cancelar o reprogramar turnos ajenos, y decidir si se trae
+        `get_client_history` o `UNKNOWN_HISTORY`.
+
+        False si no hay cliente con ese telefono en la tienda, si su email no
+        es entregable (el tecnico `{tel}@store{id}.noreply`) o si la
+        verificacion no registro email. 2026-09-20.
+        """
+        reason = await self.client_contact_verification_reason(
+            store_id=store_id, phone=phone, window_minutes=window_minutes
+        )
+        return reason == OTP_GATE_OK
+
+    async def booking_otp_reason(
+        self, *, store_id: str, phone: str, window_minutes: int = 30
+    ) -> str:
+        """Motivo (para el log) del veredicto de `may_book_with_otp`."""
         normalized_phone = normalize_phone(phone)
+        contact = await self._deliverable_client_email(store_id, normalized_phone)
+        if contact:
+            # Hay una victima posible: se exige lo mismo que para autogestion.
+            return await self.client_contact_verification_reason(
+                store_id=store_id, phone=phone, window_minutes=window_minutes
+            )
+        # Sin ficha (o con el email tecnico `.noreply`) no hay nada que
+        # filtrar: basta con haber probado ALGUN buzon. El codigo fue a ese
+        # email porque `_dispatch_destination_for` no tenia a quien proteger.
+        if await self._matches_verified_email(
+            store_id=store_id,
+            normalized_phone=normalized_phone,
+            email=None,
+            window_minutes=window_minutes,
+        ):
+            return OTP_GATE_OK
+        return OTP_GATE_NEVER_VERIFIED
+
+    async def may_book_with_otp(
+        self, *, store_id: str, phone: str, window_minutes: int = 30
+    ) -> bool:
+        """Gate del feature flag `otp_booking` al RESERVAR.
+
+        NO recibe email a proposito. Exigir que el email del formulario
+        coincida con el verificado no aportaba seguridad -- quien ataca
+        controla los dos campos igual -- y rompia el wizard publico, que tiene
+        el email del cliente y el del codigo como campos independientes y
+        opcionales. La seguridad la da el PUNTO DE DESPACHO: si el telefono
+        tiene ficha con email entregable, `_dispatch_destination_for` manda el
+        codigo a ESE buzon y el solicitante ya no lo elige. 2026-09-20.
+        """
+        reason = await self.booking_otp_reason(
+            store_id=store_id, phone=phone, window_minutes=window_minutes
+        )
+        return reason == OTP_GATE_OK
+
+    async def _dispatch_destination_for(
+        self, store_id: str, normalized_phone: str, *, requested_email: str | None
+    ) -> str | None:
+        """El buzon al que va el codigo. NO lo elige quien lo pide.
+
+        Si ese telefono ya es un cliente de la tienda con email ENTREGABLE, el
+        codigo va a ESE email y el del request se ignora. Sin esto,
+        `/public/otp/request` (publico) convertia "saber un telefono" en
+        "recibir el codigo de esa persona". 2026-09-20.
+
+        Si no hay ficha, o su email es el tecnico `{tel}@store{id}.noreply`, el
+        codigo va al email del request: un telefono sin ficha no tiene nada que
+        filtrar y el alta legitima tiene que poder verificarse.
+        """
+        protected = await self._deliverable_client_email(store_id, normalized_phone)
+        if protected:
+            return protected
+        return _normalize_email(requested_email)
+
+    async def _matches_verified_email(
+        self,
+        *,
+        store_id: str,
+        normalized_phone: str,
+        email: str | None,
+        window_minutes: int,
+    ) -> bool:
+        """Hay una verificacion reciente de ese telefono contra ESE email.
+
+        Con `email=None` la pregunta es "contra ALGUN email", que sigue siendo
+        fail closed: exige `otp_verifications.email IS NOT NULL`.
+
+        Es PRIVADO a proposito. Como API publica era el footgun que este fix
+        vino a eliminar: un predicado que acepta un email arbitrario del
+        llamador deja que cada call site elija mal (y el gate de reserva eligio
+        el email del formulario, que el atacante tambien controla). La
+        ramificacion vive en `may_book_with_otp` /
+        `is_client_contact_verified`, en un solo lugar testeado. 2026-09-20.
+        """
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+        # Las filas sin email (anteriores al 2026-09-20) NUNCA matchean: por
+        # igualdad porque `NULL = 'x'` es NULL, y con `email=None` porque se
+        # pide explicitamente `IS NOT NULL`. Fail closed por SQL, no por
+        # acordarse.
+        email_clause: ColumnElement[bool] = OtpVerification.email.is_not(None)
+        if email is not None:
+            normalized_email = _normalize_email(email)
+            if not normalized_email:
+                return False
+            email_clause = OtpVerification.email == normalized_email
         result = await self.db.execute(
             select(OtpVerification.id)
             .where(
@@ -212,8 +381,37 @@ class OtpService:
                 OtpVerification.phone == normalized_phone,
                 OtpVerification.verified_at.is_not(None),
                 OtpVerification.verified_at >= cutoff,
+                email_clause,
             )
             .order_by(OtpVerification.verified_at.desc())
             .limit(1)
         )
         return result.scalar_one_or_none() is not None
+
+    async def _deliverable_client_email(
+        self, store_id: str, normalized_phone: str
+    ) -> str | None:
+        """El email ENTREGABLE del cliente de esa tienda con ese telefono."""
+        # `users.phone` guarda el telefono tal como lo tipearon menos
+        # `\s-()+` (validador del schema publico) y `otp_verifications.phone`
+        # normalizado con `+` (`normalize_phone`). Se buscan las tres formas de
+        # almacenamiento que produce ese par de reglas, incluida la del prefijo
+        # internacional `00` (que el validador conserva y `normalize_phone`
+        # traduce a `+`): encontrar la ficha solo endurece el chequeo, nunca lo
+        # afloja, asi que no encontrarla trababa a un cliente legitimo con 403.
+        bare = normalized_phone.lstrip("+")
+        variants = {normalized_phone, bare, f"00{bare}"}
+        result = await self.db.execute(
+            select(User)
+            .where(
+                User.store_id == store_id,
+                User.role == UserRole.CLIENT,
+                User.phone.in_(variants),
+            )
+            .order_by(User.created_at.desc())
+            .limit(1)
+        )
+        client = result.scalars().first()
+        if not client or not is_deliverable_email(client.email):
+            return None
+        return _normalize_email(client.email)

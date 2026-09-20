@@ -614,18 +614,22 @@ async def test_public_booking_requires_otp_when_feature_enabled(
         ).isoformat(),
         "client_name": "Cliente OTP",
         "client_phone": "+5491123456789",
+        "client_email": "cliente-otp@example.com",
         "idempotency_key": "otp-booking-test-001",
     }
 
     blocked_booking = await client.post("/public/appointments", json=booking_payload)
     assert blocked_booking.status_code == 403
 
+    # El OTP prueba posesion del EMAIL, no del telefono: el gate de
+    # `otp_booking` pide haber verificado el email de ESTA reserva. 2026-09-20.
     otp_request = await client.post(
         "/public/otp/request",
         json={
             "store_public_id": store_public_id,
             "phone": "+5491123456789",
-            "channel": "whatsapp",
+            "channel": "email",
+            "email": "cliente-otp@example.com",
         },
     )
     assert otp_request.status_code == 200, otp_request.text
@@ -676,6 +680,10 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
             ).isoformat(),
             "client_name": "Cliente Autogestion",
             "client_phone": phone,
+            # La autogestion exige que el OTP se haya verificado contra el email
+            # ENTREGABLE de la ficha; sin email propio la ficha queda con el
+            # tecnico `.noreply` y no hay contra que comparar. 2026-09-20.
+            "client_email": "cliente-autogestion@example.com",
             "idempotency_key": "self-service-otp-booking-001",
         },
     )
@@ -704,7 +712,8 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
         json={
             "store_public_id": store_public_id,
             "phone": phone,
-            "channel": "whatsapp",
+            "channel": "email",
+            "email": "cliente-autogestion@example.com",
         },
     )
     assert otp_request.status_code == 200, otp_request.text

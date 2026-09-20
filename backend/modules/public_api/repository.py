@@ -125,18 +125,21 @@ class PublicRepository:
         phone: str,
         name: str,
         email: str | None,
-        *,
-        adopt_contact: bool = False,
     ) -> User:
         """Busca o crea el cliente de la tienda por telefono.
 
-        ``adopt_contact`` decide si los datos que llegan en ESTA peticion
-        pisan los del cliente que ya existe. Es False por defecto porque el
-        telefono no prueba identidad: sin esa guarda, cualquiera que conozca
-        un telefono se anotaba en la lista de espera con su propio email y a
-        partir de ahi recibia los mails del cliente real (confirmaciones,
-        recordatorios y sus datos de turno). Solo se adopta cuando el
-        telefono paso por OTP en esta tienda. 2026-09-10.
+        El flujo publico NUNCA pisa el email ni el nombre de una ficha que ya
+        existe. El telefono no prueba identidad: sin esa guarda, cualquiera que
+        conociera un telefono se anotaba en la lista de espera con su propio
+        email y desde ahi recibia los mails del cliente real (confirmaciones,
+        recordatorios y sus datos de turno). 2026-09-10.
+
+        Hasta el 2026-09-20 existia una excepcion (``adopt_contact``) para el
+        telefono "verificado por OTP". Sintoma: el OTP prueba posesion del
+        EMAIL y ``/public/otp/request`` es publico, asi que quien pedia el
+        codigo elegia el buzon; pedirlo al email propio con el telefono de otro
+        adoptaba su ficha. La excepcion se fue del todo: el mail de ESTA reserva
+        sigue yendo al email que dejaron, pero no queda pegado al cliente.
         """
         # Dos clientes con el mismo telefono (alta vieja sin unicidad) rompian
         # con MultipleResultsFound -> 500. Se toma el mas reciente.
@@ -153,33 +156,7 @@ class PublicRepository:
         existing = result.scalars().first()
 
         if existing:
-            if (
-                adopt_contact
-                and email
-                and (not existing.email or existing.email.endswith(".noreply"))
-            ):
-                existing.email = email
-                await self.db.flush()
-            if adopt_contact and name and not existing.first_name:
-                existing.full_name = name
             return existing
-
-        if email and adopt_contact:
-            result_by_email = await self.db.execute(
-                select(User).where(
-                    User.email == email,
-                    User.store_id == store_id,
-                    User.role == UserRole.CLIENT,
-                )
-            )
-            existing_by_email = result_by_email.scalar_one_or_none()
-            if existing_by_email:
-                if not existing_by_email.phone:
-                    existing_by_email.phone = phone
-                if name and not existing_by_email.first_name:
-                    existing_by_email.full_name = name
-                await self.db.flush()
-                return existing_by_email
 
         technical_email = email or f"{phone}@store{store_id}.noreply"
         new_client = User(

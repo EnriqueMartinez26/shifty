@@ -25,6 +25,15 @@ class OtpVerification(BaseEntity):
     verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+    # A QUE direccion se despacho el codigo. Sin esta columna, `verified_at`
+    # solo decia "alguien acerto un codigo de este telefono", y el que pedia el
+    # codigo elegia el buzon: saber un telefono ajeno y poner el email propio
+    # alcanzaba para autogestionar los turnos de esa persona. 2026-09-20.
+    #
+    # NULLABLE por las filas anteriores a esa fecha, y NULL es FAIL CLOSED: una
+    # verificacion sin email no otorga NINGUN privilegio, porque no se puede
+    # saber contra que direccion se probo la posesion.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     @property
