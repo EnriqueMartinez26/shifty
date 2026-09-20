@@ -20,6 +20,7 @@ import ulid
 
 from core.security import hash_password
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.auth.service import normalize_email
 from modules.appointments.repository import AppointmentRepository
 from modules.payments.deposit_rules import ClientHistory
 from modules.services.model import Service
@@ -147,7 +148,14 @@ class PublicRepository:
         partir de ahi recibia los mails del cliente real (confirmaciones,
         recordatorios y sus datos de turno). Solo se adopta cuando el
         telefono paso por OTP en esta tienda. 2026-09-10.
+
+        El email se normaliza a minusculas antes de buscar y antes de escribir
+        (regla 16). Este es el camino que mas filas ``users`` crea y era el
+        unico que lo guardaba crudo: la busqueda exacta no encontraba la fila
+        escrita con otra capitalizacion y el INSERT chocaba contra el indice
+        funcional ``uq_users_email_lower`` (AUD2-B3-04, 2026-09-20).
         """
+        email = normalize_email(email) if email else None
         # Dos clientes con el mismo telefono (alta vieja sin unicidad) rompian
         # con MultipleResultsFound -> 500. Se toma el mas reciente.
         result = await self.db.execute(
@@ -175,14 +183,19 @@ class PublicRepository:
             return existing
 
         if email and adopt_contact:
+            # func.lower, igual que el login: el indice uq_users_email_lower es
+            # la unica garantia de unicidad y es case-insensitive. Con limit(1)
+            # una fila legada duplicada no puede dar 500 (regla 16).
             result_by_email = await self.db.execute(
-                select(User).where(
-                    User.email == email,
+                select(User)
+                .where(
+                    func.lower(User.email) == email,
                     User.store_id == store_id,
                     User.role == UserRole.CLIENT,
                 )
+                .limit(1)
             )
-            existing_by_email = result_by_email.scalar_one_or_none()
+            existing_by_email = result_by_email.scalars().first()
             if existing_by_email:
                 if not existing_by_email.phone:
                     existing_by_email.phone = phone
@@ -191,7 +204,10 @@ class PublicRepository:
                 await self.db.flush()
                 return existing_by_email
 
-        technical_email = email or f"{phone}@store{store_id}.noreply"
+        # El tecnico tambien va en minusculas: el store_id es un ULID en
+        # mayusculas y una identidad no canonica estorba a cualquier
+        # comparacion posterior con func.lower(...).
+        technical_email = email or f"{phone}@store{store_id}.noreply".lower()
         new_client = User(
             email=technical_email,
             hashed_password=_UNUSABLE_CLIENT_PASSWORD_HASH,
