@@ -1,11 +1,13 @@
 from datetime import time
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.interfaces import LoaderOption
 
 from core.security import hash_password
+from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.services.model import Service
 from infrastructure.persistence.models.staff import (
     STAFF_KIND_PERSON,
@@ -17,11 +19,33 @@ from modules.users.model import User, UserRole
 import ulid
 
 
-# Carga de la relacion que deja SOLO los servicios activos (AUD2-B6-01).
-# Filtra en el JOIN, asi que la coleccion nunca se re-asigna: re-asignar una
-# relacion `secondary` marca las filas sobrantes de `staff_services` para
-# DELETE y se perdia la asignacion (y su `rating`) del servicio desactivado.
-_ACTIVE_SERVICES = selectinload(Staff.services.and_(Service.is_active == True))
+def _active_services(store_id: str) -> LoaderOption:
+    """Carga de la relacion con SOLO los servicios activos de ESA tienda.
+
+    El filtro va en el JOIN y no re-asignando la coleccion: re-asignar una
+    relacion `secondary` marca las filas sobrantes de `staff_services` para
+    DELETE, asi que una lectura borraba la asignacion (y su `rating`) del
+    servicio desactivado (AUD2-B6-01 / AUD2-B6-02).
+
+    El predicado `store_id` no es redundante con `Staff.store_id`: es uno de
+    los filtros de tienda que CLAUDE.md §2 pide no quitar, defensa en
+    profundidad sobre RLS para una fila cruzada de `staff_services`. Se
+    construye por llamada porque el `store_id` es del request, igual que en
+    `modules/public_api/repository.get_staff`.
+
+    CUIDADO: la garantia depende de que nadie cargue el mismo `Staff` antes en
+    el MISMO request. `Staff.services` es `lazy="selectin"`, asi que un
+    `select(Staff)` sin esta opcion trae la coleccion COMPLETA, y la sesion no
+    refresca una coleccion ya cargada salvo con `populate_existing()`: el
+    objeto del identity map se quedaria con los servicios inactivos adentro y
+    la proxima escritura volveria a marcarlos para DELETE.
+    """
+    return selectinload(
+        Staff.services.and_(
+            Service.is_active == True,
+            Service.store_id == store_id,
+        )
+    )
 
 
 class StaffRepository:
@@ -119,12 +143,11 @@ class StaffRepository:
             )
             .options(
                 selectinload(Staff.schedules),
-                _ACTIVE_SERVICES,
+                _active_services(store_id),
             )
         )
-        # La carga ya trae solo los activos: no se filtra ni se re-asigna nada.
-        # Re-asignar una relacion `secondary` marca las filas sobrantes de
-        # `staff_services` para DELETE (AUD2-B6-02).
+        # La carga ya trae solo los activos de la tienda: no se filtra ni se
+        # re-asigna nada (ver `_active_services`).
         return list(result.scalars().all())
 
     async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:
@@ -136,7 +159,7 @@ class StaffRepository:
             )
             .options(
                 selectinload(Staff.schedules),
-                _ACTIVE_SERVICES,
+                _active_services(store_id),
             )
         )
         # Antes esto re-consultaba con `_get_services_for_store`, que exige que
@@ -218,6 +241,30 @@ class StaffRepository:
         await self.db.delete(schedule)
         await self.db.flush()
 
+    async def _set_services(self, staff: Staff, services_list: list[Service]) -> None:
+        """Deja al profesional con EXACTAMENTE los servicios de la lista.
+
+        La coleccion cargada solo trae los activos de la tienda, asi que
+        SQLAlchemy por si solo no puede borrar la asignacion a un servicio
+        desactivado: el PATCH respondia 200 y la fila sobrevivia, y al
+        reactivar el servicio volvia a la ficha sin que nadie lo pidiera.
+        Se borra dirigido lo que no esta en la lista nueva.
+
+        Esto NO reabre AUD2-B6-02: ahi el problema era que una LECTURA del
+        portal borraba. Aca el borrado es la lista explicita del dueno.
+        """
+        staff.service_ids = [service.public_id for service in services_list]
+        staff.services = services_list
+        await self.db.flush()
+
+        sobrantes = delete(StaffServiceModel).where(
+            StaffServiceModel.staff_id == staff.id
+        )
+        conservar = [service.id for service in services_list]
+        if conservar:
+            sobrantes = sobrantes.where(StaffServiceModel.service_id.not_in(conservar))
+        await self.db.execute(sobrantes)
+
     async def update_services(
         self, staff: Staff, service_public_ids: list[str]
     ) -> Staff:
@@ -225,9 +272,7 @@ class StaffRepository:
             service_public_ids,
             staff.store_id,
         )
-        staff.service_ids = [service.public_id for service in services_list]
-        staff.services = services_list
-        await self.db.flush()
+        await self._set_services(staff, services_list)
         return staff
 
     async def update_profile(
@@ -264,12 +309,13 @@ class StaffRepository:
         if is_active is not None:
             staff.is_active = is_active
         if service_public_ids is not None:
+            # `PATCH /staff/{id}` con `service_ids` es la misma lista explicita
+            # que `PATCH /staff/{id}/services`: mismo borrado dirigido.
             services_list = await self._get_services_for_store(
                 service_public_ids,
                 staff.store_id,
             )
-            staff.service_ids = [service.public_id for service in services_list]
-            staff.services = services_list
+            await self._set_services(staff, services_list)
 
         # Solo una persona tiene usuario que sincronizar; un recurso no.
         user = None

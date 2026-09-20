@@ -96,6 +96,14 @@ class PublicRepository:
         # (y su `rating`) en el commit siguiente (AUD2-B6-02, 2026-09-20).
         # Sigue siendo una sola query extra, como el batch que reemplaza, y
         # conserva el filtro por `store_id` como defensa en profundidad.
+        #
+        # CUIDADO: la garantia depende de que nadie cargue el mismo `Staff`
+        # antes en el MISMO request. `Staff.services` es `lazy="selectin"`, asi
+        # que un `select(Staff)` sin esta opcion trae la coleccion COMPLETA, y
+        # la sesion no refresca una coleccion ya cargada salvo con
+        # `populate_existing()`: el objeto del identity map se quedaria con los
+        # servicios inactivos adentro y la proxima escritura de la request
+        # volveria a marcarlos para DELETE.
         result = await self.db.execute(
             select(Staff)
             .options(
