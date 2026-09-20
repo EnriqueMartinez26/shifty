@@ -39,9 +39,7 @@ NOMBRE_SUCIO = "Ana\x00"
 APELLIDO_SUCIO = "P‮rez​"
 
 
-async def _sembrar_fila_sucia(
-    session: AsyncSession, store_id: str
-) -> tuple[str, str]:
+async def _sembrar_fila_sucia(session: AsyncSession, store_id: str) -> tuple[str, str]:
     """Inserta por el ORM, salteando los schemas: simula la fila legacy."""
     sucio = User(
         email="legacy-sucio@test.com",

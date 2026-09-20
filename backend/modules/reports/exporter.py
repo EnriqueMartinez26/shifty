@@ -62,6 +62,13 @@ def _summary_metrics(
     los tres archivos. El dueno que baja el Excel para su contador no podia
     descomponer el total en ingreso por servicio y sena retenida. La clave es
     la que usan CSV y Excel; la etiqueta, la que dibuja el PDF.
+
+    La lista tiene que cubrir TODOS los campos de ``ReportSummaryStats``: si
+    falta uno, los contadores por estado del archivo no suman el total y el
+    dueno ve en la planilla el mismo defecto que AUD2-B5-14 arreglo en la
+    pantalla. Lo fija
+    ``test_report_exporters.py::test_el_archivo_escribe_todos_los_contadores_del_resumen``,
+    que compara estas claves contra ``ReportSummaryStats.model_fields``.
     """
     stats = summary.stats
     return (
@@ -70,6 +77,8 @@ def _summary_metrics(
         ("cancelled_appointments", "Cancelados", stats.cancelled_appointments),
         ("pending_appointments", "Pendientes", stats.pending_appointments),
         ("confirmed_appointments", "Confirmados", stats.confirmed_appointments),
+        ("absent_appointments", "Ausentes", stats.absent_appointments),
+        ("expired_appointments", "Vencidos", stats.expired_appointments),
         ("total_revenue", "Ingreso total", stats.total_revenue),
         ("average_ticket", "Ticket promedio", stats.average_ticket),
         ("retained_deposit_revenue", "Sena retenida", stats.retained_deposit_revenue),
