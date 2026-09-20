@@ -24,8 +24,10 @@ from modules.stores.model import Store
 
 
 async def _tienda(session: AsyncSession, slug: str) -> str:
+    # Sin `tienda.public_id = tienda.id`: es el mismo patron muerto que este
+    # test denuncia (antes del flush, `id` todavia es None). El test solo usa
+    # el `id` interno como `store_id` del servicio.
     tienda = Store(name=f"Tienda {slug}", slug=slug)
-    tienda.public_id = tienda.id
     session.add(tienda)
     await session.flush()
     return str(tienda.id)
