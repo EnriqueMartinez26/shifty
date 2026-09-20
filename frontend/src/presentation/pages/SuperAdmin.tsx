@@ -10,6 +10,7 @@ import {
 } from '@application/services/SuperAdminService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../theme/colors'
 import { SuperAdminAuditTimeline } from '../components/organisms/SuperAdminAuditTimeline'
@@ -53,8 +54,6 @@ import {
   panelStyle,
   parseOptionalInt,
   scopeBadgeStyle,
-  fromDateTimeInput,
-  toDateTimeInput,
   type AdminFormState,
   type CouponFormState,
   type PlanFormState,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -23,6 +23,25 @@ def _normalize_code(value: str) -> str:
     return value.strip().upper()
 
 
+def _require_aware(value: datetime | None) -> datetime | None:
+    """Rechaza una vigencia sin offset en vez de suponer que es UTC.
+
+    El panel mandaba el valor crudo de un input `datetime-local`
+    ("2026-12-31T23:59"): hora de pared argentina sin offset. La base lo
+    guardaba como si fuera UTC y la promo vencia tres horas antes de lo que el
+    dueno habia tipeado (2026-09-20). Suponer una zona aca solo mueve la
+    adivinanza de lugar; el front ahora manda siempre el instante en UTC.
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        raise ValueError(
+            "La vigencia debe incluir zona horaria (por ejemplo "
+            "2026-12-31T23:59:00-03:00)"
+        )
+    return value.astimezone(timezone.utc)
+
+
 class PromotionBase(BaseModel):
     code: str = Field(..., min_length=3, max_length=30, pattern=PROMOTION_CODE_PATTERN)
     title: str = Field(..., min_length=2, max_length=120)
@@ -41,6 +60,11 @@ class PromotionBase(BaseModel):
     @classmethod
     def normalize_code(cls, value: str) -> str:
         return _normalize_code(value)
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def require_aware_window(cls, value: datetime | None) -> datetime | None:
+        return _require_aware(value)
 
     @model_validator(mode="after")
     def validate_window(self) -> "PromotionBase":
@@ -77,6 +101,11 @@ class PromotionUpdate(BaseModel):
         if value is None:
             return None
         return _normalize_code(value)
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def require_aware_window(cls, value: datetime | None) -> datetime | None:
+        return _require_aware(value)
 
     @model_validator(mode="after")
     def validate_window(self) -> "PromotionUpdate":

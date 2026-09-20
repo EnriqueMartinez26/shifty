@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.utils import ensure_utc_aware
 from modules.promotions.model import PromotionRedemption, StorePromotion
 from modules.services.model import Service
 from modules.users.model import User
@@ -39,9 +40,11 @@ def _validate_promotion_window(
     now = datetime.now(timezone.utc)
     if not promotion.is_active:
         return "La promocion no esta activa"
-    if promotion.valid_from and promotion.valid_from > now:
+    # SQLite devuelve la vigencia naive aun con DateTime(timezone=True): sin
+    # normalizar, comparar contra `now` (aware) revienta con TypeError.
+    if promotion.valid_from and ensure_utc_aware(promotion.valid_from) > now:
         return "La promocion todavia no esta vigente"
-    if promotion.valid_until and promotion.valid_until < now:
+    if promotion.valid_until and ensure_utc_aware(promotion.valid_until) < now:
         return "La promocion ya vencio"
     if promotion.max_uses is not None and promotion.current_uses >= promotion.max_uses:
         return "La promocion ya alcanzo su limite de usos"

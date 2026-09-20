@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, Path, Query, status
@@ -15,6 +16,7 @@ from core.exceptions import (
     ServiceNotFoundException,
     ValidationException,
 )
+from core.utils import ensure_utc_aware
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user
 from modules.promotions.model import StorePromotion
@@ -35,6 +37,10 @@ PublicIdPath = Annotated[
 PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    return ensure_utc_aware(value) if value is not None else None
 
 
 def _require_admin(user: User) -> None:
@@ -155,8 +161,10 @@ async def update_promotion(
     ):
         raise ValidationException("El descuento porcentual no puede superar 100")
 
-    candidate_valid_from = payload.get("valid_from", promotion.valid_from)
-    candidate_valid_until = payload.get("valid_until", promotion.valid_until)
+    # El payload llega aware (lo exige el schema) y lo guardado puede venir
+    # naive de SQLite: compararlos crudos levanta TypeError -> 500.
+    candidate_valid_from = _aware(payload.get("valid_from", promotion.valid_from))
+    candidate_valid_until = _aware(payload.get("valid_until", promotion.valid_until))
     if (
         candidate_valid_from
         and candidate_valid_until

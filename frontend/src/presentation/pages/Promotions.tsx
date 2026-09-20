@@ -3,6 +3,7 @@ import React, { useMemo, useState } from 'react'
 import { Loader2, Save, TicketPercent, TriangleAlert } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
 
 import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -26,8 +27,6 @@ const createEmptyPromotionForm = () => ({
   valid_until: '',
   is_active: true
 })
-
-const toInputDate = (value?: string | null) => (value ? value.slice(0, 16) : '')
 
 const PromotionsPage: React.FC = () => {
   const promotionsQuery = usePromotions(true, true)
@@ -68,8 +67,11 @@ const PromotionsPage: React.FC = () => {
           ? Number(promotionForm.min_service_amount)
           : undefined,
         max_uses: promotionForm.max_uses ? Number(promotionForm.max_uses) : undefined,
-        valid_from: promotionForm.valid_from || undefined,
-        valid_until: promotionForm.valid_until || undefined,
+        // El input entrega una hora de pared argentina sin offset. Mandarla
+        // cruda dejaba que el backend la leyera como UTC: la promo vencia tres
+        // horas antes de lo que el dueno habia tipeado (2026-09-20).
+        valid_from: fromDateTimeInput(promotionForm.valid_from) ?? undefined,
+        valid_until: fromDateTimeInput(promotionForm.valid_until) ?? undefined,
         is_active: promotionForm.is_active
       }
 
@@ -102,8 +104,8 @@ const PromotionsPage: React.FC = () => {
       min_service_amount:
         promotion.min_service_amount !== null ? String(promotion.min_service_amount) : '',
       max_uses: promotion.max_uses !== null ? String(promotion.max_uses) : '',
-      valid_from: toInputDate(promotion.valid_from),
-      valid_until: toInputDate(promotion.valid_until),
+      valid_from: toDateTimeInput(promotion.valid_from),
+      valid_until: toDateTimeInput(promotion.valid_until),
       is_active: promotion.is_active
     })
   }

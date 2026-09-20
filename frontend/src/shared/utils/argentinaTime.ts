@@ -153,3 +153,26 @@ export const argentinaLocalToUtcIso = (date: string, time: string): string => {
   const offsetMs = wallAsUtc - naiveAsUtc
   return new Date(naiveAsUtc - offsetMs).toISOString()
 }
+
+/**
+ * Instante UTC -> valor de un input `datetime-local`, en hora ARGENTINA.
+ * Antes usaba la hora del navegador y el valor volvia al backend como naive,
+ * que lo interpretaba como UTC: tres horas de deriva en cada guardado.
+ * Vivia en `pages/superadmin/shared.ts` (cupones de plataforma); se movio aca
+ * cuando aparecio el mismo bug en las promociones de tienda (2026-09-20), que
+ * mandaban el `datetime-local` crudo y vencian tres horas antes.
+ */
+export const toDateTimeInput = (value: string | null | undefined): string => {
+  if (!value) return ''
+  const fecha = formatArgentinaDate(value)
+  const hora = formatArgentinaTime(value)
+  return fecha && hora ? `${fecha}T${hora}` : ''
+}
+
+/** Valor de un input `datetime-local` (hora argentina) -> instante UTC ISO. */
+export const fromDateTimeInput = (value: string): string | null => {
+  if (!value) return null
+  const [fecha, hora] = value.split('T')
+  if (!fecha || !hora) return null
+  return argentinaLocalToUtcIso(fecha, hora.slice(0, 5))
+}

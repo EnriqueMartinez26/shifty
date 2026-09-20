@@ -4,7 +4,9 @@ import {
   formatArgentinaDate,
   formatArgentinaDateDisplay,
   formatArgentinaDayMonth,
-  formatArgentinaTime
+  formatArgentinaTime,
+  fromDateTimeInput,
+  toDateTimeInput
 } from './argentinaTime'
 
 describe('argentinaTime', () => {
@@ -73,6 +75,33 @@ describe('argentinaMinutesOfDay', () => {
 
   it('una fecha sin hora vale medianoche, igual que los demas formateadores', () => {
     expect(argentinaMinutesOfDay('2026-09-27')).toBe(0)
+  })
+})
+
+describe('inputs datetime-local', () => {
+  it('el input va y vuelve en hora argentina sin deriva', () => {
+    // 2026-09-20 15:30 en Buenos Aires = 18:30 UTC.
+    expect(toDateTimeInput('2026-09-20T18:30:00+00:00')).toBe('2026-09-20T15:30')
+    expect(fromDateTimeInput('2026-09-20T15:30')).toBe('2026-09-20T18:30:00.000Z')
+    expect(fromDateTimeInput('')).toBeNull()
+    expect(toDateTimeInput(null)).toBe('')
+    expect(toDateTimeInput(undefined)).toBe('')
+  })
+
+  it('la vigencia que tipea el dueno no se adelanta tres horas', () => {
+    // El bug de las promociones: "vence 31/12 23:59" salia sin offset y el
+    // backend lo leia como UTC, o sea 20:59 ART (2026-09-20).
+    const vence = fromDateTimeInput('2026-12-31T23:59')
+    expect(vence).toBe('2027-01-01T02:59:00.000Z')
+    expect(toDateTimeInput(vence)).toBe('2026-12-31T23:59')
+  })
+
+  it('un valor con segundos se recorta a HH:mm', () => {
+    expect(fromDateTimeInput('2026-12-31T23:59:30')).toBe('2027-01-01T02:59:00.000Z')
+  })
+
+  it('devuelve null si el valor no tiene hora', () => {
+    expect(fromDateTimeInput('2026-12-31')).toBeNull()
   })
 })
 
