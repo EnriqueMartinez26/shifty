@@ -27,11 +27,29 @@ def _local_datetime(value: datetime) -> str:
     return ensure_utc_aware(value).astimezone(ARGENTINA_TZ).strftime("%Y-%m-%d %H:%M")
 
 
+def _safe_text(value: object) -> str:
+    """Texto sin caracteres de control (regla 19): NUL, saltos de linea, bidi,
+    zero-width y BOM (categoria Unicode C*) no llegan a ningun exportador.
+
+    AUD2-B5-03: la limpieza existia solo para el PDF. Un NUL en el nombre hacia
+    que ``openpyxl`` levantara ``IllegalCharacterError`` —que no es
+    ``RuntimeError``, lo unico que captura el router— y la descarga de Excel
+    terminaba en un 500 opaco; en el CSV el bidi override viajaba intacto.
+    """
+    return "".join(
+        char for char in str(value) if not unicodedata.category(char).startswith("C")
+    ).strip()
+
+
 def _neutralize_cell(value: object) -> object:
-    """Prefija con apostrofo el texto que empieza con un trigger de formula."""
-    if isinstance(value, str) and value and value[0] in _FORMULA_TRIGGERS:
-        return "'" + value
-    return value
+    """Celda de planilla: sin caracteres de control y con apostrofo delante si
+    el texto empieza con un trigger de formula. Los no-texto pasan derecho."""
+    if not isinstance(value, str):
+        return value
+    limpio = _safe_text(value)
+    if limpio and limpio[0] in _FORMULA_TRIGGERS:
+        return "'" + limpio
+    return limpio
 
 
 def export_to_csv(summary: ReportSummaryResponse) -> bytes:
@@ -156,14 +174,6 @@ _PDF_HEADERS = ("Fecha", "Estado", "Servicio", "Profesional", "Cliente", "Precio
 _ELLIPSIS = "..."
 
 
-def _pdf_text(value: object) -> str:
-    """Texto sin caracteres de control (regla 19): NUL, saltos de linea, bidi,
-    zero-width y BOM (categoria Unicode C*) no llegan al PDF."""
-    return "".join(
-        char for char in str(value) if not unicodedata.category(char).startswith("C")
-    ).strip()
-
-
 def _fit_pdf_text(text: str, width: float, font: str, string_width: Any) -> str:
     """Recorta ``text`` para que entre en ``width`` puntos, marcando el corte."""
     if string_width(text, font, _PDF_FONT_SIZE) <= width:
@@ -181,8 +191,8 @@ def _draw_pdf_row(
     pdf.setFont(font, _PDF_FONT_SIZE)
     *texts, price = cells
     for (x, width), value in zip(_PDF_TEXT_COLUMNS, texts, strict=True):
-        pdf.drawString(x, y, _fit_pdf_text(_pdf_text(value), width, font, stringWidth))
-    pdf.drawRightString(_PDF_PRICE_RIGHT_EDGE, y, _pdf_text(price))
+        pdf.drawString(x, y, _fit_pdf_text(_safe_text(value), width, font, stringWidth))
+    pdf.drawRightString(_PDF_PRICE_RIGHT_EDGE, y, _safe_text(price))
 
 
 def export_to_pdf(summary: ReportSummaryResponse) -> bytes:

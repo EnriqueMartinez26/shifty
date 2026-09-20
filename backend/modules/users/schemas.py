@@ -2,8 +2,14 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from core.validation import validate_password_strength
+from core.validation import reject_control_chars, validate_password_strength
 from modules.users.model import UserRole
+
+# AUD2-B5-03: nombre y apellido eran el unico texto libre del sistema sin esta
+# guarda (staff, services, stores, superadmin y public_api ya la tienen). Salen
+# al reporte del dueno via _report_client_name, asi que un NUL o un bidi
+# cargado desde /users llegaba hasta la planilla (regla 19).
+_NOMBRES_LIBRES = ("first_name", "last_name")
 
 
 class UserBase(BaseModel):
@@ -12,6 +18,11 @@ class UserBase(BaseModel):
     last_name: str | None = Field(None, min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
     role: UserRole = UserRole.STAFF
+
+    @field_validator(*_NOMBRES_LIBRES)
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        return reject_control_chars(value)
 
 
 class UserCreate(UserBase):
@@ -26,6 +37,11 @@ class UserUpdate(BaseModel):
     phone: str | None = Field(None, max_length=50)
     role: UserRole | None = None
     password: str | None = Field(None, min_length=12, max_length=128)
+
+    @field_validator(*_NOMBRES_LIBRES)
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        return reject_control_chars(value)
 
     @field_validator("password")
     @classmethod

@@ -151,3 +151,57 @@ def test_los_exportadores_toleran_un_reporte_vacio(exportador) -> None:  # type:
     """Un periodo sin actividad no puede romper la descarga."""
     contenido = exportador(_summary(con_datos=False))
     assert isinstance(contenido, bytes) and contenido
+
+
+# 2026-09-20, AUD2-B5-03: un nombre con NUL/bidi/zero-width entraba crudo a las
+# planillas. Sintoma: ``openpyxl`` levantaba ``IllegalCharacterError`` (que no
+# es ``RuntimeError``, lo unico que captura el router), asi que la descarga de
+# Excel del dueno terminaba en un 500 opaco; y en el CSV el ``U+202E`` viajaba
+# intacto y daba vuelta el texto de la celda. La limpieza existia solo para el
+# PDF. El dato es el mismo de ``test_el_pdf_no_dibuja_caracteres_de_control``.
+_TEXTO_HOSTIL = "Ana\x00 ‮P​erez\r\n"
+_CONTROL_PROHIBIDOS = ("\x00", "‮", "​", "\r", "\n")
+
+
+def _texto_del_xlsx(contenido: bytes) -> str:
+    """Las celdas de las hojas del libro (openpyxl las escribe inline).
+
+    Se miran solo las hojas: el resto del ZIP (tema, estilos) trae saltos de
+    linea propios de openpyxl que no son datos del reporte.
+    """
+    with zipfile.ZipFile(io.BytesIO(contenido)) as libro:
+        return "".join(
+            libro.read(nombre).decode("utf-8")
+            for nombre in libro.namelist()
+            if nombre.startswith("xl/worksheets/")
+        )
+
+
+def test_el_excel_no_se_cae_con_un_nombre_con_caracteres_de_control() -> None:
+    resumen = _summary()
+    resumen.appointments[0].client_name = _TEXTO_HOSTIL
+    contenido = export_to_excel(resumen)
+    assert contenido[:2] == b"PK"
+    texto = _texto_del_xlsx(contenido)
+    for prohibido in _CONTROL_PROHIBIDOS:
+        assert prohibido not in texto, f"el Excel se llevo {prohibido!r}"
+    assert "Ana Perez" in texto
+
+
+def test_el_csv_no_se_lleva_el_bidi_ni_el_nul() -> None:
+    resumen = _summary()
+    resumen.appointments[0].client_name = _TEXTO_HOSTIL
+    texto = _csv_texto(resumen)
+    for prohibido in ("\x00", "‮", "​"):
+        assert prohibido not in texto, f"el CSV se llevo {prohibido!r}"
+    assert "Ana Perez" in texto
+
+
+def test_excel_neutraliza_inyeccion_de_formula() -> None:
+    """La proteccion de formula que ya tenia el CSV tambien vale para el Excel."""
+    resumen = _summary()
+    resumen.appointments[0].client_name = "=cmd|'/c calc'!A1"
+    resumen.appointments[0].service_name = "+SUM(1+1)"
+    texto = _texto_del_xlsx(export_to_excel(resumen))
+    assert "&#39;=cmd" in texto or "'=cmd" in texto
+    assert "&#39;+SUM(1+1)" in texto or "'+SUM(1+1)" in texto
