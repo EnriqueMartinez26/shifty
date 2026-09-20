@@ -32,6 +32,7 @@ from sqlalchemy import select
 from core.availability_cache import (
     AvailabilityCacheClient,
     invalidate_availability_range,
+    invalidate_store_availability,
 )
 from core.exceptions import (
     AppException,
@@ -42,7 +43,8 @@ from core.exceptions import (
 )
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AbstractUnitOfWork
-from core.utils import ensure_utc_aware
+from core.utils import ARGENTINA_TZ, ensure_utc_aware
+from modules.appointment_blocks.schemas import block_range_error
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import build_client_details, is_deliverable_email
@@ -56,6 +58,26 @@ EVENT_CANCELLED_BY_BLOCK = "appointment.cancelled_by_block"
 
 Range = tuple[datetime, datetime]
 T = TypeVar("T")
+
+# Hasta cuantos dias se invalida la cache dia por dia (un INCR + EXPIRE por
+# dia, AUD2-B1-10). Por encima, un solo INCR de la generacion de la tienda:
+# un bloqueo de meses cambia la disponibilidad de todos esos dias igual, y
+# tirar la cache entera cuesta lo mismo que tirar la de un dia.
+MAX_DAYS_INVALIDATED_ONE_BY_ONE = 31
+
+
+def days_covered(ranges: list[Range]) -> int:
+    """Cantidad de dias locales que tocan los rangos, sumados (funcion pura).
+
+    Cota superior de lo que ``invalidate_availability_range`` recorreria: un
+    dia que aparece en dos rangos cuenta dos veces, que es lo que costaria.
+    """
+    total = 0
+    for starts_at, ends_at in ranges:
+        inicio = ensure_utc_aware(starts_at).astimezone(ARGENTINA_TZ).date()
+        fin = ensure_utc_aware(ends_at).astimezone(ARGENTINA_TZ).date()
+        total += (fin - inicio).days + 1
+    return total
 
 
 def changed(changes: dict[str, object], key: str, current: T) -> T:
@@ -363,8 +385,12 @@ class AppointmentBlockService:
         """
         starts_at: datetime = changed(changes, "starts_at", block.start_time)
         ends_at: datetime = changed(changes, "ends_at", block.end_time)
-        if ensure_utc_aware(starts_at) >= ensure_utc_aware(ends_at):
-            raise ValidationException("El inicio debe ser anterior al fin")
+        # Misma regla que los schemas del alta, incluido el tope de duracion
+        # (AUD2-B1-10): el schema del PATCH no puede medirla porque puede
+        # venir un solo extremo.
+        error = block_range_error(starts_at, ends_at)
+        if error:
+            raise ValidationException(error)
         return (starts_at, ends_at)
 
     async def update_block(
@@ -444,6 +470,16 @@ class AppointmentBlockService:
             )
 
     async def _invalidate(self, ranges: list[Range]) -> None:
+        """Invalida la disponibilidad de los dias que tocan los rangos.
+
+        Dia por dia hasta ``MAX_DAYS_INVALIDATED_ONE_BY_ONE``; por encima, un
+        solo ``INCR`` de la generacion de la tienda (AUD2-B1-10). Sin el tope,
+        un bloqueo largo o un lote recurrente disparaba miles de comandos a
+        Redis con la transaccion ya commiteada y el request colgado.
+        """
+        if days_covered(ranges) > MAX_DAYS_INVALIDATED_ONE_BY_ONE:
+            await invalidate_store_availability(self.cache, self.actor.store_id)
+            return
         for starts_at, ends_at in ranges:
             await invalidate_availability_range(
                 self.cache, self.actor.store_id, starts_at, ends_at

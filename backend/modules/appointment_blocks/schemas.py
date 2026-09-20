@@ -1,6 +1,32 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, model_validator
+
+from core.utils import ensure_utc_aware
+
+# Tope de duracion de UN rango de bloqueo (AUD2-B1-10). Regla 9 aplicada a
+# una duracion: sin cota superior, un bloqueo de 2026 a 2036 era valido y la
+# invalidacion del cache recorria ~3650 dias con un INCR + EXPIRE por cada
+# uno, sobre el mismo Redis que sostiene el rate limit y la idempotencia de
+# cobros. Un anio entero (con bisiesto) cubre una licencia larga.
+MAX_BLOCK_DURATION = timedelta(days=366)
+
+
+def block_range_error(starts_at: datetime, ends_at: datetime) -> str | None:
+    """Motivo por el que un rango de bloqueo no vale, o None si vale.
+
+    Una sola regla para los schemas de entrada y para el PATCH del service,
+    que decide sobre el rango que dejaria el cambio (puede venir un solo
+    extremo). Un instante naive se toma como UTC, igual que en el resto del
+    modulo.
+    """
+    inicio = ensure_utc_aware(starts_at)
+    fin = ensure_utc_aware(ends_at)
+    if inicio >= fin:
+        return "El inicio debe ser anterior al fin"
+    if fin - inicio > MAX_BLOCK_DURATION:
+        return f"Un bloqueo no puede durar mas de {MAX_BLOCK_DURATION.days} dias"
+    return None
 
 
 class AppointmentBlockBase(BaseModel):
@@ -11,8 +37,9 @@ class AppointmentBlockBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "AppointmentBlockBase":
-        if self.starts_at >= self.ends_at:
-            raise ValueError("El inicio debe ser anterior al fin")
+        error = block_range_error(self.starts_at, self.ends_at)
+        if error:
+            raise ValueError(error)
         return self
 
 
@@ -33,8 +60,9 @@ class StoreWideBlockCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "StoreWideBlockCreate":
-        if self.starts_at >= self.ends_at:
-            raise ValueError("El inicio debe ser anterior al fin")
+        error = block_range_error(self.starts_at, self.ends_at)
+        if error:
+            raise ValueError(error)
         return self
 
 
@@ -118,8 +146,9 @@ class BlockPreviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "BlockPreviewRequest":
-        if self.starts_at >= self.ends_at:
-            raise ValueError("El inicio debe ser anterior al fin")
+        error = block_range_error(self.starts_at, self.ends_at)
+        if error:
+            raise ValueError(error)
         if self.recurrence != "none" and self.recurrence_until is None:
             raise ValueError(
                 "recurrence_until es obligatorio cuando recurrence no es none"
