@@ -3,7 +3,9 @@
 Acceso puro a datos (CLAUDE.md §2): sin reglas de negocio ni commits. Cada
 consulta lleva el predicado ``store_id`` de la tienda del request aunque RLS
 ya filtre (defensa en profundidad, B5-01), tambien para el superadmin (B5-02).
-Los instantes se reciben aware en UTC y se comparan naive, como antes.
+Los instantes se reciben aware en UTC y se comparan aware: ``starts_at`` y
+``created_at`` son ``timestamptz``, y asyncpg codifica un naive como hora local
+DEL HOST (AUD2-B5-07). Es el mismo criterio que ``modules/reports`` (regla 24).
 """
 
 from __future__ import annotations
@@ -40,8 +42,8 @@ def _store_scope(
 
 def _starts_between(desde: datetime, hasta: datetime) -> list[ColumnElement[bool]]:
     return [
-        Appointment.starts_at >= desde.replace(tzinfo=None),
-        Appointment.starts_at < hasta.replace(tzinfo=None),
+        Appointment.starts_at >= desde,
+        Appointment.starts_at < hasta,
     ]
 
 
@@ -64,9 +66,19 @@ class DashboardRepository:
         )
         return int(result.scalar() or 0)
 
-    async def count_pending(self) -> int:
+    async def count_pending(self, desde: datetime) -> int:
+        """Turnos pendientes que empiezan de ``desde`` en adelante.
+
+        AUD2-B5-11: antes contaba TODOS los pendientes de la tienda, sin cota.
+        Un pendiente cuya fecha ya paso no cambia de estado solo (el grafo lo
+        lleva a absent/completed por accion del staff), asi que el contador era
+        monotono creciente: a los seis meses mostraba "137 confirmaciones
+        pendientes" donde habia dos reales y dejaba de disparar accion. El
+        horizonte es el mismo que el de ``upcoming``.
+        """
         result = await self.db.execute(
             select(func.count(Appointment.id)).where(
+                Appointment.starts_at >= desde,
                 Appointment.status == AppointmentStatus.PENDING.value,
                 *self._appointment_scope(),
             )
@@ -74,11 +86,17 @@ class DashboardRepository:
         return int(result.scalar() or 0)
 
     async def booked_minutes_between(self, desde: datetime, hasta: datetime) -> float:
-        """Minutos de servicio reservados (no cancelados) en el rango."""
+        """Minutos reservados (no cancelados) en el rango, segun el turno.
+
+        AUD2-B5-10: sumaba ``Service.duration_minutes``, la duracion de lista
+        de HOY, asi que alargar un servicio recalculaba hacia atras la
+        ocupacion de una agenda que no cambio y la separaba del reporte por
+        profesional, que usa el snapshot. Misma razon por la que el turno
+        congela ``price_amount``.
+        """
         result = await self.db.execute(
-            select(func.coalesce(func.sum(Service.duration_minutes), 0))
+            select(func.coalesce(func.sum(Appointment.duration_minutes), 0))
             .select_from(Appointment)
-            .join(Service, Appointment.service_id == Service.id)
             .where(
                 *_starts_between(desde, hasta),
                 Appointment.status != AppointmentStatus.CANCELLED.value,
@@ -109,7 +127,7 @@ class DashboardRepository:
         result = await self.db.execute(
             select(func.count(User.id)).where(
                 User.role == UserRole.CLIENT.value,
-                User.created_at >= since.replace(tzinfo=None),
+                User.created_at >= since,
                 *_store_scope(self.store_id, User.store_id),
             )
         )
@@ -123,6 +141,11 @@ class DashboardRepository:
         Antes sumaba Service.price (precio de lista actual) de turnos CONFIRMED/
         COMPLETED, lo que contaba turnos sin cobrar y a precio equivocado. Ahora
         es consistente con el reporte de ingresos: solo pagos acreditados.
+
+        AUD2-B5-16: era la unica consulta del panel sin el predicado store_id
+        sobre su propia tabla. El aislamiento se sostenia por el join a un
+        appointments ya acotado, pero la defensa en profundidad que promete el
+        docstring del modulo faltaba, y modules/reports si la pone.
         """
         result = await self.db.execute(
             select(func.coalesce(func.sum(Payment.amount), 0))
@@ -132,16 +155,20 @@ class DashboardRepository:
                 *_starts_between(desde, hasta),
                 Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
                 *self._appointment_scope(),
+                *_store_scope(self.store_id, Payment.store_id),
             )
         )
         return float(result.scalar() or 0)
 
     async def average_duration_between(self, desde: datetime, hasta: datetime) -> float:
-        """Duracion promedio de servicio de los turnos no cancelados del rango."""
+        """Duracion promedio de los turnos no cancelados del rango.
+
+        Sobre el snapshot del turno, por lo mismo que ``booked_minutes_between``
+        (AUD2-B5-10).
+        """
         result = await self.db.execute(
-            select(func.coalesce(func.avg(Service.duration_minutes), 0))
+            select(func.coalesce(func.avg(Appointment.duration_minutes), 0))
             .select_from(Appointment)
-            .join(Service, Appointment.service_id == Service.id)
             .where(
                 *_starts_between(desde, hasta),
                 Appointment.status != AppointmentStatus.CANCELLED.value,
@@ -158,7 +185,7 @@ class DashboardRepository:
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
             .where(
-                Appointment.starts_at >= since.replace(tzinfo=None),
+                Appointment.starts_at >= since,
                 Appointment.status.in_(
                     [
                         AppointmentStatus.PENDING.value,
