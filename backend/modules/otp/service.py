@@ -83,9 +83,25 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
             raise OTPRateLimitedException() from exc
 
 
+def _otp_subject(store_name: str) -> str:
+    """Mismo asunto para el codigo y para el aviso retenido: el asunto
+    tampoco puede discriminar (AUD2-B4-05)."""
+    return f"Tu codigo de verificacion - {store_name or 'Shifty'}"
+
+
+async def _send_otp_mail(email: str, asunto: str, cuerpo: str) -> None:
+    """Envio del OTP fuera del request. Nunca propaga: la respuesta es neutra."""
+    try:
+        enviado = await send_email(email, asunto, cuerpo)
+    except Exception as exc:
+        logger.warning("otp_email_dispatch_error", error_type=type(exc).__name__)
+        return
+    if not enviado:
+        logger.warning("otp_email_dispatch_failed")
+
+
 async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> None:
     tienda = store_name or "Shifty"
-    asunto = f"Tu codigo de verificacion - {tienda}"
     cuerpo = (
         "Hola,\n\n"
         f"Tu codigo para {tienda} es: {code}\n\n"
@@ -93,13 +109,35 @@ async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> Non
         "Si no pediste este codigo, ignora este mensaje.\n\n"
         "- El equipo de Shifty"
     )
-    try:
-        enviado = await send_email(email, asunto, cuerpo)
-    except Exception as exc:  # nunca propaga: la respuesta debe ser neutra
-        logger.warning("otp_email_dispatch_error", error_type=type(exc).__name__)
-        return
-    if not enviado:
-        logger.warning("otp_email_dispatch_failed")
+    await _send_otp_mail(email, _otp_subject(store_name), cuerpo)
+
+
+async def _dispatch_withheld_notice(email: str, store_name: str) -> None:
+    """Aviso SIN codigo al email tipeado cuando el telefono ya tiene duenio.
+
+    AUD2-B4-05 (2026-09-20): el camino retenido de B4-01 no mandaba nada, y
+    quien pide controla la casilla que tipea. Pedir el codigo de un telefono
+    ajeno con la casilla propia y mirar si llega ALGO decia si ese telefono es
+    cliente de esa tienda; repetido contra varias tiendas, mapeaba donde es
+    cliente una persona. Ahora llega un mail en los dos casos, con el mismo
+    asunto y sin codigo.
+
+    Queda un residuo declarado: quien LEE el cuerpo del mail que recibe sigue
+    distinguiendo "codigo" de "aviso". Cerrarlo del todo exigiria no mandar
+    nunca el codigo a una casilla tipeada, que es el caso del telefono que
+    todavia no es de nadie. Lo que se cierra aca es el oraculo barato -el que
+    solo mira si hubo entrega- y el vector automatizable.
+    """
+    tienda = store_name or "Shifty"
+    cuerpo = (
+        "Hola,\n\n"
+        f"Recibimos un pedido de codigo de verificacion para {tienda}.\n\n"
+        "Si el telefono es tuyo, el codigo va a la direccion de correo que "
+        "tenes registrada. Si no reconoces este pedido, ignora este mensaje: "
+        "no hace falta que hagas nada.\n\n"
+        "- El equipo de Shifty"
+    )
+    await _send_otp_mail(email, _otp_subject(store_name), cuerpo)
 
 
 # Agenda un trabajo para DESPUES de la respuesta: ``BackgroundTasks.add_task``
@@ -227,6 +265,12 @@ class OtpService:
             # cliente ni convertir el SMTP en un oraculo. El envio no toca la
             # base; un fallo se loguea en _dispatch_code_by_email.
             schedule_dispatch(_dispatch_code_by_email, destination, code, store_name)
+        elif channel == "email" and withheld and email:
+            # AUD2-B4-05: el camino retenido tambien manda, sin codigo. Sin
+            # esto, "no me llego nada" era la respuesta a "¿este telefono es
+            # cliente de esta tienda?". Un envio por pedido en los dos
+            # caminos, acotado por OTP_MAX_REQUESTS_PER_HOUR.
+            schedule_dispatch(_dispatch_withheld_notice, email, store_name)
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:

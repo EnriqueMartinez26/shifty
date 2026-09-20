@@ -17,6 +17,7 @@ entregable, el comportamiento es el de siempre.
 
 from __future__ import annotations
 
+import re
 import statistics
 import time
 from typing import Any
@@ -39,6 +40,18 @@ from tests.integration.test_mails_al_cliente import Buzon
 
 TELEFONO_CLIENTE = "5491155551234"
 EMAIL_CLIENTE = "duenio@example.com"
+
+_CODIGO = re.compile(r"\b\d{6}\b")
+
+
+def _sin_codigo(enviados: list[tuple[str, str, str]]) -> bool:
+    """Ningun mail de la lista trae un codigo de 6 digitos.
+
+    Desde AUD2-B4-05 el camino retenido manda un aviso SIN codigo al email
+    tipeado, para que "no me llego nada" deje de decir que ese telefono es
+    cliente. Lo que no puede pasar nunca es que el codigo salga ahi.
+    """
+    return all(not _CODIGO.search(cuerpo) for _, _, cuerpo in enviados)
 
 
 async def _tienda_con_cliente(
@@ -128,8 +141,10 @@ async def test_email_distinto_respuesta_neutra_y_nadie_recibe_el_codigo(
     assert set(neutra) == set(exito)
     assert neutra["ok"] is True
     assert EMAIL_CLIENTE not in str(neutra)
-    # Nadie recibe codigo: ni el email tipeado ni el del cliente.
-    assert buzon.enviados == []
+    # Nadie recibe el CODIGO: al email tipeado le llega el aviso sin codigo
+    # de AUD2-B4-05 y al del cliente no le llega nada.
+    assert [destino for destino, _, _ in buzon.enviados] == ["atacante@example.com"]
+    assert _sin_codigo(buzon.enviados)
 
     # El codigo de la respuesta (solo existe en modo debug) no verifica, y
     # el telefono no queda verificado para quien lo pidio.
@@ -315,9 +330,11 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
     nuevo, envios_nuevo = await trabajo("5491166660000", "nuevo@example.com")
 
     assert coincide == distinto == nuevo, (coincide, distinto, nuevo)
-    # Ninguno manda en linea; el camino "email distinto" no encola nada.
+    # Ninguno manda en linea. Los tres encolan exactamente un envio: el
+    # camino "email distinto" manda el aviso sin codigo de AUD2-B4-05, asi
+    # la entrega tampoco distingue si el telefono es cliente.
     assert buzon.enviados == []
-    assert (envios_ok, envios_neutros, envios_nuevo) == (1, 0, 1)
+    assert (envios_ok, envios_neutros, envios_nuevo) == (1, 1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -379,10 +396,11 @@ async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
         },
     )
     assert respuesta.status_code == 200, respuesta.text
-    assert buzon.enviados == [], (
+    assert _sin_codigo(buzon.enviados), (
         "el codigo salio al email del atacante: el cliente guardado con 00 "
         "no se encontro"
     )
+    buzon.enviados.clear()
 
     # Y con el email del cliente, en la misma forma de telefono, si sale.
     ok = await client.post(
