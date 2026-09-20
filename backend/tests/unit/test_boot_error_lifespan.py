@@ -38,18 +38,34 @@ class _FakeConnection:
 
 
 class _FakeEngine:
+    """Engine simulado. Cuenta los `dispose` porque en Celery importan.
+
+    `worker_init` corre en el proceso PADRE de prefork, antes del fork: una
+    conexion que quede en el pool la heredan todos los hijos (AUD2-B7-08).
+    """
+
     def __init__(self, row: tuple[bool, bool] | None) -> None:
         self._row = row
+        self.dispose_count = 0
 
     def connect(self) -> _FakeConnection:
         return _FakeConnection(self._row)
+
+    async def dispose(self) -> None:
+        self.dispose_count += 1
 
 
 class _UnreachableEngine:
     """La DATABASE_URL de respaldo apunta a una base que no existe."""
 
+    def __init__(self) -> None:
+        self.dispose_count = 0
+
     def connect(self) -> Any:
         raise OSError("connect() failed: localhost/invalid")
+
+    async def dispose(self) -> None:
+        self.dispose_count += 1
 
 
 def test_con_boot_error_la_app_arranca_y_responde_503_en_toda_ruta(

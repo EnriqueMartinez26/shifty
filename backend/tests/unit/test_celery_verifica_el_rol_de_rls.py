@@ -79,3 +79,77 @@ def test_con_settings_de_respaldo_ni_se_consulta_la_base(
 
     with pytest.raises(SystemExit, match="SECRET_KEY placeholder"):
         celery_app._start_worker_process()
+
+
+def test_el_chequeo_no_deja_conexiones_en_el_pool_del_padre(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """AUD2-B7-08 (2026-09-20): el chequeo envenenaba el pool de los hijos.
+
+    `worker_init` corre en el proceso PADRE de prefork (`WorkController.
+    setup_instance`), ANTES del fork. `assert_rls_capable_role` abre una
+    conexion con `bind.connect()` y al salir del `async with` esa conexion
+    vuelve al QueuePool del engine global. Cada hijo forkeado hereda ese
+    registro -mismo descriptor, atado al event loop del padre-, asi que la
+    primera tarea que la saque del pool muere con "attached to a different
+    loop" / "Event loop is closed": exactamente el bug que documenta
+    `core/worker_loop.py` y que ese modulo existe para evitar. `pool_pre_ping`
+    no salva, porque el ping tambien corre sobre la conexion prestada.
+
+    Por eso el padre desecha el pool apenas termina de verificar.
+    """
+    motor = _FakeEngine((False, False))
+    monkeypatch.setattr(celery_app, "SETTINGS_BOOT_ERROR", None)
+    monkeypatch.setattr(celery_app, "engine", motor)
+
+    celery_app._start_worker_process()
+
+    assert motor.dispose_count == 1
+
+
+def test_el_pool_se_desecha_tambien_cuando_el_rol_esta_mal(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """El proceso muere igual, pero no deja el pool sucio para nadie."""
+    motor = _FakeEngine((False, True))
+    monkeypatch.setattr(celery_app, "SETTINGS_BOOT_ERROR", None)
+    monkeypatch.setattr(celery_app, "engine", motor)
+
+    with pytest.raises(SystemExit, match="BYPASSRLS"):
+        celery_app._start_worker_process()
+
+    assert motor.dispose_count == 1
+
+
+def test_un_dispose_que_falla_no_tapa_el_motivo_real(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """El mensaje del abort es el del rol, no el del cierre del pool.
+
+    Si el `finally` levantara, el operador leeria un error de pool y no "el rol
+    puede saltar RLS", que es lo unico accionable.
+    """
+
+    class _MotorConDisposeRoto(_FakeEngine):
+        async def dispose(self) -> None:
+            raise OSError("no se pudo cerrar el pool")
+
+    monkeypatch.setattr(celery_app, "SETTINGS_BOOT_ERROR", None)
+    monkeypatch.setattr(celery_app, "engine", _MotorConDisposeRoto((True, False)))
+
+    with pytest.raises(SystemExit, match="superusuario"):
+        celery_app._start_worker_process()
+
+
+def test_con_settings_de_respaldo_ni_se_desecha_nada(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Regla 21 primero: si no se abrio el pool, no hay nada que cerrar."""
+    motor = _UnreachableEngine()
+    monkeypatch.setattr(celery_app, "SETTINGS_BOOT_ERROR", "SECRET_KEY placeholder")
+    monkeypatch.setattr(celery_app, "engine", motor)
+
+    with pytest.raises(SystemExit, match="SECRET_KEY placeholder"):
+        celery_app._start_worker_process()
+
+    assert motor.dispose_count == 0

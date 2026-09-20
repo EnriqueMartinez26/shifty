@@ -60,6 +60,16 @@ def _abort_if_role_can_bypass_rls() -> None:
     no responde dejarian al proceso "ready" sin haber verificado nada. Cuesta
     una conexion durante ``worker_init``, que es el precio de la garantia que
     CLAUDE.md §2 dice tener.
+
+    Y el pool se desecha ANTES de devolver. ``worker_init`` corre en el proceso
+    PADRE de prefork (``WorkController.setup_instance``), antes del fork: la
+    conexion que abre el chequeo vuelve al QueuePool del engine global y cada
+    hijo hereda ese registro -mismo descriptor, atado al event loop del
+    padre-, asi que la primera tarea que la saque del pool muere con "attached
+    to a different loop" / "Event loop is closed". Es el bug que documenta
+    ``core/worker_loop.py`` y que ese modulo existe para evitar; ``pool_pre_ping``
+    no lo detecta porque el ping corre sobre la misma conexion prestada. Beat no
+    forkea, pero desechar un pool recien usado no le cuesta nada.
     """
     try:
         run_in_worker_loop(assert_rls_capable_role(engine))
@@ -68,6 +78,22 @@ def _abort_if_role_can_bypass_rls() -> None:
     except BaseException as exc:
         logger.critical("Celery no arranca, no se pudo verificar el rol: %s", exc)
         raise SystemExit(f"Celery no arranca, no se pudo verificar el rol: {exc}")
+    finally:
+        _dispose_pool_before_fork()
+
+
+def _dispose_pool_before_fork() -> None:
+    """Deja el pool del padre vacio; un fallo al cerrarlo no tapa el motivo.
+
+    Si esto levantara, el operador leeria un error de pool en vez de "el rol
+    puede saltar RLS", que es lo unico accionable.
+    """
+    try:
+        run_in_worker_loop(engine.dispose())
+    except BaseException:
+        logger.warning(
+            "No se pudo desechar el pool tras verificar el rol", exc_info=True
+        )
 
 
 def _abort_if_settings_are_fallback() -> None:
