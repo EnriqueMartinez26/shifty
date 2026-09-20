@@ -42,7 +42,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
     setError('')
     if (continuarSiYaVerificado()) return
     if (!form.email.trim()) {
-      setError('Ingresá el email donde querés recibir el código')
+      setError('Ingresá tu email para poder buscarte')
       return
     }
     try {
@@ -87,8 +87,12 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
           >
             Mis turnos
           </h2>
+          {/* El código va al email registrado en el negocio, no al que se
+              tipee acá: quien pide el código no elige el buzón (2026-09-20).
+              Acá el cliente SIEMPRE tiene ficha, así que el campo de email es
+              solo el respaldo del contrato de la API. */}
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Poné tu teléfono y te mandamos un código por email para ver tus turnos.
+            Poné tu teléfono y te mandamos un código al email que tenés registrado en el negocio.
           </p>
         </div>
       </div>
@@ -112,7 +116,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             placeholder="tu@email.com"
-            aria-label="Email para recibir el código"
+            aria-label="Tu email"
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
             style={createBookingInputStyle()}
           />

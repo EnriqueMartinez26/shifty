@@ -40,7 +40,7 @@ const turno = {
 
 const entrar = async () => {
   fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
-  fireEvent.change(screen.getByLabelText('Email para recibir el código'), {
+  fireEvent.change(screen.getByLabelText('Tu email'), {
     target: { value: 'yo@example.com' }
   })
   fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
