@@ -12,6 +12,7 @@ from core.exceptions import (
     UserNotFoundException,
 )
 from core.validation import PUBLIC_ID_PATTERN
+from modules.audit.public_id import opaque_audit_log_id
 from modules.auth.dependencies import get_current_global_admin
 from modules.superadmin.repository import SuperAdminRepository
 from modules.superadmin.schemas import (
@@ -211,7 +212,9 @@ async def list_store_audit_logs(
     logs = await repo.stores.list_store_audit_logs(store, limit)
     return [
         AuditLogResponse(
-            public_id=str(log.id),
+            # Opaco, no el autoincremental global (AUD2-B3-14): el entero
+            # contaba las acciones de toda la plataforma.
+            public_id=opaque_audit_log_id(log.id),
             created_at=log.created_at,
             actor_email=log.actor_email,
             resource_type=log.resource_type,
