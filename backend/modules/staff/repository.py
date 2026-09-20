@@ -1,9 +1,10 @@
 from datetime import time
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql import Select
 
 from core.security import hash_password
 from modules.services.model import Service
@@ -15,6 +16,24 @@ from modules.staff.model import Schedule, Staff
 from modules.auth.service import revoke_sessions_for_user
 from modules.users.model import User, UserRole
 import ulid
+
+
+def _visible_para_el_panel(
+    query: Select[tuple[Staff]], include_global_admins: bool
+) -> Select[tuple[Staff]]:
+    """Esconde al profesional cuya cuenta de login es superadmin.
+
+    Misma regla que ``UserRepository`` (S-15): para un admin de tienda la
+    cuenta global no existe, y eso vale tambien para las lecturas de
+    ``/staff/`` (AUD2-B3-11). Sin esto el panel listaba con su email a un
+    profesional ascendido a superadmin mientras ``GET /users/`` lo ocultaba
+    y ``PUT /staff/{id}`` sobre el daba 404. Un recurso (cancha, sala) no
+    tiene usuario y nunca cae en el filtro.
+    """
+    if include_global_admins:
+        return query
+    es_global = exists().where(User.id == Staff.id, User.is_global_admin.is_(True))
+    return query.where(~es_global)
 
 
 class StaffRepository:
@@ -112,8 +131,10 @@ class StaffRepository:
         await self.db.flush()
         return new_staff
 
-    async def get_all(self, store_id: str) -> list[Staff]:
-        result = await self.db.execute(
+    async def get_all(
+        self, store_id: str, *, include_global_admins: bool = False
+    ) -> list[Staff]:
+        query = (
             select(Staff)
             .where(
                 Staff.store_id == store_id,
@@ -124,6 +145,9 @@ class StaffRepository:
                 selectinload(Staff.services),
             )
         )
+        result = await self.db.execute(
+            _visible_para_el_panel(query, include_global_admins)
+        )
         staff_members = list(result.scalars().all())
         # ``services`` ya viene cargado por selectinload en una sola query.
         # Antes esto re-consultaba por cada miembro (N+1); ahora se filtra en
@@ -132,8 +156,10 @@ class StaffRepository:
             member.services = [s for s in member.services if s.is_active]
         return staff_members
 
-    async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:
-        result = await self.db.execute(
+    async def get_by_id(
+        self, public_id: str, store_id: str, *, include_global_admins: bool = False
+    ) -> Staff | None:
+        query = (
             select(Staff)
             .where(
                 Staff.id == public_id,
@@ -143,6 +169,9 @@ class StaffRepository:
                 selectinload(Staff.schedules),
                 selectinload(Staff.services),
             )
+        )
+        result = await self.db.execute(
+            _visible_para_el_panel(query, include_global_admins)
         )
         member = result.scalar_one_or_none()
         if member:

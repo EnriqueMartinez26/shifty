@@ -51,7 +51,11 @@ async def create_staff(
         created = await service.create(
             data.model_dump(exclude={"service_ids"}), admin.store_id, data.service_ids
         )
-        loaded = await repo.get_by_id(created.public_id, admin.store_id)
+        loaded = await repo.get_by_id(
+            created.public_id,
+            admin.store_id,
+            include_global_admins=admin.is_global_admin,
+        )
         if not loaded:
             raise AppException(
                 message="No se pudo recargar el staff creado",
@@ -68,7 +72,11 @@ async def list_staff(
     user: User = Depends(get_current_staff), db: AsyncSession = Depends(get_db)
 ) -> list[StaffResponse]:
     repo = StaffRepository(db)
-    members = await repo.get_all(user.store_id)
+    # La cuenta global no existe para el panel de la tienda, tampoco en las
+    # lecturas (S-15, AUD2-B3-11); solo el superadmin la ve.
+    members = await repo.get_all(
+        user.store_id, include_global_admins=user.is_global_admin
+    )
     return [to_staff_response(member) for member in members]
 
 
@@ -79,7 +87,9 @@ async def get_staff(
     db: AsyncSession = Depends(get_db),
 ) -> StaffResponse:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, user.store_id)
+    staff = await repo.get_by_id(
+        public_id, user.store_id, include_global_admins=user.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
     return to_staff_response(staff)
@@ -94,7 +104,9 @@ async def add_staff_schedule(
     redis: Redis = Depends(get_redis),
 ) -> ScheduleResponse:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
@@ -118,7 +130,9 @@ async def update_staff_schedule(
 ) -> ScheduleResponse:
     """Corrige una franja horaria mal cargada."""
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
@@ -151,7 +165,9 @@ async def delete_staff_schedule(
     reservables que la tienda no podia atender.
     """
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
@@ -175,7 +191,9 @@ async def update_staff_services(
     redis: Redis = Depends(get_redis),
 ) -> dict[str, str]:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
@@ -220,7 +238,9 @@ async def update_staff(
     redis: Redis = Depends(get_redis),
 ) -> StaffResponse:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
     await _guardar_cuenta_vinculada(
@@ -240,7 +260,9 @@ async def update_staff(
     except ValueError as exc:
         raise ValidationException(str(exc))
 
-    loaded = await repo.get_by_id(updated.public_id, admin.store_id)
+    loaded = await repo.get_by_id(
+        updated.public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not loaded:
         raise AppException(
             message="No se pudo recargar el staff actualizado",
@@ -258,7 +280,9 @@ async def delete_staff(
     redis: Redis = Depends(get_redis),
 ) -> Response:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
     # La baja desactiva la cuenta de login vinculada.
