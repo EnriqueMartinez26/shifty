@@ -5,6 +5,7 @@ from fastapi import Depends, File, Form, Path, UploadFile
 from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db, tenant_bypass
@@ -107,15 +108,19 @@ async def update_my_store(
     store = await _get_current_store(user, db)
     update_data = data.model_dump(exclude_unset=True)
 
-    slug = update_data.get("slug")
-    if isinstance(slug, str) and slug != store.slug:
-        slug_check = await db.execute(select(Store).where(Store.slug == slug))
-        if slug_check.scalar_one_or_none():
-            raise AppException(
-                "El slug ya est? en uso",
-                http_status=400,
-                error_code="SLUG_ALREADY_IN_USE",
-            )
+    # El slug duplicado lo decide el UNIQUE de `stores.slug` (model.py), no un
+    # pre-chequeo (AUD2-B3-15). El que habia corria con el contexto de tenant
+    # del admin y `stores_rls_policy` restringe la tabla a la tienda propia:
+    # en Postgres NUNCA veia el slug de otra tienda, asi que su 400 era
+    # inalcanzable y lo que salia igual era el 409 neutro del IntegrityError.
+    # Solo se disparaba en SQLite, donde no hay RLS. El handler de `main.py` ya
+    # documenta ese caso ("bajo RLS a veces ni siquiera ve la fila en
+    # conflicto") y responde 409 sin nombrar la fila (regla 20). Con el bloque
+    # se fue tambien su mensaje, que tenia un "?" donde iba una vocal con
+    # tilde. No se uso `tenant_bypass` para conservar el mensaje amable porque
+    # al salir reaplica (None, False) a la conexion y no el contexto previo:
+    # el UPDATE posterior de esta misma request quedaria sin tenant y RLS lo
+    # rechazaria, algo que ningun test en SQLite podria ver.
 
     # Contracara de la validacion en feature-flags: si los cobros ya estan
     # activos, vaciar la politica dejaria al cliente aceptando un texto que ya
@@ -156,7 +161,18 @@ async def update_my_store(
         setattr(store, key, value)
 
     _replace_business_hours(store, business_hours)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Mismo patron que `UserService.create`: rollback y re-raise para que el
+        # handler global responda 409 neutro con la SESION SANA. Sin el
+        # rollback, la sesion queda en `PendingRollbackError` y cualquier
+        # consulta posterior de la misma request revienta con un error que no
+        # tiene nada que ver (AUD2-B3-15). Este router es dueno de su
+        # transaccion por deuda declarada de CLAUDE.md; migrarlo a un service
+        # es otro trabajo, pero la sesion tiene que quedar usable igual.
+        await db.rollback()
+        raise
     await db.refresh(store)
     return to_store_response(store)
 
