@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple, cast
 
-from sqlalchemy import ColumnElement, Select, Subquery, and_, case, func, select
+from sqlalchemy import ColumnElement, Select, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -484,25 +484,25 @@ class ReportService:
             result.all(),
         )
 
-    def _paid_by_appointment(self) -> Subquery:
-        """Plata acreditada por turno, agregada en la base.
+    def _accredited_payment_join(self) -> ColumnElement[bool]:
+        """Condicion de join a ``payments``: el pago acreditado de ese turno.
 
-        ``GROUP BY appointment_id`` + ``SUM(amount)`` sobre los pagos aprobados
-        o confirmados a mano, acotado a la tienda. Es el bloque que usan el
-        ingreso total, los top-5 y el ingreso por profesional: al proceso nunca
-        vuelve una fila por pago (regla 11; antes se sumaba en un defaultdict).
+        AUD2-B5-08: antes esto era una subconsulta ``GROUP BY appointment_id``
+        sobre TODOS los pagos de la tienda, sin cota de fecha, construida de
+        nuevo en cada una de las cuatro consultas de plata del resumen.
+        Postgres no puede empujar el predicado de rango adentro de ese
+        ``GROUP BY``, asi que el agregado se materializaba entero y el reporte
+        de "los ultimos 7 dias" se volvia mas lento cada mes aunque el rango no
+        cambiara. ``uq_payments_store_appointment`` garantiza a lo sumo UN pago
+        por turno y por tienda, asi que el ``SUM`` no aportaba nada que el join
+        directo no de: ahora el predicado de rango queda del lado de
+        ``appointments`` y el plan usa el indice de ``appointment_id``.
+        El ``store_id`` va igual, por defensa en profundidad (CLAUDE.md §2).
         """
-        return (
-            select(
-                Payment.appointment_id.label("appointment_id"),
-                func.sum(Payment.amount).label("paid"),
-            )
-            .where(
-                Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
-                *self._store_scope(Payment.store_id),
-            )
-            .group_by(Payment.appointment_id)
-            .subquery()
+        return and_(
+            Payment.appointment_id == Appointment.id,
+            Payment.status.in_(ACCREDITED_PAYMENT_STATUSES),
+            *self._store_scope(Payment.store_id),
         )
 
     async def _accredited_revenue(
@@ -516,15 +516,14 @@ class ReportService:
         el numerador, o sea los turnos con pago acreditado. El join a ``paid``
         es interno, asi que cada fila contada es un turno cobrado.
         """
-        paid = self._paid_by_appointment()
         result = await self.db.execute(
             self._select_in_range(
-                func.coalesce(func.sum(paid.c.paid), 0),
-                func.count(paid.c.appointment_id),
+                func.coalesce(func.sum(Payment.amount), 0),
+                func.count(Payment.id),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
-            ).join(paid, paid.c.appointment_id == Appointment.id)
+            ).join(Payment, self._accredited_payment_join())
         )
         total, cobrados = result.one()
         return _AccreditedRevenue(Decimal(str(total or 0)), int(cobrados or 0))
@@ -542,15 +541,14 @@ class ReportService:
         en la base (regla 11), con el mismo conjunto de filas y la misma tienda
         que el total.
         """
-        paid = self._paid_by_appointment()
         result = await self.db.execute(
             self._select_in_range(
-                func.coalesce(func.sum(paid.c.paid), 0),
+                func.coalesce(func.sum(Payment.amount), 0),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .join(paid, paid.c.appointment_id == Appointment.id)
+            .join(Payment, self._accredited_payment_join())
             .where(Appointment.status.in_(_NOT_SERVED_STATUSES))
         )
         return Decimal(str(result.scalar_one() or 0))
@@ -559,16 +557,15 @@ class ReportService:
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> dict[str, Decimal]:
         """Ingreso cobrado por profesional: una fila por staff, no por pago."""
-        paid = self._paid_by_appointment()
         result = await self.db.execute(
             self._select_in_range(
                 Appointment.staff_id,
-                func.coalesce(func.sum(paid.c.paid), 0),
+                func.coalesce(func.sum(Payment.amount), 0),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .join(paid, paid.c.appointment_id == Appointment.id)
+            .join(Payment, self._accredited_payment_join())
             .group_by(Appointment.staff_id)
         )
         return {
@@ -586,12 +583,11 @@ class ReportService:
         ``total_revenue - retained_deposit_revenue``, que es donde vive esa
         identidad (AUD2-B5-05).
         """
-        paid = self._paid_by_appointment()
         turnos = func.count(Appointment.id)
         completados = func.sum(
             case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
         )
-        ingreso = func.coalesce(func.sum(paid.c.paid), 0)
+        ingreso = func.coalesce(func.sum(Payment.amount), 0)
         result = await self.db.execute(
             self._select_in_range(
                 Service.public_id,
@@ -603,7 +599,7 @@ class ReportService:
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .outerjoin(paid, paid.c.appointment_id == Appointment.id)
+            .outerjoin(Payment, self._accredited_payment_join())
             .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(Service.id, Service.public_id, Service.name)
             # Mismo desempate que el orden anterior en Python (estable sobre
@@ -630,12 +626,11 @@ class ReportService:
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> list[ReportTopClientItem]:
         """Top-5 de clientes por turnos e ingreso: GROUP BY + ORDER BY + LIMIT."""
-        paid = self._paid_by_appointment()
         turnos = func.count(Appointment.id)
         completados = func.sum(
             case((Appointment.status == AppointmentStatus.COMPLETED.value, 1), else_=0)
         )
-        ingreso = func.coalesce(func.sum(paid.c.paid), 0)
+        ingreso = func.coalesce(func.sum(Payment.amount), 0)
         result = await self.db.execute(
             self._select_in_range(
                 Appointment.client_id,
@@ -650,7 +645,7 @@ class ReportService:
                 end_dt=end_dt,
                 staff_id=staff_id,
             )
-            .outerjoin(paid, paid.c.appointment_id == Appointment.id)
+            .outerjoin(Payment, self._accredited_payment_join())
             .where(Appointment.status.not_in(_NOT_SERVED_STATUSES))
             .group_by(
                 Appointment.client_id, User.first_name, User.last_name, User.email

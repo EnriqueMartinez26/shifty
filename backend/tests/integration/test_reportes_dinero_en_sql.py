@@ -223,3 +223,10 @@ async def test_el_dinero_del_reporte_se_agrega_en_sql(
     assert any("appointments" in s for s in sentencias_resumen), "consulta turnos"
     sueltas = _sin_tope(sentencias_resumen, TABLAS_DEL_RESUMEN)
     assert sueltas == [], f"el resumen barre el rango: {sueltas}"
+    # AUD2-B5-08: y el agregado de pagos no puede ser una subconsulta sobre
+    # TODA la historia de la tienda. Sin cota de fecha adentro del GROUP BY,
+    # Postgres no puede empujar el predicado de rango y materializa el
+    # agregado entero: el reporte de "los ultimos 7 dias" se vuelve mas lento
+    # cada mes aunque el rango no cambie.
+    historicas = [s for s in sentencias_resumen if "group by payments." in s]
+    assert historicas == [], f"agregado de pagos sin cota de rango: {historicas}"
