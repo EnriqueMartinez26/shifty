@@ -64,14 +64,16 @@ async def test_el_lote_pide_a_lo_sumo_el_tope_de_filas(
     _preparar(monkeypatch, _filas_vencidas(now, 3))
 
     await notification_tasks.process_due_appointment_reminders(now=now)
-    assert _FakeRepo.limits == [notification_tasks.REMINDER_BATCH_LIMIT]
+    # AUD2-B4-04: una consulta POR ETAPA, cada una con su propio tope, para
+    # que los turnos de 2 h no le coman el lote a los de 24 h.
+    assert _FakeRepo.limits == [notification_tasks.REMINDER_BATCH_LIMIT] * 2
     assert notification_tasks.REMINDER_BATCH_LIMIT >= 1
 
     _preparar(monkeypatch, _filas_vencidas(now, 3))
     result = await notification_tasks.process_due_appointment_reminders(
         now=now, limit=2
     )
-    assert _FakeRepo.limits == [2]
+    assert _FakeRepo.limits == [2, 2]
     assert result["published"] == 2
     assert len(_FakeRepo.claims) == 2
 

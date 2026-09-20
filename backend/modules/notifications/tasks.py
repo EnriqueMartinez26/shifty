@@ -7,6 +7,7 @@ import smtplib
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from typing import Any, cast
@@ -22,7 +23,12 @@ from core.database import (
     _apply_tenant_context,
     set_tenant_context,
 )
-from modules.notifications.reminders import ReminderStage, due_stages
+from modules.notifications.reminders import (
+    STAGE_2H,
+    STAGE_24H,
+    ReminderStage,
+    due_stages,
+)
 
 logger = structlog.get_logger()
 
@@ -767,6 +773,95 @@ async def _dispatch_reminder(
     return result.get("status") == "sent"
 
 
+@dataclass(frozen=True)
+class _ReminderWindow:
+    """Ventana de UNA etapa: el tope corta sobre filas que hay que mandar.
+
+    AUD2-B4-04 (2026-09-20): antes habia una sola consulta de 48 h con el
+    predicado "reminder_24h_sent_at IS NULL OR reminder_2h_sent_at IS NULL"
+    -o sea, casi todos los turnos-, ordenada por ``starts_at`` y cortada en
+    ``limit``. Los primeros del orden son los mas proximos, asi que con
+    ``limit`` turnos empezando dentro de las proximas horas los que estaban a
+    24 h no entraban nunca al lote; cuando entraban ya les faltaban menos de
+    3 h y el piso de la etapa (``_PISO_24H``) los descartaba. El cliente
+    dejaba de recibir el aviso de 24 h sin un solo error en el camino.
+    """
+
+    stage: ReminderStage
+    starts_after: datetime
+    starts_before: datetime
+
+
+@dataclass
+class _ReminderTotals:
+    """Contadores compartidos por las ventanas de una corrida."""
+
+    published: int = 0
+    skipped: int = 0
+    unexamined: int = 0
+    batch_full: bool = False
+    windows: list[str] = field(default_factory=list)
+
+
+def _reminder_windows(now: datetime, lookahead_hours: int) -> list[_ReminderWindow]:
+    """Una ventana por etapa, la mas urgente primero.
+
+    Cada etapa se pide por separado para que su ``limit`` sea suyo y ninguna
+    le coma el lugar a la otra. ``lookahead_hours`` queda solo como cota
+    superior. Los extremos exactos los sigue decidiendo ``stage_is_due``: la
+    ventana pide de mas (un minuto de margen) y nunca de menos.
+    """
+    tope = now + timedelta(hours=lookahead_hours)
+    margen = timedelta(minutes=1)
+    ventanas = []
+    for stage in (STAGE_2H, STAGE_24H):
+        starts_after = now + stage.floor
+        starts_before = min(now + stage.lead + margen, tope)
+        if starts_after < starts_before:
+            ventanas.append(_ReminderWindow(stage, starts_after, starts_before))
+    return ventanas
+
+
+async def _process_reminder_window(
+    repo: Any,
+    ventana: _ReminderWindow,
+    rows: list[tuple[Any, Any, Any, Any, Any]],
+    now: datetime,
+    smtp: SmtpSession,
+    deadline: float,
+    totales: _ReminderTotals,
+) -> bool:
+    """Manda la etapa de esta ventana. False si se agoto el presupuesto.
+
+    El ciclo por turno de B4-02 no cambia: presupuesto -> reclamo -> envio ->
+    liberacion ante fallo.
+    """
+    for index, row in enumerate(rows):
+        if time.monotonic() >= deadline:
+            # Presupuesto agotado: no se reclama ni uno mas. Los que quedan
+            # siguen en NULL y salen en el proximo tick.
+            totales.unexamined += len(rows) - index
+            logger.warning(
+                "reminders_time_budget_exhausted",
+                stage=ventana.stage.name,
+                unexamined=totales.unexamined,
+                published=totales.published,
+                budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
+            )
+            return False
+        appointment, _service, _staff, _client, store = row
+        if ventana.stage not in due_stages(appointment, now):
+            continue
+        # Se cuenta salteado el turno al que le tocaba un aviso, no cada fila
+        # que trajo la ventana.
+        if not getattr(store, "send_email_reminders", True):
+            totales.skipped += 1
+            continue
+        if await _dispatch_reminder(repo, row, ventana.stage, now, smtp):
+            totales.published += 1
+    return True
+
+
 async def process_due_appointment_reminders(
     *,
     now: datetime | None = None,
@@ -774,18 +869,13 @@ async def process_due_appointment_reminders(
     limit: int = REMINDER_BATCH_LIMIT,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    window_start = now
-    window_end = now + timedelta(hours=lookahead_hours)
     # Reloj monotonico y no ``now``: ``now`` es la hora logica del lote
     # (inyectable en tests) y el presupuesto es tiempo real de proceso.
     deadline = time.monotonic() + REMINDER_TIME_BUDGET_SECONDS
 
     from modules.appointments.repository import AppointmentRepository
 
-    published = 0
-    skipped = 0
-    unexamined = 0
-    batch_full = False
+    totales = _ReminderTotals()
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
         # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
@@ -795,54 +885,42 @@ async def process_due_appointment_reminders(
         try:
             await _apply_tenant_context(db)
             repo = AppointmentRepository(db)
-            rows = await repo.get_upcoming_for_reminders(
-                starts_after=window_start,
-                starts_before=window_end,
-                limit=limit,
-            )
-            # Lote lleno: puede haber mas turnos pendientes afuera del tope.
-            batch_full = len(rows) >= limit
-            # B4-08: una sola conexion SMTP para todo el lote. El ciclo por
-            # turno de B4-02 no cambia (presupuesto -> reclamo -> envio ->
-            # liberacion ante fallo); solo el envio reusa la conexion.
+            # B4-08: una sola conexion SMTP para todo el lote.
             async with smtp_session() as smtp:
-                for index, row in enumerate(rows):
-                    if time.monotonic() >= deadline:
-                        # Presupuesto agotado: no se reclama ni uno mas. Los que
-                        # quedan siguen en NULL y salen en el proximo tick.
-                        unexamined = len(rows) - index
-                        logger.warning(
-                            "reminders_time_budget_exhausted",
-                            unexamined=unexamined,
-                            published=published,
-                            budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
-                        )
+                for ventana in _reminder_windows(now, lookahead_hours):
+                    rows = await repo.get_upcoming_for_reminders(
+                        starts_after=ventana.starts_after,
+                        starts_before=ventana.starts_before,
+                        limit=limit,
+                    )
+                    totales.windows.append(ventana.stage.name)
+                    # Ventana llena: puede haber mas turnos afuera del tope.
+                    totales.batch_full = totales.batch_full or len(rows) >= limit
+                    if not await _process_reminder_window(
+                        repo, ventana, rows, now, smtp, deadline, totales
+                    ):
                         break
-                    appointment, _service, _staff, _client, store = row
-                    if not getattr(store, "send_email_reminders", True):
-                        skipped += 1
-                        continue
-                    for stage in due_stages(appointment, now):
-                        if await _dispatch_reminder(repo, row, stage, now, smtp):
-                            published += 1
         finally:
             set_tenant_context(None, False)
 
+    window_start = now
+    window_end = now + timedelta(hours=lookahead_hours)
     logger.info(
         "reminders_processed",
-        published=published,
-        skipped=skipped,
-        unexamined=unexamined,
-        batch_full=batch_full,
+        published=totales.published,
+        skipped=totales.skipped,
+        unexamined=totales.unexamined,
+        batch_full=totales.batch_full,
+        stages=totales.windows,
         window_start=window_start.isoformat(),
         window_end=window_end.isoformat(),
     )
     return {
         "status": "processed",
-        "published": published,
-        "skipped": skipped,
-        "unexamined": unexamined,
-        "batch_full": batch_full,
+        "published": totales.published,
+        "skipped": totales.skipped,
+        "unexamined": totales.unexamined,
+        "batch_full": totales.batch_full,
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
     }

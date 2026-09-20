@@ -122,7 +122,8 @@ async def test_el_resultado_informa_filas_sin_revisar_y_lote_lleno(
     assert result["unexamined"] == 2
     assert result["batch_full"] is True
     assert "deferred" not in result
-    assert _FakeRepo.limits == [4]
+    # Una consulta por etapa desde AUD2-B4-04, cada una con el mismo tope.
+    assert _FakeRepo.limits == [4, 4]
 
     # Sin presion de tiempo y con lugar de sobra: nada sin revisar ni lote lleno.
     _preparar(monkeypatch, _filas_vencidas(now, 3))
