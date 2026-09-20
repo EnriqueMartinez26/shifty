@@ -205,3 +205,36 @@ async def test_una_carrera_no_se_relevanta_ni_ensucia_el_log(
 
     assert res.status_code == 409, res.text
     assert errores == []
+
+
+@pytest.mark.asyncio
+async def test_el_error_de_base_se_loguea_UNA_sola_vez(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-B7-01, seguimiento (2026-09-20): `db_error` salia duplicado.
+
+    Sintoma: con Starlette 1.0 el handler de una clase concreta se invoca DOS
+    veces cuando re-levanta -una en el envoltorio de la ruta y otra en
+    `ExceptionMiddleware`-, asi que cada error de base dejaba dos `db_error`
+    con traceback completo. Dos trazas identicas del mismo hecho hacen creer
+    que fallo dos veces y duplican el ruido en el log del contenedor, justo en
+    la clase de error que AUD2-B7-01 hizo visible para poder investigarla.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "db-error-una-vez")
+    error = OperationalError("SELECT 1", {}, _ErrorDelDriver("42501"))
+    monkeypatch.setattr(PublicBookingService, "book", _que_falle_con(error))
+
+    eventos: list[str] = []
+    monkeypatch.setattr(
+        main.logger, "error", lambda evento, **kw: eventos.append(evento)
+    )
+
+    transporte = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transporte, base_url="http://test") as sin_reraise:
+        res = await sin_reraise.post(
+            "/public/appointments", json=_reserva(t, "db-error-una-vez-01")
+        )
+
+    assert res.status_code == 500, res.text
+    assert eventos.count("db_error") == 1, eventos

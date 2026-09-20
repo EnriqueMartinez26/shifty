@@ -302,6 +302,14 @@ async def stale_data_exception_handler(
 _CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001", "55P03"})
 
 
+# Marca en la propia excepcion de que su `db_error` ya se escribio. Starlette
+# 1.0 invoca el handler de una clase concreta DOS veces cuando re-levanta -una
+# en el envoltorio de la ruta y otra en `ExceptionMiddleware`-, asi que sin
+# esto cada error de base dejaba dos trazas identicas y parecia haber fallado
+# dos veces (AUD2-B7-01, seguimiento 2026-09-20).
+_ATRIBUTO_YA_LOGUEADO = "_shifty_db_error_logged"
+
+
 def _sqlstate(exc: DBAPIError) -> str | None:
     """SQLSTATE del error del driver (asyncpg: ``sqlstate``; psycopg: ``pgcode``)."""
     candidatos = [exc.orig, getattr(exc.orig, "__cause__", None)]
@@ -333,6 +341,10 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
     `status_code` (AUD2-B7-01, 2026-09-19). Al subir, la atiende
     `ServerErrorMiddleware` como cualquier otra excepcion: mismo 500 neutro,
     traceback y captura, igual que antes de S-18.
+
+    Al re-levantar, Starlette 1.0 vuelve a invocar este handler (envoltorio de
+    la ruta y despues `ExceptionMiddleware`), asi que el log lleva marca en la
+    excepcion para escribirse una sola vez.
     """
     sqlstate = _sqlstate(exc)
     if sqlstate in _CONCURRENCY_SQLSTATES:
@@ -343,14 +355,18 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
             sqlstate=sqlstate,
         )
         return _concurrent_modification_response()
-    logger.error(
-        "db_error",
-        path=str(request.url.path),
-        method=request.method,
-        error_type=type(exc).__name__,
-        sqlstate=sqlstate,
-        exc_info=True,
-    )
+    if not getattr(exc, _ATRIBUTO_YA_LOGUEADO, False):
+        # El `setattr` va ANTES del log: si el logger fallara, la segunda
+        # invocacion tampoco tiene que escribir.
+        setattr(exc, _ATRIBUTO_YA_LOGUEADO, True)
+        logger.error(
+            "db_error",
+            path=str(request.url.path),
+            method=request.method,
+            error_type=type(exc).__name__,
+            sqlstate=sqlstate,
+            exc_info=True,
+        )
     raise exc
 
 
