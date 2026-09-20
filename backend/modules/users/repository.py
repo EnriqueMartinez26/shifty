@@ -11,6 +11,15 @@ from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User
 
 
+def _valor_de_rol(dato: object) -> str | None:
+    """El rol como cadena, venga como ``UserRole`` o como ``str`` de la base.
+
+    Misma lectura que ``core.roles``: la columna es ``String`` y el payload
+    puede traer el enum, asi que la comparacion se hace sobre el valor.
+    """
+    return None if dato is None else str(getattr(dato, "value", dato))
+
+
 class UserRepository:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -91,6 +100,11 @@ class UserRepository:
         """Edicion sin commit (lo hace UserService)."""
         payload = data.copy()
         password = payload.pop("password", None)
+        # El rol vigente ANTES del patch: el formulario del panel reenvia el
+        # ``role`` actual en cada edicion, asi que "vino un rol" no significa
+        # "cambio el rol" (AUD2-B3-09).
+        rol_pedido = _valor_de_rol(payload.get("role"))
+        rol_anterior = _valor_de_rol(user.role)
 
         # El router manda solo lo que vino (``exclude_unset``) y ``apply_patch``
         # distingue "vino null" de "no vino": un null borra si la columna admite
@@ -107,12 +121,12 @@ class UserRepository:
 
         # Una desactivacion, un cambio de rol o una clave impuesta por el admin
         # deben cortar las sesiones vivas: sin esto, los refresh tokens del
-        # usuario siguen operando 30 dias con los permisos viejos.
-        if (
-            payload.get("is_active") is False
-            or payload.get("role") is not None
-            or password
-        ):
+        # usuario siguen operando 30 dias con los permisos viejos (regla 15).
+        # Reenviar el MISMO rol no es un cambio y no revoca nada: la misma
+        # lectura que ya hacian ``assert_can_grant_role`` (con ``current``) y
+        # ``assert_can_change_access`` en ``core/roles.py``.
+        cambio_de_rol = rol_pedido is not None and rol_pedido != rol_anterior
+        if payload.get("is_active") is False or cambio_de_rol or password:
             await revoke_sessions_for_user(self.db, user.id)
 
         await self.db.flush()
