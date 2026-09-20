@@ -3,7 +3,9 @@
 Acceso puro a datos (CLAUDE.md §2): sin reglas de negocio ni commits. Cada
 consulta lleva el predicado ``store_id`` de la tienda del request aunque RLS
 ya filtre (defensa en profundidad, B5-01), tambien para el superadmin (B5-02).
-Los instantes se reciben aware en UTC y se comparan naive, como antes.
+Los instantes se reciben aware en UTC y se comparan aware: ``starts_at`` y
+``created_at`` son ``timestamptz``, y asyncpg codifica un naive como hora local
+DEL HOST (AUD2-B5-07). Es el mismo criterio que ``modules/reports`` (regla 24).
 """
 
 from __future__ import annotations
@@ -40,8 +42,8 @@ def _store_scope(
 
 def _starts_between(desde: datetime, hasta: datetime) -> list[ColumnElement[bool]]:
     return [
-        Appointment.starts_at >= desde.replace(tzinfo=None),
-        Appointment.starts_at < hasta.replace(tzinfo=None),
+        Appointment.starts_at >= desde,
+        Appointment.starts_at < hasta,
     ]
 
 
@@ -109,7 +111,7 @@ class DashboardRepository:
         result = await self.db.execute(
             select(func.count(User.id)).where(
                 User.role == UserRole.CLIENT.value,
-                User.created_at >= since.replace(tzinfo=None),
+                User.created_at >= since,
                 *_store_scope(self.store_id, User.store_id),
             )
         )
@@ -158,7 +160,7 @@ class DashboardRepository:
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
             .where(
-                Appointment.starts_at >= since.replace(tzinfo=None),
+                Appointment.starts_at >= since,
                 Appointment.status.in_(
                     [
                         AppointmentStatus.PENDING.value,
