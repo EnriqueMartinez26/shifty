@@ -732,7 +732,14 @@ async def _dispatch_reminder(
     try:
         result = await notify_client_reminder(
             phone=getattr(client, "phone", None),
-            email=getattr(client, "email", None),
+            # AUD2-B4-01 (2026-09-20): el email de ESTA reserva, como los
+            # otros cinco mails al cliente. El registro puede tener una
+            # direccion vieja (o una que el titular nunca dio: sin OTP,
+            # adopt_contact=False no la actualiza) y el recordatorio era el
+            # unico aviso que la usaba. Se cae al registro si el turno no
+            # trae email. El telefono sigue saliendo del registro.
+            email=getattr(appointment, "client_email", None)
+            or getattr(client, "email", None),
             details=details,
             smtp=smtp,
         )
