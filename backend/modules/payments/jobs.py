@@ -117,6 +117,62 @@ def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
     }
 
 
+async def _despachar_mails(
+    pendientes: list[tuple[PendingEmail, dict[str, str | None]]],
+) -> None:
+    """Manda los mails del lote, ya con la transaccion cerrada (B2-01).
+
+    Adentro de la transaccion quedarian bajo el ``FOR UPDATE SKIP LOCKED`` y,
+    si Celery mata la tarea antes del commit, la corrida siguiente reenviaria
+    lo ya enviado. Un SMTP caido no revierte nada ni marca el evento como
+    fallido: el aviso in-app, que es la fuente durable, ya quedo escrito.
+    """
+    for enviar, contexto in pendientes:
+        try:
+            await enviar()
+        except Exception as exc:
+            logger.warning(
+                "outbox_email_skipped", error_type=type(exc).__name__, **contexto
+            )
+
+
+async def _registrar_fallo(
+    db: AsyncSession, fila: OutboxMessage | WebhookInbox, exc: Exception
+) -> None:
+    """Suma el intento fallido, en su propio savepoint (AUD2-B2-11).
+
+    Los tres lotes envuelven cada item en ``except Exception`` y siguen. Eso
+    esta bien para un error de Mercado Pago, pero si la excepcion venia de la
+    BASE (``IntegrityError``, ``StaleDataError``, deadlock) la transaccion
+    quedaba abortada: cada iteracion siguiente fallaba, ``register_failure``
+    no se persistia y el ``db.commit()`` final reventaba. Se perdia el lote
+    entero, incluidos los items ya aplicados, y ``attempts`` no subia, asi que
+    el mismo lote se repetia cada minuto sin avanzar (regla 8, y el techo de
+    B2-12 deja de funcionar si ``attempts`` nunca se persiste). Por eso cada
+    item corre bajo ``begin_nested``.
+
+    Esta anotacion tiene que ser un savepoint y no una escritura suelta: lo que queda
+    pendiente en la transaccion externa lo termina volcando el ``flush`` del
+    savepoint del item SIGUIENTE, y si ese item falla se revierte tambien
+    este ``attempts``. Con savepoint propio, el intento queda firme apenas se
+    libera. Si ni siquiera eso se puede escribir, se registra y se sigue: el
+    lote no se pierde por no poder anotar un fallo.
+    """
+    try:
+        # Revertir el savepoint deja la fila EXPIRADA: ``register_failure``
+        # lee ``attempts`` y ese acceso perezoso, fuera de un await, revienta
+        # con ``MissingGreenlet``. Se relee explicitamente antes de tocarla.
+        await db.refresh(fila)
+        async with db.begin_nested():
+            fila.register_failure(str(exc))
+    except Exception:
+        logger.warning(
+            "batch_register_failure_skipped",
+            error_type=type(exc).__name__,
+            row_id=fila.id,
+        )
+
+
 async def _efectos_del_mensaje(
     db: AsyncSession, message: OutboxMessage, *, now: datetime
 ) -> list[PendingEmail]:
@@ -204,35 +260,29 @@ async def process_outbox_batch(
     now = datetime.now(timezone.utc)
     processed = 0
     failed = 0
-    # Ningun mail sale dentro del lote: el cuerpo del for solo persiste y
-    # acumula; todo se despacha despues del unico commit (2026-09-16, B2-01).
+    # Ningun mail sale dentro del lote: todo se despacha despues del unico
+    # commit (2026-09-16, B2-01).
     mails_pendientes: list[tuple[PendingEmail, dict[str, str | None]]] = []
 
     for message in messages:
         contexto = _contexto_del_mail(message)
         try:
-            mails_pendientes.extend(
-                (mail, contexto)
-                for mail in await _efectos_del_mensaje(db, message, now=now)
-            )
-            message.processed_at = now
-            message.error = None
-            processed += 1
+            # Savepoint por item (AUD2-B2-11, ver _registrar_fallo). El
+            # sellado va ADENTRO: lo tiene que volcar el flush de ESTE
+            # savepoint y no el del item siguiente, que puede revertirlo.
+            async with db.begin_nested():
+                mails = await _efectos_del_mensaje(db, message, now=now)
+                message.processed_at = now
+                message.error = None
         except Exception as exc:
-            message.register_failure(str(exc))
             failed += 1
+            await _registrar_fallo(db, message, exc)
+        else:
+            mails_pendientes.extend((mail, contexto) for mail in mails)
+            processed += 1
 
     await db.commit()
-    # Recien ahora, con la transaccion cerrada y processed_at persistido, se
-    # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
-    # como fallido ni duplica envios.
-    for enviar, contexto in mails_pendientes:
-        try:
-            await enviar()
-        except Exception as exc:
-            logger.warning(
-                "outbox_email_skipped", error_type=type(exc).__name__, **contexto
-            )
+    await _despachar_mails(mails_pendientes)
     # El paso propio de los vencimientos de MP: hasta MAX_CLAIMS llamadas de
     # WORST_CASE_PER_CLAIM cada una, que ``limit`` no acota. Unico paso que
     # sale a la red, y por eso el endpoint del panel lo apaga (AUD2-B2-07).
@@ -691,21 +741,32 @@ async def _process_webhook_inbox_batch(
             continue
         inspected += 1
         try:
-            applied = True
-            if inbox.provider == "mercadopago" and inbox.store_id:
-                inbox.payload = enriquecidos[inbox.id]
-                applied = await apply_mercadopago_webhook_payload(
-                    db, store_id=inbox.store_id, payload=inbox.payload, configs=configs
-                )
+            # Savepoint por item (AUD2-B2-11): ver el comentario del lote del
+            # outbox. Un fallo de base en un webhook no puede llevarse puestos
+            # los cobros que el resto del lote ya aplico.
+            async with db.begin_nested():
+                applied = True
+                if inbox.provider == "mercadopago" and inbox.store_id:
+                    inbox.payload = enriquecidos[inbox.id]
+                    applied = await apply_mercadopago_webhook_payload(
+                        db,
+                        store_id=inbox.store_id,
+                        payload=inbox.payload,
+                        configs=configs,
+                    )
+                if applied:
+                    inbox.mark_processed()
+        except Exception as exc:
+            failed += 1
+            await _registrar_fallo(db, inbox, exc)
+        else:
             if applied:
-                inbox.mark_processed()
                 processed += 1
             else:
-                inbox.register_failure("No se pudo resolver el pago del webhook")
                 failed += 1
-        except Exception as exc:
-            inbox.register_failure(str(exc))
-            failed += 1
+                await _registrar_fallo(
+                    db, inbox, RuntimeError("No se pudo resolver el pago del webhook")
+                )
 
     await db.commit()
     return {"processed": processed, "failed": failed, "inspected": inspected}
@@ -812,17 +873,23 @@ async def _reconcile_pending_payments(
         if not remote:
             continue
         try:
-            applied = await apply_mercadopago_webhook_payload(
-                db,
-                store_id=payment.store_id,
-                payload={"data": remote, "status": remote.get("status")},
-                configs=configs,
-            )
+            # Savepoint por cobro (AUD2-B2-11): "no frenar al resto del lote"
+            # no alcanzaba si la excepcion venia de la base, porque la
+            # transaccion quedaba abortada y los cobros ya conciliados se
+            # perdian en el commit final. Este lote no tiene attempts propio:
+            # el cobro sigue pendiente y lo toma la corrida siguiente.
+            async with db.begin_nested():
+                applied = await apply_mercadopago_webhook_payload(
+                    db,
+                    store_id=payment.store_id,
+                    payload={"data": remote, "status": remote.get("status")},
+                    configs=configs,
+                )
+        except Exception:
+            fallidos += 1
+        else:
             if applied:
                 reconciled += 1
-        except Exception:
-            # Un pago que no se puede conciliar no debe frenar al resto del lote.
-            fallidos += 1
 
     await db.commit()
     return {"reconciled": reconciled, "failed": fallidos, "inspected": inspected}
