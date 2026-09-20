@@ -161,6 +161,9 @@ services:
     # (AUD2-C-09; es el incidente de 2026-09-08). `inspect ping` pregunta por
     # ESTE worker: si no responde, el contenedor queda unhealthy. $$HOSTNAME
     # va escapado para que lo expanda el shell del contenedor y no compose.
+    # Lo que prueba el ping es que el proceso tiene control sobre el broker
+    # que resolvio, no que su configuracion sea la correcta: eso lo cubre la
+    # regla 21 (con settings de respaldo, Celery no arranca).
     healthcheck:
       test:
         [
@@ -200,11 +203,15 @@ services:
     # sigue agendando es que su archivo de schedule se siga sincronizando;
     # las tareas del beat corren cada minuto, asi que 15 minutos sin tocarlo
     # es que dejo de trabajar. La ventana es amplia a proposito.
+    # La ruta y el nombre salen de core/celery_app.py (beat_schedule_filename:
+    # tempfile.gettempdir() + "shifty-celerybeat-schedule"); el sufijo lo pone
+    # el backend de shelve, por eso el comodin. El contrato del compose lo
+    # verifica contra la config real.
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "find /app -maxdepth 1 -name 'celerybeat-schedule*' -newermt '-15 minutes' | grep -q .",
+          "find /tmp -maxdepth 1 -name 'shifty-celerybeat-schedule*' -newermt '-15 minutes' | grep -q .",
         ]
       interval: 300s
       timeout: 15s

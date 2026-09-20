@@ -211,10 +211,23 @@ def test_los_procesos_de_celery_declaran_healthcheck() -> None:
         f"el healthcheck del worker no pregunta si consume: {worker!r}"
     )
 
+    # El archivo de schedule NO vive en /app: core/celery_app.py lo manda al
+    # tmp del sistema (en el contenedor, /tmp) con un nombre propio. La primera
+    # version de este healthcheck buscaba /app/celerybeat-schedule* y dejaba a
+    # beat unhealthy para siempre; el test pasaba porque miraba un substring.
+    from core.celery_app import celery_app
+
+    archivo = Path(str(celery_app.conf.beat_schedule_filename))
     beat = _prueba_del_healthcheck("celery_beat")
-    assert "celerybeat-schedule" in beat, (
-        f"el healthcheck del beat no mira su schedule: {beat!r}"
+    assert f"-name '{archivo.name}*'" in beat, (
+        f"el healthcheck de beat no busca {archivo.name!r}, que es lo que "
+        f"escribe core/celery_app.py: {beat!r}"
     )
+    assert "find /tmp " in beat, (
+        "el healthcheck de beat no mira /tmp, que es tempfile.gettempdir() "
+        f"dentro del contenedor: {beat!r}"
+    )
+    assert "/app" not in beat, f"el healthcheck de beat sigue mirando /app: {beat!r}"
 
     for prueba in (worker, beat):
         assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
