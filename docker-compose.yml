@@ -16,10 +16,10 @@ x-app-environment: &app_environment
   # Sin default (C-02): la contrasena del rol shifty_app viene del .env local.
   DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   # Las migraciones necesitan DDL: van con el dueno de la base.
-  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
+  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
   REDIS_URL: redis://redis:6379/0
-  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
+  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}@rabbitmq:5672//
   CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
@@ -51,7 +51,8 @@ services:
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-shifty_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shifty_password}
+      # Sin default (AUD2-C-02): es el rol DUENO, con DDL y sin RLS.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}
       POSTGRES_DB: ${POSTGRES_DB:-shifty_db}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -97,7 +98,7 @@ services:
     restart: always
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shifty}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-shifty_password}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}
     ports:
       - "127.0.0.1:5672:5672"
       - "127.0.0.1:15672:15672"
@@ -156,6 +157,23 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A core.celery_app worker --loglevel=info
+    # Un worker vivo que dejo de consumir se veia igual que uno sano
+    # (AUD2-C-09; es el incidente de 2026-09-08). `inspect ping` pregunta por
+    # ESTE worker: si no responde, el contenedor queda unhealthy. $$HOSTNAME
+    # va escapado para que lo expanda el shell del contenedor y no compose.
+    # Lo que prueba el ping es que el proceso tiene control sobre el broker
+    # que resolvio, no que su configuracion sea la correcta: eso lo cubre la
+    # regla 21 (con settings de respaldo, Celery no arranca).
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "celery -A core.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10",
+        ]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
     container_name: shifty_celery
     restart: always
     environment: *app_environment
@@ -181,6 +199,24 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: celery -A core.celery_app beat --loglevel=info
+    # beat no es un worker: no responde `inspect ping`. Lo que prueba que
+    # sigue agendando es que su archivo de schedule se siga sincronizando;
+    # las tareas del beat corren cada minuto, asi que 15 minutos sin tocarlo
+    # es que dejo de trabajar. La ventana es amplia a proposito.
+    # La ruta y el nombre salen de core/celery_app.py (beat_schedule_filename:
+    # tempfile.gettempdir() + "shifty-celerybeat-schedule"); el sufijo lo pone
+    # el backend de shelve, por eso el comodin. El contrato del compose lo
+    # verifica contra la config real.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /tmp -maxdepth 1 -name 'shifty-celerybeat-schedule*' -newermt '-15 minutes' | grep -q .",
+        ]
+      interval: 300s
+      timeout: 15s
+      retries: 2
+      start_period: 120s
     container_name: shifty_celery_beat
     restart: always
     environment: *app_environment

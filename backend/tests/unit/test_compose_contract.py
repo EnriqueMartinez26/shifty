@@ -7,6 +7,7 @@ encolar ninguna tarea. Ningun job corria, y en silencio: el worker se
 declaraba "ready".
 """
 
+import re
 from pathlib import Path
 
 import yaml
@@ -85,3 +86,203 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
                 f"{nombre} arranca contra {dependencia} sin esperar su healthcheck: "
                 f"{deps.get(dependencia)!r}"
             )
+
+
+# --- Override de produccion (AUD2-C-01, 2026-09-19) ---------------------------
+#
+# Sintoma: docker-compose.prod.yml no declaraba environment ni env_file, asi que
+# los tres procesos heredaban el ancla de DESARROLLO. Dos consecuencias: las
+# claves que el ancla lista llegaban con su default de desarrollo de forma
+# explicita (COOKIE_SECURE=false, EXPOSE_API_DOCS=true, OTP_PROVIDER=console,
+# OTP_DEBUG_EXPOSE_CODE=true), lo que anula apply_production_defaults porque usa
+# setdefault; y las que el ancla NO lista se ignoraban aunque estuvieran en el
+# .env, incluida DATABASE_URL, que el ancla construye contra el `db` del
+# compose. Un operador que siga .env.production.example arrancaba contra el
+# Postgres del contenedor en vez de su base administrada, sin ningun error.
+
+COMPOSE_PROD = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
+
+SERVICIOS_DE_LA_APP = ("backend", "celery_worker", "celery_beat")
+
+# Sin estas no se arranca: tienen que venir del entorno con `:?`, nunca con un
+# valor por default.
+CRITICAS_EN_PRODUCCION = (
+    "SECRET_KEY",
+    "FIELD_ENCRYPTION_KEY",
+    "DATABASE_URL",
+    "MIGRATION_DATABASE_URL",
+    "APP_DB_PASSWORD",
+    "REDIS_URL",
+    "CELERY_BROKER_URL",
+    "CELERY_RESULT_BACKEND_URL",
+    "CORS_ORIGINS",
+)
+
+# Valor de desarrollo que no puede aparecer como default en produccion.
+DEFAULTS_DE_DESARROLLO_PROHIBIDOS = {
+    "COOKIE_SECURE": "false",
+    "EXPOSE_API_DOCS": "true",
+    "OTP_PROVIDER": "console",
+    "OTP_DEBUG_EXPOSE_CODE": "true",
+}
+
+
+def _servicios_prod() -> dict[str, dict[str, object]]:
+    data = yaml.safe_load(COMPOSE_PROD.read_text(encoding="utf-8"))
+    return dict(data["services"])
+
+
+def _env_prod(servicio: str) -> dict[str, str]:
+    env = _servicios_prod()[servicio].get("environment") or {}
+    assert isinstance(env, dict), f"{servicio} declara environment como lista"
+    return {str(k): str(v) for k, v in env.items()}
+
+
+def test_produccion_no_hereda_el_entorno_de_desarrollo() -> None:
+    del_ancla = _env_keys(_services()["backend"])
+    for servicio in SERVICIOS_DE_LA_APP:
+        faltan = del_ancla - set(_env_prod(servicio))
+        assert not faltan, (
+            f"{servicio} en produccion hereda del ancla de desarrollo: {sorted(faltan)}"
+        )
+
+
+def test_produccion_le_pasa_el_env_del_operador_a_los_tres_servicios() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        env_file = _servicios_prod()[servicio].get("env_file")
+        assert env_file, f"{servicio} no declara env_file: el .env no llega entero"
+        archivos = env_file if isinstance(env_file, list) else [env_file]
+        assert ".env" in [str(a) for a in archivos], f"{servicio}: {archivos}"
+
+
+def test_produccion_exige_las_criticas_y_no_inventa_defaults() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        env = _env_prod(servicio)
+        for clave in CRITICAS_EN_PRODUCCION:
+            valor = env.get(clave, "")
+            assert f"${{{clave}:?" in valor, (
+                f"{servicio}.{clave} no es obligatoria en produccion: {valor!r}"
+            )
+
+
+def test_produccion_no_repite_ningun_valor_de_desarrollo() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        env = _env_prod(servicio)
+        for clave, prohibido in DEFAULTS_DE_DESARROLLO_PROHIBIDOS.items():
+            valor = env.get(clave, "")
+            assert f":-{prohibido}" not in valor and valor != prohibido, (
+                f"{servicio}.{clave} usa el valor de desarrollo: {valor!r}"
+            )
+        # Los servicios del compose no pueden quedar cableados: en produccion
+        # la base, Redis y el broker pueden ser administrados.
+        for clave in ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL"):
+            valor = env.get(clave, "")
+            for host in ("@db:", "//redis:", "@rabbitmq:"):
+                assert host not in valor, (
+                    f"{servicio}.{clave} apunta al contenedor del compose: {valor!r}"
+                )
+
+
+def test_los_tres_servicios_comparten_el_entorno_tambien_en_produccion() -> None:
+    # Regla 22: la paridad vale para el override igual que para el base.
+    api = set(_env_prod("backend"))
+    assert api
+    for servicio in ("celery_worker", "celery_beat"):
+        faltan = api - set(_env_prod(servicio))
+        assert not faltan, f"{servicio} no recibe en produccion: {sorted(faltan)}"
+
+
+def _prueba_del_healthcheck(servicio: str) -> str:
+    healthcheck = _services()[servicio].get("healthcheck")
+    assert isinstance(healthcheck, dict), f"{servicio} no declara healthcheck"
+    return str(healthcheck["test"])
+
+
+def test_los_procesos_de_celery_declaran_healthcheck() -> None:
+    """AUD2-C-09 (2026-09-19): un worker vivo que no consume se veia sano.
+
+    db, redis, rabbitmq y backend tenian healthcheck; los dos procesos de
+    Celery, ninguno. Con restart: always, un worker que dejo de consumir o un
+    beat que dejo de agendar se ven igual que uno sano en `docker compose ps`.
+    Es el incidente de 2026-09-08 que este mismo archivo describe: "ningun job
+    corria, y en silencio: el worker se declaraba ready".
+    """
+    worker = _prueba_del_healthcheck("celery_worker")
+    assert "inspect ping" in worker, (
+        f"el healthcheck del worker no pregunta si consume: {worker!r}"
+    )
+
+    # El archivo de schedule NO vive en /app: core/celery_app.py lo manda al
+    # tmp del sistema (en el contenedor, /tmp) con un nombre propio. La primera
+    # version de este healthcheck buscaba /app/celerybeat-schedule* y dejaba a
+    # beat unhealthy para siempre; el test pasaba porque miraba un substring.
+    from core.celery_app import celery_app
+
+    archivo = Path(str(celery_app.conf.beat_schedule_filename))
+    beat = _prueba_del_healthcheck("celery_beat")
+    assert f"-name '{archivo.name}*'" in beat, (
+        f"el healthcheck de beat no busca {archivo.name!r}, que es lo que "
+        f"escribe core/celery_app.py: {beat!r}"
+    )
+    assert "find /tmp " in beat, (
+        "el healthcheck de beat no mira /tmp, que es tempfile.gettempdir() "
+        f"dentro del contenedor: {beat!r}"
+    )
+    assert "/app" not in beat, f"el healthcheck de beat sigue mirando /app: {beat!r}"
+
+    for prueba in (worker, beat):
+        assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
+            f"$HOSTNAME sin escapar lo interpola compose, no el shell: {prueba!r}"
+        )
+
+
+# --- El ejemplo de produccion tiene que levantar el stack (AUD2-C-01, V-diff) --
+#
+# compose interpola cada archivo ANTES de fusionarlos: un `${VAR:?}` del compose
+# base aborta `docker compose config` en produccion aunque el override no use
+# esa variable. Asi que toda variable exigida con `:?` en cualquiera de los dos
+# composes tiene que estar declarada en backend/.env.production.example, que
+# es el archivo que el operador copia a la RAIZ como .env.
+
+ENV_PRODUCCION_EXAMPLE = COMPOSE_PROD.parent / "backend" / ".env.production.example"
+
+
+def _exigidas_con_interrogacion() -> set[str]:
+    exigidas: set[str] = set()
+    for compose in (COMPOSE, COMPOSE_PROD):
+        exigidas.update(re.findall(r"\$\{([A-Z_]+):\?", compose.read_text("utf-8")))
+    return exigidas
+
+
+def _declaradas_en(ruta: Path) -> set[str]:
+    return {
+        linea.split("=", 1)[0].strip()
+        for linea in ruta.read_text(encoding="utf-8").splitlines()
+        if linea.strip() and not linea.lstrip().startswith("#") and "=" in linea
+    }
+
+
+def test_el_ejemplo_de_produccion_declara_todo_lo_que_los_composes_exigen() -> None:
+    exigidas = _exigidas_con_interrogacion()
+    assert exigidas, "ningun compose exige variables con :?"
+    faltan = exigidas - _declaradas_en(ENV_PRODUCCION_EXAMPLE)
+    assert not faltan, (
+        "el compose aborta en produccion si falta alguna de estas, y el "
+        f"ejemplo que se copia como .env no las declara: {sorted(faltan)}"
+    )
+
+
+def test_el_ejemplo_de_produccion_dice_que_se_copia_a_la_raiz() -> None:
+    texto = ENV_PRODUCCION_EXAMPLE.read_text(encoding="utf-8")
+    assert "raiz" in texto.lower() and "env_file" in texto, (
+        "nadie dice que este archivo se copia a la raiz del repo como .env, que "
+        "es lo que resuelve env_file: .env en docker-compose.prod.yml"
+    )
+
+
+def test_el_override_fija_env_production() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        assert _env_prod(servicio).get("ENV") == "production", (
+            f"{servicio}: el override no fija ENV=production y las guardas de "
+            "core/config.py no se activan"
+        )
