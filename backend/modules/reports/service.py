@@ -568,7 +568,13 @@ class ReportService:
     async def _top_services(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> list[ReportTopServiceItem]:
-        """Top-5 de servicios por turnos e ingreso: GROUP BY + ORDER BY + LIMIT."""
+        """Top-5 de servicios por turnos e ingreso: GROUP BY + ORDER BY + LIMIT.
+
+        Es un RANKING, no la definicion del ingreso por servicio: con mas de
+        cinco servicios en el rango su suma es menor que
+        ``total_revenue - retained_deposit_revenue``, que es donde vive esa
+        identidad (AUD2-B5-05).
+        """
         paid = self._paid_by_appointment()
         turnos = func.count(Appointment.id)
         completados = func.sum(
