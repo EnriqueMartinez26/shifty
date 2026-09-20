@@ -16,7 +16,7 @@ from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from core.redis import get_redis
 from core.security import hash_otp_code
-from modules.notifications.tasks import is_deliverable_email, send_email
+from modules.notifications.tasks import is_deliverable_email
 from modules.otp.model import OtpVerification
 from modules.users.model import User, UserRole
 
@@ -89,30 +89,18 @@ def _otp_subject(store_name: str) -> str:
     return f"Tu codigo de verificacion - {store_name or 'Shifty'}"
 
 
-async def _send_otp_mail(email: str, asunto: str, cuerpo: str) -> None:
-    """Envio del OTP fuera del request. Nunca propaga: la respuesta es neutra."""
-    try:
-        enviado = await send_email(email, asunto, cuerpo)
-    except Exception as exc:
-        logger.warning("otp_email_dispatch_error", error_type=type(exc).__name__)
-        return
-    if not enviado:
-        logger.warning("otp_email_dispatch_failed")
-
-
-async def _dispatch_code_by_email(email: str, code: str, store_name: str) -> None:
+def _code_body(code: str, store_name: str) -> str:
     tienda = store_name or "Shifty"
-    cuerpo = (
+    return (
         "Hola,\n\n"
         f"Tu codigo para {tienda} es: {code}\n\n"
         f"Vence en {settings.OTP_CODE_EXPIRE_MINUTES} minutos. "
         "Si no pediste este codigo, ignora este mensaje.\n\n"
         "- El equipo de Shifty"
     )
-    await _send_otp_mail(email, _otp_subject(store_name), cuerpo)
 
 
-async def _dispatch_withheld_notice(email: str, store_name: str) -> None:
+def _withheld_body(store_name: str) -> str:
     """Aviso SIN codigo al email tipeado cuando el telefono ya tiene duenio.
 
     AUD2-B4-05 (2026-09-20): el camino retenido de B4-01 no mandaba nada, y
@@ -129,7 +117,7 @@ async def _dispatch_withheld_notice(email: str, store_name: str) -> None:
     solo mira si hubo entrega- y el vector automatizable.
     """
     tienda = store_name or "Shifty"
-    cuerpo = (
+    return (
         "Hola,\n\n"
         f"Recibimos un pedido de codigo de verificacion para {tienda}.\n\n"
         "Si el telefono es tuyo, el codigo va a la direccion de correo que "
@@ -137,12 +125,36 @@ async def _dispatch_withheld_notice(email: str, store_name: str) -> None:
         "no hace falta que hagas nada.\n\n"
         "- El equipo de Shifty"
     )
-    await _send_otp_mail(email, _otp_subject(store_name), cuerpo)
 
 
-# Agenda un trabajo para DESPUES de la respuesta: ``BackgroundTasks.add_task``
-# en el router (mismo mecanismo que auth/router.py). Firma: (func, *args).
-DispatchScheduler = Callable[..., None]
+# Entrega el mail (destino, asunto, cuerpo) FUERA del proceso de la API:
+# ``notifications.tasks.enqueue_otp_email`` en el router (AUD2-B4-06). El
+# servicio decide destino y contenido; quien llama decide el transporte, y
+# nunca manda en linea.
+DispatchScheduler = Callable[[str, str, str], None]
+
+
+def _schedule_otp_mail(
+    schedule_dispatch: DispatchScheduler,
+    *,
+    destination: str | None,
+    withheld: bool,
+    typed_email: str | None,
+    code: str,
+    store_name: str,
+) -> None:
+    """Un envio por pedido, coincida el email o no.
+
+    AUD2-B4-05: el camino retenido tambien manda, sin codigo. Sin esto, "no
+    me llego nada" era la respuesta a "¿este telefono es cliente de esta
+    tienda?". Los dos caminos usan el mismo asunto y estan acotados por
+    ``OTP_MAX_REQUESTS_PER_HOUR``.
+    """
+    asunto = _otp_subject(store_name)
+    if destination:
+        schedule_dispatch(destination, asunto, _code_body(code, store_name))
+    elif withheld and typed_email:
+        schedule_dispatch(typed_email, asunto, _withheld_body(store_name))
 
 
 def _same_email(typed: str | None, registered: str) -> bool:
@@ -178,6 +190,56 @@ class OtpService:
         registered = result.scalar_one_or_none()
         return registered if is_deliverable_email(registered) else None
 
+    async def _resolve_destination(
+        self, store_id: str, normalized_phone: str, email: str | None
+    ) -> tuple[str | None, bool]:
+        """(destino del codigo, retenido) para el canal email.
+
+        B4-01 (2026-09-18): el codigo prueba posesion del EMAIL al que llega
+        y la marca queda en el TELEFONO. Con el email del payload, cualquiera
+        "verificaba" el telefono de otro. Si el telefono ya es de un cliente
+        de la tienda con email entregable, el codigo solo va a ESE email y el
+        tipeado tiene que coincidir; si no coincide, nadie recibe el codigo.
+        Telefono nuevo o cliente sin email entregable: como siempre.
+        """
+        registered = await self._registered_client_email(store_id, normalized_phone)
+        if registered is None:
+            return email, False
+        if _same_email(email, registered):
+            return registered, False
+        logger.info("otp_request_email_mismatch_for_known_client")
+        return None, True
+
+    async def _store_code(
+        self, store_id: str, normalized_phone: str, channel: str, code: str
+    ) -> OtpVerification:
+        """Invalida los codigos vivos de ese telefono y guarda el nuevo."""
+        now = datetime.now(timezone.utc)
+        await self.db.execute(
+            update(OtpVerification)
+            .where(
+                OtpVerification.store_id == store_id,
+                OtpVerification.phone == normalized_phone,
+                OtpVerification.consumed_at.is_(None),
+            )
+            .values(consumed_at=now)
+        )
+        otp = OtpVerification(
+            store_id=store_id,
+            phone=normalized_phone,
+            channel=channel,
+            # HMAC con pepper y contexto: un SHA-256 pelado de 6 digitos se
+            # invierte con una tabla de 10^6 entradas ante cualquier lectura
+            # de la tabla (backup, replica).
+            code_hash=hash_otp_code(store_id, normalized_phone, code),
+            expires_at=now + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES),
+            provider_message_id="email" if channel == "email" else "console-dispatch",
+        )
+        self.db.add(otp)
+        await self.db.commit()
+        await self.db.refresh(otp)
+        return otp
+
     async def request_code(
         self,
         *,
@@ -188,10 +250,11 @@ class OtpService:
         store_name: str = "",
         schedule_dispatch: DispatchScheduler,
     ) -> dict[str, object]:
-        """Genera y guarda el codigo; el envio lo corre ``schedule_dispatch``
-        despues de la respuesta (B4-01, 2026-09-19): la respuesta no espera
-        al SMTP y su tiempo no depende del destino. Obligatorio a proposito,
-        para que ningun llamador vuelva a mandar en linea."""
+        """Genera y guarda el codigo; el mail lo entrega ``schedule_dispatch``
+        fuera del proceso de la API (B4-01 lo saco del camino sincronico;
+        AUD2-B4-06 lo saco tambien del request). La respuesta no espera al
+        SMTP y su tiempo no depende del destino. El parametro es obligatorio
+        a proposito, para que ningun llamador vuelva a mandar en linea."""
         normalized_phone = normalize_phone(phone)
         if channel not in {"email", "whatsapp", "sms"}:
             raise ValidationException("Canal invalido")
@@ -209,68 +272,30 @@ class OtpService:
             "req", store_id, normalized_phone, settings.OTP_MAX_REQUESTS_PER_HOUR
         )
 
-        # B4-01 (2026-09-18): el codigo prueba posesion del EMAIL al que llega
-        # y la marca queda en el TELEFONO. Con el email del payload, cualquiera
-        # "verificaba" el telefono de otro. Si el telefono ya es de un cliente
-        # de la tienda con email entregable, el codigo solo va a ESE email y el
-        # tipeado tiene que coincidir; si no coincide, respuesta neutra con la
-        # misma forma y el mismo trabajo de base, y nadie recibe el codigo.
-        # Telefono nuevo o cliente sin email entregable: como siempre.
-        destination = email
+        destination: str | None = email
         withheld = False
         if channel == "email":
-            registered = await self._registered_client_email(store_id, normalized_phone)
-            if registered is not None:
-                withheld = not _same_email(email, registered)
-                destination = None if withheld else registered
-                if withheld:
-                    logger.info("otp_request_email_mismatch_for_known_client")
+            destination, withheld = await self._resolve_destination(
+                store_id, normalized_phone, email
+            )
 
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.OTP_CODE_EXPIRE_MINUTES
-        )
-        now = datetime.now(timezone.utc)
+        otp = await self._store_code(store_id, normalized_phone, channel, code)
 
-        await self.db.execute(
-            update(OtpVerification)
-            .where(
-                OtpVerification.store_id == store_id,
-                OtpVerification.phone == normalized_phone,
-                OtpVerification.consumed_at.is_(None),
+        if channel == "email":
+            # Despues del commit (el codigo ya esta guardado cuando se encola
+            # el mail) y fuera del proceso de la API: la respuesta es la
+            # misma, y tarda lo mismo, haya envio o no, para no revelar si el
+            # telefono es cliente ni convertir el SMTP en un oraculo.
+            _schedule_otp_mail(
+                schedule_dispatch,
+                destination=destination,
+                withheld=withheld,
+                typed_email=email,
+                code=code,
+                store_name=store_name,
             )
-            .values(consumed_at=now)
-        )
-
-        otp = OtpVerification(
-            store_id=store_id,
-            phone=normalized_phone,
-            channel=channel,
-            # HMAC con pepper y contexto: un SHA-256 pelado de 6 digitos se
-            # invierte con una tabla de 10^6 entradas ante cualquier lectura
-            # de la tabla (backup, replica).
-            code_hash=hash_otp_code(store_id, normalized_phone, code),
-            expires_at=expires_at,
-            provider_message_id="email" if channel == "email" else "console-dispatch",
-        )
-        self.db.add(otp)
-        await self.db.commit()
-        await self.db.refresh(otp)
-
-        if channel == "email" and destination:
-            # Despues del commit (el codigo ya esta guardado cuando llega el
-            # mail) y fuera del request: la respuesta es la misma, y tarda lo
-            # mismo, haya envio o no, para no revelar si el telefono es
-            # cliente ni convertir el SMTP en un oraculo. El envio no toca la
-            # base; un fallo se loguea en _dispatch_code_by_email.
-            schedule_dispatch(_dispatch_code_by_email, destination, code, store_name)
-        elif channel == "email" and withheld and email:
-            # AUD2-B4-05: el camino retenido tambien manda, sin codigo. Sin
-            # esto, "no me llego nada" era la respuesta a "¿este telefono es
-            # cliente de esta tienda?". Un envio por pedido en los dos
-            # caminos, acotado por OTP_MAX_REQUESTS_PER_HOUR.
-            schedule_dispatch(_dispatch_withheld_notice, email, store_name)
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:

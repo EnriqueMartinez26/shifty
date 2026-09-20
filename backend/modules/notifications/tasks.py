@@ -249,6 +249,59 @@ async def send_email(to: str, subject: str, body: str) -> bool:
     return await _send_email(to, subject, body)
 
 
+async def deliver_otp_email(to: str, subject: str, body: str) -> dict[str, str]:
+    """Cuerpo de la tarea ``send_otp_email``: manda por el sink unico.
+
+    Vive aparte del wrapper de Celery para poder probarse con ``await``
+    (``run_in_worker_loop`` se niega a anidarse en un loop activo).
+    """
+    delivered = await _send_email(to, subject, body)
+    if not delivered:
+        # El detalle ya lo logueo el sink, enmascarado. Aca solo queda que
+        # este pedido de OTP no llego.
+        logger.warning("otp_email_dispatch_failed", to=_mask_email(to))
+    return {"status": "sent" if delivered else "failed"}
+
+
+def _send_otp_email_task(to: str, subject: str, body: str) -> dict[str, str]:
+    """Tarea de Celery: el mail del OTP sale del worker, no de la API.
+
+    AUD2-B4-06 (2026-09-20): B4-01 saco el envio del camino sincronico con
+    ``BackgroundTasks.add_task``, que no sale del proceso: el SMTP corria
+    dentro de la misma llamada ASGI y un servidor colgado retenia el slot
+    los 10 s del timeout por pedido, sin rastro durable si el proceso se
+    reiniciaba entre la respuesta y el envio.
+
+    Sin reintento (``max_retries=0``): un OTP que no salio se pide de nuevo,
+    y reintentar un mail cuyo DATA pudo haber llegado lo duplica (misma
+    razon que en ``SmtpSession``). La durabilidad la da el broker, no el
+    reintento de la tarea.
+    """
+    return run_in_worker_loop(deliver_otp_email(to, subject, body))
+
+
+# Anotada ``Any`` (y no por ``cast`` sobre el mismo nombre, como
+# ``process_appointment_reminders``) porque a esta si se le llama ``.delay``:
+# con el tipo de la funcion cruda mypy no ve el atributo que agrega Celery.
+send_otp_email: Any = celery_app.task(name="send_otp_email", max_retries=0)(
+    _send_otp_email_task
+)
+
+
+def enqueue_otp_email(to: str, subject: str, body: str) -> None:
+    """Encola el mail del OTP. Nunca propaga.
+
+    La respuesta del pedido de OTP es neutra por contrato (regla 20): no
+    puede cambiar de forma ni de tiempo porque el broker este caido. Un
+    fallo de encolado se trata como un fallo de envio: se loguea sin datos
+    personales y el cliente vuelve a pedir el codigo.
+    """
+    try:
+        send_otp_email.delay(to, subject, body)
+    except Exception as exc:
+        logger.warning("otp_email_enqueue_failed", error_type=type(exc).__name__)
+
+
 def is_deliverable_email(email: str | None) -> bool:
     """Descarta vacios y los emails tecnicos ``{tel}@store{id}.noreply``.
 

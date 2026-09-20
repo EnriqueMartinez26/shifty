@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Annotated
 
 import structlog
-from fastapi import BackgroundTasks, Depends, Path, Query, Request, status
+from fastapi import Depends, Path, Query, Request, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -34,6 +34,7 @@ from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.service import store_is_suspended
+from modules.notifications.tasks import enqueue_otp_email
 from modules.otp.service import OtpService
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
@@ -350,7 +351,6 @@ async def preview_public_promotion(
 async def request_public_otp(
     request: Request,
     data: OtpRequestPayload,
-    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, object]:
     await enforce_rate_limit(
@@ -370,7 +370,11 @@ async def request_public_otp(
             channel=data.channel,
             email=str(data.email) if data.email else None,
             store_name=store.name,
-            schedule_dispatch=background_tasks.add_task,
+            # AUD2-B4-06: a la cola, no a un BackgroundTask. El
+            # BackgroundTask no salia del proceso: el SMTP corria dentro de
+            # la misma llamada ASGI y retenia el slot hasta 10 s por pedido,
+            # sin rastro durable ante un reinicio.
+            schedule_dispatch=enqueue_otp_email,
         )
 
 

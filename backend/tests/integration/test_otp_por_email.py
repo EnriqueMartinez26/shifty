@@ -32,20 +32,32 @@ class Buzon:
         return True
 
 
+class Cola:
+    """Reemplaza la tarea de Celery ``send_otp_email``: guarda lo encolado.
+
+    AUD2-B4-06 (2026-09-20): el mail del OTP lo manda el worker, no el
+    proceso de la API. En los tests alcanza con ver QUE se encolo, y se
+    guarda con la misma forma (destino, asunto, cuerpo) que usa el sink SMTP,
+    asi las aserciones son las mismas de los dos lados.
+    """
+
+    def __init__(self) -> None:
+        self.enviados: list[tuple[str, str, str]] = []
+
+    def delay(self, to: str, subject: str, body: str) -> None:
+        self.enviados.append((to, subject, body))
+
+
 @pytest.mark.asyncio
 async def test_el_codigo_llega_por_email_y_verifica(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _ = await register_and_login(
         client, slug="otp-mail", email="otp-mail@example.com"
     )
 
-    # B4-01 (2026-09-19): el envio corre como background task, despues de la
-    # respuesta. Sin ``x-raw-response`` para que el desenvuelto de tests de
-    # core/router.py no descarte las background tasks (el camino normal, el
-    # de produccion, las conserva).
     pedido = await client.post(
         "/public/otp/request",
         headers={"x-raw-response": "false"},
@@ -57,8 +69,8 @@ async def test_el_codigo_llega_por_email_y_verifica(
         },
     )
     assert pedido.status_code == 200, pedido.text
-    assert len(buzon.enviados) == 1
-    destino, asunto, cuerpo = buzon.enviados[0]
+    assert len(cola.enviados) == 1
+    destino, asunto, cuerpo = cola.enviados[0]
     assert destino == "cliente@example.com"
     assert "codigo" in asunto.lower()
     codigo = pedido.json()["data"]["debug_code"]  # solo en tests/desarrollo

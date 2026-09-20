@@ -37,6 +37,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
 )
 from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_otp_por_email import Cola
 
 TELEFONO_CLIENTE = "5491155551234"
 EMAIL_CLIENTE = "duenio@example.com"
@@ -79,9 +80,11 @@ async def _tienda_con_cliente(
 async def _pedir(
     client: AsyncClient, tienda: str, email: str
 ) -> tuple[int, dict[str, Any]]:
-    # Sin ``x-raw-response``: el desenvuelto de tests en core/router.py arma
-    # una respuesta nueva sin las background tasks, y el envio del codigo
-    # corre ahi (B4-01). El camino normal las conserva, como en produccion.
+    # ``x-raw-response: false`` pide el sobre canonico; el fixture ``client``
+    # manda "true" por defecto. Es lo unico que decide ese header: la nota
+    # anterior decia que el desenvuelto perdia las background tasks, y no era
+    # cierto -las dos ramas de CanonicalJsonMiddleware clonan igual-. Desde
+    # AUD2-B4-06 ya no hay background tasks en este camino: el mail se encola.
     respuesta = await client.post(
         "/public/otp/request",
         headers={"x-raw-response": "false"},
@@ -100,8 +103,8 @@ async def _pedir(
 async def test_email_coincidente_recibe_el_codigo_y_verifica(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, store_id = await _tienda_con_cliente(
         client, test_session, "otp-cliente-ok", email_cliente=EMAIL_CLIENTE
     )
@@ -109,8 +112,8 @@ async def test_email_coincidente_recibe_el_codigo_y_verifica(
     # Mayusculas y espacios no cuentan: se compara normalizado.
     status, cuerpo = await _pedir(client, tienda, "DUENIO@example.com")
     assert status == 200, cuerpo
-    assert [destino for destino, _, _ in buzon.enviados] == [EMAIL_CLIENTE]
-    assert cuerpo["debug_code"] in buzon.enviados[0][2]
+    assert [destino for destino, _, _ in cola.enviados] == [EMAIL_CLIENTE]
+    assert cuerpo["debug_code"] in cola.enviados[0][2]
 
     servicio = OtpService(test_session)
     await servicio.verify_code(
@@ -125,14 +128,14 @@ async def test_email_coincidente_recibe_el_codigo_y_verifica(
 async def test_email_distinto_respuesta_neutra_y_nadie_recibe_el_codigo(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, store_id = await _tienda_con_cliente(
         client, test_session, "otp-cliente-ajeno", email_cliente=EMAIL_CLIENTE
     )
 
     status_ok, exito = await _pedir(client, tienda, EMAIL_CLIENTE)
-    buzon.enviados.clear()
+    cola.enviados.clear()
     status, neutra = await _pedir(client, tienda, "atacante@example.com")
 
     # Misma forma que el exito: nada revela que el telefono es cliente ni
@@ -143,8 +146,8 @@ async def test_email_distinto_respuesta_neutra_y_nadie_recibe_el_codigo(
     assert EMAIL_CLIENTE not in str(neutra)
     # Nadie recibe el CODIGO: al email tipeado le llega el aviso sin codigo
     # de AUD2-B4-05 y al del cliente no le llega nada.
-    assert [destino for destino, _, _ in buzon.enviados] == ["atacante@example.com"]
-    assert _sin_codigo(buzon.enviados)
+    assert [destino for destino, _, _ in cola.enviados] == ["atacante@example.com"]
+    assert _sin_codigo(cola.enviados)
 
     # El codigo de la respuesta (solo existe en modo debug) no verifica, y
     # el telefono no queda verificado para quien lo pidio.
@@ -165,7 +168,7 @@ async def test_email_distinto_tarda_lo_mismo_que_el_exito(
     """Hace el mismo trabajo de base (invalidar + guardar + commit) que el
     exito. Con el SMTP falso instantaneo, los tiempos quedan en el mismo orden;
     el costo del SMTP real queda documentado en el commit."""
-    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    monkeypatch.setattr(tasks, "send_otp_email", Cola())
     tienda, _ = await _tienda_con_cliente(
         client, test_session, "otp-cliente-tiempo", email_cliente=EMAIL_CLIENTE
     )
@@ -189,22 +192,22 @@ async def test_email_distinto_tarda_lo_mismo_que_el_exito(
 async def test_telefono_nuevo_sigue_como_siempre(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, _ = await register_and_login(
         client, slug="otp-telefono-nuevo", email="otp-telefono-nuevo@example.com"
     )
     status, cuerpo = await _pedir(client, tienda, "nuevo@example.com")
     assert status == 200, cuerpo
-    assert [destino for destino, _, _ in buzon.enviados] == ["nuevo@example.com"]
+    assert [destino for destino, _, _ in cola.enviados] == ["nuevo@example.com"]
 
 
 @pytest.mark.asyncio
 async def test_cliente_sin_email_entregable_sigue_como_siempre(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda, _ = await _tienda_con_cliente(
         client,
         test_session,
@@ -213,7 +216,7 @@ async def test_cliente_sin_email_entregable_sigue_como_siempre(
     )
     status, cuerpo = await _pedir(client, tienda, "real@example.com")
     assert status == 200, cuerpo
-    assert [destino for destino, _, _ in buzon.enviados] == ["real@example.com"]
+    assert [destino for destino, _, _ in cola.enviados] == ["real@example.com"]
 
 
 # ---------------------------------------------------------------------------
@@ -224,18 +227,23 @@ async def test_cliente_sin_email_entregable_sigue_como_siempre(
 # ---------------------------------------------------------------------------
 
 
-class _Agenda:
-    """Hace de BackgroundTasks: guarda los trabajos para correrlos despues."""
+class _Cola:
+    """Hace de cola: guarda lo que el servicio manda entregar (AUD2-B4-06).
+
+    ``correr`` entrega lo encolado como lo haria el worker, por el cuerpo
+    real de la tarea, asi el test sigue viendo el mail y no solo la
+    intencion de mandarlo.
+    """
 
     def __init__(self) -> None:
-        self.trabajos: list[tuple[Any, tuple[Any, ...]]] = []
+        self.encolados: list[tuple[str, str, str]] = []
 
-    def __call__(self, func: Any, *args: Any) -> None:
-        self.trabajos.append((func, args))
+    def __call__(self, to: str, subject: str, body: str) -> None:
+        self.encolados.append((to, subject, body))
 
     async def correr(self) -> None:
-        for func, args in self.trabajos:
-            await func(*args)
+        for to, subject, body in self.encolados:
+            await tasks.deliver_otp_email(to, subject, body)
 
 
 async def _store_con_cliente_directo(session: AsyncSession, slug: str) -> str:
@@ -264,7 +272,7 @@ async def test_el_request_devuelve_sin_llamar_al_smtp_y_el_envio_va_despues(
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
     store_id = await _store_con_cliente_directo(test_session, "otp-diferido")
-    agenda = _Agenda()
+    cola = _Cola()
 
     respuesta = await OtpService(test_session).request_code(
         store_id=store_id,
@@ -272,12 +280,12 @@ async def test_el_request_devuelve_sin_llamar_al_smtp_y_el_envio_va_despues(
         channel="email",
         email=EMAIL_CLIENTE,
         store_name="Demo",
-        schedule_dispatch=agenda,
+        schedule_dispatch=cola,
     )
 
     # Al volver el request: codigo guardado y commiteado, SMTP sin tocar.
     assert buzon.enviados == []
-    assert len(agenda.trabajos) == 1
+    assert len(cola.encolados) == 1
     guardado = await test_session.scalar(
         select(OtpVerification.id).where(
             OtpVerification.store_id == store_id,
@@ -286,7 +294,7 @@ async def test_el_request_devuelve_sin_llamar_al_smtp_y_el_envio_va_despues(
     )
     assert guardado is not None
 
-    await agenda.correr()
+    await cola.correr()
     assert [destino for destino, _, _ in buzon.enviados] == [EMAIL_CLIENTE]
     assert str(respuesta["debug_code"]) in buzon.enviados[0][2]
 
@@ -310,7 +318,7 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
         ) -> None:
             sentencias.append(statement.split()[0].upper())
 
-        agenda = _Agenda()
+        cola = _Cola()
         event.listen(test_engine.sync_engine, "before_cursor_execute", registrar)
         try:
             await servicio.request_code(
@@ -319,11 +327,11 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
                 channel="email",
                 email=email,
                 store_name="Demo",
-                schedule_dispatch=agenda,
+                schedule_dispatch=cola,
             )
         finally:
             event.remove(test_engine.sync_engine, "before_cursor_execute", registrar)
-        return sentencias, len(agenda.trabajos)
+        return sentencias, len(cola.encolados)
 
     coincide, envios_ok = await trabajo(TELEFONO_CLIENTE, EMAIL_CLIENTE)
     distinto, envios_neutros = await trabajo(TELEFONO_CLIENTE, "atacante@example.com")
@@ -364,8 +372,8 @@ async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
     monkeypatch: pytest.MonkeyPatch,
     tipeado: str,
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     publica, _ = await register_and_login(
         client, slug="otp-00-prefijo", email="otp-00-prefijo@example.com"
     )
@@ -396,11 +404,11 @@ async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
         },
     )
     assert respuesta.status_code == 200, respuesta.text
-    assert _sin_codigo(buzon.enviados), (
+    assert _sin_codigo(cola.enviados), (
         "el codigo salio al email del atacante: el cliente guardado con 00 "
         "no se encontro"
     )
-    buzon.enviados.clear()
+    cola.enviados.clear()
 
     # Y con el email del cliente, en la misma forma de telefono, si sale.
     ok = await client.post(
@@ -414,4 +422,4 @@ async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
         },
     )
     assert ok.status_code == 200, ok.text
-    assert [destino for destino, _, _ in buzon.enviados] == [EMAIL_CLIENTE]
+    assert [destino for destino, _, _ in cola.enviados] == [EMAIL_CLIENTE]

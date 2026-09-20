@@ -30,7 +30,7 @@ from modules.users.model import User, UserRole
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
 )
-from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_otp_por_email import Cola
 
 TELEFONO_CLIENTE = "5491155551234"
 TELEFONO_DESCONOCIDO = "5491166669999"
@@ -84,15 +84,15 @@ async def _pedir(client: AsyncClient, tienda: str, telefono: str, email: str) ->
 async def test_al_email_tipeado_le_llega_algo_sea_cliente_el_telefono_o_no(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda = await _tienda_con_cliente(client, test_session, "otp-oraculo")
 
     assert await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_TIPEADO) == 200
-    con_cliente = [d for d, _, _ in buzon.enviados]
-    buzon.enviados.clear()
+    con_cliente = [d for d, _, _ in cola.enviados]
+    cola.enviados.clear()
     assert await _pedir(client, tienda, TELEFONO_DESCONOCIDO, EMAIL_TIPEADO) == 200
-    sin_cliente = [d for d, _, _ in buzon.enviados]
+    sin_cliente = [d for d, _, _ in cola.enviados]
 
     assert con_cliente == sin_cliente == [EMAIL_TIPEADO], (
         "la llegada del mail discrimina si el telefono es cliente"
@@ -103,20 +103,20 @@ async def test_al_email_tipeado_le_llega_algo_sea_cliente_el_telefono_o_no(
 async def test_el_aviso_del_camino_retenido_no_lleva_codigo_ni_el_email_del_cliente(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda = await _tienda_con_cliente(client, test_session, "otp-oraculo-cuerpo")
 
     assert await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_TIPEADO) == 200
 
-    assert len(buzon.enviados) == 1, "exactamente un envio, como el camino feliz"
-    destino, asunto, cuerpo = buzon.enviados[0]
+    assert len(cola.enviados) == 1, "exactamente un envio, como el camino feliz"
+    destino, asunto, cuerpo = cola.enviados[0]
     assert destino == EMAIL_TIPEADO
     assert not _tiene_codigo(cuerpo), "el aviso retenido no puede traer el codigo"
     assert EMAIL_CLIENTE not in cuerpo and EMAIL_CLIENTE not in asunto
     # Mismo asunto que el codigo: el asunto tampoco discrimina.
     assert await _pedir(client, tienda, TELEFONO_DESCONOCIDO, EMAIL_TIPEADO) == 200
-    assert buzon.enviados[1][1] == asunto
+    assert cola.enviados[1][1] == asunto
 
 
 @pytest.mark.asyncio
@@ -124,11 +124,11 @@ async def test_el_email_del_cliente_sigue_recibiendo_el_codigo(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Guarda viva de B4-01: el codigo solo va al email registrado."""
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     tienda = await _tienda_con_cliente(client, test_session, "otp-oraculo-ok")
 
     assert await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_CLIENTE) == 200
 
-    assert [d for d, _, _ in buzon.enviados] == [EMAIL_CLIENTE]
-    assert _tiene_codigo(buzon.enviados[0][2])
+    assert [d for d, _, _ in cola.enviados] == [EMAIL_CLIENTE]
+    assert _tiene_codigo(cola.enviados[0][2])
