@@ -3,11 +3,11 @@ import json
 from typing import Any, cast
 
 from redis.asyncio import Redis
-from redis.exceptions import RedisError
 
 import structlog
 
 from core.exceptions import IdempotencyInProgressException
+from core.redis import REDIS_UNAVAILABLE_ERRORS
 
 PROCESSING_VALUE = "PROCESSING"
 PROCESSING_TTL_MS = 30_000
@@ -49,7 +49,7 @@ async def idempotency_guard(key: str, redis: Redis) -> dict[str, Any] | None:
                 )
                 if acquired:
                     return None
-        except RedisError as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             _log_redis_fallback("guard", cache_key, exc)
             return None
 
@@ -64,7 +64,7 @@ async def idempotency_save(key: str, result: Any, redis: Redis) -> None:
     cache_key = f"idempotency:{key}"
     try:
         await redis.setex(cache_key, RESULT_TTL_SECONDS, json.dumps(result))
-    except RedisError as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         _log_redis_fallback("save", cache_key, exc)
 
 
@@ -75,5 +75,5 @@ async def idempotency_release(key: str, redis: Redis) -> None:
         cached = await redis.get(cache_key)
         if cached in (PROCESSING_VALUE, PROCESSING_VALUE.encode("utf-8")):
             await redis.delete(cache_key)
-    except RedisError as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         _log_redis_fallback("release", cache_key, exc)

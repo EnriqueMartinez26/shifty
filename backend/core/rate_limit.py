@@ -6,11 +6,10 @@ import time
 import structlog
 from fastapi import Request
 from core.exceptions import AppException, RateLimitedException
-from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from core.config import settings
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 
 logger = structlog.get_logger()
 
@@ -118,7 +117,7 @@ async def enforce_rate_limit(
             retry_after = await _hit_rate_limit(
                 f"subject:{subject.lower()}", action, limit, window
             )
-    except (RedisError, OSError) as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
@@ -204,7 +203,7 @@ class RedisRateLimitMiddleware:
             retry_after = await _hit_rate_limit(
                 ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS
             )
-        except (RedisError, OSError) as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning(
                 "rate_limit_middleware_redis_unavailable", action=action, error=str(exc)
             )
