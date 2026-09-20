@@ -11,16 +11,37 @@ from core.observability import init_observability
 
 logger = logging.getLogger(__name__)
 
-# Los workers corren en procesos aparte: necesitan su propia inicializacion.
-init_observability("worker")
-# ...y su registro de modelos completo: las tasks importan Appointment pero
-# no Staff, y las relaciones por nombre fallan al configurar los mappers.
+# Registro de modelos completo: las tasks importan Appointment pero no Staff, y
+# las relaciones por nombre fallan al configurar los mappers. Queda a nivel de
+# modulo porque tiene que estar listo antes de la primera tarea y no depende de
+# que el proceso sea un worker (lo cubre test_model_registry).
 load_all_models()
 
 
 @worker_init.connect  # type: ignore[untyped-decorator]
 @beat_init.connect  # type: ignore[untyped-decorator]
-def _abort_if_settings_are_fallback(**_: object) -> None:
+def _start_worker_process(**_: object) -> None:
+    """Arranque de un proceso de Celery (worker o beat), y SOLO de ellos.
+
+    Sentry no se puede inicializar en el cuerpo de este modulo: el proceso de
+    la API lo importa sin querer, por la cadena `main` ->
+    `modules.appointment_blocks.router` -> `...service` ->
+    `modules.notifications.tasks` -> `core.celery_app`, 128 lineas ANTES de su
+    propio `init_observability("api")`. Como el init tiene un guard global
+    `_initialized`, el de la API retornaba sin hacer nada y TODOS sus eventos
+    salian etiquetados `component="worker"`: la unica senal para separar un
+    request roto de un job roto respondia siempre lo mismo (AUD2-B7-04,
+    2026-09-20).
+
+    La configuracion se valida ANTES de Sentry: el DSN sale de esos mismos
+    settings, y con settings de respaldo el proceso tiene que morir igual
+    (regla 21).
+    """
+    _abort_if_settings_are_fallback()
+    init_observability("worker")
+
+
+def _abort_if_settings_are_fallback() -> None:
     """Ni el worker ni beat deben correr con la configuracion de respaldo.
 
     La API tolera un Settings() invalido para responder 503 con el detalle;
