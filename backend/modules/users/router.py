@@ -112,8 +112,10 @@ async def update_user(
     await assert_deactivation_allowed(db, admin, user, is_active=data.is_active)
 
     try:
+        # ``exclude_unset``: sin el, "no vino" y "vino null" llegan iguales al
+        # repositorio y el PATCH no puede borrar un campo (AUD2-B3-08).
         return UserResponse.model_validate(
-            await UserService(db).update(user, data.model_dump())
+            await UserService(db).update(user, data.model_dump(exclude_unset=True))
         )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)

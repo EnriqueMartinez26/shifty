@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
+from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User
 
@@ -91,14 +92,14 @@ class UserRepository:
         payload = data.copy()
         password = payload.pop("password", None)
 
-        for key, value in payload.items():
-            if value is not None:
-                setattr(user, key, value)
+        # El router manda solo lo que vino (``exclude_unset``) y ``apply_patch``
+        # distingue "vino null" de "no vino": un null borra si la columna admite
+        # NULL (telefono, nombre) y se ignora si es NOT NULL (rol, estado). Con
+        # el patron viejo -- ``if value is not None`` -- no se podia borrar el
+        # telefono de un usuario desde el panel (AUD2-B3-08).
+        apply_patch(user, payload)
 
-        if (
-            payload.get("first_name") is not None
-            or payload.get("last_name") is not None
-        ):
+        if "first_name" in payload or "last_name" in payload:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
 
         if password:

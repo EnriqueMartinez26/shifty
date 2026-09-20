@@ -3,13 +3,13 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
+from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
@@ -184,23 +184,6 @@ def _compute_discount(
     return discount_amount, _money(base_amount - discount_amount)
 
 
-def _apply_patch(entity: Any, payload: dict[str, Any]) -> None:
-    """Aplica un PATCH respetando el null explicito (B3-19, 2026-09-18).
-
-    El router ya descarto lo que no vino (``model_dump(exclude_unset=True)``),
-    asi que cada clave del payload es algo que el cliente mando. Un ``null``
-    borra el valor si la columna admite NULL (logo, descripcion, vencimiento);
-    en una columna NOT NULL se ignora como antes, en vez de terminar en 409.
-    """
-    columnas = sa_inspect(type(entity)).columns
-    for key, value in payload.items():
-        if value is None:
-            columna = columnas.get(key)
-            if columna is None or not columna.nullable:
-                continue
-        setattr(entity, key, value)
-
-
 class _BaseAdminRepository:
     """Base de los repositorios de superadmin: sesión + auditoría común."""
 
@@ -313,7 +296,7 @@ class StoreAdminRepository(_BaseAdminRepository):
         self, store: Store, payload: dict[str, Any], actor: User
     ) -> Store:
         before = {"name": store.name, "slug": store.slug, "is_active": store.is_active}
-        _apply_patch(store, payload)
+        apply_patch(store, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -420,7 +403,7 @@ class UserAdminRepository(_BaseAdminRepository):
             "is_active": user.is_active,
             "is_global_admin": user.is_global_admin,
         }
-        _apply_patch(user, data)
+        apply_patch(user, data)
         if "first_name" in data or "last_name" in data:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if password:
@@ -514,7 +497,7 @@ class PlanAdminRepository(_BaseAdminRepository):
             "price": str(plan.price),
             "is_active": plan.is_active,
         }
-        _apply_patch(plan, payload)
+        apply_patch(plan, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -667,7 +650,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             "is_active": coupon.is_active,
             "current_uses": coupon.current_uses,
         }
-        # coupon_type y value son NOT NULL: un null se ignora (_apply_patch),
+        # coupon_type y value son NOT NULL: un null se ignora (apply_patch),
         # asi que el candidato es el valor actual. Antes {"value": null}
         # llegaba aca como None y "None > 100" terminaba en 500.
         candidate_type = payload.get("coupon_type") or coupon.coupon_type
@@ -684,7 +667,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             and candidate_valid_from >= candidate_valid_until
         ):
             raise ValueError("valid_from debe ser anterior a valid_until")
-        _apply_patch(coupon, payload)
+        apply_patch(coupon, payload)
         try:
             await self.db.flush()
             self._audit(
