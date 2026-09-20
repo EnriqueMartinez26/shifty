@@ -962,23 +962,20 @@ async def _discard_orphan_payment(
 
     Solo borra si el cobro sigue con el link placeholder: si otra request
     concurrente ya le sello un link real, el cobro es de ella y queda (S-17).
+
+    No borra ningun evento del outbox: la fase 1 no publica ninguno. Habia un
+    DELETE de ``payment.preference.created`` que no borraba nunca nada porque
+    ese evento dejo de publicarse en B2-17, el mismo dia que se escribio esta
+    compensacion; leerlo sugeria un evento vivo que no existe (AUD2-B2-12,
+    2026-09-20). Lo garantiza
+    tests/integration/test_eventos_de_pago_con_consumidor.py.
     """
     placeholder, _ = _placeholder_link(appointment_id)
-    borrado = await db.execute(
+    await db.execute(
         delete(Payment).where(
             Payment.id == payment_id,
             Payment.store_id == store_id,
             Payment.preference_id == placeholder,
-        )
-    )
-    if not getattr(borrado, "rowcount", 0):
-        await db.commit()
-        return
-    await db.execute(
-        delete(OutboxMessage).where(
-            OutboxMessage.store_id == store_id,
-            OutboxMessage.event_type == "payment.preference.created",
-            OutboxMessage.payload["payment_id"].as_string() == payment_id,
         )
     )
     await db.commit()
