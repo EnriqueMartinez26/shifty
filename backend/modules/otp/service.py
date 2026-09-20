@@ -78,7 +78,9 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
         if int(current) > limit:
             raise OTPRateLimitedException()
     except (RedisError, OSError) as exc:
-        logger.warning("otp_budget_redis_unavailable", error=str(exc))
+        # AUD2-B4-08: solo el tipo. El texto de un RedisError repite la
+        # URL de conexion, que lleva credenciales.
+        logger.warning("otp_budget_redis_unavailable", error_type=type(exc).__name__)
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise OTPRateLimitedException() from exc
 

@@ -86,6 +86,18 @@ def _mask_phones_in_text(text: str) -> str:
     return _PHONE_IN_TEXT.sub(lambda match: _mask_phone(match.group(0)), text)
 
 
+def _safe_error(exc: BaseException) -> str:
+    """Texto de una excepcion ajena, listo para el log.
+
+    AUD2-B4-08 (2026-09-20): tres logs volcaban ``str(exc)`` crudo. En el
+    camino feliz esas excepciones eran siempre ``RuntimeError("SMTP send
+    failed")``, asi que no filtraban nada: la garantia dependia de que
+    ninguna excepcion con datos llegara ahi, no de una guarda. Ahora la
+    guarda existe y tapa direcciones y telefonos, como el sink.
+    """
+    return _mask_emails_in_text(_mask_phones_in_text(str(exc)))
+
+
 def _header_safe(value: str) -> str:
     """Colapsa CR/LF/TAB a espacio: el Subject interpola nombres de servicio/
     tienda controlados por el usuario, y un CRLF ahi inyecta cabeceras (Bcc,
@@ -182,8 +194,12 @@ class SmtpSession:
             raise
 
     async def send(self, to: str, subject: str, body: str) -> bool:
-        message = _build_message(to, subject, body)
         try:
+            # AUD2-B4-08: dentro del try. Afuera, un error del parser de
+            # cabeceras se propagaba con el asunto o la direccion en el
+            # texto, y en el recordatorio liberaba el reclamo, asi que el
+            # mismo turno reintentaba cada 15 minutos hasta su hora.
+            message = _build_message(to, subject, body)
             await asyncio.to_thread(self._send_sync, message)
             return True
         except Exception as exc:
@@ -191,7 +207,7 @@ class SmtpSession:
                 "smtp_send_failed",
                 to=_mask_email(to),
                 error_type=type(exc).__name__,
-                error=_mask_emails_in_text(str(exc)),
+                error=_safe_error(exc),
             )
             return False
 
@@ -739,7 +755,7 @@ async def send_confirmation_email(
             email=_mask_email(email),
             appointment=details.get("public_id"),
             error_type=type(exc).__name__,
-            error=str(exc),
+            error=_safe_error(exc),
         )
         return {
             "status": "failed",
@@ -782,7 +798,7 @@ async def _dispatch_reminder(
             appointment=appointment.public_id,
             stage=stage.name,
             error_type=type(exc).__name__,
-            error=str(exc),
+            error=_safe_error(exc),
         )
         return False
     return result.get("status") == "sent"

@@ -18,13 +18,16 @@ from __future__ import annotations
 
 import smtplib
 from collections.abc import MutableMapping
+from datetime import datetime, timezone
 from email.message import EmailMessage
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from structlog.testing import capture_logs
 
 import modules.notifications.tasks as tasks
+from modules.notifications.reminders import STAGE_24H
 
 EMAIL = "cliente.privado@example.com"
 MASCARA = "c***@example.com"
@@ -192,3 +195,122 @@ def test_el_enmascarado_de_telefonos_tapa_el_numero_y_deja_el_resto() -> None:
     assert "***2345" in enmascarado
     # Un codigo de error no es un telefono: se conserva.
     assert "21211" in enmascarado
+
+
+# ---------------------------------------------------------------------------
+# AUD2-B4-08 (2026-09-20): los bordes que quedaron sin la guarda del sink.
+# Tres logs volcaban ``str(exc)`` crudo y ``_build_message`` corria FUERA del
+# ``try`` de ``SmtpSession.send``, asi que una excepcion del parser de
+# cabeceras se propagaba con el asunto o la direccion en el texto. En el
+# recordatorio eso ademas libera el reclamo: el mismo turno volvia a
+# intentarlo cada 15 minutos hasta la hora del turno.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_un_fallo_al_armar_el_mensaje_queda_contenido_en_el_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explota(to: str, subject: str, body: str) -> EmailMessage:
+        raise ValueError(f"cabecera invalida: <{to}> / {subject}")
+
+    monkeypatch.setattr(tasks, "_build_message", explota)
+    sesion = tasks.SmtpSession()
+
+    with capture_logs() as eventos:
+        assert await sesion.send(EMAIL, "Asunto", "cuerpo") is False
+
+    fallo = next(e for e in eventos if e["event"] == "smtp_send_failed")
+    assert fallo["error_type"] == "ValueError"
+    _sin_email_crudo(eventos)
+
+
+@pytest.mark.asyncio
+async def test_el_fallo_de_la_confirmacion_no_vuelca_el_texto_crudo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def explota(*args: Any, **kwargs: Any) -> dict[str, str]:
+        raise RuntimeError(f"rechazado {EMAIL} desde +5491155512345")
+
+    monkeypatch.setattr(tasks, "send_appointment_confirmation", explota)
+
+    with capture_logs() as eventos:
+        resultado = await tasks.send_confirmation_email(
+            email=EMAIL, details=dict(DETAILS)
+        )
+
+    assert resultado["status"] == "failed"
+    _sin_email_crudo(eventos)
+    assert all("5491155512345" not in repr(e) for e in eventos)
+
+
+@pytest.mark.asyncio
+async def test_el_fallo_del_recordatorio_no_vuelca_el_texto_crudo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    liberados: list[str] = []
+
+    class _Repo:
+        async def claim_reminder(self, *args: Any) -> bool:
+            return True
+
+        async def release_reminder(self, appointment_id: str, columna: str) -> None:
+            liberados.append(columna)
+
+    async def explota(**kwargs: Any) -> dict[str, str]:
+        raise RuntimeError(f"rechazado {EMAIL} desde +5491155512345")
+
+    monkeypatch.setattr(tasks, "notify_client_reminder", explota)
+    turno = SimpleNamespace(
+        id="ap-1",
+        public_id="appt-b408",
+        client_email=EMAIL,
+        starts_at=datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc),
+        client_name="Ana",
+    )
+    fila = (
+        turno,
+        SimpleNamespace(name="Corte", public_id="srv-1"),
+        SimpleNamespace(display_name="Ana", kind="person", public_id="stf-1"),
+        SimpleNamespace(email=EMAIL),
+        SimpleNamespace(name="Tienda", slug="tienda", whatsapp_number=None),
+    )
+
+    with capture_logs() as eventos:
+        enviado = await tasks._dispatch_reminder(
+            _Repo(), fila, STAGE_24H, datetime.now(timezone.utc)
+        )
+
+    assert enviado is False
+    assert liberados == [STAGE_24H.column], "el reclamo se libera para reintentar"
+    _sin_email_crudo(eventos)
+    assert all("5491155512345" not in repr(e) for e in eventos)
+
+
+@pytest.mark.asyncio
+async def test_el_presupuesto_del_otp_no_loguea_la_url_de_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """El cuarto ``str(exc)`` de AUD2-B4-08 estaba en ``modules/otp``.
+
+    Un ``RedisError`` repite la URL de conexion en su texto, y esa URL lleva
+    credenciales. Se loguea solo el tipo.
+    """
+    import modules.otp.service as otp_service
+    from core.config import settings
+    from redis.exceptions import RedisError
+
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", False)
+
+    async def redis_caido() -> Any:
+        raise RedisError("Error 111 connecting to redis://usuario:secreto@10.0.0.5")
+
+    monkeypatch.setattr(otp_service, "get_redis", redis_caido)
+
+    with capture_logs() as eventos:
+        await otp_service._consume_budget("req", "store-1", "+5491155512345", 5)
+
+    evento = next(e for e in eventos if e["event"] == "otp_budget_redis_unavailable")
+    assert evento["error_type"] == "RedisError"
+    assert "secreto" not in repr(evento)
