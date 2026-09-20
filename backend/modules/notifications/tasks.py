@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
-from typing import Any, cast
+from typing import Any
 
 import structlog
 
@@ -295,9 +295,8 @@ def _send_otp_email_task(to: str, subject: str, body: str) -> dict[str, str]:
     return run_in_worker_loop(deliver_otp_email(to, subject, body))
 
 
-# Anotada ``Any`` (y no por ``cast`` sobre el mismo nombre, como
-# ``process_appointment_reminders``) porque a esta si se le llama ``.delay``:
-# con el tipo de la funcion cruda mypy no ve el atributo que agrega Celery.
+# Anotada ``Any``: el nombre publico es la tarea de Celery, y a esta ademas
+# se le llama ``.delay``, que el tipo de la funcion cruda no tiene.
 send_otp_email: Any = celery_app.task(name="send_otp_email", max_retries=0)(
     _send_otp_email_task
 )
@@ -957,18 +956,42 @@ async def process_due_appointment_reminders(
     }
 
 
-def process_appointment_reminders(
+def _process_appointment_reminders_task(
     self: Any, lookahead_hours: int = 48
-) -> dict[str, int]:
-    async def _run() -> dict[str, int]:
+) -> dict[str, Any]:
+    """Wrapper de Celery del lote de recordatorios.
+
+    AUD2-B4-10 (2026-09-20): S-06 agrego ``unexamined`` y ``batch_full``
+    justamente para que se sepa cuando el lote quedo corto, y este wrapper
+    los tiraba: el resultado de la tarea -lo que se ve en el backend de
+    resultados y en cualquier monitor- traia solo ``published`` y
+    ``skipped``. Con AUD2-B4-04 encima, la unica evidencia de que se estaban
+    perdiendo recordatorios de 24 h era una linea de ``info``. Ahora la
+    tarea devuelve los cuatro y, si el lote quedo corto, avisa aparte con el
+    contexto que hace falta para decidir (tope de filas y presupuesto de
+    tiempo de esta corrida).
+    """
+
+    async def _run() -> dict[str, Any]:
         result = await process_due_appointment_reminders(
             now=datetime.now(timezone.utc),
             lookahead_hours=lookahead_hours,
         )
-        return {
+        resumen: dict[str, Any] = {
             "published": int(result["published"]),
             "skipped": int(result["skipped"]),
+            "unexamined": int(result["unexamined"]),
+            "batch_full": bool(result["batch_full"]),
         }
+        if resumen["batch_full"] or resumen["unexamined"]:
+            logger.warning(
+                "reminders_batch_incompleto",
+                **resumen,
+                lookahead_hours=lookahead_hours,
+                batch_limit=REMINDER_BATCH_LIMIT,
+                time_budget_seconds=REMINDER_TIME_BUDGET_SECONDS,
+            )
+        return resumen
 
     try:
         return run_in_worker_loop(_run())
@@ -976,12 +999,11 @@ def process_appointment_reminders(
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
 
-process_appointment_reminders = cast(
-    Any,
-    celery_app.task(name="process_appointment_reminders", bind=True, max_retries=3)(
-        process_appointment_reminders
-    ),
-)
+# Anotada ``Any`` como ``send_otp_email``: el nombre publico es la tarea de
+# Celery, no la funcion cruda, y quien la llama no le pasa ``self``.
+process_appointment_reminders: Any = celery_app.task(
+    name="process_appointment_reminders", bind=True, max_retries=3
+)(_process_appointment_reminders_task)
 
 
 def _store_notification_body(title: str, body: str | None) -> str:
