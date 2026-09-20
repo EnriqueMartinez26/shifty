@@ -28,6 +28,7 @@ from modules.notifications.tasks import (
     send_store_notification_email,
 )
 from modules.payments.model import (
+    JsonValue,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -585,43 +586,82 @@ async def _store_owner_mails(
     ]
 
 
-async def process_webhook_inbox_batch(
-    db: AsyncSession,
-    *,
-    limit: int = 100,
-    store_id: str | None = None,
-) -> dict[str, int]:
+def _inbox_batch_query(
+    *, limit: int, store_id: str | None
+) -> Select[tuple[WebhookInbox]]:
     filters: list[ColumnElement[bool]] = [
         WebhookInbox.processed_at.is_(None),
         WebhookInbox.is_active.is_(True),
     ]
     if store_id:
         filters.append(WebhookInbox.store_id == store_id)
-
-    result = await db.execute(
+    return (
         select(WebhookInbox)
         .where(*filters)
         .order_by(WebhookInbox.created_at.asc())
         .limit(limit)
-        # Dos corridas solapadas del beat (cada item hace HTTP a MP) no deben
-        # tomar el mismo webhook: sin esto se repetia el fetch y attempts
-        # subia dos veces por evento (regla 8). 2026-09-16, B2-03.
-        .with_for_update(skip_locked=True)
     )
-    inbox_items = list(result.scalars().all())
-    processed = 0
-    failed = 0
+
+
+async def process_webhook_inbox_batch(
+    db: AsyncSession,
+    *,
+    limit: int = 100,
+    store_id: str | None = None,
+) -> dict[str, int]:
+    async with _exclusive_job(db, INBOX_JOB_LOCK) as tomado:
+        if not tomado:
+            # Otra corrida del beat sigue adentro (MP lento): esta no hace nada.
+            logger.info("process_webhook_inbox_overlap_skipped")
+            return {"processed": 0, "failed": 0, "inspected": 0}
+        return await _process_webhook_inbox_batch(db, limit=limit, store_id=store_id)
+
+
+async def _process_webhook_inbox_batch(
+    db: AsyncSession, *, limit: int, store_id: str | None
+) -> dict[str, int]:
+    """Aplica los webhooks pendientes en dos fases (AUD2-B2-02, 2026-09-20).
+
+    Fase A, SIN lock y con la transaccion cerrada: se le pide a Mercado Pago
+    el detalle de cada evento. Antes el lote tomaba las filas con ``FOR UPDATE
+    SKIP LOCKED`` y hacia ese HTTP (hasta 20 s por evento) dentro del mismo
+    ``for``, asi que una corrida podia sostener 100 filas bloqueadas y la
+    sesion ``idle in transaction`` durante minutos (regla 5).
+
+    Fase B, CON lock: se escribe con el resultado ya en memoria. La exclusion
+    entre corridas solapadas la da ahora el advisory lock de sesion
+    (``_exclusive_job``), como en el job de vencimiento: el ``SKIP LOCKED`` de
+    la fase B ya no alcanza porque la fase A no bloquea nada.
+    """
+    consulta = _inbox_batch_query(limit=limit, store_id=store_id)
+    pendientes = list((await db.execute(consulta)).scalars().all())
     # La configuracion es por tienda, no por evento: una lectura con in_()
     # antes del for en vez de dos por webhook (regla 12; 2026-09-17, B2-13).
-    configs = await load_gateway_configs(db, (i.store_id for i in inbox_items))
+    configs = await load_gateway_configs(db, (i.store_id for i in pendientes))
+    # Commit de AsyncSession y no de TenantSession: el de TenantSession
+    # reaplica el contexto y con eso reabre otra transaccion en el acto (S-02).
+    await AsyncSession.commit(db)
+    enriquecidos = await _enrich_inbox_payloads(db, pendientes, configs)
+    await _apply_tenant_context(db)
 
-    for inbox in inbox_items:
+    result = await db.execute(
+        consulta.with_for_update(skip_locked=True).execution_options(
+            populate_existing=True
+        )
+    )
+    processed = 0
+    failed = 0
+    inspected = 0
+    for inbox in result.scalars().all():
+        if inbox.id not in enriquecidos:
+            # Llego despues de la fase A: sin detalle de MP no se resuelve, y
+            # gastarle un intento seria mentir. Lo toma la corrida siguiente.
+            continue
+        inspected += 1
         try:
             applied = True
             if inbox.provider == "mercadopago" and inbox.store_id:
-                inbox.payload = await enrich_mercadopago_webhook_payload(
-                    db, store_id=inbox.store_id, payload=inbox.payload, configs=configs
-                )
+                inbox.payload = enriquecidos[inbox.id]
                 applied = await apply_mercadopago_webhook_payload(
                     db, store_id=inbox.store_id, payload=inbox.payload, configs=configs
                 )
@@ -636,20 +676,36 @@ async def process_webhook_inbox_batch(
             failed += 1
 
     await db.commit()
-    return {"processed": processed, "failed": failed, "inspected": len(inbox_items)}
+    return {"processed": processed, "failed": failed, "inspected": inspected}
 
 
-async def reconcile_pending_payments(
-    db: AsyncSession, *, limit: int = 100
-) -> dict[str, int]:
-    """Consulta a Mercado Pago los cobros que siguen pendientes en Shifty.
+async def _enrich_inbox_payloads(
+    db: AsyncSession, pendientes: list[WebhookInbox], configs: GatewayConfigs
+) -> dict[str, dict[str, JsonValue]]:
+    """Consulta el detalle de cada webhook en MP. Sin lock ni transaccion abierta.
 
-    Es la red de contencion del webhook: si la notificacion nunca llego, llego
-    sin firma valida o no pudimos resolverla, aca recuperamos el estado real
-    preguntandole directamente a Mercado Pago.
+    Un evento que no se puede enriquecer conserva su payload crudo: ``enrich``
+    ya devuelve el original ante cualquier fallo, y la fase B decide con eso.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
-    result = await db.execute(
+    persistir = partial(_persist_refresh_in_short_transaction, db)
+    enriquecidos: dict[str, dict[str, JsonValue]] = {}
+    for inbox in pendientes:
+        if inbox.provider != "mercadopago" or not inbox.store_id:
+            enriquecidos[inbox.id] = inbox.payload
+            continue
+        enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
+            db,
+            store_id=inbox.store_id,
+            payload=inbox.payload,
+            configs=configs,
+            persist_refresh=persistir,
+        )
+    return enriquecidos
+
+
+def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
+    cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
+    return (
         select(Payment)
         .join(
             PaymentGatewayConfig,
@@ -664,25 +720,66 @@ async def reconcile_pending_payments(
         )
         .order_by(Payment.created_at.asc())
         .limit(limit)
-        # Regla 8: dos corridas solapadas no consultan dos veces a MP por el
-        # mismo cobro. Solo la fila del cobro: el JOIN con la configuracion de
-        # la tienda no la bloquea. 2026-09-16, B2-03.
-        .with_for_update(skip_locked=True, of=Payment)
     )
-    payments = list(result.scalars().all())
+
+
+async def reconcile_pending_payments(
+    db: AsyncSession, *, limit: int = 100
+) -> dict[str, int]:
+    """Consulta a Mercado Pago los cobros que siguen pendientes en Shifty.
+
+    Es la red de contencion del webhook: si la notificacion nunca llego, llego
+    sin firma valida o no pudimos resolverla, aca recuperamos el estado real
+    preguntandole directamente a Mercado Pago.
+    """
+    async with _exclusive_job(db, RECONCILE_JOB_LOCK) as tomado:
+        if not tomado:
+            logger.info("reconcile_pending_payments_overlap_skipped")
+            return {"reconciled": 0, "failed": 0, "inspected": 0}
+        return await _reconcile_pending_payments(db, limit=limit)
+
+
+async def _reconcile_pending_payments(
+    db: AsyncSession, *, limit: int
+) -> dict[str, int]:
+    """Las mismas dos fases que el inbox (AUD2-B2-02, 2026-09-20).
+
+    Aca el costo era el peor de los tres lotes: las filas bloqueadas son
+    ``payments``, las mismas que toma ``find_payment_for_webhook`` en cada
+    webhook entrante y ``get_by_appointment_locked`` al liberar un turno. Con
+    ``lock_timeout = 5s`` en el rol de la app y MP lento, una corrida hacia
+    fallar los webhooks y el boton "liberar turno" del panel.
+    """
+    consulta = _reconciliation_query(limit, datetime.now(timezone.utc))
+    pendientes = list((await db.execute(consulta)).scalars().all())
     # La configuracion es por tienda, no por cobro: una lectura con in_() antes
     # del for en vez de dos por cobro, una en la consulta a MP y otra en la
-    # validacion de integridad (regla 12; 2026-09-20, AUD2-B2-06). B2-13 lo
-    # habia cerrado solo en el lote del inbox.
-    configs = await load_gateway_configs(db, (p.store_id for p in payments))
+    # validacion de integridad (regla 12; 2026-09-20, AUD2-B2-06).
+    configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
+    await AsyncSession.commit(db)
+    remotos, fallidos = await _remote_payments_for_reconciliation(
+        db, pendientes, configs
+    )
+    await _apply_tenant_context(db)
 
+    result = await db.execute(
+        consulta.with_for_update(skip_locked=True, of=Payment).execution_options(
+            populate_existing=True
+        )
+    )
     reconciled = 0
-    failed = 0
-    for payment in payments:
+    inspected = 0
+    # Un cobro que aparecio despues de la fase A no tiene respuesta de MP: lo
+    # toma la corrida siguiente en vez de contarse como inspeccionado.
+    vistos = {p.id for p in pendientes}
+    for payment in result.scalars().all():
+        if payment.id not in vistos:
+            continue
+        inspected += 1
+        remote = remotos.get(payment.id)
+        if not remote:
+            continue
         try:
-            remote = await _fetch_remote_payment(db, payment, configs)
-            if not remote:
-                continue
             applied = await apply_mercadopago_webhook_payload(
                 db,
                 store_id=payment.store_id,
@@ -693,10 +790,31 @@ async def reconcile_pending_payments(
                 reconciled += 1
         except Exception:
             # Un pago que no se puede conciliar no debe frenar al resto del lote.
-            failed += 1
+            fallidos += 1
 
     await db.commit()
-    return {"reconciled": reconciled, "failed": failed, "inspected": len(payments)}
+    return {"reconciled": reconciled, "failed": fallidos, "inspected": inspected}
+
+
+async def _remote_payments_for_reconciliation(
+    db: AsyncSession, pendientes: list[Payment], configs: GatewayConfigs
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """{payment.id: pago remoto} y cuantos no se pudieron consultar.
+
+    Corre en la fase A: sin lock y con la transaccion cerrada.
+    """
+    persistir = partial(_persist_refresh_in_short_transaction, db)
+    remotos: dict[str, dict[str, Any]] = {}
+    fallidos = 0
+    for payment in pendientes:
+        try:
+            remote = await _fetch_remote_payment(db, payment, configs, persistir)
+        except Exception:
+            fallidos += 1
+            continue
+        if remote:
+            remotos[payment.id] = remote
+    return remotos, fallidos
 
 
 async def _fetch_remote_payment(
@@ -760,6 +878,11 @@ def _expired_holds_query(
 # reservado para jobs; el id es hashtext(nombre del job).
 JOB_LOCK_NAMESPACE = 7001
 EXPIRE_JOB_LOCK = "job:expire_unpaid_appointments"
+# Desde AUD2-B2-02 el inbox y la conciliacion tambien leen su lote SIN lock
+# (el HTTP a MP pasa a una fase previa), asi que la exclusion entre corridas
+# solapadas del beat ya no puede venir del SKIP LOCKED: viene de aca.
+INBOX_JOB_LOCK = "job:process_webhook_inbox"
+RECONCILE_JOB_LOCK = "job:reconcile_pending_payments"
 
 
 async def _release_job_lock(conn: AsyncConnection, params: dict[str, object]) -> None:

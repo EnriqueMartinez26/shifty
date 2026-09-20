@@ -10,6 +10,13 @@ evento y sumaba ``attempts`` dos veces por el mismo webhook (regla 8).
 
 SQLite ignora ``FOR UPDATE``, asi que aca se verifica la sentencia que arma
 cada lote; la concurrencia real vive en ``tests/postgres``.
+
+2026-09-20, AUD2-B2-02: los dos lotes pasaron a dos fases (fase A sin lock
+para hablar con Mercado Pago, fase B con lock para escribir), asi que ahora
+ejecutan DOS consultas sobre la misma entidad. La que tiene que bloquear es
+la de la fase B: aca se busca esa. La exclusion entre corridas solapadas la
+da ademas el advisory lock de sesion (``_exclusive_job``), que es lo que
+reemplaza al SKIP LOCKED durante la fase de HTTP.
 """
 
 from typing import Any
@@ -39,15 +46,19 @@ def _espiar_sentencias(
     return ejecutadas
 
 
-def _consulta_del_lote(ejecutadas: list[Any], entidad: type) -> Select[Any]:
-    """La SELECT ORM cuya primera entidad es la fila del lote."""
+def _consulta_bloqueada_del_lote(ejecutadas: list[Any], entidad: type) -> Select[Any]:
+    """La SELECT ORM de la fase B: la que bloquea las filas del lote."""
     for statement in ejecutadas:
         if not isinstance(statement, Select):
             continue
         descripciones = statement.column_descriptions
-        if descripciones and descripciones[0].get("entity") is entidad:
+        if (
+            descripciones
+            and descripciones[0].get("entity") is entidad
+            and statement._for_update_arg is not None
+        ):
             return statement
-    raise AssertionError(f"el lote no consulto {entidad.__name__}")
+    raise AssertionError(f"el lote no bloqueo ninguna fila de {entidad.__name__}")
 
 
 def _bloquea_con_skip_locked(statement: Select[Any]) -> bool:
@@ -64,7 +75,7 @@ async def test_el_lote_del_inbox_toma_sus_filas_con_skip_locked(
     stats = await process_webhook_inbox_batch(test_session)
 
     assert stats == {"processed": 0, "failed": 0, "inspected": 0}
-    lote = _consulta_del_lote(ejecutadas, WebhookInbox)
+    lote = _consulta_bloqueada_del_lote(ejecutadas, WebhookInbox)
     assert _bloquea_con_skip_locked(lote), (
         "el inbox se selecciona sin FOR UPDATE SKIP LOCKED: dos corridas "
         "solapadas del beat toman el mismo webhook (regla 8)"
@@ -80,7 +91,7 @@ async def test_el_lote_de_conciliacion_toma_sus_cobros_con_skip_locked(
     stats = await reconcile_pending_payments(test_session)
 
     assert stats == {"reconciled": 0, "failed": 0, "inspected": 0}
-    lote = _consulta_del_lote(ejecutadas, Payment)
+    lote = _consulta_bloqueada_del_lote(ejecutadas, Payment)
     assert _bloquea_con_skip_locked(lote), (
         "la conciliacion selecciona sin FOR UPDATE SKIP LOCKED: dos corridas "
         "solapadas consultan dos veces a Mercado Pago por el mismo cobro"

@@ -18,6 +18,7 @@ from modules.payments.model import JsonValue
 from modules.services.model import Service
 from modules.payments.service import (
     GatewayConfigs,
+    PersistRefresh,
     fetch_mercadopago_payment,
     resolve_gateway_config,
     stamp_payment_from_status,
@@ -63,6 +64,7 @@ async def enrich_mercadopago_webhook_payload(
     store_id: str,
     payload: dict[str, Any],
     configs: GatewayConfigs | None = None,
+    persist_refresh: PersistRefresh | None = None,
 ) -> dict[str, Any]:
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -72,7 +74,11 @@ async def enrich_mercadopago_webhook_payload(
 
     try:
         payment_details = await fetch_mercadopago_payment(
-            db, store_id=store_id, payment_id=payment_id, configs=configs
+            db,
+            store_id=store_id,
+            payment_id=payment_id,
+            configs=configs,
+            persist_refresh=persist_refresh,
         )
     except Exception:
         return payload
