@@ -7,6 +7,7 @@ encolar ninguna tarea. Ningun job corria, y en silencio: el worker se
 declaraba "ready".
 """
 
+import re
 from pathlib import Path
 
 import yaml
@@ -232,4 +233,56 @@ def test_los_procesos_de_celery_declaran_healthcheck() -> None:
     for prueba in (worker, beat):
         assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
             f"$HOSTNAME sin escapar lo interpola compose, no el shell: {prueba!r}"
+        )
+
+
+# --- El ejemplo de produccion tiene que levantar el stack (AUD2-C-01, V-diff) --
+#
+# compose interpola cada archivo ANTES de fusionarlos: un `${VAR:?}` del compose
+# base aborta `docker compose config` en produccion aunque el override no use
+# esa variable. Asi que toda variable exigida con `:?` en cualquiera de los dos
+# composes tiene que estar declarada en backend/.env.production.example, que
+# es el archivo que el operador copia a la RAIZ como .env.
+
+ENV_PRODUCCION_EXAMPLE = COMPOSE_PROD.parent / "backend" / ".env.production.example"
+
+
+def _exigidas_con_interrogacion() -> set[str]:
+    exigidas: set[str] = set()
+    for compose in (COMPOSE, COMPOSE_PROD):
+        exigidas.update(re.findall(r"\$\{([A-Z_]+):\?", compose.read_text("utf-8")))
+    return exigidas
+
+
+def _declaradas_en(ruta: Path) -> set[str]:
+    return {
+        linea.split("=", 1)[0].strip()
+        for linea in ruta.read_text(encoding="utf-8").splitlines()
+        if linea.strip() and not linea.lstrip().startswith("#") and "=" in linea
+    }
+
+
+def test_el_ejemplo_de_produccion_declara_todo_lo_que_los_composes_exigen() -> None:
+    exigidas = _exigidas_con_interrogacion()
+    assert exigidas, "ningun compose exige variables con :?"
+    faltan = exigidas - _declaradas_en(ENV_PRODUCCION_EXAMPLE)
+    assert not faltan, (
+        "el compose aborta en produccion si falta alguna de estas, y el "
+        f"ejemplo que se copia como .env no las declara: {sorted(faltan)}"
+    )
+
+
+def test_el_ejemplo_de_produccion_dice_que_se_copia_a_la_raiz() -> None:
+    texto = ENV_PRODUCCION_EXAMPLE.read_text(encoding="utf-8")
+    assert "raiz" in texto.lower() and "env_file" in texto, (
+        "nadie dice que este archivo se copia a la raiz del repo como .env, que "
+        "es lo que resuelve env_file: .env en docker-compose.prod.yml"
+    )
+
+
+def test_el_override_fija_env_production() -> None:
+    for servicio in SERVICIOS_DE_LA_APP:
+        assert _env_prod(servicio).get("ENV") == "production", (
+            f"{servicio}: el override no fija ENV=production y las guardas de "
+            "core/config.py no se activan"
         )
