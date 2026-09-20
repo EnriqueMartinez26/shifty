@@ -1009,7 +1009,17 @@ async def send_store_notification_email(
 
     Nunca propaga errores: es un efecto secundario operativo y no puede
     abortar el procesamiento del outbox.
+
+    AUD2-B4-09 (2026-09-20): la guarda de entregabilidad faltaba aca y su
+    proveedor (``payments/jobs.py::_store_owner_mails``) solo filtra
+    ``if email``. Un administrador con un email tecnico o roto generaba un
+    rebote por cada evento del outbox -que corre cada minuto-, que es
+    exactamente lo que ``is_deliverable_email`` existe para evitar. La guarda
+    va en el sink del aviso, no en el proveedor, para que cubra a cualquier
+    llamador nuevo sin que haya que acordarse.
     """
+    if not is_deliverable_email(email):
+        return {"status": "skipped", "reason": "no-deliverable"}
     try:
         delivered = await _send_email(
             email, f"Shifty - {title}", _store_notification_body(title, body), smtp
