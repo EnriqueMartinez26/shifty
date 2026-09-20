@@ -127,6 +127,13 @@ async def test_la_ultima_migracion_es_reversible(owner_engine: AsyncEngine) -> N
 # del test: si aparece una nueva, este test falla y hay que justificarla.
 SIN_RLS_A_PROPOSITO = {"audit_logs"}
 
+# Multi-tenant SIN columna store_id: la consulta por columna no las encuentra,
+# pero llevan RLS igual. `stores` ES la tienda (su policy compara `id`) y
+# `staff_services` cuelga de staff (su policy hace EXISTS contra staff.store_id;
+# ver d5ec116d06a3). Al reemplazar los pisos globales por la verificacion por
+# columna, estas dos quedaban sin cobertura (V-diff de AUD2-C-11, 2026-09-20).
+RLS_OBLIGATORIA_SIN_STORE_ID = {"stores", "staff_services"}
+
 
 @pytest.mark.asyncio
 async def test_toda_tabla_con_store_id_tiene_rls_forzado_y_politica(
@@ -177,11 +184,20 @@ async def test_toda_tabla_con_store_id_tiene_rls_forzado_y_politica(
         }
 
     assert con_store_id, "ninguna tabla tiene store_id: la consulta no sirve"
+    assert RLS_OBLIGATORIA_SIN_STORE_ID <= set(estado), (
+        "la lista de tablas sin store_id nombra tablas que no existen: "
+        f"{sorted(RLS_OBLIGATORIA_SIN_STORE_ID - set(estado))}"
+    )
+    assert not (RLS_OBLIGATORIA_SIN_STORE_ID & con_store_id), (
+        "estas tablas ya tienen store_id: la consulta por columna las cubre y "
+        f"sobran en la lista: {sorted(RLS_OBLIGATORIA_SIN_STORE_ID & con_store_id)}"
+    )
 
+    exigidas = (con_store_id - SIN_RLS_A_PROPOSITO) | RLS_OBLIGATORIA_SIN_STORE_ID
     faltan_rls: list[str] = []
     faltan_force: list[str] = []
     faltan_politica: list[str] = []
-    for tabla in sorted(con_store_id - SIN_RLS_A_PROPOSITO):
+    for tabla in sorted(exigidas):
         habilitada, forzada = estado.get(tabla, (False, False))
         if not habilitada:
             faltan_rls.append(tabla)
