@@ -36,8 +36,11 @@ interface NewAppointmentModalProps {
   defaultDate?: Date
 }
 
+// Sin `channel`: email es el unico canal con envio real. `whatsapp`/`sms`
+// solo existen con OTP_PROVIDER=console y en produccion el backend los
+// rechaza con 422, asi que ofrecerlos dejaba el alta manual inutilizable
+// (2026-09-20).
 interface OtpFlowState {
-  channel: 'whatsapp' | 'sms'
   code: string
   verified: boolean
   verifiedPhone: string
@@ -46,7 +49,6 @@ interface OtpFlowState {
 }
 
 const emptyOtpState: OtpFlowState = {
-  channel: 'whatsapp',
   code: '',
   verified: false,
   verifiedPhone: '',
@@ -136,7 +138,8 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
       const response = await requestOtp.mutateAsync({
         store_public_id: storeSettings.public_id,
         phone: clientPhone.trim(),
-        channel: otpState.channel
+        channel: 'email',
+        email: clientEmail.trim()
       })
       setOtpState((prev) => ({ ...prev, debugCode: response.debug_code || '', error: '' }))
     } catch (err) {
@@ -376,7 +379,8 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
               className="text-[10px] font-black uppercase tracking-widest ml-1 flex items-center gap-1"
               style={{ color: colors2000s.text.secondary }}
             >
-              <Mail size={11} /> Email (Opcional)
+              <Mail size={11} />{' '}
+              {requiresOtp ? 'Email (requerido para el código)' : 'Email (Opcional)'}
             </label>
             <input
               type="email"
@@ -431,27 +435,26 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-                <select
-                  value={otpState.channel}
-                  onChange={(e) =>
-                    setOtpState((prev) => ({
-                      ...prev,
-                      channel: e.target.value as 'whatsapp' | 'sms'
-                    }))
-                  }
-                  className="px-4 py-3 rounded-md font-bold outline-none text-xs"
-                  style={inputStyle}
+              <div className="grid sm:grid-cols-[1fr_auto] gap-3 items-center">
+                <p
+                  className="text-[10px] font-bold px-1"
+                  style={{ color: colors2000s.text.secondary }}
                 >
-                  <option value="whatsapp">WhatsApp</option>
-                  <option value="sms">SMS</option>
-                </select>
+                  {clientEmail.trim()
+                    ? `El código va a ${clientEmail.trim()} y ese email queda guardado como contacto del cliente: tiene que ser el de él, no el del local.`
+                    : 'Completá el email del cliente para poder enviarle el código.'}
+                </p>
                 <button
                   type="button"
                   onClick={() => {
                     void handleRequestOtp()
                   }}
-                  disabled={requestOtp.isPending || !storeSettings || !clientPhone.trim()}
+                  disabled={
+                    requestOtp.isPending ||
+                    !storeSettings ||
+                    !clientPhone.trim() ||
+                    !clientEmail.trim()
+                  }
                   className="px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
                   style={buttonStyles2000s.default}
                 >

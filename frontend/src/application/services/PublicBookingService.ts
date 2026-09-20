@@ -125,8 +125,16 @@ export interface PublicPaymentStatus {
 export interface OtpRequestPayload {
   store_public_id: string
   phone: string
-  channel: 'email' | 'whatsapp' | 'sms'
-  email?: string
+  /**
+   * Solo `email`: es el unico canal con envio real. El backend acepta
+   * `whatsapp`/`sms` unicamente con OTP_PROVIDER=console y en produccion los
+   * rechaza con 422, asi que dejarlos en el tipo permitia volver a mandar un
+   * canal que no funciona (fue el bug F11a-03, 2026-09-20). Cerrarlo en el
+   * tipo lo vuelve un error de compilacion, no un test que alguien puede
+   * borrar.
+   */
+  channel: 'email'
+  email: string
 }
 
 export interface OtpRequestResponse {
