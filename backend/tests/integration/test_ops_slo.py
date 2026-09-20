@@ -108,3 +108,27 @@ async def test_el_superadmin_ve_el_consolidado_de_la_plataforma(
     cuerpo = res.json()
     assert cuerpo["scope"] == "global"
     assert cuerpo["store_id"] is None
+
+
+# V-diff AUD2-B5-17: el mismo patron inalcanzable que se borro de
+# modules/reports/router.py sobrevivia aca:
+#   is_global = role == ROLE_SUPER_ADMIN or bool(user.is_global_admin)
+# El segundo termino no se alcanza nunca, porque canonical_role ya devuelve
+# ROLE_SUPER_ADMIN en cuanto is_global_admin es true. Codigo muerto que sugiere
+# una combinacion de permisos que no existe: "global admin que NO es
+# superadmin". Este test afirma la propiedad de canonical_role en la que se
+# apoya el borrado, para que quede escrito por que se puede sacar; el
+# comportamiento ya lo fija test_el_superadmin_ve_el_consolidado_de_la_plataforma.
+def test_el_global_admin_siempre_es_rol_superadmin() -> None:
+    from core.roles import ROLE_SUPER_ADMIN, canonical_role
+
+    for rol_persistido in (UserRole.STAFF, UserRole.ADMIN, UserRole.CLIENT):
+        usuario = User(
+            email=f"prop-{rol_persistido.value}@test.com",
+            hashed_password="no-se-loguea",
+            role=rol_persistido,
+            is_global_admin=True,
+        )
+        assert canonical_role(usuario) == ROLE_SUPER_ADMIN, (
+            f"is_global_admin con role={rol_persistido!r} tiene que ser superadmin"
+        )

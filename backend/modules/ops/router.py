@@ -196,7 +196,12 @@ async def slo_status(
     if role != ROLE_SUPER_ADMIN and not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("ver SLO")
 
-    is_global = role == ROLE_SUPER_ADMIN or bool(user.is_global_admin)
+    # No hace falta mirar is_global_admin aparte: canonical_role ya devuelve
+    # ROLE_SUPER_ADMIN cuando el flag esta, asi que el termino extra era
+    # inalcanzable y sugeria un "global admin que no es superadmin" que no
+    # existe (AUD2-B5-17, mismo patron que reports/router.py). Lo fija
+    # test_el_global_admin_siempre_es_rol_superadmin.
+    is_global = role == ROLE_SUPER_ADMIN
     # store_scope_for nunca devuelve None: no hay forma de pedir "sin filtro"
     # desde aca, y el alcance global es una decision de este endpoint.
     store_id = store_scope_for(user)
