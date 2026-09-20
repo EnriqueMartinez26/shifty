@@ -179,10 +179,12 @@ async def test_el_dinero_del_reporte_se_agrega_en_sql(
     assert profesionales.status_code == 200, profesionales.text
     cuerpo = resumen.json()
 
-    # Contrato del ingreso: solo lo cobrado, y el ticket promedio sobre los 3.
+    # Contrato del ingreso: solo lo cobrado, y el ticket promedio sobre los
+    # turnos que cobraron. AUD2-B5-04: antes dividia por los 3 agendados y el
+    # "ticket promedio" de un servicio de $10.000 daba $6.666,67.
     assert cuerpo["stats"]["total_appointments"] == 3
     assert cuerpo["stats"]["total_revenue"] == 20000.0
-    assert cuerpo["stats"]["average_ticket"] == round(20000 / 3, 2)
+    assert cuerpo["stats"]["average_ticket"] == 10000.0
     assert [
         (s["service_id"], s["appointments"], s["completed_appointments"], s["revenue"])
         for s in cuerpo["top_services"]

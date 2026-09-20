@@ -58,14 +58,18 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
     llamadas: list[int] = []
 
     async def fake_execute(*args: Any, **kwargs: Any) -> SimpleNamespace:
-        # La primera consulta es el conteo por estado (un turno completado);
-        # las siguientes son los top-5 (vacios). Cohortes en cero y sin ingreso.
+        # Orden de las consultas de get_summary: (1) conteo por estado, con un
+        # turno completado; (2) ingreso acreditado (total, turnos cobrados);
+        # (3) sena retenida; (4) y (5) los top-5, vacios; (6) cohortes. Sin
+        # plata: el ticket promedio no puede dividir por cero.
         llamadas.append(1)
-        filas = [("completed", 1)] if len(llamadas) == 1 else []
+        numero = len(llamadas)
+        filas = [("completed", 1)] if numero == 1 else []
+        una_fila = (0, 0) if numero == 2 else (0, 0, 0)
         return SimpleNamespace(
             all=lambda: filas,
             scalar_one=lambda: 0,
-            one=lambda: (0, 0, 0),
+            one=lambda: una_fila,
         )
 
     fake_db.execute = fake_execute
@@ -79,6 +83,7 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
     assert summary.stats.completed_appointments == 1
     assert summary.appointments[0].client_name == "Cliente"
     assert summary.has_more is False
+    assert summary.stats.average_ticket == 0.0
 
 
 @pytest.mark.asyncio

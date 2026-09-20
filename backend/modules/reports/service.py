@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 from sqlalchemy import ColumnElement, Select, Subquery, and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,6 +114,17 @@ def _local_month_key(
     )
 
 
+class _AccreditedRevenue(NamedTuple):
+    """Plata acreditada del rango y turnos que la generaron.
+
+    Las dos mitades del ticket promedio salen de la misma consulta para que
+    nunca hablen de conjuntos distintos.
+    """
+
+    total: Decimal
+    appointments: int
+
+
 # Estado del turno (en mayusculas) -> contador del resumen. Absent y expired
 # solo cuentan en el total.
 _STATUS_COUNTERS = {
@@ -147,19 +158,26 @@ def _appointment_item(
 
 
 def _summary_stats(
-    counts: dict[str, int], total_revenue: Decimal, retained_deposit_revenue: Decimal
+    counts: dict[str, int],
+    cobrado: _AccreditedRevenue,
+    retained_deposit_revenue: Decimal,
 ) -> ReportSummaryStats:
-    """Metricas del resumen a partir del conteo por estado que devuelve la base."""
-    revenue = float(total_revenue)
-    total = counts.get("total", 0)
+    """Metricas del resumen a partir del conteo por estado que devuelve la base.
+
+    El ticket promedio divide la plata acreditada por los turnos que la
+    generaron, no por los turnos agendados (AUD2-B5-04).
+    """
+    revenue = float(cobrado.total)
     return ReportSummaryStats(
-        total_appointments=total,
+        total_appointments=counts.get("total", 0),
         completed_appointments=counts.get("completed", 0),
         cancelled_appointments=counts.get("cancelled", 0),
         pending_appointments=counts.get("pending", 0),
         confirmed_appointments=counts.get("confirmed", 0),
         total_revenue=round(revenue, 2),
-        average_ticket=round(revenue / total, 2) if total else 0.0,
+        average_ticket=(
+            round(revenue / cobrado.appointments, 2) if cobrado.appointments else 0.0
+        ),
         retained_deposit_revenue=round(float(retained_deposit_revenue), 2),
     )
 
@@ -482,18 +500,27 @@ class ReportService:
 
     async def _accredited_revenue(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
-    ) -> Decimal:
-        """Ingreso total del rango: un escalar, sumado en la base."""
+    ) -> _AccreditedRevenue:
+        """Ingreso del rango y CUANTOS turnos lo generaron, en una consulta.
+
+        AUD2-B5-04: el ticket promedio dividia la plata cobrada por todos los
+        turnos agendados del rango, de cualquier estado. Son dos universos
+        distintos: el denominador tiene que ser el mismo conjunto de filas que
+        el numerador, o sea los turnos con pago acreditado. El join a ``paid``
+        es interno, asi que cada fila contada es un turno cobrado.
+        """
         paid = self._paid_by_appointment()
         result = await self.db.execute(
             self._select_in_range(
                 func.coalesce(func.sum(paid.c.paid), 0),
+                func.count(paid.c.appointment_id),
                 start_dt=start_dt,
                 end_dt=end_dt,
                 staff_id=staff_id,
             ).join(paid, paid.c.appointment_id == Appointment.id)
         )
-        return Decimal(str(result.scalar_one() or 0))
+        total, cobrados = result.one()
+        return _AccreditedRevenue(Decimal(str(total or 0)), int(cobrados or 0))
 
     async def _retained_deposit_revenue(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
@@ -745,7 +772,7 @@ class ReportService:
         # con el descuento de la promo aplicado y al precio historico, asi que
         # esto tambien resuelve el precio de lista y las promociones.
         counts = await self._status_counts(**rango)
-        total_revenue = await self._accredited_revenue(**rango)
+        cobrado = await self._accredited_revenue(**rango)
         retained = await self._retained_deposit_revenue(**rango)
         top_services = await self._top_services(**rango)
         top_clients = await self._top_clients(**rango)
@@ -773,7 +800,7 @@ class ReportService:
         return ReportSummaryResponse(
             from_date=resolved_from,
             to_date=resolved_to,
-            stats=_summary_stats(counts, total_revenue, retained),
+            stats=_summary_stats(counts, cobrado, retained),
             client_stats=client_stats,
             top_services=top_services,
             top_clients=top_clients,

@@ -271,7 +271,9 @@ async def test_resumen_cohortes_y_profesionales_no_cambian(
         "pending_appointments": 2,
         "confirmed_appointments": 1,
         "total_revenue": 15000.0,
-        "average_ticket": 2142.86,
+        # AUD2-B5-04: 15.000 sobre los DOS turnos que cobraron (t1 y t2), no
+        # sobre los siete agendados (antes daba 2142.86, el precio de nadie).
+        "average_ticket": 7500.0,
         # B5-10 (aditivo): el cancelado t3 no tiene pago, no hay sena retenida.
         "retained_deposit_revenue": 0.0,
     }
