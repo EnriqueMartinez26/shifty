@@ -49,6 +49,44 @@ def _build_pg_restore_command(
     return command, env
 
 
+def _build_psql_command(
+    database_url: str, sql: str
+) -> tuple[list[str], dict[str, str]]:
+    """Consulta de UNA fila contra la base restaurada, en formato plano.
+
+    Comparte el parseo de la URL con pg_restore para no tener dos traducciones
+    distintas del mismo string (AUD2-C-04, 2026-09-19).
+    """
+    parsed = urlparse(_normalize_postgres_url(database_url))
+    database_name = parsed.path.lstrip("/")
+    if not database_name:
+        raise ValueError("DATABASE_URL no contiene nombre de base de datos")
+
+    command = [
+        "psql",
+        # -A sin alinear, -t sin encabezado, -X ignora el .psqlrc del runner,
+        # ON_ERROR_STOP para que una tabla faltante sea exit code != 0.
+        "-AtX",
+        "--variable",
+        "ON_ERROR_STOP=1",
+        "--host",
+        parsed.hostname or "localhost",
+        "--port",
+        str(parsed.port or 5432),
+        "--username",
+        parsed.username or "postgres",
+        "--dbname",
+        database_name,
+        "--command",
+        sql,
+    ]
+
+    env = os.environ.copy()
+    if parsed.password:
+        env["PGPASSWORD"] = parsed.password
+    return command, env
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Restaura backup PostgreSQL en formato custom (pg_restore)."
