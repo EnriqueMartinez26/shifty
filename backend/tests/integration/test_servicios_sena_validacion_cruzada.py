@@ -21,7 +21,7 @@ from typing import Any, cast
 import pytest
 import ulid
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.services.model import Service
@@ -171,20 +171,29 @@ async def test_fila_vieja_invalida_se_edita_si_no_se_toca_la_sena(
         await test_session.execute(select(Store.id).where(Store.slug == "b6-02-legado"))
     ).scalar_one()
     servicio_id = str(ulid.ULID())
-    test_session.add(
-        Service(
-            id=servicio_id,
-            public_id=servicio_id,
-            store_id=store_id,
-            name="Legado",
-            duration_minutes=30,
-            price=10000,
-            deposit_mode="optional",
-            deposit_type="percent",
-            deposit_amount=500,
+    # Desde AUD2-B6-03 esta fila no se puede crear: la rechaza el CHECK
+    # `ck_services_deposit_percent_max`. Se siembra con el CHECK apagado
+    # porque lo que prueba el test es el merge del PATCH sobre una fila que ya
+    # estaba mal ANTES de que existiera el CHECK, que es exactamente lo que se
+    # va a encontrar quien corra la migracion en una base vieja.
+    await test_session.execute(sa_text("PRAGMA ignore_check_constraints = ON"))
+    try:
+        test_session.add(
+            Service(
+                id=servicio_id,
+                public_id=servicio_id,
+                store_id=store_id,
+                name="Legado",
+                duration_minutes=30,
+                price=10000,
+                deposit_mode="optional",
+                deposit_type="percent",
+                deposit_amount=500,
+            )
         )
-    )
-    await test_session.commit()
+        await test_session.commit()
+    finally:
+        await test_session.execute(sa_text("PRAGMA ignore_check_constraints = OFF"))
 
     res = await client.patch(
         f"/services/{servicio_id}",
