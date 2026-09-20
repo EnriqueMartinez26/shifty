@@ -89,9 +89,23 @@ class PublicRepository:
     async def get_staff(
         self, store_id: str, service_public_id: str | None = None
     ) -> list[Staff]:
+        # El filtro de activos va en el JOIN de la carga, no re-asignando
+        # `member.services`: asignar sobre una relacion `secondary` marca las
+        # filas sobrantes de `staff_services` para DELETE, asi que una lectura
+        # del portal borraba de verdad la asignacion del servicio desactivado
+        # (y su `rating`) en el commit siguiente (AUD2-B6-02, 2026-09-20).
+        # Sigue siendo una sola query extra, como el batch que reemplaza, y
+        # conserva el filtro por `store_id` como defensa en profundidad.
         result = await self.db.execute(
             select(Staff)
-            .options(selectinload(Staff.services))
+            .options(
+                selectinload(
+                    Staff.services.and_(
+                        Service.is_active == True,
+                        Service.store_id == store_id,
+                    )
+                )
+            )
             .where(Staff.store_id == store_id, Staff.is_active == True)
         )
         staff_members = list(result.scalars().all())
@@ -100,32 +114,6 @@ class PublicRepository:
                 member
                 for member in staff_members
                 if service_public_id in (member.service_ids or [])
-            ]
-
-        # Antes esto ejecutaba un select(Service) POR CADA miembro (N+1) en el
-        # portal publico de reservas. Se batchea en UNA sola query con todos los
-        # service_ids y se reparte en memoria, preservando la semantica exacta
-        # (activos y pertenecientes al service_ids de cada miembro).
-        wanted_ids = {
-            sid for member in staff_members for sid in (member.service_ids or [])
-        }
-        services_by_id: dict[str, Service] = {}
-        if wanted_ids:
-            services_res = await self.db.execute(
-                select(Service).where(
-                    Service.store_id == store_id,
-                    Service.public_id.in_(wanted_ids),
-                    Service.is_active == True,
-                )
-            )
-            services_by_id = {
-                service.public_id: service for service in services_res.scalars().all()
-            }
-        for member in staff_members:
-            member.services = [
-                services_by_id[sid]
-                for sid in (member.service_ids or [])
-                if sid in services_by_id
             ]
         return staff_members
 
