@@ -131,7 +131,8 @@ Integrators should match against `error_code` strings to customize user experien
 | `VALIDATION_ERROR` | 422 Unprocessable Entity | The payload format is incorrect or business constraints were violated. |
 | `OTP_INVALID` | 400 Bad Request | The OTP verification code is incorrect or expired. |
 | `OTP_RATE_LIMITED` | 429 Too Many Requests | Too many OTP attempts. The client must wait before retrying. |
-| `RATE_LIMITED` | 429 Too Many Requests | Request rate limit exceeded. |
+| `RATE_LIMITED` | 429 Too Many Requests | Request rate limit exceeded. Honour `Retry-After`. |
+| `RATE_LIMIT_UNAVAILABLE` | 503 Service Unavailable | The rate limiter itself is down and the API fails closed. This is not a quota problem: back off for `Retry-After` seconds instead of retrying immediately. |
 | `PAYMENT_ERROR` | 400 Bad Request | A gateway payment preference or capture error occurred. |
 | `WEBHOOK_ERROR` | 400 Bad Request | An external webhook signature or payload parsing verification failed. |
 
