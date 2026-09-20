@@ -365,7 +365,9 @@ async def expire_lapsed_offers(
     El lote tiene tope (``limit``) y orden por vencimiento (B1-16): cada
     vencida cuesta varias consultas para re-ofrecer su cupo, todas con las
     filas tomadas; sin tope, una cola grande acercaba la corrida al time
-    limit de Celery. Lo que no entra se procesa en la corrida siguiente.
+    limit de Celery. Lo que no entra se procesa en la corrida siguiente. El
+    mismo ``limit`` acota las ventanas vencidas de la segunda consulta
+    (AUD2-B1-12), asi que una corrida toca a lo sumo ``2 * limit`` filas.
     """
     rows = await db.execute(
         select(WaitlistEntry)
@@ -406,6 +408,10 @@ async def expire_lapsed_offers(
             if oferta.pending_email:
                 resultado.pending_emails.append(oferta.pending_email)
 
+    # Mismo tope y mismo orden que el lote de arriba (AUD2-B1-12): sin ellos
+    # esta consulta barria todas las tiendas de la instalacion de una, con
+    # FOR UPDATE SKIP LOCKED sobre cada fila. En regimen son pocas, pero un
+    # backlog (beat caido unos dias) hacia una sola transaccion enorme.
     vencidas = await db.execute(
         select(WaitlistEntry)
         .where(
@@ -415,6 +421,8 @@ async def expire_lapsed_offers(
             ),
             WaitlistEntry.window_ends_at <= now,
         )
+        .order_by(WaitlistEntry.window_ends_at.asc())
+        .limit(limit)
         .with_for_update(skip_locked=True)
     )
     for entry in vencidas.scalars().all():
