@@ -12,6 +12,17 @@ inbox lo reintentaba 10 veces y lo abandonaba. La tienda cobraba dos veces
 sin registro.
 
 El ``amount`` explicito del pedido sigue siendo el unico que re-tarifa.
+
+Segunda vuelta (V-diff, 2026-09-20): conservar el ``preference_id`` real no
+alcanza. AUD2-B2-03 solo vence la preferencia cuando el id CAMBIA, asi que el
+checkout de MP seguia vivo despues de confirmar a mano; si el cliente pagaba
+ese link, ``find_payment_for_webhook`` lo encontraba, la integridad pasaba
+(mismo importe, misma preferencia), ``approved`` desde ``manual_confirmed`` es
+ilegal y se ignoraba, ``was_settled`` tapaba el aviso y el inbox se sellaba:
+plata en MP, cobro ``manual_confirmed`` y ninguna senal. Antes al menos caia
+en ``failed_webhooks``. Ahora confirmar a mano publica
+``payment.preference.expire`` con el id real (que se conserva en la fila para
+trazabilidad); un placeholder no publica nada.
 """
 
 from __future__ import annotations
@@ -22,11 +33,12 @@ from typing import cast
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus
+from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
@@ -59,6 +71,23 @@ async def _turno_con_sena(
     return token, turno, pago
 
 
+async def _vencimientos(session: AsyncSession) -> list[str]:
+    """preference_id de cada ``payment.preference.expire`` en el outbox."""
+    session.expire_all()
+    filas = (
+        (
+            await session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == EVENT_PREFERENCE_EXPIRE
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return [str(dict(m.payload or {}).get("preference_id")) for m in filas]
+
+
 @pytest.mark.asyncio
 async def test_confirmar_a_mano_conserva_la_sena_el_snapshot_y_el_link_real(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -88,6 +117,43 @@ async def test_confirmar_a_mano_conserva_la_sena_el_snapshot_y_el_link_real(
     # Y el link de Mercado Pago sigue siendo el real, no el placeholder.
     assert pago.preference_id == PREFERENCIA_REAL
     assert pago.payment_link and "payments.shifty.local" not in pago.payment_link
+    # ...pero ese checkout se manda a vencer: la plata ya entro por otro lado.
+    assert await _vencimientos(test_session) == [PREFERENCIA_REAL]
+
+    # Un doble clic es un no-op idempotente (200) y NO vuelve a publicarlo.
+    otra_vez = await client.post(
+        f"/payments/{turno}/manual-confirm", headers=auth_headers(token), json={}
+    )
+    assert otra_vez.status_code == 200, otra_vez.text
+    assert await _vencimientos(test_session) == [PREFERENCIA_REAL]
+
+
+@pytest.mark.asyncio
+async def test_confirmar_a_mano_un_cobro_con_placeholder_no_vence_nada(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un placeholder no existe en Mercado Pago: no hay link que vencer."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_preference(monkeypatch)
+    token, turno, _pago = await _turno_con_sena(
+        client, test_session, "aud2-01-placeholder", 12
+    )
+    # El cobro vuelve al placeholder, como si MP nunca hubiera respondido.
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.appointment_id == turno)
+        .values(
+            preference_id=f"pref_{turno}",
+            payment_link=f"https://payments.shifty.local/pay/{turno}",
+        )
+    )
+    await test_session.commit()
+
+    confirmado = await client.post(
+        f"/payments/{turno}/manual-confirm", headers=auth_headers(token), json={}
+    )
+    assert confirmado.status_code == 200, confirmado.text
+    assert await _vencimientos(test_session) == []
 
 
 @pytest.mark.asyncio
