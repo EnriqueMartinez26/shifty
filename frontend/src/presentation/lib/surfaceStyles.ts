@@ -40,7 +40,7 @@ const SURFACE_SHADOWS = {
   lifted: colors2000s.shadows.outer
 } as const
 
-export interface SurfaceStyleOptions {
+interface SurfaceStyleOptions {
   background?: string
   borderColor?: string
   borderStyle?: 'solid' | 'dashed'
@@ -49,7 +49,7 @@ export interface SurfaceStyleOptions {
   color?: string
 }
 
-export const createSurfaceStyle = ({
+const createSurfaceStyle = ({
   background = SURFACE_BACKGROUNDS.plain,
   borderColor = colors2000s.border.light,
   borderStyle = 'solid',

@@ -14,7 +14,8 @@ export const createServiceSchema = z.object({
   youtube_trailer_url: z.string().url('URL invalida').optional().or(z.literal(''))
 })
 
-export const updateServiceSchema = createServiceSchema.partial()
-
-export type CreateServiceSchema = z.infer<typeof createServiceSchema>
-export type UpdateServiceSchema = z.infer<typeof updateServiceSchema>
+// `updateServiceSchema` y sus alias `z.infer` se borraron el 2026-09-21: eran
+// una validacion de cliente escrita y nunca conectada a ningun formulario. La
+// validacion real del PATCH vive en el schema Pydantic del backend; esto no
+// protegia nada. Si se cablea el formulario de edicion, se reintroduce con su
+// consumidor en el mismo commit.

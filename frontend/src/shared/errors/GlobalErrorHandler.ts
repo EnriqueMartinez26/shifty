@@ -48,4 +48,3 @@ export class GlobalErrorHandler {
     await Promise.all(executions)
   }
 }
-export default GlobalErrorHandler

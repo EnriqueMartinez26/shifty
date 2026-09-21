@@ -1,4 +1,4 @@
-export interface EventPayload {
+interface EventPayload {
   eventName: string
   aggregateId: string
   occurredAt: string
@@ -39,4 +39,3 @@ export abstract class DomainEvent {
     }
   }
 }
-export default DomainEvent

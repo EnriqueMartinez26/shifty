@@ -1,12 +1,12 @@
 import type { BusinessType } from '@shared/types/business'
 
-export interface BusinessTypeOption {
+interface BusinessTypeOption {
   value: BusinessType
   label: string
   description: string
 }
 
-export interface BusinessLabels {
+interface BusinessLabels {
   businessType: BusinessType
   businessNoun: string
   businessNameLabel: string

@@ -54,6 +54,13 @@ export default [
       react: {
         version: 'detect'
       },
+      // Sin estas dos claves, `import/no-unused-modules` arma su lista de
+      // archivos con las extensiones por defecto (.js, .mjs, .cjs) y no evalua
+      // NI UNO de un proyecto TypeScript: el job `dead-code` que CLAUDE.md
+      // declara como compuerta (regla 26) daba verde sobre cero archivos
+      // (F12-01, 2026-09-20).
+      'import/extensions': ['.ts', '.tsx'],
+      'import/parsers': { '@typescript-eslint/parser': ['.ts', '.tsx'] },
       'import/resolver': {
         typescript: {
           project: './tsconfig.json'

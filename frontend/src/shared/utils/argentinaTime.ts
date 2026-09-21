@@ -10,7 +10,7 @@
  * (2026-09-10).
  */
 
-export const ARGENTINA_TZ = 'America/Argentina/Buenos_Aires'
+const ARGENTINA_TZ = 'America/Argentina/Buenos_Aires'
 
 const partsFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: ARGENTINA_TZ,

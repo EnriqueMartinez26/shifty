@@ -9,22 +9,22 @@ import {
   type ApplicationError
 } from '@shared/errors'
 
-export interface ApiSuccess<T> {
+interface ApiSuccess<T> {
   success: true
   data: T
   meta?: Record<string, unknown>
 }
 
-export interface ApiErrorResponse {
+interface ApiErrorResponse {
   success: false
   error_code: string
   message: string
   detail?: unknown
 }
 
-export type ApiEnvelope<T> = ApiSuccess<T> | ApiErrorResponse
+type ApiEnvelope<T> = ApiSuccess<T> | ApiErrorResponse
 
-export type NormalizedApiErrorContext = {
+type NormalizedApiErrorContext = {
   errorCode?: string
   detail?: unknown
   statusCode?: number

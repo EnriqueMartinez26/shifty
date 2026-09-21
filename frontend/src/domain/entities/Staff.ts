@@ -2,9 +2,9 @@ import { createUuid } from '../../shared/utils/uuid'
 import { Email } from '../value-objects/Email'
 import { UserId } from '../value-objects/UserId'
 
-export type StaffKind = 'person' | 'resource'
+type StaffKind = 'person' | 'resource'
 
-export interface StaffProps {
+interface StaffProps {
   id: UserId
   /** 'person' = profesional con login; 'resource' = cancha, sala, box (sin email ni usuario). */
   kind: StaffKind

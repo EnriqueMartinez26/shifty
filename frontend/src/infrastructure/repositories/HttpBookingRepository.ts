@@ -198,4 +198,3 @@ export class HttpBookingRepository
     await this.cancel(id)
   }
 }
-export default HttpBookingRepository

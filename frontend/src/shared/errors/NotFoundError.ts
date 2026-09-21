@@ -5,4 +5,3 @@ export class NotFoundError extends ApplicationError {
   public readonly statusCode = 404
   public readonly isOperational = true
 }
-export default NotFoundError

@@ -9,4 +9,3 @@ export class AuditLogOnShiftCreated implements EventHandler<ShiftCreatedEvent> {
     )
   }
 }
-export default AuditLogOnShiftCreated

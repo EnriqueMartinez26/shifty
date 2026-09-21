@@ -1,6 +1,6 @@
 import apiClient from '@infrastructure/http/client'
 
-export type UserRole = 'admin' | 'staff' | 'receptionist' | 'client'
+type UserRole = 'admin' | 'staff' | 'receptionist' | 'client'
 
 export interface ManagedUser {
   public_id: string
@@ -14,7 +14,7 @@ export interface ManagedUser {
   updated_at: string
 }
 
-export interface CreateUserPayload {
+interface CreateUserPayload {
   email: string
   password: string
   first_name?: string
@@ -23,7 +23,7 @@ export interface CreateUserPayload {
   role: UserRole
 }
 
-export interface UpdateUserPayload {
+interface UpdateUserPayload {
   first_name?: string
   last_name?: string
   phone?: string
@@ -32,7 +32,7 @@ export interface UpdateUserPayload {
   is_active?: boolean
 }
 
-export class UserAdminService {
+class UserAdminService {
   async list(includeInactive = false): Promise<ManagedUser[]> {
     const { data } = await apiClient.get<ManagedUser[]>(
       `/users/?include_inactive=${includeInactive}`

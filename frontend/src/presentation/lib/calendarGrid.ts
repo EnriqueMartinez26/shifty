@@ -46,12 +46,12 @@ const FALLBACK_OPEN_RANGE: TimeRange = { startMinutes: 8 * 60, endMinutes: 20 * 
 
 const MINUTES_IN_DAY = 24 * 60
 
-export interface TimeRange {
+interface TimeRange {
   startMinutes: number
   endMinutes: number
 }
 
-export interface SlotLabel {
+interface SlotLabel {
   text: string
   topPx: number
 }
@@ -76,21 +76,21 @@ export interface ClosedBand extends BandBase {
   expanded: boolean
 }
 
-export type GridBand = OpenBand | ClosedBand
+type GridBand = OpenBand | ClosedBand
 
-export interface DayGrid {
+interface DayGrid {
   bands: GridBand[]
   totalHeightPx: number
 }
 
-export interface GridPlacement {
+interface GridPlacement {
   top: string
   height: string
 }
 
 const pad = (value: number): string => String(value).padStart(2, '0')
 
-export const minutesToLabel = (minutes: number): string =>
+const minutesToLabel = (minutes: number): string =>
   `${pad(Math.floor(minutes / 60) % 24)}:${pad(minutes % 60)}`
 
 /** `HH:mm` -> minutos desde medianoche. `null` si no se puede leer. */

@@ -21,6 +21,14 @@ export const useGatewayConfig = () =>
     queryFn: () => paymentsService.getGatewayConfig()
   })
 
+// PENDIENTE DE DECISION DEL DUEÑO (2026-09-21). Nadie lo importa: el panel
+// conecta Mercado Pago por OAuth (`useStartMercadoPagoOAuth`) y nunca ofrece
+// cargar las credenciales a mano. No se borra porque es el camino de
+// credenciales de cobro: sacarlo es decidir que esa via no existe mas, y eso
+// es producto, no limpieza. Borrarlo tambien deja huerfano
+// `paymentsService.upsertGatewayConfig`. Si el dueño confirma que la carga
+// manual no vuelve, se van los dos juntos y este disable se cae solo.
+// eslint-disable-next-line import/no-unused-modules
 export const useUpsertGatewayConfig = () => {
   const queryClient = useQueryClient()
   return useMutation<GatewayConfig, Error, GatewayConfigUpsertPayload>({

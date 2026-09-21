@@ -10,7 +10,7 @@ interface ShareLinksPanelProps {
   slug: string
 }
 
-export interface ShareLink {
+interface ShareLink {
   label: string
   url: string
 }

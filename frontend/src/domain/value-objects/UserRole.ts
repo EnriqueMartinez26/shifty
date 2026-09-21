@@ -1,4 +1,4 @@
-export type RoleValue = 'admin' | 'staff' | 'receptionist' | 'client'
+type RoleValue = 'admin' | 'staff' | 'receptionist' | 'client'
 
 export class UserRole {
   private readonly value: RoleValue

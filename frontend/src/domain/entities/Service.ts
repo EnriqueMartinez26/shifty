@@ -4,7 +4,7 @@ import { Price } from '../value-objects/Price'
 import { ServiceColor } from '../value-objects/ServiceColor'
 import { UserId } from '../value-objects/UserId'
 
-export interface ServiceProps {
+interface ServiceProps {
   id: UserId
   name: string
   description: string | null

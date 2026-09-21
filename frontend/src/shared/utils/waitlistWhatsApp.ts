@@ -1,6 +1,6 @@
 import { formatArgentinaDateDisplay } from './argentinaTime'
 
-export interface WaitlistMessageInput {
+interface WaitlistMessageInput {
   clientName: string
   serviceName: string
   staffName: string | null

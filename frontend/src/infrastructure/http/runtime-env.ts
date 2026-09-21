@@ -1,6 +1,6 @@
 /* istanbul ignore file */
 
-export type RuntimeEnv = {
+type RuntimeEnv = {
   apiUrl?: string
   dev: boolean
   mode: string

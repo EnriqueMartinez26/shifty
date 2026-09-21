@@ -18,7 +18,7 @@ import {
 
 export type ActivityFilter = 'active' | 'inactive' | 'all'
 export type SubscriptionFilter = 'all' | 'with' | 'without'
-export type FeedbackTone = 'success' | 'error' | 'warning'
+type FeedbackTone = 'success' | 'error' | 'warning'
 export type SuperAdminModalKey =
   | 'create-store'
   | 'edit-store'

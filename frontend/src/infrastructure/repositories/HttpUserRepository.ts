@@ -118,4 +118,3 @@ export class HttpUserRepository
     await this.client.delete(`/users/${id}`)
   }
 }
-export default HttpUserRepository

@@ -1008,5 +1008,3 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     </div>
   )
 }
-
-export default BookingStepConfirmation

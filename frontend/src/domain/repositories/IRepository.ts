@@ -20,4 +20,3 @@ export interface IRepository<T, CreateDTO = T, UpdateDTO = Partial<T>> {
   update(id: string, data: UpdateDTO): Promise<T>
   delete(id: string): Promise<void>
 }
-export default IRepository

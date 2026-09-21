@@ -15,7 +15,7 @@ export interface LoginPayload {
   password: string
 }
 
-export interface LoginResponse {
+interface LoginResponse {
   access_token: string
 }
 
@@ -41,7 +41,7 @@ export interface ChangePasswordPayload {
   new_password: string
 }
 
-export class AuthService {
+class AuthService {
   async login(payload: LoginPayload): Promise<LoginResponse> {
     const { data } = await apiClient.post<LoginResponse>('/auth/login', payload)
     return data

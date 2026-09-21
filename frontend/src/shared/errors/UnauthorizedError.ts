@@ -5,4 +5,3 @@ export class UnauthorizedError extends ApplicationError {
   public readonly statusCode = 401
   public readonly isOperational = true
 }
-export default UnauthorizedError

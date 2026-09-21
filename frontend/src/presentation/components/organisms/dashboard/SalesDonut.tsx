@@ -38,7 +38,7 @@ type SalesSlice = {
   color: string
 }
 
-export type SalesDonutProps = {
+type SalesDonutProps = {
   services: ReportTopServiceItem[]
   isLoading?: boolean
 }
@@ -129,7 +129,7 @@ const buildSlices = (services: ReportTopServiceItem[]): SalesSlice[] => {
   return slices.filter((slice) => slice.value > 0)
 }
 
-export function SalesDonut({ services, isLoading }: SalesDonutProps) {
+function SalesDonut({ services, isLoading }: SalesDonutProps) {
   const slices = useMemo(() => buildSlices(services ?? []), [services])
   const totalAppointments = useMemo(
     () => slices.reduce((sum, slice) => sum + slice.value, 0),

@@ -5,4 +5,3 @@ export class ForbiddenError extends ApplicationError {
   public readonly statusCode = 403
   public readonly isOperational = true
 }
-export default ForbiddenError

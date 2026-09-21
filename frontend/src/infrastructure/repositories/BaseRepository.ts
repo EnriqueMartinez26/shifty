@@ -69,4 +69,3 @@ export abstract class BaseRepository<
     throw new InternalServerError(`Database operation '${operation}' failed: ${msg}`)
   }
 }
-export default BaseRepository

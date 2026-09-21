@@ -1,7 +1,5 @@
 import React from 'react'
 
-import type { LucideProps } from 'lucide-react'
-
 /**
  * Icon2000s — Wrapper de íconos con acabado skeuomórfico "Early Smartphone 2000s"
  *
@@ -17,7 +15,7 @@ import type { LucideProps } from 'lucide-react'
  *   <Icon2000s path={mdiHome} size={22} variant="active" />
  */
 
-export type IconVariant = 'idle' | 'active' | 'pressed' | 'muted'
+type IconVariant = 'idle' | 'active' | 'pressed' | 'muted'
 
 interface Icon2000sProps {
   /** Path SVG de @mdi/js — ej: mdiHome, mdiCalendar, etc. */
@@ -97,48 +95,3 @@ export const Icon2000s: React.FC<Icon2000sProps> = ({
     </svg>
   )
 }
-
-/**
- * LucideIcon2000s — Aplica los mismos filtros CSS skeuomórficos
- * a cualquier componente de ícono de Lucide-React.
- *
- * Uso:
- *   import { Settings } from "lucide-react";
- *   <LucideIcon2000s icon={Settings} size={20} variant="active" />
- */
-interface LucideIcon2000sProps {
-  icon: React.ComponentType<LucideProps>
-  size?: number
-  variant?: IconVariant
-  color?: string
-  className?: string
-  style?: React.CSSProperties
-}
-
-export const LucideIcon2000s: React.FC<LucideIcon2000sProps> = ({
-  icon: LucideComponent,
-  size = 20,
-  variant = 'idle',
-  color,
-  className = '',
-  style = {}
-}) => {
-  const fill = color ?? COLOR_MAP[variant]
-  const filter = FILTER_MAP[variant]
-
-  return (
-    <LucideComponent
-      size={size}
-      color={fill}
-      className={className}
-      style={{
-        filter,
-        transition: 'filter 0.15s ease',
-        flexShrink: 0,
-        ...style
-      }}
-    />
-  )
-}
-
-export default Icon2000s

@@ -5,4 +5,3 @@ export class NetworkError extends ApplicationError {
   public readonly statusCode = 0
   public readonly isOperational = true
 }
-export default NetworkError

@@ -1,7 +1,7 @@
 import { EventHandler } from './EventHandler'
 import { DomainEvent } from '../../domain/events/DomainEvent'
 
-export type Unsubscribe = () => void
+type Unsubscribe = () => void
 
 /**
  * Bus de eventos centralizado en memoria para coordinar la comunicación reactiva.
@@ -94,6 +94,5 @@ export class EventBus {
     this.eventHistory = []
   }
 }
-export default EventBus
 
 export const eventBus = EventBus.getInstance()

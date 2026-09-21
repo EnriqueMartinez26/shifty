@@ -12,7 +12,7 @@ import { UnauthorizedError, ValidationError } from '@shared/errors'
 
 import { useAuth } from '../context/AuthContext'
 
-export interface LoginResult {
+interface LoginResult {
   access_token: string
   user: AuthenticatedUser
 }
@@ -43,5 +43,3 @@ export const useLogin = () => {
     }
   })
 }
-
-export default useLogin

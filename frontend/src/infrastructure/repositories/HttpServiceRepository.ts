@@ -100,5 +100,3 @@ export class HttpServiceRepository
     await this.client.delete(`/services/${id}`)
   }
 }
-
-export default HttpServiceRepository

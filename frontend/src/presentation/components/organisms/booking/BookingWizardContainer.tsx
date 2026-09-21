@@ -354,5 +354,3 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     </div>
   )
 }
-
-export default BookingWizardContainer

@@ -2,7 +2,7 @@ import { BookingStatus } from '../value-objects/BookingStatus'
 import { BookingTimeSpan } from '../value-objects/BookingTimeSpan'
 import { UserId } from '../value-objects/UserId'
 
-export interface AppointmentProps {
+interface AppointmentProps {
   id: UserId
   serviceId: string
   serviceName: string

@@ -17,4 +17,3 @@ export class SendWelcomeEmailOnUserCreated implements EventHandler<UserCreatedEv
     await this.emailService.sendWelcomeEmail(payload.email as string)
   }
 }
-export default SendWelcomeEmailOnUserCreated

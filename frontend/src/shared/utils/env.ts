@@ -10,5 +10,3 @@
  */
 
 export const isProduction = (): boolean => import.meta.env.PROD
-
-export const isDevelopment = (): boolean => import.meta.env.DEV

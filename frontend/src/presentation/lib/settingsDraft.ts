@@ -195,9 +195,9 @@ export const narrowDraft = (
  * la politica" en un mismo guardado fallaba SIEMPRE con DEPOSIT_POLICY_REQUIRED
  * y no habia forma de salir con el unico boton de guardar.
  */
-export type SettingsSaveOrder = 'store-first' | 'flags-first'
+type SettingsSaveOrder = 'store-first' | 'flags-first'
 
-export type SettingsSavePlan = {
+type SettingsSavePlan = {
   store?: StoreUpdatePayload
   flags?: Partial<StoreFeatureFlags>
   order: SettingsSaveOrder

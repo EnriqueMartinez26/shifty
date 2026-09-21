@@ -52,4 +52,3 @@ export class HttpStaffRepository
     await this.client.delete(`/staff/${id}`)
   }
 }
-export default HttpStaffRepository

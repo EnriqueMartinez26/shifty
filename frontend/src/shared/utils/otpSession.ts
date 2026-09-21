@@ -8,7 +8,7 @@
  * por tienda; se lee con try/catch porque el storage puede no existir.
  */
 
-export const OTP_WINDOW_MINUTES = 30
+const OTP_WINDOW_MINUTES = 30
 
 interface OtpSession {
   phone: string

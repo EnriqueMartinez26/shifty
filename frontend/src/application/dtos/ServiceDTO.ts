@@ -9,13 +9,3 @@ export interface ServiceResponseDTO {
   youtube_trailer_url: string | null
   is_active: boolean
 }
-
-export interface CreateServiceRequestDTO {
-  name: string
-  description?: string
-  duration_minutes: number
-  price: number
-  color?: string
-  image_url?: string
-  youtube_trailer_url?: string
-}

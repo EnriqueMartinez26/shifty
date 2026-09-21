@@ -167,7 +167,11 @@ describe('NewAppointmentModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Verificar código' }))
 
     await waitFor(() => expect(botonCrear()).not.toBeDisabled())
-  })
+    // Timeout explicito: el test corre en 100 ms aislado, pero encadena dos
+    // `waitFor` sobre mutaciones de react-query y con la suite completa en
+    // paralelo se pasaba de los 5 s por defecto de jest. Se sube solo este
+    // caso; subir el global esconderia lentitud real en otros tests.
+  }, 20000)
 
   it('sin OTP exigido el mismo formulario si habilita el turno', () => {
     // Contraprueba del test anterior: demuestra que lo que frena el submit es

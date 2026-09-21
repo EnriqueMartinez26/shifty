@@ -1,6 +1,6 @@
 import apiClient from '@infrastructure/http/client'
 
-export type WaitlistStatus = 'waiting' | 'offered' | 'booked' | 'cancelled' | 'expired'
+type WaitlistStatus = 'waiting' | 'offered' | 'booked' | 'cancelled' | 'expired'
 
 export interface WaitlistEntry {
   public_id: string
@@ -38,7 +38,7 @@ export interface WaitlistBookedAppointment {
 }
 
 /** Lista de espera del panel del dueno. */
-export class WaitlistService {
+class WaitlistService {
   async list(): Promise<WaitlistEntry[]> {
     const { data } = await apiClient.get<WaitlistEntry[]>('/waitlist/')
     return data

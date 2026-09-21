@@ -9,7 +9,7 @@ import {
   type ReportTrend
 } from '@application/services/ReportsService'
 
-export type { ProfessionalReports, ReportExportFormat, ReportSummary, ReportTrend }
+export type { ReportExportFormat }
 
 export const useReportSummary = (fromDate: string, toDate: string, enabled = true) => {
   return useQuery({

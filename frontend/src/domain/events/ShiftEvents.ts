@@ -23,35 +23,3 @@ export class ShiftCreatedEvent extends DomainEvent {
     }
   }
 }
-
-export class ShiftUpdatedEvent extends DomainEvent {
-  public readonly eventName = 'shift.updated'
-  public readonly aggregateId: string
-  public readonly isAvailable: boolean
-
-  constructor(aggregateId: string, isAvailable: boolean) {
-    super()
-    this.aggregateId = aggregateId
-    this.isAvailable = isAvailable
-  }
-
-  public getPayload(): Record<string, unknown> {
-    return {
-      isAvailable: this.isAvailable
-    }
-  }
-}
-
-export class ShiftDeletedEvent extends DomainEvent {
-  public readonly eventName = 'shift.deleted'
-  public readonly aggregateId: string
-
-  constructor(aggregateId: string) {
-    super()
-    this.aggregateId = aggregateId
-  }
-
-  public getPayload(): Record<string, unknown> {
-    return {}
-  }
-}

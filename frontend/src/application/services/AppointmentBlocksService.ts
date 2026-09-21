@@ -63,7 +63,7 @@ export interface RecurringBlocksResult {
   blocks: AppointmentBlock[]
 }
 
-export class AppointmentBlocksService {
+class AppointmentBlocksService {
   async list(): Promise<AppointmentBlock[]> {
     const { data } = await apiClient.get<AppointmentBlock[]>('/appointment-blocks/')
     return data

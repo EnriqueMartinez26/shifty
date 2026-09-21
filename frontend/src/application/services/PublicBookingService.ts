@@ -4,7 +4,7 @@ import type { BusinessType } from '@shared/types/business'
 
 import type { StoreCustomField } from './StoreSettingsService'
 
-export interface PublicStoreFeatureFlags {
+interface PublicStoreFeatureFlags {
   payments: boolean
   ledger: boolean
   advanced_reports: boolean
@@ -205,7 +205,7 @@ export interface ClientAppointments {
   appointments: ClientAppointmentItem[]
 }
 
-export class PublicBookingService {
+class PublicBookingService {
   async previewDeposit(params: {
     storePublicId: string
     serviceId: string

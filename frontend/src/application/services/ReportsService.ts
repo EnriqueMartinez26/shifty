@@ -2,7 +2,7 @@ import apiClient from '@infrastructure/http/client'
 
 export type ReportExportFormat = 'csv' | 'excel' | 'pdf'
 
-export interface ReportSummaryStats {
+interface ReportSummaryStats {
   total_appointments: number
   completed_appointments: number
   cancelled_appointments: number
@@ -12,7 +12,7 @@ export interface ReportSummaryStats {
   average_ticket: number
 }
 
-export interface ReportClientStats {
+interface ReportClientStats {
   total_clients: number
   new_clients: number
   returning_clients: number
@@ -27,7 +27,7 @@ export interface ReportTopServiceItem {
   revenue: number
 }
 
-export interface ReportTopClientItem {
+interface ReportTopClientItem {
   client_id: string
   client_name: string
   appointments: number
@@ -35,13 +35,13 @@ export interface ReportTopClientItem {
   revenue: number
 }
 
-export interface ReportDebtClientItem {
+interface ReportDebtClientItem {
   client_id: string
   client_name: string
   balance: number
 }
 
-export interface ReportDebtSummary {
+interface ReportDebtSummary {
   outstanding_balance: number
   debtors_count: number
   average_debt: number
@@ -110,7 +110,7 @@ export interface ReportTrend {
   points: ReportTrendPoint[]
 }
 
-export class ReportsService {
+class ReportsService {
   async getSummary(fromDate: string, toDate: string): Promise<ReportSummary> {
     const { data } = await apiClient.get<ReportSummary>(
       `/reports/summary?from_date=${fromDate}&to_date=${toDate}`

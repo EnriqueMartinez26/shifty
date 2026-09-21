@@ -22,4 +22,3 @@ export function setupEventHandlers(eventBus: EventBus, services: SetupServices):
   // Evento: shift.created
   eventBus.subscribe('shift.created', new AuditLogOnShiftCreated())
 }
-export default setupEventHandlers

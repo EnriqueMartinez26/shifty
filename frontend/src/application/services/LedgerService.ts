@@ -16,7 +16,7 @@ export interface CustomerLedger {
   movements: LedgerMovement[]
 }
 
-export interface LedgerSummaryClientItem {
+interface LedgerSummaryClientItem {
   client_id: string
   client_name: string
   balance: number
@@ -38,7 +38,7 @@ export interface LedgerMovementPayload {
   notes?: string
 }
 
-export class LedgerService {
+class LedgerService {
   async getCustomerLedger(clientId: string): Promise<CustomerLedger> {
     const { data } = await apiClient.get<CustomerLedger>(`/ledger/customers/${clientId}`)
     return data
