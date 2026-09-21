@@ -127,6 +127,15 @@ const refreshAccessToken = async (): Promise<string | null> => {
 const isAuthPath = (url: string | undefined) =>
   Boolean(url && (url.includes('/auth/login') || url.includes('/auth/refresh')))
 
+/**
+ * Un 401 del propio login es "credenciales mal", no "sesion vencida": avisar
+ * sesion expirada ahi recargaba la pantalla con el cartel "Sesion expirada.
+ * Redirigiendo..." y borraba el error del formulario, asi que quien tipeaba
+ * mal la clave nunca se enteraba de por que (F11c-03, 2026-09-20).
+ * El 401 de `/auth/refresh` SI es sesion muerta y se sigue avisando.
+ */
+const isLoginPath = (url: string | undefined) => Boolean(url && url.includes('/auth/login'))
+
 apiClient.interceptors.response.use(
   (response) => {
     response.data = unwrapApiEnvelope(response.data, response.status)
@@ -157,14 +166,16 @@ apiClient.interceptors.response.use(
 
     // Llegar aca con 401 significa que la rehidratacion no ocurrio o fallo:
     // sesion muerta. Se avisa a la UI para que cierre sesion de verdad.
+    const esLogin = isLoginPath(originalRequest.url)
+
     if (isApiEnvelope(payload) && !payload.success) {
-      if (statusCode === 401) {
+      if (statusCode === 401 && !esLogin) {
         notifySessionExpired()
       }
       return Promise.reject(normalizedError)
     }
 
-    if (normalizedError.statusCode === 401) {
+    if (normalizedError.statusCode === 401 && !esLogin) {
       notifySessionExpired()
     }
     return Promise.reject(normalizedError)
