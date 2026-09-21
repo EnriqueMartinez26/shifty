@@ -34,7 +34,7 @@ import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from modules.notifications.model import Notification
 from modules.payments.jobs import process_outbox_batch, process_webhook_inbox_batch
-from modules.payments.model import Payment, PaymentStatus, WebhookInbox
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus, WebhookInbox
 from modules.payments.processing import resolve_payment_status
 from modules.appointments.model import Appointment, AppointmentStatus
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -182,6 +182,75 @@ async def test_una_disputa_abierta_no_agota_los_reintentos_del_inbox(
     assert evento.attempts == 0, evento.error
     await test_session.refresh(cobro)
     assert cobro.status == PaymentStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_una_disputa_sobre_un_cobro_acreditado_avisa_al_dueno(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``in_mediation`` sobre un ``approved`` no cambia el estado, pero avisa.
+
+    V-diff de AUD2-B2-04 (2026-09-20): el mapeo a ``pending`` alcanzaba para
+    un cobro que todavia no se acredito, pero sobre uno ``approved`` la
+    transicion ``approved -> pending`` es ilegal, se ignoraba en silencio y el
+    inbox se sellaba: Mercado Pago retenia la plata y el dueno no se enteraba.
+    Decision: el cobro sigue ``approved`` (sin estado ni arista nueva, regla 2)
+    y se publica ``payment.in_mediation`` al outbox, con el mismo consumidor
+    que el contracargo.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago_con_estado(monkeypatch, {})
+    store, token = await register_and_login(
+        client, slug="disputa-acreditada", email="disputa-acreditada@t.com"
+    )
+    await _enable_payments(client, token)
+    await _configure_gateway(client, token)
+    turno = await _book_with_mercadopago(
+        client, token, store, slug_suffix="disputa-acreditada", hour=13
+    )
+    cobro = (
+        await test_session.execute(
+            select(Payment).where(Payment.appointment_id == turno)
+        )
+    ).scalar_one()
+
+    _mercadopago_con_estado(monkeypatch, _remoto(turno, cobro, "approved"))
+    await _entregar_webhook(client, store, evento="evt-ok3", pago="mp-pago-contracargo")
+    _mercadopago_con_estado(monkeypatch, _remoto(turno, cobro, "in_mediation"))
+    await _entregar_webhook(client, store, evento="evt-med", pago="mp-pago-contracargo")
+
+    await test_session.refresh(cobro)
+    assert cobro.status == PaymentStatus.APPROVED.value
+    eventos = (await test_session.execute(select(WebhookInbox))).scalars().all()
+    assert len(eventos) == 2, eventos
+    assert all(e.processed_at is not None for e in eventos), [e.error for e in eventos]
+    disputas = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == "payment.in_mediation"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(disputas) == 1, disputas
+    assert disputas[0].payload and disputas[0].payload["appointment_id"] == turno
+
+    await process_outbox_batch(test_session)
+    avisos = list(
+        (
+            await test_session.execute(
+                select(Notification).where(Notification.type == "payment.in_mediation")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(avisos) == 1, avisos
+    assert avisos[0].appointment_id == turno
+    assert "retenida" in (avisos[0].body or "")
 
 
 def test_los_estados_que_mercado_pago_manda_y_no_estaban_mapeados() -> None:

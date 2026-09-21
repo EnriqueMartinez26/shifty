@@ -322,6 +322,52 @@ async def _notify_payment_reversed(
     )
 
 
+async def _avisar_al_dueno(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment: Payment,
+    appointment: Appointment | None,
+    was_settled: bool,
+    data: dict[str, Any],
+) -> None:
+    """Avisos al panel segun lo que el webhook hizo (o no pudo hacer) con la plata.
+
+    Sale despues de sincronizar el turno: recien ahi se sabe si el pago
+    confirmo el turno o llego tarde sobre uno ya liberado (S-16). El pago
+    queda acreditado igual: la plata entro y hay que poder devolverla.
+    """
+    estado_remoto = str(data.get("status") or "").lower()
+    if not was_settled and payment.status == PaymentStatus.APPROVED.value:
+        await _notify_payment_approved(
+            db,
+            store_id=store_id,
+            payment=payment,
+            turno_liberado=appointment is None or appointment.status in _TURNO_LIBERADO,
+        )
+    # La plata que estaba asentada se fue: contracargo o reembolso hecho desde
+    # Mercado Pago. El turno puede seguir confirmado, pero no en silencio.
+    if was_settled and payment.status == PaymentStatus.REFUNDED.value:
+        await _notify_payment_reversed(
+            db,
+            store_id=store_id,
+            payment=payment,
+            contracargo=estado_remoto == "charged_back",
+        )
+    # Disputa sobre un cobro ya acreditado (V-diff de AUD2-B2-04, 2026-09-20):
+    # ``in_mediation`` mapea a ``pending`` y desde ``approved`` esa transicion
+    # es ilegal, asi que el estado no cambia (decision: sin estado ni arista
+    # nueva, regla 2). Pero Mercado Pago retiene la plata hasta resolverla y
+    # antes eso no dejaba rastro: el inbox se sellaba y nadie se enteraba.
+    if was_settled and estado_remoto == "in_mediation":
+        await _publicar_aviso_de_cobro(
+            db,
+            store_id=store_id,
+            payment=payment,
+            event_type=NotificationType.PAYMENT_IN_MEDIATION.value,
+        )
+
+
 async def apply_mercadopago_webhook_payload(
     db: AsyncSession,
     *,
@@ -377,23 +423,12 @@ async def apply_mercadopago_webhook_payload(
         ):
             appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         sync_appointment_with_payment(appointment, payment.status)
-    # El aviso sale despues de sincronizar el turno: recien ahi se sabe si el
-    # pago confirmo el turno o llego tarde sobre uno ya liberado (S-16). El
-    # pago queda acreditado igual: la plata entro y hay que poder devolverla.
-    if not was_settled and payment.status == PaymentStatus.APPROVED.value:
-        await _notify_payment_approved(
-            db,
-            store_id=store_id,
-            payment=payment,
-            turno_liberado=appointment is None or appointment.status in _TURNO_LIBERADO,
-        )
-    # La plata que estaba asentada se fue: contracargo o reembolso hecho desde
-    # Mercado Pago. El turno puede seguir confirmado, pero no en silencio.
-    if was_settled and payment.status == PaymentStatus.REFUNDED.value:
-        await _notify_payment_reversed(
-            db,
-            store_id=store_id,
-            payment=payment,
-            contracargo=str(data.get("status") or "").lower() == "charged_back",
-        )
+    await _avisar_al_dueno(
+        db,
+        store_id=store_id,
+        payment=payment,
+        appointment=appointment,
+        was_settled=was_settled,
+        data=data,
+    )
     return True

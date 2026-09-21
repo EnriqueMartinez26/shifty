@@ -592,6 +592,22 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
             appointment_id=str(appointment_id) if appointment_id else None,
         )
 
+    if message.event_type == NotificationType.PAYMENT_IN_MEDIATION.value:
+        # V-diff de AUD2-B2-04: el cobro sigue acreditado, la plata retenida.
+        amount = payload.get("amount")
+        amount_label = f" de ${amount}" if amount else ""
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Disputa abierta en Mercado Pago",
+            body=(
+                f"Mercado Pago abrio una disputa sobre el cobro{amount_label} de "
+                f"{client_name} por {service_name}: la plata queda retenida hasta "
+                "que se resuelva. El turno sigue confirmado."
+            ),
+            appointment_id=str(appointment_id) if appointment_id else None,
+        )
+
     if message.event_type == NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value:
         # S-16: pago acreditado de un turno que ya se habia liberado. No se
         # confirma nada ni se avisa al cliente: el dueno decide.
