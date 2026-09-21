@@ -1,3 +1,5 @@
+import type { ServiceDepositMode, ServiceDepositType } from '@domain/entities/Service'
+
 export interface ServiceFormValues {
   name: string
   description: string
@@ -6,6 +8,9 @@ export interface ServiceFormValues {
   color: string
   imageUrl: string
   youtubeTrailerUrl: string
+  depositMode: ServiceDepositMode
+  depositType: ServiceDepositType
+  depositAmount: number | null
 }
 
 export interface StaffFormValues {

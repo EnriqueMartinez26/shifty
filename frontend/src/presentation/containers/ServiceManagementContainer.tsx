@@ -4,8 +4,6 @@ import { Plus, Search, Loader2 } from 'lucide-react'
 
 import { Service } from '@domain/entities/Service'
 
-import { ServiceService } from '@application/services/ServiceService'
-
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { ServiceCard } from '../components/molecules/ServiceCard'
 import { ServiceFormModal } from '../components/organisms/ServiceFormModal'
@@ -16,8 +14,6 @@ import {
   useUpdateManagedService
 } from '../hooks/useManagedServices'
 import type { ServiceFormValues } from '../types/forms'
-
-type UpdateServiceInput = Parameters<ServiceService['updateService']>[1]
 
 export const ServiceManagementContainer: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -53,10 +49,11 @@ export const ServiceManagementContainer: React.FC = () => {
 
   const handleFormSubmit = async (formData: ServiceFormValues) => {
     if (editingService) {
-      await updateMutation.mutateAsync({
-        id: editingService.id,
-        data: formData as unknown as UpdateServiceInput
-      })
+      // Sin cast: `ServiceFormValues` calza con `ServiceWriteInput`, asi que el
+      // compilador verifica que lo que manda el formulario sea exactamente lo
+      // que el payload de escritura sabe traducir (antes iba por
+      // `as unknown as` y cualquier campo nuevo pasaba de largo en silencio).
+      await updateMutation.mutateAsync({ id: editingService.id, data: formData })
     } else {
       await createMutation.mutateAsync(formData)
     }

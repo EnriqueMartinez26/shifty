@@ -1,5 +1,10 @@
 import { BaseService } from './BaseService'
-import { Service } from '../../domain/entities/Service'
+import {
+  Service,
+  type ServiceDepositMode,
+  type ServiceDepositType,
+  type ServiceWriteInput
+} from '../../domain/entities/Service'
 import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
 import { Duration } from '../../domain/value-objects/Duration'
 import { Price } from '../../domain/value-objects/Price'
@@ -30,13 +35,19 @@ export class ServiceService extends BaseService<Service> {
     color?: string
     imageUrl?: string
     youtubeTrailerUrl?: string
+    depositMode?: ServiceDepositMode
+    depositType?: ServiceDepositType
+    depositAmount?: number | null
   }): Promise<Service> {
     return await this.execute(async () => {
       const validatorInput = {
         ...data,
         duration_minutes: data.durationMinutes,
         image_url: data.imageUrl,
-        youtube_trailer_url: data.youtubeTrailerUrl
+        youtube_trailer_url: data.youtubeTrailerUrl,
+        deposit_mode: data.depositMode,
+        deposit_type: data.depositType,
+        deposit_amount: data.depositAmount
       }
 
       this.validate(validatorInput, createServiceSchema)
@@ -50,6 +61,9 @@ export class ServiceService extends BaseService<Service> {
         color: ServiceColor.create(validated.color || '#6366f1'),
         imageUrl: validated.image_url ?? null,
         youtubeTrailerUrl: validated.youtube_trailer_url ?? null,
+        depositMode: validated.deposit_mode,
+        depositType: validated.deposit_type,
+        depositAmount: validated.deposit_amount ?? null,
         isActive: true
       })
 
@@ -57,7 +71,7 @@ export class ServiceService extends BaseService<Service> {
     }, 'createService')
   }
 
-  async updateService(id: string, data: Partial<Service>): Promise<Service> {
+  async updateService(id: string, data: ServiceWriteInput): Promise<Service> {
     return await this.execute(async () => {
       return await this.repository.update(id, data)
     }, 'updateService')

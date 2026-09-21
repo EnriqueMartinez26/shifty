@@ -1,4 +1,4 @@
 import { IRepository } from './IRepository'
-import { Service } from '../entities/Service'
+import type { Service, ServiceWriteInput } from '../entities/Service'
 
-export interface IServiceRepository extends IRepository<Service, Service, Partial<Service>> {}
+export interface IServiceRepository extends IRepository<Service, Service, ServiceWriteInput> {}
