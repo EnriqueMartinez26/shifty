@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { argentinaLocalToUtcIso } from '@shared/utils/argentinaTime'
+
 import { NewAppointmentModal } from './NewAppointmentModal'
 
 const mockServices = jest.fn()
@@ -7,6 +9,7 @@ const mockStaff = jest.fn()
 const mockFeatureFlags = jest.fn()
 const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
+const mockCrearTurno = jest.fn()
 
 jest.mock('@presentation/hooks/useManagedServices', () => ({
   useManagedServices: () => mockServices()
@@ -22,7 +25,7 @@ jest.mock('@presentation/hooks/useStores', () => ({
 }))
 
 jest.mock('@presentation/hooks/useCalendarAgenda', () => ({
-  useCreateAppointment: () => ({ mutateAsync: jest.fn(), isPending: false })
+  useCreateAppointment: () => ({ mutateAsync: mockCrearTurno, isPending: false })
 }))
 
 jest.mock('@presentation/hooks/usePublic', () => ({
@@ -69,6 +72,8 @@ describe('NewAppointmentModal', () => {
     mockFeatureFlags.mockReset()
     mockRequestOtp.mockReset()
     mockVerifyOtp.mockReset()
+    mockCrearTurno.mockReset()
+    mockCrearTurno.mockResolvedValue({})
     mockServices.mockReturnValue({ data: [servicio], isLoading: false })
     mockStaff.mockReturnValue({ data: [], isLoading: false })
     conOtp(true)
@@ -116,6 +121,52 @@ describe('NewAppointmentModal', () => {
     completarFormulario(container)
 
     expect(botonCrear()).toBeDisabled()
+  })
+
+  it('el turno se crea en el instante UTC de la hora argentina tipeada', async () => {
+    // F11a-01: concatenaba `${date}T${time}:00Z`, asi que "10:00" que tipea el
+    // dueno se agendaba 10:00 UTC = 07:00 ART, tres horas antes.
+    conOtp(false)
+    const { container } = render(<NewAppointmentModal isOpen onClose={jest.fn()} />)
+
+    completarFormulario(container)
+    const fecha = container.querySelector<HTMLInputElement>('input[type="date"]')
+    if (!fecha) throw new Error('el modal ya no tiene input de fecha')
+
+    fireEvent.click(botonCrear())
+
+    await waitFor(() => expect(mockCrearTurno).toHaveBeenCalledTimes(1))
+    const payload = mockCrearTurno.mock.calls[0]?.[0] as { starts_at: string }
+    expect(payload.starts_at).toBe(argentinaLocalToUtcIso(fecha.value, '10:00'))
+    // La prueba de que no es UTC crudo: el sufijo ingenuo habria sido este.
+    expect(payload.starts_at).not.toBe(`${fecha.value}T10:00:00Z`)
+  })
+
+  it('el gate de OTP abre aunque el telefono se tipee en otro formato', async () => {
+    // F11a-02: `normalize_phone` del backend saca los separadores y antepone
+    // `+`, asi que "11 5555-0101" vuelve como "+1155550101". Comparar las
+    // cadenas crudas no coincidia nunca y el alta con OTP quedaba imposible
+    // desde el panel.
+    mockRequestOtp.mockResolvedValue({ ok: true })
+    mockVerifyOtp.mockResolvedValue({ phone: '+1155550101' })
+    const { container } = render(<NewAppointmentModal isOpen onClose={jest.fn()} />)
+
+    completarFormulario(container)
+    fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+      target: { value: '11 5555-0101' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+      target: { value: 'lucia@example.com' }
+    })
+
+    fireEvent.click(botonEnviarCodigo())
+    await waitFor(() => expect(mockRequestOtp).toHaveBeenCalledTimes(1))
+    fireEvent.change(screen.getByPlaceholderText('Ingresá el código OTP'), {
+      target: { value: '123456' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Verificar código' }))
+
+    await waitFor(() => expect(botonCrear()).not.toBeDisabled())
   })
 
   it('sin OTP exigido el mismo formulario si habilita el turno', () => {

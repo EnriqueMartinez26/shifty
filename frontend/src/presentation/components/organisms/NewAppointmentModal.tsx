@@ -25,6 +25,8 @@ import { useStoreFeatureFlags, useStoreSettings } from '@presentation/hooks/useS
 
 import { ConflictError } from '@shared/errors/ConflictError'
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { argentinaLocalToUtcIso } from '@shared/utils/argentinaTime'
+import { phoneDigits } from '@shared/utils/otpSession'
 import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
@@ -126,8 +128,13 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
   const showOtpSection = requiresOtp && clientPhone.trim().length >= 6
   // Igual que create_public_booking en el backend: si la tienda exige OTP, el
   // gate no cede hasta que el telefono actual quede verificado.
+  // Se comparan solo los digitos: el backend devuelve el telefono verificado en
+  // formato internacional (`+5411...`) y aca se tipea como salga, asi que
+  // comparar las cadenas crudas no coincidia nunca y el alta con OTP quedaba
+  // imposible desde el panel (F11a-02, 2026-09-20).
   const otpVerifiedGate =
-    !requiresOtp || (otpState.verified && otpState.verifiedPhone === clientPhone.trim())
+    !requiresOtp ||
+    (otpState.verified && phoneDigits(otpState.verifiedPhone) === phoneDigits(clientPhone))
   const canSubmit = Boolean(
     serviceId && date && time && clientName.trim() && clientPhone.trim() && otpVerifiedGate
   )
@@ -178,7 +185,10 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
     const payload: CreateBookingInput = {
       service_id: serviceId,
       staff_id: staffId || undefined,
-      starts_at: `${date}T${time}:00Z`,
+      // El dueno tipea hora ARGENTINA. Concatenar con sufijo `Z` la mandaba
+      // como UTC: "13:00" se agendaba 10:00 ART (F11a-01, 2026-09-20). Es el
+      // mismo conversor que ya usan la lista de espera y el wizard publico.
+      starts_at: argentinaLocalToUtcIso(date, time),
       client_name: clientName.trim(),
       client_email: clientEmail.trim() || undefined,
       client_phone: clientPhone.trim(),
