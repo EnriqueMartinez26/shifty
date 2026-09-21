@@ -99,6 +99,17 @@ async def advance_subscriptions(
 
     Los avisos se devuelven para que la tarea los publique al outbox; aca no
     se manda ningun mail.
+
+    Costo declarado (V-diff, 2026-09-20): la corrida entera es UNA
+    transaccion, y cada pagina toma sus filas con ``FOR UPDATE SKIP LOCKED``
+    que no se sueltan hasta el commit de la tarea. En el peor caso quedan
+    bloqueadas ``SUBSCRIPTION_MAX_PAGES * limit`` filas (40 x 500 = 20.000)
+    durante toda la corrida. Con las tiendas de hoy no muerde; si en
+    produccion las suscripciones activas pasan de unos cientos, conviene que
+    la TAREA (``billing/tasks.py``) commitee por pagina en vez de al final,
+    para que el lock de cada pagina dure lo que dura esa pagina. No esta
+    implementado a proposito: cambia la unidad de trabajo de la tarea y eso
+    se decide con datos, no por anticipado.
     """
     now = now or datetime.now(timezone.utc)
     hoy = today_local(now)
