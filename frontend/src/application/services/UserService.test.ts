@@ -83,6 +83,19 @@ describe('UserService', () => {
       expect(createdUser.lastName).toBe('Gómez')
     })
 
+    it('rechaza una contraseña de menos de 12 caracteres, el mismo piso que el backend', async () => {
+      const input: CreateUserInput = {
+        email: 'test@example.com',
+        password: 'abcdefgh123',
+        role: 'client'
+      }
+
+      await expect(service.createUser(input)).rejects.toThrow(
+        'Error de validación: Verifique los datos ingresados.'
+      )
+      expect(mockRepository.create).not.toHaveBeenCalled()
+    })
+
     it('should throw validation error when email is invalid', async () => {
       const input = {
         email: 'invalid-email',
