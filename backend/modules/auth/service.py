@@ -462,9 +462,19 @@ async def revoke_store_sessions(
         )
 
     async with tenant_bypass(db):
-        affected = await _revoke_sessions(
-            db, AuthSession.store_id == current_user.store_id
-        )
+        condiciones: list[ColumnElement[bool]] = [
+            AuthSession.store_id == current_user.store_id
+        ]
+        if not current_user.is_global_admin:
+            # La cuenta del superadmin no existe para un admin de tienda
+            # (S-15): su sesion lleva el store_id de su tienda real, asi que
+            # el boton de panico de la tienda la alcanzaba (AUD2-B3-02).
+            condiciones.append(
+                AuthSession.user_id.not_in(
+                    select(User.id).where(User.is_global_admin.is_(True))
+                )
+            )
+        affected = await _revoke_sessions(db, *condiciones)
         await db.commit()
         return {"revoked_sessions": affected}
 
