@@ -94,6 +94,37 @@ def _public_booking_idempotency_key(data: PublicBookingCreate) -> str:
     return "public-" + hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
+def _namespaced_cache_key(*parts: str) -> str:
+    """Clave de Redis de un endpoint publico, SIEMPRE namespaceada (AUD2-B1-06).
+
+    La cadena que manda el cliente es texto libre y se usaba tal cual como
+    clave global (``idempotency:{key}``): quien mandara la misma recibia de
+    vuelta la respuesta ajena (nombre, telefono, notas, link de pago y
+    ``public_id`` del turno). Y la clave derivada del alta es sha256 de datos
+    que un tercero puede conocer. Poniendo adelante a quien pertenece la
+    operacion, la clave sigue siendo estable para el reintento del MISMO
+    cliente y deja de ser un identificador global adivinable. El turno guarda
+    la clave original: el unico de ``appointments.idempotency_key`` es la
+    ultima defensa y no cambia.
+    """
+    return "public-" + hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _booking_cache_key(data: PublicBookingCreate, idempotency_key: str) -> str:
+    """Clave del alta publica: tienda, servicio y telefono del solicitante."""
+    return _namespaced_cache_key(
+        data.store_public_id or "",
+        data.service_id,
+        data.client_phone,
+        idempotency_key,
+    )
+
+
+def _reschedule_cache_key(public_id: str, data: ClientRescheduleRequest) -> str:
+    """Clave de la reprogramacion: el turno y el telefono que lo reclama."""
+    return _namespaced_cache_key(public_id, data.phone, data.idempotency_key)
+
+
 @router.get("/stores/{slug}", response_model=PublicStoreResponse)
 async def get_store_by_slug(
     slug: SlugPath, db: AsyncSession = Depends(get_db)
@@ -423,24 +454,25 @@ async def create_public_booking(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{data.client_phone}:{data.service_id}",
     )
-    idempotency_key: str | None = None
+    idempotency_key = data.idempotency_key or _public_booking_idempotency_key(data)
+    cache_key = _booking_cache_key(data, idempotency_key)
     async with tenant_bypass(db):
+        # La guarda va FUERA del try (AUD2-B1-07, patron de
+        # ``appointments/router.py``): si levanta
+        # ``IdempotencyInProgressException`` la clave es de OTRA peticion en
+        # vuelo y el ``except`` de abajo le borraba el ``PROCESSING``, con lo
+        # que una tercera peticion entraba al alta en paralelo. Solo se libera
+        # la clave que ESTA peticion adquirio.
+        cached = await idempotency_guard(cache_key, redis)
+        if cached:
+            return PublicBookingResponse.model_validate(cached)
         try:
-            idempotency_key = data.idempotency_key or _public_booking_idempotency_key(
-                data
-            )
-            cached = await idempotency_guard(idempotency_key, redis)
-            if cached:
-                return PublicBookingResponse.model_validate(cached)
             response = await PublicBookingService(db, redis).book(data, idempotency_key)
-            await idempotency_save(
-                idempotency_key, response.model_dump(mode="json"), redis
-            )
-            return response
         except Exception:
-            if idempotency_key:
-                await idempotency_release(idempotency_key, redis)
+            await idempotency_release(cache_key, redis)
             raise
+        await idempotency_save(cache_key, response.model_dump(mode="json"), redis)
+        return response
 
 
 @router.get(
@@ -601,18 +633,19 @@ async def client_reschedule_appointment(
         settings.RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE,
         subject=f"{public_id}:{data.phone}",
     )
+    cache_key = _reschedule_cache_key(public_id, data)
     async with tenant_bypass(db):
+        # La guarda va FUERA del try: ver ``create_public_booking``
+        # (AUD2-B1-07). Solo se libera la clave que ESTA peticion adquirio.
+        cached = await idempotency_guard(cache_key, redis)
+        if cached:
+            return PublicBookingResponse.model_validate(cached)
         try:
-            cached = await idempotency_guard(data.idempotency_key, redis)
-            if cached:
-                return PublicBookingResponse.model_validate(cached)
             response = await PublicBookingService(db, redis).reschedule_by_client(
                 public_id, data
             )
-            await idempotency_save(
-                data.idempotency_key, response.model_dump(mode="json"), redis
-            )
-            return response
         except Exception:
-            await idempotency_release(data.idempotency_key, redis)
+            await idempotency_release(cache_key, redis)
             raise
+        await idempotency_save(cache_key, response.model_dump(mode="json"), redis)
+        return response
