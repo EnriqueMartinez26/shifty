@@ -11,6 +11,7 @@ from core.validation import (
     reject_control_chars,
     reject_unsafe_url,
 )
+from modules.stores.schemas import HEX_COLOR_PATTERN
 from modules.users.model import UserRole
 
 # Techos de los enteros expuestos por la API.
@@ -31,7 +32,10 @@ class StoreCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
     slug: str = Field(..., min_length=2, max_length=100, pattern=SLUG_PATTERN)
     logo_url: str | None = Field(None, max_length=500)
-    primary_color: str = Field(default="#000000", max_length=20)
+    # Mismo patron que el panel de la tienda (StoreUpdate): el valor sale al
+    # portal publico como color CSS, asi que se valida igual lo mande el
+    # dueno o el superadmin (AUD2-B3-13, regla 19).
+    primary_color: str = Field(default="#000000", pattern=HEX_COLOR_PATTERN)
     cancellation_hours: int = Field(default=24, ge=0, le=MAX_HORAS_ANIO)
     buffer_minutes: int = Field(default=0, ge=0, le=MAX_MINUTOS_DIA)
     send_email_confirmation: bool = True
@@ -53,7 +57,7 @@ class StoreGlobalUpdate(BaseModel):
     name: str | None = Field(None, min_length=2, max_length=255)
     slug: str | None = Field(None, min_length=2, max_length=100, pattern=SLUG_PATTERN)
     logo_url: str | None = Field(None, max_length=500)
-    primary_color: str | None = Field(None, max_length=20)
+    primary_color: str | None = Field(None, pattern=HEX_COLOR_PATTERN)
     cancellation_hours: int | None = Field(None, ge=0, le=MAX_HORAS_ANIO)
     buffer_minutes: int | None = Field(None, ge=0, le=MAX_MINUTOS_DIA)
     send_email_confirmation: bool | None = None

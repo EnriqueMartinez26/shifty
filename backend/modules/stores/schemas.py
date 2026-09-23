@@ -29,6 +29,11 @@ MAX_USOS_CUPON = 1_000_000
 
 
 CUSTOM_FIELD_KEY_PATTERN = r"^[a-z][a-z0-9_]{1,39}$"
+# El color del negocio sale al tema del portal publico como valor CSS: es
+# texto publicado (regla 19). Vive aca, junto al schema que es dueno del
+# campo, y lo importa el de superadmin para que no haya dos versiones del
+# mismo contrato (AUD2-B3-13).
+HEX_COLOR_PATTERN = r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
 CustomClientFieldType = Literal["text", "textarea", "tel", "email", "date", "select"]
 
 
@@ -77,9 +82,7 @@ class StoreUpdate(BaseModel):
     slug: Optional[str] = Field(None, max_length=100, pattern=SLUG_PATTERN)
     business_type: Optional[BusinessType] = None
     logo_url: Optional[str] = Field(None, max_length=500)
-    primary_color: Optional[str] = Field(
-        None, pattern=r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
-    )
+    primary_color: Optional[str] = Field(None, pattern=HEX_COLOR_PATTERN)
     cover_url: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = Field(None, max_length=2000)
     whatsapp_number: Optional[str] = Field(None, max_length=50)
