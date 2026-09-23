@@ -131,6 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await _close_redis_on_shutdown()
+        await _dispose_db_pool_on_shutdown()
 
 
 async def _close_redis_on_shutdown() -> None:
@@ -144,6 +145,26 @@ async def _close_redis_on_shutdown() -> None:
         await close_redis()
     except Exception:
         logger.warning("redis_close_failed_on_shutdown", exc_info=True)
+
+
+async def _dispose_db_pool_on_shutdown() -> None:
+    """Cierre ordenado del pool de Postgres (AUD2-B7-05, 2026-09-20).
+
+    Mismo modo de fallo que X-16 declaro inaceptable para Redis, en el recurso
+    que ademas ya se agoto una vez (regla 5, 2026-09-04): sin esto quedaban
+    hasta DB_POOL_SIZE + DB_MAX_OVERFLOW conexiones abiertas contra Postgres
+    por proceso de uvicorn tras cada apagado, hasta que las cerrara el timeout
+    del servidor. Con `restart: always` y un contenedor de Postgres de 256M,
+    un deploy con reinicios seguidos puede dejar la base sin cupo para el
+    proceso nuevo.
+
+    Va en su propio try y despues del cierre de Redis: una base que ya no
+    responde no puede trabar el apagado, y un cierre no puede tapar al otro.
+    """
+    try:
+        await engine.dispose()
+    except Exception:
+        logger.warning("db_pool_dispose_failed_on_shutdown", exc_info=True)
 
 
 # Sentry se inicializa antes de construir la app para que sus integraciones
@@ -265,8 +286,28 @@ async def stale_data_exception_handler(
 
 
 # SQLSTATE de Postgres que son carreras legitimas entre transacciones, no
-# fallos del servidor: deadlock_detected y serialization_failure.
-_CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001"})
+# fallos del servidor: deadlock_detected, serialization_failure y
+# lock_not_available.
+#
+# 55P03 entra porque la migracion `app_role_timeouts` le pone al rol de la app
+# `lock_timeout = '5s'`: en una rafaga sobre el mismo profesional, el que
+# espera mas de ese plazo por el `SELECT ... FOR UPDATE` recibe 55P03. Es la
+# misma carrera entre dos actores que 40P01, provocada por una guarda propia
+# del repo, y salia como 500 (AUD2-B7-02, 2026-09-20). La regla de CLAUDE.md
+# §4 exige cero 5xx en la prueba de rafaga.
+#
+# 57014 (statement_timeout) NO entra: ahi no hay otro actor esperando, es una
+# consulta que tardo demasiado, o sea un problema del servidor que tiene que
+# seguir siendo 500 visible.
+_CONCURRENCY_SQLSTATES = frozenset({"40P01", "40001", "55P03"})
+
+
+# Marca en la propia excepcion de que su `db_error` ya se escribio. Starlette
+# 1.0 invoca el handler de una clase concreta DOS veces cuando re-levanta -una
+# en el envoltorio de la ruta y otra en `ExceptionMiddleware`-, asi que sin
+# esto cada error de base dejaba dos trazas identicas y parecia haber fallado
+# dos veces (AUD2-B7-01, seguimiento 2026-09-20).
+_ATRIBUTO_YA_LOGUEADO = "_shifty_db_error_logged"
 
 
 def _sqlstate(exc: DBAPIError) -> str | None:
@@ -282,7 +323,7 @@ def _sqlstate(exc: DBAPIError) -> str | None:
 
 @app.exception_handler(DBAPIError)
 async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse:
-    """Deadlock o falla de serializacion de Postgres: 409 neutro (S-18).
+    """Carrera de locks de Postgres: 409 neutro (S-18, AUD2-B7-02).
 
     Postgres ya aborto la transaccion; el handler solo responde. Quedan dos
     cruces de locks posibles (reprogramar turno -> profesional contra el alta
@@ -290,6 +331,20 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
     contra un cierre de tienda): son carreras entre dos actores, como el
     optimistic locking, y el cliente reintenta. Sin detalles internos (regla
     20). Cualquier otro error de base es un 500, como antes.
+
+    Ese 500 NO se responde aca: la excepcion se re-levanta. Starlette atiende
+    los handlers de clases concretas en `ExceptionMiddleware`, la capa interna,
+    que no re-levanta; devolver la respuesta desde aca dejaba mudo a todo error
+    de base que no fuera una carrera -conexion perdida, pool agotado, timeouts
+    y violacion de politica RLS (42501)-: sin traceback en uvicorn y sin evento
+    en Sentry, porque su integracion de Starlette solo reporta excepciones con
+    `status_code` (AUD2-B7-01, 2026-09-19). Al subir, la atiende
+    `ServerErrorMiddleware` como cualquier otra excepcion: mismo 500 neutro,
+    traceback y captura, igual que antes de S-18.
+
+    Al re-levantar, Starlette 1.0 vuelve a invocar este handler (envoltorio de
+    la ruta y despues `ExceptionMiddleware`), asi que el log lleva marca en la
+    excepcion para escribirse una sola vez.
     """
     sqlstate = _sqlstate(exc)
     if sqlstate in _CONCURRENCY_SQLSTATES:
@@ -300,7 +355,19 @@ async def dbapi_error_handler(request: Request, exc: DBAPIError) -> JSONResponse
             sqlstate=sqlstate,
         )
         return _concurrent_modification_response()
-    return await unhandled_exception_handler(request, exc)
+    if not getattr(exc, _ATRIBUTO_YA_LOGUEADO, False):
+        # El `setattr` va ANTES del log: si el logger fallara, la segunda
+        # invocacion tampoco tiene que escribir.
+        setattr(exc, _ATRIBUTO_YA_LOGUEADO, True)
+        logger.error(
+            "db_error",
+            path=str(request.url.path),
+            method=request.method,
+            error_type=type(exc).__name__,
+            sqlstate=sqlstate,
+            exc_info=True,
+        )
+    raise exc
 
 
 @app.exception_handler(IntegrityError)
@@ -325,14 +392,8 @@ async def integrity_error_handler(
     )
 
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.error(
-        "unhandled_exception",
-        path=str(request.url.path),
-        method=request.method,
-        error_type=type(exc).__name__,
-    )
+def _internal_error_response() -> JSONResponse:
+    """El 500 neutro, sin log: lo arman dos capas y el evento se registra una."""
     return error_response(
         status_code=500,
         error_code="INTERNAL_SERVER_ERROR",
@@ -341,14 +402,78 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "unhandled_exception",
+        path=str(request.url.path),
+        method=request.method,
+        error_type=type(exc).__name__,
+    )
+    return _internal_error_response()
+
+
+class LastResortErrorMiddleware:
+    """Emite el 500 no manejado DENTRO del stack, no por encima de el.
+
+    El handler de ``Exception`` lo atiende ``ServerErrorMiddleware``, que
+    Starlette pone como capa MAS externa de todas: por encima de
+    ``CORSMiddleware`` y de ``SecurityHeadersMiddleware``, que solo son las mas
+    externas de las de usuario. Esa respuesta salia entonces sin
+    ``access-control-allow-origin`` y sin un solo header de seguridad: un
+    navegador en otro origen (el dev server de Vite, cualquier cliente
+    cross-origin) veia un error de CORS en vez del sobre canonico y el front no
+    podia ni mostrar "Error interno del servidor". Ademas el mismo 500 salia
+    con headers distintos segun de que capa viniera (AUD2-B7-11, 2026-09-20).
+
+    Esta capa va por dentro de CORS y de los security headers, asi que la
+    respuesta los recibe como cualquier otra. La excepcion se RE-LEVANTA igual:
+    ``ServerErrorMiddleware`` ve la respuesta ya empezada, no la duplica, y la
+    vuelve a levantar para que uvicorn imprima el traceback y el middleware
+    ASGI de Sentry capture el evento (la garantia de AUD2-B7-01). El log lo
+    escribe el handler de arriba, una sola vez.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracked_send)
+        except Exception:
+            if response_started:
+                # Con la respuesta a medio camino no hay nada que reemplazar:
+                # el error sube y el servidor corta la conexion.
+                raise
+            await _internal_error_response()(scope, receive, send)
+            raise
+
+
 # IMPORTANTE: En Starlette/FastAPI, los middlewares se ejecutan en orden INVERSO al de registro.
 # Registramos de lo más interno a lo más externo:
-# tenant -> rate limit -> request guard -> boot error -> canonical JSON -> security headers -> CORS.
+# tenant -> rate limit -> request guard -> boot error -> canonical JSON ->
+# last resort -> security headers -> CORS.
 app.add_middleware(TenantMiddleware)
 app.add_middleware(RedisRateLimitMiddleware)
 app.add_middleware(RequestGuardMiddleware)
 app.add_middleware(BootErrorMiddleware)
 app.add_middleware(CanonicalJsonMiddleware)
+# Justo por dentro de los headers de seguridad y de CORS: es lo que hace que el
+# 500 no manejado salga con ellos (AUD2-B7-11). Por fuera del sobre canonico
+# para cubrir tambien lo que reviente ahi.
+app.add_middleware(LastResortErrorMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Configurar CORS como la capa más externa.

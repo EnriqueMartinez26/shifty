@@ -7,8 +7,15 @@ tienda. Postgres detecta el ciclo y aborta una transaccion con SQLSTATE 40P01
 (``DeadlockDetectedError``), que SQLAlchemy envuelve en ``DBAPIError``; hoy
 salia por el handler generico como 500. Es una carrera legitima entre dos
 actores, igual que el optimistic locking: 409 neutro, sin detalles internos
-(regla 20). Lo mismo con 40001 (``SerializationFailure``). Cualquier otro
-error de base sigue siendo 500.
+(regla 20). Lo mismo con 40001 (``SerializationFailure``).
+
+Y lo mismo con 55P03 (``lock_not_available``): la migracion
+``app_role_timeouts`` le pone al rol de la app ``lock_timeout = '5s'``, asi
+que en una rafaga sobre el mismo profesional el que espera mas de 5 segundos
+por el ``SELECT ... FOR UPDATE`` recibe ese SQLSTATE. Es la misma carrera
+legitima entre dos actores, provocada por una guarda propia del repo, y salia
+como 500 (AUD2-B7-02, 2026-09-20). Cualquier otro error de base sigue siendo
+500.
 
 La carrera real esta en tests/postgres/test_pg_deadlock_como_conflicto.py; aca
 se simula el error que sube de la base.
@@ -22,6 +29,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import DBAPIError, OperationalError
 
+import main
 import modules.notifications.tasks as tasks
 from main import app
 from modules.public_api.service import PublicBookingService
@@ -61,6 +69,10 @@ CUERPO_NEUTRO = {
         (DBAPIError, "40P01"),
         (OperationalError, "40P01"),
         (DBAPIError, "40001"),
+        # lock_timeout del rol de la app: esperar el FOR UPDATE mas de 5s no
+        # es un fallo del servidor (AUD2-B7-02, 2026-09-20).
+        (DBAPIError, "55P03"),
+        (OperationalError, "55P03"),
     ],
 )
 async def test_deadlock_o_serializacion_responde_409_neutro(
@@ -94,8 +106,8 @@ async def test_otro_error_de_base_sigue_siendo_500(
     error = OperationalError("SELECT 1", {}, _ErrorDelDriver("53300"))
     monkeypatch.setattr(PublicBookingService, "book", _que_falle_con(error))
 
-    # El handler generico responde 500 y Starlette vuelve a levantar la
-    # excepcion: con raise_app_exceptions=False se ve la respuesta.
+    # Con raise_app_exceptions=False se ve la respuesta; la excepcion sigue
+    # subiendo (lo exige test_un_error_de_base_que_no_es_carrera_se_relevanta).
     transporte = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(
         transport=transporte,
@@ -109,3 +121,120 @@ async def test_otro_error_de_base_sigue_siendo_500(
     assert res.status_code == 500, res.text
     assert res.json()["error_code"] == "INTERNAL_SERVER_ERROR"
     assert "SELECT" not in res.text
+
+
+@pytest.mark.asyncio
+async def test_un_error_de_base_que_no_es_carrera_se_relevanta(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-B7-01 (2026-09-19): el 500 de base quedaba mudo.
+
+    Al registrar un handler para `DBAPIError` (clase concreta), Starlette lo
+    atiende en `ExceptionMiddleware`, la capa interna, que NO re-levanta. Todo
+    error de base que no fuera 40P01/40001 (conexion perdida, pool agotado,
+    timeouts, y sobre todo 42501: violacion de politica RLS) se respondia 500 y
+    moria ahi: sin traceback en uvicorn y sin evento en Sentry, cuya
+    integracion de Starlette solo reporta excepciones con `status_code`.
+
+    Tiene que terminar como antes de S-18: la excepcion vuelve a subir hasta
+    `ServerErrorMiddleware`, que responde el 500 y la re-levanta.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "db-error-sube")
+    error = OperationalError("SELECT 1", {}, _ErrorDelDriver("42501"))
+    monkeypatch.setattr(PublicBookingService, "book", _que_falle_con(error))
+
+    transporte = ASGITransport(app=app, raise_app_exceptions=True)
+    async with AsyncClient(transport=transporte, base_url="http://test") as con_reraise:
+        with pytest.raises(OperationalError) as excinfo:
+            await con_reraise.post(
+                "/public/appointments", json=_reserva(t, "db-error-sube-01")
+            )
+
+    assert excinfo.value is error
+
+
+@pytest.mark.asyncio
+async def test_un_error_de_base_que_no_es_carrera_se_loguea_con_traza(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin `exc_info` el log era una sola linea con el nombre de la clase."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "db-error-log")
+    error = OperationalError("SELECT 1", {}, _ErrorDelDriver("53300"))
+    monkeypatch.setattr(PublicBookingService, "book", _que_falle_con(error))
+
+    registrados: list[tuple[str, dict[str, Any]]] = []
+
+    def espia(evento: str, **kwargs: Any) -> None:
+        registrados.append((evento, kwargs))
+
+    monkeypatch.setattr(main.logger, "error", espia)
+
+    transporte = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transporte, base_url="http://test") as sin_reraise:
+        await sin_reraise.post(
+            "/public/appointments", json=_reserva(t, "db-error-log-01")
+        )
+
+    con_traza = [kw for _evento, kw in registrados if kw.get("exc_info")]
+    assert con_traza, registrados
+    assert con_traza[0]["sqlstate"] == "53300"
+
+
+@pytest.mark.asyncio
+async def test_una_carrera_no_se_relevanta_ni_ensucia_el_log(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El 409 de 40P01 sigue: se responde y no sube (no es un fallo del servidor)."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "db-carrera-no-sube")
+    error = DBAPIError("SELECT ... FOR UPDATE", {}, _ErrorDelDriver("40P01"))
+    monkeypatch.setattr(PublicBookingService, "book", _que_falle_con(error))
+
+    errores: list[str] = []
+    monkeypatch.setattr(
+        main.logger, "error", lambda evento, **kw: errores.append(evento)
+    )
+
+    transporte = ASGITransport(app=app, raise_app_exceptions=True)
+    async with AsyncClient(transport=transporte, base_url="http://test") as con_reraise:
+        res = await con_reraise.post(
+            "/public/appointments", json=_reserva(t, "db-carrera-no-sube-01")
+        )
+
+    assert res.status_code == 409, res.text
+    assert errores == []
+
+
+@pytest.mark.asyncio
+async def test_el_error_de_base_se_loguea_UNA_sola_vez(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-B7-01, seguimiento (2026-09-20): `db_error` salia duplicado.
+
+    Sintoma: con Starlette 1.0 el handler de una clase concreta se invoca DOS
+    veces cuando re-levanta -una en el envoltorio de la ruta y otra en
+    `ExceptionMiddleware`-, asi que cada error de base dejaba dos `db_error`
+    con traceback completo. Dos trazas identicas del mismo hecho hacen creer
+    que fallo dos veces y duplican el ruido en el log del contenedor, justo en
+    la clase de error que AUD2-B7-01 hizo visible para poder investigarla.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    t = await _tienda(client, "db-error-una-vez")
+    error = OperationalError("SELECT 1", {}, _ErrorDelDriver("42501"))
+    monkeypatch.setattr(PublicBookingService, "book", _que_falle_con(error))
+
+    eventos: list[str] = []
+    monkeypatch.setattr(
+        main.logger, "error", lambda evento, **kw: eventos.append(evento)
+    )
+
+    transporte = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transporte, base_url="http://test") as sin_reraise:
+        res = await sin_reraise.post(
+            "/public/appointments", json=_reserva(t, "db-error-una-vez-01")
+        )
+
+    assert res.status_code == 500, res.text
+    assert eventos.count("db_error") == 1, eventos
