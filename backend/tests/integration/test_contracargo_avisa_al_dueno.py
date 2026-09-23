@@ -253,6 +253,61 @@ async def test_una_disputa_sobre_un_cobro_acreditado_avisa_al_dueno(
     assert "retenida" in (avisos[0].body or "")
 
 
+@pytest.mark.asyncio
+async def test_dos_webhooks_de_la_misma_disputa_publican_un_solo_aviso(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-POST-10 (2026-09-23): el aviso de disputa es idempotente por cobro.
+
+    Sintoma: Mercado Pago reenvia el webhook en cada actualizacion de la
+    disputa, cada vez con un ``event_id`` nuevo, asi que la idempotencia del
+    inbox no lo frena; y cada reenvio publicaba otro ``payment.in_mediation``,
+    o sea otro aviso identico al dueno por la misma disputa.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago_con_estado(monkeypatch, {})
+    store, token = await register_and_login(
+        client, slug="disputa-reenviada", email="disputa-reenviada@t.com"
+    )
+    await _enable_payments(client, token)
+    await _configure_gateway(client, token)
+    turno = await _book_with_mercadopago(
+        client, token, store, slug_suffix="disputa-reenviada", hour=14
+    )
+    cobro = (
+        await test_session.execute(
+            select(Payment).where(Payment.appointment_id == turno)
+        )
+    ).scalar_one()
+
+    _mercadopago_con_estado(monkeypatch, _remoto(turno, cobro, "approved"))
+    await _entregar_webhook(client, store, evento="evt-ok4", pago="mp-pago-contracargo")
+    _mercadopago_con_estado(monkeypatch, _remoto(turno, cobro, "in_mediation"))
+    await _entregar_webhook(
+        client, store, evento="evt-med-1", pago="mp-pago-contracargo"
+    )
+    await _entregar_webhook(
+        client, store, evento="evt-med-2", pago="mp-pago-contracargo"
+    )
+
+    eventos = (await test_session.execute(select(WebhookInbox))).scalars().all()
+    assert len(eventos) == 3, eventos
+    assert all(e.processed_at is not None for e in eventos), [e.error for e in eventos]
+    disputas = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == "payment.in_mediation"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(disputas) == 1, [d.payload for d in disputas]
+    assert disputas[0].payload["payment_id"] == cobro.id
+
+
 def test_los_estados_que_mercado_pago_manda_y_no_estaban_mapeados() -> None:
     def estado(valor: str) -> str | None:
         return resolve_payment_status({"data": {"id": "x", "status": valor}})
