@@ -1,10 +1,13 @@
 import React, { useMemo, useState } from 'react'
 
-import { CheckCircle2, CreditCard, ExternalLink, Link2, Loader2, TriangleAlert } from 'lucide-react'
+import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { MessageBanner } from '../components/molecules/MessageBanner'
+import { PageHeader } from '../components/molecules/PageHeader'
+import { SummaryCards } from '../components/molecules/SummaryCards'
 import {
   useCreatePaymentPreference,
   useManualConfirmPayment,
@@ -75,58 +78,16 @@ const CollectionsPage: React.FC = () => {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <div
-        className="p-6 rounded-3xl flex flex-wrap items-start justify-between gap-4"
-        style={cardStyle}
-      >
-        <div>
-          <h2
-            className="text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
-          >
-            Cobros
-          </h2>
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Turnos operables para generar links y confirmar pagos manuales sin mezclarlo con
-            configuración.
-          </p>
-        </div>
-        {appointmentsQuery.isLoading && (
-          <div
-            className="flex items-center gap-2 text-xs font-black uppercase tracking-widest"
-            style={{ color: colors2000s.text.secondary }}
-          >
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Cargando cobros...
-          </div>
-        )}
-      </div>
+      <PageHeader
+        title="Cobros"
+        description="Turnos operables para generar links y confirmar pagos manuales sin mezclarlo con configuración."
+        isLoading={appointmentsQuery.isLoading}
+        loadingText="Cargando cobros..."
+      />
 
-      {message && (
-        <div
-          className="p-4 rounded-2xl text-sm font-bold flex items-center gap-3"
-          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
-        >
-          <TriangleAlert className="w-5 h-5 flex-shrink-0" />
-          <span>{message}</span>
-        </div>
-      )}
+      <MessageBanner message={message} />
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {cards.map((card) => (
-          <div key={card.label} className="p-5 rounded-2xl" style={cardStyle}>
-            <p
-              className="text-[10px] font-black uppercase tracking-widest"
-              style={{ color: colors2000s.text.secondary }}
-            >
-              {card.label}
-            </p>
-            <p className="mt-2 text-2xl font-black" style={{ color: colors2000s.orange.accent }}>
-              {card.value}
-            </p>
-          </div>
-        ))}
-      </div>
+      <SummaryCards cards={cards} columns={3} />
 
       <div className="p-6 rounded-3xl space-y-4" style={cardStyle}>
         <div className="flex items-center gap-3">
