@@ -7,6 +7,7 @@ import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
 
 import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
 import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import {
@@ -399,26 +400,11 @@ const PromotionsPage: React.FC = () => {
                 La promo queda visible para el booking público.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setPromotionForm((prev) => ({ ...prev, is_active: !prev.is_active }))}
-              className="w-14 h-7 rounded-full relative transition-all"
-              style={{
-                background: promotionForm.is_active
-                  ? colors2000s.orange.light
-                  : colors2000s.bg.disabled,
-                boxShadow: colors2000s.shadows.insetDark
-              }}
-            >
-              <div
-                className="absolute top-1 w-5 h-5 rounded-full transition-all shadow-md"
-                style={{
-                  background: 'white',
-                  left: promotionForm.is_active ? '32px' : '4px',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                }}
-              />
-            </button>
+            <ToggleSwitch
+              label="Promoción activa"
+              checked={promotionForm.is_active}
+              onToggle={() => setPromotionForm((prev) => ({ ...prev, is_active: !prev.is_active }))}
+            />
           </div>
 
           {editingPromotionId && (
