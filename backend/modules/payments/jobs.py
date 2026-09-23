@@ -9,14 +9,13 @@ from functools import partial
 from typing import Any
 
 import structlog
-from redis.exceptions import RedisError
 from sqlalchemy import Select, or_, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
 from core.database import _apply_tenant_context
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
@@ -256,29 +255,12 @@ async def process_outbox_batch(
     store_id: str | None = None,
     incluir_vencimientos: bool = True,
 ) -> dict[str, int]:
-    """Procesa un lote del outbox: persiste, commitea, y recien despues manda.
+    """Procesa un lote del outbox: persiste, commitea y recien despues manda.
 
-    ``incluir_vencimientos=False`` deja afuera el unico paso que sale a la
-    red; lo usa el endpoint del panel (ver abajo, AUD2-B2-07).
-
-    Contrato del mail que no sale: un mail que falla o no entra en el
-    presupuesto DESPUES del commit del lote se pierde. Queda con huella en
-    su mensaje (``attempts`` y ``error``) pero el mensaje no revive:
-    ``processed_at`` ya esta commiteado y reprocesarlo duplicaria la
-    notificacion in-app y la oferta de lista de espera. Reintentar exigiria
-    un estado propio por mail.
-
-    El commit del lote es el de ``AsyncSession``, no el de ``TenantSession``
-    (v-diff de AUD2-B4-02, 2026-09-20): el de ``TenantSession`` reaplica el
-    contexto y con eso abre en el acto otra transaccion, que quedaba IDLE
-    durante todo el despacho (misma trampa que S-02 en
-    ``_expire_unpaid_appointments``). Con el
-    ``idle_in_transaction_session_timeout`` del rol (60 s) y un presupuesto
-    de 90 s, Postgres mataba la conexion a mitad del despacho, el commit de
-    los fallados reventaba y los fallos no quedaban anotados. El contexto se
-    reaplica recien cuando hay que volver a escribir. Vale igual para el
-    camino HTTP (``POST /payments/outbox/process``): ``get_db`` tambien
-    fabrica ``TenantSession`` y entra por aca.
+    Un mail que falla DESPUES del commit se pierde con huella (``attempts``,
+    ``error``): ``processed_at`` ya esta commiteado y reprocesar duplicaria.
+    El commit es el de ``AsyncSession``: el de ``TenantSession`` reaplica el
+    contexto y deja una transaccion IDLE que el rol mata a 60 s (AUD2-B4-02).
     """
     filters: list[ColumnElement[bool]] = [
         OutboxMessage.processed_at.is_(None),
@@ -324,9 +306,7 @@ async def process_outbox_batch(
             mails_pendientes.extend(mails)
             processed += 1
 
-    # Commit de AsyncSession y no de TenantSession: el de TenantSession
-    # reaplica el contexto y deja una transaccion idle abierta durante el
-    # despacho (ver docstring).
+    # Commit plano de AsyncSession, no el de TenantSession (ver docstring).
     await AsyncSession.commit(db)
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
     # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
@@ -1269,7 +1249,7 @@ async def _expire_unpaid_appointments(
             redis = await get_redis()
             for store_id, starts_at in liberados:
                 await invalidate_availability(redis, store_id, starts_at)
-        except (RedisError, OSError) as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning("availability_cache_invalidation_failed", error=str(exc))
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 

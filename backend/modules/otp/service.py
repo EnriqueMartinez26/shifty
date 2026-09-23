@@ -8,13 +8,12 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from redis.exceptions import RedisError
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.security import hash_otp_code
 from modules.notifications.tasks import is_deliverable_email
 from modules.otp.model import OtpVerification
@@ -77,7 +76,7 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
         current, _ = await pipe.execute()
         if int(current) > limit:
             raise OTPRateLimitedException()
-    except (RedisError, OSError) as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         # AUD2-B4-08: solo el tipo. El texto de un RedisError repite la
         # URL de conexion, que lleva credenciales.
         logger.warning("otp_budget_redis_unavailable", error_type=type(exc).__name__)

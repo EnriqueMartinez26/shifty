@@ -26,6 +26,7 @@ from core.config import settings
 from core.utils import ARGENTINA_TZ, ensure_utc_aware
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.repository import AppointmentRepository
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
     format_local_datetime,
@@ -33,7 +34,7 @@ from modules.notifications.tasks import (
     rebook_url,
 )
 from modules.services.model import Service
-from modules.staff.model import Staff, StaffBlock
+from modules.staff.model import Staff
 from modules.stores.model import Store
 from modules.waitlist.model import (
     MAX_LAPSED_OFFERS,
@@ -164,8 +165,9 @@ async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
     Ofrecerla igual manda al cliente al 409 ``SCHEDULE_BLOCKED`` del portal y
     encima le gasta una de sus ofertas (``lapsed_offers``, tope
     ``MAX_LAPSED_OFFERS``) por algo que no hizo. El predicado de solapamiento
-    es el mismo que usa el alta en
-    ``AppointmentRepository.get_overlapping_block``.
+    es el MISMO que usa el alta (``AppointmentRepository.get_overlapping_block``,
+    AUD2-POST-03), con el filtro de tienda porque este camino corre con bypass
+    de RLS.
     """
     ocupado = await db.execute(
         select(Appointment.id)
@@ -187,19 +189,10 @@ async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
     )
     if ocupado.scalar_one_or_none() is not None:
         return False
-    bloqueado = await db.execute(
-        select(StaffBlock.id)
-        .where(
-            StaffBlock.staff_id == slot.staff_id,
-            StaffBlock.is_active.is_(True),
-            and_(
-                StaffBlock.starts_at < slot.ends_at,
-                StaffBlock.ends_at > slot.starts_at,
-            ),
-        )
-        .limit(1)
+    bloqueado = await AppointmentRepository(db).get_overlapping_block(
+        slot.staff_id, slot.starts_at, slot.ends_at, store_id=slot.store_id
     )
-    return bloqueado.scalar_one_or_none() is None
+    return bloqueado is None
 
 
 def _owner_notification(

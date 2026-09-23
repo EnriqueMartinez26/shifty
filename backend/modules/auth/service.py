@@ -10,7 +10,6 @@ from typing import NoReturn, TypedDict
 
 import structlog
 from fastapi import status
-from redis.exceptions import RedisError
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -26,7 +25,7 @@ from core.exceptions import (
     RateLimitedException,
     UserNotFoundException,
 )
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.roles import (
     ROLE_CLIENT,
     STORE_MANAGERS,
@@ -124,6 +123,13 @@ _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(24))
 
 logger = structlog.get_logger()
 
+# "Redis no esta" es el criterio unico de core.redis (AUD2-B7-14); ValueError
+# suma el contador ilegible, que se trata igual que no poder leerlo.
+_LOGIN_FAILURES_UNREADABLE: tuple[type[Exception], ...] = (
+    *REDIS_UNAVAILABLE_ERRORS,
+    ValueError,
+)
+
 
 def _email_fingerprint(email: str) -> str:
     """Identificador estable del email para logs y claves de Redis, sin PII."""
@@ -139,7 +145,7 @@ async def _login_failures(email_key: str) -> int:
         redis = await get_redis()
         value = await redis.get(f"login:fail:{email_key}")
         return int(value) if value else 0
-    except RedisError, OSError, ValueError:
+    except _LOGIN_FAILURES_UNREADABLE:
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
                 message="Servicio temporalmente no disponible",
@@ -159,7 +165,7 @@ async def _register_login_failure(email_key: str) -> None:
         pipe.incr(key)
         pipe.expire(key, settings.LOGIN_LOCKOUT_WINDOW_SECONDS)
         await pipe.execute()
-    except RedisError, OSError:
+    except REDIS_UNAVAILABLE_ERRORS:
         logger.warning("login_lockout_redis_unavailable")
 
 
@@ -169,7 +175,7 @@ async def _clear_login_failures(email_key: str) -> None:
     try:
         redis = await get_redis()
         await redis.delete(f"login:fail:{email_key}")
-    except RedisError, OSError:
+    except REDIS_UNAVAILABLE_ERRORS:
         logger.warning("login_lockout_redis_unavailable")
 
 

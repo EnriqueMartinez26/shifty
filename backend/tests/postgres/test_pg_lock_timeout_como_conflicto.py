@@ -42,10 +42,17 @@ async def test_esperar_el_lock_del_profesional_responde_409_neutro(
     async with owner_engine.connect() as retenedor:
         # El rol dueno retiene la fila del profesional: la reserva se queda
         # esperando el mismo FOR UPDATE hasta que salta lock_timeout.
-        await retenedor.execute(
-            text("SELECT id FROM staff WHERE public_id = :p FOR UPDATE"),
-            {"p": staff},
-        )
+        # En ``staff`` el id publico ES la columna ``id`` (``StaffModel.public_id``
+        # es una propiedad sobre ``id``; AUD2-POST-02): la tabla no tiene
+        # ``public_id`` y el WHERE tiene que apuntar a la misma fila que
+        # ``lock_staff_row`` (``WHERE staff.id = ...``).
+        retenida = (
+            await retenedor.execute(
+                text("SELECT id FROM staff WHERE id = :p FOR UPDATE"),
+                {"p": staff},
+            )
+        ).scalar_one_or_none()
+        assert retenida == staff, "el retenedor no tomo la fila del profesional"
         res: Response = await asyncio.wait_for(
             client.post(
                 "/public/appointments",

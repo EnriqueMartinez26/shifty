@@ -569,8 +569,11 @@ class AppointmentService:
         # administrador y la confirmacion, el recordatorio y el WhatsApp
         # apuntaban a la tienda misma) y el precio congelado (reprogramar
         # cambia el horario, no re-tarifa al precio de lista de hoy).
+        # El estado se lee ANTES de cancelar el original: la copia lo conserva
+        # y ``apply_status_transition`` ya lo habria pisado.
+        estado_previo = original.status
         new_appointment = _rescheduled_copy(
-            original, service, new_starts_at, ends_at, idempotency_key
+            original, service, new_starts_at, ends_at, idempotency_key, estado_previo
         )
         original.apply_status_transition(AppointmentStatus.CANCELLED)
         self._publish_slot_released(original, reason="rescheduled")
@@ -770,8 +773,26 @@ def _rescheduled_copy(
     new_starts_at: datetime,
     ends_at: datetime,
     idempotency_key: str,
+    estado_previo: str,
 ) -> Appointment:
+    # Mismo criterio que el portal (``public_api.service._rescheduled_copy``,
+    # AUD2-B1-14; al panel en AUD2-POST-05, 2026-09-23): el turno movido
+    # conserva el estado del original. Antes nacia con el default de la
+    # columna y un confirmado volvia a "pendiente de confirmar" sin aviso. A
+    # esta altura no hay sena de por medio (``pending_payment`` lo frena
+    # ``reject_cancellation_while_awaiting_payment``), asi que lo que se
+    # conserva es un ``confirmed`` sin retencion que vencer. Un pendiente
+    # conserva la retencion que TENIA: la del portal (hasta el inicio) pasa
+    # al horario nuevo; el alta del panel no retiene y moverlo tampoco.
+    confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
+    retenido = not confirmado and original.expires_at is not None
     return Appointment(
+        status=(
+            AppointmentStatus.CONFIRMED.value
+            if confirmado
+            else AppointmentStatus.PENDING.value
+        ),
+        expires_at=new_starts_at if retenido else None,
         id=str(ulid.ULID()),
         store_id=original.store_id,
         staff_id=original.staff_id,

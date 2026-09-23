@@ -322,6 +322,28 @@ async def _notify_payment_reversed(
     )
 
 
+async def _disputa_ya_avisada(
+    db: AsyncSession, *, store_id: str, payment: Payment
+) -> bool:
+    """Si ya hay un aviso de disputa publicado para este cobro (AUD2-POST-10).
+
+    Mercado Pago reenvia el webhook en cada actualizacion de la disputa, cada
+    vez con un ``event_id`` nuevo: la idempotencia del inbox no lo frena y el
+    estado del cobro no cambia (``approved`` -> ``pending`` es ilegal), asi
+    que sin esta consulta cada reenvio era otro aviso identico al dueno.
+    """
+    result = await db.execute(
+        select(OutboxMessage.id)
+        .where(
+            OutboxMessage.store_id == store_id,
+            OutboxMessage.event_type == NotificationType.PAYMENT_IN_MEDIATION.value,
+            OutboxMessage.payload["payment_id"].as_string() == payment.id,
+        )
+        .limit(1)
+    )
+    return result.first() is not None
+
+
 async def _avisar_al_dueno(
     db: AsyncSession,
     *,
@@ -359,7 +381,11 @@ async def _avisar_al_dueno(
     # es ilegal, asi que el estado no cambia (decision: sin estado ni arista
     # nueva, regla 2). Pero Mercado Pago retiene la plata hasta resolverla y
     # antes eso no dejaba rastro: el inbox se sellaba y nadie se enteraba.
-    if was_settled and estado_remoto == "in_mediation":
+    if (
+        was_settled
+        and estado_remoto == "in_mediation"
+        and not await _disputa_ya_avisada(db, store_id=store_id, payment=payment)
+    ):
         await _publicar_aviso_de_cobro(
             db,
             store_id=store_id,
