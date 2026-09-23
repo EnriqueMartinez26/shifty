@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from redis.exceptions import RedisError, TimeoutError
 from unittest.mock import AsyncMock
@@ -66,19 +68,35 @@ def test_el_criterio_de_redis_caido_se_define_una_sola_vez() -> None:
     vive en `core.redis` y los modulos que dependen del cliente lo importan.
     `core.availability_cache` entra en la lista porque AUD2-B7-03 le puso su
     propio `_REDIS_CAIDO = (RedisError, OSError)`: una cuarta copia del mismo
-    criterio, escrita en paralelo a AUD2-B7-14.
+    criterio, escrita en paralelo a AUD2-B7-14. Los modulos de negocio que
+    hablan con Redis (OTP, lockout de login, expiracion de retenciones)
+    entran desde AUD2-POST-09: seguian con el literal (V-diff de B7-14b).
     """
     import inspect
 
     import core.availability_cache as availability_cache
     import core.idempotency as idempotency
     import core.rate_limit as rate_limit
+    import modules.auth.service as auth_service
+    import modules.otp.service as otp_service
+    import modules.payments.jobs as payments_jobs
     from core.redis import REDIS_UNAVAILABLE_ERRORS
 
     assert REDIS_UNAVAILABLE_ERRORS == (RedisError, OSError)
-    for modulo in (idempotency, rate_limit, availability_cache):
+    modulos = (
+        idempotency,
+        rate_limit,
+        availability_cache,
+        auth_service,
+        otp_service,
+        payments_jobs,
+    )
+    for modulo in modulos:
         fuente = inspect.getsource(modulo)
-        assert "except REDIS_UNAVAILABLE_ERRORS" in fuente, modulo.__name__
+        assert "REDIS_UNAVAILABLE_ERRORS" in fuente, modulo.__name__
         assert "except RedisError" not in fuente, modulo.__name__
         assert "except (RedisError" not in fuente, modulo.__name__
         assert "(RedisError, OSError)" not in fuente, modulo.__name__
+        # Ni un `except` que nombre a RedisError por su cuenta: el criterio se
+        # importa, no se reescribe (tampoco como `except RedisError, OSError:`).
+        assert not re.search(r"except\s+RedisError\b", fuente), modulo.__name__

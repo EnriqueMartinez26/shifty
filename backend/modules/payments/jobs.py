@@ -9,14 +9,13 @@ from functools import partial
 from typing import Any
 
 import structlog
-from redis.exceptions import RedisError
 from sqlalchemy import Select, or_, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
 from core.database import _apply_tenant_context
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
@@ -1250,7 +1249,7 @@ async def _expire_unpaid_appointments(
             redis = await get_redis()
             for store_id, starts_at in liberados:
                 await invalidate_availability(redis, store_id, starts_at)
-        except (RedisError, OSError) as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning("availability_cache_invalidation_failed", error=str(exc))
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 
