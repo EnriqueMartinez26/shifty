@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, Field, model_validator
 
 from core.utils import ensure_utc_aware
+from core.validation import reject_payload_control_chars
 
 # Tope de duracion de UN rango de bloqueo (AUD2-B1-10). Regla 9 aplicada a
 # una duracion: sin cota superior, un bloqueo de 2026 a 2036 era valido y la
@@ -42,6 +43,17 @@ class AppointmentBlockBase(BaseModel):
             raise ValueError(error)
         return self
 
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "AppointmentBlockBase":
+        # El motivo lo tipea un admin, pero se PUBLICA: sale como motivo del
+        # slot en la disponibilidad, en el listado del panel y en el cuerpo
+        # del mail de cancelacion en bloque (regla 19: "texto que se publica",
+        # sin importar quien lo tipeo). Se valida al escribir, igual que la
+        # tienda y el personal: una fila legada con un invisible se sigue
+        # leyendo.
+        self.reason = reject_payload_control_chars(self.reason) or ""
+        return self
+
 
 class StoreWideBlockCreate(BaseModel):
     """Cierre de toda la tienda: un feriado, una mudanza, un dia de limpieza.
@@ -63,6 +75,11 @@ class StoreWideBlockCreate(BaseModel):
         error = block_range_error(self.starts_at, self.ends_at)
         if error:
             raise ValueError(error)
+        return self
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "StoreWideBlockCreate":
+        self.reason = reject_payload_control_chars(self.reason) or ""
         return self
 
 
@@ -106,6 +123,11 @@ class AppointmentBlockUpdate(BaseModel):
     # el flag (solo administradores) se cancelan los que se pueden y se avisa
     # al cliente. Mismo contrato que el alta (AUD2-B1-01).
     cancel_affected: bool = False
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "AppointmentBlockUpdate":
+        self.reason = reject_payload_control_chars(self.reason)
+        return self
 
 
 class AppointmentBlockResponse(BaseModel):

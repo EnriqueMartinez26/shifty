@@ -14,6 +14,7 @@ heredan las respuestas, asi una fila legada con un invisible se sigue leyendo
 (sin 500) y un PATCH que no toca ese campo sigue funcionando.
 """
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 import pytest
@@ -21,6 +22,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.staff.model import StaffBlock
 from modules.stores.model import Store
 from modules.users.model import User
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -214,3 +216,103 @@ async def test_una_tienda_legada_con_invisibles_se_sigue_leyendo_y_editando(
     )
     assert otro.status_code == 200, otro.text
     assert cast(JsonDict, otro.json())["cancellation_hours"] == 12
+
+
+# ---------------------------------------------------------------------------
+# Bloqueos de agenda (AUD2-B1-11, 2026-09-20)
+# ---------------------------------------------------------------------------
+#
+# El ``reason`` de un bloqueo lo tipea un admin y se publica en tres lados: la
+# respuesta de disponibilidad (``availability`` lo devuelve como motivo del
+# slot), el listado del panel y el cuerpo del mail de cancelacion en bloque.
+# Ninguno de los tres schemas pasaba por ``reject_payload_control_chars``, asi
+# que un U+202E o un zero-width llegaba al portal y al mail del cliente. Mismo
+# criterio que la tienda y el personal: se valida al ESCRIBIR, con 422 y sin
+# persistir.
+
+
+async def _tienda_con_profesional(
+    client: AsyncClient, slug: str
+) -> tuple[str, str, str]:
+    _, token = await register_and_login(client, slug=slug, email=f"{slug}@test.com")
+    servicio = await create_service(client, token)
+    profesional = await create_staff(client, token, servicio)
+    return token, servicio, profesional
+
+
+def _rango() -> tuple[str, str]:
+    inicio = datetime.now(timezone.utc) + timedelta(days=5)
+    return inicio.isoformat(), (inicio + timedelta(hours=1)).isoformat()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("veneno", VENENOS)
+async def test_el_motivo_de_un_bloqueo_rechaza_invisibles(
+    client: AsyncClient, test_session: AsyncSession, veneno: str
+) -> None:
+    token, _servicio, profesional = await _tienda_con_profesional(
+        client, "texto-bloqueo"
+    )
+    headers = auth_headers(token)
+    starts_at, ends_at = _rango()
+    base: JsonDict = {
+        "staff_id": profesional,
+        "starts_at": starts_at,
+        "ends_at": ends_at,
+    }
+
+    alta = await client.post(
+        "/appointment-blocks/", headers=headers, json={**base, "reason": veneno}
+    )
+    assert alta.status_code == 422, alta.text
+
+    cierre = await client.post(
+        "/appointment-blocks/store-wide",
+        headers=headers,
+        json={"starts_at": starts_at, "ends_at": ends_at, "reason": veneno},
+    )
+    assert cierre.status_code == 422, cierre.text
+
+    lote = await client.post(
+        "/appointment-blocks/batch",
+        headers=headers,
+        json={**base, "reason": veneno, "recurrence": "none"},
+    )
+    assert lote.status_code == 422, lote.text
+
+    limpio = await client.post(
+        "/appointment-blocks/", headers=headers, json={**base, "reason": "Tramite"}
+    )
+    assert limpio.status_code == 201, limpio.text
+    edicion = await client.patch(
+        f"/appointment-blocks/{limpio.json()['public_id']}",
+        headers=headers,
+        json={"reason": veneno},
+    )
+    assert edicion.status_code == 422, edicion.text
+
+    test_session.expire_all()
+    motivos = (await test_session.execute(select(StaffBlock.reason))).scalars().all()
+    assert all(veneno not in (m or "") for m in motivos), motivos
+
+
+@pytest.mark.asyncio
+async def test_el_motivo_normal_de_un_bloqueo_sigue_entrando(
+    client: AsyncClient,
+) -> None:
+    token, _servicio, profesional = await _tienda_con_profesional(
+        client, "texto-bloqueo-ok"
+    )
+    starts_at, ends_at = _rango()
+    res = await client.post(
+        "/appointment-blocks/",
+        headers=auth_headers(token),
+        json={
+            "staff_id": profesional,
+            "starts_at": starts_at,
+            "ends_at": ends_at,
+            "reason": "Turno médico\nde la mañana",
+        },
+    )
+    assert res.status_code == 201, res.text
+    assert res.json()["reason"] == "Turno médico\nde la mañana"
