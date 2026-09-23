@@ -13,7 +13,9 @@ Decision del duenio (2026-09-20): la ventana aplica a los dos caminos.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -21,6 +23,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment
+from modules.public_api.router import _reschedule_cache_key
+from modules.public_api.schemas import ClientRescheduleRequest
 from tests.integration.test_caracterizacion_alta_publica import (
     _contar,
     _eventos,
@@ -45,6 +49,18 @@ async def _adelantar(session: AsyncSession, turno: str, minutos: int) -> datetim
     return inicio
 
 
+def _clave_redis(turno: str, cuerpo: dict[str, Any]) -> str:
+    """La clave real que la reprogramacion usa en Redis (AUD2-B1-06).
+
+    Es la namespaceada por turno y telefono, no la cadena cruda del cliente:
+    afirmar sobre ``idempotency:{clave cruda}`` daba siempre ``None`` y la
+    asercion de liberacion no probaba nada (AUD2-POST-04).
+    """
+    return "idempotency:" + _reschedule_cache_key(
+        turno, ClientRescheduleRequest(**cuerpo)
+    )
+
+
 @pytest.mark.asyncio
 async def test_reprogramar_dentro_de_la_ventana_se_rechaza(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
@@ -55,15 +71,14 @@ async def test_reprogramar_dentro_de_la_ventana_se_rechaza(
     eventos_antes = await _eventos(test_session)
     turnos_antes = await _contar(test_session, Appointment)
     redis = await _redis()
-    clave = "ventana-repro-clave-0001"
+    cuerpo: dict[str, Any] = {
+        "phone": TELEFONO,
+        "new_starts_at": nuevo_inicio.isoformat(),
+        "idempotency_key": "ventana-repro-clave-0001",
+    }
 
     res = await client.patch(
-        f"/public/client/appointments/{turno}/reschedule",
-        json={
-            "phone": TELEFONO,
-            "new_starts_at": nuevo_inicio.isoformat(),
-            "idempotency_key": clave,
-        },
+        f"/public/client/appointments/{turno}/reschedule", json=cuerpo
     )
 
     assert res.status_code == 409, res.text
@@ -73,7 +88,9 @@ async def test_reprogramar_dentro_de_la_ventana_se_rechaza(
     assert (await _turno(test_session, turno)).status == "pending"
     assert await _eventos(test_session) == eventos_antes
     assert await _contar(test_session, Appointment) == turnos_antes
-    assert await redis.get(f"idempotency:{clave}") is None
+    # El rechazo libero la clave que ESTA peticion adquirio: un reintento del
+    # cliente vuelve a evaluarse en vez de recibir el 409 cacheado.
+    assert await redis.get(_clave_redis(turno, cuerpo)) is None
 
 
 @pytest.mark.asyncio
@@ -83,19 +100,29 @@ async def test_reprogramar_fuera_de_la_ventana_sigue_andando(
     """La guarda nueva no rompe el camino feliz (turno a cinco dias vista)."""
     t, turno = await _con_turno(client, monkeypatch, "ventana-repro-ok")
     nuevo_inicio = t.slot + timedelta(hours=2)
+    redis = await _redis()
+    cuerpo: dict[str, Any] = {
+        "phone": TELEFONO,
+        "new_starts_at": nuevo_inicio.isoformat(),
+        "idempotency_key": "ventana-repro-ok-0001",
+    }
 
     res = await client.patch(
-        f"/public/client/appointments/{turno}/reschedule",
-        json={
-            "phone": TELEFONO,
-            "new_starts_at": nuevo_inicio.isoformat(),
-            "idempotency_key": "ventana-repro-ok-0001",
-        },
+        f"/public/client/appointments/{turno}/reschedule", json=cuerpo
     )
 
     assert res.status_code == 200, res.text
     assert (await _turno(test_session, turno)).status == "cancelled"
     assert (await _turno(test_session, res.json()["public_id"])).status == "pending"
+    # Con exito, la MISMA clave derivada queda guardada con la respuesta: es
+    # la prueba de que ``_clave_redis`` apunta a lo que el router escribe y
+    # de que el ``None`` del test de rechazo significa "liberada", no
+    # "nunca existio".
+    guardado = await redis.get(_clave_redis(turno, cuerpo))
+    assert guardado is not None
+    if isinstance(guardado, bytes):
+        guardado = guardado.decode("utf-8")
+    assert json.loads(guardado)["public_id"] == res.json()["public_id"]
 
 
 @pytest.mark.asyncio
