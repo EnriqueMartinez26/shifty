@@ -65,8 +65,8 @@ async def _sembrar(sessions: async_sessionmaker[AsyncSession]) -> None:
             plan = Plan(name="Plan PG paginado", price=15000, currency="ARS")
             session.add(plan)
             await session.flush()
-            for i in range(CUANTAS):
-                store_id = str(ulid.ULID())
+            store_ids = [str(ulid.ULID()) for _ in range(CUANTAS)]
+            for i, store_id in enumerate(store_ids):
                 session.add(
                     Store(
                         id=store_id,
@@ -76,6 +76,10 @@ async def _sembrar(sessions: async_sessionmaker[AsyncSession]) -> None:
                         theme_config={"business_type": "general"},
                     )
                 )
+            # Without a relationship() between the two models the unit of work
+            # does not guarantee stores are inserted first; flush them explicitly.
+            await session.flush()
+            for i, store_id in enumerate(store_ids):
                 session.add(
                     StoreSubscription(
                         id=str(ulid.ULID()),
