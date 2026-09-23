@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 
 import { Check, Copy, Share2 } from 'lucide-react'
 
-import { useServicesCatalog } from '@presentation/hooks/useServicesCatalog'
+import { useManagedServices } from '@presentation/hooks/useManagedServices'
 
 import { colors2000s } from '../../../theme/colors'
 
@@ -38,7 +38,7 @@ export const buildShareLinks = (
  * canal real de una tienda chica: no hay integracion que los publique sola.
  */
 export const ShareLinksPanel: React.FC<ShareLinksPanelProps> = ({ slug }) => {
-  const { data: services } = useServicesCatalog()
+  const { data: services } = useManagedServices()
   const [copiado, setCopiado] = useState<string | null>(null)
   const links = buildShareLinks(
     typeof window === 'undefined' ? '' : window.location.origin,

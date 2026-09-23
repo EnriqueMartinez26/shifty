@@ -1,4 +1,4 @@
-// ShareLinksPanel usa useServicesCatalog, que importa el singleton
+// ShareLinksPanel usa useManagedServices, que importa el singleton
 // serviceService -> apiClient real (que a su vez toca runtime-env.ts /
 // import.meta, que ts-jest no compila fuera de node_modules). Se mockea
 // el modulo del cliente HTTP para poder cargar buildShareLinks sin

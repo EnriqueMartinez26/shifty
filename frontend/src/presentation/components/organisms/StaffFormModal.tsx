@@ -4,7 +4,7 @@ import { X, Loader2, User, Mail, Briefcase, Check } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
-import { useServicesCatalog } from '@presentation/hooks/useServicesCatalog'
+import { useManagedServices } from '@presentation/hooks/useManagedServices'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -36,7 +36,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
     service_ids: []
   })
 
-  const { data: services } = useServicesCatalog()
+  const { data: services } = useManagedServices()
 
   useEffect(() => {
     if (editingStaff) {
