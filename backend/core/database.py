@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -139,3 +139,41 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 # Alias para uso fuera de FastAPI (Celery tasks, scripts, etc.)
 # Las tareas de Celery usan esto con "async with AsyncSessionFactory() as db:"
 AsyncSessionFactory = SessionLocal
+
+
+class RlsBypassError(RuntimeError):
+    """El rol con el que se conecta el proceso puede saltar RLS."""
+
+
+async def assert_rls_capable_role(bind: Any) -> None:
+    """Levanta si el proceso se conecta con un rol que saltea RLS.
+
+    Todo el aislamiento multi-tenant depende de que ``DATABASE_URL`` use un rol
+    NOSUPERUSER/NOBYPASSRLS (shifty_app). Un superusuario ignora FORCE ROW LEVEL
+    SECURITY y desactiva el aislamiento en silencio.
+
+    Vive aca y no en ``main.py`` porque la API no es el unico proceso que se
+    conecta: el worker y beat usan la MISMA ``DATABASE_URL`` -del mismo bloque
+    de compose que ``MIGRATION_DATABASE_URL``, con la que se la confunde por un
+    typo de una palabra- y tocan turnos, pagos y outbox de todas las tiendas.
+    Que el chequeo existiera solo en el lifespan dejaba a Celery trabajando sin
+    aislamiento, en silencio (AUD2-B7-08, 2026-09-20).
+
+    ``bind`` es el engine y se pasa explicito para poder doblarlo en tests.
+    """
+    async with bind.connect() as conn:
+        if conn.dialect.name != "postgresql":
+            return
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles "
+                    "WHERE rolname = current_user"
+                )
+            )
+        ).one_or_none()
+    if row is not None and (row[0] or row[1]):
+        raise RlsBypassError(
+            "La app NO puede conectarse con un rol superusuario o con BYPASSRLS: "
+            "eso desactiva el aislamiento multi-tenant (RLS). Usa el rol shifty_app."
+        )

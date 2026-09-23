@@ -6,21 +6,97 @@ from celery import Celery
 from celery.schedules import crontab
 from celery.signals import beat_init, worker_init
 from core.config import SETTINGS_BOOT_ERROR, settings
+from core.database import assert_rls_capable_role, engine
 from core.model_registry import load_all_models
 from core.observability import init_observability
+from core.worker_loop import run_in_worker_loop
 
 logger = logging.getLogger(__name__)
 
-# Los workers corren en procesos aparte: necesitan su propia inicializacion.
-init_observability("worker")
-# ...y su registro de modelos completo: las tasks importan Appointment pero
-# no Staff, y las relaciones por nombre fallan al configurar los mappers.
+# Registro de modelos completo: las tasks importan Appointment pero no Staff, y
+# las relaciones por nombre fallan al configurar los mappers. Queda a nivel de
+# modulo porque tiene que estar listo antes de la primera tarea y no depende de
+# que el proceso sea un worker (lo cubre test_model_registry).
 load_all_models()
 
 
 @worker_init.connect  # type: ignore[untyped-decorator]
 @beat_init.connect  # type: ignore[untyped-decorator]
-def _abort_if_settings_are_fallback(**_: object) -> None:
+def _start_worker_process(**_: object) -> None:
+    """Arranque de un proceso de Celery (worker o beat), y SOLO de ellos.
+
+    Sentry no se puede inicializar en el cuerpo de este modulo: el proceso de
+    la API lo importa sin querer, por la cadena `main` ->
+    `modules.appointment_blocks.router` -> `...service` ->
+    `modules.notifications.tasks` -> `core.celery_app`, 128 lineas ANTES de su
+    propio `init_observability("api")`. Como el init tiene un guard global
+    `_initialized`, el de la API retornaba sin hacer nada y TODOS sus eventos
+    salian etiquetados `component="worker"`: la unica senal para separar un
+    request roto de un job roto respondia siempre lo mismo (AUD2-B7-04,
+    2026-09-20).
+
+    La configuracion se valida ANTES de Sentry: el DSN sale de esos mismos
+    settings, y con settings de respaldo el proceso tiene que morir igual
+    (regla 21). El chequeo del rol va al final, porque es el unico que abre una
+    conexion a la base.
+    """
+    _abort_if_settings_are_fallback()
+    init_observability("worker")
+    _abort_if_role_can_bypass_rls()
+
+
+def _abort_if_role_can_bypass_rls() -> None:
+    """El worker y beat tampoco pueden correr con un rol que saltea RLS.
+
+    Los tres procesos usan la MISMA ``DATABASE_URL``, del mismo bloque de
+    compose que ``MIGRATION_DATABASE_URL``: confundirlas es un typo de una
+    palabra. Con el chequeo solo en el lifespan de FastAPI, la API moria
+    ruidosamente y Celery seguia trabajando sin aislamiento multi-tenant, en
+    silencio, sobre turnos, pagos y outbox de TODAS las tiendas (AUD2-B7-08,
+    2026-09-20).
+
+    Cualquier fallo se traduce a ``SystemExit``: el despachador de signals de
+    Celery se traga las ``Exception``, asi que un rol equivocado o una base que
+    no responde dejarian al proceso "ready" sin haber verificado nada. Cuesta
+    una conexion durante ``worker_init``, que es el precio de la garantia que
+    CLAUDE.md §2 dice tener.
+
+    Y el pool se desecha ANTES de devolver. ``worker_init`` corre en el proceso
+    PADRE de prefork (``WorkController.setup_instance``), antes del fork: la
+    conexion que abre el chequeo vuelve al QueuePool del engine global y cada
+    hijo hereda ese registro -mismo descriptor, atado al event loop del
+    padre-, asi que la primera tarea que la saque del pool muere con "attached
+    to a different loop" / "Event loop is closed". Es el bug que documenta
+    ``core/worker_loop.py`` y que ese modulo existe para evitar; ``pool_pre_ping``
+    no lo detecta porque el ping corre sobre la misma conexion prestada. Beat no
+    forkea, pero desechar un pool recien usado no le cuesta nada.
+    """
+    try:
+        run_in_worker_loop(assert_rls_capable_role(engine))
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        logger.critical("Celery no arranca, no se pudo verificar el rol: %s", exc)
+        raise SystemExit(f"Celery no arranca, no se pudo verificar el rol: {exc}")
+    finally:
+        _dispose_pool_before_fork()
+
+
+def _dispose_pool_before_fork() -> None:
+    """Deja el pool del padre vacio; un fallo al cerrarlo no tapa el motivo.
+
+    Si esto levantara, el operador leeria un error de pool en vez de "el rol
+    puede saltar RLS", que es lo unico accionable.
+    """
+    try:
+        run_in_worker_loop(engine.dispose())
+    except BaseException:
+        logger.warning(
+            "No se pudo desechar el pool tras verificar el rol", exc_info=True
+        )
+
+
+def _abort_if_settings_are_fallback() -> None:
     """Ni el worker ni beat deben correr con la configuracion de respaldo.
 
     La API tolera un Settings() invalido para responder 503 con el detalle;
