@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+import structlog
+from sqlalchemy import Select, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.utils import ARGENTINA_TZ
@@ -17,6 +18,17 @@ from modules.billing.subscription_rules import (
     daily_action,
     outlook,
 )
+
+logger = structlog.get_logger()
+
+
+# Recorrido del ciclo diario (AUD2-B2-09). El tamano de pagina es el viejo
+# ``limit``; lo que cambio es que ya no es un TOPE sino el paso de un cursor
+# que recorre todas las suscripciones activas. El techo de paginas acota la
+# corrida (regla 9: nada sin cota) y se registra si se alcanza, para que un
+# corte nunca vuelva a ser invisible.
+SUBSCRIPTION_PAGE_SIZE = 500
+SUBSCRIPTION_MAX_PAGES = 40
 
 
 def today_local(now: datetime | None = None) -> date:
@@ -72,42 +84,97 @@ class DailyRun:
 
 
 async def advance_subscriptions(
-    db: AsyncSession, *, now: datetime | None = None, limit: int = 500
+    db: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = SUBSCRIPTION_PAGE_SIZE,
 ) -> DailyRun:
     """Un paso del ciclo diario. NO commitea: eso es de la tarea.
 
+    Recorre TODAS las suscripciones activas en paginas de ``limit``. Antes
+    ``limit`` era un tope: con mas de 500 activas, cada corrida volvia a
+    mirar las mismas 500 mas viejas (ya al dia) y las de mas atras no se
+    avisaban, no pasaban a ``past_due`` y no se suspendian nunca, sin que
+    nada lo registrara (AUD2-B2-09, 2026-09-20).
+
     Los avisos se devuelven para que la tarea los publique al outbox; aca no
     se manda ningun mail.
+
+    Costo declarado (V-diff, 2026-09-20): la corrida entera es UNA
+    transaccion, y cada pagina toma sus filas con ``FOR UPDATE SKIP LOCKED``
+    que no se sueltan hasta el commit de la tarea. En el peor caso quedan
+    bloqueadas ``SUBSCRIPTION_MAX_PAGES * limit`` filas (40 x 500 = 20.000)
+    durante toda la corrida. Con las tiendas de hoy no muerde; si en
+    produccion las suscripciones activas pasan de unos cientos, conviene que
+    la TAREA (``billing/tasks.py``) commitee por pagina en vez de al final,
+    para que el lock de cada pagina dure lo que dura esa pagina. No esta
+    implementado a proposito: cambia la unidad de trabajo de la tarea y eso
+    se decide con datos, no por anticipado.
     """
     now = now or datetime.now(timezone.utc)
     hoy = today_local(now)
-    rows = await db.execute(
-        select(StoreSubscription)
-        .where(StoreSubscription.is_active.is_(True))
-        .order_by(StoreSubscription.created_at.asc())
+    run = DailyRun()
+    cursor: tuple[datetime, str] | None = None
+    for pagina in range(SUBSCRIPTION_MAX_PAGES):
+        filas = list((await db.execute(_pagina(cursor, limit))).scalars().all())
+        if not filas:
+            return run
+        for subscription in filas:
+            _aplicar_accion_diaria(subscription, run, hoy=hoy, now=now)
+        # Cursor por clave, no por OFFSET: ``skip_locked`` saltea filas y un
+        # OFFSET se correria justo esa cantidad, dejando huecos.
+        ultima = filas[-1]
+        cursor = (ultima.created_at, ultima.id)
+    logger.warning(
+        "subscription_lifecycle_pages_exhausted",
+        pages=pagina + 1,
+        inspected=run.inspected,
+    )
+    return run
+
+
+def _pagina(
+    cursor: tuple[datetime, str] | None, limit: int
+) -> Select[tuple[StoreSubscription]]:
+    """Una pagina del recorrido, ordenada por ``(created_at, id)``.
+
+    ``id`` desempata: con ``created_at`` repetido el orden seria arbitrario y
+    el cursor podria saltearse filas o repetirlas.
+    """
+    consulta = select(StoreSubscription).where(StoreSubscription.is_active.is_(True))
+    if cursor is not None:
+        consulta = consulta.where(
+            tuple_(StoreSubscription.created_at, StoreSubscription.id) > cursor
+        )
+    return (
+        consulta.order_by(
+            StoreSubscription.created_at.asc(), StoreSubscription.id.asc()
+        )
         .limit(limit)
         # Dos corridas solapadas no toman la misma fila.
         .with_for_update(skip_locked=True)
     )
-    run = DailyRun()
-    for subscription in rows.scalars().all():
-        run.inspected += 1
-        accion = daily_action(subscription, today=hoy)
-        if accion.new_status:
-            apply_subscription_transition(subscription, accion.new_status)
-            if accion.new_status == SUBSCRIPTION_SUSPENDED:
-                run.suspended += 1
-            else:
-                run.past_due += 1
-        elif accion.send_warning:
-            subscription.expiry_warning_sent_at = now
-            vista = outlook(subscription, today=hoy)
-            run.warnings.append(
-                (
-                    subscription.store_id,
-                    int(vista.days_left or 0),
-                    subscription.plan_name or "tu plan",
-                )
+
+
+def _aplicar_accion_diaria(
+    subscription: StoreSubscription, run: DailyRun, *, hoy: date, now: datetime
+) -> None:
+    run.inspected += 1
+    accion = daily_action(subscription, today=hoy)
+    if accion.new_status:
+        apply_subscription_transition(subscription, accion.new_status)
+        if accion.new_status == SUBSCRIPTION_SUSPENDED:
+            run.suspended += 1
+        else:
+            run.past_due += 1
+    elif accion.send_warning:
+        subscription.expiry_warning_sent_at = now
+        vista = outlook(subscription, today=hoy)
+        run.warnings.append(
+            (
+                subscription.store_id,
+                int(vista.days_left or 0),
+                subscription.plan_name or "tu plan",
             )
-            run.warned += 1
-    return run
+        )
+        run.warned += 1
