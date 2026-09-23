@@ -8,6 +8,7 @@ from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import invalidate_store_availability
@@ -75,6 +76,9 @@ def _replace_business_hours(
         if day_of_week is None or not periods:
             continue
 
+        # Un solo periodo por dia: ``StoreUpdate.reject_extra_periods`` da 422
+        # ante un segundo, asi que aca ya no se pierde nada en silencio
+        # (AUD2-B3-07). Soportar horario partido es producto, y esta pendiente.
         period = periods[0]
         store.schedules.append(
             StoreSchedule(
@@ -137,15 +141,19 @@ async def update_my_store(
     update_data = data.model_dump(exclude_unset=True)
     toca_la_agenda = bool(_CAMPOS_DE_AGENDA & update_data.keys())
 
-    slug = update_data.get("slug")
-    if isinstance(slug, str) and slug != store.slug:
-        slug_check = await db.execute(select(Store).where(Store.slug == slug))
-        if slug_check.scalar_one_or_none():
-            raise AppException(
-                "El slug ya est? en uso",
-                http_status=400,
-                error_code="SLUG_ALREADY_IN_USE",
-            )
+    # El slug duplicado lo decide el UNIQUE de `stores.slug` (model.py), no un
+    # pre-chequeo (AUD2-B3-15). El que habia corria con el contexto de tenant
+    # del admin y `stores_rls_policy` restringe la tabla a la tienda propia:
+    # en Postgres NUNCA veia el slug de otra tienda, asi que su 400 era
+    # inalcanzable y lo que salia igual era el 409 neutro del IntegrityError.
+    # Solo se disparaba en SQLite, donde no hay RLS. El handler de `main.py` ya
+    # documenta ese caso ("bajo RLS a veces ni siquiera ve la fila en
+    # conflicto") y responde 409 sin nombrar la fila (regla 20). Con el bloque
+    # se fue tambien su mensaje, que tenia un "?" donde iba una vocal con
+    # tilde. No se uso `tenant_bypass` para conservar el mensaje amable porque
+    # al salir reaplica (None, False) a la conexion y no el contexto previo:
+    # el UPDATE posterior de esta misma request quedaria sin tenant y RLS lo
+    # rechazaria, algo que ningun test en SQLite podria ver.
 
     # Contracara de la validacion en feature-flags: si los cobros ya estan
     # activos, vaciar la politica dejaria al cliente aceptando un texto que ya
@@ -186,7 +194,18 @@ async def update_my_store(
         setattr(store, key, value)
 
     _replace_business_hours(store, business_hours)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Mismo patron que `UserService.create`: rollback y re-raise para que el
+        # handler global responda 409 neutro con la SESION SANA. Sin el
+        # rollback, la sesion queda en `PendingRollbackError` y cualquier
+        # consulta posterior de la misma request revienta con un error que no
+        # tiene nada que ver (AUD2-B3-15). Este router es dueno de su
+        # transaccion por deuda declarada de CLAUDE.md; migrarlo a un service
+        # es otro trabajo, pero la sesion tiene que quedar usable igual.
+        await db.rollback()
+        raise
     await db.refresh(store)
     if toca_la_agenda:
         await _invalidar_agenda(redis, str(store.id))

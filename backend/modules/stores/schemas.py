@@ -133,6 +133,25 @@ class StoreUpdate(BaseModel):
             reject_payload_control_chars([campo.model_dump() for campo in value])
         return value
 
+    @field_validator("business_hours")
+    @classmethod
+    def reject_extra_periods(
+        cls, value: Optional[Dict[str, List[BusinessHourPeriod]]]
+    ) -> Optional[Dict[str, List[BusinessHourPeriod]]]:
+        """Un dia, un periodo: lo que no se persiste se rechaza (AUD2-B3-07).
+
+        El router guarda ``periods[0]`` y descartaba el resto en silencio, asi
+        que un local con corte de mediodia recibia 200 y quedaba abierto medio
+        dia. Soportar horario partido es decision de producto y esta pendiente;
+        hasta entonces un 200 que guarda menos de lo enviado es una mentira de
+        contrato, y esto la convierte en un 422 con mensaje neutro.
+        """
+        if value is None:
+            return value
+        if any(len(periodos) > 1 for periodos in value.values()):
+            raise ValueError("Por ahora cada dia admite un solo periodo de apertura")
+        return value
+
 
 class StoreMediaUploadResponse(BaseModel):
     url: str
