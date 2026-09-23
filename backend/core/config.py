@@ -49,9 +49,10 @@ def _looks_like_placeholder(value: str) -> bool:
 
 # Minimos operativos: valen en TODO entorno, desarrollo incluido, porque un
 # valor absurdo aca no es una configuracion insegura sino un proceso que no
-# funciona. Tabla `(campo, minimo, mensaje)` y no nueve `if` identicos: sumar
+# funciona. Tabla `(campo, minimo, mensaje)` y no trece `if` identicos: sumar
 # un limite es sumar una fila, con el mensaje al lado del numero que justifica.
-_MINIMOS_OPERATIVOS: tuple[tuple[str, int, str], ...] = (
+# El minimo es float porque los timeouts de Redis lo son; un int entra igual.
+_MINIMOS_OPERATIVOS: tuple[tuple[str, float, str], ...] = (
     (
         "PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
         1,
@@ -89,6 +90,33 @@ _MINIMOS_OPERATIVOS: tuple[tuple[str, int, str], ...] = (
         1024,
         "MAX_REQUEST_BODY_BYTES no puede ser menor a 1024 bytes",
     ),
+    # `_hit_rate_limit` hace `now // window_seconds`: con 0 es un
+    # ZeroDivisionError en CADA request, y no es RedisError ni OSError, asi que
+    # no lo atrapa ningun `except` del modulo (AUD2-B7-06, 2026-09-20).
+    (
+        "RATE_LIMIT_WINDOW_SECONDS",
+        1,
+        "RATE_LIMIT_WINDOW_SECONDS debe ser >= 1",
+    ),
+    # Hermano de MAX_REQUEST_BODY_BYTES: tambien necesita piso, o la subida de
+    # logo/portada queda inutilizable sin que el arranque diga nada.
+    (
+        "MAX_UPLOAD_BODY_BYTES",
+        1024,
+        "MAX_UPLOAD_BODY_BYTES no puede ser menor a 1024 bytes",
+    ),
+    # Un timeout en 0 no significa "sin espera": redis-py lo toma como no
+    # bloqueante y toda operacion falla.
+    (
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+        0.1,
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS debe ser >= 0.1",
+    ),
+    (
+        "REDIS_SOCKET_TIMEOUT_SECONDS",
+        0.1,
+        "REDIS_SOCKET_TIMEOUT_SECONDS debe ser >= 0.1",
+    ),
 )
 
 # Interruptores que produccion exige en una posicion y no en la otra:
@@ -107,6 +135,19 @@ _BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
         "OTP_DEBUG_EXPOSE_CODE",
         False,
         "OTP_DEBUG_EXPOSE_CODE debe ser false en produccion",
+    ),
+    # `GET /api/ops/health/ready` devolvia a cualquier anonimo el detalle por
+    # componente (`{"db": false, "redis": true}`) y nginx proxea `/api/`
+    # entero, asi que es publico. El propio comentario del endpoint reconoce
+    # que eso es "info util para un atacante anonimo que sondea la infra" y por
+    # eso lo puso detras de un flag... que venia abierto y que ninguna
+    # validacion de produccion miraba (AUD2-B7-12, 2026-09-20). El healthcheck
+    # del compose sondea 127.0.0.1 dentro de la red interna y le alcanza con el
+    # 503; el detalle se mira con `docker compose logs`, no desde afuera.
+    (
+        "OPS_ENABLE_PUBLIC_HEALTH",
+        False,
+        "OPS_ENABLE_PUBLIC_HEALTH debe ser false en produccion",
     ),
 )
 
@@ -198,6 +239,9 @@ class Settings(BaseSettings):
     # Minutos que un cupo liberado se ofrece a UNA persona de la lista de
     # espera antes de pasar a la siguiente (exclusividad blanda).
     WAITLIST_OFFER_MINUTES: int = 10
+    # Detalle por componente en el readiness publico. Abierto en desarrollo
+    # (diagnosticar es lo que se hace ahi) y cerrado en produccion, donde lo
+    # exige `_BOOLEANOS_DE_PRODUCCION` (AUD2-B7-12).
     OPS_ENABLE_PUBLIC_HEALTH: bool = True
     SLO_MAX_PENDING_WEBHOOKS: int = 200
     SLO_MAX_FAILED_WEBHOOKS: int = 20
@@ -252,6 +296,7 @@ class Settings(BaseSettings):
         production_data.setdefault("COOKIE_SAMESITE", "lax")
         production_data.setdefault("EXPOSE_API_DOCS", False)
         production_data.setdefault("RATE_LIMIT_FAIL_CLOSED", True)
+        production_data.setdefault("OPS_ENABLE_PUBLIC_HEALTH", False)
         return production_data
 
     def _validate_secrets_outside_development(self) -> None:

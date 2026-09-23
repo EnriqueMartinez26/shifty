@@ -31,6 +31,9 @@ BASE: dict[str, Any] = {
     "OTP_PROVIDER": "twilio",
     "OTP_DEBUG_EXPOSE_CODE": False,
     "EXPOSE_API_DOCS": False,
+    # El entorno de tests lo pone en "true" para los tests de /ops; produccion
+    # lo exige apagado (AUD2-B7-12), igual que EXPOSE_API_DOCS.
+    "OPS_ENABLE_PUBLIC_HEALTH": False,
 }
 
 
@@ -66,6 +69,8 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
         ({"CORS_ORIGINS": "*"}, "CORS_ORIGINS"),
         ({"RATE_LIMIT_FAIL_CLOSED": False}, "RATE_LIMIT_FAIL_CLOSED"),
         ({"ACCESS_TOKEN_EXPIRE_MINUTES": 120}, "ACCESS_TOKEN_EXPIRE_MINUTES"),
+        # AUD2-B7-12 (2026-09-20): el detalle del readiness venia abierto.
+        ({"OPS_ENABLE_PUBLIC_HEALTH": True}, "OPS_ENABLE_PUBLIC_HEALTH"),
     ],
 )
 def test_produccion_rechaza_configuraciones_inseguras(
@@ -89,6 +94,14 @@ def test_produccion_rechaza_configuraciones_inseguras(
         ({"CELERY_TASK_TIME_LIMIT_SECONDS": 10}, "TIME_LIMIT"),
         ({"MAX_REQUEST_BODY_BYTES": 100}, "MAX_REQUEST_BODY_BYTES"),
         ({"MAX_REQUEST_BODY_BYTES": 5 * 1024 * 1024}, "MAX_REQUEST_BODY_BYTES"),
+        # AUD2-B7-06 (2026-09-20): tres numericos que quedaron sin piso.
+        ({"RATE_LIMIT_WINDOW_SECONDS": 0}, "RATE_LIMIT_WINDOW_SECONDS"),
+        ({"MAX_UPLOAD_BODY_BYTES": 100}, "MAX_UPLOAD_BODY_BYTES"),
+        (
+            {"REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS": 0},
+            "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+        ),
+        ({"REDIS_SOCKET_TIMEOUT_SECONDS": 0}, "REDIS_SOCKET_TIMEOUT_SECONDS"),
     ],
 )
 def test_los_limites_operativos_se_validan_en_cualquier_entorno(
@@ -99,6 +112,23 @@ def test_los_limites_operativos_se_validan_en_cualquier_entorno(
         _build(ENV="development", **override)
 
 
+@pytest.mark.asyncio
+async def test_una_ventana_de_rate_limit_en_cero_revienta_cada_request() -> None:
+    """Por que RATE_LIMIT_WINDOW_SECONDS necesita piso (AUD2-B7-06, 2026-09-20).
+
+    `_hit_rate_limit` hace `now // window_seconds`. Con la ventana en 0 eso es
+    un ZeroDivisionError en CADA request, y no es `RedisError` ni `OSError`, asi
+    que no lo atrapa ni el `except` del middleware ni el de
+    `enforce_rate_limit`: 500 en toda la API. La regla 17 dice que la config de
+    produccion falla cerrada; sin el piso fallaba abierta y el sintoma aparecia
+    en el primer request, no en el arranque.
+    """
+    from core.rate_limit import _hit_rate_limit
+
+    with pytest.raises(ZeroDivisionError):
+        await _hit_rate_limit("ip:1.2.3.4", "global", 10, 0)
+
+
 def test_produccion_aplica_defaults_endurecidos(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -107,6 +137,7 @@ def test_produccion_aplica_defaults_endurecidos(
         "COOKIE_SECURE",
         "EXPOSE_API_DOCS",
         "COOKIE_SAMESITE",
+        "OPS_ENABLE_PUBLIC_HEALTH",
     )
     # El entorno de tests define estas variables; hay que sacarlas para observar
     # el default que aplica apply_production_defaults.
@@ -117,3 +148,11 @@ def test_produccion_aplica_defaults_endurecidos(
     assert settings.COOKIE_SECURE is True
     assert settings.EXPOSE_API_DOCS is False
     assert settings.COOKIE_SAMESITE == "lax"
+    # AUD2-B7-12 (2026-09-20): `GET /api/ops/health/ready` devolvia a cualquier
+    # anonimo `{"components": {"db": false, "redis": true}}`. nginx proxea
+    # `/api/` entero, asi que el endpoint es publico, y el flag venia en True
+    # por default sin que ninguna validacion de produccion lo tocara: el propio
+    # comentario del endpoint reconoce que ese detalle es "info util para un
+    # atacante anonimo que sondea la infra". El healthcheck del compose sondea
+    # 127.0.0.1 dentro de la red interna y le alcanza con el 503.
+    assert settings.OPS_ENABLE_PUBLIC_HEALTH is False

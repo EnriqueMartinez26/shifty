@@ -16,7 +16,8 @@ Este archivo fija las dos mitades del contrato ANTES de reorganizar nada:
    borrarla, moverla mal o cambiarle el alcance la deja en rojo.
 
 Es la guarda de la regla 17 (config de produccion falla cerrada) escrita como
-lista: mientras las 30 filas pasen, las 27 condiciones siguen vivas.
+lista: mientras las 35 filas pasen, las 19 condiciones de las dos tablas de
+datos y los 13 `if` sueltos (16 filas) siguen vivos.
 """
 
 from __future__ import annotations
@@ -53,6 +54,9 @@ BASE: dict[str, Any] = {
     "OTP_PROVIDER": "twilio",
     "OTP_DEBUG_EXPOSE_CODE": False,
     "EXPOSE_API_DOCS": False,
+    # El entorno de tests lo pone en "true" para los tests de /ops; produccion
+    # lo exige apagado (AUD2-B7-12), igual que EXPOSE_API_DOCS.
+    "OPS_ENABLE_PUBLIC_HEALTH": False,
 }
 
 # (ENV en el que el chequeo debe dispararse, override que lo rompe, mensaje).
@@ -60,7 +64,7 @@ BASE: dict[str, Any] = {
 # encerrado en el bloque de produccion, y "development" que el limite operativo
 # vale en cualquier entorno.
 INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
-    # --- Secretos: todo entorno que no sea desarrollo (1 `if` con 3 ramas + 1) ---
+    # --- Secretos: todo entorno que no sea desarrollo (2 `if` sueltos, 4 filas) ---
     (
         "staging",
         {"SECRET_KEY": "generate_a_very_secret_key_here_for_production"},
@@ -81,7 +85,8 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"FIELD_ENCRYPTION_KEY": "replace_this_field_encryption_key_1234567890"},
         "FIELD_ENCRYPTION_KEY parece un placeholder del repo",
     ),
-    # --- Endurecimientos: solo produccion (14 `if`) ---
+    # --- Endurecimientos: solo produccion ---
+    # (6 filas de _BOOLEANOS_DE_PRODUCCION + 9 `if` sueltos que ocupan 10, 16 filas)
     (
         "production",
         {"CORS_ORIGINS": "https://app.example.com,http://localhost:3000"},
@@ -157,7 +162,13 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"FIELD_ENCRYPTION_KEY": None},
         "FIELD_ENCRYPTION_KEY es obligatorio en produccion",
     ),
-    # --- Limites operativos: cualquier entorno, desarrollo incluido (11 `if`) ---
+    (
+        "production",
+        {"OPS_ENABLE_PUBLIC_HEALTH": True},
+        "OPS_ENABLE_PUBLIC_HEALTH debe ser false en produccion",
+    ),
+    # --- Limites operativos: cualquier entorno, desarrollo incluido ---
+    # (13 filas de _MINIMOS_OPERATIVOS + 2 `if` sueltos, 15 filas)
     (
         "development",
         {"PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD": 0},
@@ -213,13 +224,44 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"MAX_REQUEST_BODY_BYTES": 5 * 1024 * 1024},
         "MAX_REQUEST_BODY_BYTES no debe superar 1MB sin revision de seguridad",
     ),
+    # AUD2-B7-06 (2026-09-20) sumo estos cuatro a `_MINIMOS_OPERATIVOS` y no
+    # llegaron aca: el inventario solo detectaba borrados, no altas.
+    (
+        "development",
+        {"RATE_LIMIT_WINDOW_SECONDS": 0},
+        "RATE_LIMIT_WINDOW_SECONDS debe ser >= 1",
+    ),
+    (
+        "development",
+        {"MAX_UPLOAD_BODY_BYTES": 100},
+        "MAX_UPLOAD_BODY_BYTES no puede ser menor a 1024 bytes",
+    ),
+    (
+        "development",
+        {"REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS": 0},
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS debe ser >= 0.1",
+    ),
+    (
+        "development",
+        {"REDIS_SOCKET_TIMEOUT_SECONDS": 0},
+        "REDIS_SOCKET_TIMEOUT_SECONDS debe ser >= 0.1",
+    ),
 ]
 
-# 27 condiciones (`if`, con los que recorren las tablas contados por fila)
-# repartidas en 30 filas: SECRET_KEY tiene tres ramas en un mismo `or` y
-# CORS_ORIGINS/localhost dos. Bajar este numero es borrar una
-# proteccion; subirlo sin agregar la fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 30
+# Filas de los chequeos sueltos: los `if` escritos uno por uno, fuera de las
+# dos tablas de datos de `config.py`. Son 13 `if` que ocupan 16 filas, porque
+# SECRET_KEY tiene tres ramas en un mismo `or` (3 filas para 1 `if`) y
+# CORS_ORIGINS/localhost dos.
+N_SUELTOS = 16
+
+# El total NO se escribe a mano suelto: se ata a las tablas de `config.py`
+# (`test_el_inventario_cubre_las_dos_tablas`). Agregar una fila a
+# `_MINIMOS_OPERATIVOS` o a `_BOOLEANOS_DE_PRODUCCION` sin inventariarla
+# rompe la cuenta, que es lo que fallo con AUD2-B7-06: sus cuatro minimos
+# nuevos no llegaron aca y el inventario, que solo detectaba borrados, no dijo
+# nada. Bajar este numero es borrar una proteccion; subirlo sin agregar la
+# fila correspondiente, olvidarse de probarla.
+FILAS_ESPERADAS = 35
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 
@@ -244,6 +286,33 @@ def test_cada_chequeo_sigue_aplicandose(
 ) -> None:
     with pytest.raises(ValueError, match=re.escape(mensaje)):
         _build(ENV=env, **override)
+
+
+def test_el_inventario_cubre_las_dos_tablas() -> None:
+    """Una fila nueva en una tabla de `config.py` obliga a inventariarla.
+
+    El test viejo era unidireccional: detectaba un chequeo BORRADO (su mensaje
+    desaparecia de `config.py`) pero no uno AGREGADO. AUD2-B7-06 sumo cuatro
+    minimos operativos y el inventario siguio en verde sin ellos (2026-09-20).
+    """
+    from core.config import _BOOLEANOS_DE_PRODUCCION, _MINIMOS_OPERATIVOS
+
+    campos_inventariados = {
+        campo for _env, override, _msg in INVENTARIO for campo in override
+    }
+    sin_inventariar = [
+        campo
+        for campo, *_ in (*_MINIMOS_OPERATIVOS, *_BOOLEANOS_DE_PRODUCCION)
+        if campo not in campos_inventariados
+    ]
+    assert sin_inventariar == [], sin_inventariar
+
+    total = len(_MINIMOS_OPERATIVOS) + len(_BOOLEANOS_DE_PRODUCCION) + N_SUELTOS
+    assert total == FILAS_ESPERADAS, (
+        f"{len(_MINIMOS_OPERATIVOS)} minimos + "
+        f"{len(_BOOLEANOS_DE_PRODUCCION)} booleanos + {N_SUELTOS} sueltos "
+        f"!= {FILAS_ESPERADAS} filas inventariadas"
+    )
 
 
 def test_el_inventario_no_se_quedo_corto() -> None:
