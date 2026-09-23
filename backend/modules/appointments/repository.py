@@ -299,25 +299,33 @@ class AppointmentRepository:
         return list(res.scalars().unique().all())
 
     async def get_overlapping_block(
-        self, staff_id: str, starts_at: datetime, ends_at: datetime
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        store_id: str | None = None,
     ) -> StaffBlock | None:
         """Retorna el primer StaffBlock que solape con el rango dado.
 
         ``limit(1)`` porque puede haber mas de uno (dos bloqueos solapados del
         mismo profesional): sin el, ``scalar_one_or_none`` levantaba
         ``MultipleResultsFound`` y la reserva salia 500 (B1-02).
+
+        ``store_id`` agrega el filtro de tienda (AUD2-POST-03): lo usan los
+        consumidores que corren con bypass de RLS (el outbox de la lista de
+        espera), donde ese filtro es la unica capa de aislamiento (§2).
         """
+        condiciones = [
+            StaffBlock.staff_id == staff_id,
+            StaffBlock.is_active.is_(True),
+            StaffBlock.starts_at < ends_at,
+            StaffBlock.ends_at > starts_at,
+        ]
+        if store_id is not None:
+            condiciones.append(StaffBlock.store_id == store_id)
         res = await self.db.execute(
-            select(StaffBlock)
-            .where(
-                and_(
-                    StaffBlock.staff_id == staff_id,
-                    StaffBlock.is_active.is_(True),
-                    StaffBlock.starts_at < ends_at,
-                    StaffBlock.ends_at > starts_at,
-                )
-            )
-            .limit(1)
+            select(StaffBlock).where(and_(*condiciones)).limit(1)
         )
         return res.scalar_one_or_none()
 
