@@ -6,13 +6,25 @@ import time
 import structlog
 from fastapi import Request
 from core.exceptions import AppException, RateLimitedException
-from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from core.config import settings
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 
 logger = structlog.get_logger()
+
+# Cuanto esperar cuando el limitador NO esta disponible (Redis caido y
+# RATE_LIMIT_FAIL_CLOSED). No es la ventana del limite: la ventana describe
+# cuando se libera una cuota, y aca no hay cuota que liberar sino un servicio
+# que volver a intentar. Un valor chico y fijo le da al cliente un backoff
+# concreto en vez de dejarlo reintentar a discrecion (AUD2-B7-09).
+RETRY_AFTER_SIN_RATE_LIMIT_SECONDS = 5
+
+# Un limite alcanzado y un limitador caido son eventos distintos y el front
+# decide el reintento por el codigo, no por el status.
+_ERROR_CODE_LIMITE_ALCANZADO = "RATE_LIMITED"
+_ERROR_CODE_LIMITE_NO_DISPONIBLE = "RATE_LIMIT_UNAVAILABLE"
+_MENSAJE_LIMITE_NO_DISPONIBLE = "Rate limit temporalmente no disponible"
 
 
 def _hash_identifier(value: str) -> str:
@@ -105,13 +117,14 @@ async def enforce_rate_limit(
             retry_after = await _hit_rate_limit(
                 f"subject:{subject.lower()}", action, limit, window
             )
-    except (RedisError, OSError) as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
-                message="Rate limit temporalmente no disponible",
+                message=_MENSAJE_LIMITE_NO_DISPONIBLE,
                 http_status=503,
-                error_code="RATE_LIMIT_UNAVAILABLE",
+                error_code=_ERROR_CODE_LIMITE_NO_DISPONIBLE,
+                headers={"Retry-After": str(RETRY_AFTER_SIN_RATE_LIMIT_SECONDS)},
             ) from exc
         return
 
@@ -133,10 +146,21 @@ def _policy_for_request(method: str, path: str) -> tuple[str, int]:
 
 
 async def _send_rate_limit_response(
-    send: Send, status_code: int, message: str, retry_after: int | None = None
+    send: Send,
+    status_code: int,
+    message: str,
+    retry_after: int | None = None,
+    error_code: str = _ERROR_CODE_LIMITE_ALCANZADO,
 ) -> None:
+    """Sobre canonico del limitador, armado a mano por estar fuera del router.
+
+    ``error_code`` es parametro y no una constante porque esta capa responde
+    dos eventos distintos: un limite alcanzado (429) y un limitador que no esta
+    disponible (503). Fijarlo en "RATE_LIMITED" hacia que el segundo se leyera
+    como el primero (AUD2-B7-09).
+    """
     body = json.dumps(
-        {"success": False, "error_code": "RATE_LIMITED", "message": message},
+        {"success": False, "error_code": error_code, "message": message},
         separators=(",", ":"),
     ).encode("utf-8")
     headers = [
@@ -179,13 +203,17 @@ class RedisRateLimitMiddleware:
             retry_after = await _hit_rate_limit(
                 ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS
             )
-        except (RedisError, OSError) as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning(
                 "rate_limit_middleware_redis_unavailable", action=action, error=str(exc)
             )
             if settings.RATE_LIMIT_FAIL_CLOSED:
                 await _send_rate_limit_response(
-                    send, 503, "Rate limit temporalmente no disponible"
+                    send,
+                    503,
+                    _MENSAJE_LIMITE_NO_DISPONIBLE,
+                    retry_after=RETRY_AFTER_SIN_RATE_LIMIT_SECONDS,
+                    error_code=_ERROR_CODE_LIMITE_NO_DISPONIBLE,
                 )
                 return
             await self.app(scope, receive, send)

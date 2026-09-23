@@ -26,10 +26,16 @@ local del turno y, por si acaso, el dia UTC cuando difiere.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterable
 from typing import Any, Protocol, runtime_checkable
 
+import structlog
+
+from core.observability import report_exception
+from core.redis import REDIS_UNAVAILABLE_ERRORS
 from core.utils import ARGENTINA_TZ
+
+logger = structlog.get_logger()
 
 SLOTS_TTL_SECONDS = 300
 
@@ -177,6 +183,41 @@ def local_days_touched(*instants: datetime) -> set[date]:
     return days
 
 
+def _tolerar_redis_caido(operacion: str, store_id: str, exc: Exception) -> None:
+    """Invalidar es best-effort, pero no es silencio (AUD2-B7-03, 2026-09-20).
+
+    El peor efecto de no invalidar es que la disponibilidad publica muestre el
+    estado viejo hasta que venza el TTL de cinco minutos. El peor efecto de
+    levantar aca es un 500 sobre una reserva YA commiteada, antes del link de
+    pago y del mail: una reserva fantasma, sin cobro ni aviso. Entre los dos,
+    se sigue; queda el log con la tienda y el evento en Sentry.
+    """
+    logger.warning(
+        "availability_cache_invalidation_failed",
+        operacion=operacion,
+        store_id=store_id,
+        error_type=type(exc).__name__,
+        error=str(exc),
+        exc_info=True,
+    )
+    report_exception(exc, operacion=operacion, store_id=store_id)
+
+
+async def _bump_days(
+    client: AvailabilityCacheClient,
+    store_id: str,
+    days: Iterable[date],
+    *,
+    operacion: str,
+) -> None:
+    """Sube la version de cada dia; un Redis caido no corta la operacion."""
+    try:
+        for day in days:
+            await _bump_version(client, store_id, day)
+    except REDIS_UNAVAILABLE_ERRORS as exc:
+        _tolerar_redis_caido(operacion, store_id, exc)
+
+
 async def invalidate_availability(
     client: AvailabilityCacheClient, store_id: str, *instants: datetime
 ) -> None:
@@ -184,11 +225,17 @@ async def invalidate_availability(
 
     Llamar en TODO camino que cambie la agenda: reservar, cancelar, liberar,
     reprogramar (ambas fechas), expirar una sena, y crear/editar/borrar
-    bloqueos. Nunca falla la operacion de negocio por un Redis caido: el
-    llamador decide si envuelve en try/except; aca solo se hace el INCR.
+    bloqueos. Nunca falla la operacion de negocio por un Redis caido: la
+    tolerancia vive ACA, no en cada llamador, asi que un camino nuevo nace
+    cubierto (AUD2-B7-03). Solo se traga el Redis caido: cualquier otro error
+    sube, para que esto no se vuelva un silenciador de bugs.
     """
-    for day in local_days_touched(*instants):
-        await _bump_version(client, store_id, day)
+    await _bump_days(
+        client,
+        store_id,
+        local_days_touched(*instants),
+        operacion="invalidate_availability",
+    )
 
 
 async def invalidate_availability_range(
@@ -211,8 +258,7 @@ async def invalidate_availability_range(
         seen.add(day)
         day = date.fromordinal(day.toordinal() + 1)
     seen |= local_days_touched(starts_at, ends_at)
-    for touched in seen:
-        await _bump_version(client, store_id, touched)
+    await _bump_days(client, store_id, seen, operacion="invalidate_availability_range")
 
 
 async def invalidate_store_availability(
@@ -223,8 +269,11 @@ async def invalidate_store_availability(
     Para cambios que no tienen un instante: editar o borrar un servicio. Un
     ``INCR`` de la generacion + ``EXPIRE`` (como ``_bump_version``); no se
     borra ninguna clave ni se usan comodines. Igual que
-    ``invalidate_availability``, el llamador decide si envuelve en try/except.
+    ``invalidate_availability``, un Redis caido no corta la operacion.
     """
     key = store_generation_key(store_id)
-    await client.incr(key)
-    await client.expire(key, VERSION_TTL_SECONDS)
+    try:
+        await client.incr(key)
+        await client.expire(key, VERSION_TTL_SECONDS)
+    except REDIS_UNAVAILABLE_ERRORS as exc:
+        _tolerar_redis_caido("invalidate_store_availability", store_id, exc)

@@ -1,8 +1,19 @@
 import asyncio
 
 from redis.asyncio import Redis, from_url
+from redis.exceptions import RedisError
 
 from core.config import settings
+
+# Que cuenta como "Redis no esta". Vive aca, al lado del cliente, porque el
+# criterio tiene que ser UNO: `core/idempotency.py` capturaba solo `RedisError`
+# y `core/rate_limit.py` capturaba ademas `OSError`, asi que el mismo fallo
+# -resolucion de nombres, socket cerrado antes de que redis-py lo envuelva- era
+# fail-open en un lado y 500 en el otro, justo en las mutaciones que la
+# idempotencia protege (AUD2-B7-14, 2026-09-20). `OSError` entra por ser el
+# caso que redis-py no siempre alcanza a envolver; si alguna vez se demuestra
+# que siempre lo envuelve, se saca de aca y los dos modulos cambian juntos.
+REDIS_UNAVAILABLE_ERRORS: tuple[type[Exception], ...] = (RedisError, OSError)
 
 _redis: Redis | None = None
 _redis_loop: asyncio.AbstractEventLoop | None = None
