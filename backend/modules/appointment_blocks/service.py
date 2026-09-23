@@ -14,6 +14,10 @@ Ahora:
   cancela los cancelables con auditoria y aviso al cliente por outbox, y deja
   listados los que requieren decision humana (pago pendiente en Mercado Pago,
   sena acreditada). Nunca llama a Mercado Pago bajo el lock.
+- ``update_block`` pasa por ese mismo nucleo sobre los tramos que el bloqueo
+  EMPIEZA a cubrir (mover, agrandar, reactivar). Hasta la auditoria 2
+  (AUD2-B1-01) el PATCH no lockeaba ni miraba turnos: agrandar un bloqueo
+  dejaba adentro los mismos huerfanos que el alta evita.
 - Los commits viven aca, no en el router (patron de ``appointments``).
 """
 
@@ -21,12 +25,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import TypeVar, cast
 
 from sqlalchemy import select
 
 from core.availability_cache import (
     AvailabilityCacheClient,
     invalidate_availability_range,
+    invalidate_store_availability,
 )
 from core.exceptions import (
     AppException,
@@ -37,7 +43,8 @@ from core.exceptions import (
 )
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AbstractUnitOfWork
-from core.utils import ensure_utc_aware
+from core.utils import ARGENTINA_TZ, ensure_utc_aware
+from modules.appointment_blocks.schemas import block_range_error
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import build_client_details, is_deliverable_email
@@ -50,6 +57,58 @@ from modules.waitlist.events import EVENT_SLOT_RELEASED, slot_released_payload
 EVENT_CANCELLED_BY_BLOCK = "appointment.cancelled_by_block"
 
 Range = tuple[datetime, datetime]
+T = TypeVar("T")
+
+# Hasta cuantos dias se invalida la cache dia por dia (un INCR + EXPIRE por
+# dia, AUD2-B1-10). Por encima, un solo INCR de la generacion de la tienda:
+# un bloqueo de meses cambia la disponibilidad de todos esos dias igual, y
+# tirar la cache entera cuesta lo mismo que tirar la de un dia.
+MAX_DAYS_INVALIDATED_ONE_BY_ONE = 31
+
+
+def days_covered(ranges: list[Range]) -> int:
+    """Cantidad de dias locales que tocan los rangos, sumados (funcion pura).
+
+    Cota superior de lo que ``invalidate_availability_range`` recorreria: un
+    dia que aparece en dos rangos cuenta dos veces, que es lo que costaria.
+    """
+    total = 0
+    for starts_at, ends_at in ranges:
+        inicio = ensure_utc_aware(starts_at).astimezone(ARGENTINA_TZ).date()
+        fin = ensure_utc_aware(ends_at).astimezone(ARGENTINA_TZ).date()
+        total += (fin - inicio).days + 1
+    return total
+
+
+def changed(changes: dict[str, object], key: str, current: T) -> T:
+    """Valor que deja el PATCH para ``key`` (ausente o null = sin cambio)."""
+    value = changes.get(key)
+    return current if value is None else cast(T, value)
+
+
+def added_ranges(
+    previous: Range, was_active: bool, planned: Range, will_be_active: bool
+) -> list[Range]:
+    """Tramos que el bloqueo EMPIEZA a cubrir con el cambio (funcion pura).
+
+    Complemento exacto de ``_publish_released``: ahi se mira lo que se
+    libera, aca lo que se agrega. Un bloqueo inactivo no cubre nada, asi que
+    reactivarlo agrega el rango entero y desactivarlo no agrega nada.
+    """
+    if not will_be_active:
+        return []
+    new_start = ensure_utc_aware(planned[0])
+    new_end = ensure_utc_aware(planned[1])
+    if not was_active:
+        return [(new_start, new_end)]
+    prev_start = ensure_utc_aware(previous[0])
+    prev_end = ensure_utc_aware(previous[1])
+    added: list[Range] = []
+    if new_start < prev_start:
+        added.append((new_start, min(new_end, prev_start)))
+    if prev_end < new_end:
+        added.append((max(new_start, prev_end), new_end))
+    return added
 
 
 def expand_ranges(
@@ -177,40 +236,13 @@ class AppointmentBlockService:
     ) -> BlockCreationResult:
         members = await self._staff_for(staff_id)
         staff_ids = [m.id for m in members]
-        # Orden total por id en una sentencia (S-11): dos altas simultaneas
-        # sobre los mismos profesionales no pueden cruzarse en deadlock.
-        await self.uow.appointments.lock_staff_rows(staff_ids)
-
-        appointments = await self.uow.appointments.list_active_overlapping(
-            self.actor.store_id, staff_ids, ranges, lock=True
-        )
-        affected = await self._classify(appointments)
         result = BlockCreationResult(blocks=[])
-
-        if affected and not cancel_affected:
-            raise AppException(
-                message=(
-                    f"Hay {len(affected)} turno(s) reservado(s) dentro del bloqueo. "
-                    "Revisalos y confirmá la cancelación."
-                ),
-                http_status=409,
-                error_code="BLOCK_HAS_APPOINTMENTS",
-                detail={"affected": len(affected)},
-            )
-        if affected and cancel_affected:
-            if not has_any_role(self.actor, STORE_MANAGERS):
-                raise PermissionDeniedException(
-                    action="Solo un administrador puede cancelar turnos en bloque"
-                )
-            store = await self.uow.session.get(Store, self.actor.store_id)
-            for item in affected:
-                if not item.cancellable:
-                    result.skipped.append(
-                        (item.appointment.public_id, item.reason or "")
-                    )
-                    continue
-                await self._cancel_for_block(item.appointment, reason, store)
-                result.cancelled.append(item.appointment.public_id)
+        result.cancelled, result.skipped = await self._lock_and_resolve_affected(
+            staff_ids=staff_ids,
+            ranges=ranges,
+            reason=reason,
+            cancel_affected=cancel_affected,
+        )
 
         for member_id in staff_ids:
             for starts_at, ends_at in ranges:
@@ -248,6 +280,56 @@ class AppointmentBlockService:
         # y la sesion no expira al commitear (expire_on_commit=False).
         await self._invalidate(ranges)
         return result
+
+    async def _lock_and_resolve_affected(
+        self,
+        *,
+        staff_ids: list[str],
+        ranges: list[Range],
+        reason: str,
+        cancel_affected: bool,
+    ) -> tuple[list[str], list[tuple[str, str]]]:
+        """Lock, relectura bajo lock y guarda de turnos afectados.
+
+        Nucleo compartido por el alta y por la edicion (AUD2-B1-01). Sin
+        ``cancel_affected`` levanta 409 antes de escribir nada; con el flag
+        (solo administradores) cancela los cancelables y devuelve
+        ``(cancelados, salteados)``. Con ``ranges`` vacio (un PATCH que solo
+        achica o desactiva) toma igual el lock y no lee turnos.
+        """
+        # Orden total por id en una sentencia (S-11): dos escrituras
+        # simultaneas sobre los mismos profesionales no pueden cruzarse en
+        # deadlock.
+        await self.uow.appointments.lock_staff_rows(staff_ids)
+        appointments = await self.uow.appointments.list_active_overlapping(
+            self.actor.store_id, staff_ids, ranges, lock=True
+        )
+        affected = await self._classify(appointments)
+        if affected and not cancel_affected:
+            raise AppException(
+                message=(
+                    f"Hay {len(affected)} turno(s) reservado(s) dentro del bloqueo. "
+                    "Revisalos y confirmá la cancelación."
+                ),
+                http_status=409,
+                error_code="BLOCK_HAS_APPOINTMENTS",
+                detail={"affected": len(affected)},
+            )
+        cancelled: list[str] = []
+        skipped: list[tuple[str, str]] = []
+        if affected:
+            if not has_any_role(self.actor, STORE_MANAGERS):
+                raise PermissionDeniedException(
+                    action="Solo un administrador puede cancelar turnos en bloque"
+                )
+            store = await self.uow.session.get(Store, self.actor.store_id)
+            for item in affected:
+                if not item.cancellable:
+                    skipped.append((item.appointment.public_id, item.reason or ""))
+                    continue
+                await self._cancel_for_block(item.appointment, reason, store)
+                cancelled.append(item.appointment.public_id)
+        return cancelled, skipped
 
     async def _cancel_for_block(
         self, appointment: Appointment, block_reason: str, store: Store | None
@@ -293,20 +375,51 @@ class AppointmentBlockService:
             raise ResourceNotFoundException(resource="Bloqueo", identifier=public_id)
         return block
 
+    @staticmethod
+    def _planned_range(block: StaffBlock, changes: dict[str, object]) -> Range:
+        """Rango que dejaria el PATCH, calculado ANTES de tocar el bloqueo.
+
+        Se decide sobre valores sueltos y no sobre la fila ya mutada porque
+        la relectura bajo lock hace autoflush: con la fila mutada, un 409
+        habria escrito el rango nuevo antes de rechazarlo.
+        """
+        starts_at: datetime = changed(changes, "starts_at", block.start_time)
+        ends_at: datetime = changed(changes, "ends_at", block.end_time)
+        # Misma regla que los schemas del alta, incluido el tope de duracion
+        # (AUD2-B1-10): el schema del PATCH no puede medirla porque puede
+        # venir un solo extremo.
+        error = block_range_error(starts_at, ends_at)
+        if error:
+            raise ValidationException(error)
+        return (starts_at, ends_at)
+
     async def update_block(
-        self, public_id: str, changes: dict[str, object]
+        self,
+        public_id: str,
+        changes: dict[str, object],
+        *,
+        cancel_affected: bool = False,
     ) -> StaffBlock:
         block = await self._get_block(public_id)
         previous: Range = (block.start_time, block.end_time)
         was_active = bool(block.is_active)
-        if "starts_at" in changes and changes["starts_at"] is not None:
-            block.start_time = changes["starts_at"]  # type: ignore[assignment]
-        if "ends_at" in changes and changes["ends_at"] is not None:
-            block.end_time = changes["ends_at"]  # type: ignore[assignment]
-        if ensure_utc_aware(block.start_time) >= ensure_utc_aware(block.end_time):
-            raise ValidationException("El inicio debe ser anterior al fin")
-        for key in ("reason", "is_active"):
-            if key in changes and changes[key] is not None:
+        planned = self._planned_range(block, changes)
+        # Mismo camino que el alta (AUD2-B1-01): lo que el bloqueo empieza a
+        # cubrir se decide con el profesional lockeado; achicar o desactivar
+        # no cubre nada nuevo y no pide confirmacion.
+        await self._lock_and_resolve_affected(
+            staff_ids=[block.staff_id],
+            ranges=added_ranges(
+                previous,
+                was_active,
+                planned,
+                bool(changed(changes, "is_active", was_active)),
+            ),
+            reason=str(changed(changes, "reason", block.reason)),
+            cancel_affected=cancel_affected,
+        )
+        for key in ("starts_at", "ends_at", "reason", "is_active"):
+            if changes.get(key) is not None:
                 setattr(block, key, changes[key])
         self._publish_released(block, previous, was_active)
         await self.uow.commit()
@@ -357,6 +470,16 @@ class AppointmentBlockService:
             )
 
     async def _invalidate(self, ranges: list[Range]) -> None:
+        """Invalida la disponibilidad de los dias que tocan los rangos.
+
+        Dia por dia hasta ``MAX_DAYS_INVALIDATED_ONE_BY_ONE``; por encima, un
+        solo ``INCR`` de la generacion de la tienda (AUD2-B1-10). Sin el tope,
+        un bloqueo largo o un lote recurrente disparaba miles de comandos a
+        Redis con la transaccion ya commiteada y el request colgado.
+        """
+        if days_covered(ranges) > MAX_DAYS_INVALIDATED_ONE_BY_ONE:
+            await invalidate_store_availability(self.cache, self.actor.store_id)
+            return
         for starts_at, ends_at in ranges:
             await invalidate_availability_range(
                 self.cache, self.actor.store_id, starts_at, ends_at

@@ -236,7 +236,11 @@ async def update_block(
     service: AppointmentBlockService = Depends(get_block_service),
 ) -> AppointmentBlockResponse:
     _require_manage(user, "editar bloqueos")
-    block = await service.update_block(public_id, data.model_dump(exclude_unset=True))
+    changes = data.model_dump(exclude_unset=True)
+    cancel_affected = bool(changes.pop("cancel_affected", False))
+    block = await service.update_block(
+        public_id, changes, cancel_affected=cancel_affected
+    )
     return _to_response(block)
 
 
