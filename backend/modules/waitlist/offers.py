@@ -2,9 +2,9 @@
 
 Regla de encaje (decision de producto, 2026-09-10): mismo profesional (o
 "cualquiera") y que el servicio pedido quepa en el hueco, siempre que ese
-profesional de ese servicio. No hace falta que sea el mismo servicio del
-turno cancelado: un hueco de 30 minutos sirve para cualquier servicio de
-hasta 30 minutos.
+profesional de ese servicio y que el servicio siga activo. No hace falta que
+sea el mismo servicio del turno cancelado: un hueco de 30 minutos sirve para
+cualquier servicio de hasta 30 minutos.
 
 Se ofrece a UNA persona por vez, por orden de llegada, durante
 ``WAITLIST_OFFER_MINUTES``. Los cupos dentro de la antelacion minima de la
@@ -33,7 +33,7 @@ from modules.notifications.tasks import (
     rebook_url,
 )
 from modules.services.model import Service
-from modules.staff.model import Staff
+from modules.staff.model import Staff, StaffBlock
 from modules.stores.model import Store
 from modules.waitlist.model import (
     MAX_LAPSED_OFFERS,
@@ -123,6 +123,10 @@ async def matching_entries(
         .where(
             WaitlistEntry.store_id == slot.store_id,
             WaitlistEntry.is_active.is_(True),
+            # Un servicio dado de baja no se puede reservar por el portal
+            # (``get_service_by_public_id`` exige ``is_active``): ofrecerlo
+            # manda al cliente a un 404 y encima le gasta una de sus ofertas.
+            Service.is_active.is_(True),
             WaitlistEntry.status == WaitlistStatus.WAITING.value,
             # Quien ya dejo pasar MAX_LAPSED_OFFERS ofertas no recibe mas.
             WaitlistEntry.lapsed_offers < MAX_LAPSED_OFFERS,
@@ -153,7 +157,17 @@ async def matching_entries(
 
 
 async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
-    result = await db.execute(
+    """Que el cupo se pueda reservar: sin turno activo Y sin bloqueo encima.
+
+    El bloqueo tambien cuenta (AUD2-B1-08): entre que se publica
+    ``slot_released`` y que corre el beat, el dueno puede bloquear esa franja.
+    Ofrecerla igual manda al cliente al 409 ``SCHEDULE_BLOCKED`` del portal y
+    encima le gasta una de sus ofertas (``lapsed_offers``, tope
+    ``MAX_LAPSED_OFFERS``) por algo que no hizo. El predicado de solapamiento
+    es el mismo que usa el alta en
+    ``AppointmentRepository.get_overlapping_block``.
+    """
+    ocupado = await db.execute(
         select(Appointment.id)
         .where(
             Appointment.staff_id == slot.staff_id,
@@ -171,7 +185,21 @@ async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
         )
         .limit(1)
     )
-    return result.scalar_one_or_none() is None
+    if ocupado.scalar_one_or_none() is not None:
+        return False
+    bloqueado = await db.execute(
+        select(StaffBlock.id)
+        .where(
+            StaffBlock.staff_id == slot.staff_id,
+            StaffBlock.is_active.is_(True),
+            and_(
+                StaffBlock.starts_at < slot.ends_at,
+                StaffBlock.ends_at > slot.starts_at,
+            ),
+        )
+        .limit(1)
+    )
+    return bloqueado.scalar_one_or_none() is None
 
 
 def _owner_notification(
@@ -337,7 +365,9 @@ async def expire_lapsed_offers(
     El lote tiene tope (``limit``) y orden por vencimiento (B1-16): cada
     vencida cuesta varias consultas para re-ofrecer su cupo, todas con las
     filas tomadas; sin tope, una cola grande acercaba la corrida al time
-    limit de Celery. Lo que no entra se procesa en la corrida siguiente.
+    limit de Celery. Lo que no entra se procesa en la corrida siguiente. El
+    mismo ``limit`` acota las ventanas vencidas de la segunda consulta
+    (AUD2-B1-12), asi que una corrida toca a lo sumo ``2 * limit`` filas.
     """
     rows = await db.execute(
         select(WaitlistEntry)
@@ -378,6 +408,10 @@ async def expire_lapsed_offers(
             if oferta.pending_email:
                 resultado.pending_emails.append(oferta.pending_email)
 
+    # Mismo tope y mismo orden que el lote de arriba (AUD2-B1-12): sin ellos
+    # esta consulta barria todas las tiendas de la instalacion de una, con
+    # FOR UPDATE SKIP LOCKED sobre cada fila. En regimen son pocas, pero un
+    # backlog (beat caido unos dias) hacia una sola transaccion enorme.
     vencidas = await db.execute(
         select(WaitlistEntry)
         .where(
@@ -387,6 +421,8 @@ async def expire_lapsed_offers(
             ),
             WaitlistEntry.window_ends_at <= now,
         )
+        .order_by(WaitlistEntry.window_ends_at.asc())
+        .limit(limit)
         .with_for_update(skip_locked=True)
     )
     for entry in vencidas.scalars().all():
