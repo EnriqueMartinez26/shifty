@@ -486,59 +486,70 @@ const SuperAdminPage: React.FC = () => {
     }
   }
 
-  const toggleStoreActive = async (store: SuperAdminStoreRow) => {
-    const nextActiveState = !store.is_active
-    const confirmed = window.confirm(
-      nextActiveState
-        ? `Activar ${store.name}?`
-        : `Desactivar ${store.name}? Esto puede bloquear nuevas operaciones del tenant.`
-    )
-    if (!confirmed) return
+  // Confirmar -> mutar -> avisar: el cuerpo que repetian los cinco toggles.
+  // `window.confirm` queda tal cual; cambiarlo por un modal es decision de
+  // producto. Activar avisa en verde, desactivar o revocar en naranja.
+  const confirmAndToggle = async ({
+    nextState,
+    question,
+    run,
+    doneText,
+    failText
+  }: {
+    nextState: boolean
+    question: string
+    run: () => Promise<unknown>
+    doneText: string
+    failText: string
+  }) => {
+    if (!window.confirm(question)) return
 
     try {
-      await updateStoreMutation.mutateAsync({
-        storePublicId: store.public_id,
-        payload: { is_active: nextActiveState }
-      })
-      setFeedback({
-        tone: nextActiveState ? 'success' : 'warning',
-        text: `Tienda ${nextActiveState ? 'activada' : 'desactivada'}: ${store.name}`
-      })
+      await run()
+      setFeedback({ tone: nextState ? 'success' : 'warning', text: doneText })
     } catch (error) {
-      setFeedback({
-        tone: 'error',
-        text: getErrorMessage(error, 'No se pudo cambiar el estado de la tienda')
-      })
+      setFeedback({ tone: 'error', text: getErrorMessage(error, failText) })
     }
   }
 
-  const toggleUserActive = async (targetUser: SuperAdminUser) => {
-    const nextActiveState = !targetUser.is_active
-    const confirmed = window.confirm(
-      nextActiveState ? `Activar ${targetUser.email}?` : `Desactivar ${targetUser.email}?`
-    )
-    if (!confirmed) return
+  const toggleStoreActive = (store: SuperAdminStoreRow) => {
+    const nextState = !store.is_active
+    return confirmAndToggle({
+      nextState,
+      question: nextState
+        ? `Activar ${store.name}?`
+        : `Desactivar ${store.name}? Esto puede bloquear nuevas operaciones del tenant.`,
+      run: () =>
+        updateStoreMutation.mutateAsync({
+          storePublicId: store.public_id,
+          payload: { is_active: nextState }
+        }),
+      doneText: `Tienda ${nextState ? 'activada' : 'desactivada'}: ${store.name}`,
+      failText: 'No se pudo cambiar el estado de la tienda'
+    })
+  }
 
-    try {
-      await updateUserMutation.mutateAsync({
-        userPublicId: targetUser.public_id,
-        payload: { is_active: nextActiveState }
-      })
-      setFeedback({
-        tone: nextActiveState ? 'success' : 'warning',
-        text: `Usuario ${nextActiveState ? 'activado' : 'desactivado'}: ${targetUser.email}`
-      })
-    } catch (error) {
-      setFeedback({
-        tone: 'error',
-        text: getErrorMessage(error, 'No se pudo cambiar el estado del usuario')
-      })
-    }
+  const toggleUserActive = (targetUser: SuperAdminUser) => {
+    const nextState = !targetUser.is_active
+    return confirmAndToggle({
+      nextState,
+      question: nextState ? `Activar ${targetUser.email}?` : `Desactivar ${targetUser.email}?`,
+      run: () =>
+        updateUserMutation.mutateAsync({
+          userPublicId: targetUser.public_id,
+          payload: { is_active: nextState }
+        }),
+      doneText: `Usuario ${nextState ? 'activado' : 'desactivado'}: ${targetUser.email}`,
+      failText: 'No se pudo cambiar el estado del usuario'
+    })
   }
 
   const toggleGlobalAdmin = async (targetUser: SuperAdminUser) => {
-    const nextGlobalState = !targetUser.is_global_admin
-    if (!nextGlobalState && user?.public_id === targetUser.public_id) {
+    const nextState = !targetUser.is_global_admin
+    // Regla 14, espejo de la UI: la garantia real vive en
+    // `backend/modules/superadmin/repository.py`. Queda fuera del helper a
+    // proposito: no pregunta, avisa y corta.
+    if (!nextState && user?.public_id === targetUser.public_id) {
       setFeedback({
         tone: 'warning',
         text: 'No podés revocarte tu propio permiso global desde esta sesion.'
@@ -546,70 +557,49 @@ const SuperAdminPage: React.FC = () => {
       return
     }
 
-    const confirmed = window.confirm(
-      nextGlobalState
+    await confirmAndToggle({
+      nextState,
+      question: nextState
         ? `Promover a ${targetUser.email} como Super Admin global?`
-        : `Revocar Super Admin global a ${targetUser.email}? El backend impedira dejar al sistema sin un admin global activo.`
-    )
-    if (!confirmed) return
-
-    try {
-      await setGlobalAdminMutation.mutateAsync({
-        userPublicId: targetUser.public_id,
-        isGlobalAdmin: nextGlobalState
-      })
-      setFeedback({
-        tone: nextGlobalState ? 'success' : 'warning',
-        text: `${targetUser.email} ${nextGlobalState ? 'ahora es' : 'dejo de ser'} Super Admin`
-      })
-    } catch (error) {
-      setFeedback({
-        tone: 'error',
-        text: getErrorMessage(error, 'No se pudo actualizar el permiso global')
-      })
-    }
+        : `Revocar Super Admin global a ${targetUser.email}? El backend impedira dejar al sistema sin un admin global activo.`,
+      run: () =>
+        setGlobalAdminMutation.mutateAsync({
+          userPublicId: targetUser.public_id,
+          isGlobalAdmin: nextState
+        }),
+      doneText: `${targetUser.email} ${nextState ? 'ahora es' : 'dejo de ser'} Super Admin`,
+      failText: 'No se pudo actualizar el permiso global'
+    })
   }
 
-  const togglePlanActive = async (plan: SuperAdminPlan) => {
-    const nextActiveState = !plan.is_active
-    const confirmed = window.confirm(
-      nextActiveState ? `Activar plan ${plan.name}?` : `Desactivar plan ${plan.name}?`
-    )
-    if (!confirmed) return
-
-    try {
-      await updatePlanMutation.mutateAsync({
-        planPublicId: plan.public_id,
-        payload: { is_active: nextActiveState }
-      })
-      setFeedback({
-        tone: nextActiveState ? 'success' : 'warning',
-        text: `Plan ${nextActiveState ? 'activado' : 'desactivado'}: ${plan.name}`
-      })
-    } catch (error) {
-      setFeedback({ tone: 'error', text: getErrorMessage(error, 'No se pudo actualizar el plan') })
-    }
+  const togglePlanActive = (plan: SuperAdminPlan) => {
+    const nextState = !plan.is_active
+    return confirmAndToggle({
+      nextState,
+      question: nextState ? `Activar plan ${plan.name}?` : `Desactivar plan ${plan.name}?`,
+      run: () =>
+        updatePlanMutation.mutateAsync({
+          planPublicId: plan.public_id,
+          payload: { is_active: nextState }
+        }),
+      doneText: `Plan ${nextState ? 'activado' : 'desactivado'}: ${plan.name}`,
+      failText: 'No se pudo actualizar el plan'
+    })
   }
 
-  const toggleCouponActive = async (coupon: SuperAdminCoupon) => {
-    const nextActiveState = !coupon.is_active
-    const confirmed = window.confirm(
-      nextActiveState ? `Activar cupon ${coupon.code}?` : `Desactivar cupon ${coupon.code}?`
-    )
-    if (!confirmed) return
-
-    try {
-      await updateCouponMutation.mutateAsync({
-        couponPublicId: coupon.public_id,
-        payload: { is_active: nextActiveState }
-      })
-      setFeedback({
-        tone: nextActiveState ? 'success' : 'warning',
-        text: `Cupon ${nextActiveState ? 'activado' : 'desactivado'}: ${coupon.code}`
-      })
-    } catch (error) {
-      setFeedback({ tone: 'error', text: getErrorMessage(error, 'No se pudo actualizar el cupon') })
-    }
+  const toggleCouponActive = (coupon: SuperAdminCoupon) => {
+    const nextState = !coupon.is_active
+    return confirmAndToggle({
+      nextState,
+      question: nextState ? `Activar cupon ${coupon.code}?` : `Desactivar cupon ${coupon.code}?`,
+      run: () =>
+        updateCouponMutation.mutateAsync({
+          couponPublicId: coupon.public_id,
+          payload: { is_active: nextState }
+        }),
+      doneText: `Cupon ${nextState ? 'activado' : 'desactivado'}: ${coupon.code}`,
+      failText: 'No se pudo actualizar el cupon'
+    })
   }
 
   const feedbackStyle =
