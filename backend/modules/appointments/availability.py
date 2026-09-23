@@ -254,7 +254,9 @@ class AvailabilityService:
         for schedule in schedules_res.scalars().all():
             schedules.setdefault(schedule.staff_id, []).append(schedule)
 
-        booked, blocks = await self._load_occupancy(staff_ids, day_start, day_end)
+        booked, blocks = await self._load_occupancy(
+            staff_ids, day_start, day_end, buffer=buffer
+        )
         return _DayAgenda(
             notice_hours=notice_hours,
             buffer=buffer,
@@ -265,9 +267,23 @@ class AvailabilityService:
         )
 
     async def _load_occupancy(
-        self, staff_ids: list[str], day_start: datetime, day_end: datetime
+        self,
+        staff_ids: list[str],
+        day_start: datetime,
+        day_end: datetime,
+        *,
+        buffer: timedelta,
     ) -> tuple[dict[str, list[Range]], dict[str, list[StaffBlock]]]:
-        """Turnos activos y bloqueos del dia, una consulta cada uno."""
+        """Turnos activos y bloqueos del dia, una consulta cada uno.
+
+        Los turnos se traen por SOLAPAMIENTO, igual que los bloqueos
+        (AUD2-B1-13): antes se filtraban por ``starts_at`` dentro de la
+        ventana, asi que uno que empieza el dia local anterior y termina
+        adentro del dia consultado no entraba en ``booked`` y su slot salia
+        ``available`` para despues ser rechazado con 409. La ventana se
+        ensancha por ``buffer`` porque el obstaculo real que arma
+        ``_schedule_slots`` es el turno mas el hueco obligatorio a cada lado.
+        """
         from sqlalchemy.orm import joinedload
 
         appt_res = await self.db.execute(
@@ -277,8 +293,8 @@ class AvailabilityService:
                 and_(
                     Appointment.staff_id.in_(staff_ids),
                     Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
-                    Appointment.starts_at >= day_start,
-                    Appointment.starts_at < day_end,
+                    Appointment.starts_at < day_end + buffer,
+                    Appointment.ends_at > day_start - buffer,
                 )
             )
         )
