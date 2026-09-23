@@ -1,12 +1,16 @@
 from datetime import time
 from typing import Annotated, Any
 
+import structlog
 from fastapi import Depends, File, Form, Path, UploadFile
 from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.availability_cache import invalidate_store_availability
 from core.database import get_db, tenant_bypass
 from core.exceptions import (
     AppException,
@@ -14,6 +18,7 @@ from core.exceptions import (
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
+from core.redis import get_redis
 from core.roles import STORE_MANAGERS, has_any_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
@@ -38,6 +43,7 @@ from modules.stores.schemas import (
 )
 from modules.users.model import User
 
+logger = structlog.get_logger()
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
@@ -80,6 +86,31 @@ def _replace_business_hours(
         )
 
 
+# Campos del local que son insumo de la grilla de disponibilidad: el horario
+# comercial, el hueco obligatorio entre turnos y la antelacion minima. Cambiar
+# uno cambia lo que el portal puede ofrecer cualquier dia, asi que invalida la
+# generacion de la tienda entera, no un dia (AUD2-B3-05).
+_CAMPOS_DE_AGENDA = frozenset(
+    {"business_hours", "buffer_minutes", "min_booking_notice_hours"}
+)
+
+
+async def _invalidar_agenda(redis: Redis, store_id: str) -> None:
+    """Best-effort DESPUES del commit, igual que ``services/router.py``.
+
+    Un Redis caido no revierte la configuracion ya guardada; en el peor caso
+    el portal muestra lo viejo hasta que vencen los slots (300 s).
+    """
+    try:
+        await invalidate_store_availability(redis, store_id)
+    except RedisError as exc:
+        logger.warning(
+            "store_cache_invalidation_failed",
+            store_id=store_id,
+            error_type=type(exc).__name__,
+        )
+
+
 @router.get("/me", response_model=StoreResponse)
 async def get_my_store(
     user: User = Depends(get_current_staff),
@@ -94,6 +125,7 @@ async def update_my_store(
     data: StoreUpdate,
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> StoreResponse:
     # Rol canonico de core/roles.py, no el enum crudo (B3-18): un superadmin
     # cuyo role no sea 'admin' quedaba afuera, y era una segunda llave de rol
@@ -103,6 +135,7 @@ async def update_my_store(
 
     store = await _get_current_store(user, db)
     update_data = data.model_dump(exclude_unset=True)
+    toca_la_agenda = bool(_CAMPOS_DE_AGENDA & update_data.keys())
 
     slug = update_data.get("slug")
     if isinstance(slug, str) and slug != store.slug:
@@ -155,6 +188,8 @@ async def update_my_store(
     _replace_business_hours(store, business_hours)
     await db.commit()
     await db.refresh(store)
+    if toca_la_agenda:
+        await _invalidar_agenda(redis, str(store.id))
     return to_store_response(store)
 
 

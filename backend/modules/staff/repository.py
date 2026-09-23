@@ -1,10 +1,11 @@
 from datetime import time
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.interfaces import LoaderOption
+from sqlalchemy.sql import Select
 
 from core.security import hash_password
 from infrastructure.persistence.models.staff_service import StaffServiceModel
@@ -46,6 +47,24 @@ def _active_services(store_id: str) -> LoaderOption:
             Service.store_id == store_id,
         )
     )
+
+
+def _visible_para_el_panel(
+    query: Select[tuple[Staff]], include_global_admins: bool
+) -> Select[tuple[Staff]]:
+    """Esconde al profesional cuya cuenta de login es superadmin.
+
+    Misma regla que ``UserRepository`` (S-15): para un admin de tienda la
+    cuenta global no existe, y eso vale tambien para las lecturas de
+    ``/staff/`` (AUD2-B3-11). Sin esto el panel listaba con su email a un
+    profesional ascendido a superadmin mientras ``GET /users/`` lo ocultaba
+    y ``PUT /staff/{id}`` sobre el daba 404. Un recurso (cancha, sala) no
+    tiene usuario y nunca cae en el filtro.
+    """
+    if include_global_admins:
+        return query
+    es_global = exists().where(User.id == Staff.id, User.is_global_admin.is_(True))
+    return query.where(~es_global)
 
 
 class StaffRepository:
@@ -134,8 +153,10 @@ class StaffRepository:
         await self.db.flush()
         return new_staff
 
-    async def get_all(self, store_id: str) -> list[Staff]:
-        result = await self.db.execute(
+    async def get_all(
+        self, store_id: str, *, include_global_admins: bool = False
+    ) -> list[Staff]:
+        query = (
             select(Staff)
             .where(
                 Staff.store_id == store_id,
@@ -146,12 +167,17 @@ class StaffRepository:
                 _active_services(store_id),
             )
         )
+        result = await self.db.execute(
+            _visible_para_el_panel(query, include_global_admins)
+        )
         # La carga ya trae solo los activos de la tienda: no se filtra ni se
         # re-asigna nada (ver `_active_services`).
         return list(result.scalars().all())
 
-    async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:
-        result = await self.db.execute(
+    async def get_by_id(
+        self, public_id: str, store_id: str, *, include_global_admins: bool = False
+    ) -> Staff | None:
+        query = (
             select(Staff)
             .where(
                 Staff.id == public_id,
@@ -161,6 +187,9 @@ class StaffRepository:
                 selectinload(Staff.schedules),
                 _active_services(store_id),
             )
+        )
+        result = await self.db.execute(
+            _visible_para_el_panel(query, include_global_admins)
         )
         # Antes esto re-consultaba con `_get_services_for_store`, que exige que
         # TODOS los ids existan y esten activos: un servicio borrado dejaba en
