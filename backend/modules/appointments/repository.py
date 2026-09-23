@@ -106,9 +106,16 @@ class AppointmentRepository:
         Se toma por separado y antes de ``get_by_public_id`` porque ese metodo
         usa ``joinedload``, que arma OUTER JOINs, y Postgres rechaza FOR UPDATE
         sobre el lado nullable de un outer join.
+
+        Filtra por tienda igual que ``get_by_public_id`` (AUD2-B1-09): el
+        ``store_id`` estaba en la firma y no se usaba. Con RLS la fila ajena no
+        es visible y no habia fuga, pero §2 pide las DOS capas, y en SQLite
+        -donde corre toda la suite de integracion- no hay RLS que respalde.
         """
         await self.db.execute(
-            select(Appointment.id).where(Appointment.id == public_id).with_for_update()
+            select(Appointment.id)
+            .where(Appointment.id == public_id, Appointment.store_id == store_id)
+            .with_for_update()
         )
 
     def add(self, appointment: Appointment) -> None:
