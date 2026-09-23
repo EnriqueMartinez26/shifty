@@ -341,12 +341,15 @@ Una instrucción en lenguaje natural no es una garantía.
   (`docs/AUDIT_MATRIX_SHARED.md`), en particular los permisos de
   `/reports/professionals` y `/reports/summary|export`. Para un cambio de
   permisos se verifica en código, no en la doc.
-- El pre-commit hook (`.githooks/pre-commit`) existe pero **solo corre si
-  cada clon hace `git config core.hooksPath .githooks`**; en este clon no
-  estaba activado. Además `verify-toolchain` exige la versión EXACTA de Node
-  (24.18.0 / 26.5.0) y npm: en una máquina con otra versión (2026-09-16:
-  24.16.0) activarlo bloquea todos los commits, y `npm ci` necesita
-  `--engine-strict=false`. Antes de activarlo, alinear el toolchain.
+- El pre-commit hook (`.githooks/pre-commit`) **está activado en este clon**
+  (`core.hooksPath` apunta a `.githooks`) y corre `verify-toolchain` más
+  `npm run check`; los checks de backend se omiten si `uv` no está en el
+  PATH local, porque corren en Docker/CI. `verify-toolchain` acepta el
+  CONJUNTO soportado, no una versión única: Node 24.18.0 o 26.5.0, npm
+  11.16.0 o 11.17.0. Un clon nuevo sigue necesitando `git config
+  core.hooksPath .githooks`, y en una máquina fuera de ese conjunto el hook
+  bloquea todos los commits y `npm ci` necesita `--engine-strict=false`: el
+  toolchain se alinea antes.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
   detrás de nginx (`E2E_BASE_URL=http://localhost`,
@@ -359,8 +362,7 @@ Una instrucción en lenguaje natural no es una garantía.
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
   prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
-- Falta todavía: activar el pre-commit hook por clon (`git config
-  core.hooksPath .githooks`, con el toolchain alineado); descomponer las
+- Falta todavía: descomponer las
   funciones más largas (`create_public_booking`,
   `client_reschedule_appointment`); zona horaria por tienda; unicidad de
   email de clientes POR tienda (hoy es global, así que un mismo email no
@@ -368,6 +370,7 @@ Una instrucción en lenguaje natural no es una garantía.
   patrón de `appointments`; pasar CodeQL a bloqueante cuando el ruido inicial
   esté limpio. Cerrado el 2026-09-16: N+1 en `get_available_slots`
   (auditado, no había), teléfono único por tienda y primera corrida del E2E.
+  Cerrado el 2026-09-22: el pre-commit hook quedó activado en este clon.
 
 ## 6. Compuertas de proceso
 
