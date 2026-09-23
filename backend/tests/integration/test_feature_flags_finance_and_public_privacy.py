@@ -910,6 +910,9 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
         store_id: str,
         payment_id: str,
         configs: Any = None,  # config del gateway ya resuelta por el lote (B2-13)
+        # Como persistir un refresh OAuth sin dejar transaccion abierta: lo pasa
+        # el lote del inbox desde AUD2-B2-02; el handler HTTP no lo usa.
+        persist_refresh: Any = None,
     ) -> dict[str, Any]:
         assert payment_id == "mp-pay-minimal-123"
         assert store_id

@@ -198,8 +198,11 @@ async def test_rafaga_de_confirmaciones_manuales_del_mismo_turno(
     que corre a la par choca con ``uq_payments_store_appointment`` o con la
     version del Payment (409). Ninguna de las dos es un 5xx.
 
-    No se afirma la cantidad de eventos ``payment.manual_confirmed``: cada
-    no-op lo republica (hallazgo B2-17, pregunta abierta para el dueno).
+    Cero eventos ``payment.manual_confirmed`` en el outbox: B2-17 (2026-09-19)
+    dejo de publicarlo porque no tenia consumidor y cada no-op lo republicaba.
+    Hasta AUD2-B2-14 (2026-09-20) este docstring decia lo contrario ("no se
+    afirma la cantidad porque cada no-op lo republica"): el test pasaba, pero
+    explicaba el invariante al reves. Ahora lo afirma.
     """
     token, turno = await _turno_con_cobro(client, app_sessions, "pg-manual-rafaga")
 
@@ -222,6 +225,8 @@ async def test_rafaga_de_confirmaciones_manuales_del_mismo_turno(
     assert await _cobros_del_turno(owner_engine, turno) == ["manual_confirmed"]
     pagados = {r.json()["paid_at"] for r in respuestas if r.status_code == 200}
     assert len(pagados) == 1, pagados  # paid_at se sello una sola vez
+    # Ni un evento: el outbox no conoce payment.manual_confirmed desde B2-17.
+    assert await _eventos(owner_engine, "payment.manual_confirmed") == 0
 
 
 @pytest.mark.asyncio

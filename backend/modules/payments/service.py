@@ -168,11 +168,6 @@ def calculate_service_payment_amount(
     return Decimal("0.00")
 
 
-def service_requires_payment(service: Service) -> bool:
-    mode = getattr(service, "deposit_mode", "none") or "none"
-    return mode != "none" and calculate_service_payment_amount(service) > 0
-
-
 async def _mercadopago_api_request(
     access_token: str,
     *,
@@ -746,6 +741,38 @@ def _needs_provider_link(
     )
 
 
+def _expire_replaced_preference(
+    db: AsyncSession, *, payment: Payment, previa: str | None
+) -> None:
+    """Manda a vencer en MP el link REAL que este cobro deja de usar (AUD2-B2-03).
+
+    Publica ``payment.preference.expire``, que consume
+    ``_claim_and_expire_preferences`` fuera de todo lock (B1-04). Hasta ahora
+    solo lo publicaba ``release_pending``: los demas caminos que reemplazan un
+    ``preference_id`` real (re-tarifar desde el panel, confirmar a mano con
+    otro importe) dejaban vivo un checkout que Shifty ya no reconocia, y el
+    pago de ese link se rechazaba por preferencia e importe hasta agotar los
+    reintentos del inbox: plata en la cuenta de la tienda sin registro.
+
+    Un placeholder no existe en Mercado Pago, asi que no se vence nada.
+    """
+    if not previa or _is_placeholder_preference(previa):
+        return
+    if payment.preference_id == previa:
+        return
+    db.add(
+        OutboxMessage(
+            store_id=payment.store_id,
+            event_type=EVENT_PREFERENCE_EXPIRE,
+            payload={
+                "appointment_id": payment.appointment_id,
+                "payment_id": payment.id,
+                "preference_id": previa,
+            },
+        )
+    )
+
+
 async def _attach_provider_link(
     db: AsyncSession,
     *,
@@ -867,6 +894,8 @@ async def _upsert_payment_preference(
     )
     payment = result.scalar_one_or_none()
     creado = payment is None
+    # Un id REAL que se deja de usar hay que vencerlo en MP (AUD2-B2-03).
+    preferencia_previa = None if payment is None else payment.preference_id
     if payment:
         importe_cambio = _reprice_existing_payment(
             payment,
@@ -911,6 +940,7 @@ async def _upsert_payment_preference(
             amount=amount,
         )
 
+    _expire_replaced_preference(db, payment=payment, previa=preferencia_previa)
     return payment, creado
 
 
@@ -927,23 +957,20 @@ async def _discard_orphan_payment(
 
     Solo borra si el cobro sigue con el link placeholder: si otra request
     concurrente ya le sello un link real, el cobro es de ella y queda (S-17).
+
+    No borra ningun evento del outbox: la fase 1 no publica ninguno. Habia un
+    DELETE de ``payment.preference.created`` que no borraba nunca nada porque
+    ese evento dejo de publicarse en B2-17, el mismo dia que se escribio esta
+    compensacion; leerlo sugeria un evento vivo que no existe (AUD2-B2-12,
+    2026-09-20). Lo garantiza
+    tests/integration/test_eventos_de_pago_con_consumidor.py.
     """
     placeholder, _ = _placeholder_link(appointment_id)
-    borrado = await db.execute(
+    await db.execute(
         delete(Payment).where(
             Payment.id == payment_id,
             Payment.store_id == store_id,
             Payment.preference_id == placeholder,
-        )
-    )
-    if not getattr(borrado, "rowcount", 0):
-        await db.commit()
-        return
-    await db.execute(
-        delete(OutboxMessage).where(
-            OutboxMessage.store_id == store_id,
-            OutboxMessage.event_type == "payment.preference.created",
-            OutboxMessage.payload["payment_id"].as_string() == payment_id,
         )
     )
     await db.commit()
@@ -1063,9 +1090,13 @@ def stamp_payment_from_status(
     payment_status: str,
     *,
     payload: dict[str, JsonValue] | None = None,
-) -> None:
+) -> bool:
     # El grafo decide: una transicion ilegal se ignora (el webhook se reentrega
     # y no queremos romper por un duplicado), pero nunca se aplica. La regla y la
     # mutacion viven en la entidad (Payment.apply_status); esto es solo el wrapper
     # que conservan los llamadores (router, webhook, conciliacion).
-    payment.apply_status(payment_status, payload=payload)
+    #
+    # Devuelve si la transicion se aplico: el llamador que escribe otros campos
+    # del cobro (el external_payment_id del webhook) tiene que enterarse de que
+    # la entidad la descarto (AUD2-B2-05).
+    return payment.apply_status(payment_status, payload=payload)

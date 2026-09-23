@@ -21,6 +21,8 @@ from modules.appointments.model import Appointment
 from modules.notifications.model import NotificationType
 from modules.payments.model import Payment, PaymentStatus
 from modules.payments.service import (
+    EVENT_PREFERENCE_EXPIRE,
+    _is_placeholder_preference,
     calculate_service_payment_amount,
     ensure_payment_preference,
     sync_appointment_with_payment,
@@ -48,6 +50,16 @@ class PaymentService:
 
         El monto por defecto es el precio congelado del turno (no el de lista de
         hoy); recien despues cae al calculo por servicio para turnos historicos.
+
+        Un cobro que nacio con la regla de sena (snapshot ``deposit_rule``) NO
+        se re-tarifa: registrarlo a mano pasaba su importe de la sena al total,
+        borraba ``promotion_code``, dejaba el snapshot mintiendo y pisaba el
+        ``preference_id`` real con el placeholder, dejando vivo en Mercado Pago
+        un checkout que Shifty ya no podia reconocer (AUD2-B2-01, 2026-09-19).
+        El ``amount`` explicito del pedido es el unico que re-tarifa.
+
+        El link real que se conserva se manda a vencer en Mercado Pago
+        (``_expire_live_checkout``): la plata ya entro por otro lado.
         """
         resolved = amount
         if resolved is None and appointment.price_amount is not None:
@@ -64,16 +76,50 @@ class PaymentService:
             store_id=actor.store_id,
             amount_override=resolved,
             create_provider_link=False,
+            keep_existing_amount=amount is None,
         )
-        payment.apply_status(
+        ya_confirmado = payment.status == PaymentStatus.MANUAL_CONFIRMED.value
+        aplicada = payment.apply_status(
             PaymentStatus.MANUAL_CONFIRMED.value,
             payload={"notes": notes} if notes else None,
         )
         sync_appointment_with_payment(appointment, payment.status)
-        # Sin evento de outbox: payment.manual_confirmed no tenia consumidor y
-        # se republicaba en cada doble clic (B2-17, 2026-09-19).
+        # Sin evento payment.manual_confirmed: no tenia consumidor y se
+        # republicaba en cada doble clic (B2-17, 2026-09-19). El vencimiento
+        # del link sale una sola vez, con la primera confirmacion real.
+        if aplicada and not ya_confirmado:
+            self._expire_live_checkout(payment)
         await self.uow.commit()
         return payment
+
+    def _expire_live_checkout(self, payment: Payment) -> None:
+        """Manda a vencer en MP el link real del cobro recien confirmado a mano.
+
+        V-diff de AUD2-B2-01 (2026-09-20): conservar el ``preference_id`` no
+        alcanzaba. AUD2-B2-03 solo vence la preferencia cuando el id CAMBIA,
+        asi que el checkout seguia vivo; si el cliente pagaba ese link,
+        ``find_payment_for_webhook`` lo encontraba, la integridad pasaba (mismo
+        importe, misma preferencia), ``approved`` desde ``manual_confirmed`` se
+        ignoraba por ilegal, ``was_settled`` tapaba el aviso y el inbox se
+        sellaba: plata en Mercado Pago sin ninguna senal (antes al menos caia
+        en ``failed_webhooks``).
+
+        El id se conserva en la fila para trazabilidad; lo que se vence es el
+        checkout, y fuera de esta transaccion: lo consume
+        ``_claim_and_expire_preferences`` (B1-04, regla 5). Un placeholder no
+        existe en Mercado Pago, asi que no se publica nada.
+        """
+        if _is_placeholder_preference(payment.preference_id):
+            return
+        self.uow.outbox.publish(
+            store_id=payment.store_id,
+            event_type=EVENT_PREFERENCE_EXPIRE,
+            payload={
+                "appointment_id": payment.appointment_id,
+                "payment_id": payment.id,
+                "preference_id": payment.preference_id,
+            },
+        )
 
     async def refund(
         self,

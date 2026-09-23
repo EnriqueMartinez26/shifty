@@ -8,6 +8,14 @@ de la cuenta de la tienda) y ``attempts`` subia dos veces por el mismo
 webhook. Aca dos workers corren a la vez con un MP lento: cada evento y cada
 cobro se consultan UNA vez, y la suma de ``inspected`` es la cantidad de
 filas, no el doble (regla 8).
+
+2026-09-20, AUD2-B2-02: el invariante sigue igual pero lo sostiene otra
+guarda. Los dos lotes pasaron a dos fases y la de Mercado Pago corre SIN lock
+y con la transaccion cerrada (regla 5), asi que el ``FOR UPDATE SKIP LOCKED``
+ya no cubre el HTTP: ahora la corrida entera se serializa con el advisory
+lock de sesion de ``_exclusive_job``, como en ``expire_unpaid_appointments``.
+La segunda corrida ya no toma un subconjunto de filas: no entra, devuelve
+``inspected = 0``, y la suma sigue siendo la cantidad de filas.
 """
 
 import asyncio

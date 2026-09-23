@@ -5,8 +5,8 @@ cada uno por separado. Dos combinaciones llegaban a la base:
 (a) ``percent`` con ``deposit_amount=500`` -> la reserva publica generaba un
 link de Mercado Pago por 5 veces el precio del servicio;
 (b) ``required`` sin monto (``null`` o 0) con tipo ``percent``/``fixed`` -> el
-importe calculado era 0, ``service_requires_payment`` daba ``False`` y un
-servicio marcado "sena obligatoria" se reservaba sin sena y sin aviso. Con
+importe calculado era 0, la reserva no pedia sena y un servicio marcado
+"sena obligatoria" se reservaba sin sena y sin aviso. Con
 ``optional`` el mismo hueco ofrecia una sena opcional de 0.
 
 Decision: ``percent`` se acota a 100 en el schema y ``required``/``optional``
