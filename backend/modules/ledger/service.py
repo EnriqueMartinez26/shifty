@@ -15,6 +15,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import ResourceNotFoundException, ValidationException
+from modules.appointments.model import Appointment
 from modules.ledger.model import CustomerLedger
 from modules.users.repository import UserRepository
 
@@ -35,8 +36,14 @@ async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -
         )
 
 
-async def _previous_balance(db: AsyncSession, store_id: str, client_id: str) -> Decimal:
-    """Ultimo saldo del cliente (0 si no tiene movimientos). Con el lock tomado."""
+async def current_balance(db: AsyncSession, store_id: str, client_id: str) -> Decimal:
+    """Ultimo saldo del cliente (0 si no tiene movimientos).
+
+    Una sola fila: el saldo es un dato, no el resultado de traer el historial
+    a memoria (regla 11). ``add_movement`` la llama CON el lock tomado; el
+    endpoint de lectura la llama sin lock, que es lo que corresponde a una
+    consulta (AUD2-B2-10).
+    """
     result = await db.execute(
         select(CustomerLedger)
         .where(
@@ -67,6 +74,29 @@ async def _ensure_store_client(
         raise ResourceNotFoundException("Cliente", client_id)
 
 
+async def _ensure_store_appointment(
+    db: AsyncSession, *, store_id: str, appointment_id: str
+) -> None:
+    """El turno asociado al movimiento es de ESTA tienda, o el movimiento no se carga.
+
+    2026-09-20, hallazgo AUD2-B2-16: B2-11 cerro la mitad del hueco (el
+    cliente) y dejo el ``appointment_id`` sin comprobar. La FK a
+    ``appointments.id`` no pasa por RLS (Postgres verifica restricciones por
+    fuera de las politicas), asi que una fila de fiado podia quedar apuntando
+    al turno de otra tienda. Mismo criterio que ``_ensure_store_client``:
+    filtro ``store_id`` como defensa en profundidad (CLAUDE.md §2), y un id
+    inexistente pasa de 409 generico (por FK) a 404 explicito.
+    """
+    turno = await db.scalar(
+        select(Appointment.id).where(
+            Appointment.id == appointment_id,
+            Appointment.store_id == store_id,
+        )
+    )
+    if turno is None:
+        raise ResourceNotFoundException("Turno", appointment_id)
+
+
 async def add_movement(
     db: AsyncSession,
     *,
@@ -79,10 +109,14 @@ async def add_movement(
 ) -> CustomerLedger:
     """Carga un movimiento y devuelve el saldo resultante, ya commiteado."""
     await _ensure_store_client(db, store_id=store_id, client_id=client_id)
+    if appointment_id is not None:
+        await _ensure_store_appointment(
+            db, store_id=store_id, appointment_id=appointment_id
+        )
     # Lock por cliente antes de leer el saldo previo: evita que dos movimientos
     # concurrentes calculen balance_after sobre el mismo saldo y se pisen.
     await _lock_client_ledger(db, store_id, client_id)
-    previous_balance = await _previous_balance(db, store_id, client_id)
+    previous_balance = await current_balance(db, store_id, client_id)
     movement = CustomerLedger(
         store_id=store_id,
         client_id=client_id,
@@ -141,7 +175,7 @@ async def reverse_movement(
 
     # La entidad decide como se compensa (ajuste con signo opuesto) y marca el
     # candado reverses_id; aca solo calculamos el saldo resultante y persistimos.
-    previous_balance = await _previous_balance(db, store_id, client_id)
+    previous_balance = await current_balance(db, store_id, client_id)
     reversal = original.build_reversal(
         balance_after=previous_balance - original.signed_amount
     )
