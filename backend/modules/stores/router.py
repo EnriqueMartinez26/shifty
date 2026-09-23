@@ -141,19 +141,9 @@ async def update_my_store(
     update_data = data.model_dump(exclude_unset=True)
     toca_la_agenda = bool(_CAMPOS_DE_AGENDA & update_data.keys())
 
-    # El slug duplicado lo decide el UNIQUE de `stores.slug` (model.py), no un
-    # pre-chequeo (AUD2-B3-15). El que habia corria con el contexto de tenant
-    # del admin y `stores_rls_policy` restringe la tabla a la tienda propia:
-    # en Postgres NUNCA veia el slug de otra tienda, asi que su 400 era
-    # inalcanzable y lo que salia igual era el 409 neutro del IntegrityError.
-    # Solo se disparaba en SQLite, donde no hay RLS. El handler de `main.py` ya
-    # documenta ese caso ("bajo RLS a veces ni siquiera ve la fila en
-    # conflicto") y responde 409 sin nombrar la fila (regla 20). Con el bloque
-    # se fue tambien su mensaje, que tenia un "?" donde iba una vocal con
-    # tilde. No se uso `tenant_bypass` para conservar el mensaje amable porque
-    # al salir reaplica (None, False) a la conexion y no el contexto previo:
-    # el UPDATE posterior de esta misma request quedaria sin tenant y RLS lo
-    # rechazaria, algo que ningun test en SQLite podria ver.
+    # El slug duplicado lo decide el UNIQUE de `stores.slug`, no un pre-chequeo
+    # (AUD2-B3-15): bajo RLS ese chequeo nunca veia la otra tienda. El porque
+    # completo vive en tests/integration/test_slug_duplicado_de_tienda.py.
 
     # Contracara de la validacion en feature-flags: si los cobros ya estan
     # activos, vaciar la politica dejaria al cliente aceptando un texto que ya
