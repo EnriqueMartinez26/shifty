@@ -1,5 +1,5 @@
 import { BaseService } from './BaseService'
-import { User } from '../../domain/entities/User'
+import { User, type UserWriteInput } from '../../domain/entities/User'
 import type { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { CreateUserUseCase } from '../../domain/use-cases/user/CreateUserUseCase'
 import type { CreateUserInput } from '../../domain/use-cases/user/CreateUserUseCase'
@@ -86,10 +86,10 @@ export class UserService extends BaseService<User> {
    * Updates partial data of a user.
    *
    * @param id The unique identifier of the user to update.
-   * @param data The partial fields of User to merge and update.
+   * @param data The fields to write; only the ones present are sent.
    * @returns A promise that resolves to the updated User entity.
    */
-  async updateUser(id: string, data: Partial<User>): Promise<User> {
+  async updateUser(id: string, data: UserWriteInput): Promise<User> {
     return await this.execute(async () => {
       return await this.repository.update(id, data)
     }, 'updateUser')

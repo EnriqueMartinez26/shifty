@@ -4,8 +4,6 @@ import { Plus, Search, Loader2, User as UserIcon } from 'lucide-react'
 
 import { User } from '@domain/entities/User'
 
-import { UserService } from '@application/services/UserService'
-
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { UserCard } from '../components/molecules/UserCard'
 import { UserFormModal } from '../components/organisms/UserFormModal'
@@ -16,8 +14,6 @@ import {
   useUpdateManagedDomainUser
 } from '../hooks/useManagedDomainUsers'
 import type { UserFormValues } from '../types/forms'
-
-type UpdateUserInput = Parameters<UserService['updateUser']>[1]
 
 export const UserManagementContainer: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -53,9 +49,17 @@ export const UserManagementContainer: React.FC = () => {
 
   const handleFormSubmit = async (formData: UserFormValues) => {
     if (editingUser) {
+      // Mapeo explicito, sin `as unknown as`: el formulario habla snake_case y
+      // el PATCH recibe `UserWriteInput`. El email no va: no se edita.
       await updateMutation.mutateAsync({
         id: editingUser.id,
-        data: formData as unknown as UpdateUserInput
+        data: {
+          firstName: formData.first_name,
+          lastName: formData.last_name,
+          phone: formData.phone,
+          role: formData.role,
+          password: formData.password
+        }
       })
     } else {
       await createMutation.mutateAsync(formData)

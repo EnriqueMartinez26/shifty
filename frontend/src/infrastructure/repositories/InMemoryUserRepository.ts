@@ -1,5 +1,5 @@
 import { BaseRepository } from './BaseRepository'
-import { User } from '../../domain/entities/User'
+import { User, type UserWriteInput } from '../../domain/entities/User'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
@@ -11,7 +11,7 @@ import { NotFoundError } from '../../shared/errors/NotFoundError'
  * Mantiene un almacenamiento local Map ideal para pruebas rápidas y robustas.
  */
 export class InMemoryUserRepository
-  extends BaseRepository<User, User, Partial<User>>
+  extends BaseRepository<User, User, UserWriteInput>
   implements IUserRepository
 {
   private store: Map<string, User> = new Map()
@@ -63,7 +63,7 @@ export class InMemoryUserRepository
     return user
   }
 
-  protected async updateImpl(id: string, data: Partial<User>): Promise<User> {
+  protected async updateImpl(id: string, data: UserWriteInput): Promise<User> {
     const existing = this.store.get(id)
     if (!existing) {
       throw new NotFoundError(`User with id ${id} not found`)
@@ -71,11 +71,11 @@ export class InMemoryUserRepository
 
     const updatedUser = User.fromPrimitives({
       id: existing.id,
-      email: data.email ? data.email.getValue() : existing.email.getValue(),
+      email: existing.email.getValue(),
       firstName: data.firstName !== undefined ? data.firstName : existing.firstName,
       lastName: data.lastName !== undefined ? data.lastName : existing.lastName,
       phone: data.phone !== undefined ? data.phone : existing.phone,
-      role: data.role ? data.role.getValue() : existing.role.getValue(),
+      role: data.role ?? existing.role.getValue(),
       isActive: data.isActive !== undefined ? data.isActive : existing.isActive,
       createdAt: existing.toPrimitives().createdAt
     })

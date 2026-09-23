@@ -160,9 +160,7 @@ describe('UserService', () => {
 
       mockRepository.update.mockResolvedValue(updatedUser)
 
-      const result = await service.updateUser('user-id', {
-        firstName: 'John'
-      } as Partial<User>)
+      const result = await service.updateUser('user-id', { firstName: 'John' })
 
       expect(result).toBe(updatedUser)
       expect(mockRepository.update).toHaveBeenCalledWith('user-id', {

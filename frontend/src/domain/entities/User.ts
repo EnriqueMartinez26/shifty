@@ -3,6 +3,20 @@ import { Email } from '../value-objects/Email'
 import { UserId } from '../value-objects/UserId'
 import { UserRole } from '../value-objects/UserRole'
 
+/**
+ * Forma de escritura del PATCH de usuarios. Todo campo es opcional y solo los
+ * PRESENTES se mandan; `password` vacio tampoco viaja (editar sin tocar la
+ * clave no la cambia). Mismo criterio que `ServiceWriteInput`.
+ */
+export interface UserWriteInput {
+  firstName?: string
+  lastName?: string
+  phone?: string
+  role?: string
+  isActive?: boolean
+  password?: string
+}
+
 interface UserProps {
   id: UserId
   email: Email
