@@ -44,7 +44,10 @@ class AuditLog(Base):
 
     __tablename__ = "audit_logs"
 
-    # PK simple, sin ULID para máxima performance de inserción
+    # PK simple, sin ULID para máxima performance de inserción. Es un contador
+    # GLOBAL: nunca sale tal cual hacia afuera, ni siquiera al superadmin; las
+    # respuestas usan ``modules.audit.public_id.opaque_audit_log_id``
+    # (AUD2-B3-14).
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
     # Cuándo ocurrió la acción (server-side, no confiar en el cliente).
