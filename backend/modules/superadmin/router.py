@@ -270,6 +270,11 @@ async def create_store_admin(
 async def list_store_users(
     store_public_id: PublicIdPath,
     include_inactive: bool = Query(False),
+    # Regla 9 (ge Y le) y techo real: la tabla de usuarios de una tienda crece
+    # con cada reserva publica, asi que sin paginar este endpoint devolvia
+    # decenas de miles de filas (AUD2-B3-03). Mismos topes que /superadmin/stores.
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=1_000_000),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserGlobalResponse]:
@@ -277,7 +282,7 @@ async def list_store_users(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    users = await repo.users.list_store_users(store.id, include_inactive)
+    users = await repo.users.list_store_users(store.id, include_inactive, limit, offset)
     return [_user_response(user) for user in users]
 
 
@@ -510,6 +515,9 @@ async def redeem_store_coupon(
 )
 async def list_store_redemptions(
     store_public_id: PublicIdPath,
+    # El repositorio ya aceptaba ``limit``; el router lo llamaba sin el y el
+    # listado no tenia techo (AUD2-B3-03, regla 9).
+    limit: int = Query(50, ge=1, le=200),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[CouponRedemptionResponse]:
@@ -517,7 +525,7 @@ async def list_store_redemptions(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    redemptions = await repo.coupons.list_store_redemptions(store.id)
+    redemptions = await repo.coupons.list_store_redemptions(store.id, limit=limit)
     return [
         CouponRedemptionResponse.model_validate(redemption)
         for redemption in redemptions

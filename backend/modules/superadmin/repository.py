@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any
+from typing import Any, TypedDict
 
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
+from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,10 +58,23 @@ def _json_safe(value: Any) -> Any:
 
 _ADMIN_ROLES = (UserRole.ADMIN.value,)
 
+# Techo de la lista de usuarios que viaja en el overview de una tienda. La
+# tabla ``users`` crece con CADA reserva publica (el portal crea un ``User``
+# con rol ``client`` por cliente nuevo), asi que sin techo el detalle de una
+# tienda grande serializaba decenas de miles de filas con email y telefono
+# (AUD2-B3-03). El listado completo vive en el endpoint que ya pagina,
+# ``GET /superadmin/stores/{id}/users``.
+STORE_OVERVIEW_USERS_LIMIT = 200
+
+
+def _es_admin() -> ColumnElement[bool]:
+    """Cuentas con acceso al panel: rol admin o la cuenta global."""
+    return or_(User.role.in_(_ADMIN_ROLES), User.is_global_admin.is_(True))
+
 
 def _user_stats_subquery() -> Subquery:
     """Un ``GROUP BY store_id`` en lugar de tres conteos correlacionados."""
-    es_admin = or_(User.role.in_(_ADMIN_ROLES), User.is_global_admin.is_(True))
+    es_admin = _es_admin()
     return (
         select(
             User.store_id.label("store_id"),
@@ -331,16 +345,65 @@ class StoreAdminRepository(_BaseAdminRepository):
         return list(result.scalars().all())
 
 
+class StoreUserCounts(TypedDict):
+    users_count: int
+    active_users_count: int
+    admins_count: int
+
+
 class UserAdminRepository(_BaseAdminRepository):
     async def list_store_users(
-        self, store_id: str, include_inactive: bool
+        self,
+        store_id: str,
+        include_inactive: bool,
+        limit: int = STORE_OVERVIEW_USERS_LIMIT,
+        offset: int = 0,
     ) -> list[User]:
+        # LIMIT/OFFSET reales: sin ellos se traia y serializaba la tabla entera
+        # de la tienda, que crece con cada reserva publica (AUD2-B3-03). El
+        # desempate por ``id`` mantiene la paginacion estable cuando varias
+        # filas comparten ``created_at`` (el alta masiva de clientes lo hace).
         query = select(User).where(User.store_id == store_id)
         if not include_inactive:
             query = query.where(User.is_active.is_(True))
-        query = query.order_by(User.created_at.desc())
-        result = await self.db.execute(query)
+        result = await self.db.execute(
+            query.order_by(User.created_at.desc(), User.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         return list(result.scalars().all())
+
+    async def list_store_admins(self, store_id: str) -> list[User]:
+        """Solo las cuentas con acceso al panel, sin techo: son unas pocas."""
+        result = await self.db.execute(
+            select(User)
+            .where(User.store_id == store_id, _es_admin())
+            .order_by(User.created_at.desc(), User.id.desc())
+        )
+        return list(result.scalars().all())
+
+    async def count_store_users(self, store_id: str) -> StoreUserCounts:
+        """Los tres contadores en un solo agregado de SQL (regla 11).
+
+        Antes salian de ``len(...)`` sobre la lista completa en memoria, que es
+        justo lo que la lista ya no trae.
+        """
+        fila = (
+            await self.db.execute(
+                select(
+                    func.count().label("users_count"),
+                    func.sum(case((User.is_active.is_(True), 1), else_=0)).label(
+                        "active_users_count"
+                    ),
+                    func.sum(case((_es_admin(), 1), else_=0)).label("admins_count"),
+                ).where(User.store_id == store_id)
+            )
+        ).one()
+        return StoreUserCounts(
+            users_count=int(fila.users_count or 0),
+            active_users_count=int(fila.active_users_count or 0),
+            admins_count=int(fila.admins_count or 0),
+        )
 
     async def get_user(self, public_id: str) -> User | None:
         result = await self.db.execute(select(User).where(User.id == public_id))
@@ -815,12 +878,15 @@ class SuperAdminRepository:
         if store is None:
             return None
 
-        users = await self.users.list_store_users(store.id, include_inactive=True)
-        admins = [
-            user
-            for user in users
-            if user.is_global_admin or str(user.role) == UserRole.ADMIN.value
-        ]
+        # La lista de usuarios va truncada y los contadores salen de SQL: la
+        # tabla crece con cada reserva publica (AUD2-B3-03). Los admins se
+        # piden aparte para que la truncada no se lleve puesta ninguna cuenta
+        # con acceso al panel, que es lo que el detalle de tienda necesita.
+        users = await self.users.list_store_users(
+            store.id, include_inactive=True, limit=STORE_OVERVIEW_USERS_LIMIT
+        )
+        admins = await self.users.list_store_admins(store.id)
+        counts = await self.users.count_store_users(store.id)
         subscription = await self.subscriptions.get_store_subscription(store.id)
         plan = (
             await self.db.get(Plan, subscription.plan_id)
@@ -837,9 +903,9 @@ class SuperAdminRepository:
             "store": store,
             "admins": admins,
             "users": users,
-            "admins_count": len(admins),
-            "users_count": len(users),
-            "active_users_count": sum(1 for user in users if user.is_active),
+            "admins_count": counts["admins_count"],
+            "users_count": counts["users_count"],
+            "active_users_count": counts["active_users_count"],
             "subscription": subscription,
             "plan_name": getattr(plan, "name", None),
             "billing_interval": getattr(plan, "billing_interval", None),
