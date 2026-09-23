@@ -9,8 +9,8 @@ Responsabilidades:
 
 from decimal import Decimal
 from enum import Enum
-from core.utils import ARGENTINA_TZ
-from datetime import datetime, timedelta
+from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,6 +35,22 @@ from modules.users.model import User, UserRole
 # siendo un hash bcrypt valido, asi que un verify eventual devuelve False sin
 # romper (no un formato invalido que lance excepcion).
 _UNUSABLE_CLIENT_PASSWORD_HASH = hash_password(str(ulid.ULID()))
+
+
+def _schedule_covers(
+    local_day: date, schedule: Schedule, starts_at: datetime, ends_at: datetime
+) -> bool:
+    """La jornada de ese dia local, contiene el rango COMPLETO? (AUD2-B1-03)
+
+    Se comparan INSTANTES, no la hora del dia suelta. Con ``time`` un turno
+    que termina despues de la medianoche local "daba la vuelta" (23:30 + 60
+    min queda en 00:30) y la condicion ``cierre >= fin`` se cumplia sola: un
+    POST directo agendaba a las 23:30 contra una jornada de 09:00 a 18:00.
+    De paso queda cubierto el caso de que el fin caiga en otro dia local.
+    """
+    apertura = local_to_utc(local_day, schedule.start_time)
+    cierre = local_to_utc(local_day, schedule.end_time)
+    return apertura <= starts_at and ends_at <= cierre
 
 
 class RangeRejection(str, Enum):
@@ -288,10 +304,9 @@ class PublicRepository:
         """
         if not staff_ids:
             return set()
-        local_start = starts_at.astimezone(ARGENTINA_TZ)
-        local_end = ends_at.astimezone(ARGENTINA_TZ)
-        start_time = local_start.time().replace(tzinfo=None)
-        end_time = local_end.time().replace(tzinfo=None)
+        starts_utc = ensure_utc_aware(starts_at)
+        ends_utc = ensure_utc_aware(ends_at)
+        local_start = starts_utc.astimezone(ARGENTINA_TZ)
         schedules_result = await self.db.execute(
             select(Schedule).where(
                 Schedule.staff_id.in_(staff_ids),
@@ -301,7 +316,7 @@ class PublicRepository:
         return {
             schedule.staff_id
             for schedule in schedules_result.scalars().all()
-            if schedule.start_time <= start_time and schedule.end_time >= end_time
+            if _schedule_covers(local_start.date(), schedule, starts_utc, ends_utc)
         }
 
     async def _staff_ids_with_overlapping_block(
