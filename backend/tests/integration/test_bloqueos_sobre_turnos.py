@@ -9,6 +9,8 @@ listan para decision humana, y el cliente recibe un mail por el outbox.
 
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -124,7 +126,7 @@ async def test_confirmar_cancela_en_bloque_audita_y_avisa_por_mail(
 ) -> None:
     enviados: list[tuple[str, str, str]] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append((to, subject, body))
         return True
 

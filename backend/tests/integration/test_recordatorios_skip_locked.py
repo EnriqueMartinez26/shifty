@@ -64,7 +64,7 @@ async def test_el_lote_de_recordatorios_bloquea_solo_turnos_con_skip_locked(
     now = datetime.now(timezone.utc)
 
     await AppointmentRepository(test_session).get_upcoming_for_reminders(
-        now, now + timedelta(hours=48), limit=10
+        now, now + timedelta(hours=48), pending_column="reminder_2h_sent_at", limit=10
     )
 
     lotes = [
@@ -87,6 +87,10 @@ async def test_el_lote_de_recordatorios_bloquea_solo_turnos_con_skip_locked(
     assert "FOR UPDATE OF appointments SKIP LOCKED" in sql, sql
     assert "ORDER BY appointments.starts_at" in sql
     assert "LIMIT" in sql
+    # V-diff de AUD2-B4-04: el predicado es el de LA etapa pedida, no un OR
+    # sobre las dos columnas.
+    assert "appointments.reminder_2h_sent_at IS NULL" in sql, sql
+    assert "reminder_24h_sent_at IS NULL" not in sql, sql
 
 
 @pytest.mark.asyncio
@@ -102,7 +106,6 @@ async def test_el_resultado_informa_filas_sin_revisar_y_lote_lleno(
 
     async def envio_lento(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,
@@ -122,7 +125,8 @@ async def test_el_resultado_informa_filas_sin_revisar_y_lote_lleno(
     assert result["unexamined"] == 2
     assert result["batch_full"] is True
     assert "deferred" not in result
-    assert _FakeRepo.limits == [4]
+    # Una consulta por etapa desde AUD2-B4-04, cada una con el mismo tope.
+    assert _FakeRepo.limits == [4, 4]
 
     # Sin presion de tiempo y con lugar de sobra: nada sin revisar ni lote lleno.
     _preparar(monkeypatch, _filas_vencidas(now, 3))

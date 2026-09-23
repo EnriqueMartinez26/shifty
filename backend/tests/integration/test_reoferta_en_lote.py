@@ -191,7 +191,9 @@ async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
         eventos.append("commit")
         await commit_original()
 
-    async def enviar_espiado(to: str, subject: str, body: str) -> bool:
+    async def enviar_espiado(
+        to: str, subject: str, body: str, smtp: Any = None
+    ) -> bool:
         eventos.append(f"mail:{to}")
         return await buzon(to, subject, body)
 

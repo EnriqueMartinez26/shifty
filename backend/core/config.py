@@ -210,7 +210,6 @@ class Settings(BaseSettings):
     PAYMENT_HOLD_MINUTES: int = 30
     TWILIO_ACCOUNT_SID: str | None = None
     TWILIO_AUTH_TOKEN: str | None = None
-    TWILIO_SMS_FROM: str | None = None
     TWILIO_WHATSAPP_FROM: str | None = None
     EXPOSE_API_DOCS: bool = True
     MAX_REQUEST_BODY_BYTES: int = 32 * 1024

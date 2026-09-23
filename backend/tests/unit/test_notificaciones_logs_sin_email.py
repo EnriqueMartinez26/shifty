@@ -18,16 +18,16 @@ from __future__ import annotations
 
 import smtplib
 from collections.abc import MutableMapping
+from datetime import datetime, timezone
 from email.message import EmailMessage
+from types import SimpleNamespace
 from typing import Any
 
-import httpx
 import pytest
 from structlog.testing import capture_logs
 
-from core.config import settings
-
 import modules.notifications.tasks as tasks
+from modules.notifications.reminders import STAGE_24H
 
 EMAIL = "cliente.privado@example.com"
 MASCARA = "c***@example.com"
@@ -75,9 +75,7 @@ async def test_eventos_de_envio_y_fallo_loguean_el_email_enmascarado(
         await tasks.send_appointment_confirmation(EMAIL, dict(DETAILS))
         # El recordatorio sale por notify_client_reminder (X-08 borro el
         # gemelo send_appointment_reminder): no loguea el email.
-        await tasks.notify_client_reminder(
-            phone=None, email=EMAIL, details=dict(DETAILS)
-        )
+        await tasks.notify_client_reminder(email=EMAIL, details=dict(DETAILS))
 
     monkeypatch.setattr(smtplib, "SMTP", _SmtpCaido)
     with capture_logs() as eventos_fallo:
@@ -180,45 +178,139 @@ def test_el_texto_de_error_tapa_direcciones_no_ascii_y_entre_comillas(
     assert "***@" in enmascarado
 
 
-class _RespuestaTwilio:
-    status_code = 400
-    text = (
-        '{"code": 21211, "message": "The \'To\' number whatsapp:+5491155512345 '
-        'is not a valid phone number.", "more_info": '
-        '"https://www.twilio.com/docs/errors/21211", "status": 400}'
+def test_el_enmascarado_de_telefonos_tapa_el_numero_y_deja_el_resto() -> None:
+    """AUD2-B4-07 (2026-09-20) reemplaza al test del rechazo de Twilio.
+
+    ``_mask_phones_in_text`` nacio para ``whatsapp_send_rejected``, que
+    volcaba el ``resp.text`` donde Twilio repite el ``To`` completo. Ese
+    camino ya no existe, pero el helper sigue vivo y sigue siendo la unica
+    guarda entre un texto de error ajeno y el log, asi que se prueba solo.
+    """
+    texto = (
+        '{"code": 21211, "message": "el numero +5491155512345 no es valido", '
+        '"status": 400}'
     )
+    enmascarado = tasks._mask_phones_in_text(texto)
+    assert "5491155512345" not in enmascarado
+    assert "***2345" in enmascarado
+    # Un codigo de error no es un telefono: se conserva.
+    assert "21211" in enmascarado
 
 
-class _TwilioRechaza:
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-    async def __aenter__(self) -> "_TwilioRechaza":
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        return None
-
-    async def post(self, *args: Any, **kwargs: Any) -> _RespuestaTwilio:
-        return _RespuestaTwilio()
+# ---------------------------------------------------------------------------
+# AUD2-B4-08 (2026-09-20): los bordes que quedaron sin la guarda del sink.
+# Tres logs volcaban ``str(exc)`` crudo y ``_build_message`` corria FUERA del
+# ``try`` de ``SmtpSession.send``, asi que una excepcion del parser de
+# cabeceras se propagaba con el asunto o la direccion en el texto. En el
+# recordatorio eso ademas libera el reclamo: el mismo turno volvia a
+# intentarlo cada 15 minutos hasta la hora del turno.
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_el_rechazo_de_whatsapp_no_loguea_el_telefono(
+async def test_un_fallo_al_armar_el_mensaje_queda_contenido_en_el_sink(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Revision V-diff (2026-09-18): ``whatsapp_send_rejected`` logueaba
-    ``resp.text`` y Twilio repite ahi el numero ``To`` completo."""
-    monkeypatch.setattr(settings, "TWILIO_ACCOUNT_SID", "AC-test")
-    monkeypatch.setattr(settings, "TWILIO_AUTH_TOKEN", "token-test")
-    monkeypatch.setattr(settings, "TWILIO_WHATSAPP_FROM", "whatsapp:+10000000000")
-    monkeypatch.setattr(httpx, "AsyncClient", _TwilioRechaza)
+    def explota(to: str, subject: str, body: str) -> EmailMessage:
+        raise ValueError(f"cabecera invalida: <{to}> / {subject}")
+
+    monkeypatch.setattr(tasks, "_build_message", explota)
+    sesion = tasks.SmtpSession()
 
     with capture_logs() as eventos:
-        assert await tasks._send_whatsapp("+5491155512345", "hola") is False
+        assert await sesion.send(EMAIL, "Asunto", "cuerpo") is False
 
-    rechazo = next(e for e in eventos if e["event"] == "whatsapp_send_rejected")
-    assert "5491155512345" not in repr(rechazo)
-    assert "***2345" in rechazo["detail"]
-    # El codigo de error de Twilio no es un telefono: se conserva.
-    assert "21211" in rechazo["detail"]
+    fallo = next(e for e in eventos if e["event"] == "smtp_send_failed")
+    assert fallo["error_type"] == "ValueError"
+    _sin_email_crudo(eventos)
+
+
+@pytest.mark.asyncio
+async def test_el_fallo_de_la_confirmacion_no_vuelca_el_texto_crudo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def explota(*args: Any, **kwargs: Any) -> dict[str, str]:
+        raise RuntimeError(f"rechazado {EMAIL} desde +5491155512345")
+
+    monkeypatch.setattr(tasks, "send_appointment_confirmation", explota)
+
+    with capture_logs() as eventos:
+        resultado = await tasks.send_confirmation_email(
+            email=EMAIL, details=dict(DETAILS)
+        )
+
+    assert resultado["status"] == "failed"
+    _sin_email_crudo(eventos)
+    assert all("5491155512345" not in repr(e) for e in eventos)
+
+
+@pytest.mark.asyncio
+async def test_el_fallo_del_recordatorio_no_vuelca_el_texto_crudo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    liberados: list[str] = []
+
+    class _Repo:
+        async def claim_reminder(self, *args: Any) -> bool:
+            return True
+
+        async def release_reminder(self, appointment_id: str, columna: str) -> None:
+            liberados.append(columna)
+
+    async def explota(**kwargs: Any) -> dict[str, str]:
+        raise RuntimeError(f"rechazado {EMAIL} desde +5491155512345")
+
+    monkeypatch.setattr(tasks, "notify_client_reminder", explota)
+    turno = SimpleNamespace(
+        id="ap-1",
+        public_id="appt-b408",
+        client_email=EMAIL,
+        starts_at=datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc),
+        client_name="Ana",
+    )
+    fila = (
+        turno,
+        SimpleNamespace(name="Corte", public_id="srv-1"),
+        SimpleNamespace(display_name="Ana", kind="person", public_id="stf-1"),
+        SimpleNamespace(email=EMAIL),
+        SimpleNamespace(name="Tienda", slug="tienda", whatsapp_number=None),
+    )
+
+    with capture_logs() as eventos:
+        enviado = await tasks._dispatch_reminder(
+            _Repo(), fila, STAGE_24H, datetime.now(timezone.utc)
+        )
+
+    assert enviado is False
+    assert liberados == [STAGE_24H.column], "el reclamo se libera para reintentar"
+    _sin_email_crudo(eventos)
+    assert all("5491155512345" not in repr(e) for e in eventos)
+
+
+@pytest.mark.asyncio
+async def test_el_presupuesto_del_otp_no_loguea_la_url_de_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """El cuarto ``str(exc)`` de AUD2-B4-08 estaba en ``modules/otp``.
+
+    Un ``RedisError`` repite la URL de conexion en su texto, y esa URL lleva
+    credenciales. Se loguea solo el tipo.
+    """
+    import modules.otp.service as otp_service
+    from core.config import settings
+    from redis.exceptions import RedisError
+
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", False)
+
+    async def redis_caido() -> Any:
+        raise RedisError("Error 111 connecting to redis://usuario:secreto@10.0.0.5")
+
+    monkeypatch.setattr(otp_service, "get_redis", redis_caido)
+
+    with capture_logs() as eventos:
+        await otp_service._consume_budget("req", "store-1", "+5491155512345", 5)
+
+    evento = next(e for e in eventos if e["event"] == "otp_budget_redis_unavailable")
+    assert evento["error_type"] == "RedisError"
+    assert "secreto" not in repr(evento)

@@ -41,7 +41,7 @@ from tests.integration.test_mails_al_cliente import Buzon
 def _buzon_en_orden(orden: list[str] | None, monkeypatch: pytest.MonkeyPatch) -> Buzon:
     buzon = Buzon()
 
-    async def enviar(to: str, subject: str, body: str) -> bool:
+    async def enviar(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         if orden is not None:
             orden.append("mail")
         return await buzon(to, subject, body)

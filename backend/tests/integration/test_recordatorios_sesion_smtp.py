@@ -109,11 +109,6 @@ def _preparar_lote(
     # _preparar reemplaza el envio por un fake: aca se usa el real, que pasa
     # por is_deliverable_email y por la sesion SMTP del lote.
     monkeypatch.setattr(notification_tasks, "notify_client_reminder", _NOTIFY_REAL)
-
-    async def sin_whatsapp(*args: Any, **kwargs: Any) -> bool:
-        return False
-
-    monkeypatch.setattr(notification_tasks, "_send_whatsapp", sin_whatsapp)
     monkeypatch.setattr(smtplib, "SMTP", _SmtpFalso)
     _SmtpFalso.reset(**fallas)
 

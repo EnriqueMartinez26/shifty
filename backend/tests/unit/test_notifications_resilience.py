@@ -66,6 +66,7 @@ class _FakeRepo:
     releases: list[tuple[str, str]] = []
     rows: list[tuple[Any, Any, Any, Any, Any]] = []
     limits: list[int | None] = []
+    columns: list[str | None] = []
     claim_result = True
 
     def __init__(self, db: Any) -> None:
@@ -76,9 +77,11 @@ class _FakeRepo:
         starts_after: datetime,
         starts_before: datetime,
         *,
+        pending_column: str | None = None,
         limit: int | None = None,
     ) -> list[tuple[Any, Any, Any, Any, Any]]:
         self.limits.append(limit)
+        self.columns.append(pending_column)
         return list(self.rows)[:limit]
 
     async def claim_reminder(
@@ -98,7 +101,6 @@ def _preparar(
 
     async def fake_notify_client_reminder(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,
@@ -109,6 +111,7 @@ def _preparar(
     _FakeRepo.claims = []
     _FakeRepo.releases = []
     _FakeRepo.limits = []
+    _FakeRepo.columns = []
     _FakeRepo.rows = rows
     _FakeRepo.claim_result = claim_result
     monkeypatch.setattr(

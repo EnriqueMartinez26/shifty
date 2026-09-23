@@ -2,6 +2,8 @@
 telefono del cliente en la agenda solo para administradores.
 """
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -58,7 +60,7 @@ async def test_completar_manda_el_mail_de_reserva_de_nuevo_con_deep_link(
 async def test_smtp_caido_no_impide_completar(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def explota(to: str, subject: str, body: str) -> bool:
+    async def explota(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         raise ConnectionError("smtp down")
 
     _store, token, _service, _staff, pid = await _turno_confirmado(client, "smtp-caido")

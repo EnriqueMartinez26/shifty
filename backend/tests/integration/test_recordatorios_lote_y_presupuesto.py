@@ -64,14 +64,16 @@ async def test_el_lote_pide_a_lo_sumo_el_tope_de_filas(
     _preparar(monkeypatch, _filas_vencidas(now, 3))
 
     await notification_tasks.process_due_appointment_reminders(now=now)
-    assert _FakeRepo.limits == [notification_tasks.REMINDER_BATCH_LIMIT]
+    # AUD2-B4-04: una consulta POR ETAPA, cada una con su propio tope, para
+    # que los turnos de 2 h no le coman el lote a los de 24 h.
+    assert _FakeRepo.limits == [notification_tasks.REMINDER_BATCH_LIMIT] * 2
     assert notification_tasks.REMINDER_BATCH_LIMIT >= 1
 
     _preparar(monkeypatch, _filas_vencidas(now, 3))
     result = await notification_tasks.process_due_appointment_reminders(
         now=now, limit=2
     )
-    assert _FakeRepo.limits == [2]
+    assert _FakeRepo.limits == [2, 2]
     assert result["published"] == 2
     assert len(_FakeRepo.claims) == 2
 
@@ -91,7 +93,6 @@ async def test_presupuesto_agotado_deja_de_reclamar_y_no_pierde_recordatorios(
 
     async def envio_lento(
         *,
-        phone: str | None,
         email: str | None,
         details: dict[str, Any],
         smtp: Any = None,
@@ -139,7 +140,7 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
 ) -> None:
     # El alta publica manda "reserva registrada" contra el SMTP configurado;
     # aca no hay ninguno y cada intento espera el timeout.
-    async def sin_smtp(to: str, subject: str, body: str) -> bool:
+    async def sin_smtp(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         return True
 
     monkeypatch.setattr(notification_tasks, "_send_email", sin_smtp)
@@ -172,9 +173,28 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
 
     repo = AppointmentRepository(test_session)
     ventana = (dia - timedelta(days=1), dia + timedelta(days=2))
-    todas = await repo.get_upcoming_for_reminders(*ventana)
+    todas = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_24h_sent_at"
+    )
     assert len(todas) == 2
 
-    acotadas = await repo.get_upcoming_for_reminders(*ventana, limit=1)
+    acotadas = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_24h_sent_at", limit=1
+    )
     assert len(acotadas) == 1
     assert acotadas[0][0].starts_at.replace(tzinfo=timezone.utc) == primero
+
+    # V-diff de AUD2-B4-04 (2026-09-20), contra SQL real: la consulta filtra
+    # por LA columna de la etapa. Con el de 24 h ya mandado, ese turno no
+    # vuelve para la etapa de 24 h aunque le falte el de 2 h; antes el OR lo
+    # traia primero y le comia el tope al que si habia que avisar.
+    acotadas[0][0].reminder_24h_sent_at = datetime.now(timezone.utc)
+    await test_session.commit()
+    para_24h = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_24h_sent_at"
+    )
+    assert [f[0].starts_at.replace(tzinfo=timezone.utc) for f in para_24h] == [segundo]
+    para_2h = await repo.get_upcoming_for_reminders(
+        *ventana, pending_column="reminder_2h_sent_at"
+    )
+    assert len(para_2h) == 2

@@ -39,7 +39,7 @@ pytestmark = pytest.mark.postgres
 DEMORA_ENVIO = 0.2
 
 
-async def _sin_smtp(to: str, subject: str, body: str) -> bool:
+async def _sin_smtp(to: str, subject: str, body: str, smtp: Any = None) -> bool:
     return True
 
 

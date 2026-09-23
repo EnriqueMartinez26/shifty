@@ -500,7 +500,7 @@ async def test_con_mp_lento_los_mails_del_lote_salen_antes_que_mp(
             await asyncio.sleep(0.2)
         return await llamada(*args, **kwargs)
 
-    async def enviar(to: str, subject: str, body: str) -> bool:
+    async def enviar(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         orden.append("mail")
         return True
 

@@ -10,7 +10,7 @@ no mandan dos veces el mismo aviso (SKIP LOCKED) ni pierden ninguno.
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient
@@ -113,7 +113,7 @@ async def test_el_aviso_al_dueno_sale_con_la_fila_ya_commiteada_y_una_sola_vez(
     enviados: list[str] = []
 
     async def dueno(
-        *, email: str, title: str, body: str | None = None
+        *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
         # El cuerpo arranca con "Cliente N reservo ...": identifica la fila.
         nombre = (body or "").split(" reservo", 1)[0]

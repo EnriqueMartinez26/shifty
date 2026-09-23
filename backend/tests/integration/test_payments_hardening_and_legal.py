@@ -714,7 +714,7 @@ async def test_el_dueno_recibe_la_notificacion_tambien_por_mail(
     enviados: list[dict[str, str | None]] = []
 
     async def fake_send(
-        *, email: str, title: str, body: str | None = None
+        *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
         enviados.append({"email": email, "title": title, "body": body})
         return {"status": "sent"}

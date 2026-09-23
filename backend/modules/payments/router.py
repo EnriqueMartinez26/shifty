@@ -931,7 +931,12 @@ async def reconciliation_summary(
 async def process_outbox(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    # le=100 y no 500 (v-diff de AUD2-B4-02, 2026-09-20): el request del
+    # panel despacha los mails del lote en linea, hasta el presupuesto entero
+    # (OUTBOX_EMAIL_BUDGET_SECONDS). Con 500 mensajes -y varios mails por
+    # mensaje- un click del dueno retenia un worker de la API durante todo el
+    # presupuesto; 100 es el mismo tope que usa el beat cada minuto.
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> OutboxProcessResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)

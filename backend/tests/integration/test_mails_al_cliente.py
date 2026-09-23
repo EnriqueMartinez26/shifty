@@ -7,6 +7,8 @@ llegaba el recordatorio de 24 horas. Ademas la hora salia en ISO UTC.
 
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 
@@ -26,7 +28,9 @@ class Buzon:
         self.enviados: list[tuple[str, str, str]] = []
         self.falla = falla
 
-    async def __call__(self, to: str, subject: str, body: str) -> bool:
+    async def __call__(
+        self, to: str, subject: str, body: str, smtp: Any = None
+    ) -> bool:
         if self.falla:
             return False
         self.enviados.append((to, subject, body))

@@ -51,7 +51,9 @@ EVENTO_PAGO_SOBRE_TURNO_LIBERADO = "payment.received_on_released_appointment"
 def _espiar_confirmaciones(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
     enviadas: list[str | None] = []
 
-    async def confirmacion(*, email: str | None, details: dict[str, Any]) -> None:
+    async def confirmacion(
+        *, email: str | None, details: dict[str, Any], smtp: Any = None
+    ) -> None:
         enviadas.append(details.get("public_id"))
 
     monkeypatch.setattr(jobs, "send_confirmation_email", confirmacion)

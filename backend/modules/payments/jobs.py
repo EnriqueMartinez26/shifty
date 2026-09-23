@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from modules.notifications.tasks import (
     send_cancellation_email,
     send_confirmation_email,
     send_store_notification_email,
+    smtp_session,
 )
 from modules.payments.model import (
     JsonValue,
@@ -99,7 +101,34 @@ class _PreferenceExpireClaim:
 # tarea antes del commit, la corrida siguiente reenviaria lo ya enviado. Es la
 # misma funcion de envio de siempre con sus argumentos ya fijados: conserva
 # is_deliverable_email y el best-effort de cada camino.
-PendingEmail = Callable[[], Awaitable[object]]
+PendingEmail = Callable[..., Awaitable[object]]
+
+# AUD2-B4-02 (2026-09-20): el despacho post-commit no tenia tope. El lote trae
+# hasta 100 mensajes (500 por el endpoint del panel) y cada mensaje puede
+# generar varios mails; con un SMTP lento el hard time limit de Celery (150 s)
+# mataba el proceso con los ``processed_at`` YA persistidos, asi que los mails
+# que faltaban no salian nunca y no quedaba rastro. Ahora el despacho corre con
+# una sola conexion SMTP y con presupuesto: lo que no entra se anota en SU
+# mensaje con ``attempts`` (el contador de B2-12) en una transaccion nueva.
+#
+# 45 s y no 90 (v-diff de AUD2-B4-02, 2026-09-20): el rol de la app tiene
+# ``idle_in_transaction_session_timeout = 60 s`` (migracion app_role_timeouts).
+# El despacho corre sin transaccion abierta, pero el presupuesto tiene que
+# quedar igual por debajo de ese tope con margen: se revisa ANTES de cada envio
+# y el envio en curso puede sumar hasta los 10 s del timeout del SMTP. Si
+# alguna vez vuelve a quedar una transaccion idle durante el despacho, Postgres
+# no llega a matar la conexion antes de anotar los fallos.
+OUTBOX_EMAIL_BUDGET_SECONDS = 45
+OUTBOX_EMAIL_BUDGET_REASON = "outbox_email_budget_exhausted"
+
+
+@dataclass
+class _MailDelLote:
+    """Un mail listo para mandar y el mensaje del outbox que lo genero."""
+
+    message: OutboxMessage
+    enviar: PendingEmail
+    contexto: dict[str, str | None]
 
 
 def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
@@ -115,25 +144,6 @@ def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
         "appointment_id": str(turno) if turno else None,
         "event_type": message.event_type,
     }
-
-
-async def _despachar_mails(
-    pendientes: list[tuple[PendingEmail, dict[str, str | None]]],
-) -> None:
-    """Manda los mails del lote, ya con la transaccion cerrada (B2-01).
-
-    Adentro de la transaccion quedarian bajo el ``FOR UPDATE SKIP LOCKED`` y,
-    si Celery mata la tarea antes del commit, la corrida siguiente reenviaria
-    lo ya enviado. Un SMTP caido no revierte nada ni marca el evento como
-    fallido: el aviso in-app, que es la fuente durable, ya quedo escrito.
-    """
-    for enviar, contexto in pendientes:
-        try:
-            await enviar()
-        except Exception as exc:
-            logger.warning(
-                "outbox_email_skipped", error_type=type(exc).__name__, **contexto
-            )
 
 
 async def _registrar_fallo(
@@ -173,16 +183,18 @@ async def _registrar_fallo(
         )
 
 
-async def _efectos_del_mensaje(
+async def _plan_outbox_message(
     db: AsyncSession, message: OutboxMessage, *, now: datetime
-) -> list[PendingEmail]:
+) -> list[_MailDelLote]:
     """Aplica en la base lo que pide un evento y devuelve sus mails.
 
-    Extraido de ``process_outbox_batch`` (regla 29): el lote se queda con el
+    Extraida de ``process_outbox_batch`` (regla 29): el lote se queda con el
     lock, el conteo y el manejo de fallos; el despacho por tipo de evento vive
-    aca. Ningun mail sale desde adentro: se devuelven para despues del commit
-    (B2-01).
+    aca. Solo persiste y acumula: ningun mail sale dentro de la transaccion
+    del lote (2026-09-16, B2-01); se devuelven para despues del commit, con
+    el contexto de su mensaje para el log si no salen (AUD2-B4-02).
     """
+    contexto = _contexto_del_mail(message)
     if message.event_type == EVENT_SLOT_RELEASED and message.store_id:
         # Lista de espera: aviso al dueno y oferta a una persona por vez.
         oferta = await offer_released_slot(
@@ -190,37 +202,50 @@ async def _efectos_del_mensaje(
             ReleasedSlot.from_payload(message.store_id, dict(message.payload or {})),
             now=now,
         )
-        if oferta.pending_email is None:
+        if not oferta.pending_email:
             return []
         return [
-            partial(
-                send_waitlist_offer_email,
-                email=oferta.pending_email.email,
-                details=oferta.pending_email.details,
+            _MailDelLote(
+                message,
+                partial(
+                    send_waitlist_offer_email,
+                    email=oferta.pending_email.email,
+                    details=oferta.pending_email.details,
+                ),
+                contexto,
             )
         ]
+
     if message.event_type == "appointment.cancelled_by_block":
         # Aviso al cliente (no al dueno, que fue quien bloqueo).
         payload = dict(message.payload or {})
         return [
-            partial(
-                send_cancellation_email,
-                email=str(payload.get("client_email") or "") or None,
-                details=payload,
+            _MailDelLote(
+                message,
+                partial(
+                    send_cancellation_email,
+                    email=str(payload.get("client_email") or "") or None,
+                    details=payload,
+                ),
+                contexto,
             )
         ]
+
     notification = _build_store_notification(message)
     if notification is None:
         return []
     # La notificacion in-app es la fuente durable; el mail es un efecto
     # secundario que sale despues del commit.
     db.add(notification)
-    mails = list(await _store_owner_mails(db, notification))
+    mails = [
+        _MailDelLote(message, mail, contexto)
+        for mail in await _store_owner_mails(db, notification)
+    ]
     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
         # La sena acreditada confirma el turno: el cliente tambien se entera.
         confirmacion = await _client_confirmation_mail(db, notification.appointment_id)
         if confirmacion is not None:
-            mails.append(confirmacion)
+            mails.append(_MailDelLote(message, confirmacion, contexto))
     return mails
 
 
@@ -231,10 +256,29 @@ async def process_outbox_batch(
     store_id: str | None = None,
     incluir_vencimientos: bool = True,
 ) -> dict[str, int]:
-    """Procesa el outbox de la tienda (o de todas) y devuelve el conteo.
+    """Procesa un lote del outbox: persiste, commitea, y recien despues manda.
 
     ``incluir_vencimientos=False`` deja afuera el unico paso que sale a la
     red; lo usa el endpoint del panel (ver abajo, AUD2-B2-07).
+
+    Contrato del mail que no sale: un mail que falla o no entra en el
+    presupuesto DESPUES del commit del lote se pierde. Queda con huella en
+    su mensaje (``attempts`` y ``error``) pero el mensaje no revive:
+    ``processed_at`` ya esta commiteado y reprocesarlo duplicaria la
+    notificacion in-app y la oferta de lista de espera. Reintentar exigiria
+    un estado propio por mail.
+
+    El commit del lote es el de ``AsyncSession``, no el de ``TenantSession``
+    (v-diff de AUD2-B4-02, 2026-09-20): el de ``TenantSession`` reaplica el
+    contexto y con eso abre en el acto otra transaccion, que quedaba IDLE
+    durante todo el despacho (misma trampa que S-02 en
+    ``_expire_unpaid_appointments``). Con el
+    ``idle_in_transaction_session_timeout`` del rol (60 s) y un presupuesto
+    de 90 s, Postgres mataba la conexion a mitad del despacho, el commit de
+    los fallados reventaba y los fallos no quedaban anotados. El contexto se
+    reaplica recien cuando hay que volver a escribir. Vale igual para el
+    camino HTTP (``POST /payments/outbox/process``): ``get_db`` tambien
+    fabrica ``TenantSession`` y entra por aca.
     """
     filters: list[ColumnElement[bool]] = [
         OutboxMessage.processed_at.is_(None),
@@ -260,29 +304,37 @@ async def process_outbox_batch(
     now = datetime.now(timezone.utc)
     processed = 0
     failed = 0
-    # Ningun mail sale dentro del lote: todo se despacha despues del unico
-    # commit (2026-09-16, B2-01).
-    mails_pendientes: list[tuple[PendingEmail, dict[str, str | None]]] = []
+    # Ningun mail sale dentro del lote: el cuerpo del for solo persiste y
+    # acumula; todo se despacha despues del unico commit (2026-09-16, B2-01).
+    mails_pendientes: list[_MailDelLote] = []
 
     for message in messages:
-        contexto = _contexto_del_mail(message)
         try:
             # Savepoint por item (AUD2-B2-11, ver _registrar_fallo). El
             # sellado va ADENTRO: lo tiene que volcar el flush de ESTE
             # savepoint y no el del item siguiente, que puede revertirlo.
             async with db.begin_nested():
-                mails = await _efectos_del_mensaje(db, message, now=now)
+                mails = await _plan_outbox_message(db, message, now=now)
                 message.processed_at = now
                 message.error = None
         except Exception as exc:
             failed += 1
             await _registrar_fallo(db, message, exc)
         else:
-            mails_pendientes.extend((mail, contexto) for mail in mails)
+            mails_pendientes.extend(mails)
             processed += 1
 
-    await db.commit()
-    await _despachar_mails(mails_pendientes)
+    # Commit de AsyncSession y no de TenantSession: el de TenantSession
+    # reaplica el contexto y deja una transaccion idle abierta durante el
+    # despacho (ver docstring).
+    await AsyncSession.commit(db)
+    # Recien ahora, con la transaccion cerrada y processed_at persistido, se
+    # mandan los mails. Un SMTP caido no revierte nada, no marca el evento
+    # como fallido ni duplica envios.
+    await _dispatch_pending_emails(db, mails_pendientes)
+    # El commit plano dejo la conexion sin contexto: se reaplica antes de
+    # volver a leer, o la RLS le esconderia los eventos al job.
+    await _apply_tenant_context(db)
     # El paso propio de los vencimientos de MP: hasta MAX_CLAIMS llamadas de
     # WORST_CASE_PER_CLAIM cada una, que ``limit`` no acota. Unico paso que
     # sale a la red, y por eso el endpoint del panel lo apaga (AUD2-B2-07).
@@ -296,6 +348,79 @@ async def process_outbox_batch(
         "failed": failed + vencimientos["failed"],
         "inspected": len(messages) + vencimientos["inspected"],
     }
+
+
+async def _dispatch_pending_emails(
+    db: AsyncSession, pendientes: list[_MailDelLote]
+) -> None:
+    """Manda los mails del lote fuera de toda transaccion, con UNA sesion SMTP.
+
+    AUD2-B4-02 (2026-09-20). Tres decisiones del coordinador:
+
+    - Una conexion SMTP para todo el lote, como el lote de recordatorios desde
+      B4-08. Antes cada ``send_*_email`` pagaba conexion + STARTTLS + LOGIN.
+    - Presupuesto de tiempo: el hard limit de Celery no puede seguir cortando
+      el despacho en silencio.
+    - Lo que no sale se declara en SU mensaje con ``attempts`` (B2-12) y nunca
+      se lleva el resto del lote.
+
+    El mensaje NO revive: ``processed_at`` ya quedo commiteado y reprocesarlo
+    duplicaria la notificacion in-app (y la oferta de lista de espera). El
+    contador y el ``error`` dejan el hueco visible en la fila, que es lo que
+    antes no existia.
+
+    Las filas se tocan recien al final, en una transaccion nueva con el
+    contexto reaplicado (patron de ``_expire_claimed_preferences``). Mientras
+    se manda no hay ninguna abierta (regla 5), y eso depende de que el commit
+    previo del lote sea el de ``AsyncSession``: con el de ``TenantSession``
+    la transaccion idle que abre el ``set_config`` acompanaba a todo el
+    despacho (v-diff de AUD2-B4-02).
+    """
+    if not pendientes:
+        return
+    deadline = time.monotonic() + OUTBOX_EMAIL_BUDGET_SECONDS
+    fallados: dict[str, tuple[OutboxMessage, str]] = {}
+    async with smtp_session() as smtp:
+        for indice, pendiente in enumerate(pendientes):
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "outbox_email_budget_exhausted",
+                    sin_despachar=len(pendientes) - indice,
+                    budget_seconds=OUTBOX_EMAIL_BUDGET_SECONDS,
+                )
+                for restante in pendientes[indice:]:
+                    fallados[restante.message.id] = (
+                        restante.message,
+                        OUTBOX_EMAIL_BUDGET_REASON,
+                    )
+                break
+            motivo = await _send_one_pending_email(pendiente, smtp)
+            if motivo is not None:
+                fallados[pendiente.message.id] = (pendiente.message, motivo)
+    if not fallados:
+        return
+    await _apply_tenant_context(db)
+    for message, motivo in fallados.values():
+        message.register_failure(motivo)
+    await AsyncSession.commit(db)
+
+
+async def _send_one_pending_email(pendiente: _MailDelLote, smtp: Any) -> str | None:
+    """Manda un mail del lote. Devuelve el motivo si no salio, o None."""
+    try:
+        resultado = await pendiente.enviar(smtp=smtp)
+    except Exception as exc:
+        logger.warning(
+            "outbox_email_skipped",
+            error_type=type(exc).__name__,
+            **pendiente.contexto,
+        )
+        return type(exc).__name__
+    if not isinstance(resultado, dict) or resultado.get("status") != "failed":
+        return None
+    # El sink ya logueo el error con el destinatario enmascarado.
+    logger.warning("outbox_email_skipped", error_type="smtp", **pendiente.contexto)
+    return str(resultado.get("reason") or "smtp")
 
 
 async def _claim_and_expire_preferences(
