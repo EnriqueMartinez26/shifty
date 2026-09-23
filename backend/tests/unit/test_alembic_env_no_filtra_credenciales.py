@@ -22,6 +22,7 @@ from typing import Any
 
 import alembic
 import pytest
+from sqlalchemy.engine import make_url
 
 from core.config import settings
 
@@ -29,6 +30,12 @@ ENV_PY = Path(__file__).resolve().parents[2] / "alembic" / "env.py"
 
 URL_HOSTIL = "postgres://shifty_user:S3cr3t@/"
 URL_VALIDA = "postgresql+asyncpg://shifty_owner:Otr0S3cr3t@db:5432/shifty_db"
+
+# Password con los cinco caracteres que rompen una URL si no se re-escapan al
+# rearmarla: `@`, `/`, `:`, `?` y `#`. Se declara ya escapada, como vendria del
+# entorno (AUD2-B7-10).
+PASSWORD_CON_SIMBOLOS = "p@ss/w:rd?#"
+URL_CON_PASSWORD_HOSTIL = "postgresql+asyncpg://shifty_owner:p%40ss%2Fw%3Ard%3F%23@db:5432/shifty_db?ssl=require"
 
 
 class _ContextoOffline:
@@ -40,9 +47,14 @@ class _ContextoOffline:
     def is_offline_mode() -> bool:
         return True
 
-    @staticmethod
-    def configure(**_: Any) -> None:
-        return None
+    # `run_migrations_offline` arma la URL a mano y se la pasa a `configure`:
+    # es el unico lugar donde se puede mirar (AUD2-B7-10).
+    url_configurada: str | None = None
+
+    @classmethod
+    def configure(cls, **kwargs: Any) -> None:
+        url = kwargs.get("url")
+        cls.url_configurada = None if url is None else str(url)
 
     @staticmethod
     def begin_transaction() -> contextlib.AbstractContextManager[None]:
@@ -112,3 +124,43 @@ def test_parse_db_url_sigue_extrayendo_los_componentes(cargar_env: Any) -> None:
         "dbname": "shifty_db",
         "sslmode": "require",
     }
+
+
+def test_la_url_del_modo_offline_sobrevive_a_una_password_con_simbolos(
+    cargar_env: Any,
+) -> None:
+    """AUD2-B7-10 (2026-09-20): `run_migrations_offline` rearmaba la URL cruda.
+
+    Sintoma: `parse_db_url` devuelve usuario y password ya des-escapados
+    (`unquote`), y el modo offline los volvia a meter en un f-string sin
+    re-escaparlos. Con `p@ss/w:rd?#`, la URL resultante la leia `make_url` como
+    otro usuario, otro host y otra base; el error de SQLAlchemy que sigue puede
+    llevar la URL cruda (regla 20). El modo online no tiene el problema porque
+    pasa los componentes por `connect_args`.
+    """
+    _ContextoOffline.url_configurada = None
+
+    cargar_env(URL_CON_PASSWORD_HOSTIL)
+
+    assert _ContextoOffline.url_configurada is not None
+    url = make_url(_ContextoOffline.url_configurada)
+    assert url.username == "shifty_owner"
+    assert url.password == PASSWORD_CON_SIMBOLOS
+    assert url.host == "db"
+    assert url.port == 5432
+    assert url.database == "shifty_db"
+
+
+def test_la_url_del_modo_offline_sobrevive_a_un_usuario_con_simbolos(
+    cargar_env: Any,
+) -> None:
+    """El usuario se rearma por el mismo camino que la password."""
+    _ContextoOffline.url_configurada = None
+
+    cargar_env("postgresql+asyncpg://shifty%40owner:simple@db:5432/shifty_db")
+
+    assert _ContextoOffline.url_configurada is not None
+    url = make_url(_ContextoOffline.url_configurada)
+    assert url.username == "shifty@owner"
+    assert url.password == "simple"
+    assert url.database == "shifty_db"

@@ -7,6 +7,7 @@ con el ProactorEventLoop de Python 3.13 en Windows.
 
 from logging.config import fileConfig
 from sqlalchemy import Engine, create_engine, pool
+from sqlalchemy.engine import URL
 from alembic import context
 
 # Base + TODOS los modelos, desde el registro unico: una lista parcial hace
@@ -62,12 +63,22 @@ def run_migrations_offline() -> None:
         settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL,
         label="MIGRATION_DATABASE_URL",
     )
-    url = (
-        f"postgresql+psycopg2://{params['user']}:{params['password']}"
-        f"@{params['host']}:{params['port']}/{params['dbname']}"
+    # `parse_db_url` devuelve usuario y password ya des-escapados (`unquote`).
+    # Rearmar la URL con un f-string los dejaba crudos: una password con `@`,
+    # `/`, `:`, `?` o `#` producia una URL que SQLAlchemy leia como otro
+    # usuario, otro host y otra base, y el error resultante podia llevarla
+    # entera (regla 20). `URL.create` re-escapa cada componente
+    # (AUD2-B7-10). El modo online no pasa por aca: usa `connect_args`.
+    url = URL.create(
+        "postgresql+psycopg2",
+        username=params["user"],
+        password=params["password"],
+        host=params["host"],
+        port=params["port"],
+        database=params["dbname"],
     )
     context.configure(
-        url=url,
+        url=url.render_as_string(hide_password=False),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
