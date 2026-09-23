@@ -217,5 +217,31 @@ export default [
         }
       ]
     }
+  },
+  {
+    // Application orchestrates; it must never reach up into the UI. Importing
+    // infrastructure is still allowed on purpose: the services take the axios
+    // client directly because there is no DI container, and banning it here
+    // would be a refactor, not a guard.
+    files: ['src/application/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@presentation/**'],
+              message: 'Application cannot depend on presentation.'
+            }
+          ],
+          paths: [
+            {
+              name: 'react',
+              message: 'Application must stay free of React dependencies.'
+            }
+          ]
+        }
+      ]
+    }
   }
 ]
