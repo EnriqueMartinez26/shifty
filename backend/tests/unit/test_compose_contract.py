@@ -10,6 +10,7 @@ declaraba "ready".
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 from core.config import Settings
@@ -22,21 +23,137 @@ def _services() -> dict[str, dict[str, object]]:
     return dict(data["services"])
 
 
-def _env_keys(service: dict[str, object]) -> set[str]:
+def _env_items(service: dict[str, object]) -> dict[str, str]:
+    """`environment` normalizado a {clave: valor}, en cualquiera de sus formas."""
     env = service.get("environment") or {}
     if isinstance(env, dict):
-        return {str(key) for key in env}
+        return {str(key): str(value) for key, value in env.items()}
     assert isinstance(env, list)
-    return {str(item).split("=", 1)[0] for item in env}
+    pares = [str(item).split("=", 1) for item in env]
+    return {par[0]: par[1] if len(par) > 1 else "" for par in pares}
+
+
+def _env_keys(service: dict[str, object]) -> set[str]:
+    return set(_env_items(service))
+
+
+def _nodo_hijo(nodo: yaml.nodes.Node, clave: str) -> yaml.nodes.Node:
+    assert isinstance(nodo, yaml.nodes.MappingNode), f"{clave}: el padre no es un mapa"
+    for k, v in nodo.value:
+        if str(k.value) == clave:
+            return v
+    raise AssertionError(f"el YAML no declara {clave!r}")
+
+
+def _nodos_de_environment(
+    texto: str, servicios: tuple[str, ...]
+) -> dict[str, yaml.nodes.Node]:
+    """Nodos SIN resolver del `environment` de cada servicio.
+
+    PyYAML devuelve el MISMO objeto nodo para cada alias de un ancla, asi que
+    comparar por identidad responde la pregunta que importa: los tres servicios
+    apuntan al mismo bloque, o alguien copio uno.
+    """
+    raiz = yaml.compose(texto)
+    assert raiz is not None, "el compose esta vacio"
+    services = _nodo_hijo(raiz, "services")
+    return {
+        nombre: _nodo_hijo(_nodo_hijo(services, nombre), "environment")
+        for nombre in servicios
+    }
+
+
+def verificar_paridad_de_entorno(texto: str, servicios: tuple[str, ...]) -> None:
+    """Regla 22: un solo bloque de entorno para API, worker y beat.
+
+    AUD2-B7-07 (2026-09-20): esto comparaba los CONJUNTOS DE NOMBRES de las
+    variables. Como los tres servicios usan el mismo ancla, las claves son
+    identicas por construccion y el test no podia fallar: alguien que
+    reemplazara el alias de `celery_worker` por un bloque copiado con los mismos
+    nombres y un `DATABASE_URL` distinto pasaba igual, y reproducia exactamente
+    la regresion que el docstring de este archivo dice cubrir. Ahora se comparan
+    los VALORES y, ademas, se exige que los tres apunten al MISMO ancla.
+    """
+    data = yaml.safe_load(texto)
+    services = dict(data["services"])
+    api = _env_items(services[servicios[0]])
+    assert api, f"{servicios[0]} debe declarar environment en compose"
+    for nombre in servicios[1:]:
+        suyo = _env_items(services[nombre])
+        distintas = {
+            clave: (valor, suyo.get(clave))
+            for clave, valor in api.items()
+            if suyo.get(clave) != valor
+        }
+        assert not distintas, f"{nombre} no recibe lo mismo que la API: {distintas}"
+        de_mas = set(suyo) - set(api)
+        assert not de_mas, f"{nombre} recibe variables que la API no: {sorted(de_mas)}"
+
+    nodos = _nodos_de_environment(texto, servicios)
+    for nombre in servicios[1:]:
+        assert nodos[nombre] is nodos[servicios[0]], (
+            f"{nombre} no usa el mismo ancla que {servicios[0]}: es un bloque "
+            "aparte que hoy coincide y manana no"
+        )
 
 
 def test_celery_recibe_el_mismo_entorno_que_la_api() -> None:
-    services = _services()
-    api = _env_keys(services["backend"])
-    assert api, "el backend debe declarar environment en compose"
-    for name in ("celery_worker", "celery_beat"):
-        faltan = api - _env_keys(services[name])
-        assert not faltan, f"{name} no recibe: {sorted(faltan)}"
+    verificar_paridad_de_entorno(
+        COMPOSE.read_text(encoding="utf-8"),
+        ("backend", "celery_worker", "celery_beat"),
+    )
+
+
+_COMPOSE_CON_BLOQUE_COPIADO = """
+x-app-environment: &app_environment
+  ENV: development
+  DATABASE_URL: postgresql+asyncpg://app@db:5432/shifty
+services:
+  backend:
+    environment: *app_environment
+  celery_worker:
+    environment:
+      ENV: development
+      DATABASE_URL: postgresql+asyncpg://app@otra-base:5432/shifty
+  celery_beat:
+    environment: *app_environment
+"""
+
+
+def test_un_bloque_copiado_con_otro_valor_no_pasa_el_contrato() -> None:
+    """La regresion de 2026-09-08 con las MISMAS claves y otra base.
+
+    Es el caso que el contrato viejo no podia ver. Sin este contraejemplo el
+    test de arriba es decorativo: contra el compose real no puede fallar nunca.
+    """
+    with pytest.raises(AssertionError, match="celery_worker"):
+        verificar_paridad_de_entorno(
+            _COMPOSE_CON_BLOQUE_COPIADO,
+            ("backend", "celery_worker", "celery_beat"),
+        )
+
+
+_COMPOSE_CON_ANCLA_DUPLICADA = """
+x-app-environment: &app_environment
+  ENV: development
+services:
+  backend:
+    environment: *app_environment
+  celery_worker:
+    environment:
+      ENV: development
+  celery_beat:
+    environment: *app_environment
+"""
+
+
+def test_un_bloque_copiado_identico_tampoco_pasa() -> None:
+    """Hoy coincide; manana alguien edita uno solo y nadie se entera."""
+    with pytest.raises(AssertionError, match="ancla"):
+        verificar_paridad_de_entorno(
+            _COMPOSE_CON_ANCLA_DUPLICADA,
+            ("backend", "celery_worker", "celery_beat"),
+        )
 
 
 def test_el_entorno_de_compose_cubre_lo_obligatorio_de_settings() -> None:
@@ -184,12 +301,11 @@ def test_produccion_no_repite_ningun_valor_de_desarrollo() -> None:
 
 
 def test_los_tres_servicios_comparten_el_entorno_tambien_en_produccion() -> None:
-    # Regla 22: la paridad vale para el override igual que para el base.
-    api = set(_env_prod("backend"))
-    assert api
-    for servicio in ("celery_worker", "celery_beat"):
-        faltan = api - set(_env_prod(servicio))
-        assert not faltan, f"{servicio} no recibe en produccion: {sorted(faltan)}"
+    # Regla 22: la paridad vale para el override igual que para el base, y con
+    # el mismo criterio (valores y ancla, no solo nombres; AUD2-B7-07).
+    verificar_paridad_de_entorno(
+        COMPOSE_PROD.read_text(encoding="utf-8"), SERVICIOS_DE_LA_APP
+    )
 
 
 def _prueba_del_healthcheck(servicio: str) -> str:
