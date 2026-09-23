@@ -4,10 +4,12 @@ Hasta el 2026-09-17 (B3-06) ``UserRepository`` commiteaba por su cuenta y no
 estaba en la lista de deuda declarada de CLAUDE.md. Ahora el repositorio solo
 hace ``flush`` y este service, como ``appointments``, cierra la transaccion.
 
-En el alta, un ``IntegrityError`` ya no se traduce: sube al handler global de
-``main.py``, que responde 409 neutro (regla 20). Antes salia 400 "Ya existe un
-usuario con ese email" aunque la restriccion violada fuera otra (el telefono
-unico de cliente por tienda): una causa falsa (B3-12, 2026-09-18).
+Ni en el alta ni en la edicion se traduce el ``IntegrityError``: sube al
+handler global de ``main.py``, que responde 409 neutro (regla 20). Antes el
+alta salia 400 "Ya existe un usuario con ese email" aunque la restriccion
+violada fuera otra -el telefono unico de cliente por tienda-, o sea una causa
+falsa (B3-12, 2026-09-18); la edicion se quedo con un 400 de mensaje neutro
+pero codigo equivocado hasta AUD2-B3-10 (2026-09-20).
 """
 
 from __future__ import annotations
@@ -43,8 +45,13 @@ class UserService:
             updated = await self.repo.update(user, data)
             await self.db.commit()
         except IntegrityError:
+            # Misma decision que el alta (AUD2-B3-10): rollback y re-raise. El
+            # 400 anterior tenia mensaje neutro pero codigo equivocado; chocar
+            # con uq_users_client_phone_per_store o con uq_users_email_lower es
+            # un conflicto, no un error de la solicitud, y el front no lo podia
+            # distinguir de una validacion.
             await self.db.rollback()
-            raise ValueError("No se pudo actualizar el usuario")
+            raise
         await self.db.refresh(updated)
         return updated
 

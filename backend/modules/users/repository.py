@@ -6,8 +6,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
+from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User
+
+
+def _valor_de_rol(dato: object) -> str | None:
+    """El rol como cadena, venga como ``UserRole`` o como ``str`` de la base.
+
+    Misma lectura que ``core.roles``: la columna es ``String`` y el payload
+    puede traer el enum, asi que la comparacion se hace sobre el valor.
+    """
+    return None if dato is None else str(getattr(dato, "value", dato))
 
 
 class UserRepository:
@@ -90,15 +100,20 @@ class UserRepository:
         """Edicion sin commit (lo hace UserService)."""
         payload = data.copy()
         password = payload.pop("password", None)
+        # El rol vigente ANTES del patch: el formulario del panel reenvia el
+        # ``role`` actual en cada edicion, asi que "vino un rol" no significa
+        # "cambio el rol" (AUD2-B3-09).
+        rol_pedido = _valor_de_rol(payload.get("role"))
+        rol_anterior = _valor_de_rol(user.role)
 
-        for key, value in payload.items():
-            if value is not None:
-                setattr(user, key, value)
+        # El router manda solo lo que vino (``exclude_unset``) y ``apply_patch``
+        # distingue "vino null" de "no vino": un null borra si la columna admite
+        # NULL (telefono, nombre) y se ignora si es NOT NULL (rol, estado). Con
+        # el patron viejo -- ``if value is not None`` -- no se podia borrar el
+        # telefono de un usuario desde el panel (AUD2-B3-08).
+        apply_patch(user, payload)
 
-        if (
-            payload.get("first_name") is not None
-            or payload.get("last_name") is not None
-        ):
+        if "first_name" in payload or "last_name" in payload:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
 
         if password:
@@ -106,12 +121,12 @@ class UserRepository:
 
         # Una desactivacion, un cambio de rol o una clave impuesta por el admin
         # deben cortar las sesiones vivas: sin esto, los refresh tokens del
-        # usuario siguen operando 30 dias con los permisos viejos.
-        if (
-            payload.get("is_active") is False
-            or payload.get("role") is not None
-            or password
-        ):
+        # usuario siguen operando 30 dias con los permisos viejos (regla 15).
+        # Reenviar el MISMO rol no es un cambio y no revoca nada: la misma
+        # lectura que ya hacian ``assert_can_grant_role`` (con ``current``) y
+        # ``assert_can_change_access`` en ``core/roles.py``.
+        cambio_de_rol = rol_pedido is not None and rol_pedido != rol_anterior
+        if payload.get("is_active") is False or cambio_de_rol or password:
             await revoke_sessions_for_user(self.db, user.id)
 
         await self.db.flush()

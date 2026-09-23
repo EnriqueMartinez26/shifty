@@ -3,18 +3,22 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
-from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
+from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
 from modules.stores.model import Store
+from modules.users.guards import (
+    assert_deactivation_allowed,
+    assert_global_admin_revocation_allowed,
+)
 from modules.users.model import User, UserRole
 
 
@@ -180,23 +184,6 @@ def _compute_discount(
     return discount_amount, _money(base_amount - discount_amount)
 
 
-def _apply_patch(entity: Any, payload: dict[str, Any]) -> None:
-    """Aplica un PATCH respetando el null explicito (B3-19, 2026-09-18).
-
-    El router ya descarto lo que no vino (``model_dump(exclude_unset=True)``),
-    asi que cada clave del payload es algo que el cliente mando. Un ``null``
-    borra el valor si la columna admite NULL (logo, descripcion, vencimiento);
-    en una columna NOT NULL se ignora como antes, en vez de terminar en 409.
-    """
-    columnas = sa_inspect(type(entity)).columns
-    for key, value in payload.items():
-        if value is None:
-            columna = columnas.get(key)
-            if columna is None or not columna.nullable:
-                continue
-        setattr(entity, key, value)
-
-
 class _BaseAdminRepository:
     """Base de los repositorios de superadmin: sesión + auditoría común."""
 
@@ -309,7 +296,7 @@ class StoreAdminRepository(_BaseAdminRepository):
         self, store: Store, payload: dict[str, Any], actor: User
     ) -> Store:
         before = {"name": store.name, "slug": store.slug, "is_active": store.is_active}
-        _apply_patch(store, payload)
+        apply_patch(store, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -406,26 +393,17 @@ class UserAdminRepository(_BaseAdminRepository):
     ) -> User:
         data = payload.copy()
         password = data.pop("password", None)
-        # La guarda de "ultimo superadmin" vivia solo en set_global_admin;
-        # update_user podia desactivar al ultimo global admin activo (o a uno
-        # mismo) y brickear el panel (is_active=false -> get_current_user lo
-        # rechaza). Se replica aca antes de aplicar los cambios.
-        if user.is_global_admin and data.get("is_active") is False:
-            if user.id == actor.id:
-                raise ValueError("No podés desactivar tu propio acceso SuperAdmin")
-            activos = await self.db.execute(
-                select(func.count())
-                .select_from(User)
-                .where(User.is_active.is_(True), User.is_global_admin.is_(True))
-            )
-            if int(activos.scalar_one()) <= 1:
-                raise ValueError("No se puede desactivar el último SuperAdmin activo")
+        # Regla 14, en el unico lugar donde vive (AUD2-B3-01): la misma guarda
+        # corre en PATCH /users/{id} y en DELETE /users/{id}.
+        await assert_deactivation_allowed(
+            self.db, actor, user, is_active=data.get("is_active")
+        )
         before = {
             "role": user.role,
             "is_active": user.is_active,
             "is_global_admin": user.is_global_admin,
         }
-        _apply_patch(user, data)
+        apply_patch(user, data)
         if "first_name" in data or "last_name" in data:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if password:
@@ -451,19 +429,11 @@ class UserAdminRepository(_BaseAdminRepository):
             raise ValueError("No se pudo actualizar el usuario")
 
     async def set_global_admin(self, user: User, enabled: bool, actor: User) -> User:
-        if not enabled and user.id == actor.id:
-            raise ValueError("No podés revocar tu propio acceso SuperAdmin")
-        if not enabled and user.is_global_admin:
-            result = await self.db.execute(
-                select(func.count())
-                .select_from(User)
-                .where(
-                    User.is_active.is_(True),
-                    User.is_global_admin.is_(True),
-                )
-            )
-            if int(result.scalar_one()) <= 1:
-                raise ValueError("No se puede revocar el último SuperAdmin activo")
+        # Regla 14, en el unico lugar donde vive (AUD2-B3-12): el conteo era
+        # "leer y despues actuar" y aca tenia su cuarta copia. Revocar el flag
+        # deja la plataforma sin SuperAdmin igual que desactivar la cuenta.
+        if not enabled:
+            await assert_global_admin_revocation_allowed(self.db, actor, user)
         before = {"is_global_admin": user.is_global_admin}
         user.is_global_admin = enabled
         if enabled:
@@ -527,7 +497,7 @@ class PlanAdminRepository(_BaseAdminRepository):
             "price": str(plan.price),
             "is_active": plan.is_active,
         }
-        _apply_patch(plan, payload)
+        apply_patch(plan, payload)
         try:
             await self.db.flush()
             self._audit(
@@ -680,7 +650,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             "is_active": coupon.is_active,
             "current_uses": coupon.current_uses,
         }
-        # coupon_type y value son NOT NULL: un null se ignora (_apply_patch),
+        # coupon_type y value son NOT NULL: un null se ignora (apply_patch),
         # asi que el candidato es el valor actual. Antes {"value": null}
         # llegaba aca como None y "None > 100" terminaba en 500.
         candidate_type = payload.get("coupon_type") or coupon.coupon_type
@@ -697,7 +667,7 @@ class CouponAdminRepository(_BaseAdminRepository):
             and candidate_valid_from >= candidate_valid_until
         ):
             raise ValueError("valid_from debe ser anterior a valid_until")
-        _apply_patch(coupon, payload)
+        apply_patch(coupon, payload)
         try:
             await self.db.flush()
             self._audit(
