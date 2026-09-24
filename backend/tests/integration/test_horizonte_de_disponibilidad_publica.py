@@ -69,3 +69,36 @@ async def test_una_fecha_lejana_no_toca_el_cache(client: AsyncClient) -> None:
     assert await _pedir(client, store, service, lejos) == 422
 
     assert cache.store == antes
+
+
+@pytest.mark.asyncio
+async def test_un_servicio_inexistente_no_crea_claves(
+    client: AsyncClient,
+) -> None:
+    """Revision de F1-11: ids de servicio al azar no pueden fabricar claves.
+
+    Un ``service_id`` que no es un servicio activo de la tienda (inventado o
+    de otra tienda) no escribe nada en el cache: ``get_available_slots`` sale
+    antes del ``setex`` y GETEX no crea las claves de version ni de
+    generacion. La respuesta sigue siendo 200 con ``[]``: es contrato
+    publico caracterizado en ``test_caracterizacion_disponibilidad.py`` y
+    pasarlo a 404 es decision del dueno, no de este cambio.
+    """
+    from core.redis import get_availability_cache
+    from main import app
+
+    store, _ = await register_and_login(
+        client, slug="horizonte-svc", email="horizonte-svc@example.com"
+    )
+    _, token_ajeno = await register_and_login(
+        client, slug="horizonte-svc-ajena", email="horizonte-svc-ajena@example.com"
+    )
+    ajeno = await create_service(client, token_ajeno)
+    cache = await app.dependency_overrides[get_availability_cache]()
+    antes = dict(cache.store)
+    hoy = today_local().isoformat()
+
+    for service_id in ("01J9ZZZZZZZZZZZZZZZZZZZZZZ", ajeno):
+        assert await _pedir(client, store, service_id, hoy) == 200, service_id
+
+    assert cache.store == antes
