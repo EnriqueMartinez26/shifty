@@ -16,6 +16,8 @@ feliz.
 
 from __future__ import annotations
 
+from typing import Any
+
 from datetime import datetime, time, timedelta
 
 import pytest
@@ -81,7 +83,7 @@ async def _tienda_de_dia(client: AsyncClient, slug: str) -> tuple[str, str, str,
 
 def _reserva(
     store: str, service: str, staff: str, inicio: datetime, clave: str
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,

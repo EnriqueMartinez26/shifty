@@ -46,7 +46,7 @@ async def _tienda_con_turno(
     await add_staff_schedule(client, token, staff, target_date=dia)  # 06-18 local
     base = dia.replace(hour=13, minute=0, second=0, microsecond=0)  # 10:00 local
 
-    def reserva(inicio: datetime, telefono: str, clave: str) -> dict[str, str]:
+    def reserva(inicio: datetime, telefono: str, clave: str) -> dict[str, Any]:
         return {
             "store_public_id": store,
             "service_id": service,

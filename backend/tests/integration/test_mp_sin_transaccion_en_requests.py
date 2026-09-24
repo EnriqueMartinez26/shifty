@@ -145,7 +145,7 @@ async def test_la_reserva_publica_pide_el_link_sin_transaccion_abierta(
         )
     ).scalar_one()
     await test_session.refresh(cobro)
-    assert cobro.preference_id.startswith("pref-f105-")
+    assert (cobro.preference_id or "").startswith("pref-f105-")
 
 
 @pytest.mark.asyncio

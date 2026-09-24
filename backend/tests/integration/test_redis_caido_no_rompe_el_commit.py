@@ -77,7 +77,7 @@ async def _tienda_reservable(
     return store, token, service, staff, slot
 
 
-def _reserva(store: str, service: str, staff: str, slot: datetime) -> dict[str, str]:
+def _reserva(store: str, service: str, staff: str, slot: datetime) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,

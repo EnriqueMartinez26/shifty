@@ -53,7 +53,7 @@ async def _tienda_reservable(
 
 def _reserva(
     store: str, service: str, staff: str, slot: datetime, **extra: str
-) -> dict[str, str]:
+) -> dict[str, Any]:
     cuerpo = {
         "store_public_id": store,
         "service_id": service,

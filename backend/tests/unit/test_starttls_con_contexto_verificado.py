@@ -10,6 +10,7 @@ Con ``ssl.create_default_context()`` se exige ``CERT_REQUIRED`` y
 
 from __future__ import annotations
 
+import smtplib
 import ssl
 from email.message import EmailMessage
 from typing import Any
@@ -45,7 +46,8 @@ def test_el_reset_negocia_starttls_con_certificado_verificado(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _SmtpQueRegistra.contextos = []
-    monkeypatch.setattr(auth_service.smtplib, "SMTP", _SmtpQueRegistra)
+    # auth.service usa ``smtplib.SMTP`` por el modulo: se dobla ahi.
+    monkeypatch.setattr(smtplib, "SMTP", _SmtpQueRegistra)
 
     auth_service.send_password_reset_email(
         "alguien@example.com", "https://shifty.local/reset?token=x"

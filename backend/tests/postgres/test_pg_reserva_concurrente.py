@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from typing import cast
+from typing import Any, cast
 from httpx import AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -47,7 +47,7 @@ async def _tienda_reservable(
 
 def _reserva(
     store: str, service: str, staff: str, slot: datetime, i: int, key: str
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,

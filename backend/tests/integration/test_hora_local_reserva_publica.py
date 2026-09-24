@@ -9,6 +9,7 @@ recomponia fecha local + hora UTC y el instante caia en el dia anterior.
 ``start_time``/``end_time`` pasan a ser hora local de Argentina.
 """
 
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -157,7 +158,7 @@ async def test_la_reserva_publica_respeta_el_buffer_y_congela_el_precio(
     )
     base = dia.replace(hour=13, minute=0, second=0, microsecond=0)
 
-    def reserva(starts_at: datetime, key: str) -> dict[str, str]:
+    def reserva(starts_at: datetime, key: str) -> dict[str, Any]:
         return {
             "store_public_id": store,
             "service_id": service,

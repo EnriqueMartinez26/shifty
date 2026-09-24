@@ -23,6 +23,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import modules.appointments.service as appointments_service
+from core.availability_cache import invalidate_availability
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -50,7 +51,7 @@ def _registrar_mails_e_invalidaciones(
     ):
         monkeypatch.setattr(appointments_service, nombre, mail)
 
-    invalidar_original = appointments_service.invalidate_availability
+    invalidar_original = invalidate_availability
 
     async def invalidar(*args: Any, **kwargs: Any) -> None:
         linea.append("invalidar")
