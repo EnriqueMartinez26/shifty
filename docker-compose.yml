@@ -192,12 +192,16 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shifty}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}
+      # Dos schedulers de Erlang (uno por nucleo del HOST por defecto): baja la
+      # memoria base del broker. Con 16 nucleos, un broker recien arrancado ya
+      # rozaba la alarma de 180 MiB (decision del dueno, 2026-09-24).
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
     ports:
       - "127.0.0.1:5672:5672"
       - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
-      # F0-16: alarma de memoria absoluta (180 MiB, debajo del limite de 256M)
+      # F0-16: alarma de memoria absoluta (280 MiB, debajo del limite de 384M)
       # y piso de disco libre. Ver deploy/rabbitmq/rabbitmq.conf.
       - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/10-shifty.conf:ro
     # check_running es del CLI base: no depende del plugin de management.
@@ -211,7 +215,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # 280 MiB de alarma + margen para Erlang (decision del dueno,
+          # 2026-09-24; reemplaza los 256M/180MiB de la decision 6).
+          memory: 384M
 
   backend:
     # F0-02: UNA imagen para la API, el worker y beat. Solo backend la construye

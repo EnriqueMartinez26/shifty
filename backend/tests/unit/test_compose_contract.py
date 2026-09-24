@@ -1102,7 +1102,7 @@ def _conf_de_rabbitmq() -> dict[str, str]:
 
 def test_rabbitmq_frena_a_los_publicadores_antes_del_oom() -> None:
     conf = _conf_de_rabbitmq()
-    assert conf.get("vm_memory_high_watermark.absolute") == "180MiB", conf
+    assert conf.get("vm_memory_high_watermark.absolute") == "280MiB", conf
     assert conf.get("disk_free_limit.absolute") == "1GB", conf
 
     for vista, servicios in {
@@ -1115,9 +1115,14 @@ def test_rabbitmq_frena_a_los_publicadores_antes_del_oom() -> None:
             f"./deploy/rabbitmq/rabbitmq.conf:{RABBITMQ_CONF_EN_EL_CONTENEDOR}:ro"
         )
         assert esperado in montajes, (vista, montajes)
-        assert _megas(_limite(rabbit)) == 256, (vista, _limite(rabbit))
-        # 180 MiB de alarma dentro de 256 MB de limite: margen para Erlang.
-        assert 180 < _megas(_limite(rabbit))
+        assert _megas(_limite(rabbit)) == 384, (vista, _limite(rabbit))
+        # 280 MiB de alarma dentro de 384 MB de limite: margen para Erlang.
+        assert 280 < _megas(_limite(rabbit))
+        # Con 180 MiB un broker recien arrancado ya levantaba la alarma en un
+        # host de 16 nucleos (~170 MB propios); dos schedulers de Erlang
+        # bajan la memoria base (decision del dueno, 2026-09-24).
+        env = _env_items(rabbit)
+        assert env.get("RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS") == "+S 2:2", (vista, env)
         # El healthcheck no puede depender del plugin de management.
         prueba = str(rabbit["healthcheck"]["test"])  # type: ignore[index]
         assert "check_running" in prueba and "15672" not in prueba, prueba
@@ -1181,7 +1186,7 @@ LIMITES_EN_PRODUCCION = {
     "db": "4G",
     "redis_cache": "192M",
     "redis_state": "96M",
-    "rabbitmq": "256M",
+    "rabbitmq": "384M",
     "backend": "512M",
     "celery_worker": "768M",
     "celery_worker_interactive": "256M",

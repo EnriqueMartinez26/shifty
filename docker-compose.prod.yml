@@ -206,7 +206,7 @@ services:
 
   rabbitmq:
     # F0-16 (decision 6): sin el plugin de management. El 15672 ya no se
-    # publica y el plugin cuesta memoria dentro de los 256M.
+    # publica y el plugin cuesta memoria dentro de los 384M.
     image: rabbitmq:3.13.7-alpine
     ports: !reset []
 
