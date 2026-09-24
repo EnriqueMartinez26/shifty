@@ -1034,7 +1034,12 @@ def test_el_redis_de_cache_desaloja_y_no_persiste() -> None:
     cache = servicios["redis_cache"]
     argumentos = _argumentos(cache.get("command"))
     assert argumentos[0] == "redis-server", argumentos
-    assert _opcion(argumentos, "--maxmemory-policy") == ["allkeys-lru"]
+    # volatile-ttl: toda clave del cache tiene TTL, y el desalojo empieza por
+    # la que vence antes. Los slots (300 s) se van antes que las versiones y
+    # generaciones (7 dias): se sostiene el invariante de
+    # core/availability_cache.py (una version no desaparece mientras viva un
+    # slot escrito bajo ella). allkeys-lru podia expulsar una version antes.
+    assert _opcion(argumentos, "--maxmemory-policy") == ["volatile-ttl"]
     assert _opcion(argumentos, "--save") == [""], "el cache no persiste"
     assert _opcion(argumentos, "--appendonly") == ["no"]
     maxmemory = _megas(_opcion(argumentos, "--maxmemory")[0])
@@ -1375,3 +1380,10 @@ def test_los_nombres_de_contenedor_llevan_el_proyecto() -> None:
         for nombre, valor in nombres.items()
     }
     assert resueltos == NOMBRES_EN_DESARROLLO, resueltos
+
+
+def test_rabbitmq_conserva_su_nodo_al_recrearse() -> None:
+    """Sin hostname fijo, el nodo se llama rabbit@<id del contenedor>: un
+    contenedor recreado arranca con otro nombre, otro directorio de mnesia
+    dentro del volumen y sin las colas ni los mensajes que habia."""
+    assert _services()["rabbitmq"].get("hostname") == "rabbitmq"

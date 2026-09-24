@@ -58,7 +58,7 @@ async def get_redis() -> Redis:
 async def get_availability_cache() -> Redis:
     """Cliente del Redis de CACHE: solo para el cache de disponibilidad (F0-15).
 
-    Ese Redis desaloja (`allkeys-lru`) y no persiste: lo que se pierde ahi se
+    Ese Redis desaloja (`volatile-ttl`) y no persiste: lo que se pierde ahi se
     recalcula. Todo lo que es ESTADO (rate limit, idempotencia, lockout, OTP,
     OAuth, resultados de Celery) sigue en `get_redis`, un Redis `noeviction`:
     un desalojo no puede aflojar una proteccion. Sin `REDIS_CACHE_URL` (o con la

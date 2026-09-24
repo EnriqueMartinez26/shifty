@@ -36,6 +36,9 @@ target_metadata = Base.metadata
 # a los 3 s y el deploy falla a la vista, con el codigo viejo sirviendo; se
 # reintenta con la tabla tranquila. `statement_timeout` en 0: un backfill por
 # lotes legitimo no puede cortarse por un timeout heredado de la sesion.
+# Solo en modo ONLINE: el SQL que genera `alembic upgrade --sql` (offline) NO
+# lleva estos SET. Quien aplique ese script a mano (DBA) tiene que fijar
+# `SET lock_timeout = '3s'` en su sesion antes de correrlo.
 MIGRATION_SESSION_SETTINGS = (
     "SET lock_timeout = '3s'",
     "SET statement_timeout = 0",

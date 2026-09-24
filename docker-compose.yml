@@ -114,7 +114,11 @@ services:
   # llenaba de cache y hacia fallar TODA escritura.
   #
   # CACHE: solo la disponibilidad (core/redis.py::get_availability_cache).
-  # Desaloja lo menos usado y no persiste: perderlo es recalcular.
+  # No persiste: perderlo es recalcular. Desaloja por `volatile-ttl`: toda
+  # clave tiene TTL y se va primero la que vence antes, asi los slots (300 s)
+  # salen antes que las versiones y generaciones (7 dias) y se sostiene el
+  # invariante de core/availability_cache.py (una version no desaparece
+  # mientras viva un slot escrito bajo ella). allkeys-lru podia romperlo.
   redis_cache:
     image: redis:7.4-alpine
     container_name: ${COMPOSE_PROJECT_NAME:-shifty}_redis_cache
@@ -125,7 +129,7 @@ services:
       - --maxmemory
       - 96mb
       - --maxmemory-policy
-      - allkeys-lru
+      - volatile-ttl
       - --save
       - ""
       - --appendonly
@@ -187,6 +191,10 @@ services:
     # produccion corre la imagen sin el plugin (docker-compose.prod.yml).
     image: rabbitmq:3.13.7-management-alpine
     container_name: ${COMPOSE_PROJECT_NAME:-shifty}_rabbitmq
+    # Nombre de nodo estable (rabbit@rabbitmq): con el id del contenedor como
+    # hostname, un contenedor recreado arrancaba con otro directorio de mnesia
+    # dentro del volumen, sin las colas ni los mensajes que habia.
+    hostname: rabbitmq
     restart: always
     logging: *logging
     environment:

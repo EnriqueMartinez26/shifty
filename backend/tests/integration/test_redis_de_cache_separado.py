@@ -1,6 +1,6 @@
 """F0-15 (plan de rendimiento): el cache de disponibilidad vive en su propio Redis.
 
-El Redis de cache desaloja (`allkeys-lru`) y el de estado no (`noeviction`).
+El Redis de cache desaloja (`volatile-ttl`) y el de estado no (`noeviction`).
 Si una clave de idempotencia cae en el de cache, un desalojo reabre la puerta a
 un cobro duplicado; si el cache cae en el de estado, lo llena y hace fallar las
 escrituras de lockout y rate limit. Este test recorre el flujo publico completo

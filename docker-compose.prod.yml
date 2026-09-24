@@ -52,7 +52,7 @@ x-app-environment-prod: &app_environment_prod
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
   # F0-15: dos Redis; el de estado no desaloja, el de cache si (ver compose base).
   REDIS_URL: ${REDIS_URL:?Falta REDIS_URL en .env (Redis de ESTADO, noeviction)}
-  REDIS_CACHE_URL: ${REDIS_CACHE_URL:?Falta REDIS_CACHE_URL en .env (Redis de CACHE, allkeys-lru)}
+  REDIS_CACHE_URL: ${REDIS_CACHE_URL:?Falta REDIS_CACHE_URL en .env (Redis de CACHE, volatile-ttl)}
   REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-0.5}
   REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: ${REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS:-0.5}
   CELERY_BROKER_URL: ${CELERY_BROKER_URL:?Falta CELERY_BROKER_URL en .env}
@@ -189,7 +189,10 @@ services:
       - track_io_timing=on
       - -c
       - shared_preload_libraries=pg_stat_statements
-    # shared_buffers de 1 GB vive en /dev/shm; el default de docker es 64 MB.
+    # /dev/shm guarda la memoria compartida dinamica de las consultas en
+    # paralelo (hash joins y sorts de los workers); el default de docker es
+    # 64 MB y una consulta paralela grande fallaba con "could not resize
+    # shared memory segment". shared_buffers no vive ahi (es mmap anonimo).
     shm_size: 512m
     # Ante falta de memoria en el host, el OOM killer elige otro proceso.
     oom_score_adj: -800

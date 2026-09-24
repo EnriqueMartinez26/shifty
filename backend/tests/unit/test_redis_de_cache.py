@@ -5,7 +5,7 @@ idempotencia de cobros, el presupuesto de OTP y el rate limit: bajo presion de
 memoria, `allkeys-lru` los expulsa y la proteccion se afloja sin aviso. Con
 `noeviction` en cambio el cache de disponibilidad llena la memoria y TODA
 escritura falla. Se separan: el cache de disponibilidad va a `REDIS_CACHE_URL`
-(`allkeys-lru`, sin persistencia, se puede perder) y el resto se queda en
+(`volatile-ttl`, sin persistencia, se puede perder) y el resto se queda en
 `REDIS_URL` (`noeviction`, RDB).
 
 `REDIS_CACHE_URL` es opcional: sin ella el cache comparte el cliente de estado,
