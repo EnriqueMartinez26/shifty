@@ -74,7 +74,8 @@ class _SmtpFalso:
     def __exit__(self, *args: Any) -> None:
         self.quit()
 
-    def starttls(self) -> None:
+    # Firma de smtplib: desde PV-06 se llama con ``context=``.
+    def starttls(self, **_kwargs: Any) -> None:
         return None
 
     def login(self, *args: Any) -> None:

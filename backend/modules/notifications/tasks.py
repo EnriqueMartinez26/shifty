@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import smtplib
+import ssl
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -151,7 +152,9 @@ class SmtpSession:
     def _connect(self) -> smtplib.SMTP:
         smtp = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
         try:
-            smtp.starttls()
+            # PV-06: sin contexto smtplib cifra pero no verifica certificado
+            # ni hostname; cualquiera en el camino leia mails y la clave SMTP.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
         except Exception:
             smtp.close()
