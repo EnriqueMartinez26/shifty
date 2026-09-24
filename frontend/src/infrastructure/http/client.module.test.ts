@@ -159,9 +159,14 @@ describe('api client module wiring', () => {
     }
   })
 
-  it('no reintenta un 409 en un POST, pero sí en métodos idempotentes', async () => {
+  it('no reintenta nunca un POST; sí el 409 de métodos idempotentes', async () => {
     const clientModule = await import('./client')
     const { shouldRetryRequest } = clientModule
+
+    expect(mockAxiosRetry).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ retryCondition: shouldRetryRequest })
+    )
 
     // Un 409 al crear un turno es un conflicto de negocio real (el slot ya no
     // está libre), no algo transitorio: reintentarlo no lo resuelve y puede
@@ -169,7 +174,11 @@ describe('api client module wiring', () => {
     expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'post' } })).toBe(
       false
     )
-    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'post' } })).toBe(true)
+    // Un POST abortado pudo haberse aplicado en el servidor: no se reenvia.
+    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'post' } })).toBe(false)
+    // Sin timeout configurado, ECONNABORTED solo llega por un aborto del
+    // navegador; no es un error transitorio a reintentar.
+    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'get' } })).toBe(false)
     expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'patch' } })).toBe(
       true
     )
