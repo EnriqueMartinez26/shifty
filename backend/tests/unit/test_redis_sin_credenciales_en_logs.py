@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+import structlog
 from redis.exceptions import ConnectionError as RedisConnectionError
 from starlette.requests import Request
 from structlog.testing import capture_logs
@@ -125,6 +126,10 @@ async def test_invalidar_disponibilidad_loguea_el_tipo_y_no_la_url(
         "report_exception",
         lambda exc, **_kw: reportados.append(exc),
     )
+    # Proxy nuevo: otro test parchea ``logger.warning`` sobre el proxy del
+    # modulo y al deshacerlo deja fijado un logger concreto que
+    # ``capture_logs`` ya no intercepta (se vio en la suite completa).
+    monkeypatch.setattr(availability_cache, "logger", structlog.get_logger())
 
     with capture_logs() as eventos:
         await availability_cache.invalidate_availability(
