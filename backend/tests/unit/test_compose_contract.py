@@ -671,3 +671,50 @@ def test_la_vista_fusionada_distingue_la_lista_vacia_del_reset() -> None:
     assert puertos_publicados(con_lista_vacia) == {"backend": ["127.0.0.1:8000:8000"]}
     con_reset = servicios_fusionados(_BASE_CON_PUERTOS, _OVERRIDE_CON_RESET)
     assert puertos_publicados(con_reset) == {}
+
+
+# --- La API escala por replicas de un proceso (F0-04, plan de rendimiento) ----
+#
+# Decision del dueno (2026-09-24): tres replicas de UN proceso de uvicorn, no
+# `--workers 3`. Con varios workers dentro de un contenedor, uno que muere en
+# loop queda escondido detras de un contenedor "sano" (regla 21). Con replicas,
+# cada proceso tiene su healthcheck y su reinicio. `container_name` fija un
+# nombre unico por servicio, asi que compose no puede levantar mas de una.
+
+
+def _dockerfile_cmd() -> list[str]:
+    import json
+
+    dockerfile = COMPOSE.parent / "backend" / "Dockerfile"
+    lineas = [
+        linea
+        for linea in dockerfile.read_text(encoding="utf-8").splitlines()
+        if linea.startswith("CMD ")
+    ]
+    assert len(lineas) == 1, f"el Dockerfile del backend declara {len(lineas)} CMD"
+    cmd = json.loads(lineas[0].removeprefix("CMD "))
+    assert isinstance(cmd, list), "el CMD no esta en forma exec (JSON)"
+    return [str(parte) for parte in cmd]
+
+
+def test_la_api_escala_por_replicas_de_un_proceso() -> None:
+    base = _services()["backend"]
+    assert "container_name" not in base, (
+        "backend fija container_name: compose no puede levantar mas de una replica"
+    )
+    deploy_base = base.get("deploy") or {}
+    assert isinstance(deploy_base, dict)
+    assert deploy_base.get("replicas", 1) == 1, "en desarrollo corre una sola replica"
+
+    deploy_prod = _servicios_de_produccion()["backend"].get("deploy") or {}
+    assert isinstance(deploy_prod, dict)
+    assert deploy_prod.get("replicas") == 3, (
+        f"produccion no corre tres replicas de la API: {deploy_prod!r}"
+    )
+
+    cmd = _dockerfile_cmd()
+    assert cmd[0] == "uvicorn", cmd
+    assert not any(parte.startswith("--workers") for parte in cmd), (
+        f"la API vuelve a multiplicarse por dentro del contenedor: {cmd}"
+    )
+    assert "command" not in base, "backend no puede pisar el CMD de la imagen"

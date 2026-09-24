@@ -120,7 +120,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: shifty_backend
+    # Sin container_name (F0-04): en produccion corren tres replicas de un
+    # proceso (docker-compose.prod.yml) y un nombre fijo impide mas de una.
     # Sin bind mount del codigo (2026-09-24): el contenedor corre lo que trae
     # la imagen. Un cambio en backend/ exige `docker-compose build` de
     # backend, celery_worker y celery_beat juntos (regla 22).

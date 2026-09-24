@@ -86,6 +86,12 @@ services:
       - .env
     environment: *app_environment_prod
     ports: !reset []
+    # F0-04: tres replicas de UN proceso de uvicorn, no `--workers 3`. Un
+    # worker que muere en loop dentro de un contenedor "sano" violaba la
+    # regla 21; con replicas cada proceso tiene su healthcheck y su reinicio.
+    # nginx reparte entre las tres por el DNS interno de compose.
+    deploy:
+      replicas: 3
 
   celery_worker:
     env_file:
