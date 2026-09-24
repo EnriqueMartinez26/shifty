@@ -16,6 +16,7 @@ import { colors2000s } from '../../theme/colors'
 import { SuperAdminAuditTimeline } from '../components/organisms/SuperAdminAuditTimeline'
 import { SuperAdminHealthPanel } from '../components/organisms/SuperAdminHealthPanel'
 import { useAuth } from '../context/AuthContext'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useAssignSuperAdminSubscription,
   useCreateSuperAdminCoupon,
@@ -71,6 +72,7 @@ import { UserModals } from './superadmin/UserModals'
 
 const SuperAdminPage: React.FC = () => {
   const { user } = useAuth()
+  const { confirm, confirmDialog } = useConfirm()
 
   const [search, setSearch] = useState('')
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('active')
@@ -487,8 +489,8 @@ const SuperAdminPage: React.FC = () => {
   }
 
   // Confirmar -> mutar -> avisar: el cuerpo que repetian los cinco toggles.
-  // `window.confirm` queda tal cual; cambiarlo por un modal es decision de
-  // producto. Activar avisa en verde, desactivar o revocar en naranja.
+  // La pregunta va por el ConfirmDialog propio (useConfirm). Activar avisa en
+  // verde, desactivar o revocar en naranja.
   const confirmAndToggle = async ({
     nextState,
     question,
@@ -502,7 +504,7 @@ const SuperAdminPage: React.FC = () => {
     doneText: string
     failText: string
   }) => {
-    if (!window.confirm(question)) return
+    if (!(await confirm(question))) return
 
     try {
       await run()
@@ -611,6 +613,7 @@ const SuperAdminPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {feedback ? (
         <div
           className="flex items-start gap-3 rounded-[1.5rem] px-5 py-4 text-sm font-bold"

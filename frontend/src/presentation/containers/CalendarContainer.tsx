@@ -57,6 +57,7 @@ import {
   useMarkAbsentAppointment,
   useReleaseAppointment
 } from '../hooks/useCalendarAgenda'
+import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
 import {
@@ -181,6 +182,7 @@ const statusStyle = (status: string) => {
 }
 
 export const CalendarContainer: React.FC = () => {
+  const { confirm, confirmDialog } = useConfirm()
   const { user } = useAuth()
   const canReleaseAppointments = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
   // Confirmar, completar y ausente: admin o personal (mismo criterio que la API).
@@ -514,7 +516,7 @@ export const CalendarContainer: React.FC = () => {
 
   const handleReleaseAppointment = async (event: UnifiedCalendarEvent) => {
     if (event.type === 'block') return
-    const confirmed = window.confirm(
+    const confirmed = await confirm(
       `¿Liberar el turno de ${event.title}? El enlace de pago pendiente también será vencido.`
     )
     if (!confirmed) return
@@ -550,7 +552,7 @@ export const CalendarContainer: React.FC = () => {
       absent: ['¿Marcar como ausente a', 'Turno marcado como ausente', 'No se pudo marcar el turno']
     }
     const [pregunta, exito, fallo] = textos[action]
-    if (!window.confirm(`${pregunta} ${event.title}?`)) return
+    if (!(await confirm(`${pregunta} ${event.title}?`))) return
     const mutation =
       action === 'confirm'
         ? confirmAppointment
@@ -921,6 +923,7 @@ export const CalendarContainer: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
+      {confirmDialog}
       <div
         className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
         style={panelStyle}

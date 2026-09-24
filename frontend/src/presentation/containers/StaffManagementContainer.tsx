@@ -7,6 +7,7 @@ import { Staff } from '@domain/entities/Staff'
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { StaffCard } from '../components/molecules/StaffCard'
 import { StaffFormModal } from '../components/organisms/StaffFormModal'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedStaff,
   useDeleteManagedStaff,
@@ -15,6 +16,7 @@ import {
 } from '../hooks/useManagedStaff'
 
 export const StaffManagementContainer: React.FC = () => {
+  const { confirm, confirmDialog } = useConfirm()
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -30,8 +32,15 @@ export const StaffManagementContainer: React.FC = () => {
       s.displayName.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
+  const handleDelete = async (id: string) => {
+    if (await confirm('¿Estás seguro de eliminar a este profesional?')) {
+      deleteMutation.mutate(id)
+    }
+  }
+
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
+      {confirmDialog}
       {/* Unified Skeuomorphic Header Card matching Reports.tsx */}
       <div
         className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-lg"
@@ -142,11 +151,7 @@ export const StaffManagementContainer: React.FC = () => {
                 setEditingStaff(s)
                 setIsModalOpen(true)
               }}
-              onDelete={(id) => {
-                if (window.confirm('¿Estás seguro de eliminar a este profesional?')) {
-                  deleteMutation.mutate(id)
-                }
-              }}
+              onDelete={(id) => void handleDelete(id)}
             />
           ))}
         </div>

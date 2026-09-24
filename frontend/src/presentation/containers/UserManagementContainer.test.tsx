@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import { User } from '@domain/entities/User'
 
@@ -6,6 +6,7 @@ import { UserManagementContainer } from './UserManagementContainer'
 
 const mockUpdate = jest.fn()
 const mockCreate = jest.fn()
+const mockDelete = jest.fn()
 
 const usuario = User.fromPrimitives({
   id: 'usr-1',
@@ -22,11 +23,12 @@ jest.mock('../hooks/useManagedDomainUsers', () => ({
   useManagedDomainUsers: () => ({ data: [usuario], isLoading: false }),
   useCreateManagedDomainUser: () => ({ mutateAsync: mockCreate }),
   useUpdateManagedDomainUser: () => ({ mutateAsync: mockUpdate }),
-  useDeleteManagedDomainUser: () => ({ mutate: jest.fn() })
+  useDeleteManagedDomainUser: () => ({ mutate: mockDelete })
 }))
 
 describe('UserManagementContainer', () => {
   beforeEach(() => {
+    mockDelete.mockReset()
     mockUpdate.mockReset()
     mockUpdate.mockResolvedValue(usuario)
   })
@@ -87,5 +89,23 @@ describe('UserManagementContainer', () => {
       phone: '1155550102',
       role: 'staff'
     })
+  })
+
+  it('eliminar pregunta con el dialogo propio y solo borra al confirmar (D1)', async () => {
+    render(<UserManagementContainer />)
+
+    fireEvent.click(screen.getByRole('button', { name: /eliminar/i }))
+    fireEvent.click(
+      within(
+        screen.getByRole('alertdialog', { name: '¿Estás seguro de eliminar este usuario?' })
+      ).getByRole('button', { name: 'Cancelar' })
+    )
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(mockDelete).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /eliminar/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith('usr-1'))
   })
 })

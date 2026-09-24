@@ -7,6 +7,7 @@ import { Service } from '@domain/entities/Service'
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { ServiceCard } from '../components/molecules/ServiceCard'
 import { ServiceFormModal } from '../components/organisms/ServiceFormModal'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedService,
   useDeleteManagedService,
@@ -16,6 +17,7 @@ import {
 import type { ServiceFormValues } from '../types/forms'
 
 export const ServiceManagementContainer: React.FC = () => {
+  const { confirm, confirmDialog } = useConfirm()
   const [searchTerm, setSearchTerm] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
@@ -29,9 +31,9 @@ export const ServiceManagementContainer: React.FC = () => {
     service.name.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (
-      window.confirm('¿Estás seguro de eliminar este servicio? Esto no afectará turnos ya creados.')
+      await confirm('¿Estás seguro de eliminar este servicio? Esto no afectará turnos ya creados.')
     ) {
       deleteMutation.mutate(id)
     }
@@ -61,6 +63,7 @@ export const ServiceManagementContainer: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {/* Unified Skeuomorphic Header Card matching Reports.tsx */}
       <div
         className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-lg"
@@ -128,7 +131,7 @@ export const ServiceManagementContainer: React.FC = () => {
               key={service.id}
               service={service}
               onEdit={handleEdit}
-              onDelete={handleDelete}
+              onDelete={(id) => void handleDelete(id)}
             />
           ))}
         </div>

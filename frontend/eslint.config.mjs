@@ -22,7 +22,6 @@ const commonLanguageOptions = {
     }
   },
   globals: {
-    confirm: 'readonly',
     console: 'readonly',
     crypto: 'readonly',
     document: 'readonly',

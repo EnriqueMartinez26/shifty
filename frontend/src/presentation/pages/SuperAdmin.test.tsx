@@ -384,24 +384,21 @@ describe('SuperAdminPage', () => {
   // F11b-10: los cinco toggles comparten confirmar -> mutar -> avisar. Antes
   // ningun test ejercia ni uno, ni la guarda de auto-revocacion.
   describe('toggles con confirmacion', () => {
-    let confirmSpy: jest.SpyInstance<boolean, [message?: string]>
-
-    beforeEach(() => {
-      confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true)
-    })
-
-    afterEach(() => {
-      confirmSpy.mockRestore()
-    })
+    // La pregunta sale en el ConfirmDialog propio (D1), no en window.confirm.
+    const answerDialog = (question: string, button: 'Confirmar' | 'Cancelar') => {
+      const dialog = screen.getByRole('alertdialog', { name: question })
+      fireEvent.click(within(dialog).getByRole('button', { name: button }))
+    }
 
     it('desactiva una tienda despues de confirmar y avisa en tono de advertencia', async () => {
       render(<SuperAdminPage />)
 
       fireEvent.click(sectionOf('Operacion por tenant').getByRole('button', { name: 'Desactivar' }))
-
-      expect(confirmSpy).toHaveBeenCalledWith(
-        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones del tenant.'
+      answerDialog(
+        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones del tenant.',
+        'Confirmar'
       )
+
       await waitFor(() => {
         expect(mockMutations.updateStore).toHaveBeenCalledWith({
           storePublicId: 'store-1',
@@ -411,13 +408,13 @@ describe('SuperAdminPage', () => {
       expect(await screen.findByText('Tienda desactivada: Barber Uno')).toBeInTheDocument()
     })
 
-    it('no toca nada si se cancela la confirmacion', () => {
-      confirmSpy.mockReturnValue(false)
+    it('no toca nada si se cancela la confirmacion', async () => {
       render(<SuperAdminPage />)
 
       fireEvent.click(sectionOf('Catalogo global').getByRole('button', { name: 'Desactivar' }))
+      answerDialog('Desactivar plan Plan Oro?', 'Cancelar')
 
-      expect(confirmSpy).toHaveBeenCalledWith('Desactivar plan Plan Oro?')
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
       expect(mockMutations.updatePlan).not.toHaveBeenCalled()
     })
 
@@ -426,6 +423,7 @@ describe('SuperAdminPage', () => {
       render(<SuperAdminPage />)
 
       fireEvent.click(sectionOf('Maestro editable').getByRole('button', { name: 'Desactivar' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
       expect(await screen.findByText('No se pudo actualizar el cupon')).toBeInTheDocument()
     })
@@ -436,6 +434,7 @@ describe('SuperAdminPage', () => {
       fireEvent.click(
         first(sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Desactivar' }))
       )
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
       await waitFor(() => {
         expect(mockMutations.updateUser).toHaveBeenCalledWith({
@@ -453,6 +452,7 @@ describe('SuperAdminPage', () => {
           sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Promover SuperAdmin' })
         )
       )
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
       await waitFor(() => {
         expect(mockMutations.setGlobalAdmin).toHaveBeenCalledWith({
@@ -476,7 +476,7 @@ describe('SuperAdminPage', () => {
           )
         )
 
-        expect(confirmSpy).not.toHaveBeenCalled()
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
         expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
         expect(
           screen.getByText('No podés revocarte tu propio permiso global desde esta sesion.')
