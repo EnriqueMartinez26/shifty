@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import re
 import secrets
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
@@ -165,14 +166,6 @@ def _notice_body(store_name: str) -> str:
 DispatchScheduler = Callable[[str, str, str], Awaitable[None] | None]
 
 
-async def _dispatch(
-    schedule_dispatch: DispatchScheduler, to: str, subject: str, body: str
-) -> None:
-    pending = schedule_dispatch(to, subject, body)
-    if inspect.isawaitable(pending):
-        await pending
-
-
 async def _schedule_otp_mail(
     schedule_dispatch: DispatchScheduler,
     *,
@@ -186,14 +179,25 @@ async def _schedule_otp_mail(
 
     Los dos usan el mismo asunto y estan acotados por
     ``OTP_MAX_REQUESTS_PER_HOUR``.
+
+    Revision de F1-03 (2026-09-24): los despachos se INICIAN en orden fijo
+    (codigo y despues aviso) y se esperan juntos. En serie, con el broker
+    colgado, el camino de dos mails costaba el doble del tope de encolado que
+    el de uno, y el tiempo volvia a decir si el telefono es cliente.
     """
     asunto = _otp_subject(store_name)
+    envios: list[tuple[str, str]] = []
     if destination:
-        await _dispatch(
-            schedule_dispatch, destination, asunto, _code_body(code, store_name)
-        )
+        envios.append((destination, _code_body(code, store_name)))
     if notice_to:
-        await _dispatch(schedule_dispatch, notice_to, asunto, _notice_body(store_name))
+        envios.append((notice_to, _notice_body(store_name)))
+    pendientes = [
+        pending
+        for pending in (schedule_dispatch(to, asunto, body) for to, body in envios)
+        if inspect.isawaitable(pending)
+    ]
+    if pendientes:
+        await asyncio.gather(*pendientes)
 
 
 def _debug_code(code: str, *, decoy: bool) -> str:
