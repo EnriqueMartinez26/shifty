@@ -152,6 +152,9 @@ async def test_middleware_con_redis_caido_no_dice_que_es_un_limite_de_tasa(
     trataba una caida de Redis como un limite de tasa y reintentaba sin backoff
     contra un backend que justamente no puede limitarlo. El mismo evento por la
     otra capa (enforce_rate_limit) ya salia como RATE_LIMIT_UNAVAILABLE.
+
+    Desde F1-09 (2026-09-24) la lectura publica falla abierta: el caso se
+    prueba sobre una escritura publica, que sigue cerrada.
     """
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
     monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", True)
@@ -175,8 +178,8 @@ async def test_middleware_con_redis_caido_no_dice_que_es_un_limite_de_tasa(
     await middleware(
         {
             "type": "http",
-            "method": "GET",
-            "path": "/public/availability",
+            "method": "POST",
+            "path": "/public/appointments",
             "headers": [],
             "client": ("127.0.0.1", 12345),
         },
