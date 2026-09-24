@@ -909,8 +909,9 @@ async def process_due_appointment_reminders(
     async with AsyncSessionFactory() as db:
         # Job global cross-tenant: sin request/tenant necesita el bypass RLS para
         # ver y reclamar los turnos de TODAS las tiendas (shifty_app es
-        # NOBYPASSRLS). El contexto se mantiene durante toda la sesion porque
-        # los reclamos commitean y TenantSession lo reaplica.
+        # NOBYPASSRLS). Los reclamos commitean PLANO (sin reabrir transaccion,
+        # para no quedar "idle in transaction" durante el SMTP, F1-22) y cada
+        # sentencia del repositorio reaplica este contexto al entrar.
         set_tenant_context(None, True)
         try:
             await _apply_tenant_context(db)

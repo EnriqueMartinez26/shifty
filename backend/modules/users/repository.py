@@ -33,11 +33,12 @@ class UserRepository:
         password = payload.pop("password")
         first_name = payload.get("first_name") or ""
         last_name = payload.get("last_name") or ""
-        # La identidad del login es lower(email): sin normalizar, "X@a.com" y
-        # "x@a.com" convivian como dos filas y el login de ambas pasaba a 500
-        # (MultipleResultsFound). Con el email en minusculas el duplicado choca
-        # con el indice unico y sale como 409 neutro; el indice funcional
-        # uq_users_email_lower frena a cualquier camino que se olvide de esto.
+        # El login busca por igualdad sobre el email normalizado (F1-12): sin
+        # normalizar, "X@a.com" y "x@a.com" convivian como dos filas y el login
+        # de ambas pasaba a 500 (MultipleResultsFound). Con el email en
+        # minusculas el duplicado choca con el indice unico y sale como 409
+        # neutro; ck_users_email_lower rechaza en la base a cualquier camino
+        # que se olvide de normalizar.
         payload["email"] = normalize_email(str(payload["email"]))
 
         new_user = User(
