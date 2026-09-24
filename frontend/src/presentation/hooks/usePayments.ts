@@ -106,21 +106,49 @@ export const useUpdatePromotion = () => {
   })
 }
 
-export const useManualConfirmPayment = () =>
-  useMutation<PaymentRecord, Error, { appointmentId: string; amount?: number; notes?: string }>({
-    mutationFn: ({ appointmentId, amount, notes }) =>
-      paymentsService.manualConfirm(appointmentId, amount, notes)
-  })
+// Confirmar a mano o devolver cambia el estado del cobro, lo sincroniza al
+// turno y publica un evento en el outbox (`payments/application.py`): todo lo
+// que se lee de esas tres cosas queda viejo.
+const PAYMENT_STATE_QUERIES = [
+  ['payments-reconciliation-summary'],
+  ['payments-appointments'],
+  ['payments-outbox-stats'],
+  ['calendar-agenda']
+] as const
 
-export const useRefundPayment = () =>
-  useMutation<
+export const useManualConfirmPayment = () => {
+  const queryClient = useQueryClient()
+  return useMutation<
+    PaymentRecord,
+    Error,
+    { appointmentId: string; amount?: number; notes?: string }
+  >({
+    mutationFn: ({ appointmentId, amount, notes }) =>
+      paymentsService.manualConfirm(appointmentId, amount, notes),
+    onSuccess: () => {
+      PAYMENT_STATE_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
+    }
+  })
+}
+
+export const useRefundPayment = () => {
+  const queryClient = useQueryClient()
+  return useMutation<
     PaymentRecord,
     Error,
     { paymentId: string; amount?: number; reason?: string; manual?: boolean }
   >({
     mutationFn: ({ paymentId, amount, reason, manual }) =>
-      paymentsService.refund(paymentId, amount, reason, manual)
+      paymentsService.refund(paymentId, amount, reason, manual),
+    onSuccess: () => {
+      PAYMENT_STATE_QUERIES.forEach((queryKey) => {
+        void queryClient.invalidateQueries({ queryKey: [...queryKey] })
+      })
+    }
   })
+}
 
 export const useReconciliationSummary = (enabled = true) =>
   useQuery<ReconciliationSummary>({

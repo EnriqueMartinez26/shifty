@@ -29,6 +29,7 @@ import type { BusinessType } from '@shared/types/business'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
 import {
@@ -1211,31 +1212,16 @@ const SettingsPage: React.FC = () => {
                   Enviar al confirmar reserva.
                 </p>
               </div>
-              <button
-                onClick={() =>
+              <ToggleSwitch
+                label="Email de Confirmación"
+                checked={formData.send_email_confirmation}
+                onToggle={() =>
                   setFormData({
                     ...formData,
                     send_email_confirmation: !formData.send_email_confirmation
                   })
                 }
-                className="w-14 h-7 rounded-full relative transition-all"
-                style={{
-                  background: formData.send_email_confirmation
-                    ? colors2000s.orange.light
-                    : colors2000s.bg.disabled,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  border: `1px solid ${colors2000s.border.default}`
-                }}
-              >
-                <div
-                  className="absolute top-1 w-5 h-5 rounded-full transition-all shadow-md"
-                  style={{
-                    background: 'white',
-                    left: formData.send_email_confirmation ? '32px' : '4px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                  }}
-                />
-              </button>
+              />
             </div>
 
             <div
@@ -1260,28 +1246,13 @@ const SettingsPage: React.FC = () => {
                   Aviso automático un día antes.
                 </p>
               </div>
-              <button
-                onClick={() =>
+              <ToggleSwitch
+                label="Recordatorios 24hs"
+                checked={formData.send_email_reminders}
+                onToggle={() =>
                   setFormData({ ...formData, send_email_reminders: !formData.send_email_reminders })
                 }
-                className="w-14 h-7 rounded-full relative transition-all"
-                style={{
-                  background: formData.send_email_reminders
-                    ? colors2000s.orange.light
-                    : colors2000s.bg.disabled,
-                  boxShadow: colors2000s.shadows.insetDark,
-                  border: `1px solid ${colors2000s.border.default}`
-                }}
-              >
-                <div
-                  className="absolute top-1 w-5 h-5 rounded-full transition-all shadow-md"
-                  style={{
-                    background: 'white',
-                    left: formData.send_email_reminders ? '32px' : '4px',
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                  }}
-                />
-              </button>
+              />
             </div>
           </div>
         )}
@@ -1320,9 +1291,10 @@ const SettingsPage: React.FC = () => {
                       {feature.description}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() =>
+                  <ToggleSwitch
+                    label={feature.title}
+                    checked={enabled}
+                    onToggle={() =>
                       setFormData({
                         ...formData,
                         feature_flags: {
@@ -1331,22 +1303,7 @@ const SettingsPage: React.FC = () => {
                         }
                       })
                     }
-                    className="w-14 h-7 rounded-full relative transition-all flex-shrink-0"
-                    style={{
-                      background: enabled ? colors2000s.orange.light : colors2000s.bg.disabled,
-                      boxShadow: colors2000s.shadows.insetDark,
-                      border: `1px solid ${colors2000s.border.default}`
-                    }}
-                  >
-                    <div
-                      className="absolute top-1 w-5 h-5 rounded-full transition-all shadow-md"
-                      style={{
-                        background: 'white',
-                        left: enabled ? '32px' : '4px',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                      }}
-                    />
-                  </button>
+                  />
                 </div>
               )
             })}

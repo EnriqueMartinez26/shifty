@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react'
 
-import { Loader2, TriangleAlert, WalletCards } from 'lucide-react'
+import { WalletCards } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { MessageBanner } from '../components/molecules/MessageBanner'
+import { PageHeader } from '../components/molecules/PageHeader'
 import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from '../hooks/useLedger'
 import { useManagedUsers } from '../hooks/useManagedUsers'
 import {
@@ -80,41 +82,14 @@ const LedgerPage: React.FC = () => {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <div
-        className="p-6 rounded-3xl flex flex-wrap items-start justify-between gap-4"
-        style={cardStyle}
-      >
-        <div>
-          <h2
-            className="text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
-          >
-            Cuentas pendientes
-          </h2>
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Mira cuanto debe cada cliente, que pago y que quedo pendiente.
-          </p>
-        </div>
-        {(usersQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading) && (
-          <div
-            className="flex items-center gap-2 text-xs font-black uppercase tracking-widest"
-            style={{ color: colors2000s.text.secondary }}
-          >
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Cargando cuentas pendientes...
-          </div>
-        )}
-      </div>
+      <PageHeader
+        title="Cuentas pendientes"
+        description="Mira cuanto debe cada cliente, que pago y que quedo pendiente."
+        isLoading={usersQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading}
+        loadingText="Cargando cuentas pendientes..."
+      />
 
-      {message && (
-        <div
-          className="p-4 rounded-2xl text-sm font-bold flex items-center gap-3"
-          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
-        >
-          <TriangleAlert className="w-5 h-5 flex-shrink-0" />
-          <span>{message}</span>
-        </div>
-      )}
+      <MessageBanner message={message} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <div className="p-5 rounded-2xl" style={cardStyle}>

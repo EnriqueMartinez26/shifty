@@ -1,6 +1,7 @@
 import React from 'react'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { create2000sInnerCardStyle, create2000sInputStyle } from '../lib/surfaceStyles'
 
 /**
@@ -109,24 +110,7 @@ export const ToggleRow: React.FC<{
         {description}
       </p>
     </div>
-    <button
-      type="button"
-      onClick={onToggle}
-      className="relative h-7 w-14 rounded-full"
-      style={{
-        background: checked ? colors2000s.orange.light : colors2000s.bg.disabled,
-        boxShadow: colors2000s.shadows.insetDark
-      }}
-    >
-      <span
-        className="absolute top-1 h-5 w-5 rounded-full transition-all"
-        style={{
-          left: checked ? '32px' : '4px',
-          background: 'white',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-        }}
-      />
-    </button>
+    <ToggleSwitch checked={checked} onToggle={onToggle} label={label} />
   </div>
 )
 

@@ -2,7 +2,9 @@ import { z } from 'zod'
 
 export const createUserSchema = z.object({
   email: z.string().email('Email inválido'),
-  password: z.string().min(6, 'La contraseña debe tener al menos 6 caracteres'),
+  // Mismo piso que `UserCreate` en el backend (min_length=12). La fuerza
+  // (letra, numero, denylist) la decide el backend; aca solo el largo.
+  password: z.string().min(12, 'La contraseña debe tener al menos 12 caracteres'),
   first_name: z.string().min(2, 'Nombre muy corto').optional().or(z.literal('')),
   last_name: z.string().min(2, 'Apellido muy corto').optional().or(z.literal('')),
   phone: z.string().optional().or(z.literal('')),

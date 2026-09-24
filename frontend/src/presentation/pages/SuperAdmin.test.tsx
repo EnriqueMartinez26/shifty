@@ -182,8 +182,10 @@ jest.mock('../hooks/useSuperAdmin', () => ({
   useRedeemSuperAdminCoupon: () => ({ mutateAsync: mockMutations.redeemCoupon, isPending: false })
 }))
 
+const mockAuthUser = { public_id: 'root-user' }
+
 jest.mock('../context/AuthContext', () => ({
-  useAuth: () => ({ user: { public_id: 'root-user' } })
+  useAuth: () => ({ user: mockAuthUser })
 }))
 
 jest.mock('../components/organisms/SuperAdminHealthPanel', () => ({
@@ -377,5 +379,112 @@ describe('SuperAdminPage', () => {
       })
     })
     expect(await screen.findByText('Cupon WELCOME10 canjeado en Barber Uno')).toBeInTheDocument()
+  })
+
+  // F11b-10: los cinco toggles comparten confirmar -> mutar -> avisar. Antes
+  // ningun test ejercia ni uno, ni la guarda de auto-revocacion.
+  describe('toggles con confirmacion', () => {
+    let confirmSpy: jest.SpyInstance<boolean, [message?: string]>
+
+    beforeEach(() => {
+      confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true)
+    })
+
+    afterEach(() => {
+      confirmSpy.mockRestore()
+    })
+
+    it('desactiva una tienda despues de confirmar y avisa en tono de advertencia', async () => {
+      render(<SuperAdminPage />)
+
+      fireEvent.click(sectionOf('Operacion por tenant').getByRole('button', { name: 'Desactivar' }))
+
+      expect(confirmSpy).toHaveBeenCalledWith(
+        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones del tenant.'
+      )
+      await waitFor(() => {
+        expect(mockMutations.updateStore).toHaveBeenCalledWith({
+          storePublicId: 'store-1',
+          payload: { is_active: false }
+        })
+      })
+      expect(await screen.findByText('Tienda desactivada: Barber Uno')).toBeInTheDocument()
+    })
+
+    it('no toca nada si se cancela la confirmacion', () => {
+      confirmSpy.mockReturnValue(false)
+      render(<SuperAdminPage />)
+
+      fireEvent.click(sectionOf('Catalogo global').getByRole('button', { name: 'Desactivar' }))
+
+      expect(confirmSpy).toHaveBeenCalledWith('Desactivar plan Plan Oro?')
+      expect(mockMutations.updatePlan).not.toHaveBeenCalled()
+    })
+
+    it('si la mutacion falla muestra el mensaje de respaldo del toggle', async () => {
+      mockMutations.updateCoupon.mockRejectedValue({})
+      render(<SuperAdminPage />)
+
+      fireEvent.click(sectionOf('Maestro editable').getByRole('button', { name: 'Desactivar' }))
+
+      expect(await screen.findByText('No se pudo actualizar el cupon')).toBeInTheDocument()
+    })
+
+    it('desactiva un usuario del tenant', async () => {
+      render(<SuperAdminPage />)
+
+      fireEvent.click(
+        first(sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Desactivar' }))
+      )
+
+      await waitFor(() => {
+        expect(mockMutations.updateUser).toHaveBeenCalledWith({
+          userPublicId: 'user-admin-1',
+          payload: { is_active: false }
+        })
+      })
+    })
+
+    it('promueve a Super Admin global despues de confirmar', async () => {
+      render(<SuperAdminPage />)
+
+      fireEvent.click(
+        first(
+          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Promover SuperAdmin' })
+        )
+      )
+
+      await waitFor(() => {
+        expect(mockMutations.setGlobalAdmin).toHaveBeenCalledWith({
+          userPublicId: 'user-admin-1',
+          isGlobalAdmin: true
+        })
+      })
+      expect(await screen.findByText('root@barberuno.com ahora es Super Admin')).toBeInTheDocument()
+    })
+
+    it('no deja revocarse el propio permiso global y ni siquiera pregunta', () => {
+      // Guarda espejo de la regla 14; la garantia real vive en el backend.
+      mockAuthUser.public_id = 'user-admin-1'
+      mockAdminUser.is_global_admin = true
+      try {
+        render(<SuperAdminPage />)
+
+        fireEvent.click(
+          first(
+            sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Revocar SuperAdmin' })
+          )
+        )
+
+        expect(confirmSpy).not.toHaveBeenCalled()
+        expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
+        expect(
+          screen.getByText('No podés revocarte tu propio permiso global desde esta sesion.')
+        ).toBeInTheDocument()
+      } finally {
+        mockAuthUser.public_id = 'root-user'
+        mockAdminUser.is_global_admin = false
+      }
+    })
   })
 })

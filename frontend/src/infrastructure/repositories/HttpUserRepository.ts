@@ -3,7 +3,7 @@ import type { AxiosInstance } from 'axios'
 import { BaseRepository } from './BaseRepository'
 import { UserResponseDTO } from '../../application/dtos/UserDTO'
 import { UserMapper } from '../../application/mappers/UserMapper'
-import { User } from '../../domain/entities/User'
+import { User, type UserWriteInput } from '../../domain/entities/User'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
@@ -14,7 +14,7 @@ import { UserRole } from '../../domain/value-objects/UserRole'
  * Extiende de BaseRepository para beneficiarse del control de errores unificado.
  */
 export class HttpUserRepository
-  extends BaseRepository<User, User, Partial<User>>
+  extends BaseRepository<User, User, UserWriteInput>
   implements IUserRepository
 {
   private client: AxiosInstance
@@ -87,25 +87,18 @@ export class HttpUserRepository
     return UserMapper.toDomain(data)
   }
 
-  protected async updateImpl(id: string, data: Partial<User>): Promise<User> {
-    // El formulario envia snake_case (first_name, password), pero antes esto
-    // solo leia camelCase (data.firstName) y NO manejaba password: editar el
-    // nombre o la clave de un usuario se descartaba en silencio. Se aceptan
-    // ambas convenciones y se incluye password (solo si no viene vacio).
-    const raw = data as unknown as Record<string, unknown>
+  protected async updateImpl(id: string, data: UserWriteInput): Promise<User> {
+    // Antes recibia `Partial<User>` y el formulario le mandaba snake_case por
+    // un `as unknown as`, asi que aceptaba las dos convenciones leyendo un
+    // Record crudo. Ahora el contenedor mapea a `UserWriteInput` y el
+    // compilador verifica el borde. Password solo si no viene vacio.
     const updateData: Record<string, unknown> = {}
-    const firstName = raw.firstName ?? raw.first_name
-    if (firstName !== undefined) updateData.first_name = firstName
-    const lastName = raw.lastName ?? raw.last_name
-    if (lastName !== undefined) updateData.last_name = lastName
-    if (raw.phone !== undefined) updateData.phone = raw.phone
-    if (raw.role !== undefined) updateData.role = raw.role
-    const isActive = raw.isActive ?? raw.is_active
-    if (isActive !== undefined) updateData.is_active = isActive
-    const password = raw.password
-    if (typeof password === 'string' && password.length > 0) {
-      updateData.password = password
-    }
+    if (data.firstName !== undefined) updateData.first_name = data.firstName
+    if (data.lastName !== undefined) updateData.last_name = data.lastName
+    if (data.phone !== undefined) updateData.phone = data.phone
+    if (data.role !== undefined) updateData.role = data.role
+    if (data.isActive !== undefined) updateData.is_active = data.isActive
+    if (data.password) updateData.password = data.password
 
     const { data: responseData } = await this.client.patch<UserResponseDTO>(
       `/users/${id}`,
