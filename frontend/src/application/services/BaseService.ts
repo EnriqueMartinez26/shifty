@@ -64,25 +64,19 @@ export abstract class BaseService<T> {
   }
 
   /**
-   * Validates target data against a Zod schema. If invalid, throws a validation error that is intercepted by handleError.
+   * Validates target data against a Zod schema and returns the parsed value, so callers
+   * parse exactly once (F9-09). If invalid, the error is translated by handleError.
    *
    * @param data The payload to validate.
    * @param schema The zod schema.
-   * @throws {z.ZodError} If data doesn't match the schema rules.
+   * @returns The value parsed by the schema.
+   * @throws A sanitized validation Error if data doesn't match the schema rules.
    */
-  protected validate(data: unknown, schema?: ZodTypeAny): void {
-    if (!schema) {
-      return
-    }
-
-    if (typeof schema.parse === 'function') {
-      try {
-        schema.parse(data)
-      } catch (error) {
-        this.handleError(error)
-      }
-    } else {
-      this.log('WARNING', 'Validation schema is not a valid Zod schema.')
+  protected validate<S extends ZodTypeAny>(data: unknown, schema: S): z.output<S> {
+    try {
+      return schema.parse(data) as z.output<S>
+    } catch (error) {
+      this.handleError(error)
     }
   }
 

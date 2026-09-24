@@ -12,6 +12,7 @@ import { NotFoundError } from '@shared/errors'
 import { StaffService } from './StaffService'
 import { Staff } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
+import { createStaffSchema } from '../validators/staff.validators'
 
 describe('StaffService', () => {
   let mockRepository: jest.Mocked<IStaffRepository>
@@ -73,6 +74,24 @@ describe('StaffService', () => {
 
       expect(result).toBe(createdStaff)
       expect(mockRepository.create).toHaveBeenCalledWith(expect.any(Staff))
+    })
+
+    it('valida el formulario una sola vez al crear y al editar (F9-09)', async () => {
+      const parseSpy = jest.spyOn(createStaffSchema, 'parse')
+      mockRepository.create.mockImplementation(async (staff) => staff)
+      const recurso = { kind: 'resource' as const, display_name: 'Cancha 1', service_ids: ['s1'] }
+
+      try {
+        const creado = await service.createStaff(recurso)
+        expect(parseSpy).toHaveBeenCalledTimes(1)
+
+        mockRepository.update.mockResolvedValue(creado)
+
+        await service.updateStaff('cancha-1', recurso)
+        expect(parseSpy).toHaveBeenCalledTimes(2)
+      } finally {
+        parseSpy.mockRestore()
+      }
     })
 
     it('should throw validation error if email is invalid', async () => {

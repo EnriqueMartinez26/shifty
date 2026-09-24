@@ -43,8 +43,7 @@ export class StaffService extends BaseService<Staff> {
    */
   async createStaff(data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
-      this.validate(data, createStaffSchema)
-      const validated = createStaffSchema.parse(data)
+      const validated = this.validate(data, createStaffSchema)
 
       // El id lo asigna el backend: se arma con la fabrica de entidad nueva,
       // igual que ServiceService, en vez de inventar un public_id aca.
@@ -71,8 +70,7 @@ export class StaffService extends BaseService<Staff> {
    */
   async updateStaff(id: string, data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
-      this.validate(data, createStaffSchema)
-      const validated = createStaffSchema.parse(data)
+      const validated = this.validate(data, createStaffSchema)
 
       // Un recurso no tiene nombre, apellido ni email: mandarlos vacios choca
       // con el min_length de StaffUpdate. El tipo no cambia al editar (el

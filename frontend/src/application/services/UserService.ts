@@ -43,8 +43,7 @@ export class UserService extends BaseService<User> {
         last_name: input.lastName
       }
 
-      this.validate(validatorInput, createUserSchema)
-      const validated = createUserSchema.parse(validatorInput)
+      const validated = this.validate(validatorInput, createUserSchema)
 
       return await this.createUserUseCase.execute({
         ...validated,

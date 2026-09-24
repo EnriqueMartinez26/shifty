@@ -39,6 +39,10 @@ class TestService extends BaseService<unknown> {
     }, 'runValidationOperation')
   }
 
+  async runParsingOperation<S extends z.ZodTypeAny>(data: unknown, schema: S) {
+    return await this.execute(async () => this.validate(data, schema), 'runParsingOperation')
+  }
+
   public triggerLog(level: string, message: string, data?: unknown): void {
     this.log(level, message, data)
   }
@@ -101,6 +105,14 @@ describe('BaseService', () => {
     it('should pass validation if data conforms to schema', async () => {
       const validData = { name: 'Alice', age: 30 }
       await expect(service.runValidationOperation(validData, testSchema)).resolves.not.toThrow()
+    })
+
+    it('devuelve el valor parseado para que el llamador no parsee dos veces (F9-09)', async () => {
+      const trimmed = z.object({ name: z.string().trim() })
+
+      await expect(service.runParsingOperation({ name: '  Ana  ' }, trimmed)).resolves.toEqual({
+        name: 'Ana'
+      })
     })
 
     it('should throw Error and log ERROR level on validation failures', async () => {
