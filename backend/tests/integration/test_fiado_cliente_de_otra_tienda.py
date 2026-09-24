@@ -78,6 +78,36 @@ async def test_no_se_carga_fiado_a_un_cliente_de_otra_tienda(
 
 
 @pytest.mark.asyncio
+async def test_el_historial_de_un_cliente_de_otra_tienda_es_404(
+    client: AsyncClient,
+) -> None:
+    """2026-09-24, SEG-01: ``GET /ledger/customers/{client_id}`` con un cliente
+    de OTRA tienda respondia 200 con saldo 0 en vez de 404. No filtraba datos
+    (los movimientos se acotan por store_id), pero no validaba al cliente como
+    si lo hace el alta desde B2-11."""
+    _tienda_a, token_a = await register_and_login(
+        client, slug="fiado-ha", email="fiado-ha@test.com"
+    )
+    tienda_b, token_b = await register_and_login(
+        client, slug="fiado-hb", email="fiado-hb@test.com"
+    )
+    await _habilitar_fiado(client, token_a)
+    cliente_de_b = await _client_id_de_una_reserva(client, token_b, tienda_b)
+
+    ajeno = await client.get(
+        f"/ledger/customers/{cliente_de_b}", headers=auth_headers(token_a)
+    )
+    assert ajeno.status_code == 404, ajeno.text
+    assert ajeno.json()["error_code"] == "RESOURCE_NOT_FOUND", ajeno.text
+
+    inexistente = await client.get(
+        "/ledger/customers/01J0000000000000000000NADA",
+        headers=auth_headers(token_a),
+    )
+    assert inexistente.status_code == 404, inexistente.text
+
+
+@pytest.mark.asyncio
 async def test_el_resumen_no_resuelve_nombres_de_otra_tienda(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
