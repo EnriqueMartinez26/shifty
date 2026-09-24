@@ -38,6 +38,7 @@ CADENCIA = {
     "process_appointment_reminders": (900, 890),
     "purge_expired_auth_sessions": (86400, 3600),
     "process_subscription_lifecycle": (86400, 3600),
+    "purge_expired_data": (86400, 3600),
 }
 
 
@@ -182,3 +183,11 @@ def test_un_latido_que_no_puede_escribir_no_tumba_al_worker(
     avisos = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert avisos, "el latido fallido no dejo rastro en el log"
     assert "worker_heartbeat_touch_failed" in avisos[0].getMessage()
+
+
+def test_la_retencion_corre_a_las_0430_utc() -> None:
+    """F1-19: despues de la purga de sesiones (04:00) y lejos del backup."""
+    entrada = _entradas()["purge_expired_data"]
+    schedule = entrada["schedule"]
+    assert isinstance(schedule, crontab)
+    assert schedule.hour == {4} and schedule.minute == {30}

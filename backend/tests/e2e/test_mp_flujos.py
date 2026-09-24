@@ -596,8 +596,13 @@ async def test_h_un_401_refresca_el_token_oauth_y_reintenta(
 
 @pytest.mark.asyncio
 async def test_i_la_conciliacion_recupera_un_pago_sin_webhook(
-    client: httpx.AsyncClient, test_session: AsyncSession, mp: Emu
+    client: httpx.AsyncClient,
+    test_session: AsyncSession,
+    mp: Emu,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     _t, turno_id, pref = await _reserva_pendiente(
         client, test_session, mp, "e2e-conciliacion"
     )

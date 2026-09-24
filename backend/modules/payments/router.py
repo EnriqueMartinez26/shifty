@@ -38,6 +38,7 @@ from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
 from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
+from modules.payments.on_demand import request_inbox_retry
 from modules.payments.model import (
     OutboxMessage,
     Payment,
@@ -793,6 +794,7 @@ async def mercadopago_webhook(
     request: Request,
     store_id: Annotated[str | None, Query(max_length=64)] = None,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> dict[str, Any]:
     async with tenant_bypass(db):
         # Un body invalido no puede tirar un 500: es trafico externo no confiable.
@@ -856,7 +858,13 @@ async def mercadopago_webhook(
             else:
                 inbox.register_failure("No se pudo resolver el pago del webhook")
         await db.commit()
-        return {"success": True, "data": {"received": True, "applied": applied}}
+    if not applied and inbox.processed_at is None:
+        # F1-21 (R9-09): sin esto el cobro esperaba al beat del inbox (60-120 s)
+        # con el cliente mirando "pendiente". Despues del commit, para que la
+        # tarea vea la fila; deduplicado por tienda y nunca con los intentos
+        # agotados (``processed_at`` ya puesto por ``register_failure``).
+        await request_inbox_retry(redis, resolved_store_id)
+    return {"success": True, "data": {"received": True, "applied": applied}}
 
 
 @router.get("/outbox/stats", response_model=OutboxStatsResponse)

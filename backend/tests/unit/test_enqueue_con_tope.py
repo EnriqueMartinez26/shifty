@@ -95,3 +95,27 @@ def test_el_tope_por_defecto_es_de_dos_segundos() -> None:
     import inspect
 
     assert inspect.signature(enqueue).parameters["timeout"].default == 2.0
+
+
+class _TareaConOpciones:
+    name = "tarea_con_opciones"
+
+    def __init__(self) -> None:
+        self.publicado: list[dict[str, object]] = []
+
+    def delay(self, *_args: object, **_kwargs: object) -> None:
+        raise AssertionError("con opciones se publica con apply_async")
+
+    def apply_async(self, **kwargs: object) -> None:
+        self.publicado.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_las_opciones_publican_con_apply_async() -> None:
+    """F1-21: el reintento corto del inbox necesita ``countdown`` y pasa por aca."""
+    tarea = _TareaConOpciones()
+
+    assert await enqueue(tarea, "x", options={"countdown": 15}, limite=25) is True
+    assert tarea.publicado == [
+        {"args": ("x",), "kwargs": {"limite": 25}, "countdown": 15}
+    ]

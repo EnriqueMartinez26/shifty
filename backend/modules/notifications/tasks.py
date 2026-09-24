@@ -13,6 +13,7 @@ from email.message import EmailMessage
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 
 from core.celery_app import celery_app
 from core.enqueue import enqueue
@@ -166,6 +167,8 @@ class SmtpSession:
         if smtp is not None:
             try:
                 smtp.close()
+            except SoftTimeLimitExceeded:
+                raise
             except Exception:
                 pass
 
@@ -175,6 +178,8 @@ class SmtpSession:
             return
         try:
             code, _ = self._smtp.noop()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             logger.warning("smtp_session_reconnect", error_type=type(exc).__name__)
             self._discard()
@@ -206,6 +211,8 @@ class SmtpSession:
             message = _build_message(to, subject, body)
             await asyncio.to_thread(self._send_sync, message)
             return True
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             logger.error(
                 "smtp_send_failed",
@@ -221,9 +228,13 @@ class SmtpSession:
             return
         try:
             smtp.quit()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             try:
                 smtp.close()
+            except SoftTimeLimitExceeded:
+                raise
             except Exception:
                 pass
 
@@ -480,6 +491,8 @@ async def send_reschedule_email(
         success = await _send_email(
             email, _rescheduled_subject(details), _rescheduled_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "reschedule_email_dispatch_failed",
@@ -645,6 +658,8 @@ async def send_registration_email(
     assert email is not None
     try:
         return await send_appointment_registration(email, details, smtp)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "registration_email_dispatch_failed",
@@ -665,6 +680,8 @@ async def send_cancellation_email(
         success = await _send_email(
             email, _cancellation_subject(details), _cancellation_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "cancellation_email_dispatch_failed",
@@ -688,6 +705,8 @@ async def send_rebook_email(
         success = await _send_email(
             email, _rebook_subject(details), _rebook_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "rebook_email_dispatch_failed",
@@ -731,6 +750,8 @@ async def send_waitlist_offer_email(
         success = await _send_email(
             email, _waitlist_offer_subject(details), _waitlist_offer_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "waitlist_offer_email_dispatch_failed",
@@ -752,6 +773,8 @@ async def send_confirmation_email(
     assert email is not None
     try:
         return await send_appointment_confirmation(email, details, smtp)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         # Confirmations are operational side effects; they must never abort bookings.
         logger.warning(
@@ -928,6 +951,8 @@ async def _dispatch_reminder(
             details=details,
             smtp=smtp,
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         # Se libera la marca para reintentar en la proxima corrida.
         await repo.release_reminder(appointment.id, stage.column)
@@ -1139,6 +1164,8 @@ def _process_appointment_reminders_task(
 
     try:
         return run_in_worker_loop(_run())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
@@ -1191,6 +1218,8 @@ async def send_store_notification_email(
             email, f"Shifty - {title}", _store_notification_body(title, body), smtp
         )
         return {"status": "sent" if delivered else "failed"}
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "store_notification_email_failed",
