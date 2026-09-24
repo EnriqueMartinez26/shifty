@@ -30,6 +30,20 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# F0-06 (plan de rendimiento): una migracion que espera un lock fuerte encola
+# detras de ella TODAS las consultas de la app sobre esa tabla, asi que el
+# deploy tumbaba la API sin que la migracion hiciera nada. Con este tope aborta
+# a los 3 s y el deploy falla a la vista, con el codigo viejo sirviendo; se
+# reintenta con la tabla tranquila. `statement_timeout` en 0: un backfill por
+# lotes legitimo no puede cortarse por un timeout heredado de la sesion.
+# Solo en modo ONLINE: el SQL que genera `alembic upgrade --sql` (offline) NO
+# lleva estos SET. Quien aplique ese script a mano (DBA) tiene que fijar
+# `SET lock_timeout = '3s'` en su sesion antes de correrlo.
+MIGRATION_SESSION_SETTINGS = (
+    "SET lock_timeout = '3s'",
+    "SET statement_timeout = 0",
+)
+
 
 def get_sync_engine() -> Engine:
     """
@@ -82,6 +96,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -92,9 +107,19 @@ def run_migrations_online() -> None:
     connectable = get_sync_engine()
 
     with connectable.connect() as connection:
+        for sentencia in MIGRATION_SESSION_SETTINGS:
+            connection.exec_driver_sql(sentencia)
+        # Los SET abren una transaccion (autobegin de SQLAlchemy 2). Abierta al
+        # configurar, Alembic la toma como externa: no abre una por migracion y
+        # no commitea nada. Los SET son de sesion y sobreviven al commit.
+        connection.commit()
+        # Cada revision en su transaccion: una cadena larga no retiene los
+        # locks de la primera hasta la ultima, y un fallo en la sexta deja
+        # aplicadas y registradas las cinco anteriores.
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            transaction_per_migration=True,
         )
         with context.begin_transaction():
             context.run_migrations()

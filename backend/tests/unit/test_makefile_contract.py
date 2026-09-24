@@ -245,3 +245,13 @@ def test_makemigrations_no_resucita_una_revision_descartada(tmp_path: Path) -> N
     # Tampoco se genera la nueva: seria hija de la rechazada (su head).
     assert codigo != 0, "makemigrations siguio con una revision descartada como head"
     assert not any("alembic revision" in llamada for llamada in llamadas), llamadas
+
+
+def test_make_dev_quita_los_contenedores_de_servicios_que_ya_no_existen() -> None:
+    """F0-15 (2026-09-24): el servicio `redis` se partio en redis_cache y
+    redis_state. El contenedor viejo queda huerfano, sigue publicando
+    127.0.0.1:6379 y redis_state no puede levantar ("port is already
+    allocated"). `--remove-orphans` lo quita en el mismo `up`."""
+    receta = _receta("dev")
+    assert receta, "El Makefile no define el objetivo dev"
+    assert any("up" in c and "--remove-orphans" in c for c in receta), receta

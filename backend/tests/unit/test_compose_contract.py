@@ -163,7 +163,7 @@ def verificar_paridad_de_entorno(texto: str, servicios: tuple[str, ...]) -> None
 def test_celery_recibe_el_mismo_entorno_que_la_api() -> None:
     verificar_paridad_de_entorno(
         COMPOSE.read_text(encoding="utf-8"),
-        ("backend", "celery_worker", "celery_beat"),
+        ("backend", "celery_worker", "celery_worker_interactive", "celery_beat"),
     )
 
 
@@ -252,14 +252,19 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
     unico sin la guarda.
     """
     services = _services()
-    infra = ("db", "redis", "rabbitmq")
+    infra = ("db", "redis_cache", "redis_state", "rabbitmq")
 
     for nombre in infra:
         assert services[nombre].get("healthcheck"), (
             f"{nombre} no declara healthcheck: nadie puede esperar a que este listo"
         )
 
-    for nombre in ("backend", "celery_worker", "celery_beat"):
+    for nombre in (
+        "backend",
+        "celery_worker",
+        "celery_worker_interactive",
+        "celery_beat",
+    ):
         deps = _depends(services[nombre])
         for dependencia in infra:
             assert deps.get(dependencia) == "service_healthy", (
@@ -282,7 +287,12 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
 
 COMPOSE_PROD = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
 
-SERVICIOS_DE_LA_APP = ("backend", "celery_worker", "celery_beat")
+SERVICIOS_DE_LA_APP = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+)
 
 # Sin estas no se arranca: tienen que venir del entorno con `:?`, nunca con un
 # valor por default.
@@ -293,6 +303,7 @@ CRITICAS_EN_PRODUCCION = (
     "MIGRATION_DATABASE_URL",
     "APP_DB_PASSWORD",
     "REDIS_URL",
+    "REDIS_CACHE_URL",
     "CELERY_BROKER_URL",
     "CELERY_RESULT_BACKEND_URL",
     "CORS_ORIGINS",
@@ -354,9 +365,14 @@ def test_produccion_no_repite_ningun_valor_de_desarrollo() -> None:
             )
         # Los servicios del compose no pueden quedar cableados: en produccion
         # la base, Redis y el broker pueden ser administrados.
-        for clave in ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL"):
+        for clave in (
+            "DATABASE_URL",
+            "REDIS_URL",
+            "REDIS_CACHE_URL",
+            "CELERY_BROKER_URL",
+        ):
             valor = env.get(clave, "")
-            for host in ("@db:", "//redis:", "@rabbitmq:"):
+            for host in ("@db:", "//redis", "@rabbitmq:"):
                 assert host not in valor, (
                     f"{servicio}.{clave} apunta al contenedor del compose: {valor!r}"
                 )
@@ -384,31 +400,63 @@ def test_los_procesos_de_celery_declaran_healthcheck() -> None:
     beat que dejo de agendar se ven igual que uno sano en `docker compose ps`.
     Es el incidente de 2026-09-08 que este mismo archivo describe: "ningun job
     corria, y en silencio: el worker se declaraba ready".
-    """
-    worker = _prueba_del_healthcheck("celery_worker")
-    assert "inspect ping" in worker, (
-        f"el healthcheck del worker no pregunta si consume: {worker!r}"
-    )
 
-    # El archivo de schedule NO vive en /app: core/celery_app.py lo manda al
-    # tmp del sistema (en el contenedor, /tmp) con un nombre propio. La primera
-    # version de este healthcheck buscaba /app/celerybeat-schedule* y dejaba a
-    # beat unhealthy para siempre; el test pasaba porque miraba un substring.
+    F0-18 (decision 7): la prueba del worker dejo de ser `inspect ping`, que
+    levantaba un Python completo (~120 MB) dentro del cgroup del worker. Ahora
+    mira la antiguedad del archivo que el worker toca en cada `heartbeat_sent`.
+    Sigue probando que CONSUME: ese latido lo emite el consumidor sobre su
+    conexion al broker (bootstep Heart, cada 2 s); con la conexion caida o el
+    loop del consumidor trabado deja de latir, el archivo envejece y el
+    contenedor queda unhealthy. Un proceso que solo esta vivo no lo renueva.
+    """
+    from core.celery_app import WORKER_HEARTBEAT_FILE
+
+    latido = Path(WORKER_HEARTBEAT_FILE)
+    for nombre in ("celery_worker", "celery_worker_interactive"):
+        worker = _prueba_del_healthcheck(nombre)
+        assert "inspect ping" not in worker, (
+            f"{nombre}: inspect ping levanta un Python entero en el cgroup: {worker!r}"
+        )
+        assert f"find {latido.parent.as_posix()} " in worker, (nombre, worker)
+        assert f"-name '{latido.name}'" in worker, (
+            f"{nombre} no mira el archivo que toca core/celery_app.py: {worker!r}"
+        )
+        # Obsoleto a los 120 s (decision 7): 60 latidos perdidos, no uno.
+        assert "-newermt '-120 seconds'" in worker, (nombre, worker)
+        assert "grep -q ." in worker, (
+            f"{nombre}: find sale 0 aunque no encuentre nada: {worker!r}"
+        )
+
+    # El archivo de schedule NO vive en /app. La primera version de este
+    # healthcheck buscaba /app/celerybeat-schedule* y dejaba a beat unhealthy
+    # para siempre; el test pasaba porque miraba un substring. Desde F0-17 vive
+    # en el volumen `beat_schedule` (antes en /tmp, que se perdia en cada
+    # recreacion): el healthcheck, el montaje y core/celery_app.py tienen que
+    # nombrar el MISMO directorio.
     from core.celery_app import celery_app
 
     archivo = Path(str(celery_app.conf.beat_schedule_filename))
+    directorio = archivo.parent.as_posix()
     beat = _prueba_del_healthcheck("celery_beat")
     assert f"-name '{archivo.name}*'" in beat, (
         f"el healthcheck de beat no busca {archivo.name!r}, que es lo que "
         f"escribe core/celery_app.py: {beat!r}"
     )
-    assert "find /tmp " in beat, (
-        "el healthcheck de beat no mira /tmp, que es tempfile.gettempdir() "
-        f"dentro del contenedor: {beat!r}"
+    assert f"find {directorio} " in beat, (
+        f"el healthcheck de beat no mira {directorio}, donde beat escribe: {beat!r}"
     )
     assert "/app" not in beat, f"el healthcheck de beat sigue mirando /app: {beat!r}"
+    montajes = [_montaje(v) for v in _services()["celery_beat"].get("volumes") or []]  # type: ignore[attr-defined]
+    assert ("beat_schedule", directorio) in montajes, (
+        f"el schedule de beat no vive en el volumen beat_schedule: {montajes}"
+    )
+    dockerfile = (COMPOSE.parent / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    assert directorio in dockerfile, (
+        "la imagen no crea el directorio del schedule con dueno appuser: un "
+        "volumen nuevo copia el dueno de la imagen, y sin el beat no escribe"
+    )
 
-    for prueba in (worker, beat):
+    for prueba in (_prueba_del_healthcheck("celery_worker"), beat):
         assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
             f"$HOSTNAME sin escapar lo interpola compose, no el shell: {prueba!r}"
         )
@@ -440,10 +488,17 @@ def _declaradas_en(ruta: Path) -> set[str]:
     }
 
 
+# Exigidas con `:?` pero que NO van en el .env: las pasa el script de deploy en
+# cada corrida. APP_VERSION en el .env queda vieja despues del primer deploy y
+# un `up` a mano volveria a la version anterior (docs/DEPLOY_RUNBOOK.md).
+NO_VAN_EN_EL_ENV = {"APP_VERSION"}
+
+
 def test_el_ejemplo_de_produccion_declara_todo_lo_que_los_composes_exigen() -> None:
     exigidas = _exigidas_con_interrogacion()
     assert exigidas, "ningun compose exige variables con :?"
-    faltan = exigidas - _declaradas_en(ENV_PRODUCCION_EXAMPLE)
+    assert NO_VAN_EN_EL_ENV <= exigidas, "la excepcion nombra variables que nadie exige"
+    faltan = exigidas - NO_VAN_EN_EL_ENV - _declaradas_en(ENV_PRODUCCION_EXAMPLE)
     assert not faltan, (
         "el compose aborta en produccion si falta alguna de estas, y el "
         f"ejemplo que se copia como .env no las declara: {sorted(faltan)}"
@@ -496,7 +551,13 @@ def test_el_worker_de_celery_acota_su_concurrencia_y_su_memoria() -> None:
 # importar la app por el bind mount tardaba ~131 s, mas que el healthcheck de
 # Celery. uvicorn corre sin --reload: el montaje no daba recarga en caliente.
 
-SERVICIOS_CON_CODIGO = ("backend", "celery_worker", "celery_beat", "frontend")
+SERVICIOS_CON_CODIGO = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+    "frontend",
+)
 FUENTES_DE_CODIGO = ("./backend", "./frontend", "backend", "frontend")
 
 
@@ -671,3 +732,658 @@ def test_la_vista_fusionada_distingue_la_lista_vacia_del_reset() -> None:
     assert puertos_publicados(con_lista_vacia) == {"backend": ["127.0.0.1:8000:8000"]}
     con_reset = servicios_fusionados(_BASE_CON_PUERTOS, _OVERRIDE_CON_RESET)
     assert puertos_publicados(con_reset) == {}
+
+
+# --- La API escala por replicas de un proceso (F0-04, plan de rendimiento) ----
+#
+# Decision del dueno (2026-09-24): tres replicas de UN proceso de uvicorn, no
+# `--workers 3`. Con varios workers dentro de un contenedor, uno que muere en
+# loop queda escondido detras de un contenedor "sano" (regla 21). Con replicas,
+# cada proceso tiene su healthcheck y su reinicio. `container_name` fija un
+# nombre unico por servicio, asi que compose no puede levantar mas de una.
+
+
+def _dockerfile_cmd() -> list[str]:
+    import json
+
+    dockerfile = COMPOSE.parent / "backend" / "Dockerfile"
+    lineas = [
+        linea
+        for linea in dockerfile.read_text(encoding="utf-8").splitlines()
+        if linea.startswith("CMD ")
+    ]
+    assert len(lineas) == 1, f"el Dockerfile del backend declara {len(lineas)} CMD"
+    cmd = json.loads(lineas[0].removeprefix("CMD "))
+    assert isinstance(cmd, list), "el CMD no esta en forma exec (JSON)"
+    return [str(parte) for parte in cmd]
+
+
+def test_la_api_escala_por_replicas_de_un_proceso() -> None:
+    base = _services()["backend"]
+    assert "container_name" not in base, (
+        "backend fija container_name: compose no puede levantar mas de una replica"
+    )
+    deploy_base = base.get("deploy") or {}
+    assert isinstance(deploy_base, dict)
+    assert deploy_base.get("replicas", 1) == 1, "en desarrollo corre una sola replica"
+
+    deploy_prod = _servicios_de_produccion()["backend"].get("deploy") or {}
+    assert isinstance(deploy_prod, dict)
+    assert deploy_prod.get("replicas") == 3, (
+        f"produccion no corre tres replicas de la API: {deploy_prod!r}"
+    )
+
+    cmd = _dockerfile_cmd()
+    assert cmd[0] == "uvicorn", cmd
+    assert not any(parte.startswith("--workers") for parte in cmd), (
+        f"la API vuelve a multiplicarse por dentro del contenedor: {cmd}"
+    )
+    assert "command" not in base, "backend no puede pisar el CMD de la imagen"
+
+
+# --- Apagado ordenado (F0-21, plan de rendimiento) ----------------------------
+#
+# Docker manda SIGTERM y, pasado `stop_grace_period` (10 s por default), SIGKILL.
+# uvicorn sin `--timeout-graceful-shutdown` espera a las conexiones abiertas sin
+# tope, asi que el SIGKILL cortaba requests a mitad de un cobro. El proceso
+# tiene que rendirse ANTES de que docker lo mate: el margen entre los dos es
+# lo que asegura que el cierre del pool y de Redis (lifespan) llegue a correr.
+# El worker de Celery termina la tarea en curso (acks_late): su margen cubre el
+# soft time limit tipico de un lote, no el hard limit entero.
+
+
+def _segundos(valor: object) -> float:
+    texto = str(valor).strip()
+    match = re.fullmatch(r"(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", texto)
+    assert match and texto, f"duracion de compose no reconocida: {valor!r}"
+    return int(match.group(1) or 0) * 60 + float(match.group(2) or 0)
+
+
+def test_la_api_se_apaga_antes_de_que_docker_la_mate() -> None:
+    cmd = _dockerfile_cmd()
+    assert "--timeout-graceful-shutdown" in cmd, (
+        f"uvicorn espera conexiones abiertas sin tope al apagarse: {cmd}"
+    )
+    tope = float(cmd[cmd.index("--timeout-graceful-shutdown") + 1])
+    gracia = _segundos(_services()["backend"].get("stop_grace_period", "10s"))
+    assert tope == 30, f"el tope de apagado de uvicorn es {tope}, el plan fija 30"
+    assert gracia >= tope + 5, (
+        f"docker mata la API a los {gracia}s y uvicorn recien se rinde a los {tope}s"
+    )
+
+
+def test_el_worker_tiene_tiempo_de_terminar_la_tarea_en_curso() -> None:
+    gracia = _segundos(_services()["celery_worker"].get("stop_grace_period", "10s"))
+    assert gracia >= 60, f"el worker recibe SIGKILL a los {gracia}s"
+
+
+# --- Imagenes con version, una sola para la app (F0-02, plan de rendimiento) --
+#
+# API, worker y beat corren EL MISMO codigo: si cada uno construye su imagen,
+# reconstruir solo uno deja a los otros con el codigo viejo (regla 22; paso con
+# Celery como root). Ahora hay una imagen, construida solo por `backend` y
+# reutilizada por los procesos de Celery, con el tag de la version: el VPS hace
+# `pull` de lo que publico CI y el rollback es volver al tag anterior.
+
+REGISTRO = "ghcr.io/enriquemartinez26"
+PROCESOS_DE_LA_APP = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+)
+
+
+def _imagen(servicio: str) -> str:
+    return f"{REGISTRO}/shifty-{servicio}:${{APP_VERSION:-dev}}"
+
+
+def test_la_app_corre_una_sola_imagen_versionada() -> None:
+    servicios = _services()
+    for nombre in PROCESOS_DE_LA_APP:
+        assert servicios[nombre].get("image") == _imagen("backend"), (
+            f"{nombre} no corre la imagen versionada de la app: "
+            f"{servicios[nombre].get('image')!r}"
+        )
+    constructores = [n for n in PROCESOS_DE_LA_APP if "build" in servicios[n]]
+    assert constructores == ["backend"], (
+        "la imagen de la app la construye solo backend; los procesos de Celery "
+        f"la reutilizan: construyen {constructores}"
+    )
+    for nombre in ("frontend", "nginx"):
+        assert servicios[nombre].get("image") == _imagen(nombre), (
+            f"{nombre}: {servicios[nombre].get('image')!r}"
+        )
+
+
+def test_la_version_llega_a_los_procesos_de_la_app() -> None:
+    # Alimenta Settings.VERSION: el release de Sentry y el de la API.
+    assert _env_items(_services()["backend"]).get("VERSION") == "${APP_VERSION:-dev}"
+    for servicio in SERVICIOS_DE_LA_APP:
+        assert "${APP_VERSION:?" in _env_prod(servicio).get("VERSION", ""), (
+            f"{servicio}: produccion no exige la version desplegada"
+        )
+
+
+def test_produccion_no_corre_una_imagen_sin_version() -> None:
+    """Sin APP_VERSION, `:-dev` en el servidor corre lo que haya quedado con ese
+    tag (un build local viejo) en vez de fallar."""
+    produccion = _servicios_de_produccion()
+    for nombre in (*PROCESOS_DE_LA_APP, "frontend"):
+        imagen = str(produccion[nombre].get("image", ""))
+        assert imagen.startswith(f"{REGISTRO}/shifty-"), (nombre, imagen)
+        assert "${APP_VERSION:?" in imagen, (
+            f"{nombre} en produccion no exige APP_VERSION: {imagen!r}"
+        )
+
+
+# --- Infraestructura con version fija (F0-05, plan de rendimiento) ------------
+#
+# `postgres:16-alpine` o `redis:7-alpine` se mueven solos: un `pull` + `up`
+# recreaba la base con otra version menor sin que nadie lo decidiera. Cada
+# imagen de terceros declara al menos version menor; subirla es un commit.
+
+VERSION_FIJA = re.compile(r"^[a-z0-9./-]+:\d+\.\d+(\.\d+)?(-[a-z0-9]+)*$")
+
+
+def imagenes_sin_version_fija(servicios: dict[str, dict[str, object]]) -> list[str]:
+    return [
+        f"{nombre}: {imagen}"
+        for nombre, servicio in servicios.items()
+        if (imagen := str(servicio.get("image", "")))
+        and not imagen.startswith(f"{REGISTRO}/")
+        and not VERSION_FIJA.match(imagen)
+    ]
+
+
+def test_la_infraestructura_corre_versiones_fijas() -> None:
+    for vista, servicios in {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }.items():
+        sueltas = imagenes_sin_version_fija(servicios)
+        assert not sueltas, f"{vista}: imagenes sin version menor fija: {sueltas}"
+    assert _services()["db"]["image"] == "postgres:16.14-alpine"
+
+
+def test_el_contrato_ve_una_imagen_con_solo_la_version_mayor() -> None:
+    servicios: dict[str, dict[str, object]] = {
+        "db": {"image": "postgres:16-alpine"},
+        "cache": {"image": "redis:7.4-alpine"},
+        "mq": {"image": "rabbitmq:latest"},
+    }
+    assert imagenes_sin_version_fija(servicios) == [
+        "db: postgres:16-alpine",
+        "mq: rabbitmq:latest",
+    ]
+
+
+# --- Postgres dimensionado (F0-14, plan de rendimiento) -----------------------
+#
+# Con los defaults de la imagen (shared_buffers 128 MB, work_mem 4 MB, jit on,
+# sin pg_stat_statements ni slow log) la base no usaba la memoria del VPS y no
+# habia forma de ver que consulta era lenta. `command` NO se fusiona: el del
+# override reemplaza entero al del base, por eso produccion repite
+# shared_preload_libraries y el umbral del slow log.
+
+POSTGRES_PRODUCCION = {
+    "shared_buffers": "1GB",
+    "effective_cache_size": "3GB",
+    "work_mem": "8MB",
+    "maintenance_work_mem": "256MB",
+    "max_connections": "150",
+    "max_wal_size": "2GB",
+    "min_wal_size": "512MB",
+    "checkpoint_timeout": "15min",
+    "wal_compression": "lz4",
+    "random_page_cost": "1.1",
+    "effective_io_concurrency": "200",
+    "jit": "off",
+    "autovacuum_naptime": "30s",
+    "autovacuum_vacuum_cost_limit": "1000",
+    "log_min_duration_statement": "250",
+    # Sin los valores de los parametros: el slow log no puede volcar emails ni
+    # telefonos que vayan como bind.
+    "log_parameter_max_length": "0",
+    "log_lock_waits": "on",
+    "log_temp_files": "0",
+    "log_autovacuum_min_duration": "5s",
+    "track_io_timing": "on",
+    "shared_preload_libraries": "pg_stat_statements",
+}
+
+POSTGRES_DESARROLLO = {
+    "shared_preload_libraries": "pg_stat_statements",
+    "log_min_duration_statement": "250",
+}
+
+
+def parametros_de_postgres(comando: object) -> dict[str, str]:
+    """`-c clave=valor` del command de postgres, en forma de lista o de texto."""
+    partes = comando if isinstance(comando, list) else str(comando).split()
+    partes = [str(p) for p in partes]
+    assert partes and partes[0] == "postgres", f"no arranca postgres: {partes}"
+    parametros: dict[str, str] = {}
+    for i, parte in enumerate(partes):
+        if parte == "-c":
+            clave, _, valor = partes[i + 1].partition("=")
+            parametros[clave] = valor
+    return parametros
+
+
+def test_postgres_de_desarrollo_mide_las_consultas_lentas() -> None:
+    db = _services()["db"]
+    parametros = parametros_de_postgres(db.get("command"))
+    assert parametros == POSTGRES_DESARROLLO, parametros
+    assert db.get("shm_size") == "256m", db.get("shm_size")
+
+
+def test_postgres_de_produccion_usa_la_memoria_del_servidor() -> None:
+    db = _servicios_prod()["db"]
+    assert parametros_de_postgres(db.get("command")) == POSTGRES_PRODUCCION
+    # shared_buffers de 1 GB necesita /dev/shm; el default de docker es 64 MB.
+    assert db.get("shm_size") == "512m", db.get("shm_size")
+    # Si el host se queda sin memoria, el OOM killer elige otro proceso antes
+    # que la base.
+    assert db.get("oom_score_adj") == -800, db.get("oom_score_adj")
+    limites = _servicios_de_produccion()["db"]["deploy"]
+    assert isinstance(limites, dict)
+    assert limites["resources"]["limits"]["memory"] == "4G", limites
+
+
+# --- Dos Redis: cache y estado (F0-15, plan de rendimiento; decision 5) -------
+#
+# Un solo Redis con desalojo expulsaba lockout, idempotencia y rate limit bajo
+# presion de memoria; sin desalojo, el cache de disponibilidad lo llenaba y
+# TODA escritura fallaba. El de cache desaloja y no persiste (se recalcula); el
+# de estado no desaloja y guarda RDB (un reinicio no borra lockouts ni el replay
+# de idempotencia de un cobro). El codigo solo manda al de cache la
+# disponibilidad (core/redis.py::get_availability_cache).
+
+
+def _argumentos(comando: object) -> list[str]:
+    assert isinstance(comando, list), (
+        f"el command no esta en forma de lista: {comando!r}"
+    )
+    return [str(parte) for parte in comando]
+
+
+def _opcion(argumentos: list[str], nombre: str) -> list[str]:
+    i = argumentos.index(nombre)
+    siguiente = [
+        j for j in range(i + 1, len(argumentos)) if argumentos[j].startswith("--")
+    ]
+    return argumentos[i + 1 : siguiente[0] if siguiente else len(argumentos)]
+
+
+def _megas(valor: str) -> int:
+    match = re.fullmatch(r"(\d+)(mb|m|M)", valor)
+    assert match, valor
+    return int(match.group(1))
+
+
+def _limite(servicio: dict[str, object]) -> str:
+    deploy = servicio.get("deploy")
+    assert isinstance(deploy, dict), servicio
+    return str(deploy["resources"]["limits"]["memory"])
+
+
+def test_el_redis_de_cache_desaloja_y_no_persiste() -> None:
+    servicios = _services()
+    assert "redis" not in servicios, "sigue el Redis unico"
+    cache = servicios["redis_cache"]
+    argumentos = _argumentos(cache.get("command"))
+    assert argumentos[0] == "redis-server", argumentos
+    # volatile-ttl: toda clave del cache tiene TTL, y el desalojo empieza por
+    # la que vence antes. Los slots (300 s) se van antes que las versiones y
+    # generaciones (7 dias): se sostiene el invariante de
+    # core/availability_cache.py (una version no desaparece mientras viva un
+    # slot escrito bajo ella). allkeys-lru podia expulsar una version antes.
+    assert _opcion(argumentos, "--maxmemory-policy") == ["volatile-ttl"]
+    assert _opcion(argumentos, "--save") == [""], "el cache no persiste"
+    assert _opcion(argumentos, "--appendonly") == ["no"]
+    maxmemory = _megas(_opcion(argumentos, "--maxmemory")[0])
+    assert maxmemory == 96
+    # El limite del contenedor deja margen para la fragmentacion y los buffers
+    # de clientes, que maxmemory no cuenta.
+    assert _megas(_limite(cache)) >= 2 * maxmemory
+    assert not cache.get("volumes"), "el cache no necesita volumen"
+
+
+def test_el_redis_de_estado_no_desaloja_y_persiste() -> None:
+    estado = _services()["redis_state"]
+    argumentos = _argumentos(estado.get("command"))
+    assert _opcion(argumentos, "--maxmemory-policy") == ["noeviction"]
+    assert _opcion(argumentos, "--save") == ["60", "1"]
+    maxmemory = _megas(_opcion(argumentos, "--maxmemory")[0])
+    assert maxmemory == 48
+    assert _megas(_limite(estado)) >= 2 * maxmemory
+    volumenes = estado.get("volumes") or []
+    assert isinstance(volumenes, list), volumenes
+    destinos = [_montaje(v) for v in volumenes]
+    assert ("redis_state_data", "/data") in destinos, destinos
+
+
+def test_cada_uso_de_redis_apunta_a_su_instancia() -> None:
+    env = _env_items(_services()["backend"])
+    assert env["REDIS_URL"].startswith("redis://redis_state:"), env["REDIS_URL"]
+    assert env["REDIS_CACHE_URL"].startswith("redis://redis_cache:"), env
+    # Los resultados de Celery son estado, no cache.
+    assert env["CELERY_RESULT_BACKEND_URL"].startswith("redis://redis_state:"), env
+    # 2 s x 2 intentos x ~6 operaciones por request retenian un request 24 s
+    # con Redis caido; con 0,5 s el peor caso baja a 6.
+    for clave in (
+        "REDIS_SOCKET_TIMEOUT_SECONDS",
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+    ):
+        for vista, valor in (
+            ("desarrollo", env[clave]),
+            ("produccion", _env_prod("backend")[clave]),
+        ):
+            assert valor == "0.5" or valor.endswith(":-0.5}"), (vista, clave, valor)
+
+
+# --- RabbitMQ acotado (F0-16, plan de rendimiento; decision 6) ----------------
+#
+# Sin configuracion, RabbitMQ calcula su alarma de memoria como el 40% de la
+# RAM que VE, que en un contenedor es la del host (16 GB): el limite de 256 MB
+# del cgroup lo mataba por OOM mucho antes de que la alarma frenara a los
+# publicadores. Con el umbral absoluto por debajo del limite, la alarma llega
+# primero. Produccion corre la imagen sin management (el 15672 ya no se
+# publica y el plugin cuesta memoria).
+
+RABBITMQ_CONF = COMPOSE.parent / "deploy" / "rabbitmq" / "rabbitmq.conf"
+RABBITMQ_CONF_EN_EL_CONTENEDOR = "/etc/rabbitmq/conf.d/10-shifty.conf"
+
+
+def _conf_de_rabbitmq() -> dict[str, str]:
+    return {
+        clave.strip(): valor.strip()
+        for linea in RABBITMQ_CONF.read_text(encoding="utf-8").splitlines()
+        if linea.strip() and not linea.lstrip().startswith("#")
+        for clave, _, valor in [linea.partition("=")]
+    }
+
+
+def test_rabbitmq_frena_a_los_publicadores_antes_del_oom() -> None:
+    conf = _conf_de_rabbitmq()
+    assert conf.get("vm_memory_high_watermark.absolute") == "280MiB", conf
+    assert conf.get("disk_free_limit.absolute") == "1GB", conf
+
+    for vista, servicios in {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }.items():
+        rabbit = servicios["rabbitmq"]
+        montajes = [str(v) for v in rabbit.get("volumes") or []]  # type: ignore[attr-defined]
+        esperado = (
+            f"./deploy/rabbitmq/rabbitmq.conf:{RABBITMQ_CONF_EN_EL_CONTENEDOR}:ro"
+        )
+        assert esperado in montajes, (vista, montajes)
+        assert _megas(_limite(rabbit)) == 384, (vista, _limite(rabbit))
+        # 280 MiB de alarma dentro de 384 MB de limite: margen para Erlang.
+        assert 280 < _megas(_limite(rabbit))
+        # Con 180 MiB un broker recien arrancado ya levantaba la alarma en un
+        # host de 16 nucleos (~170 MB propios); dos schedulers de Erlang
+        # bajan la memoria base (decision del dueno, 2026-09-24).
+        env = _env_items(rabbit)
+        assert env.get("RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS") == "+S 2:2", (vista, env)
+        # El healthcheck no puede depender del plugin de management.
+        prueba = str(rabbit["healthcheck"]["test"])  # type: ignore[index]
+        assert "check_running" in prueba and "15672" not in prueba, prueba
+
+
+def test_produccion_corre_rabbitmq_sin_management() -> None:
+    imagen = str(_servicios_de_produccion()["rabbitmq"]["image"])
+    assert imagen == "rabbitmq:3.13.7-alpine", imagen
+    assert "management" in str(_services()["rabbitmq"]["image"]), (
+        "desarrollo conserva la consola de management"
+    )
+
+
+# --- Workers de Celery (F0-18, plan de rendimiento; decision 7) ---------------
+#
+# El worker general consume solo la cola `celery` y recicla los hijos que pasan
+# 150 MB; el OTP va a la cola `interactive`, que atiende un worker aparte con
+# un solo hijo: su latencia no depende de que termine un lote del outbox.
+
+
+def _comando(nombre: str) -> str:
+    return str(_services()[nombre].get("command", ""))
+
+
+def test_el_worker_general_consume_la_cola_celery_con_tope_de_memoria() -> None:
+    worker = _services()["celery_worker"]
+    comando = _comando("celery_worker")
+    assert re.search(r"(^| )-Q celery( |$)", comando), comando
+    assert "--max-memory-per-child=150000" in comando, comando
+    assert _limite(worker) == "768M", _limite(worker)
+    deploy = worker["deploy"]
+    assert isinstance(deploy, dict)
+    assert str(deploy["resources"]["limits"].get("cpus")) == "1.5", deploy
+
+
+def test_el_otp_tiene_su_propio_worker() -> None:
+    servicios = _services()
+    interactivo = servicios["celery_worker_interactive"]
+    comando = _comando("celery_worker_interactive")
+    assert re.search(r"(^| )-Q interactive( |$)", comando), comando
+    assert "--concurrency=1" in comando, comando
+    assert "--max-memory-per-child=" in comando, comando
+    assert _limite(interactivo) == "256M", _limite(interactivo)
+    assert interactivo.get("image") == servicios["celery_worker"].get("image")
+    assert "build" not in interactivo
+    assert _segundos(interactivo.get("stop_grace_period", "10s")) >= 30
+    # La cola la fija core/celery_app.py; si cambia ahi, este worker no la ve.
+    from core.celery_app import celery_app
+
+    assert celery_app.conf.task_routes["send_otp_email"]["queue"] == "interactive"
+
+
+# --- Limites de memoria para el VPS de 16 GB (F0-19, plan de rendimiento) -----
+#
+# Sin limite, un contenedor que crece se come la memoria del host y el OOM
+# killer elige a cualquiera (la base incluida). La suma de la tabla deja
+# margen para el sistema y el cache de disco de Postgres. Sin `cpus` en la API
+# ni en la base: el throttling de CFS mete picos en el p95 (plan §8).
+
+LIMITES_EN_PRODUCCION = {
+    "db": "4G",
+    "redis_cache": "192M",
+    "redis_state": "96M",
+    "rabbitmq": "384M",
+    "backend": "512M",
+    "celery_worker": "768M",
+    "celery_worker_interactive": "256M",
+    "celery_beat": "256M",
+    "frontend": "64M",
+    "nginx": "256M",
+}
+
+
+def test_cada_servicio_tiene_su_limite_de_memoria() -> None:
+    produccion = _servicios_de_produccion()
+    assert set(produccion) == set(LIMITES_EN_PRODUCCION), sorted(produccion)
+    limites = {nombre: _limite(servicio) for nombre, servicio in produccion.items()}
+    assert limites == LIMITES_EN_PRODUCCION, limites
+    replicas = produccion["backend"]["deploy"]["replicas"]  # type: ignore[index]
+    assert replicas == 3
+
+
+def test_la_api_y_la_base_no_tienen_tope_de_cpu() -> None:
+    for vista, servicios in {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }.items():
+        for nombre in ("backend", "db"):
+            deploy = servicios[nombre].get("deploy") or {}
+            assert isinstance(deploy, dict)
+            limites = deploy.get("resources", {}).get("limits", {})
+            assert "cpus" not in limites, f"{vista}: {nombre} con tope de CPU"
+
+
+def test_nginx_puede_abrir_suficientes_conexiones() -> None:
+    ulimits = _services()["nginx"].get("ulimits")
+    assert isinstance(ulimits, dict), ulimits
+    nofile = ulimits.get("nofile")
+    valores = list(nofile.values()) if isinstance(nofile, dict) else [nofile]
+    assert all(int(str(v)) >= 65536 for v in valores), nofile
+
+
+def test_nginx_de_produccion_sirve_el_desafio_de_certbot() -> None:
+    """F0-12 (decision 4): certbot en el host con webroot. El borde sirve
+    `/.well-known/acme-challenge/` desde /var/www/acme (nginx/, lane A); sin
+    el montaje la renovacion del certificado falla a los 90 dias."""
+    montajes = [str(v) for v in _servicios_prod()["nginx"].get("volumes") or []]  # type: ignore[attr-defined]
+    assert "./nginx/acme:/var/www/acme:ro" in montajes, montajes
+
+
+# --- Logs con rotacion (F0-22, plan de rendimiento; decision 26) --------------
+#
+# El driver json-file por defecto no rota: un contenedor ruidoso llenaba el
+# disco del host, que es el mismo de la base. 20 MB x 5 por contenedor. Un
+# solo ancla, igual que el entorno: un servicio nuevo que copie el bloque a
+# mano hoy coincide y manana no.
+
+LOGGING_ESPERADO = {
+    "driver": "json-file",
+    "options": {"max-size": "20m", "max-file": "5"},
+}
+
+
+def test_todos_los_servicios_rotan_sus_logs() -> None:
+    texto = COMPOSE.read_text(encoding="utf-8")
+    servicios = _services()
+    for nombre, servicio in servicios.items():
+        assert servicio.get("logging") == LOGGING_ESPERADO, (
+            f"{nombre} no rota sus logs: {servicio.get('logging')!r}"
+        )
+    raiz = yaml.compose(texto, Loader=CargadorCompose)
+    assert raiz is not None
+    nodos = {
+        nombre: _nodo_hijo(_nodo_hijo(_nodo_hijo(raiz, "services"), nombre), "logging")
+        for nombre in servicios
+    }
+    primero = next(iter(nodos.values()))
+    copiados = [nombre for nombre, nodo in nodos.items() if nodo is not primero]
+    assert not copiados, f"estos servicios no usan el ancla x-logging: {copiados}"
+
+
+def test_la_api_no_duplica_el_access_log_de_nginx() -> None:
+    # nginx ya registra cada request; el access log de uvicorn duplicaba
+    # cada linea y llevaba la query entera (client_phone incluido).
+    assert "--no-access-log" in _dockerfile_cmd()
+
+
+def test_app_version_la_pasa_el_deploy_y_no_el_env() -> None:
+    """APP_VERSION en el .env queda vieja despues del primer deploy. El `:?`
+    sigue: un `up` a mano en produccion sin la version falla a la vista, y el
+    mensaje dice de donde sale."""
+    declaradas = _declaradas_en(ENV_PRODUCCION_EXAMPLE)
+    assert not (NO_VAN_EN_EL_ENV & declaradas), (
+        f"el ejemplo del .env declara {sorted(NO_VAN_EN_EL_ENV & declaradas)}"
+    )
+    texto = COMPOSE_PROD.read_text(encoding="utf-8")
+    mensajes = re.findall(r"\$\{APP_VERSION:\?([^}]*)\}", texto)
+    assert mensajes, "produccion no exige APP_VERSION"
+    for mensaje in mensajes:
+        assert "scripts/deploy.sh" in mensaje and "no va en .env" in mensaje, mensaje
+
+
+# --- Backups de la base (F0-20, lane de operacion) ----------------------------
+#
+# scripts/backup corre `pg_dump` dentro de `db` y escribe en /backups; ese
+# directorio es un bind al disco del host (BACKUP_DIR) para que la copia
+# sobreviva a un `down -v` y la tome la copia fuera del host.
+
+
+def test_la_base_de_produccion_escribe_los_backups_en_el_host() -> None:
+    db = _servicios_de_produccion()["db"]
+    montajes = [_montaje(v) for v in db.get("volumes") or []]  # type: ignore[attr-defined]
+    assert ("pg_backups", "/backups") in montajes, montajes
+    assert ("postgres_data", "/var/lib/postgresql/data") in montajes, montajes
+    volumen = cargar_compose(COMPOSE_PROD.read_text(encoding="utf-8"))["volumes"][
+        "pg_backups"
+    ]
+    assert volumen == {
+        "driver": "local",
+        "driver_opts": {
+            "type": "none",
+            "o": "bind",
+            "device": "${BACKUP_DIR:-/var/backups/shifty}",
+        },
+    }, volumen
+
+
+# --- Produccion nunca construye (revision independiente del lane C) ----------
+#
+# El VPS corre lo que CI publico: un `build` en la vista de produccion deja que
+# un `up` sin `--no-build` construya en el servidor una imagen que nadie
+# reviso, con el tag de la version. El borde corre la imagen OFICIAL de nginx
+# con la configuracion montada: no depende del release y no se recrea en cada
+# deploy (se recarga con `nginx -s reload`).
+
+
+def test_produccion_no_construye_ninguna_imagen() -> None:
+    produccion = _servicios_de_produccion()
+    construyen = sorted(n for n, s in produccion.items() if "build" in s)
+    assert not construyen, f"en produccion construyen imagen: {construyen}"
+    # Desarrollo sigue construyendo: el reset es solo del override.
+    base = _services()
+    assert {"backend", "frontend", "nginx"} <= {
+        n for n, s in base.items() if "build" in s
+    }
+
+
+def test_el_borde_de_produccion_corre_la_imagen_oficial_de_nginx() -> None:
+    nginx = _servicios_de_produccion()["nginx"]
+    assert nginx.get("image") == "nginx:1.27.5-alpine", nginx.get("image")
+    montajes = [str(v) for v in nginx.get("volumes") or []]  # type: ignore[attr-defined]
+    assert any(m.endswith(":/etc/nginx/conf.d/default.conf:ro") for m in montajes), (
+        montajes
+    )
+
+
+# --- Nombres de contenedor por proyecto (revision independiente del lane C) --
+#
+# Un nombre fijo (`shifty_db`) choca con un segundo proyecto compose en el
+# mismo host (staging, decision 29). El prefijo sale del nombre del proyecto;
+# por defecto sigue siendo `shifty`, que es lo que usan los scripts locales.
+
+PREFIJO_DE_PROYECTO = "${COMPOSE_PROJECT_NAME:-shifty}_"
+
+NOMBRES_EN_DESARROLLO = {
+    "db": "shifty_db",
+    "redis_cache": "shifty_redis_cache",
+    "redis_state": "shifty_redis_state",
+    "rabbitmq": "shifty_rabbitmq",
+    "celery_worker": "shifty_celery",
+    "celery_worker_interactive": "shifty_celery_interactive",
+    "celery_beat": "shifty_celery_beat",
+    "frontend": "shifty_frontend",
+    "nginx": "shifty_nginx",
+}
+
+
+def test_los_nombres_de_contenedor_llevan_el_proyecto() -> None:
+    nombres = {
+        nombre: str(servicio["container_name"])
+        for nombre, servicio in _services().items()
+        if "container_name" in servicio
+    }
+    assert set(nombres) == set(NOMBRES_EN_DESARROLLO), sorted(nombres)
+    for nombre, valor in nombres.items():
+        assert valor.startswith(PREFIJO_DE_PROYECTO), (nombre, valor)
+    # Sin COMPOSE_PROJECT_NAME resuelven a los nombres de siempre.
+    resueltos = {
+        nombre: valor.replace(PREFIJO_DE_PROYECTO, "shifty_")
+        for nombre, valor in nombres.items()
+    }
+    assert resueltos == NOMBRES_EN_DESARROLLO, resueltos
+
+
+def test_rabbitmq_conserva_su_nodo_al_recrearse() -> None:
+    """Sin hostname fijo, el nodo se llama rabbit@<id del contenedor>: un
+    contenedor recreado arranca con otro nombre, otro directorio de mnesia
+    dentro del volumen y sin las colas ni los mensajes que habia."""
+    assert _services()["rabbitmq"].get("hostname") == "rabbitmq"

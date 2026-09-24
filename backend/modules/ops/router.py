@@ -64,11 +64,18 @@ async def _database_ready() -> bool:
 
 
 async def _redis_ready() -> bool:
-    """``PING`` con el cliente compartido, obtenido DENTRO del try."""
+    """``PING`` a los DOS Redis (F0-15), clientes obtenidos DENTRO del try.
+
+    El de estado sostiene rate limit, idempotencia y lockout; el de cache, la
+    disponibilidad publica, que con ese Redis caido falla. Cualquiera de los
+    dos caido es una instancia que no esta lista. Sin ``REDIS_CACHE_URL`` los
+    dos son el mismo cliente y el segundo ping es redundante pero inocuo.
+    """
     try:
         async with asyncio.timeout(READINESS_CHECK_TIMEOUT_SECONDS):
-            client = await core.redis.get_redis()
-            await client.ping()
+            estado = await core.redis.get_redis()
+            cache = await core.redis.get_availability_cache()
+            await asyncio.gather(estado.ping(), cache.ping())
         return True
     except Exception:
         return False

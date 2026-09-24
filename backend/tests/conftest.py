@@ -74,7 +74,7 @@ os.environ.update(_TEST_ENV)
 # Test configuration must exist before importing modules that instantiate Settings.
 from core.config import settings  # noqa: E402
 from main import app  # noqa: E402
-from core.redis import get_redis  # noqa: E402
+from core.redis import get_availability_cache, get_redis  # noqa: E402
 
 # Disable rate limit globally during tests
 settings.RATE_LIMIT_ENABLED = False
@@ -137,7 +137,11 @@ def override_redis_dependency() -> Generator[None, None, None]:
     async def fake_get_redis() -> MockRedis:
         return mock_redis
 
+    # El cache de disponibilidad tiene su propio Redis en produccion (F0-15);
+    # en tests comparte el doble para que las pruebas de cache vean las claves.
+    # tests/integration/test_redis_de_cache_separado.py los separa.
     app.dependency_overrides[get_redis] = fake_get_redis
+    app.dependency_overrides[get_availability_cache] = fake_get_redis
     yield
-    if get_redis in app.dependency_overrides:
-        del app.dependency_overrides[get_redis]
+    for dependencia in (get_redis, get_availability_cache):
+        app.dependency_overrides.pop(dependencia, None)

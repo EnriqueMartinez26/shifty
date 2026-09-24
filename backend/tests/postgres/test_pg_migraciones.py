@@ -6,11 +6,24 @@ triggers, RLS forzada, rol sin bypass) y que la ultima migracion sea
 reversible.
 """
 
+import os
+import subprocess
+import sys
+import time
+
+import psycopg2
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from tests.postgres.conftest import alembic
+from tests.postgres.conftest import (
+    APP_URL,
+    BACKEND_ROOT,
+    OWNER_URL,
+    _app_password,
+    _sync_dsn,
+    alembic,
+)
 
 pytestmark = pytest.mark.postgres
 
@@ -222,3 +235,51 @@ async def test_toda_tabla_con_store_id_tiene_rls_forzado_y_politica(
         "la excepcion nombra tablas que ya no tienen store_id: "
         f"{sorted(SIN_RLS_A_PROPOSITO - con_store_id)}"
     )
+
+
+@pytest.mark.asyncio
+async def test_una_migracion_que_espera_un_lock_aborta_en_segundos(
+    owner_engine: AsyncEngine,
+) -> None:
+    """F0-06 (plan de rendimiento): `lock_timeout` en la sesion de Alembic.
+
+    Sintoma que previene: una migracion que espera un lock fuerte encola
+    detras de ella todas las consultas de la app sobre esa tabla; el deploy
+    tumbaba la API sin que la migracion hiciera nada. Aca otra sesion retiene
+    ACCESS EXCLUSIVE sobre `alembic_version` (lo primero que Alembic lee) y la
+    migracion tiene que abortar por lock timeout en segundos, no quedarse
+    esperando. Sin el SET de env.py, el subproceso cuelga hasta el timeout.
+    """
+    assert OWNER_URL and APP_URL
+    antes = _current()
+    bloqueo = psycopg2.connect(_sync_dsn(OWNER_URL))
+    try:
+        with bloqueo.cursor() as cur:
+            cur.execute("LOCK TABLE alembic_version IN ACCESS EXCLUSIVE MODE")
+        inicio = time.monotonic()
+        try:
+            corrida = subprocess.run(
+                [sys.executable, "-m", "alembic", "upgrade", "head"],
+                cwd=BACKEND_ROOT,
+                env={
+                    **os.environ,
+                    "MIGRATION_DATABASE_URL": OWNER_URL,
+                    "DATABASE_URL": APP_URL,
+                    "APP_DB_PASSWORD": _app_password(APP_URL),
+                },
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("la migracion espero el lock sin tope (sin lock_timeout)")
+        demora = time.monotonic() - inicio
+    finally:
+        bloqueo.rollback()
+        bloqueo.close()
+
+    assert corrida.returncode != 0, "la migracion no debia poder tomar el lock"
+    assert "lock timeout" in corrida.stderr, corrida.stderr[-2000:]
+    assert demora < 30, f"la migracion tardo {demora:.1f}s en rendirse"
+    assert _current() == antes

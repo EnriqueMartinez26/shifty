@@ -29,7 +29,7 @@ from core.exceptions import (
 from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
-from core.redis import get_redis
+from core.redis import get_availability_cache, get_redis
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -249,7 +249,7 @@ async def get_public_availability(
     date: Annotated[str, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")],
     force_all: Annotated[bool, Query()] = False,
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> list[object]:
     from datetime import date as date_type
 
@@ -263,7 +263,7 @@ async def get_public_availability(
         except ValueError:
             raise ValidationException("Fecha inválida")
         return list(
-            await AvailabilityService(db, redis).get_available_slots(
+            await AvailabilityService(db, availability_cache).get_available_slots(
                 store.id,
                 service_id,
                 search_date,
@@ -443,6 +443,7 @@ async def create_public_booking(
     data: PublicBookingCreate,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> PublicBookingResponse:
     """Reserva desde el portal. La transaccion es de ``PublicBookingService``.
 
@@ -469,7 +470,9 @@ async def create_public_booking(
         if cached:
             return PublicBookingResponse.model_validate(cached)
         try:
-            response = await PublicBookingService(db, redis).book(data, idempotency_key)
+            response = await PublicBookingService(db, availability_cache).book(
+                data, idempotency_key
+            )
         except Exception:
             await idempotency_release(cache_key, redis)
             raise
@@ -600,7 +603,7 @@ async def client_cancel_appointment(
     request: Request,
     data: ClientCancelRequest,
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> PublicBookingResponse:
     """El cliente cancela su turno; la transaccion es del service (B1-12)."""
     await enforce_rate_limit(
@@ -610,7 +613,9 @@ async def client_cancel_appointment(
         subject=f"{public_id}:{data.phone}",
     )
     async with tenant_bypass(db):
-        return await PublicBookingService(db, redis).cancel_by_client(public_id, data)
+        return await PublicBookingService(db, availability_cache).cancel_by_client(
+            public_id, data
+        )
 
 
 @router.patch(
@@ -622,6 +627,7 @@ async def client_reschedule_appointment(
     data: ClientRescheduleRequest,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> PublicBookingResponse:
     """El cliente reprograma su turno; la transaccion es del service (B1-12).
 
@@ -643,9 +649,9 @@ async def client_reschedule_appointment(
         if cached:
             return PublicBookingResponse.model_validate(cached)
         try:
-            response = await PublicBookingService(db, redis).reschedule_by_client(
-                public_id, data
-            )
+            response = await PublicBookingService(
+                db, availability_cache
+            ).reschedule_by_client(public_id, data)
         except Exception:
             await idempotency_release(cache_key, redis)
             raise

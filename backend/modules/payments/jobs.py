@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
 from core.database import _apply_tenant_context
-from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
@@ -246,6 +246,24 @@ async def _plan_outbox_message(
         if confirmacion is not None:
             mails.append(_MailDelLote(message, confirmacion, contexto))
     return mails
+
+
+async def process_outbox_tick(db: AsyncSession, *, limit: int) -> dict[str, int]:
+    """Un tick del beat sobre el outbox: una sola corrida a la vez (F0-17).
+
+    Con el beat cada 20 s y un lote que puede durar su presupuesto de 45 s,
+    dos hijos del worker procesaban lotes en paralelo. El ``FOR UPDATE SKIP
+    LOCKED`` del lote evita que tomen la MISMA fila, pero no que dos lotes
+    despachen a la vez y compitan por el SMTP y el pool. El advisory lock de
+    sesion (``_exclusive_job``, como el inbox y la conciliacion) deja pasar a
+    uno; el otro no hace nada y el proximo tick retoma. ``process_outbox_batch``
+    queda sin este lock para el endpoint del panel y conserva su SKIP LOCKED.
+    """
+    async with _exclusive_job(db, OUTBOX_JOB_LOCK) as tomado:
+        if not tomado:
+            logger.info("process_outbox_overlap_skipped")
+            return {"processed": 0, "failed": 0, "inspected": 0}
+        return await process_outbox_batch(db, limit=limit)
 
 
 async def process_outbox_batch(
@@ -1103,6 +1121,9 @@ EXPIRE_JOB_LOCK = "job:expire_unpaid_appointments"
 # solapadas del beat ya no puede venir del SKIP LOCKED: viene de aca.
 INBOX_JOB_LOCK = "job:process_webhook_inbox"
 RECONCILE_JOB_LOCK = "job:reconcile_pending_payments"
+# El outbox conserva su SKIP LOCKED; el lock es del TICK del beat (cada 20 s):
+# una sola corrida despachando mails a la vez (process_outbox_tick).
+OUTBOX_JOB_LOCK = "job:process_payment_outbox"
 
 
 async def _release_job_lock(conn: AsyncConnection, params: dict[str, object]) -> None:
@@ -1246,9 +1267,9 @@ async def _expire_unpaid_appointments(
     # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
     if liberados:
         try:
-            redis = await get_redis()
+            cache = await get_availability_cache()
             for store_id, starts_at in liberados:
-                await invalidate_availability(redis, store_id, starts_at)
+                await invalidate_availability(cache, store_id, starts_at)
         except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning("availability_cache_invalidation_failed", error=str(exc))
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}

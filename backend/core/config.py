@@ -3,7 +3,7 @@ import re
 import secrets
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import AliasChoices, Field, model_validator
@@ -159,6 +159,10 @@ _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shifty"
     VERSION: str = "0.1.0"
+    # Nivel de los logs JSON de la app (core/logging.py, F0-22). Un valor
+    # fuera de la lista no valida: el proceso no arranca con un nivel que no
+    # entiende (regla 21).
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     ENV: Environment = Environment.DEVELOPMENT
 
     SECRET_KEY: str
@@ -259,6 +263,10 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 5
     DB_POOL_RECYCLE_SECONDS: int = 1800
     REDIS_URL: str
+    # Redis del cache de disponibilidad (F0-15): `volatile-ttl`, sin persistencia.
+    # Vacio = el mismo REDIS_URL (compatibilidad con un deploy de un solo Redis).
+    # Nada que sea estado (rate limit, idempotencia, lockout, OTP) va aca.
+    REDIS_CACHE_URL: str | None = None
     CELERY_BROKER_URL: str = "memory://"
     CELERY_RESULT_BACKEND_URL: str | None = None
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import AvailabilityCacheClient
 from core.database import get_db
-from core.redis import get_redis
+from core.redis import get_availability_cache
 from core.exceptions import PermissionDeniedException
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AsyncSqlAlchemyUnitOfWork
@@ -55,12 +55,12 @@ def _require_manage(user: User, action: str) -> None:
 async def get_block_service(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> AsyncGenerator[AppointmentBlockService, None]:
     uow = AsyncSqlAlchemyUnitOfWork(db)
     async with uow:
         yield AppointmentBlockService(
-            uow=uow, cache=cast(AvailabilityCacheClient, redis), actor=user
+            uow=uow, cache=cast(AvailabilityCacheClient, availability_cache), actor=user
         )
 
 
