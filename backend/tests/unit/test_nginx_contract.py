@@ -670,6 +670,26 @@ def test_la_cache_la_decide_el_backend_y_nunca_con_credenciales(
         ], (args, nombre)
 
 
+@EDGES
+@pytest.mark.parametrize(
+    ("args", "clave"),
+    [
+        # La imagen es inmutable por id: un ?v=123 no es otra imagen. Con la
+        # query en la clave, cada cache-buster seria una entrada nueva y un
+        # viaje al backend (y ocuparia la cache con copias).
+        (("~", MEDIOS), "$scheme$uri"),
+        # El catalogo SI depende de la query (store_public_id, service_id).
+        (("=", "/api/public/services"), "$scheme$request_uri"),
+        (("=", "/api/public/staff"), "$scheme$request_uri"),
+    ],
+)
+def test_la_clave_de_cache_de_cada_ruta(
+    ruta: Path, args: tuple[str, str], clave: str
+) -> None:
+    loc = location(server_de_la_app(leer(ruta)), *args)
+    assert una(loc, "proxy_cache_key").args == (clave,)
+
+
 @pytest.mark.parametrize(
     ("uri", "calza"),
     [
