@@ -12,8 +12,19 @@ SOLO PARA STAGING. Siembra ``--stores`` tiendas (200 por defecto) con slug
 - 90 dias de historial (~6 turnos por dia habil: completados, cancelados y
   ausentes), los proximos 14 dias ocupados al 40 % y dos bloqueos.
 
-Se niega si ``ENV`` o la configuracion cargada dicen produccion (regla 17:
-falla cerrado). Es idempotente por slug: una tienda ``cap-NNN`` que ya existe
+Falla cerrado (regla 17) con dos capas, en este orden y antes de conectar:
+
+1. El destino. ``--expect-database`` y ``--expect-host`` son obligatorios y
+   tienen que coincidir con la base y el host de ``DATABASE_URL``; ademas el
+   nombre de la base tiene que contener ``staging``, salvo que se lo nombre
+   con ``--allow-database-name`` (queda impreso en el log). ``ENV`` solo no
+   alcanza: el operador lo pisa con ``-e ENV=staging`` y el compose de
+   produccion, que staging tambien usa, fija ``ENV: production``, asi que el
+   mismo comando corrido en el clon de produccion sembraba produccion.
+2. ``ENV``: tiene que ser staging o development; produccion se rechaza
+   aunque la base coincida.
+
+Es idempotente por slug: una tienda ``cap-NNN`` que ya existe
 no se toca y solo entra al manifiesto. Cada tienda va en su propia
 transaccion, asi que un corte deja tiendas enteras o nada.
 
@@ -23,6 +34,7 @@ explicito de RLS (``set_tenant_context(None, True)``), como
 JSON (ids publicos y emails de los duenos, sin contrasenas) para Locust:
 
     ENV=staging SEED_OWNER_PASSWORD=... python scripts/seed_capacidad.py \\
+        --expect-database shifty_staging --expect-host db \\
         --stores 5 --manifest /tmp/capacidad.json     # validar primero con 5
 """
 
@@ -53,7 +65,7 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
     create_async_engine,
 )
 
-from core.config import Environment, redact_url, settings  # noqa: E402
+from core.config import Environment, parse_db_url, redact_url  # noqa: E402
 from core.database import (  # noqa: E402
     TenantSession,
     _apply_tenant_context,
@@ -64,6 +76,9 @@ from core.security import hash_password  # noqa: E402
 from core.utils import local_to_utc, today_local  # noqa: E402
 from modules.appointments.model import Appointment  # noqa: E402
 from modules.billing.model import Plan, StoreSubscription  # noqa: E402
+from modules.public_api.repository import (  # noqa: E402
+    _UNUSABLE_CLIENT_PASSWORD_HASH,
+)
 from modules.services.model import Service  # noqa: E402
 from modules.staff.model import Schedule, Staff, StaffBlock, staff_services  # noqa: E402
 from modules.stores.model import Store, StoreSchedule  # noqa: E402
@@ -88,15 +103,14 @@ SERVICIOS = (
 
 
 def verificar_entorno(environ: Mapping[str, str]) -> str:
-    """Contrasena de los duenos si el entorno es staging o desarrollo.
+    """Contrasena de los duenos si ``ENV`` es staging o desarrollo.
 
-    Se niega con produccion en la variable O en la configuracion cargada, y
-    con cualquier otro valor: sembrar cuentas con clave conocida exige decir
-    explicitamente donde.
+    Es la segunda capa: ``ENV`` lo controla quien corre el script, asi que la
+    que decide es ``verificar_destino``. Aca produccion se rechaza aunque la
+    base coincida, y cualquier valor que no sea staging o development tambien.
     """
     env = environ.get("ENV", "").strip().lower()
-    cargado = str(getattr(settings.ENV, "value", settings.ENV)).lower()
-    if Environment.PRODUCTION.value in (env, cargado):
+    if env == Environment.PRODUCTION.value:
         raise SystemExit(
             "seed_capacidad se niega en produccion: crea cuentas con una "
             "contrasena conocida. Correrlo solo en staging."
@@ -112,6 +126,43 @@ def verificar_entorno(environ: Mapping[str, str]) -> str:
             f"{MIN_PASSWORD_LENGTH} caracteres): es la clave de los duenos."
         )
     return password
+
+
+def verificar_destino(
+    database_url: str, *, base: str, host: str, permitir: str | None
+) -> None:
+    """La base a la que apunta ``DATABASE_URL`` es la que el operador espera.
+
+    Una senal que ``ENV`` no controla: el nombre y el host de la base salen
+    de la URL real del contenedor. Se exige que coincidan con lo esperado y
+    que el nombre diga ``staging``; la excepcion por nombre (una base local
+    o de ensayo) tiene que nombrar exactamente esa base y queda en el log.
+    """
+    destino = redact_url(database_url, keep_target=True)
+    try:
+        partes = parse_db_url(database_url, label="DATABASE_URL")
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    real_base, real_host = str(partes["dbname"]), str(partes["host"])
+    if real_base != base or real_host != host:
+        raise SystemExit(
+            f"El destino no coincide con lo esperado: DATABASE_URL apunta a "
+            f"{destino} y se esperaba la base {base!r} en {host!r}. Revisar "
+            "desde que clon y contenedor se esta corriendo."
+        )
+    if "staging" in real_base.lower():
+        return
+    if permitir is not None and permitir == real_base:
+        print(
+            f"[seed] AVISO: base sin 'staging' en el nombre, aceptada por "
+            f"--allow-database-name {real_base}"
+        )
+        return
+    raise SystemExit(
+        f"La base {real_base!r} no tiene 'staging' en el nombre y puede ser "
+        "produccion. Para una base de ensayo, nombrarla con "
+        f"--allow-database-name {real_base}."
+    )
 
 
 def slug_de(indice: int) -> str:
@@ -346,7 +397,8 @@ def _personas(
         clientes.append(
             User(
                 email=f"{telefono}@store{store_id}.noreply".lower(),
-                hashed_password=hash_dueno,
+                # Como la reserva publica: un cliente no inicia sesion.
+                hashed_password=_UNUSABLE_CLIENT_PASSWORD_HASH,
                 first_name="Cliente",
                 last_name=f"{n:04d}",
                 full_name=f"Cliente {n:04d}",
@@ -529,20 +581,41 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--occupancy", type=float, default=0.4)
     parser.add_argument("--domain", default=DEFAULT_DOMAIN)
     parser.add_argument("--manifest", default="capacidad-manifiesto.json")
+    parser.add_argument(
+        "--expect-database",
+        required=True,
+        help="nombre de la base de STAGING; tiene que coincidir con DATABASE_URL",
+    )
+    parser.add_argument(
+        "--expect-host",
+        required=True,
+        help="host de la base; tiene que coincidir con DATABASE_URL",
+    )
+    parser.add_argument(
+        "--allow-database-name",
+        help="acepta una base sin 'staging' en el nombre (queda en el log)",
+    )
     args = parser.parse_args(argv)
 
-    # Primero la guarda: nada se conecta si el entorno no es el correcto.
-    password = verificar_entorno(os.environ)
+    # Primero las guardas: nada se conecta si el destino o el entorno no son
+    # los correctos.
     database_url = os.environ.get("DATABASE_URL", "")
     if not database_url:
         raise SystemExit("Falta DATABASE_URL (el rol de la app, dentro del backend)")
+    verificar_destino(
+        database_url,
+        base=args.expect_database,
+        host=args.expect_host,
+        permitir=args.allow_database_name,
+    )
+    password = verificar_entorno(os.environ)
     opciones = Opciones(
         stores=max(1, min(args.stores, 999)),
         dias_historial=max(0, min(args.days, 365)),
         por_dia=max(0, min(args.per_day, 30)),
         dias_futuros=max(0, min(args.future_days, 60)),
         ocupacion=max(0.0, min(args.occupancy, 1.0)),
-        dominio=args.domain,
+        dominio=args.domain.strip().lower(),
         manifiesto=Path(args.manifest),
     )
     print(f"[seed] base: {redact_url(database_url, keep_target=True)}")
