@@ -5,7 +5,7 @@ Responsabilidad única: recibir requests HTTP, delegar al AppointmentService
 y serializar la respuesta. Sin lógica de negocio.
 """
 
-from datetime import date as date_type
+from datetime import date as date_type, datetime
 from typing import Annotated, AsyncGenerator, List, Optional, cast
 
 from fastapi import Depends, Path, Query, status
@@ -15,7 +15,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import AvailabilityCacheClient
 from core.router import CanonicalAPIRouter
 from core.database import get_db, tenant_bypass
+from core.exceptions import ValidationException
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
+from core.keyset import (
+    CURSOR_MAX_LENGTH,
+    InvalidCursorError,
+    decode_cursor,
+    encode_cursor,
+)
 from core.redis import get_availability_cache, get_redis
 from core.roles import STORE_MANAGERS, has_any_role, require_roles
 from core.validation import PUBLIC_ID_PATTERN
@@ -410,6 +417,8 @@ async def search_appointments(
     include_total: bool = Query(
         default=True, description="false: no cuenta el total (total = null)"
     ),
+    # F3-08 (aditivo): `next_cursor` de la pagina anterior; reemplaza a `page`.
+    after: Optional[str] = Query(default=None, max_length=CURSOR_MAX_LENGTH),
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> AppointmentSearchResponse:
@@ -431,8 +440,11 @@ async def search_appointments(
     )
 
     repo = AppointmentRepository(db)
-    total, rows = await repo.search_appointments(
-        filters, user.store_id, include_total=include_total
+    total, rows, has_more = await repo.search_appointments(
+        filters,
+        user.store_id,
+        include_total=include_total,
+        after=_search_key(after, page),
     )
     # El telefono del cliente solo lo ve un administrador (dato personal).
     show_phone = has_any_role(user, STORE_MANAGERS)
@@ -443,7 +455,26 @@ async def search_appointments(
         page=filters.page,
         page_size=filters.page_size,
         results=results,
+        next_cursor=(
+            encode_cursor(rows[-1][0].starts_at, rows[-1][0].id) if has_more else None
+        ),
     )
+
+
+def _search_key(after: Optional[str], page: int) -> Optional[tuple[datetime, str]]:
+    """Clave ``(starts_at, id)`` del cursor ``after``; 422 si no es valido.
+
+    ``after`` y ``page`` > 1 a la vez es ambiguo (dos formas de decir donde
+    empieza la pagina) y tambien es 422.
+    """
+    if after is None:
+        return None
+    if page != 1:
+        raise ValidationException("after y page no se combinan")
+    try:
+        return decode_cursor(after)
+    except InvalidCursorError:
+        raise ValidationException("Cursor de paginacion invalido") from None
 
 
 def _to_search_result(

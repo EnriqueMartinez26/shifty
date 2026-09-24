@@ -164,3 +164,6 @@ class AppointmentSearchResponse(BaseModel):
     page: int
     page_size: int
     results: List[AppointmentSearchResult]
+    # Cursor opaco de la pagina siguiente (``after``); ``None`` si no hay mas
+    # (F3-08). Sale tambien en las paginas pedidas por ``page``.
+    next_cursor: Optional[str] = None

@@ -134,7 +134,8 @@ Una interfaz optimizada para móviles donde los clientes finales:
 | `GET` | `/appointments/availability` | Consulta slots libres para un servicio/fecha. |
 | `PATCH` | `/appointments/{id}/confirm` | Cambia estado a confirmado. |
 | `PATCH` | `/appointments/{id}/reschedule` | Reprograma un turno (cancela el anterior y crea uno nuevo atómicamente). |
-| `GET` | `/appointments/search` | Búsqueda con filtros dinámicos y paginación (`page`/`page_size`). `include_total=false` no cuenta el total y devuelve `total: null` (para las paginas 2 en adelante; F3-06). |
+| `GET` | `/appointments/search` | Búsqueda con filtros dinámicos y paginación (`page`/`page_size`). `include_total=false` no cuenta el total y devuelve `total: null` (para las paginas 2 en adelante; F3-06). Cada respuesta trae `next_cursor` (null si no hay mas); pasarlo como `after` pide la pagina siguiente por clave `(starts_at, id)` sin `OFFSET` (`after` con `page` > 1 es 422; F3-08). |
+| `GET` | `/ledger/customers/{client_id}` | Historial de fiado paginado (`limit`/`offset`). Trae `next_cursor`; pasarlo como `after` pide la pagina siguiente por clave `(created_at, id)` sin `OFFSET` (`after` con `offset` es 422; F3-08). |
 | `GET` | `/reports/summary` | Resumen del rango con detalle paginado (`limit`/`offset`). `order=desc` devuelve el detalle del mas reciente al mas viejo; con `limit=6`, los 6 mas recientes (F3-06). |
 
 ---

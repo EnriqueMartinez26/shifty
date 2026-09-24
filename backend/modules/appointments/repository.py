@@ -10,13 +10,14 @@ El commit siempre lo realiza la capa de Servicios.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import TypeAlias
+from typing import Any, NamedTuple, TypeAlias
 
-from sqlalchemy import and_, or_, select, func, update
+from sqlalchemy import Select, and_, or_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from core.database import _apply_tenant_context
+from core.keyset import before_key
 from core.utils import local_to_utc
 from infrastructure.persistence.models.appointment import MAX_APPOINTMENT_SPAN
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -31,6 +32,17 @@ AppointmentAgendaRow: TypeAlias = tuple[Appointment, Service, Staff, User]
 # Fila de la busqueda: del profesional solo ``id`` y ``display_name`` (F3-06),
 # para no disparar las relaciones de ``Staff`` en cada pagina.
 AppointmentSearchRow: TypeAlias = tuple[Appointment, Service, str, str, User]
+
+
+class SearchPage(NamedTuple):
+    """Una pagina de la busqueda: total (``None`` si no se pidio), filas y si
+    hay otra despues de la ultima."""
+
+    total: int | None
+    rows: list[AppointmentSearchRow]
+    has_more: bool
+
+
 AppointmentReminderRow: TypeAlias = tuple[Appointment, Service, Staff, User, Store]
 
 
@@ -513,22 +525,22 @@ class AppointmentRepository:
             User.email.ilike(term),
         )
 
-    async def _count_search(
-        self,
+    @staticmethod
+    def _search_base(
+        columns: list[Any],
         conditions: list[ColumnElement[bool]],
         by_client: ColumnElement[bool] | None,
         service_public_id: str | None,
-    ) -> int:
-        """Total de la busqueda: ``count(appointments.id)`` con el mismo WHERE.
+    ) -> Select[Any]:
+        """Filas de la busqueda leyendo solo ``appointments`` (y lo que filtra).
 
-        F3-06 (R2-05): antes era ``count(*)`` sobre la consulta de la pagina
-        entera, con sus cuatro entidades. Los joins entran solo si filtran:
-        ``services`` para ``service_id`` (se filtra por su ``public_id``) y
-        ``users`` para ``client_name``. Sin el join a ``users`` se exige
-        ``client_id IS NOT NULL``, porque la pagina hace inner join a
-        ``users`` y el total tiene que contar las mismas filas.
+        Base del total y de las claves de la pagina (F3-06/F3-08): los joins
+        entran solo si filtran, ``services`` para ``service_id`` (se filtra
+        por su ``public_id``) y ``users`` para ``client_name``. Sin el join a
+        ``users`` se exige ``client_id IS NOT NULL``: el listado siempre hizo
+        inner join a ``users``, y un turno sin cliente vinculado no entra.
         """
-        query = select(func.count(Appointment.id)).select_from(Appointment)
+        query = select(*columns).select_from(Appointment)
         if service_public_id:
             query = query.join(Service, Appointment.service_id == Service.id).where(
                 Service.public_id == service_public_id
@@ -537,8 +549,7 @@ class AppointmentRepository:
             query = query.join(User, Appointment.client_id == User.id).where(by_client)
         else:
             query = query.where(Appointment.client_id.is_not(None))
-        result = await self.db.execute(query.where(*conditions))
-        return int(result.scalar_one())
+        return query.where(*conditions)
 
     async def search_appointments(
         self,
@@ -546,7 +557,8 @@ class AppointmentRepository:
         store_id: str,
         *,
         include_total: bool = True,
-    ) -> tuple[int | None, list[AppointmentSearchRow]]:
+        after: tuple[datetime, str] | None = None,
+    ) -> SearchPage:
         """
         Búsqueda avanzada con filtros dinámicos y paginación.
         Solo construye la query; no interpreta resultados.
@@ -554,41 +566,62 @@ class AppointmentRepository:
         ``store_id`` es obligatorio: sin el, la busqueda devolvia turnos de
         todas las tiendas de la instalacion.
 
-        ``include_total=False`` no cuenta (devuelve ``None``): el panel lo
-        pide en las paginas siguientes a la primera (F3-06). El orden es
-        ``(starts_at, id)`` descendente: el ``id`` desempata turnos a la misma
-        hora para que las paginas no repitan ni salteen filas.
+        - Total (F3-06, R2-05): ``count(appointments.id)`` sobre la base
+          angosta; antes era ``count(*)`` sobre la consulta de la pagina
+          entera con sus cuatro entidades. ``include_total=False`` no cuenta
+          (``None``): el panel lo pide solo en la primera pagina.
+        - Pagina: primero las claves de la pagina sobre la base angosta
+          (indice ``(store_id, starts_at)``), despues las entidades de ESAS
+          filas. Con los joins en la misma consulta, bajo RLS el planner
+          subestima las filas y ordena todo el historial del profesional.
+        - ``after`` (F3-08, R7-11): la clave ``(starts_at, id)`` de la ultima
+          fila vista; la pagina arranca justo despues, sin ``OFFSET`` (que lee
+          y descarta todo lo saltado). Se pide una fila de mas para saber si
+          hay pagina siguiente sin otra consulta.
+
+        Orden ``(starts_at, id)`` descendente: el ``id`` desempata turnos a la
+        misma hora para que las paginas no repitan ni salteen filas.
         """
         conditions = self._search_conditions(filters, store_id)
         by_client = self._client_name_condition(filters)
-        total = (
-            await self._count_search(conditions, by_client, filters.service_id)
-            if include_total
-            else None
-        )
+        base: dict[str, Any] = {
+            "conditions": conditions,
+            "by_client": by_client,
+            "service_public_id": filters.service_id,
+        }
+        total = None
+        if include_total:
+            conteo = self._search_base([func.count(Appointment.id)], **base)
+            total = int((await self.db.execute(conteo)).scalar_one())
 
-        page = (
+        claves = self._search_base([Appointment.id], **base).order_by(
+            Appointment.starts_at.desc(), Appointment.id.desc()
+        )
+        if after is not None:
+            claves = claves.where(
+                before_key(Appointment.starts_at, Appointment.id, *after)
+            )
+        else:
+            claves = claves.offset((filters.page - 1) * filters.page_size)
+        pagina = claves.limit(filters.page_size + 1).subquery("pagina")
+        result = await self.db.execute(
             select(Appointment, Service, Staff.id, Staff.display_name, User)
+            .join(pagina, Appointment.id == pagina.c.id)
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
-            .where(*conditions)
-        )
-        if by_client is not None:
-            page = page.where(by_client)
-        if filters.service_id:
-            page = page.where(Service.public_id == filters.service_id)
-        offset = (filters.page - 1) * filters.page_size
-        result = await self.db.execute(
-            page.order_by(Appointment.starts_at.desc(), Appointment.id.desc())
-            .offset(offset)
-            .limit(filters.page_size)
+            .where(Appointment.store_id == store_id)
+            .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
         )
         rows: list[AppointmentSearchRow] = [
             (appointment, service, staff_id, staff_name, client)
             for appointment, service, staff_id, staff_name, client in result.all()
         ]
-        return total, rows
+        return SearchPage(
+            total=total,
+            rows=rows[: filters.page_size],
+            has_more=len(rows) > filters.page_size,
+        )
 
     # ------------------------------------------------------------------
     # Consulta para recordatorios automáticos (Celery Beat)

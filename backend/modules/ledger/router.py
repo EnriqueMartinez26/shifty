@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Annotated
 
@@ -11,8 +12,16 @@ from core.exceptions import (
     FeatureDisabledException,
     PermissionDeniedException,
     StoreNotFoundException,
+    ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
+from core.keyset import (
+    CURSOR_MAX_LENGTH,
+    InvalidCursorError,
+    before_key,
+    decode_cursor,
+    encode_cursor,
+)
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user
 from modules.ledger.model import CustomerLedger
@@ -59,6 +68,19 @@ async def _ensure_ledger_feature_enabled(db: AsyncSession, user: User) -> None:
         raise StoreNotFoundException(user.store_id)
     if not is_store_feature_enabled(row.feature_flags, "ledger"):
         raise FeatureDisabledException("deuda")
+
+
+def _ledger_key(after: str | None, offset: int) -> tuple[datetime, str] | None:
+    """Clave ``(created_at, id)`` del cursor ``after``; 422 si no es valido o
+    si viene junto con un ``offset`` (dos formas de decir donde empieza)."""
+    if after is None:
+        return None
+    if offset:
+        raise ValidationException("after y offset no se combinan")
+    try:
+        return decode_cursor(after)
+    except InvalidCursorError:
+        raise ValidationException("Cursor de paginacion invalido") from None
 
 
 def _client_display_name(user: User | None, *, fallback_id: str) -> str:
@@ -183,7 +205,10 @@ async def get_customer_ledger(
     db: AsyncSession = Depends(get_db),
     limit: Annotated[int, Query(ge=1, le=LEDGER_PAGE_MAX)] = LEDGER_PAGE_DEFAULT,
     offset: Annotated[int, Query(ge=0, le=LEDGER_OFFSET_MAX)] = 0,
+    # F3-08 (aditivo): `next_cursor` de la pagina anterior; reemplaza a `offset`.
+    after: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
 ) -> CustomerLedgerResponse:
+    clave = _ledger_key(after, offset)
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
     # SEG-01: un cliente de otra tienda (o inexistente) es 404, como en el
@@ -193,17 +218,23 @@ async def get_customer_ledger(
         CustomerLedger.store_id == user.store_id,
         CustomerLedger.client_id == client_id,
     )
-    result = await db.execute(
+    pagina = (
         select(CustomerLedger)
         .where(*del_cliente)
         # Mas nuevo primero: con un tope, la pagina util es la reciente.
         # El id desempata para que dos filas del mismo instante no se
         # repitan ni se salteen entre paginas.
         .order_by(CustomerLedger.created_at.desc(), CustomerLedger.id.desc())
-        .limit(limit)
-        .offset(offset)
     )
+    if clave is not None:
+        pagina = pagina.where(
+            before_key(CustomerLedger.created_at, CustomerLedger.id, *clave)
+        )
+    # Una fila de mas dice si hay pagina siguiente sin otra consulta.
+    result = await db.execute(pagina.limit(limit + 1).offset(offset))
     movements = list(result.scalars().all())
+    has_more = len(movements) > limit
+    movements = movements[:limit]
     # El saldo y el total salen de SQL (regla 11): antes el saldo era
     # ``movements[-1].balance_after``, que obligaba a traer el historial
     # entero para leer un solo numero (AUD2-B2-10).
@@ -217,6 +248,11 @@ async def get_customer_ledger(
         client_id=client_id,
         balance=balance,
         total=int(total or 0),
+        next_cursor=(
+            encode_cursor(movements[-1].created_at, movements[-1].id)
+            if has_more
+            else None
+        ),
         movements=[
             LedgerMovementResponse(
                 public_id=item.id,

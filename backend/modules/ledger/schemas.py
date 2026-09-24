@@ -32,6 +32,9 @@ class CustomerLedgerResponse(BaseModel):
     # pagina, asi que sin esto el panel no sabe si hay mas (AUD2-B2-10).
     total: int
     movements: list[LedgerMovementResponse]
+    # Cursor opaco de la pagina siguiente (``after``); ``None`` si no hay mas
+    # (F3-08).
+    next_cursor: str | None = None
 
 
 class LedgerSummaryClientItem(BaseModel):

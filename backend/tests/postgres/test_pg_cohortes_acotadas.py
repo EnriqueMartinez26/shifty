@@ -39,9 +39,17 @@ pytestmark = pytest.mark.postgres
 
 
 async def sembrar_historia(
-    owner_engine: AsyncEngine, store: str, service: str, staff: str
+    owner_engine: AsyncEngine,
+    store: str,
+    service: str,
+    staff: str,
+    *,
+    prefijo: str = "",
 ) -> None:
-    """300 clientes, tres anos de turnos (6000) y 30 en la ultima semana."""
+    """300 clientes, tres anos de turnos (6000) y 30 en la ultima semana.
+
+    ``prefijo`` separa los ids y emails cuando se siembra mas de una tienda.
+    """
     async with owner_engine.begin() as conn:
         service_id = (
             await conn.execute(
@@ -53,40 +61,41 @@ async def sembrar_historia(
                 "insert into users (id, email, hashed_password, first_name, "
                 "last_name, role, store_id, is_global_admin, is_active, "
                 "created_at, updated_at) "
-                "select 'CLI' || lpad(g::text, 23, '0'), "
-                "'cli' || g || '@historia.test', 'x', 'Cliente', g::text, "
+                "select :p || 'CLI' || lpad(g::text, 23, '0'), "
+                ":p || 'cli' || g || '@historia.test', 'x', 'Cliente', g::text, "
                 "'client', :store, false, true, now(), now() "
                 "from generate_series(1, 300) g"
             ),
-            {"store": store},
+            {"store": store, "p": prefijo},
         )
         await conn.execute(
             text(
                 "insert into appointments (id, store_id, staff_id, service_id, "
                 "client_id, client_name, starts_at, ends_at, duration_minutes, "
                 "status, version, created_at, updated_at) "
-                "select 'HIST' || lpad(g::text, 22, '0'), :store, :staff, "
-                ":service, 'CLI' || lpad((g % 300 + 1)::text, 23, '0'), 'Historia', "
+                "select :p || 'HIST' || lpad(g::text, 22, '0'), :store, :staff, "
+                ":service, :p || 'CLI' || lpad((g % 300 + 1)::text, 23, '0'), "
+                "'Historia', "
                 "now() - interval '10 days' - g * interval '4 hours', "
                 "now() - interval '10 days' - g * interval '4 hours' "
                 "+ interval '30 minutes', 30, 'completed', 1, now(), now() "
                 "from generate_series(1, 6000) g"
             ),
-            {"store": store, "staff": staff, "service": service_id},
+            {"store": store, "staff": staff, "service": service_id, "p": prefijo},
         )
         await conn.execute(
             text(
                 "insert into appointments (id, store_id, staff_id, service_id, "
                 "client_id, client_name, starts_at, ends_at, duration_minutes, "
                 "status, version, created_at, updated_at) "
-                "select 'RANGO' || lpad(g::text, 21, '0'), :store, :staff, "
-                ":service, 'CLI' || lpad((g * 7 % 300 + 1)::text, 23, '0'), "
+                "select :p || 'RANGO' || lpad(g::text, 21, '0'), :store, :staff, "
+                ":service, :p || 'CLI' || lpad((g * 7 % 300 + 1)::text, 23, '0'), "
                 "'Rango', now() - g * interval '5 hours', "
                 "now() - g * interval '5 hours' + interval '30 minutes', 30, "
                 "'completed', 1, now(), now() "
                 "from generate_series(1, 30) g"
             ),
-            {"store": store, "staff": staff, "service": service_id},
+            {"store": store, "staff": staff, "service": service_id, "p": prefijo},
         )
         await conn.execute(text("analyze appointments"))
         await conn.execute(text("analyze users"))
