@@ -3,6 +3,7 @@ import { User, type UserWriteInput } from '../../domain/entities/User'
 import type { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { CreateUserUseCase } from '../../domain/use-cases/user/CreateUserUseCase'
 import type { CreateUserInput } from '../../domain/use-cases/user/CreateUserUseCase'
+import { UserRole } from '../../domain/value-objects/UserRole'
 import apiClient from '../../infrastructure/http/client'
 import { HttpUserRepository } from '../../infrastructure/repositories/HttpUserRepository'
 import { createUserSchema } from '../validators/user.validators'
@@ -63,6 +64,17 @@ export class UserService extends BaseService<User> {
     return await this.execute(async () => {
       return await this.repository.findAll(includeInactive)
     }, 'listUsers')
+  }
+
+  /**
+   * Lists the store's active clients (GET /users/?role=client; the backend
+   * leaves out inactive users by default).
+   */
+  async listClients(): Promise<User[]> {
+    return await this.execute(
+      () => this.repository.findByRole(UserRole.create('client')),
+      'listClients'
+    )
   }
 
   /**

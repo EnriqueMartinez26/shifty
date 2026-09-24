@@ -11,6 +11,7 @@ import { UserService } from './UserService'
 import { User } from '../../domain/entities/User'
 import type { IUserRepository } from '../../domain/repositories/IUserRepository'
 import type { CreateUserInput } from '../../domain/use-cases/user/CreateUserUseCase'
+import { InMemoryUserRepository } from '../../infrastructure/repositories/InMemoryUserRepository'
 
 describe('UserService', () => {
   let mockRepository: jest.Mocked<IUserRepository>
@@ -166,6 +167,38 @@ describe('UserService', () => {
       expect(mockRepository.update).toHaveBeenCalledWith('user-id', {
         firstName: 'John'
       })
+    })
+  })
+
+  describe('listClients', () => {
+    it('pide los usuarios con rol client al repositorio', async () => {
+      const repository = new InMemoryUserRepository()
+      const clientUser = User.fromPrimitives({
+        id: 'cli-1',
+        email: 'ana@example.com',
+        firstName: 'Ana',
+        lastName: null,
+        phone: null,
+        role: 'client',
+        isActive: true,
+        createdAt: '2026-09-01T12:00:00+00:00'
+      })
+      const staffUser = User.fromPrimitives({
+        id: 'stf-1',
+        email: 'staff@example.com',
+        firstName: 'Beto',
+        lastName: null,
+        phone: null,
+        role: 'staff',
+        isActive: true,
+        createdAt: '2026-09-01T12:00:00+00:00'
+      })
+      await repository.create(clientUser)
+      await repository.create(staffUser)
+
+      const clients = await new UserService(repository).listClients()
+
+      expect(clients.map((user) => user.id)).toEqual(['cli-1'])
     })
   })
 })

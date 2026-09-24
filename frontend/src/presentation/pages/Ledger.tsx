@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { WalletCards } from 'lucide-react'
 
@@ -9,7 +9,7 @@ import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from '../hooks/useLedger'
-import { useManagedUsers } from '../hooks/useManagedUsers'
+import { useStoreClients } from '../hooks/useManagedDomainUsers'
 import {
   currencyFmtEsAr as currencyFmt,
   formatDateEsAr,
@@ -25,15 +25,16 @@ const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund',
 }
 
 const LedgerPage: React.FC = () => {
-  const usersQuery = useManagedUsers(true)
+  const clientsQuery = useStoreClients()
   const summaryQuery = useLedgerSummary()
   const addMovement = useAddLedgerMovement()
-  const clients = useMemo(
-    () => (usersQuery.data || []).filter((user) => user.role === 'client' && user.is_active),
-    [usersQuery.data]
-  )
+  const clients = clientsQuery.data ?? []
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null)
-  const ledgerQuery = useCustomerLedger(selectedClientId)
+  // Sin eleccion (o si el elegido ya no esta) se usa el primero: derivado en
+  // el render, sin un efecto que lo escriba (regla 27).
+  const selectedClient = clients.find((client) => client.id === selectedClientId) ?? clients[0]
+  const effectiveClientId = selectedClient?.id ?? null
+  const ledgerQuery = useCustomerLedger(effectiveClientId)
   const [movementForm, setMovementForm] = useState({
     movement_type: 'charge' as 'charge' | 'payment' | 'adjustment' | 'refund',
     amount: '',
@@ -41,13 +42,6 @@ const LedgerPage: React.FC = () => {
     notes: ''
   })
   const [message, setMessage] = useState('')
-
-  useEffect(() => {
-    const firstClient = clients[0]
-    if (!selectedClientId && firstClient) {
-      setSelectedClientId(firstClient.public_id)
-    }
-  }, [clients, selectedClientId])
 
   const inputStyle = {
     background: 'white',
@@ -63,10 +57,10 @@ const LedgerPage: React.FC = () => {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
-    if (!selectedClientId) return
+    if (!effectiveClientId) return
     try {
       await addMovement.mutateAsync({
-        clientId: selectedClientId,
+        clientId: effectiveClientId,
         payload: {
           movement_type: movementForm.movement_type,
           amount: Number(movementForm.amount),
@@ -86,12 +80,12 @@ const LedgerPage: React.FC = () => {
       <PageHeader
         title="Cuentas pendientes"
         description="Mira cuanto debe cada cliente, que pago y que quedo pendiente."
-        isLoading={usersQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading}
+        isLoading={clientsQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading}
         loadingText="Cargando cuentas pendientes..."
       />
 
       <QueryErrorNotice
-        error={usersQuery.error ?? summaryQuery.error ?? ledgerQuery.error}
+        error={clientsQuery.error ?? summaryQuery.error ?? ledgerQuery.error}
         message="No se pudieron cargar las cuentas pendientes."
       />
 
@@ -156,14 +150,14 @@ const LedgerPage: React.FC = () => {
             </h3>
           </div>
           <select
-            value={selectedClientId || ''}
+            value={effectiveClientId ?? ''}
             onChange={(e) => setSelectedClientId(e.target.value)}
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
             style={inputStyle}
           >
             {clients.map((client) => (
-              <option key={client.public_id} value={client.public_id}>
-                {client.first_name || client.email} {client.last_name || ''}
+              <option key={client.id} value={client.id}>
+                {client.firstName || client.email.getValue()} {client.lastName || ''}
               </option>
             ))}
           </select>
@@ -216,7 +210,7 @@ const LedgerPage: React.FC = () => {
             />
             <button
               type="submit"
-              disabled={!selectedClientId || addMovement.isPending}
+              disabled={!effectiveClientId || addMovement.isPending}
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >
@@ -235,8 +229,7 @@ const LedgerPage: React.FC = () => {
                 Estado de cuenta
               </h3>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                Cliente seleccionado:{' '}
-                {clients.find((client) => client.public_id === selectedClientId)?.email || '-'}
+                Cliente seleccionado: {selectedClient?.email.getValue() ?? '-'}
               </p>
             </div>
             <div className="text-right">
