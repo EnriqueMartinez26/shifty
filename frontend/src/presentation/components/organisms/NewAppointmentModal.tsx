@@ -200,11 +200,9 @@ export const NewAppointmentModal: React.FC<NewAppointmentModalProps> = ({
       await createAppointment.mutateAsync(payload)
       onClose()
     } catch (err) {
-      // El repositorio traduce el 409 del backend a ConflictError, pero
-      // AppointmentService.execute() lo re-envuelve en un Error generico y
-      // conserva el original en `originalError` (BaseService.handleError).
-      const originalError = (err as { originalError?: unknown } | undefined)?.originalError
-      if (originalError instanceof ConflictError) {
+      // El repositorio traduce el 409 del backend a ConflictError y
+      // BaseService.handleError lo deja pasar tipado (F9-03).
+      if (err instanceof ConflictError) {
         setError('Ese horario ya está ocupado para ese profesional.')
       } else {
         setError(getErrorMessage(err, 'No se pudo crear el turno'))

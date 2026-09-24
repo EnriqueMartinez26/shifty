@@ -1,5 +1,6 @@
 import { z, type ZodTypeAny } from 'zod'
 
+import { ApplicationError } from '@shared/errors/ApplicationError'
 import { isProduction } from '@shared/utils/env'
 
 /**
@@ -88,12 +89,23 @@ export abstract class BaseService<T> {
   /**
    * Centralized error handling. Evaluates internal exceptions (TypeErrors, ValidationErrors, NetworkErrors)
    * and translates them into uniform, sanitized user-friendly exceptions without exposing technical details.
+   * Typed ApplicationErrors are rethrown unchanged so callers can still discriminate them by class.
    *
    * @param error The raw error to analyze.
    * @returns Never returns, always throws a sanitized exception.
    */
   protected handleError(error: unknown): never {
     const serviceName = this.constructor.name
+
+    // Un ApplicationError ya es la traduccion tipada del repositorio
+    // (ConflictError, NotFoundError...): re-envolverlo en un Error plano
+    // dejaba inertes el `instanceof` del GlobalErrorHandler y de la UI (F9-03).
+    // Su mensaje ya es el que veia el usuario, asi que viaja tal cual.
+    if (error instanceof ApplicationError) {
+      this.log('ERROR', `${serviceName} - ${error.name}: ${error.message}`)
+      throw error
+    }
+
     let userMessage = 'Ocurrió un error inesperado en la operación.'
     let errorStack = ''
     let details: unknown = null

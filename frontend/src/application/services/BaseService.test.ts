@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { ConflictError, NotFoundError } from '@shared/errors'
+
 import { BaseService } from './BaseService'
 
 // Concrete subclass of BaseService to test the abstract class logic
@@ -122,6 +124,23 @@ describe('BaseService', () => {
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('[ERROR] TestService - Exception: Custom domain exception')
+      )
+    })
+
+    it.each([
+      ['ConflictError', new ConflictError('El horario ya esta ocupado')],
+      ['NotFoundError', new NotFoundError('Staff no encontrado')]
+    ])('deja pasar el %s tipado sin re-envolverlo (F9-03)', async (_name, typed) => {
+      // Re-envolverlo en un Error plano dejaba inerte el `instanceof` del
+      // GlobalErrorHandler y de la UI: el 409 llegaba como error generico.
+      const error: unknown = await service
+        .runCountedFailingOperation(() => Promise.reject(typed))
+        .catch((reason: unknown) => reason)
+
+      expect(error).toBe(typed)
+      expect(error).toBeInstanceOf(typed.constructor)
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`[ERROR] TestService - ${typed.name}: ${typed.message}`)
       )
     })
 

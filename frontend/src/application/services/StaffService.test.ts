@@ -179,7 +179,7 @@ describe('StaffService', () => {
       // El 404 del backend llega normalizado como NotFoundError desde el repo.
       mockRepository.update.mockRejectedValue(new NotFoundError('Staff no encontrado'))
 
-      // handleError re-envuelve, pero conserva el original en `originalError`.
+      // handleError deja pasar el error tipado sin re-envolverlo (F9-03).
       const error: unknown = await service
         .updateStaff('invalid-id', {
           first_name: 'Jane',
@@ -190,8 +190,8 @@ describe('StaffService', () => {
         })
         .catch((reason: unknown) => reason)
 
+      expect(error).toBeInstanceOf(NotFoundError)
       expect(error).toMatchObject({ message: 'Staff no encontrado' })
-      expect((error as { originalError?: unknown }).originalError).toBeInstanceOf(NotFoundError)
     })
   })
 

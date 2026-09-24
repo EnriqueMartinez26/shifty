@@ -67,7 +67,7 @@ export class StaffService extends BaseService<Staff> {
    * @param id The unique identifier of the staff member.
    * @param data The edited form values; `kind` is the staff's current kind.
    * @returns A promise that resolves to the updated Staff entity.
-   * @throws NotFoundError (as `originalError`) if the backend answers 404.
+   * @throws NotFoundError if the backend answers 404.
    */
   async updateStaff(id: string, data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
