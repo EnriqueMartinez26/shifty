@@ -596,8 +596,17 @@ async def refresh_mercadopago_oauth(
     try:
         config = await refresh_mercadopago_oauth_without_transaction(db, config=config)
     except RuntimeError as exc:
+        # Regla 20: el texto de la excepcion puede traer el cuerpo de la
+        # respuesta de Mercado Pago; al log va solo el tipo y su status.
+        logger.warning(
+            "mercadopago_oauth_refresh_failed",
+            error_type=type(exc).__name__,
+            provider_status=getattr(exc, "status_code", None),
+        )
         raise AppException(
-            message=str(exc),
+            message=(
+                "No se pudo renovar la conexion con Mercado Pago. Volve a conectarla."
+            ),
             http_status=status.HTTP_409_CONFLICT,
             error_code="MERCADOPAGO_REFRESH_FAILED",
         )

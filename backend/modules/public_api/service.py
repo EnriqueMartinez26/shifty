@@ -70,6 +70,7 @@ from modules.payments.deposit_rules import (
 from modules.payments.model import JsonValue, OutboxMessage, Payment, PaymentStatus
 from modules.payments.service import (
     MercadoPagoAPIError,
+    PaymentGatewayNotConnectedError,
     ensure_payment_preference,
     mercadopago_budget,
 )
@@ -303,17 +304,41 @@ async def revert_failed_booking(
         )
 
 
+# Regla 20: la reserva es anonima y el texto de estas excepciones puede traer
+# hasta 400 caracteres del cuerpo que devolvio Mercado Pago (o el nombre del
+# breaker). Afuera sale un mensaje fijo por caso; al log, solo el tipo y el
+# status de MP si lo hay.
+
+
 def _payment_provider_unavailable(exc: Exception) -> AppException:
+    logger.warning(
+        "public_booking_payment_provider_unavailable", error_type=type(exc).__name__
+    )
     return AppException(
-        message=f"Proveedor de pagos temporalmente no disponible: {exc}",
+        message="Proveedor de pagos temporalmente no disponible",
         http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
         error_code="PAYMENT_PROVIDER_UNAVAILABLE",
     )
 
 
 def _payment_link_failed(exc: Exception) -> AppException:
+    if isinstance(exc, PaymentGatewayNotConnectedError):
+        # Precondicion de la tienda, no una falla del proveedor (SEG-04).
+        logger.info(
+            "public_booking_gateway_not_connected", error_type=type(exc).__name__
+        )
+        return AppException(
+            message="Este negocio no tiene el cobro online disponible en este momento",
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="PAYMENT_GATEWAY_NOT_CONNECTED",
+        )
+    logger.warning(
+        "public_booking_payment_link_failed",
+        error_type=type(exc).__name__,
+        provider_status=getattr(exc, "status_code", None),
+    )
     return AppException(
-        message=f"No se pudo iniciar el cobro online: {exc}",
+        message="No se pudo iniciar el cobro online",
         http_status=status.HTTP_502_BAD_GATEWAY,
         error_code="PAYMENT_LINK_CREATION_FAILED",
     )
