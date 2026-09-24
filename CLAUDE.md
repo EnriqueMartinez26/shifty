@@ -103,7 +103,7 @@ Una instrucción en lenguaje natural no es una garantía.
   `WebhookInbox`), procesados por Celery beat cada minuto.
 - **Dos Redis con papeles distintos** (plan §7, decisión 5). El caché de
   disponibilidad va a `redis_cache` por `core/redis.py::get_availability_cache`
-  (`REDIS_CACHE_URL`; `allkeys-lru`, sin persistencia: perderlo solo cuesta
+  (`REDIS_CACHE_URL`; `volatile-ttl`, sin persistencia: perderlo solo cuesta
   recalcular). Rate limit, idempotencia, OTP, lockout, OAuth y los resultados
   de Celery van a `redis_state` por `REDIS_URL` (`noeviction`): un desalojo
   nunca puede aflojar una protección. Nada de estado nuevo en el Redis de
