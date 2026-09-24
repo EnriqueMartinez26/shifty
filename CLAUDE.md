@@ -280,7 +280,12 @@ Una instrucción en lenguaje natural no es una garantía.
     `test_config_production_guards.py`): sin placeholders en `SECRET_KEY` /
     `FIELD_ENCRYPTION_KEY`, CORS sin `*` ni localhost,
     `RATE_LIMIT_FAIL_CLOSED`, docs apagados, OTP no `console`. No se agrega
-    un default que deje pasar uno de estos en prod. La URL de la base se lee
+    un default que deje pasar uno de estos en prod. `RATE_LIMIT_FAIL_CLOSED`
+    cierra por política, no en bloque (`core/rate_limit.py::ACTION_POLICIES`,
+    2026-09-24): sin Redis, `auth`, `public-write`, OTP y el lockout de login
+    responden 503; `public-read`, `global` y el webhook de MP (que ya tiene
+    HMAC, ventana e idempotencia) siguen abiertos con aviso a Sentry. Una
+    acción de `enforce_rate_limit` sin política declarada falla cerrada. La URL de la base se lee
     en un solo lugar (`core/config.py::parse_db_url`, parámetro `ssl` de
     asyncpg, `require` si la URL no dice nada); las URLs locales y de CI
     llevan `?ssl=disable` explícito y compose lo toma de `POSTGRES_SSL`.
