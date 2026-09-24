@@ -38,7 +38,8 @@ _ESTADOS_APP = text(
     "SELECT CASE WHEN xact_start IS NOT NULL AND xact_start < :desde "
     "THEN 'ajena' ELSE state END "
     "FROM pg_stat_activity "
-    "WHERE usename = 'shifty_app' AND backend_type = 'client backend'"
+    "WHERE usename = 'shifty_app' AND backend_type = 'client backend' "
+    "AND datname = current_database()"
 )
 
 

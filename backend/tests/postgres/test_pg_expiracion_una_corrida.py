@@ -69,6 +69,7 @@ async def test_dos_corridas_de_expiracion_no_consultan_dos_veces_el_mismo_cobro(
                             text(
                                 "select count(*) from pg_stat_activity "
                                 "where usename = 'shifty_app' "
+                                "and datname = current_database() "
                                 "and state = 'idle in transaction'"
                             )
                         )
