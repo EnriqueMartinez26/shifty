@@ -9,8 +9,8 @@ from core.validation import (
     PUBLIC_ID_PATTERN,
     SLUG_PATTERN,
     reject_control_chars,
-    reject_unsafe_url,
 )
+from modules.stores.media import reject_media_url, validate_image_url
 from modules.stores.schemas import HEX_COLOR_PATTERN
 from modules.users.model import UserRole
 
@@ -44,7 +44,8 @@ class StoreCreate(BaseModel):
     @field_validator("logo_url")
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
-        return reject_unsafe_url(value)
+        # Una tienda nueva no tiene logo subido que enlazar (F1-30).
+        return reject_media_url(value)
 
     @field_validator("name")
     @classmethod
@@ -67,7 +68,9 @@ class StoreGlobalUpdate(BaseModel):
     @field_validator("logo_url")
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
-        return reject_unsafe_url(value)
+        # El logo subido (relativo o absoluto) o http(s): que la subida sea
+        # la de la tienda lo decide media.resolve_image_link (F1-30).
+        return validate_image_url(value)
 
     @field_validator("name")
     @classmethod

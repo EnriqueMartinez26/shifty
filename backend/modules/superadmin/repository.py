@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, TypedDict
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.engine import Row
 from sqlalchemy.sql import Subquery
 from sqlalchemy.sql.elements import ColumnElement
@@ -15,7 +15,7 @@ from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
-from modules.stores.model import Store
+from modules.stores.model import Store, StoreMedia
 from modules.users.guards import (
     assert_deactivation_allowed,
     assert_global_admin_revocation_allowed,
@@ -307,10 +307,22 @@ class StoreAdminRepository(_BaseAdminRepository):
             raise ValueError("Ya existe una tienda con ese slug")
 
     async def update_store(
-        self, store: Store, payload: dict[str, Any], actor: User
+        self,
+        store: Store,
+        payload: dict[str, Any],
+        actor: User,
+        *,
+        unlinked_media_id: str | None = None,
     ) -> Store:
         before = {"name": store.name, "slug": store.slug, "is_active": store.is_active}
         apply_patch(store, payload)
+        if unlinked_media_id is not None:
+            await self.db.execute(
+                delete(StoreMedia).where(
+                    StoreMedia.store_id == store.id,
+                    StoreMedia.id == unlinked_media_id,
+                )
+            )
         try:
             await self.db.flush()
             self._audit(
