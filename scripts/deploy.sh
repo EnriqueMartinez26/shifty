@@ -3,14 +3,18 @@
 #
 #   APP_VERSION=<sha> scripts/deploy.sh deploy     (o: make deploy APP_VERSION=<sha>)
 #   scripts/deploy.sh rollback                     (o: make rollback)
+#   scripts/deploy.sh edge                         (o: make deploy-edge)
 #
 # Secuencia del deploy (docs/DEPLOY_RUNBOOK.md):
-#   1. Preflight: Compose >= 2.24 (`!reset`), `docker compose config` valido,
-#      los servicios de DEPLOY_SERVICES existen, la base corre, disco < 80 %,
-#      backup exitoso de menos de 24 h.
+#   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
+#      2.24 (`!reset`), `docker compose config` valido, los servicios de
+#      DEPLOY_SERVICES existen, la base corre, disco < 80 %, backup exitoso de
+#      menos de 24 h.
 #   2. Guarda la version que corre hoy en .deploy/previous.
-#   3. `pull` de las imagenes de APP_VERSION (las construye CI:
-#      .github/workflows/build-images.yml; el VPS no construye).
+#   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
+#      `imagen:tag` quedo local (las construye CI:
+#      .github/workflows/build-images.yml). El VPS NUNCA construye: todo `up`
+#      y `run` lleva --no-build.
 #   4. MIGRA ANTES DE RECREAR, con el codigo viejo sirviendo:
 #      `compose run --rm --no-deps backend alembic upgrade head`. Por eso las
 #      migraciones son expand/contract (CLAUDE.md §3): el codigo viejo tiene
@@ -20,15 +24,23 @@
 #      nginx las resuelva (`resolve`), baja las viejas. Si las nuevas no quedan
 #      sanas se descartan y las viejas siguen sirviendo. DEPLOY_ROLLING=0: `up`
 #      directo (5-10 s de 502 mientras se recrean).
-#   6. Resto de la app (workers, beat, frontend, nginx) con `up -d --no-deps`:
-#      nunca recrea db/redis/rabbitmq.
-#   7. `nginx -t` + `nginx -s reload`: por si cambio la imagen o la config de
-#      nginx (el backend lo re-resuelve solo). Nunca restart.
+#   6. Resto de la app (workers, beat, frontend) con `up -d --no-deps`:
+#      nunca recrea db/redis/rabbitmq ni el borde. El frontend se recrea si
+#      cambio su imagen: la SPA da 502 un instante.
+#   7. `nginx -t` + `nginx -s reload`. El borde (nginx) solo se RECARGA en un
+#      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
+#      cuando cambio su imagen o su config.
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
 #      contenedor unhealthy, 5xx < 0,5 % en el log de nginx de los ultimos
 #      2 minutos. Si falla: rollback automatico (sin migrar).
 #
 # Rollback: APP_VERSION = .deploy/previous; pull, pasos 5 a 8, NUNCA migra.
+# Si el pull falla sigue con las imagenes locales, pero solo si estan todas:
+# si falta una, sale con 2 y alerta sin tocar nada.
+#
+# Edge: pull de nginx y recreacion SOLO si cambio el id de su imagen o la
+# config montada (un bind mount de un archivo sigue viendo el inodo viejo
+# cuando git lo reemplaza: hace falta recrear, no alcanza con reload).
 #
 # Sin sudo ni docker.sock: el usuario que lo corre tiene que estar en el grupo
 # docker. Las variables de abajo se pueden fijar en /etc/shifty/ops.env.
@@ -37,7 +49,11 @@ set -euo pipefail
 # shellcheck source=lib/common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
-: "${DEPLOY_SERVICES:=backend celery_worker celery_worker_interactive celery_beat frontend nginx}"
+# Compose toma el proyecto, el .env y COMPOSE_FILE del directorio actual.
+cd "$SHIFTY_DIR"
+
+# Sin nginx: el borde se recarga, no se recrea (ver `edge`).
+: "${DEPLOY_SERVICES:=backend celery_worker celery_worker_interactive celery_beat frontend}"
 : "${DEPLOY_BACKEND_SERVICE:=backend}"
 : "${DEPLOY_BACKEND_REPLICAS:=3}"
 : "${DEPLOY_ROLLING:=1}"
@@ -61,6 +77,10 @@ set -euo pipefail
 # trafico un 502 suelto no dispara un rollback.
 : "${DEPLOY_GATE_MIN_5XX:=3}"
 : "${DEPLOY_AUTO_ROLLBACK:=1}"
+: "${DEPLOY_EDGE_SERVICE:=nginx}"
+# Archivos que el borde monta por bind mount (relativos al clon).
+: "${DEPLOY_EDGE_CONF_FILES:=nginx/nginx.prod.conf}"
+: "${DEPLOY_PROD_COMPOSE:=docker-compose.prod.yml}"
 
 estado_dir="$SHIFTY_DIR/.deploy"
 lock="$estado_dir/lock"
@@ -94,8 +114,25 @@ version_mayor_o_igual() {
 
 # --- preflight --------------------------------------------------------------
 
+# COMPOSE_FILE del entorno (gana, como en compose) o del .env del clon.
+compose_file_efectivo() {
+  if [ -n "${COMPOSE_FILE:-}" ]; then
+    printf '%s\n' "$COMPOSE_FILE"
+    return
+  fi
+  sed -n 's/^[[:space:]]*COMPOSE_FILE[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null |
+    tail -n 1 | tr -d '"'"'"'\r'
+}
+
 preflight() {
   local completo="$1"
+
+  local archivos
+  archivos="$(compose_file_efectivo)"
+  case ":$archivos:" in
+    *":$DEPLOY_PROD_COMPOSE:"* | *"/$DEPLOY_PROD_COMPOSE:"*) ;;
+    *) die "preflight: COMPOSE_FILE (${archivos:-vacio}) no incluye $DEPLOY_PROD_COMPOSE; fijarlo en el .env del servidor (docs/DEPLOY_RUNBOOK.md §1)" ;;
+  esac
 
   local version
   version="$(docker compose version --short 2>/dev/null || true)"
@@ -143,7 +180,7 @@ preflight() {
 
 migrar() {
   log "migrando a head con el codigo viejo sirviendo"
-  docker compose run --rm --no-deps -T "$DEPLOY_BACKEND_SERVICE" alembic upgrade head
+  docker compose run --rm --no-deps --no-build -T "$DEPLOY_BACKEND_SERVICE" alembic upgrade head
 }
 
 # Las funciones de pasos devuelven su error con `|| return 1` explicito: se
@@ -160,7 +197,7 @@ backend_gradual() {
   local servicio="$DEPLOY_BACKEND_SERVICE"
   if [ "$DEPLOY_ROLLING" != 1 ]; then
     log "backend: recreacion directa (DEPLOY_ROLLING=0): 5-10 s de 502"
-    docker compose up -d --no-deps --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" || return 1
+    docker compose up -d --no-deps --no-build --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" || return 1
     return 0
   fi
 
@@ -170,7 +207,7 @@ backend_gradual() {
   log "backend: ${#viejas[@]} replicas viejas, levanto $DEPLOY_BACKEND_REPLICAS nuevas"
 
   local fallo=0
-  docker compose up -d --no-deps --no-recreate --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" \
+  docker compose up -d --no-deps --no-build --no-recreate --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" \
     --scale "$servicio=$total" "$servicio" || fallo=1
 
   mapfile -t todas < <(docker compose ps -q "$servicio")
@@ -205,7 +242,21 @@ resto_de_la_app() {
     [ "$s" = "$DEPLOY_BACKEND_SERVICE" ] || resto+=("$s")
   done
   [ "${#resto[@]}" -gt 0 ] || return 0
-  docker compose up -d --no-deps "${resto[@]}" || return 1
+  docker compose up -d --no-deps --no-build "${resto[@]}" || return 1
+}
+
+# Cada `imagen:tag` que va a correr tiene que estar local: sin esto, un pull
+# a medias terminaba en un `up` que construia o que fallaba a mitad de camino.
+imagenes_locales() {
+  local imagen faltan=""
+  # shellcheck disable=SC2086
+  for imagen in $(docker compose config --images $DEPLOY_SERVICES); do
+    docker image inspect "$imagen" >/dev/null 2>&1 || faltan="$faltan $imagen"
+  done
+  if [ -n "$faltan" ]; then
+    log "faltan imagenes locales:$faltan"
+    return 1
+  fi
 }
 
 # --- compuerta --------------------------------------------------------------
@@ -256,7 +307,12 @@ desplegar_version() {
   local version="$1" etiqueta="$2"
   export APP_VERSION="$version"
   # shellcheck disable=SC2086
-  docker compose pull $DEPLOY_SERVICES || log "$etiqueta: pull fallo; sigo con las imagenes locales de $version"
+  docker compose pull $DEPLOY_SERVICES || log "$etiqueta: pull fallo; sigo solo si las imagenes de $version estan locales"
+  if ! imagenes_locales; then
+    alert "deploy: $etiqueta a $version imposible, faltan imagenes locales" \
+      "Sin pull y sin las imagenes en el host no hay a que volver. No se toco nada."
+    return 2
+  fi
   backend_gradual || return 1
   resto_de_la_app || return 1
   recargar_nginx || return 1
@@ -269,10 +325,13 @@ cmd_rollback() {
   anterior="$(head -n 1 "$estado_dir/previous" 2>/dev/null || true)"
   [ -n "$anterior" ] || die "rollback: no hay version anterior en $estado_dir/previous"
   log "rollback a $anterior (sin migrar)"
-  if desplegar_version "$anterior" rollback; then
+  local codigo=0
+  desplegar_version "$anterior" rollback || codigo=$?
+  if [ "$codigo" = 0 ]; then
     log "rollback: ok, corre $anterior"
     return 0
   fi
+  [ "$codigo" = 2 ] && return 2
   alert "deploy: el ROLLBACK a $anterior tambien fallo la compuerta" \
     "Intervenir a mano: docker compose ps; docker compose logs --tail 200 backend nginx"
   return 2
@@ -293,7 +352,8 @@ cmd_deploy() {
 
   export APP_VERSION="$nueva"
   # shellcheck disable=SC2086
-  docker compose pull $DEPLOY_SERVICES
+  docker compose pull $DEPLOY_SERVICES || die "deploy: pull de $nueva fallo (la imagen esta publicada en GHCR? docker login ghcr.io?)"
+  imagenes_locales || die "deploy: despues del pull faltan imagenes de $nueva; no se migra ni se recrea nada"
   migrar
 
   if ! backend_gradual; then
@@ -315,8 +375,39 @@ cmd_deploy() {
   exit $((codigo == 0 ? 1 : codigo))
 }
 
+# El borde: se recarga en cada deploy; se RECREA solo si cambio su imagen o
+# la config que monta. Recrearlo corta todo el trafico un instante.
+cmd_edge() {
+  tomar_lock
+  usar_version_en_curso
+  [ -n "${APP_VERSION:-}" ] || die "edge: no hay version en curso (.deploy/current); hacer un deploy primero"
+  local servicio="$DEPLOY_EDGE_SERVICE" imagen deseada corriendo id huella anterior
+  docker compose pull "$servicio" || die "edge: pull de $servicio fallo"
+  imagen="$(docker compose config --images "$servicio" | head -n 1)"
+  deseada="$(docker image inspect -f '{{.Id}}' "$imagen")" || die "edge: falta la imagen $imagen"
+  id="$(docker compose ps -q "$servicio" | head -n 1)"
+  corriendo=""
+  [ -z "$id" ] || corriendo="$(docker inspect -f '{{.Image}}' "$id")"
+  # shellcheck disable=SC2086
+  huella="$(cat $DEPLOY_EDGE_CONF_FILES | sha256sum | cut -d' ' -f1)"
+  anterior="$(cat "$estado_dir/edge-conf.sha256" 2>/dev/null || true)"
+
+  if [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ]; then
+    log "edge: recreo $servicio (imagen ${corriendo:-ninguna} -> $deseada, config ${anterior:-sin registro} -> $huella)"
+    docker compose up -d --no-deps --no-build --force-recreate --wait \
+      --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" ||
+      die "edge: $servicio no quedo sano despues de recrearlo"
+  else
+    log "edge: sin cambios de imagen ni de config, solo reload"
+  fi
+  recargar_nginx || die "edge: nginx -t o reload fallo"
+  printf '%s\n' "$huella" >"$estado_dir/edge-conf.sha256"
+  log "edge: ok"
+}
+
 case "${1:-deploy}" in
   deploy) cmd_deploy ;;
+  edge) cmd_edge ;;
   rollback)
     tomar_lock
     # El compose de produccion exige APP_VERSION hasta para `config`: el
@@ -328,5 +419,5 @@ case "${1:-deploy}" in
     cmd_rollback
     ;;
   preflight) preflight 1 ;;
-  *) die "uso: $0 [deploy|rollback|preflight]" ;;
+  *) die "uso: $0 [deploy|rollback|edge|preflight]" ;;
 esac

@@ -63,7 +63,7 @@ clean:
 # Corren en el clon del servidor, con el usuario del deploy (grupo docker) y
 # COMPOSE_FILE fijado en el .env del servidor. `bash` explicito: el bit de
 # ejecucion no sobrevive a un checkout desde Windows.
-.PHONY: deploy rollback backup
+.PHONY: deploy rollback deploy-edge backup
 
 # make deploy APP_VERSION=<sha>: la imagen tiene que existir en GHCR
 # (.github/workflows/build-images.yml). Migra antes de recrear.
@@ -73,6 +73,11 @@ deploy:
 # Vuelve a .deploy/previous sin migrar (expand/contract).
 rollback:
 	bash scripts/deploy.sh rollback
+
+# El borde (nginx) no se recrea en `make deploy`, solo se recarga. Esto lo
+# recrea si cambio su imagen o nginx/nginx.prod.conf; si no, solo recarga.
+deploy-edge:
+	bash scripts/deploy.sh edge
 
 # Backup a mano (el diario lo dispara deploy/systemd/shifty-backup.timer).
 backup:

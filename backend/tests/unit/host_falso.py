@@ -57,12 +57,24 @@ if [ "$1" = compose ]; then
     echo 'required variable APP_VERSION is missing a value' >&2
     exit 15
   fi
+  # Directorio desde el que se hablo con compose (el proyecto sale de ahi).
+  (pwd -W 2>/dev/null || pwd) > "$FAKE_DIR/cwd"
   shift
   case "$1" in
     version) echo "${FAKE_COMPOSE_VERSION:-2.29.1}"; exit 0 ;;
     config)
       if [ "$2" = --services ]; then
-        for s in ${FAKE_SERVICES:-db redis rabbitmq backend celery_worker celery_worker_interactive celery_beat frontend nginx}; do echo "$s"; done
+        for s in ${FAKE_SERVICES:-db redis_cache redis_state rabbitmq backend celery_worker celery_worker_interactive celery_beat frontend nginx}; do echo "$s"; done
+        exit 0
+      fi
+      if [ "$2" = --images ]; then
+        shift 2
+        for s in "$@"; do
+          case "$s" in
+            nginx) echo "${FAKE_NGINX_IMAGE:-nginx:1.27.5-alpine}" ;;
+            *) echo "ghcr.io/x/shifty-$s:$APP_VERSION" ;;
+          esac
+        done
         exit 0
       fi
       exit "${FAKE_CONFIG_EXIT:-0}" ;;
@@ -70,6 +82,7 @@ if [ "$1" = compose ]; then
       case "$*" in
         *" backend"*) cat "$ids_backend" 2>/dev/null; exit 0 ;;
         *" db"*) [ -n "${FAKE_DB_DOWN:-}" ] || echo dbid; exit 0 ;;
+        *" nginx"*) echo nginxid; exit 0 ;;
         *) echo dbid; cat "$ids_backend" 2>/dev/null; echo nginxid; exit 0 ;;
       esac ;;
     pull) exit "${FAKE_PULL_EXIT:-0}" ;;
@@ -101,12 +114,24 @@ if [ "$1" = compose ]; then
 fi
 case "$1" in
   ps) for id in ${FAKE_UNHEALTHY_IDS:-}; do echo "$id"; done ;;
+  image)
+    # docker image inspect [-f FORMATO] IMAGEN
+    for imagen in "$@"; do :; done
+    if [ -n "${FAKE_MISSING_TAG:-}" ] && [ "${imagen##*:}" = "$FAKE_MISSING_TAG" ]; then
+      echo "Error: No such image: $imagen" >&2
+      exit 1
+    fi
+    case "$*" in *.Id*) echo "${FAKE_IMAGE_ID:-sha256:igual}" ;; esac ;;
   inspect)
     formato="$3"; shift 3
     for id in "$@"; do
+      # Servicio por convencion de nombre: shifty-<servicio>-<n>.
+      svc="${id%-[0-9]*}"; svc="${svc#shifty-}"
       case "$formato" in
         *Config.Image*) echo "ghcr.io/x/shifty-backend:${FAKE_RUNNING_VERSION:-}" ;;
+        *compose.service*) echo "/$id $svc" ;;
         *Health*) echo "/$id ${FAKE_HEALTH:-healthy}" ;;
+        *.Image*) echo "${FAKE_RUNNING_IMAGE_ID:-sha256:igual}" ;;
         *) echo "/$id" ;;
       esac
     done ;;
@@ -162,12 +187,12 @@ class Host:
         return archivo.read_text(encoding="utf-8").splitlines()
 
     def correr(
-        self, script: str, *args: str, **extra: str
+        self, script: str, *args: str, cwd: Path | None = None, **extra: str
     ) -> subprocess.CompletedProcess[str]:
         assert BASH is not None
         return subprocess.run(
             [BASH, str(SCRIPTS / script), *args],
-            cwd=self.repo,
+            cwd=self.repo if cwd is None else cwd,
             env={**self.env, **extra},
             capture_output=True,
             text=True,
@@ -220,7 +245,13 @@ def crear_host(tmp_path: Path) -> Host:
         "BACKUP_DIR": backups.as_posix(),
         "COMPOSE_PROJECT_NAME": "shifty",
     }
-    for variable in ("APP_VERSION", "DOMAIN", "ALERT_WEBHOOK_URL", "ALERT_EMAIL"):
+    for variable in (
+        "APP_VERSION",
+        "DOMAIN",
+        "ALERT_WEBHOOK_URL",
+        "ALERT_EMAIL",
+        "COMPOSE_FILE",
+    ):
         env.pop(variable, None)
     return Host(tmp_path, fake, repo, state, backups, env)
 

@@ -257,6 +257,7 @@ def test_los_atajos_de_operacion_llaman_a_los_scripts_del_host() -> None:
     esperado = {
         "deploy": "scripts/deploy.sh deploy",
         "rollback": "scripts/deploy.sh rollback",
+        "deploy-edge": "scripts/deploy.sh edge",
         "backup": "scripts/backup.sh",
     }
     for objetivo, script in esperado.items():

@@ -37,6 +37,10 @@ def _preparar_deploy(host: Host, actual: str = "v1") -> None:
         "old1\nold2\nold3\n", encoding="utf-8", newline="\n"
     )
     _backup_fresco(host)
+    # El .env del servidor: compose lo lee del directorio del proyecto.
+    (host.repo / ".env").write_text(
+        "COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml\n", encoding="utf-8"
+    )
 
 
 _BASE_DEPLOY = {
@@ -118,15 +122,25 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     assert resultado.returncode == 0, resultado.stderr
     llamadas = host.llamadas()
     pull = _indice(
-        llamadas, r"compose pull .*backend.*celery_worker_interactive.*nginx"
+        llamadas, r"compose pull backend .*celery_worker_interactive .*frontend$"
     )
+    verifica = _indice(llamadas, r"docker image inspect ghcr.io/x/shifty-backend:v2$")
     migra = _indice(
-        llamadas, r"compose run --rm --no-deps -T backend alembic upgrade head"
+        llamadas,
+        r"compose run --rm --no-deps --no-build -T backend alembic upgrade head",
     )
-    backend = _indice(llamadas, r"compose up -d --no-deps .*--scale backend=6 backend")
-    resto = _indice(llamadas, r"compose up -d --no-deps celery_worker ")
+    backend = _indice(
+        llamadas, r"compose up -d --no-deps --no-build .*--scale backend=6 backend"
+    )
+    # El borde NO se recrea en un deploy normal (solo `make deploy-edge`).
+    resto = _indice(
+        llamadas,
+        r"compose up -d --no-deps --no-build "
+        r"celery_worker celery_worker_interactive celery_beat frontend$",
+    )
     reload = _ultimo_indice(llamadas, r"compose exec -T nginx nginx -s reload")
-    assert pull < migra < backend < resto < reload
+    assert pull < verifica < migra < backend < resto < reload
+    assert not _hay(llamadas, r"compose (pull|up) .*\bnginx\b")
     # Rolling: las viejas se bajan despues de que las nuevas estan sanas.
     assert _indice(llamadas, r"docker stop .*old1") > backend
     assert _hay(llamadas, r"docker rm .*old1 old2 old3")
@@ -293,3 +307,187 @@ def test_deploy_sin_app_version_no_toma_la_que_corre(host: Host) -> None:
     assert resultado.returncode != 0
     assert "APP_VERSION" in resultado.stderr
     assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+# --- revision 2026-09-24: cwd, COMPOSE_FILE, nunca construir, borde aparte ----
+
+
+def test_deploy_habla_con_compose_desde_el_clon_aunque_se_llame_de_otro_lado(
+    host: Host,
+) -> None:
+    """Compose toma el proyecto, el .env y COMPOSE_FILE del directorio actual:
+    corrido desde otro lado hablaria con otro proyecto (o con ninguno)."""
+    _preparar_deploy(host, actual="v1")
+    otro = host.raiz / "otro-directorio"
+    otro.mkdir()
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", cwd=otro, APP_VERSION="v2", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    cwd = (host.fake / "cwd").read_text(encoding="utf-8").strip()
+    assert Path(cwd).resolve() == host.repo.resolve()
+
+
+@pytest.mark.parametrize(
+    "contenido",
+    ["", "COMPOSE_FILE=docker-compose.yml\n"],
+    ids=["sin-compose-file", "sin-override-de-prod"],
+)
+def test_el_preflight_exige_el_compose_de_produccion(
+    host: Host, contenido: str
+) -> None:
+    """Sin docker-compose.prod.yml el deploy levantaria el compose de
+    desarrollo: puertos publicados, entorno de dev, imagenes `:dev`."""
+    _preparar_deploy(host)
+    (host.repo / ".env").write_text(contenido, encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "docker-compose.prod.yml" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+def test_compose_file_del_entorno_le_gana_al_env(host: Host) -> None:
+    _preparar_deploy(host)
+    (host.repo / ".env").write_text("", encoding="utf-8")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        COMPOSE_FILE="docker-compose.yml:docker-compose.prod.yml",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+
+
+def test_ningun_up_ni_run_construye_imagenes(host: Host) -> None:
+    """El VPS nunca construye: sin --no-build, una imagen que falta se
+    construiria desde el arbol del clon y correria codigo sin version."""
+    _preparar_deploy(host, actual="v1")
+
+    host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", FAKE_CURL_EXIT="22", **_BASE_DEPLOY
+    )
+
+    llamadas = [ll for ll in host.llamadas() if re.search(r"compose (up|run) ", ll)]
+    assert llamadas
+    for llamada in llamadas:
+        assert "--no-build" in llamada, llamada
+
+
+def test_pull_fallido_frena_el_deploy_antes_de_migrar(host: Host) -> None:
+    _preparar_deploy(host)
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", FAKE_PULL_EXIT="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "pull" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (run|up)")
+
+
+def test_una_imagen_que_no_quedo_local_frena_el_deploy(host: Host) -> None:
+    _preparar_deploy(host)
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION="v2", FAKE_MISSING_TAG="v2", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "ghcr.io/x/shifty-backend:v2" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (run|up)")
+
+
+def test_rollback_con_pull_fallido_usa_las_imagenes_locales_si_estan(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "rollback", FAKE_PULL_EXIT="1", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_rollback_sin_la_imagen_previa_falla_con_alerta_y_no_toca_nada(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "rollback",
+        FAKE_PULL_EXIT="1",
+        FAKE_MISSING_TAG="v1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 2
+    assert "ALERTA" in resultado.stderr
+    assert "shifty-backend:v1" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose up")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+
+
+# --- make deploy-edge: el borde se recrea solo si cambio --------------------
+
+
+def _preparar_borde(host: Host, conf: str = "server {}\n") -> Path:
+    _preparar_deploy(host, actual="v2")
+    (host.repo / "nginx").mkdir()
+    archivo = host.repo / "nginx" / "nginx.prod.conf"
+    archivo.write_text(conf, encoding="utf-8")
+    return archivo
+
+
+def test_deploy_edge_sin_cambios_solo_recarga(host: Host) -> None:
+    _preparar_borde(host)
+    primero = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    assert primero.returncode == 0, primero.stderr
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    assert not _hay(llamadas, r"--force-recreate")
+    assert _hay(llamadas, r"compose exec -T nginx nginx -t")
+    assert _hay(llamadas, r"compose exec -T nginx nginx -s reload")
+
+
+def test_deploy_edge_recrea_si_cambio_la_config(host: Host) -> None:
+    archivo = _preparar_borde(host)
+    host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    archivo.write_text("server { listen 443; }\n", encoding="utf-8")
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _hay(
+        host.llamadas(),
+        r"compose up -d --no-deps --no-build --force-recreate .*nginx$",
+    )
+
+
+def test_deploy_edge_recrea_si_cambio_la_imagen(host: Host) -> None:
+    _preparar_borde(host)
+    host.correr("deploy.sh", "edge", **_BASE_DEPLOY)
+    (host.fake / "calls").unlink()
+
+    resultado = host.correr(
+        "deploy.sh", "edge", FAKE_IMAGE_ID="sha256:nueva", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    assert _hay(llamadas, r"compose pull nginx")
+    assert _hay(llamadas, r"--force-recreate .*nginx$")
