@@ -28,8 +28,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.keyset import encode_cursor
+from core.security import hash_password
 from modules.appointments.model import AppointmentStatus
 from modules.ledger.model import CustomerLedger
+from modules.users.model import User, UserRole
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
 )
@@ -38,6 +40,15 @@ from tests.integration.test_fiado_del_cliente_paginado import (
     _tienda_con_deudor,
 )
 from tests.integration.test_reportes_funciones_cortas import _Semilla, _tienda
+
+
+# Instantes validos en su zona que desbordan al pasarlos a UTC
+# (``OverflowError`` en ``astimezone``): antes salian 500 por el handler
+# generico, en la busqueda y en el fiado.
+DESBORDES = (
+    base64.urlsafe_b64encode(b"0001-01-01T00:00:00+14:00|abc").decode(),
+    base64.urlsafe_b64encode(b"9999-12-31T23:59:59-23:59|abc").decode(),
+)
 
 
 async def _sembrar_turnos(client: AsyncClient, test_session: AsyncSession) -> str:
@@ -121,6 +132,7 @@ async def test_un_cursor_invalido_es_422(
         {"after": "x" * 500},
         {"after": sin_zona},
         {"after": id_ajeno},
+        *({"after": desborde} for desborde in DESBORDES),
         {"after": valido, "page": 2},  # clave y salto a la vez: ambiguo
     ]
     for params in casos:
@@ -185,5 +197,44 @@ async def test_recorrer_el_fiado_por_cursor_da_lo_mismo_que_por_offset(
         headers=auth_headers(token),
     )
     assert ambiguo.status_code == 422, ambiguo.text
-    roto = await client.get(url, params={"after": "%%%"}, headers=auth_headers(token))
-    assert roto.status_code == 422, roto.text
+    for invalido in ("%%%", *DESBORDES):
+        roto = await client.get(
+            url, params={"after": invalido}, headers=auth_headers(token)
+        )
+        assert roto.status_code == 422, (invalido, roto.text)
+
+
+@pytest.mark.asyncio
+async def test_sin_acceso_al_fiado_es_403_aunque_el_cursor_este_roto(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """La autorizacion va antes que la validacion del cursor: un usuario sin
+    acceso financiero no aprende nada del formato del cursor (403, no 422)."""
+    _, deudor = await _tienda_con_deudor(client, test_session, slug="f308-recep")
+    duenio = (
+        await test_session.execute(select(User).where(User.id == deudor))
+    ).scalar_one()
+    test_session.add(
+        User(
+            email="recepcion-f308@test.com",
+            hashed_password=hash_password("Password123!"),
+            first_name="Recep",
+            last_name="Cion",
+            role=UserRole.RECEPTIONIST,
+            store_id=duenio.store_id,
+        )
+    )
+    await test_session.commit()
+    login = await client.post(
+        "/auth/login",
+        json={"email": "recepcion-f308@test.com", "password": "Password123!"},
+    )
+    assert login.status_code == 200, login.text
+    token = login.json()["access_token"]
+    for invalido in ("%%%", DESBORDES[0]):
+        res = await client.get(
+            f"/ledger/customers/{deudor}",
+            params={"after": invalido},
+            headers=auth_headers(token),
+        )
+        assert res.status_code == 403, (invalido, res.text)

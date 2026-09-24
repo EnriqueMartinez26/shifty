@@ -208,8 +208,9 @@ async def get_customer_ledger(
     # F3-08 (aditivo): `next_cursor` de la pagina anterior; reemplaza a `offset`.
     after: Annotated[str | None, Query(max_length=CURSOR_MAX_LENGTH)] = None,
 ) -> CustomerLedgerResponse:
-    clave = _ledger_key(after, offset)
+    # Autorizacion antes que el cursor: sin acceso es 403, no 422.
     _require_financial_access(user)
+    clave = _ledger_key(after, offset)
     await _ensure_ledger_feature_enabled(db, user)
     # SEG-01: un cliente de otra tienda (o inexistente) es 404, como en el
     # alta (B2-11), no un historial vacio con saldo 0.

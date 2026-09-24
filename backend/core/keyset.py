@@ -41,17 +41,22 @@ def encode_cursor(instant: datetime, row_id: str) -> str:
 
 
 def decode_cursor(cursor: str) -> tuple[datetime, str]:
-    """``(instante UTC aware, id)`` de un cursor de ``encode_cursor``."""
+    """``(instante UTC aware, id)`` de un cursor de ``encode_cursor``.
+
+    ``astimezone`` va adentro del ``try``: un instante valido en su zona
+    puede desbordar al pasarlo a UTC (``0001-01-01T00:00:00+14:00``) y el
+    ``OverflowError`` salia 500 por el handler generico.
+    """
     try:
         relleno = "=" * (-len(cursor) % 4)
         crudo = base64.urlsafe_b64decode(cursor + relleno).decode()
         instante_iso, row_id = crudo.split("|", 1)
         instante = datetime.fromisoformat(instante_iso)
-    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        if instante.tzinfo is None or not _ID.fullmatch(row_id):
+            raise InvalidCursorError("cursor invalido")
+        return instante.astimezone(timezone.utc), row_id
+    except (binascii.Error, UnicodeDecodeError, ValueError, OverflowError) as exc:
         raise InvalidCursorError("cursor invalido") from exc
-    if instante.tzinfo is None or not _ID.fullmatch(row_id):
-        raise InvalidCursorError("cursor invalido")
-    return instante.astimezone(timezone.utc), row_id
 
 
 def before_key(
