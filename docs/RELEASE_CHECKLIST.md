@@ -8,6 +8,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] `DATABASE_URL`, `REDIS_URL`, JWT/auth secrets, payment provider secrets, Sentry DSN, SMTP/webhook secrets, and admin bootstrap credentials are present only in the secret manager.
 - [ ] No production secret is committed, pasted in logs, or stored in local shell history.
 - [ ] Secret rotation impact has been reviewed for long-lived workers and scheduled jobs.
+- [ ] The server runs Docker Compose >= 2.24 (`docker compose version`), and `docker compose -f docker-compose.yml -f docker-compose.prod.yml config` shows `ports` only on nginx. An older Compose may ignore `!reset []` and publish db, redis, rabbitmq and backend on the host again.
 
 ## 2. Observability and health
 
