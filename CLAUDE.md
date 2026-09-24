@@ -334,10 +334,10 @@ Una instrucción en lenguaje natural no es una garantía.
 
 ## 5. Huecos conocidos: no asumir que están aplicados
 
-- `frontend/scripts/verify-clean-architecture.ts` **no está cableado** en
-  `package.json` ni en CI: es código muerto. La única protección viva de
-  capas es ESLint. El `IMPORT_RULES.md` que menciona solo existe archivado
-  en `docs/archive/refactoring/02-IMPORT_RULES.md`.
+- La única protección viva de capas del front es ESLint.
+  `frontend/scripts/verify-clean-architecture.ts` era código muerto (sin
+  cablear y sin pasar `tsc`) y se borró el 2026-09-24 al poner `scripts/`,
+  `e2e/` y las configs bajo `tsc` y ESLint (`tsconfig.node.json`, F12-04).
 - `docs/ROLE_MATRIX.md`, `docs/DOCUMENTACION_TURNERO.md` y
   `docs/SETUP_GUIDE.md` declaran deriva contra el código
   (`docs/AUDIT_MATRIX_SHARED.md`), en particular los permisos de
