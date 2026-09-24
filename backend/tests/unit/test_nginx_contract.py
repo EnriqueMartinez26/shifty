@@ -503,3 +503,64 @@ def test_la_subida_de_medios_admite_el_tope_de_la_app_mas_el_multipart(
     for loc in locations_de_api(server):
         if loc.bloque is not media:
             assert efectivo("client_max_body_size", server, loc.bloque) == ("32k",)
+
+
+# --- F0-11: log estructurado sin datos del cliente ----------------------------
+
+# Variables que meterian la query (client_phone viaja en la query de la
+# reserva publica) o la URL de la pagina de origen en el access log.
+VARIABLES_CON_QUERY = re.compile(
+    r"\$(request|request_uri|args|query_string|arg_\w+|http_referer)\b"
+)
+
+
+def _log_format(http: list[Directiva]) -> Directiva:
+    formatos = [d for d in todas(http, "log_format") if d.args[0] == "shifty_json"]
+    assert len(formatos) == 1, "falta log_format shifty_json"
+    return formatos[0]
+
+
+@EDGES
+def test_el_log_es_json_con_tiempos_y_sin_query(ruta: Path) -> None:
+    formato = _log_format(leer(ruta))
+    assert formato.args[1] == "escape=json"
+    plantilla = "".join(formato.args[2:])
+    assert "$uri" in plantilla
+    assert not VARIABLES_CON_QUERY.search(plantilla), plantilla
+    # Con cualquier valor en las variables, cada linea es JSON valido.
+    linea = json.loads(re.sub(r"\$\w+", "0", plantilla))
+    for clave in ("rid", "s", "rt", "urt", "uct", "u", "ip"):
+        assert clave in linea, clave
+
+
+@EDGES
+def test_todo_server_del_edge_loguea_en_json(ruta: Path) -> None:
+    # Un server sin access_log propio usa el `main` de la imagen, que loguea
+    # $request con la query (en prod, el de 80 que redirige tambien).
+    http = leer(ruta)
+    assert not todas(http, "access_log"), "access_log a nivel http duplica lineas"
+    for server in servidores(http):
+        destino, formato = una(server, "access_log").args
+        assert destino == "/var/log/nginx/access.log"
+        assert formato == "shifty_json"
+
+
+@EDGES
+def test_el_backend_recibe_el_id_del_edge_sin_pisar_el_de_mercado_pago(
+    ruta: Path,
+) -> None:
+    # Mercado Pago firma el webhook con SU x-request-id (el manifest HMAC de
+    # payments/router.py lo incluye): pisarlo con el id de nginx rompe la
+    # firma de todos los webhooks. El id del edge va en su propio header.
+    for loc in locations_con_proxy(leer(ruta)):
+        cabeceras = cabeceras_proxy(loc.bloque)
+        assert "x-request-id" not in cabeceras, loc.args
+        assert cabeceras.get("x-edge-request-id") == "$request_id", loc.args
+
+
+@EDGES
+def test_los_assets_con_hash_no_se_loguean(ruta: Path) -> None:
+    server = server_de_la_app(leer(ruta))
+    assets = location(server, "^~", "/assets/")
+    assert una(assets, "access_log").args == ("off",)
+    assert una(assets, "proxy_pass").args == ("http://spa",)
