@@ -181,7 +181,7 @@ It deletes in batches of `RETENTION_BATCH_SIZE` (5000) with a commit per batch. 
 
 - **Dry run first**: set `RETENTION_DRY_RUN=true` for the first days after the first deploy; the task then only counts and logs `purge_expired_data_done`. One manual dry run: `APP_VERSION=$(cat .deploy/current) docker compose exec celery_worker celery -A core.celery_app call purge_expired_data --kwargs '{"dry_run": true}'`.
 - **Restores**: a backup restored today brings back rows that the next 04:30 run deletes again. That is expected.
-- **Indexes**: `outbox_messages`, `webhook_inbox` and `notifications` have no index on the column the purge filters by (only partial indexes for pending/unread rows), so each batch scans the table. The budget bounds it; if the tables grow, add partial indexes in a separate migration.
+- **Indexes**: the purge reads `ix_outbox_processed_history`, `ix_webhook_inbox_processed_history` and `ix_notifications_read_history` (partial, history rows only; migration `e5f7a9b1c3d6`). `otp_verifications` uses its `expires_at` index.
 
 ## 9. Troubleshooting
 
