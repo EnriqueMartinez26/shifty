@@ -38,12 +38,4 @@ export class BookingTimeSpan {
   getDurationMinutes(): number {
     return Math.round((this.endsAt.getTime() - this.startsAt.getTime()) / 60000)
   }
-
-  formatDate(): string {
-    return this.startsAt.toISOString().slice(0, 10)
-  }
-
-  formatStartTime(): string {
-    return this.startsAt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
-  }
 }
