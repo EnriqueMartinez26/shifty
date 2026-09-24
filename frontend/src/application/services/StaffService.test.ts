@@ -7,6 +7,8 @@ jest.mock('../../infrastructure/http/client', () => ({
   default: {}
 }))
 
+import { NotFoundError } from '@shared/errors'
+
 import { StaffService } from './StaffService'
 import { Staff } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
@@ -188,6 +190,23 @@ describe('StaffService', () => {
           service_ids: []
         })
       ).rejects.toThrow('Staff no encontrado')
+    })
+
+    it('el staff inexistente viaja como NotFoundError, no como Error crudo (F9-10)', async () => {
+      mockRepository.findById.mockResolvedValue(null)
+
+      // handleError re-envuelve, pero conserva el original en `originalError`.
+      const error: unknown = await service
+        .updateStaff('invalid-id', {
+          first_name: 'Jane',
+          last_name: 'Doe',
+          email: 'jane@example.com',
+          display_name: 'Jane D.',
+          service_ids: ['service-1']
+        })
+        .catch((reason: unknown) => reason)
+
+      expect((error as { originalError?: unknown }).originalError).toBeInstanceOf(NotFoundError)
     })
   })
 
