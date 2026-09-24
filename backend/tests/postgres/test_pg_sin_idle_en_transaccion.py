@@ -89,12 +89,19 @@ def _doblar_la_red(monkeypatch: pytest.MonkeyPatch, obs: _Observador) -> None:
         await obs.mirar("smtp")
         return True
 
+    # F2-01: la reserva publica ya no manda SMTP; publica la tarea en el broker
+    # (``core.enqueue``, en un hilo). Eso es lo que sale a la red en el request.
+    async def encolar(*args: Any, **kwargs: Any) -> bool:
+        await obs.mirar("encolado")
+        return True
+
     async def mail_del_panel(*args: Any, **kwargs: Any) -> bool:
         await obs.mirar("mail del panel")
         return True
 
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", mercadopago)
     monkeypatch.setattr(tasks, "_send_email", smtp)
+    monkeypatch.setattr(tasks, "enqueue", encolar)
     for nombre in ("send_confirmation_email", "send_reschedule_email"):
         monkeypatch.setattr(appointments_service, nombre, mail_del_panel)
 
@@ -148,7 +155,7 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
     )
     await obs.empezar()
 
-    # Reserva publica con sena: link de MP + mail "reserva registrada".
+    # Reserva publica con sena: link de MP + encolado de "reserva registrada".
     reserva = await client.post(
         "/public/appointments",
         json={
@@ -188,7 +195,7 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
     assert link.status_code == 200, link.text
 
     lugares = {donde.split(" ")[0] for donde, _ in obs.muestras}
-    assert {"mp", "smtp", "mail"} <= lugares, obs.muestras
+    assert {"mp", "encolado", "mail"} <= lugares, obs.muestras
     # La consulta ve a la app: sin esto una vista sin permisos pasaria vacia.
     assert all(estados for _, estados in obs.muestras), obs.muestras
     assert obs.en_transaccion() == [], (

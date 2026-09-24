@@ -355,6 +355,11 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Mails al cliente**: "reserva registrada" al crear, "turno confirmado"
   desde `confirm()` y desde el pago acreditado; siempre best-effort tras el
   commit, nunca a un email técnico `.noreply` (`is_deliverable_email`).
+  La reserva pública no espera al SMTP (F2-01, 2026-09-24): encola
+  `send_booking_email` (cola `interactive`, la del OTP, `max_retries=0`) con
+  `enqueue_registration_email`/`enqueue_confirmation_email`; por el broker
+  viajan el tipo de mail, la tienda y el id del turno, nunca el email, y el
+  worker relee el turno antes de mandar. El link de MP no se difiere.
   (`test_mails_al_cliente.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).

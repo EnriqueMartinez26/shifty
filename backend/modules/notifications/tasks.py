@@ -767,6 +767,130 @@ async def send_confirmation_email(
         }
 
 
+# F2-01 (plan de rendimiento, R1-04, 2026-09-24): el 201 de la reserva publica
+# esperaba al SMTP (conexion + STARTTLS + LOGIN + DATA, hasta 10 s por
+# operacion). El request ahora solo encola ``send_booking_email`` por el helper
+# unico (``core.enqueue``) y el worker de la cola ``interactive`` -el del OTP-
+# relee el turno y manda. Por el broker viajan el tipo de mail, la tienda y el
+# id del turno: ni el email ni el nombre del cliente (PV-19). Sin reintento,
+# como el OTP: reintentar un mail cuyo DATA pudo haber llegado lo duplica.
+BOOKING_MAIL_REGISTRATION = "registration"
+BOOKING_MAIL_CONFIRMATION = "confirmation"
+# Un turno que ya se cayo no recibe "reserva registrada".
+_BOOKING_CLOSED_STATUSES = frozenset({"cancelled", "expired"})
+
+
+async def _load_booking_mail(
+    store_id: str, appointment_id: str
+) -> tuple[str | None, dict[str, Any], str] | None:
+    """(email, detalles, estado) del turno, leidos en una sesion propia.
+
+    Bypass de RLS como los demas jobs (el worker no tiene tienda), con la
+    tienda en el filtro igual. La sesion se cierra ANTES de volver: el SMTP
+    nunca corre con una transaccion abierta (regla 5).
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
+
+    from modules.appointments.model import Appointment
+    from modules.stores.model import Store
+
+    async with AsyncSessionFactory() as db:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(db)
+            appointment = (
+                await db.execute(
+                    select(Appointment)
+                    .options(
+                        joinedload(Appointment.service), joinedload(Appointment.staff)
+                    )
+                    .where(
+                        Appointment.id == appointment_id,
+                        Appointment.store_id == store_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if appointment is None:
+                return None
+            store = await db.get(Store, store_id)
+            details = build_client_details(
+                appointment, appointment.service, appointment.staff, store
+            )
+            return appointment.client_email, details, str(appointment.status)
+        finally:
+            set_tenant_context(None, False)
+
+
+async def deliver_booking_email(
+    kind: str, store_id: str, appointment_id: str
+) -> dict[str, str]:
+    """Cuerpo de la tarea ``send_booking_email``: relee el turno y manda.
+
+    El turno pudo cambiar entre el encolado y el envio: la confirmacion sale
+    solo si sigue confirmado y "reserva registrada" no sale para un turno
+    cancelado o vencido. El resultado no lleva el destinatario.
+    """
+    cargado = await _load_booking_mail(store_id, appointment_id)
+    if cargado is None:
+        logger.warning("booking_email_appointment_missing", appointment=appointment_id)
+        return {"status": "skipped", "reason": "not-found"}
+    email, details, status = cargado
+    if kind == BOOKING_MAIL_CONFIRMATION:
+        if status != "confirmed":
+            return {"status": "skipped", "reason": "status"}
+        resultado = await send_confirmation_email(email=email, details=details)
+    else:
+        if status in _BOOKING_CLOSED_STATUSES:
+            return {"status": "skipped", "reason": "status"}
+        resultado = await send_registration_email(email=email, details=details)
+    salida = {"status": resultado.get("status", "failed")}
+    if "reason" in resultado:
+        salida["reason"] = resultado["reason"]
+    return salida
+
+
+def _send_booking_email_task(
+    kind: str, store_id: str, appointment_id: str
+) -> dict[str, str]:
+    """Tarea de Celery del mail de la reserva publica (cola ``interactive``)."""
+    return run_in_worker_loop(deliver_booking_email(kind, store_id, appointment_id))
+
+
+# Anotada ``Any`` como ``send_otp_email``.
+send_booking_email: Any = celery_app.task(name="send_booking_email", max_retries=0)(
+    _send_booking_email_task
+)
+
+
+async def enqueue_registration_email(*, store_id: str, appointment_id: str) -> bool:
+    """Encola "reserva registrada". Nunca propaga; False si no se encolo."""
+    encolado = await enqueue(
+        send_booking_email, BOOKING_MAIL_REGISTRATION, store_id, appointment_id
+    )
+    if not encolado:
+        logger.warning(
+            "booking_email_enqueue_failed",
+            kind=BOOKING_MAIL_REGISTRATION,
+            appointment=appointment_id,
+        )
+    return encolado
+
+
+async def enqueue_confirmation_email(*, store_id: str, appointment_id: str) -> bool:
+    """Encola "turno confirmado". Nunca propaga; False si no se encolo."""
+    encolado = await enqueue(
+        send_booking_email, BOOKING_MAIL_CONFIRMATION, store_id, appointment_id
+    )
+    if not encolado:
+        logger.warning(
+            "booking_email_enqueue_failed",
+            kind=BOOKING_MAIL_CONFIRMATION,
+            appointment=appointment_id,
+        )
+    return encolado
+
+
 async def _dispatch_reminder(
     repo: Any,
     row: tuple[Any, Any, Any, Any, Any],

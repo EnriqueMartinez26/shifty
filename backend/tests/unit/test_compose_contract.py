@@ -1178,6 +1178,7 @@ def test_el_otp_tiene_su_propio_worker() -> None:
     from core.celery_app import celery_app
 
     assert celery_app.conf.task_routes["send_otp_email"]["queue"] == "interactive"
+    assert celery_app.conf.task_routes["send_booking_email"]["queue"] == "interactive"
 
 
 # --- Limites de memoria para el VPS de 16 GB (F0-19, plan de rendimiento) -----

@@ -55,9 +55,9 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import (
-    build_client_details,
-    send_confirmation_email,
-    send_registration_email,
+    enqueue_confirmation_email,
+    enqueue_registration_email,
+    is_deliverable_email,
 )
 from modules.otp.service import OtpService, mask_phone
 from modules.payments.deposit_rules import (
@@ -391,8 +391,8 @@ class PublicBookingService:
         """Reserva desde el portal. El llamador maneja la idempotencia.
 
         Commit del alta -> invalidacion -> link de MP (fuera de la
-        transaccion, con compensacion) -> mail -> respuesta -> cierre de la
-        entrada de lista de espera (best-effort).
+        transaccion, con compensacion) -> encolado del mail -> respuesta ->
+        cierre de la entrada de lista de espera (best-effort).
         """
         service, store = await self._resolve_store_and_service(data)
         request = await self._resolve_request(data, service, store)
@@ -406,10 +406,11 @@ class PublicBookingService:
             self.cache, request.store_id, booking.appointment.starts_at
         )
         await self._attach_payment_link(request, booking)
-        # El mail (SMTP, hasta 10 s por operacion) sale sin transaccion: el
-        # commit de TenantSession deja otra abierta al reaplicar el contexto
-        # (F1-05, R8-05; patron de AUD2-B2-08). No hay nada pendiente: esto
-        # solo la cierra, y el contexto vuelve antes de la lista de espera.
+        # El encolado del mail (F2-01: hasta 2 s de publish en un hilo; el
+        # SMTP lo hace el worker) corre sin transaccion: el commit de
+        # TenantSession deja otra abierta al reaplicar el contexto (F1-05,
+        # R8-05; patron de AUD2-B2-08). No hay nada pendiente: esto solo la
+        # cierra, y el contexto vuelve antes de la lista de espera.
         await AsyncSession.commit(self.db)
         try:
             await self._notify_client(request, booking)
@@ -768,17 +769,18 @@ class PublicBookingService:
         # Antes la condicion exigia CONFIRMED y el turno nace PENDING o
         # PENDING_PAYMENT: nunca salia nada. Ahora "reserva registrada" al
         # crear, y "turno confirmado" solo si ya nacio confirmado.
+        # F2-01 (R1-04, 2026-09-24): se ENCOLA y lo manda el worker; el 201
+        # esperaba al SMTP. Un email tecnico no se encola.
         appointment = booking.appointment
-        details = build_client_details(
-            appointment, booking.service, booking.staff, request.store
-        )
+        if not is_deliverable_email(appointment.client_email):
+            return
         if appointment.status == AppointmentStatus.CONFIRMED.value:
-            await send_confirmation_email(
-                email=appointment.client_email, details=details
+            await enqueue_confirmation_email(
+                store_id=request.store_id, appointment_id=appointment.id
             )
         else:
-            await send_registration_email(
-                email=appointment.client_email, details=details
+            await enqueue_registration_email(
+                store_id=request.store_id, appointment_id=appointment.id
             )
 
     async def _close_waitlist_entry(

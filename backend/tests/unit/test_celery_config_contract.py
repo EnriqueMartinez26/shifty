@@ -16,7 +16,8 @@ rendimiento):
 - El outbox corre cada 20 s con un lote de 25: el presupuesto de 45 s del lote
   cortaba mails cuando el lote era de 100 (decision 18).
 - El OTP va a la cola `interactive`, que atiende un worker propio: su latencia
-  no depende de que termine un lote del outbox (decision 7).
+  no depende de que termine un lote del outbox (decision 7). Desde F2-01 el
+  mail de la reserva publica (`send_booking_email`) va a la misma cola.
 """
 
 from datetime import timedelta
@@ -76,10 +77,20 @@ def test_publicar_con_el_broker_caido_no_cuelga_el_request() -> None:
     }
 
 
-def test_el_otp_va_a_la_cola_interactiva() -> None:
+def test_el_otp_y_los_mails_de_la_reserva_van_a_la_cola_interactiva() -> None:
+    """F2-01 (2026-09-24): el mail de la reserva publica sale del worker, en la
+    misma cola que el OTP: el cliente que acaba de reservar no espera a un lote
+    del outbox ni a los recordatorios."""
     celery_app.loader.import_default_modules()
     assert "send_otp_email" in celery_app.tasks, "la tarea del OTP cambio de nombre"
-    assert celery_app.conf.task_routes == {"send_otp_email": {"queue": "interactive"}}
+    assert "send_booking_email" in celery_app.tasks, "la tarea de la reserva cambio"
+    assert celery_app.conf.task_routes == {
+        "send_otp_email": {"queue": "interactive"},
+        "send_booking_email": {"queue": "interactive"},
+    }
+    # Sin reintento, como el OTP: el DATA pudo haber llegado y reintentar
+    # duplicaria el mail.
+    assert celery_app.tasks["send_booking_email"].max_retries == 0
     # Todo lo demas sigue en la cola por defecto, que consume el worker general.
     assert celery_app.conf.task_default_queue == "celery"
 
