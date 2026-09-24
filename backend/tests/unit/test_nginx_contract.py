@@ -290,6 +290,9 @@ def test_las_zonas_de_memoria_compartida_no_repiten_nombre(ruta: Path) -> None:
         if d.nombre in {"limit_req_zone", "limit_conn_zone"}:
             zona = next(a for a in d.args if a.startswith("zone="))
             nombres.append(zona.removeprefix("zone=").split(":")[0])
+        if d.nombre == "proxy_cache_path":
+            zona = next(a for a in d.args if a.startswith("keys_zone="))
+            nombres.append(zona.removeprefix("keys_zone=").split(":")[0])
     assert len(nombres) == len(set(nombres)), nombres
 
 
@@ -587,6 +590,98 @@ SUBIDA_DE_SERVICIO = "^/api/services/[A-Za-z0-9_-]+/image$"
 def test_la_regex_de_subida_de_servicio_es_exacta(uri: str, calza: bool) -> None:
     # PCRE y `re` coinciden en esta clase de patron (anclas, clase y `+`).
     assert (re.fullmatch(SUBIDA_DE_SERVICIO[1:-1], uri) is not None) is calza
+
+
+# --- F1-29: cache del edge para medios y catalogo publico --------------------
+
+ZONA_DE_CACHE = "shifty_cache"
+MEDIOS = "^/api/stores/media/[A-Za-z0-9_-]+$"
+# Solo lo que el backend marca cacheable (decision 11): la imagen inmutable
+# (F1-27) y servicios/profesionales (s-maxage=30). La vitrina, la
+# disponibilidad, los previews y el OTP no pasan por la cache.
+RUTAS_CACHEADAS = {
+    ("~", MEDIOS),
+    ("=", "/api/public/services"),
+    ("=", "/api/public/staff"),
+}
+
+
+@EDGES
+def test_el_edge_tiene_una_sola_zona_de_cache_acotada(ruta: Path) -> None:
+    (cache,) = todas(leer(ruta), "proxy_cache_path")
+    assert cache.args[0].startswith("/var/cache/nginx/")
+    assert f"keys_zone={ZONA_DE_CACHE}:10m" in cache.args
+    # Sin archivo temporal intermedio: escribe directo en el directorio.
+    assert "use_temp_path=off" in cache.args
+    assert any(a.startswith("max_size=") for a in cache.args)
+    assert any(a.startswith("inactive=") for a in cache.args)
+
+
+@EDGES
+def test_solo_se_cachean_los_medios_y_el_catalogo(ruta: Path) -> None:
+    http = leer(ruta)
+    server = server_de_la_app(http)
+    assert not todas(http, "proxy_cache")
+    assert not todas(server, "proxy_cache")
+    cacheadas = {
+        loc.args for loc in locations(server) if todas(loc.bloque, "proxy_cache")
+    }
+    assert cacheadas == RUTAS_CACHEADAS
+
+
+@EDGES
+@pytest.mark.parametrize("args", sorted(RUTAS_CACHEADAS))
+def test_la_cache_la_decide_el_backend_y_nunca_con_credenciales(
+    ruta: Path, args: tuple[str, str]
+) -> None:
+    server = server_de_la_app(leer(ruta))
+    loc = location(server, *args)
+    assert una(loc, "proxy_cache").args == (ZONA_DE_CACHE,)
+    # Con Authorization (panel) o con Origin (CORS, la respuesta varia por
+    # origen) ni se lee ni se guarda.
+    for directiva in ("proxy_cache_bypass", "proxy_no_cache"):
+        assert set(una(loc, directiva).args) == {"$http_authorization", "$http_origin"}
+    # Un solo request al backend por clave vencida; el resto espera o recibe
+    # la copia vieja mientras se renueva (stale-while-revalidate).
+    assert una(loc, "proxy_cache_lock").args == ("on",)
+    assert una(loc, "proxy_cache_background_update").args == ("on",)
+    # El TTL es el Cache-Control del backend: sin proxy_cache_valid nada sin
+    # ese header se guarda, y proxy_ignore_headers lo pisaria.
+    assert not todas(loc, "proxy_cache_valid")
+    assert not todas(loc, "proxy_ignore_headers")
+    # Un add_header aca descartaria los headers de seguridad del server.
+    assert not todas(loc, "add_header")
+    assert una(loc, "proxy_buffering").args == ("on",)
+    # Todo lo demas, igual que /api/.
+    api = location(server, "/api/")
+    for nombre in (
+        "limit_req",
+        "rewrite",
+        "proxy_pass",
+        "proxy_http_version",
+        "proxy_set_header",
+        "error_page",
+        "client_max_body_size",
+        "proxy_connect_timeout",
+        "proxy_read_timeout",
+    ):
+        assert [d.args for d in todas(loc, nombre)] == [
+            d.args for d in todas(api, nombre)
+        ], (args, nombre)
+
+
+@pytest.mark.parametrize(
+    ("uri", "calza"),
+    [
+        ("/api/stores/media/01JABCDEFGHJKMNPQRSTVWXYZ0", True),
+        ("/api/stores/media/01JABC/", False),
+        ("/api/stores/media/", False),
+        ("/api/stores/media/a/b", False),
+        ("/api/stores/me/media", False),
+    ],
+)
+def test_la_regex_de_medios_es_exacta(uri: str, calza: bool) -> None:
+    assert (re.fullmatch(MEDIOS[1:-1], uri) is not None) is calza
 
 
 # --- F0-11: log estructurado sin datos del cliente ----------------------------
