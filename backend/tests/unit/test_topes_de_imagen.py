@@ -193,3 +193,30 @@ def test_los_topes_de_pixeles_son_los_del_plan() -> None:
     assert IMAGE_CAPS["logo"].max_pixels == 2048 * 2048
     assert IMAGE_CAPS["cover"].max_pixels == 3840 * 2160
     assert IMAGE_CAPS["service"].max_pixels == 1600 * 1600
+
+
+# -- costo acotado del recorrido del JPEG -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "relleno",
+    [
+        # Un marcador sin longitud cada 2 bytes: sin tope, 1 M de vueltas de
+        # Python con 2 MB (el mismo costo que el recorrido byte a byte).
+        pytest.param(b"\xff\xd0" * 300, id="rst-en-serie"),
+        pytest.param(segmento_jpeg(0xFE, b"") * 300, id="segmentos-vacios"),
+        # Byte escapado antes del SOF: solo existe dentro de datos de
+        # entropia; aca es basura armada a mano.
+        pytest.param(b"\xff\x00" * 4, id="ff00"),
+    ],
+)
+def test_un_jpeg_armado_para_gastar_cpu_se_rechaza(relleno: bytes) -> None:
+    error = _rechazo(jpeg(100, 100, relleno), "logo")
+    assert (error.http_status, error.error_code) == (422, "INVALID_IMAGE")
+
+
+def test_una_corrida_larga_de_relleno_se_saltea_de_una() -> None:
+    # 0xFF de relleno antes de un marcador es valido; se saltea a velocidad de
+    # C (una sola vuelta), no byte a byte.
+    data = jpeg(1061, 1460, b"\xff" * 500_000 + segmento_jpeg(0xFE, b"hola"))
+    assert image_dimensions(data, "image/jpeg") == (1061, 1460)

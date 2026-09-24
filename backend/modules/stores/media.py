@@ -106,26 +106,32 @@ _JPEG_SOS = 0xDA
 _JPEG_EOI = 0xD9
 
 
+# Un JPEG real tiene menos de 30 segmentos antes del SOF (APPn, DQT, DHT,
+# DRI, COM). El tope acota el recorrido en Python: sin el, un archivo de
+# 2 MB con un marcador cada 2 bytes costaba ~1 M de vueltas (lo mismo que el
+# recorrido byte a byte que reemplaza). Pasarlo es imagen ilegible.
+_JPEG_MAX_MARKERS = 256
+_JPEG_FILL = re.compile(rb"\xff+")
+
+
 def _next_jpeg_marker(data: bytes, i: int) -> tuple[int, int] | None:
     """(posicion, marcador) del proximo marcador desde ``i``, o None.
 
-    Busca el 0xFF con ``bytes.find`` (a velocidad de C; antes era byte a
-    byte en Python, 0,2 a 0,5 s con 2 MB) y saltea el relleno (0xFF 0xFF) y
-    el byte escapado (0xFF 0x00), como el decodificador.
+    La basura hasta el proximo 0xFF se saltea con ``bytes.find`` y una
+    corrida de relleno (0xFF 0xFF ...) con una regex: las dos a velocidad de
+    C, como hace el decodificador. Un byte escapado (0xFF 0x00) solo existe
+    dentro de los datos de entropia, despues del SOS: antes del SOF es un
+    archivo armado a mano y se trata como ilegible.
     """
-    n = len(data)
-    while True:
-        i = data.find(b"\xff", i)
-        if i < 0 or i + 1 >= n:
-            return None
-        marker = data[i + 1]
-        if marker == 0xFF:
-            i += 1
-            continue
-        if marker == 0x00:
-            i += 2
-            continue
-        return (i, marker)
+    i = data.find(b"\xff", i)
+    if i < 0:
+        return None
+    # data[i] es 0xFF: la corrida tiene al menos un byte.
+    fill = _JPEG_FILL.match(data, i)
+    pos = (fill.end() if fill else i + 1) - 1
+    if pos + 1 >= len(data) or data[pos + 1] == 0x00:
+        return None
+    return (pos, data[pos + 1])
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
@@ -139,7 +145,10 @@ def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
     """
     n = len(data)
     i = 2
-    while (found := _next_jpeg_marker(data, i)) is not None:
+    for _ in range(_JPEG_MAX_MARKERS):
+        found = _next_jpeg_marker(data, i)
+        if found is None:
+            return None
         i, marker = found
         if marker in _JPEG_STANDALONE:
             i += 2
@@ -237,7 +246,10 @@ def strip_jpeg_app1(data: bytes) -> bytes:
     n = len(data)
     partes = [data[:2]]
     i = 2
-    while (found := _next_jpeg_marker(data, i)) is not None:
+    for _ in range(_JPEG_MAX_MARKERS):
+        found = _next_jpeg_marker(data, i)
+        if found is None:
+            break
         pos, marker = found
         if marker in _JPEG_STANDALONE:
             partes.append(data[i : pos + 2])
