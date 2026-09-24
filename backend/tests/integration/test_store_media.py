@@ -9,6 +9,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from modules.stores.model import Store, StoreMedia
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
@@ -49,7 +50,9 @@ async def test_upload_logo_and_serve_publicly(client: AsyncClient) -> None:
     body = res.json()
     assert body["kind"] == "logo"
     url = body["url"]
-    assert url.startswith("/api/stores/media/")
+    # Absoluta y del mismo origen (PUBLIC_API_URL): la release anterior valida
+    # las URLs con reject_unsafe_url y el front con z.string().url().
+    assert url == f"{settings.PUBLIC_API_URL}/stores/media/{body['media_id']}"
 
     # El store ahora referencia esa URL como logo.
     me = await client.get("/stores/me", headers=auth_headers(token))
@@ -276,3 +279,31 @@ async def test_el_logo_jpeg_se_publica_sin_exif(client: AsyncClient) -> None:
     servida = await client.get(f"/stores/media/{body['media_id']}")
     assert b"Exif" not in servida.content
     assert servida.content == jpeg(1061, 1460)
+
+
+@pytest.mark.asyncio
+async def test_la_forma_relativa_de_la_url_propia_tambien_es_propia(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    # El logo que se guardo antes de F1-28 es relativo; el nuevo, absoluto.
+    # "La propia" se decide por el id: las dos formas son la misma imagen.
+    store_public_id, token = await register_and_login(
+        client, slug="media-relativa", email="media-relativa@example.com"
+    )
+    _, logo = await _subir(client, token, "logo", _PNG)
+    relativa = f"/api/stores/media/{logo['media_id']}"
+    res = await client.patch(
+        "/stores/me", headers=auth_headers(token), json={"logo_url": relativa}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["logo_url"] == logo["url"]
+    assert await _filas(test_session, store_public_id) == [str(logo["media_id"])]
+
+    ajena = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={
+            "logo_url": f"{settings.PUBLIC_API_URL}/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ"
+        },
+    )
+    assert ajena.status_code == 422, ajena.text

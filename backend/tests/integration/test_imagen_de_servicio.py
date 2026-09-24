@@ -4,9 +4,12 @@
 pero ``services.image_url`` exigia una URL http(s) externa: toda imagen de
 servicio salia rota en el portal y en el panel. Ahora la imagen se sube como
 la del logo (``POST /services/{id}/image``, multipart, mismos controles con
-el tope de servicio) y ``image_url`` pasa a ser la URL servida
-``/api/stores/media/{id}``. Una URL http(s) externa se sigue aceptando por
-ahora (el front migra aparte).
+el tope de servicio) y ``image_url`` pasa a ser la URL servida, absoluta y
+del mismo origen (``{PUBLIC_API_URL}/stores/media/{id}``): la release
+anterior valida ``image_url`` con ``reject_unsafe_url`` en la respuesta y
+una ruta relativa le daria 500 en un rollback. La forma relativa
+(``/api/stores/media/{id}``) se sigue aceptando en la entrada. Una URL
+http(s) externa tambien, por ahora (el front migra aparte).
 """
 
 import pytest
@@ -14,6 +17,8 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
+from core.validation import reject_unsafe_url
 from modules.services.model import Service
 from modules.stores.media import absolute_media_url
 from modules.stores.model import StoreMedia
@@ -46,8 +51,9 @@ async def _subir(
 
 
 def _media_id(url: object) -> str:
-    assert isinstance(url, str) and url.startswith("/api/stores/media/"), url
-    return url.rsplit("/", 1)[-1]
+    base = f"{settings.PUBLIC_API_URL}/stores/media/"
+    assert isinstance(url, str) and url.startswith(base), url
+    return url.removeprefix(base)
 
 
 async def _filas_del_servicio(db: AsyncSession, servicio: str) -> int:
@@ -172,19 +178,37 @@ async def test_el_patch_acepta_la_url_propia_y_rechaza_otra_de_medios(
     )
     assert igual.status_code == 200, igual.text
 
-    ajena = await client.patch(
+    # La forma relativa del mismo id tambien es la propia, y no cambia lo
+    # guardado.
+    relativa = await client.patch(
         f"/services/{servicio}",
         headers=auth_headers(token),
-        json={"image_url": "/api/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ"},
+        json={"image_url": f"/api/stores/media/{_media_id(propia)}"},
     )
-    assert ajena.status_code == 422, ajena.text
+    assert relativa.status_code == 200, relativa.text
+    assert relativa.json()["image_url"] == propia
+
+    for ajena_url in (
+        "/api/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ",
+        f"{settings.PUBLIC_API_URL}/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ",
+    ):
+        ajena = await client.patch(
+            f"/services/{servicio}",
+            headers=auth_headers(token),
+            json={"image_url": ajena_url},
+        )
+        assert ajena.status_code == 422, ajena.text
 
 
 @pytest.mark.asyncio
-async def test_crear_con_una_url_de_medios_es_422(client: AsyncClient) -> None:
+@pytest.mark.parametrize("forma", ["relativa", "absoluta"])
+async def test_crear_con_una_url_de_medios_es_422(
+    client: AsyncClient, forma: str
+) -> None:
     _, token = await register_and_login(
-        client, slug="img-svc-alta", email="img-svc-alta@example.com"
+        client, slug=f"img-svc-alta-{forma}", email=f"img-svc-alta-{forma}@example.com"
     )
+    base = "/api" if forma == "relativa" else settings.PUBLIC_API_URL
     res = await client.post(
         "/services/",
         headers=auth_headers(token),
@@ -192,10 +216,22 @@ async def test_crear_con_una_url_de_medios_es_422(client: AsyncClient) -> None:
             "name": "Consulta",
             "duration_minutes": 30,
             "price": 1000,
-            "image_url": "/api/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ",
+            "image_url": f"{base}/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ",
         },
     )
     assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_la_url_guardada_la_acepta_la_release_anterior(
+    client: AsyncClient,
+) -> None:
+    # Rollback (expand/contract): la release anterior valida image_url con
+    # reject_unsafe_url en ServiceResponse; una ruta relativa le daba 500.
+    _, token, servicio = await _tienda_con_servicio(client, "img-svc-rollback")
+    _, subida = await _subir(client, token, servicio)
+    url = str(subida["image_url"])
+    assert reject_unsafe_url(url) == url
 
 
 @pytest.mark.asyncio
@@ -213,11 +249,15 @@ async def test_una_url_externa_se_sigue_aceptando(client: AsyncClient) -> None:
 def test_la_url_de_medios_se_vuelve_absoluta_para_mercado_pago() -> None:
     # MP muestra `picture_url` en su checkout, fuera del sitio: una ruta
     # relativa no le sirve.
+    # Lo que se guarda desde F1-28 ya es absoluto; un logo viejo (relativo)
+    # se completa con la base publica.
     base = "https://shifty.example.com/api/"
     assert (
         absolute_media_url("/api/stores/media/01ABC", base)
         == "https://shifty.example.com/api/stores/media/01ABC"
     )
+    absoluta = f"{settings.PUBLIC_API_URL}/stores/media/01ABC"
+    assert absolute_media_url(absoluta, base) == absoluta
     assert absolute_media_url("https://cdn.example.com/x.jpg", base) == (
         "https://cdn.example.com/x.jpg"
     )

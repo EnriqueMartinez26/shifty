@@ -20,7 +20,6 @@ from core.exceptions import (
     AppException,
     PermissionDeniedException,
     StoreNotFoundException,
-    ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
 from core.redis import get_availability_cache
@@ -31,9 +30,9 @@ from modules.stores.mappers import to_store_response
 from modules.stores.media import (
     ALLOWED_KINDS,
     IMAGE_CAPS,
-    is_media_url,
     media_url,
     prepare_image,
+    resolve_image_link,
 )
 from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.billing.service import get_active_subscription, today_local
@@ -127,22 +126,21 @@ def _unlinked_media_ids(store: Store, update_data: dict[str, Any]) -> list[str]:
     """Imagenes subidas que el PATCH deja sin enlazar (F1-30, decision 21).
 
     Vaciar el logo o cambiarlo por una URL externa dejaba la fila huerfana en
-    ``store_media`` (solo otra subida la borraba). Devolver la misma URL no
-    desvincula nada. Una URL de medios distinta de la actual es 422: la
-    imagen se sube, no se enlaza a mano (podria ser de otra tienda).
+    ``store_media`` (solo otra subida la borraba). La regla (misma imagen por
+    id, otra URL de medios es 422) vive en ``media.resolve_image_link``; el
+    valor a guardar reemplaza al enviado.
     """
     actuales = {"logo_url": store.logo_url, "cover_url": store.cover_url}
     ids: list[str] = []
     for campo in _CAMPOS_DE_IMAGEN:
         if campo not in update_data:
             continue
-        vieja, nueva = actuales[campo], update_data[campo]
-        if nueva == vieja:
-            continue
-        if is_media_url(nueva):
-            raise ValidationException(f"{campo}: para cambiar la imagen, subila")
-        if vieja is not None and is_media_url(vieja):
-            ids.append(vieja.rsplit("/", 1)[-1])
+        guardar, huerfana = resolve_image_link(
+            campo, actuales[campo], update_data[campo]
+        )
+        update_data[campo] = guardar
+        if huerfana is not None:
+            ids.append(huerfana)
     return ids
 
 

@@ -18,7 +18,8 @@ import struct
 from dataclasses import dataclass
 from typing import Callable
 
-from core.exceptions import AppException
+from core.config import settings
+from core.exceptions import AppException, ValidationException
 from core.validation import reject_unsafe_url
 
 
@@ -282,34 +283,89 @@ def prepare_image(data: bytes, kind: str) -> tuple[bytes, str]:
     return data, content_type
 
 
-# URL con la que el front pide una imagen subida (via nginx, con /api). Es
-# inmutable: cada upload crea un id nuevo.
-MEDIA_URL_PREFIX = "/api/stores/media/"
-_MEDIA_URL = re.compile(r"^/api/stores/media/[A-Za-z0-9_-]{1,64}$")
+# URL de una imagen subida. Se GUARDA absoluta y del mismo origen
+# ({PUBLIC_API_URL}/stores/media/{id}): la release anterior valida image_url
+# con reject_unsafe_url (http/https) en ServiceResponse, asi que una ruta
+# relativa le daba 500 en un rollback, y el front valida con z.string().url().
+# La forma relativa (/api/stores/media/{id}, la de los logos subidos antes de
+# F1-28) se sigue aceptando en la entrada. Es inmutable: cada upload crea un
+# id nuevo.
+_MEDIA_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_RELATIVE_PREFIX = "/api/stores/media/"
+
+
+def _absolute_prefix() -> str:
+    return settings.PUBLIC_API_URL.rstrip("/") + "/stores/media/"
 
 
 def media_url(media_id: str) -> str:
-    return f"{MEDIA_URL_PREFIX}{media_id}"
+    return f"{_absolute_prefix()}{media_id}"
+
+
+def media_id_from_url(value: str | None) -> str | None:
+    """El id de una imagen servida por la app, en cualquiera de sus dos
+    formas; None si la URL es otra cosa (externa, vacia)."""
+    if not value:
+        return None
+    value = value.strip()
+    for prefix in (_absolute_prefix(), _RELATIVE_PREFIX):
+        if value.startswith(prefix):
+            media_id = value.removeprefix(prefix)
+            return media_id if _MEDIA_ID.fullmatch(media_id) else None
+    return None
 
 
 def is_media_url(value: str | None) -> bool:
-    return bool(value) and _MEDIA_URL.fullmatch(str(value)) is not None
+    return media_id_from_url(value) is not None
 
 
 def validate_image_url(value: str | None) -> str | None:
     """URL de imagen de entrada: una imagen servida por la app o http(s).
 
-    Solo el FORMATO: que la imagen servida sea del recurso lo chequea quien
-    la enlaza (una URL de medios se sube, no se enlaza a mano).
+    Solo el FORMATO: que la imagen servida sea del recurso lo decide
+    ``resolve_image_link`` (una URL de medios se sube, no se enlaza a mano).
     """
-    if value is not None and is_media_url(value.strip()):
-        return value.strip()
+    if value is not None and value.strip().startswith(_RELATIVE_PREFIX):
+        if is_media_url(value):
+            return value.strip()
     return reject_unsafe_url(value)
+
+
+def reject_media_url(value: str | None) -> str | None:
+    """Alta de un recurso: todavia no tiene imagen subida que enlazar."""
+    if is_media_url(value):
+        raise ValueError("para usar una imagen subida, subila despues del alta")
+    return reject_unsafe_url(value)
+
+
+def resolve_image_link(
+    field: str, current: str | None, new: str | None
+) -> tuple[str | None, str | None]:
+    """(valor a guardar, id de la imagen subida que queda sin enlazar).
+
+    Regla unica de logo, portada e imagen de servicio (F1-30, decision 21):
+    - Una URL de medios con el MISMO id que la actual es la propia (en
+      cualquiera de las dos formas): se conserva lo guardado.
+    - Otra URL de medios es 422: la imagen se sube, no se enlaza a mano
+      (podria ser de otra tienda).
+    - Cualquier otro cambio (null, vacio, URL externa) desvincula la imagen
+      subida actual, cuya fila hay que borrar.
+    """
+    current_id = media_id_from_url(current)
+    new_id = media_id_from_url(new)
+    if new_id is not None:
+        if new_id != current_id:
+            raise ValidationException(f"{field}: para cambiar la imagen, subila")
+        return current, None
+    if current_id is not None and new != current:
+        return new, current_id
+    return new, None
 
 
 def absolute_media_url(value: str | None, public_api_url: str) -> str | None:
     """La URL de una imagen servida, absoluta (para quien la ve fuera del
-    sitio, como el checkout de Mercado Pago). Otra URL vuelve tal cual."""
-    if value is None or not is_media_url(value):
+    sitio, como el checkout de Mercado Pago). Lo que se guarda desde F1-28 ya
+    es absoluto; un logo viejo relativo se completa. Otra URL vuelve tal cual."""
+    if value is None or not value.startswith(_RELATIVE_PREFIX):
         return value
     return public_api_url.rstrip("/") + value.removeprefix("/api")

@@ -99,6 +99,8 @@ async def test_subir_reemplazar_servir_y_borrar_como_shifty_app(
         files={"file": ("foto.png", png(800, 600), "image/png")},
     )
     assert segunda.status_code == 200, segunda.text
+    # La URL es absoluta ({PUBLIC_API_URL}/stores/media/{id}): el id es el
+    # ultimo segmento.
     vieja = primera.json()["image_url"].rsplit("/", 1)[-1]
     url = segunda.json()["image_url"]
     nueva = url.rsplit("/", 1)[-1]

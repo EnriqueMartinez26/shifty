@@ -16,9 +16,9 @@ from typing import Any
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.exceptions import ServiceNotFoundException, ValidationException
+from core.exceptions import ServiceNotFoundException
 from modules.services.model import Service
-from modules.stores.media import is_media_url, media_url
+from modules.stores.media import media_url, resolve_image_link
 from modules.stores.model import StoreMedia
 
 
@@ -88,19 +88,17 @@ class ServiceImageService:
     ) -> None:
         """Lo que un PATCH de ``image_url`` le hace a la imagen subida.
 
-        Devolver la URL que ya tiene no cambia nada (el front manda el
-        formulario entero). Otra URL de medios es 422: la imagen se sube, no
-        se enlaza. Cualquier otro cambio (null u otra URL http(s)) desvincula
-        la imagen subida y su fila se borra (F1-30, decision 21); el commit
-        es el del PATCH.
+        La regla es la del logo (``media.resolve_image_link``): la misma
+        imagen por id conserva lo guardado (el front manda el formulario
+        entero), otra URL de medios es 422, y cualquier otro cambio borra la
+        fila de la imagen que queda sin enlazar (F1-30, decision 21). El
+        commit es el del PATCH.
         """
         if "image_url" not in changes:
             return
-        new_url = changes["image_url"]
-        if new_url == service.image_url:
-            return
-        if is_media_url(new_url):
-            raise ValidationException(
-                "image_url: para cambiar la imagen del servicio, subila"
-            )
-        await self._delete_media_of(service)
+        guardar, huerfana = resolve_image_link(
+            "image_url", service.image_url, changes["image_url"]
+        )
+        changes["image_url"] = guardar
+        if huerfana is not None:
+            await self._delete_media_of(service)
