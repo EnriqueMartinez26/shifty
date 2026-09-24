@@ -9,6 +9,7 @@ import type { PromotionPayload, PromotionRecord } from '../../application/servic
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
@@ -133,6 +134,11 @@ const PromotionsPage: React.FC = () => {
         description="Códigos y descuentos del booking público en una pantalla separada de pagos."
         isLoading={promotionsQuery.isLoading}
         loadingText="Cargando promociones..."
+      />
+
+      <QueryErrorNotice
+        error={promotionsQuery.error}
+        message="No se pudieron cargar las promociones."
       />
 
       <MessageBanner message={message} />

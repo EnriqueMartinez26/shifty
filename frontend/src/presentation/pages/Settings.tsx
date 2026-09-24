@@ -29,6 +29,7 @@ import type { BusinessType } from '@shared/types/business'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
@@ -150,7 +151,7 @@ type SaveHalf = {
 const SettingsPage: React.FC = () => {
   const [searchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'identity')
-  const { data: store, isLoading } = useStoreSettings()
+  const { data: store, isLoading, error: storeError } = useStoreSettings()
   const featureFlagsQuery = useStoreFeatureFlags()
   const updateStore = useUpdateStoreSettings()
   const uploadLogo = useUploadStoreLogo()
@@ -297,6 +298,14 @@ const SettingsPage: React.FC = () => {
     }
   }
 
+  if (storeError) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <QueryErrorNotice error={storeError} message="No se pudo cargar la configuración." />
+      </div>
+    )
+  }
+
   if (isLoading || !formData) {
     return (
       <div
@@ -313,6 +322,10 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      <QueryErrorNotice
+        error={featureFlagsQuery.error ?? gatewayQuery.error}
+        message="No se pudo cargar parte de la configuración."
+      />
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1
           className="text-3xl font-black uppercase tracking-tight"

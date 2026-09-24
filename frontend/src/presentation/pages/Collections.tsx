@@ -7,6 +7,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import {
   useCreatePaymentPreference,
@@ -83,6 +84,11 @@ const CollectionsPage: React.FC = () => {
         description="Turnos operables para generar links y confirmar pagos manuales sin mezclarlo con configuración."
         isLoading={appointmentsQuery.isLoading}
         loadingText="Cargando cobros..."
+      />
+
+      <QueryErrorNotice
+        error={appointmentsQuery.error ?? summaryQuery.error}
+        message="No se pudieron cargar los cobros."
       />
 
       <MessageBanner message={message} />

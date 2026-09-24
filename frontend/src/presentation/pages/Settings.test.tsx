@@ -41,10 +41,15 @@ const store: StoreSettings = {
 }
 
 const updateStore = jest.fn()
+let storeQuery: { data?: StoreSettings; isLoading: boolean; error: unknown } = {
+  data: store,
+  isLoading: false,
+  error: null
+}
 const idleMutation = { mutateAsync: jest.fn(), isPending: false }
 
 jest.mock('../hooks/useStores', () => ({
-  useStoreSettings: () => ({ data: store, isLoading: false }),
+  useStoreSettings: () => storeQuery,
   useStoreFeatureFlags: () => ({ data: undefined }),
   useUpdateStoreSettings: () => ({ mutateAsync: updateStore, isPending: false }),
   useUpdateStoreFeatureFlags: () => idleMutation,
@@ -76,6 +81,7 @@ const renderSettings = () =>
 describe('SettingsPage - Guardar Cambios (N3)', () => {
   beforeEach(() => {
     updateStore.mockReset()
+    storeQuery = { data: store, isLoading: false, error: null }
   })
 
   it('sin nada editado el boton esta apagado y no llama a ningun endpoint', () => {
@@ -100,5 +106,15 @@ describe('SettingsPage - Guardar Cambios (N3)', () => {
 
     fireEvent.click(guardar)
     expect(updateStore).toHaveBeenCalledWith({ name: 'Otro nombre' })
+  })
+})
+
+describe('SettingsPage - error de carga (N2)', () => {
+  it('si falla la configuracion lo dice, en vez de quedarse cargando para siempre', () => {
+    storeQuery = { data: undefined, isLoading: false, error: new Error('500') }
+    renderSettings()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No se pudo cargar la configuración.')
+    expect(screen.queryByText('Cargando configuración...')).not.toBeInTheDocument()
   })
 })

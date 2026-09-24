@@ -7,6 +7,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from '../hooks/useLedger'
 import { useManagedUsers } from '../hooks/useManagedUsers'
 import {
@@ -87,6 +88,11 @@ const LedgerPage: React.FC = () => {
         description="Mira cuanto debe cada cliente, que pago y que quedo pendiente."
         isLoading={usersQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading}
         loadingText="Cargando cuentas pendientes..."
+      />
+
+      <QueryErrorNotice
+        error={usersQuery.error ?? summaryQuery.error ?? ledgerQuery.error}
+        message="No se pudieron cargar las cuentas pendientes."
       />
 
       <MessageBanner message={message} />

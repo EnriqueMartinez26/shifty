@@ -8,6 +8,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import {
   useGatewayConfig,
@@ -86,6 +87,11 @@ const PaymentsPage: React.FC = () => {
         description="Configura el cobro online, revisa el estado de los pagos y registra devoluciones."
         isLoading={gatewayQuery.isLoading || summaryQuery.isLoading}
         loadingText="Cargando cobros online..."
+      />
+
+      <QueryErrorNotice
+        error={gatewayQuery.error ?? summaryQuery.error ?? outboxStatsQuery.error}
+        message="No se pudieron cargar los cobros online."
       />
 
       <MessageBanner message={message} />
