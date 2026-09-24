@@ -279,6 +279,12 @@ async def _mercadopago_api_request(
     path: str,
     json_body: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
+    # Presupuesto ya agotado: no sale ninguna request, asi que no es una falla
+    # de MP y no pasa por el breaker (no suma ni ocupa la sonda half-open).
+    if _request_deadline_seconds() <= 0:
+        raise MercadoPagoAPIError(
+            "Se agoto el tiempo para hablar con Mercado Pago", transient=True
+        )
     result = await _mercadopago_breaker.call(
         lambda: _perform_mercadopago_request(
             access_token,
