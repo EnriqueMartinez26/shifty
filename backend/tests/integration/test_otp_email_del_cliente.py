@@ -28,8 +28,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from structlog.testing import capture_logs
 
 import modules.notifications.tasks as tasks
+from core.config import settings
 from core.exceptions import OTPException
 from modules.otp.model import OtpVerification
 from modules.otp.service import OtpService
@@ -162,6 +164,97 @@ async def test_email_distinto_respuesta_neutra_y_el_codigo_solo_va_a_la_ficha(
     assert not await servicio.is_client_contact_verified(
         store_id=store_id, phone=TELEFONO_CLIENTE
     )
+
+
+@pytest.mark.asyncio
+async def test_email_distinto_el_debug_code_es_un_senuelo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-SYNC-01 (2026-09-23): el merge con origin/main dejo de devolver el
+    senuelo en el camino sin coincidencia.
+
+    Sintoma: con ``OTP_DEBUG_EXPOSE_CODE=true`` (cualquier entorno que no sea
+    produccion, que lo fuerza a false), pedir el OTP de un telefono ajeno con
+    la casilla propia devolvia en ``debug_code`` el codigo REAL, el mismo que
+    viajaba al email de la ficha. Con eso alcanzaba para verificar el telefono
+    de la victima y autogestionar sus turnos. Antes del merge (290ab9f) ese
+    camino devolvia un codigo de mentira con la misma forma; esta prueba lo
+    vuelve a clavar.
+    """
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
+    tienda, store_id = await _tienda_con_cliente(
+        client, test_session, "otp-cliente-senuelo", email_cliente=EMAIL_CLIENTE
+    )
+
+    status, neutra = await _pedir(client, tienda, "atacante@example.com")
+    assert status == 200, neutra
+    senuelo = str(neutra["debug_code"])
+    assert re.fullmatch(r"\d{6}", senuelo), "misma forma que un codigo real"
+
+    # El codigo real es el que salio al buzon de la ficha, y es OTRO.
+    con_codigo = [
+        cuerpo for destino, _, cuerpo in cola.enviados if destino == EMAIL_CLIENTE
+    ]
+    assert len(con_codigo) == 1
+    real = _CODIGO.search(con_codigo[0])
+    assert real is not None
+    assert real.group(0) != senuelo
+
+    servicio = OtpService(test_session)
+    with pytest.raises(OTPException):
+        await servicio.verify_code(
+            store_id=store_id, phone=TELEFONO_CLIENTE, code=senuelo
+        )
+    assert not await servicio.is_client_contact_verified(
+        store_id=store_id, phone=TELEFONO_CLIENTE
+    )
+
+    # El titular, con el codigo que le llego, si verifica.
+    await servicio.verify_code(
+        store_id=store_id, phone=TELEFONO_CLIENTE, code=real.group(0)
+    )
+    assert await servicio.is_client_contact_verified(
+        store_id=store_id, phone=TELEFONO_CLIENTE
+    )
+
+
+@pytest.mark.asyncio
+async def test_canal_sin_email_no_loguea_una_falsa_falta_de_coincidencia(
+    test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-SYNC-01 (2026-09-23): ``_resolve_destination`` con ``email=None``
+    (canales whatsapp/sms de desarrollo) y un cliente conocido logueaba
+    ``otp_request_email_mismatch_for_known_client`` sin que nadie hubiera
+    tipeado un email. Ese evento es la senal de un posible secuestro de
+    contacto; un falso positivo por cada pedido por consola lo vuelve ruido.
+    """
+    monkeypatch.setattr(settings, "OTP_PROVIDER", "console")
+    store_id = await _store_con_cliente_directo(test_session, "otp-sin-email-log")
+    servicio = OtpService(test_session)
+
+    with capture_logs() as sin_email:
+        await servicio.request_code(
+            store_id=store_id,
+            phone=TELEFONO_CLIENTE,
+            channel="whatsapp",
+            email=None,
+            store_name="Demo",
+            schedule_dispatch=_Cola(),
+        )
+    with capture_logs() as con_email_distinto:
+        await servicio.request_code(
+            store_id=store_id,
+            phone=TELEFONO_CLIENTE,
+            channel="email",
+            email="atacante@example.com",
+            store_name="Demo",
+            schedule_dispatch=_Cola(),
+        )
+
+    evento = "otp_request_email_mismatch_for_known_client"
+    assert all(e["event"] != evento for e in sin_email), sin_email
+    assert any(e["event"] == evento for e in con_email_distinto)
 
 
 @pytest.mark.asyncio

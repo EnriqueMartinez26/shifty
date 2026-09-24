@@ -184,6 +184,24 @@ def _schedule_otp_mail(
         schedule_dispatch(notice_to, asunto, _notice_body(store_name))
 
 
+def _debug_code(code: str, *, decoy: bool) -> str:
+    """Lo que va en ``debug_code`` (solo con ``OTP_DEBUG_EXPOSE_CODE``).
+
+    AUD2-SYNC-01 (2026-09-23): el merge con origin/main dejo de devolver el
+    senuelo del camino sin coincidencia (290ab9f lo tenia). Con el flag
+    activo -cualquier entorno que no sea produccion, que lo fuerza a false-,
+    pedir el OTP de un telefono ajeno con la casilla propia devolvia el
+    codigo REAL, el mismo que viajaba al email de la ficha, y con eso
+    alcanzaba para autogestionar los turnos de la victima. Cuando el codigo
+    no fue al email tipeado, la respuesta lleva un codigo de mentira con la
+    misma forma y siempre distinto del guardado, que no conoce nadie.
+    """
+    if not decoy:
+        return code
+    senuelo = (int(code) + 1 + secrets.randbelow(999_999)) % 1_000_000
+    return f"{senuelo:06d}"
+
+
 class OtpService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -236,7 +254,12 @@ class OtpService:
             return typed, None
         if typed == registered:
             return registered, None
-        logger.info("otp_request_email_mismatch_for_known_client")
+        # Solo hay "falta de coincidencia" si alguien TIPEO un email. Los
+        # canales de desarrollo (whatsapp/sms) no traen email: loguear ahi
+        # convertia en ruido la senal de un posible secuestro de contacto
+        # (AUD2-SYNC-01, 2026-09-23).
+        if typed is not None:
+            logger.info("otp_request_email_mismatch_for_known_client")
         return registered, typed
 
     async def _store_code(
@@ -338,7 +361,9 @@ class OtpService:
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:
-            response["debug_code"] = code
+            # Si el codigo NO fue al email tipeado, quien pide no lo puede
+            # ver ni en debug: recibe un senuelo con la misma forma.
+            response["debug_code"] = _debug_code(code, decoy=notice_to is not None)
         return response
 
     async def verify_code(
