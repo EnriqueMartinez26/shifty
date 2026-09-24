@@ -38,7 +38,14 @@ def _entradas() -> list[tuple[str, list[str]]]:
     ("glob", "codes"), _entradas(), ids=[glob for glob, _ in _entradas()]
 )
 def test_la_excepcion_todavia_hace_falta(glob: str, codes: list[str]) -> None:
-    archivos = sorted(str(p) for p in BACKEND_ROOT.glob(glob) if p.is_file())
+    # Rutas relativas (ruff corre con cwd=BACKEND_ROOT): con las absolutas,
+    # los ~600 archivos de tests/**/*.py pasaban el tope de 32 KB de la linea
+    # de comandos de Windows (WinError 206).
+    archivos = sorted(
+        p.relative_to(BACKEND_ROOT).as_posix()
+        for p in BACKEND_ROOT.glob(glob)
+        if p.is_file()
+    )
     assert archivos, f"per-file-ignores apunta a {glob!r}, que no existe"
 
     resultado = subprocess.run(
