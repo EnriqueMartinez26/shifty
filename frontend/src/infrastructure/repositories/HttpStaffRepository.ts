@@ -3,12 +3,12 @@ import type { AxiosInstance } from 'axios'
 import { BaseRepository } from './BaseRepository'
 import type { StaffResponseDTO } from '../../application/dtos/StaffDTO'
 import { StaffMapper } from '../../application/mappers/StaffMapper'
-import { Staff } from '../../domain/entities/Staff'
+import { Staff, type StaffWriteInput } from '../../domain/entities/Staff'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 
 export class HttpStaffRepository
-  extends BaseRepository<Staff, Staff, Staff>
+  extends BaseRepository<Staff, Staff, StaffWriteInput>
   implements IStaffRepository
 {
   private client: AxiosInstance
@@ -42,8 +42,8 @@ export class HttpStaffRepository
     return StaffMapper.toDomain(data)
   }
 
-  protected async updateImpl(id: string, staff: Staff): Promise<Staff> {
-    const payload = StaffMapper.toWritePayload(staff)
+  protected async updateImpl(id: string, input: StaffWriteInput): Promise<Staff> {
+    const payload = StaffMapper.toUpdatePayload(input)
     const { data } = await this.client.put<StaffResponseDTO>(`/staff/${id}`, payload)
     return StaffMapper.toDomain(data)
   }

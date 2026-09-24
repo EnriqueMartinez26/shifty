@@ -1,4 +1,4 @@
-import { Staff } from '../../domain/entities/Staff'
+import { Staff, type StaffWriteInput } from '../../domain/entities/Staff'
 import type { StaffResponseDTO } from '../dtos/StaffDTO'
 
 export class StaffMapper {
@@ -23,5 +23,17 @@ export class StaffMapper {
     delete sinContacto.last_name
     delete sinContacto.email
     return sinContacto
+  }
+
+  /** Payload parcial de `StaffUpdate`: solo viaja lo que el llamador definio. */
+  static toUpdatePayload(input: StaffWriteInput): Record<string, unknown> {
+    const fields: Record<string, unknown> = {
+      first_name: input.firstName,
+      last_name: input.lastName,
+      email: input.email,
+      display_name: input.displayName,
+      service_ids: input.serviceIds
+    }
+    return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
   }
 }

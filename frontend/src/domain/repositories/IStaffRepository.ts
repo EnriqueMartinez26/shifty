@@ -1,4 +1,4 @@
 import { IRepository } from './IRepository'
-import { Staff } from '../entities/Staff'
+import type { Staff, StaffWriteInput } from '../entities/Staff'
 
-export interface IStaffRepository extends IRepository<Staff, Staff, Staff> {}
+export interface IStaffRepository extends IRepository<Staff, Staff, StaffWriteInput> {}

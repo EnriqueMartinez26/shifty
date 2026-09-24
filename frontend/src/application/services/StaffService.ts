@@ -1,7 +1,5 @@
-import { NotFoundError } from '@shared/errors'
-
 import { BaseService } from './BaseService'
-import { Staff } from '../../domain/entities/Staff'
+import { Staff, type StaffWriteInput } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
 import { Email } from '../../domain/value-objects/Email'
 import apiClient from '../../infrastructure/http/client'
@@ -67,30 +65,30 @@ export class StaffService extends BaseService<Staff> {
    * Updates an existing staff member's information.
    *
    * @param id The unique identifier of the staff member.
-   * @param data The new staff data to replace existing values.
+   * @param data The edited form values; `kind` is the staff's current kind.
    * @returns A promise that resolves to the updated Staff entity.
-   * @throws NotFoundError (as `originalError`) if the staff member is not found.
+   * @throws NotFoundError (as `originalError`) if the backend answers 404.
    */
   async updateStaff(id: string, data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
-      const existing = await this.repository.findById(id)
-      if (!existing) throw new NotFoundError('Staff no encontrado')
-
       this.validate(data, createStaffSchema)
       const validated = createStaffSchema.parse(data)
 
-      // El tipo no se cambia al editar: un recurso no se vuelve persona (ni
-      // al reves) porque implicaria crear o borrar el usuario con login.
-      const updatedStaff = Staff.fromPrimitives({
-        ...existing.toPrimitives(),
-        first_name: validated.first_name,
-        last_name: validated.last_name,
-        email: existing.isResource ? null : validated.email,
-        display_name: validated.display_name,
-        service_ids: validated.service_ids
-      })
+      // Un recurso no tiene nombre, apellido ni email: mandarlos vacios choca
+      // con el min_length de StaffUpdate. El tipo no cambia al editar (el
+      // formulario lo fija desde el staff existente).
+      const shared = { displayName: validated.display_name, serviceIds: validated.service_ids }
+      const input: StaffWriteInput =
+        validated.kind === 'resource'
+          ? shared
+          : {
+              ...shared,
+              firstName: validated.first_name,
+              lastName: validated.last_name,
+              email: validated.email
+            }
 
-      return await this.repository.update(id, updatedStaff)
+      return await this.repository.update(id, input)
     }, 'updateStaff')
   }
 

@@ -118,82 +118,66 @@ describe('StaffService', () => {
   })
 
   describe('updateStaff', () => {
-    it('should retrieve existing, validate updates, and save them', async () => {
-      const existingStaff = Staff.fromPrimitives({
+    it('manda solo lo editado, sin leer el staff entero antes (F8-13)', async () => {
+      const saved = Staff.fromPrimitives({
         public_id: 'staff-id',
-        first_name: 'OldName',
-        last_name: 'OldLastName',
-        email: 'old@example.com',
-        display_name: 'Old D.',
+        first_name: 'Jane',
+        last_name: 'Doe',
+        email: 'jane@example.com',
+        display_name: 'Jane D.',
         is_active: true,
-        service_ids: ['s1']
+        service_ids: ['s2']
       })
+      mockRepository.update.mockResolvedValue(saved)
 
-      const updatedInput = {
+      const result = await service.updateStaff('staff-id', {
+        kind: 'person',
         first_name: 'Jane',
         last_name: 'Doe',
         email: 'jane@example.com',
         display_name: 'Jane D.',
         service_ids: ['s2']
-      }
-
-      const expectedStaff = Staff.fromPrimitives({
-        public_id: 'staff-id',
-        ...updatedInput,
-        is_active: true
       })
 
-      mockRepository.findById.mockResolvedValue(existingStaff)
-      mockRepository.update.mockResolvedValue(expectedStaff)
-
-      const result = await service.updateStaff('staff-id', updatedInput)
-
-      expect(result).toBe(expectedStaff)
-      expect(mockRepository.findById).toHaveBeenCalledWith('staff-id')
-      expect(mockRepository.update).toHaveBeenCalledWith('staff-id', expect.any(Staff))
+      expect(result).toBe(saved)
+      expect(mockRepository.findById).not.toHaveBeenCalled()
+      expect(mockRepository.update).toHaveBeenCalledWith('staff-id', {
+        firstName: 'Jane',
+        lastName: 'Doe',
+        email: 'jane@example.com',
+        displayName: 'Jane D.',
+        serviceIds: ['s2']
+      })
     })
 
-    it('editar un recurso no le inventa un email', async () => {
+    it('editar un recurso no le manda nombre, apellido ni email', async () => {
       const cancha = Staff.fromPrimitives({
         public_id: 'cancha-1',
         kind: 'resource',
         first_name: '',
         last_name: '',
         email: null,
-        display_name: 'Cancha 1',
+        display_name: 'Cancha 1 (techada)',
         is_active: true,
-        service_ids: ['s1']
+        service_ids: ['s1', 's2']
       })
-      mockRepository.findById.mockResolvedValue(cancha)
-      mockRepository.update.mockImplementation(async (_id, staff) => staff)
+      mockRepository.update.mockResolvedValue(cancha)
 
-      const result = await service.updateStaff('cancha-1', {
+      await service.updateStaff('cancha-1', {
         kind: 'resource',
         display_name: 'Cancha 1 (techada)',
         service_ids: ['s1', 's2']
       })
 
-      expect(result.isResource).toBe(true)
-      expect(result.email).toBeNull()
-      expect(result.displayName).toBe('Cancha 1 (techada)')
-    })
-
-    it('should throw error if staff is not found', async () => {
-      mockRepository.findById.mockResolvedValue(null)
-
-      await expect(
-        service.updateStaff('invalid-id', {
-          first_name: 'Jane',
-          last_name: 'Doe',
-          email: 'jane@example.com',
-          display_name: 'Jane D.',
-          service_ids: []
-        })
-      ).rejects.toThrow('Staff no encontrado')
+      expect(mockRepository.update).toHaveBeenCalledWith('cancha-1', {
+        displayName: 'Cancha 1 (techada)',
+        serviceIds: ['s1', 's2']
+      })
     })
 
     it('el staff inexistente viaja como NotFoundError, no como Error crudo (F9-10)', async () => {
-      mockRepository.findById.mockResolvedValue(null)
+      // El 404 del backend llega normalizado como NotFoundError desde el repo.
+      mockRepository.update.mockRejectedValue(new NotFoundError('Staff no encontrado'))
 
       // handleError re-envuelve, pero conserva el original en `originalError`.
       const error: unknown = await service
@@ -206,6 +190,7 @@ describe('StaffService', () => {
         })
         .catch((reason: unknown) => reason)
 
+      expect(error).toMatchObject({ message: 'Staff no encontrado' })
       expect((error as { originalError?: unknown }).originalError).toBeInstanceOf(NotFoundError)
     })
   })
