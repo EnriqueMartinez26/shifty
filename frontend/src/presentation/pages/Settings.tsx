@@ -200,14 +200,6 @@ const SettingsPage: React.FC = () => {
 
   const handleSave = async () => {
     if (!formData || !base) return
-    // Sin nada editado se muestra "Guardado" sin llamar a ningun endpoint: el
-    // boton es uno solo para las siete pestanas, asi que apretarlo sin cambios
-    // es lo normal, y dejarlo mudo se lee como que la pagina se colgo.
-    if (!hasChanges) {
-      setSaveStatus('success')
-      setTimeout(() => setSaveStatus('idle'), 3000)
-      return
-    }
     const plan = planSave(base, draft)
     setSaveStatus('saving')
     setErrorMessage('')
@@ -333,7 +325,9 @@ const SettingsPage: React.FC = () => {
             onClick={() => {
               void handleSave()
             }}
-            disabled={saveStatus === 'saving'}
+            // Sin nada editado no hay nada que guardar: el boton se apaga en
+            // vez de decir "Guardado" sin haber llamado a ningun endpoint.
+            disabled={!hasChanges || saveStatus === 'saving'}
             className="flex items-center gap-2 px-6 py-3 font-black uppercase tracking-widest text-xs rounded-xl transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.selected}
           >
@@ -1454,8 +1448,8 @@ const SettingsPage: React.FC = () => {
                 onClick={() => {
                   void handleSave()
                 }}
-                disabled={saveStatus === 'saving'}
-                className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                disabled={!hasChanges || saveStatus === 'saving'}
+                className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
                   border: `1px solid ${colors2000s.orange.accent}`,
