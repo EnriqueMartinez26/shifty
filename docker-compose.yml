@@ -70,7 +70,7 @@ services:
   db:
     # F0-05: version menor fija. Subirla es un commit, no un efecto de `pull`.
     image: postgres:16.14-alpine
-    container_name: shifty_db
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_db
     restart: always
     logging: *logging
     environment:
@@ -117,7 +117,7 @@ services:
   # Desaloja lo menos usado y no persiste: perderlo es recalcular.
   redis_cache:
     image: redis:7.4-alpine
-    container_name: shifty_redis_cache
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_redis_cache
     restart: always
     logging: *logging
     command:
@@ -152,7 +152,7 @@ services:
   # borra lockouts ni el replay de idempotencia de un cobro.
   redis_state:
     image: redis:7.4-alpine
-    container_name: shifty_redis_state
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_redis_state
     restart: always
     logging: *logging
     command:
@@ -186,7 +186,7 @@ services:
     # Desarrollo conserva la consola de management (127.0.0.1:15672);
     # produccion corre la imagen sin el plugin (docker-compose.prod.yml).
     image: rabbitmq:3.13.7-management-alpine
-    container_name: shifty_rabbitmq
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_rabbitmq
     restart: always
     logging: *logging
     environment:
@@ -291,7 +291,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
-    container_name: shifty_celery
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_celery
     restart: always
     logging: *logging
     # F0-21: la tarea en curso termina (acks_late); si no llega, SIGKILL y el
@@ -333,7 +333,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
-    container_name: shifty_celery_interactive
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_celery_interactive
     restart: always
     logging: *logging
     # Un mail de OTP dura segundos (timeout SMTP de 10 s).
@@ -377,7 +377,7 @@ services:
       timeout: 15s
       retries: 2
       start_period: 120s
-    container_name: shifty_celery_beat
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_celery_beat
     restart: always
     logging: *logging
     environment: *app_environment
@@ -409,7 +409,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
-    container_name: shifty_frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_frontend
     restart: always
     logging: *logging
     ports:
@@ -427,7 +427,7 @@ services:
     build:
       context: ./nginx
       dockerfile: Dockerfile
-    container_name: shifty_nginx
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_nginx
     restart: always
     logging: *logging
     ports:

@@ -96,6 +96,9 @@ x-app-image-prod: &app_image_prod ghcr.io/enriquemartinez26/shifty-backend:${APP
 services:
   backend:
     image: *app_image_prod
+    # Produccion nunca construye: corre lo que CI publico en GHCR. Sin esto un
+    # `up` sin --no-build podia construir en el servidor con el tag del release.
+    build: !reset null
     env_file:
       - .env
     environment: *app_environment_prod
@@ -126,6 +129,7 @@ services:
     environment: *app_environment_prod
 
   frontend:
+    build: !reset null
     image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
     ports: !reset []
 
@@ -207,7 +211,11 @@ services:
     ports: !reset []
 
   nginx:
-    image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
+    # El borde corre la imagen OFICIAL con la configuracion montada: no depende
+    # del release y no se recrea en cada deploy (se recarga con nginx -s
+    # reload). Desarrollo sigue construyendo nginx/Dockerfile.
+    image: nginx:1.27.5-alpine
+    build: !reset null
     ports:
       - "80:80"
       - "443:443"

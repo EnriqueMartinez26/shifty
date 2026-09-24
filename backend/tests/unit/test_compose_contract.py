@@ -869,7 +869,7 @@ def test_produccion_no_corre_una_imagen_sin_version() -> None:
     """Sin APP_VERSION, `:-dev` en el servidor corre lo que haya quedado con ese
     tag (un build local viejo) en vez de fallar."""
     produccion = _servicios_de_produccion()
-    for nombre in (*PROCESOS_DE_LA_APP, "frontend", "nginx"):
+    for nombre in (*PROCESOS_DE_LA_APP, "frontend"):
         imagen = str(produccion[nombre].get("image", ""))
         assert imagen.startswith(f"{REGISTRO}/shifty-"), (nombre, imagen)
         assert "${APP_VERSION:?" in imagen, (
@@ -1303,3 +1303,70 @@ def test_la_base_de_produccion_escribe_los_backups_en_el_host() -> None:
             "device": "${BACKUP_DIR:-/var/backups/shifty}",
         },
     }, volumen
+
+
+# --- Produccion nunca construye (revision independiente del lane C) ----------
+#
+# El VPS corre lo que CI publico: un `build` en la vista de produccion deja que
+# un `up` sin `--no-build` construya en el servidor una imagen que nadie
+# reviso, con el tag de la version. El borde corre la imagen OFICIAL de nginx
+# con la configuracion montada: no depende del release y no se recrea en cada
+# deploy (se recarga con `nginx -s reload`).
+
+
+def test_produccion_no_construye_ninguna_imagen() -> None:
+    produccion = _servicios_de_produccion()
+    construyen = sorted(n for n, s in produccion.items() if "build" in s)
+    assert not construyen, f"en produccion construyen imagen: {construyen}"
+    # Desarrollo sigue construyendo: el reset es solo del override.
+    base = _services()
+    assert {"backend", "frontend", "nginx"} <= {
+        n for n, s in base.items() if "build" in s
+    }
+
+
+def test_el_borde_de_produccion_corre_la_imagen_oficial_de_nginx() -> None:
+    nginx = _servicios_de_produccion()["nginx"]
+    assert nginx.get("image") == "nginx:1.27.5-alpine", nginx.get("image")
+    montajes = [str(v) for v in nginx.get("volumes") or []]  # type: ignore[attr-defined]
+    assert any(m.endswith(":/etc/nginx/conf.d/default.conf:ro") for m in montajes), (
+        montajes
+    )
+
+
+# --- Nombres de contenedor por proyecto (revision independiente del lane C) --
+#
+# Un nombre fijo (`shifty_db`) choca con un segundo proyecto compose en el
+# mismo host (staging, decision 29). El prefijo sale del nombre del proyecto;
+# por defecto sigue siendo `shifty`, que es lo que usan los scripts locales.
+
+PREFIJO_DE_PROYECTO = "${COMPOSE_PROJECT_NAME:-shifty}_"
+
+NOMBRES_EN_DESARROLLO = {
+    "db": "shifty_db",
+    "redis_cache": "shifty_redis_cache",
+    "redis_state": "shifty_redis_state",
+    "rabbitmq": "shifty_rabbitmq",
+    "celery_worker": "shifty_celery",
+    "celery_worker_interactive": "shifty_celery_interactive",
+    "celery_beat": "shifty_celery_beat",
+    "frontend": "shifty_frontend",
+    "nginx": "shifty_nginx",
+}
+
+
+def test_los_nombres_de_contenedor_llevan_el_proyecto() -> None:
+    nombres = {
+        nombre: str(servicio["container_name"])
+        for nombre, servicio in _services().items()
+        if "container_name" in servicio
+    }
+    assert set(nombres) == set(NOMBRES_EN_DESARROLLO), sorted(nombres)
+    for nombre, valor in nombres.items():
+        assert valor.startswith(PREFIJO_DE_PROYECTO), (nombre, valor)
+    # Sin COMPOSE_PROJECT_NAME resuelven a los nombres de siempre.
+    resueltos = {
+        nombre: valor.replace(PREFIJO_DE_PROYECTO, "shifty_")
+        for nombre, valor in nombres.items()
+    }
+    assert resueltos == NOMBRES_EN_DESARROLLO, resueltos
