@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from celery.exceptions import SoftTimeLimitExceeded
 from core.celery_app import celery_app
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
 from core.worker_loop import run_in_worker_loop
@@ -40,6 +41,8 @@ async def process_waitlist_offers_once(
 def process_waitlist_offers(self: Any) -> dict[str, int]:
     try:
         return run_in_worker_loop(process_waitlist_offers_once())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 

@@ -9,6 +9,7 @@ from functools import partial
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import Select, or_, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
@@ -197,7 +198,15 @@ async def _registrar_fallo(
     este ``attempts``. Con savepoint propio, el intento queda firme apenas se
     libera. Si ni siquiera eso se puede escribir, se registra y se sigue: el
     lote no se pierde por no poder anotar un fallo.
+
+    El soft time limit de Celery NO es un fallo del item (revision de f2b,
+    2026-09-24): ``SoftTimeLimitExceeded`` es una ``Exception`` y anotarlo
+    gastaba un ``attempts`` (regla 7) y dejaba seguir al lote hasta el hard
+    limit. Todo ``except Exception`` de este modulo lo deja pasar antes
+    (``tests/architecture/test_corte_de_tiempo_no_se_traga.py``).
     """
+    if isinstance(exc, SoftTimeLimitExceeded):
+        raise exc
     try:
         # Revertir el savepoint deja la fila EXPIRADA: ``register_failure``
         # lee ``attempts`` y ese acceso perezoso, fuera de un await, revienta
@@ -205,6 +214,8 @@ async def _registrar_fallo(
         await db.refresh(fila)
         async with db.begin_nested():
             fila.register_failure(str(exc))
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         logger.warning(
             "batch_register_failure_skipped",
@@ -414,6 +425,8 @@ async def process_outbox_batch(
                 )
                 message.processed_at = now
                 message.error = None
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             failed += 1
             await _registrar_fallo(db, message, exc)
@@ -504,6 +517,8 @@ async def _send_one_pending_email(pendiente: _MailDelLote, smtp: Any) -> str | N
     """Manda un mail del lote. Devuelve el motivo si no salio, o None."""
     try:
         resultado = await pendiente.enviar(smtp=smtp)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "outbox_email_skipped",
@@ -661,6 +676,8 @@ async def _expire_claimed_preferences(
                 persist_refresh=partial(persist_gateway_refresh, db),
             )
             errores[reclamo.message_id] = (reclamo, None)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             logger.warning(
                 "preference_expire_failed",
@@ -997,6 +1014,8 @@ async def _process_webhook_inbox_batch(
                     )
                 if applied:
                     inbox.mark_processed()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             failed += 1
             await _registrar_fallo(db, inbox, exc)
@@ -1195,6 +1214,8 @@ async def _reconcile(
                     payload={"data": remote, "status": remote.get("status")},
                     configs=configs,
                 )
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             fallidos += 1
         else:
@@ -1226,6 +1247,8 @@ async def _remote_payments_for_reconciliation(
         consultados.append(payment.id)
         try:
             remote = await _fetch_remote_payment(db, payment, configs, persistir)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             fallidos += 1
             continue
@@ -1318,6 +1341,11 @@ async def _release_job_lock(conn: AsyncConnection, params: dict[str, object]) ->
         await conn.execute(
             text("SELECT pg_advisory_unlock(:namespace, hashtext(:clave))"), params
         )
+    except SoftTimeLimitExceeded:
+        # Cortado a mitad del unlock: la conexion no puede volver al pool con
+        # el lock de sesion tomado.
+        await conn.invalidate()
+        raise
     except Exception as exc:
         logger.warning(
             "job_lock_unlock_failed",
@@ -1514,6 +1542,8 @@ async def _fetch_remote_payments(
             continue
         try:
             remote = await _fetch_remote_payment(db, payment, configs, persist_refresh)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             continue
         if remote:

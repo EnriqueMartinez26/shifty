@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from celery.app.task import Task
+from celery.exceptions import SoftTimeLimitExceeded
 
 from core.celery_app import celery_app
 from core.worker_loop import run_in_worker_loop
@@ -34,6 +35,8 @@ def process_payment_outbox(self: Task, limit: int = 100) -> dict[str, int]:
 
     try:
         return run_in_worker_loop(_run())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
@@ -53,6 +56,8 @@ def process_payment_webhook_inbox(
 
     try:
         return run_in_worker_loop(_run())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
@@ -72,6 +77,8 @@ def reconcile_pending_payment_holds(
 
     try:
         return run_in_worker_loop(_run())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
@@ -105,5 +112,7 @@ def expire_unpaid_appointment_holds(self: Task, limit: int = 100) -> dict[str, i
 
     try:
         return run_in_worker_loop(_run())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
