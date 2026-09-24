@@ -272,6 +272,10 @@ class Settings(BaseSettings):
     SLO_MAX_PENDING_WEBHOOKS: int = 200
     SLO_MAX_FAILED_WEBHOOKS: int = 20
     SLO_MAX_PENDING_OUTBOX: int = 200
+    # Edad minima de un cobro pendiente para que la conciliacion le pregunte a
+    # Mercado Pago (F1-20, decision 20): antes de eso el cliente sigue en el
+    # checkout y la consulta solo gasta la corrida.
+    RECONCILIATION_MIN_AGE_MINUTES: int = 10
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
 
     DATABASE_URL: str

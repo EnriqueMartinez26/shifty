@@ -26,6 +26,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import ClauseElement
 
+from core.config import settings
 import modules.notifications.tasks as tasks
 from modules.payments.model import PaymentStatus
 from modules.payments.processing import apply_mercadopago_webhook_payload
@@ -107,6 +108,8 @@ async def test_la_conciliacion_lockea_el_turno_antes_que_el_pago(
     es exclusiva por advisory lock) y por cada cobro lockea turno y despues
     pago.
     """
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _stub_mercadopago(monkeypatch, remote_payment=None)
     _turno, pago = await _turno_con_sena(client, test_session, "f118-concilia", 11)

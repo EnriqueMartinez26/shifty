@@ -74,11 +74,19 @@ def _bloquea_con_skip_locked(statement: Select[Any]) -> bool:
 async def test_el_lote_del_inbox_toma_sus_filas_con_skip_locked(
     test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # F1-20: la fase B solo corre sobre lo que la fase A alcanzo a consultar.
+    # Un evento que no es de MP no necesita consulta y la hace correr.
+    test_session.add(
+        WebhookInbox(
+            store_id="tienda-b203", provider="otro", event_id="b203", payload={}
+        )
+    )
+    await test_session.commit()
     ejecutadas = _espiar_sentencias(monkeypatch, test_session)
 
     stats = await process_webhook_inbox_batch(test_session)
 
-    assert stats == {"processed": 0, "failed": 0, "inspected": 0}
+    assert stats == {"processed": 1, "failed": 0, "inspected": 1}
     lote = _consulta_bloqueada_del_lote(ejecutadas, WebhookInbox)
     assert _bloquea_con_skip_locked(lote), (
         "el inbox se selecciona sin FOR UPDATE SKIP LOCKED: dos corridas "

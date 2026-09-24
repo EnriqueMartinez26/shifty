@@ -11,6 +11,7 @@ from core.database import (
     set_tenant_context,
 )
 from modules.payments.jobs import (
+    MP_BATCH_LIMIT,
     expire_unpaid_appointments,
     process_outbox_tick,
     process_webhook_inbox_batch,
@@ -37,7 +38,9 @@ def process_payment_outbox(self: Task, limit: int = 100) -> dict[str, int]:
 
 
 @celery_app.task(name="process_payment_webhook_inbox", bind=True, max_retries=3)  # type: ignore[untyped-decorator]
-def process_payment_webhook_inbox(self: Task, limit: int = 100) -> dict[str, int]:
+def process_payment_webhook_inbox(
+    self: Task, limit: int = MP_BATCH_LIMIT
+) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         async with AsyncSessionFactory() as db:
             set_tenant_context(None, True)
@@ -54,7 +57,9 @@ def process_payment_webhook_inbox(self: Task, limit: int = 100) -> dict[str, int
 
 
 @celery_app.task(name="reconcile_pending_payments", bind=True, max_retries=3)  # type: ignore[untyped-decorator]
-def reconcile_pending_payment_holds(self: Task, limit: int = 100) -> dict[str, int]:
+def reconcile_pending_payment_holds(
+    self: Task, limit: int = MP_BATCH_LIMIT
+) -> dict[str, int]:
     async def _run() -> dict[str, int]:
         async with AsyncSessionFactory() as db:
             set_tenant_context(None, True)

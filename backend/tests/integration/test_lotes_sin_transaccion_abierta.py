@@ -34,6 +34,7 @@ from httpx import AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from core.config import settings
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from modules.payments.jobs import (
@@ -192,6 +193,8 @@ async def test_la_conciliacion_corre_sin_transaccion_abierta(
     test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     linea: list[str] = []
     _mercadopago_que_registra(monkeypatch, linea)

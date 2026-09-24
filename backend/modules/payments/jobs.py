@@ -14,6 +14,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
+from core.config import settings
 from core.database import _apply_tenant_context
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware
@@ -57,6 +58,36 @@ from modules.payments.service import (
 # Ventana hacia atras que revisa la conciliacion. Mas alla de esto un pago
 # pendiente ya se considera abandonado.
 RECONCILIATION_LOOKBACK_DAYS = 30
+
+
+# Inbox y conciliacion (F1-20, R9-08): lote de 25 y presupuesto de 60 s para
+# la fase A. Antes eran 100 filas x hasta 20 s por consulta a MP sin tope: con
+# MP lento el hard time limit de Celery (150 s) mataba la tarea antes de la
+# fase B, no se aplicaba nada y la corrida siguiente retomaba las mismas 100.
+# El presupuesto se mira ANTES de cada consulta, asi que el peor caso es el
+# presupuesto mas una consulta, por debajo del soft time limit (120 s). Lo que
+# no entra no gasta un intento: lo toma la corrida siguiente.
+MP_BATCH_LIMIT = 25
+MP_PHASE_A_BUDGET_SECONDS = 60.0
+
+
+def _reloj() -> float:
+    """Reloj de los presupuestos de la fase A; los tests lo reemplazan."""
+    return time.monotonic()
+
+
+def _presupuesto_agotado(limite: float, *, job: str, sin_consultar: int) -> bool:
+    """True (y lo deja en el log) si la fase A ya no puede consultar a MP."""
+    if _reloj() < limite:
+        return False
+    logger.warning(
+        "mp_phase_a_budget_exhausted",
+        job=job,
+        sin_consultar=sin_consultar,
+        budget_seconds=MP_PHASE_A_BUDGET_SECONDS,
+    )
+    return True
+
 
 logger = structlog.get_logger()
 
@@ -890,7 +921,7 @@ def _inbox_batch_query(
 async def process_webhook_inbox_batch(
     db: AsyncSession,
     *,
-    limit: int = 100,
+    limit: int = MP_BATCH_LIMIT,
     store_id: str | None = None,
 ) -> dict[str, int]:
     async with _exclusive_job(db, INBOX_JOB_LOCK) as tomado:
@@ -928,19 +959,27 @@ async def _process_webhook_inbox_batch(
     enriquecidos = await _enrich_inbox_payloads(db, pendientes, configs)
     await _apply_tenant_context(db)
 
-    result = await db.execute(
-        consulta.with_for_update(skip_locked=True).execution_options(
-            populate_existing=True
+    # La fase B toma SOLO lo que la fase A consulto (F1-20): lo que llego
+    # despues o no entro en el presupuesto no tiene detalle de MP, y gastarle
+    # un intento seria mentir. Lo toma la corrida siguiente.
+    filas: list[WebhookInbox] = []
+    if enriquecidos:
+        result = await db.execute(
+            select(WebhookInbox)
+            .where(
+                WebhookInbox.id.in_(list(enriquecidos)),
+                WebhookInbox.processed_at.is_(None),
+                WebhookInbox.is_active.is_(True),
+            )
+            .order_by(WebhookInbox.created_at.asc())
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
         )
-    )
+        filas = list(result.scalars().all())
     processed = 0
     failed = 0
     inspected = 0
-    for inbox in result.scalars().all():
-        if inbox.id not in enriquecidos:
-            # Llego despues de la fase A: sin detalle de MP no se resuelve, y
-            # gastarle un intento seria mentir. Lo toma la corrida siguiente.
-            continue
+    for inbox in filas:
         inspected += 1
         try:
             # Savepoint por item (AUD2-B2-11): ver el comentario del lote del
@@ -981,13 +1020,20 @@ async def _enrich_inbox_payloads(
 
     Un evento que no se puede enriquecer conserva su payload crudo: ``enrich``
     ya devuelve el original ante cualquier fallo, y la fase B decide con eso.
+    Con el presupuesto agotado deja de consultar: lo que falta no figura en el
+    resultado y la fase B no lo toca (F1-20).
     """
     persistir = partial(persist_gateway_refresh, db)
     enriquecidos: dict[str, dict[str, JsonValue]] = {}
-    for inbox in pendientes:
+    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    for indice, inbox in enumerate(pendientes):
         if inbox.provider != "mercadopago" or not inbox.store_id:
             enriquecidos[inbox.id] = inbox.payload
             continue
+        if _presupuesto_agotado(
+            limite, job="inbox", sin_consultar=len(pendientes) - indice
+        ):
+            break
         enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
             db,
             store_id=inbox.store_id,
@@ -1013,6 +1059,9 @@ async def _lock_appointment_or_skip(db: AsyncSession, payment: Payment) -> bool:
 
 def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
     cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
+    # Edad minima (F1-20, decision 20): un cobro recien creado es un cliente
+    # que sigue en el checkout; preguntarle a MP por el gasta la corrida.
+    min_age = now - timedelta(minutes=settings.RECONCILIATION_MIN_AGE_MINUTES)
     return (
         select(Payment)
         .join(
@@ -1024,6 +1073,7 @@ def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
             Payment.provider == "mercadopago",
             Payment.is_active.is_(True),
             Payment.created_at >= cutoff,
+            Payment.created_at <= min_age,
             PaymentGatewayConfig.provider == "mercadopago",
         )
         .order_by(Payment.created_at.asc())
@@ -1032,7 +1082,7 @@ def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
 
 
 async def reconcile_pending_payments(
-    db: AsyncSession, *, limit: int = 100
+    db: AsyncSession, *, limit: int = MP_BATCH_LIMIT
 ) -> dict[str, int]:
     """Consulta a Mercado Pago los cobros que siguen pendientes en Shifty.
 
@@ -1065,7 +1115,7 @@ async def _reconcile_pending_payments(
     # validacion de integridad (regla 12; 2026-09-20, AUD2-B2-06).
     configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
     await AsyncSession.commit(db)
-    remotos, fallidos = await _remote_payments_for_reconciliation(
+    remotos, fallidos, consultados = await _remote_payments_for_reconciliation(
         db, pendientes, configs
     )
     await _apply_tenant_context(db)
@@ -1076,15 +1126,20 @@ async def _reconcile_pending_payments(
     # exclusion entre corridas ya la da el advisory lock (``_exclusive_job``);
     # la exclusion con un webhook o un "liberar" la dan los locks de fila que
     # se toman abajo, cobro por cobro y en orden.
-    result = await db.execute(consulta.execution_options(populate_existing=True))
+    # Solo lo que la fase A consulto: un cobro que aparecio despues o que no
+    # entro en el presupuesto no tiene respuesta de MP y lo toma la corrida
+    # siguiente en vez de contarse como inspeccionado (F1-20).
+    filas: list[Payment] = []
+    if consultados:
+        result = await db.execute(
+            consulta.where(Payment.id.in_(consultados)).execution_options(
+                populate_existing=True
+            )
+        )
+        filas = list(result.scalars().all())
     reconciled = 0
     inspected = 0
-    # Un cobro que aparecio despues de la fase A no tiene respuesta de MP: lo
-    # toma la corrida siguiente en vez de contarse como inspeccionado.
-    vistos = {p.id for p in pendientes}
-    for payment in result.scalars().all():
-        if payment.id not in vistos:
-            continue
+    for payment in filas:
         remote = remotos.get(payment.id)
         if not remote:
             # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
@@ -1123,15 +1178,23 @@ async def _reconcile_pending_payments(
 
 async def _remote_payments_for_reconciliation(
     db: AsyncSession, pendientes: list[Payment], configs: GatewayConfigs
-) -> tuple[dict[str, dict[str, Any]], int]:
-    """{payment.id: pago remoto} y cuantos no se pudieron consultar.
+) -> tuple[dict[str, dict[str, Any]], int, list[str]]:
+    """{payment.id: pago remoto}, cuantos fallaron y cuales se consultaron.
 
-    Corre en la fase A: sin lock y con la transaccion cerrada.
+    Corre en la fase A: sin lock y con la transaccion cerrada, y con el
+    presupuesto de F1-20: lo que no entra no se consulta ni se cuenta.
     """
     persistir = partial(persist_gateway_refresh, db)
     remotos: dict[str, dict[str, Any]] = {}
     fallidos = 0
-    for payment in pendientes:
+    consultados: list[str] = []
+    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    for indice, payment in enumerate(pendientes):
+        if _presupuesto_agotado(
+            limite, job="reconciliation", sin_consultar=len(pendientes) - indice
+        ):
+            break
+        consultados.append(payment.id)
         try:
             remote = await _fetch_remote_payment(db, payment, configs, persistir)
         except Exception:
@@ -1139,7 +1202,7 @@ async def _remote_payments_for_reconciliation(
             continue
         if remote:
             remotos[payment.id] = remote
-    return remotos, fallidos
+    return remotos, fallidos, consultados
 
 
 async def _fetch_remote_payment(

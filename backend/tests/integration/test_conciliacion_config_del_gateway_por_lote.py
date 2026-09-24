@@ -25,6 +25,7 @@ from httpx import AsyncClient
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from core.config import settings
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from modules.payments.jobs import reconcile_pending_payments
@@ -131,6 +132,8 @@ async def test_la_conciliacion_lee_la_config_del_gateway_una_vez_por_tienda(
     test_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _mercadopago_con_preferencias_distintas(monkeypatch)
     store, token = await register_and_login(
