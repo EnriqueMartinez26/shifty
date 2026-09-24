@@ -37,6 +37,27 @@ from modules.users.model import User
 
 MetricBucket = dict[str, Any]
 
+# Tope de turnos de un export (F1-07, decision 19 del dueno). El archivo se
+# arma entero en memoria del proceso de la API; por encima de esto se pide
+# acotar el rango (422) en vez de congelar un worker. El job asincrono queda
+# para mas adelante.
+EXPORT_MAX_ROWS = 20_000
+
+
+class ExportTooLargeError(Exception):
+    """El rango pedido tiene mas turnos que ``EXPORT_MAX_ROWS``."""
+
+    def __init__(self, max_rows: int) -> None:
+        self.max_rows = max_rows
+        super().__init__(f"El export supera {max_rows} turnos")
+
+
+# Lo que el archivo no escribe (cohortes, top-5, deuda) no se calcula para el
+# export: el resumen viaja con estos vacios.
+_EXPORT_EMPTY_CLIENT_STATS = ReportClientStats(
+    total_clients=0, new_clients=0, returning_clients=0, inactive_clients=0
+)
+
 # Recursos cuya auditoria expone el panel (B5-12): los que escribe
 # AuditRepository.log desde appointments y appointment_blocks. Las acciones
 # del superadmin sobre la tienda (Store, User, suscripciones) quedan afuera.
@@ -165,6 +186,45 @@ def _appointment_item(
             appointment.price_amount
             if appointment.price_amount is not None
             else service.price
+        ),
+    )
+
+
+def _export_item(fila: Any) -> ReportAppointmentItem:
+    """Fila de columnas del export -> item, con las reglas de ``_appointment_item``.
+
+    El nombre sigue a ``_report_client_name`` (el ``full_name`` del modelo une
+    nombre y apellido sin blancos sobrantes; si no hay, el email; si no, el
+    snapshot del turno) y el precio es el congelado o, en un turno viejo, el
+    de lista.
+    """
+    (
+        public_id,
+        starts_at,
+        ends_at,
+        status,
+        price_amount,
+        snapshot,
+        service_name,
+        service_price,
+        staff_name,
+        first_name,
+        last_name,
+        email,
+    ) = fila
+    full_name = " ".join(
+        part.strip() for part in (first_name, last_name) if part and part.strip()
+    )
+    return ReportAppointmentItem(
+        public_id=public_id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        status=status,
+        service_name=service_name,
+        staff_name=staff_name,
+        client_name=full_name or email or (snapshot or "").strip() or "Cliente",
+        service_price=float(
+            price_amount if price_amount is not None else service_price
         ),
     )
 
@@ -830,6 +890,67 @@ class ReportService:
             # stats.total_appointments el panel puede mostrar "N de M".
             has_more=offset + len(items) < counts.get("total", 0),
         )
+
+    async def get_export_rows(
+        self,
+        from_date: date | None,
+        to_date: date | None,
+        *,
+        staff_id: str | None = None,
+    ) -> ReportSummaryResponse:
+        """Lo que escribe el archivo de export, y nada mas (F1-07, R2-02).
+
+        Mismo rango, mismos filtros y mismas metricas del encabezado que
+        ``get_summary``; sin top-5, cohortes ni deuda (el archivo no los
+        escribe) y con el detalle leido por columnas, no como cuatro entidades
+        ORM por turno. El conteo por estado va primero: si el rango pasa de
+        ``EXPORT_MAX_ROWS`` se corta antes de traer una sola fila.
+        """
+        resolved_from, resolved_to = self._resolve_date_range(from_date, to_date)
+        start_dt, end_dt = self._range_bounds(resolved_from, resolved_to)
+        rango: dict[str, Any] = {
+            "start_dt": start_dt,
+            "end_dt": end_dt,
+            "staff_id": staff_id,
+        }
+        counts = await self._status_counts(**rango)
+        if counts.get("total", 0) > EXPORT_MAX_ROWS:
+            raise ExportTooLargeError(EXPORT_MAX_ROWS)
+        cobrado = await self._accredited_revenue(**rango)
+        retained = await self._retained_deposit_revenue(**rango)
+        return ReportSummaryResponse(
+            from_date=resolved_from,
+            to_date=resolved_to,
+            stats=_summary_stats(counts, cobrado, retained),
+            client_stats=_EXPORT_EMPTY_CLIENT_STATS,
+            debt_summary=self._empty_debt_summary(),
+            appointments=await self._fetch_export_items(**rango),
+        )
+
+    async def _fetch_export_items(
+        self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
+    ) -> list[ReportAppointmentItem]:
+        """El detalle del export por columnas, en el orden estable del detalle."""
+        result = await self.db.execute(
+            self._select_in_range(
+                Appointment.id,
+                Appointment.starts_at,
+                Appointment.ends_at,
+                Appointment.status,
+                Appointment.price_amount,
+                Appointment.client_name,
+                Service.name,
+                Service.price,
+                Staff.display_name,
+                User.first_name,
+                User.last_name,
+                User.email,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                staff_id=staff_id,
+            ).order_by(Appointment.starts_at.asc(), Appointment.id.asc())
+        )
+        return [_export_item(fila) for fila in result.all()]
 
     async def _active_staff(self, only_staff_id: str | None) -> list[Staff]:
         query = select(Staff).where(

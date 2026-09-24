@@ -1,6 +1,6 @@
+import asyncio
 from collections.abc import Iterable
 from datetime import date
-from io import BytesIO
 
 from fastapi import Depends, Query
 from core.router import CanonicalAPIRouter
@@ -20,7 +20,7 @@ from core.roles import (
     store_scope_for,
 )
 from modules.auth.dependencies import get_current_user
-from modules.reports.exporter import export_to_csv, export_to_excel, export_to_pdf
+from modules.reports.exporter import export_to_excel, export_to_pdf, iter_csv
 from modules.reports.schemas import (
     AuditLogItem,
     ProfessionalReportsResponse,
@@ -28,7 +28,7 @@ from modules.reports.schemas import (
     ReportSummaryResponse,
     ReportTrendResponse,
 )
-from modules.reports.service import ReportService
+from modules.reports.service import ExportTooLargeError, ReportService
 from modules.users.model import User
 from core.validation import PUBLIC_ID_PATTERN
 
@@ -111,6 +111,16 @@ async def get_report_trend(
         raise AppException(message=str(exc), http_status=400)
 
 
+_EXPORT_MEDIA = {
+    "csv": ("text/csv", "csv"),
+    "excel": (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xlsx",
+    ),
+    "pdf": ("application/pdf", "pdf"),
+}
+
+
 @router.post("/export")
 async def export_report(
     payload: ReportExportRequest,
@@ -124,35 +134,47 @@ async def export_report(
         user, allowed=REPORT_EXPORTERS, action="exportar reportes"
     )
     try:
-        summary = await service.get_summary(
+        summary = await service.get_export_rows(
             payload.from_date, payload.to_date, staff_id=staff_scope
+        )
+    except ExportTooLargeError as exc:
+        # Decision 19: tope de filas, sin job asincrono por ahora. Mensaje
+        # neutro (regla 20): el numero es el tope, no un dato de la tienda.
+        raise AppException(
+            message=(
+                f"El reporte tiene mas de {exc.max_rows} turnos: acota el rango "
+                "de fechas para exportarlo"
+            ),
+            http_status=422,
+            error_code="EXPORT_TOO_LARGE",
         )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
 
-    try:
-        if payload.format == "csv":
-            file_bytes = export_to_csv(summary)
-            media_type = "text/csv"
-            extension = "csv"
-        elif payload.format == "excel":
-            file_bytes = export_to_excel(summary)
-            media_type = (
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            extension = "xlsx"
-        else:
-            file_bytes = export_to_pdf(summary)
-            media_type = "application/pdf"
-            extension = "pdf"
-    except RuntimeError as exc:
-        raise AppException(message=str(exc), http_status=500, error_code="EXPORT_ERROR")
-
+    media_type, extension = _EXPORT_MEDIA[payload.format]
+    content = await _export_content(payload.format, summary)
     filename = f"{payload.filename_prefix}-{summary.from_date.isoformat()}-{summary.to_date.isoformat()}.{extension}"
     headers = {"Content-Disposition": f"attachment; filename={filename}"}
-    return StreamingResponse(
-        BytesIO(file_bytes), media_type=media_type, headers=headers
-    )
+    return StreamingResponse(content, media_type=media_type, headers=headers)
+
+
+async def _export_content(
+    export_format: str, summary: ReportSummaryResponse
+) -> Iterable[bytes]:
+    """El archivo, armado FUERA del hilo del event loop (F1-07, R2-02).
+
+    openpyxl y reportlab son sincronos y tardan segundos con miles de turnos:
+    en el ``async def`` congelaban la API entera. Excel y PDF van a
+    ``asyncio.to_thread``; el CSV es un iterador sincrono que Starlette
+    recorre en su pool mientras lo manda (streaming).
+    """
+    if export_format == "csv":
+        return iter_csv(summary)
+    exporter = export_to_excel if export_format == "excel" else export_to_pdf
+    try:
+        return [await asyncio.to_thread(exporter, summary)]
+    except RuntimeError as exc:
+        raise AppException(message=str(exc), http_status=500, error_code="EXPORT_ERROR")
 
 
 @router.get("/audit-logs", response_model=list[AuditLogItem])
