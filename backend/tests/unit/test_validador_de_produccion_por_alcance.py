@@ -64,7 +64,14 @@ BASE: dict[str, Any] = {
 # encerrado en el bloque de produccion, y "development" que el limite operativo
 # vale en cualquier entorno.
 INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
-    # --- Secretos: todo entorno que no sea desarrollo (2 `if` sueltos, 4 filas) ---
+    # --- Fuera de desarrollo: secretos y la API de MP (3 `if` sueltos, 5 filas) ---
+    # Staging tampoco puede mandar los tokens de MP a otro host (2026-09-24).
+    (
+        "staging",
+        {"MERCADOPAGO_API_BASE_URL": "http://host.docker.internal:9999"},
+        "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com fuera de "
+        "desarrollo",
+    ),
     (
         "staging",
         {"SECRET_KEY": "generate_a_very_secret_key_here_for_production"},
@@ -86,7 +93,7 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         "FIELD_ENCRYPTION_KEY parece un placeholder del repo",
     ),
     # --- Endurecimientos: solo produccion ---
-    # (6 filas de _BOOLEANOS_DE_PRODUCCION + 10 `if` sueltos que ocupan 11, 17 filas)
+    # (6 filas de _BOOLEANOS_DE_PRODUCCION + 9 `if` sueltos que ocupan 10, 16 filas)
     (
         "production",
         {"CORS_ORIGINS": "https://app.example.com,http://localhost:3000"},
@@ -156,11 +163,6 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         "production",
         {"PUBLIC_API_URL": "http://127.0.0.1:8000"},
         "PUBLIC_API_URL no puede apuntar a localhost en produccion",
-    ),
-    (
-        "production",
-        {"MERCADOPAGO_API_BASE_URL": "http://host.docker.internal:9999"},
-        "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com en produccion",
     ),
     (
         "production",

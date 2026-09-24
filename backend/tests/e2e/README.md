@@ -22,7 +22,7 @@ pytest tests/e2e -p no:cacheprovider
 
 Corre sobre la app de integracion (SQLite en memoria). Eso NO prueba RLS, el
 trigger de estados, la exclusion GiST ni locks reales (seccion 4 de
-`CLAUDE.md`). Tarda unos 30 s: el flujo (j) espera 12 s de latencia a proposito.
+`CLAUDE.md`). Tarda unos 20 s: el flujo (j) espera 3 s de latencia a proposito.
 
 | Flujo | Test | Estado |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ trigger de estados, la exclusion GiST ni locks reales (seccion 4 de
 | (g) Liberar: `payment.preference.expire` en el outbox y el job vence el link en MP | `test_g_*` | pasa |
 | (h) OAuth: 401 una vez, refresh, reintento con el token nuevo | `test_h_*` | pasa |
 | (i) Conciliacion: pago acreditado sin webhook | `test_i_*` | pasa |
-| (j) MP a 12 s: la reserva corta dentro del presupuesto y compensa | `test_j_*` | xfail hasta F1-04 |
+| (j) MP a 3 s: la reserva corta dentro de un presupuesto de 2 s y compensa | `test_j_*` | xfail hasta F1-04 |
 | (k) Circuit breaker: se abre tras N fallas, la reserva compensa, se recupera | `test_k_*` | pasa |
 | (l) La reserva llama a MP sin transaccion abierta | `test_l_*` | xfail estricto: defecto |
 
@@ -89,8 +89,19 @@ acepte (por ejemplo, el formato de `expiration_date_to`).
    ```
 
    En Linux, ademas, `extra_hosts: ["host.docker.internal:host-gateway"]` en
-   los tres servicios. Es solo variable de entorno: alcanza con recrear los
-   contenedores (`docker-compose up -d`), sin rebuild.
+   los tres servicios, y el emulador tiene que escuchar en todas las
+   interfaces para que los contenedores lo alcancen por el host-gateway:
+   `uvicorn tests.e2e.mp_emulator:app --host 0.0.0.0 --port 9999`.
+
+   **Cuidado:** con `--host 0.0.0.0` el emulador queda expuesto a la red
+   local, y los endpoints `/_emu` no tienen autenticacion: cualquiera en la
+   LAN puede ver el estado (tokens de las tiendas incluidos), pagar links,
+   mandar webhooks firmados o inyectar fallas. Usarlo solo en una red de
+   confianza o con el puerto 9999 cerrado en el firewall salvo para la red
+   de Docker, y bajarlo al terminar.
+
+   Es solo variable de entorno: alcanza con recrear los contenedores
+   (`docker-compose up -d`), sin rebuild.
 
 3. En el panel, activar cobros y cargar el gateway con cualquier access token
    y el `webhook_secret` del paso 1 (`PUT /payments/gateway-config`; en
@@ -108,6 +119,6 @@ acepte (por ejemplo, el formato de `expiration_date_to`).
    El webhook va al `notification_url` que armo Shifty con `PUBLIC_API_URL`
    (en el compose, `http://localhost/api/...`, alcanzable desde el host).
 
-Produccion rechaza cualquier `MERCADOPAGO_API_BASE_URL` que no sea
-`https://api.mercadopago.com` (regla 17, `core/config.py`): no se puede dejar
-apuntando al emulador por error.
+Fuera de desarrollo (staging y produccion) se rechaza cualquier
+`MERCADOPAGO_API_BASE_URL` que no sea `https://api.mercadopago.com` (regla 17,
+`core/config.py`): no se puede dejar apuntando al emulador por error.

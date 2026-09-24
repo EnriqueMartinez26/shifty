@@ -155,8 +155,8 @@ _BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
 # retornos de Mercado Pago apuntando a ningun lado.
 _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
 
-# Unica API de Mercado Pago que produccion acepta (regla 17): otra base
-# mandaria access tokens de las tiendas a un host ajeno.
+# Unica API de Mercado Pago que se acepta fuera de desarrollo (regla 17): otra
+# base mandaria access tokens de las tiendas a un host ajeno.
 MERCADOPAGO_API_BASE_URL_REAL = "https://api.mercadopago.com"
 
 
@@ -214,7 +214,7 @@ class Settings(BaseSettings):
     MERCADOPAGO_OAUTH_STATE_TTL_SECONDS: int = 900
     MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS: int = 300
     # Base de la API de Mercado Pago. Configurable SOLO para apuntar al
-    # emulador de tests/e2e en desarrollo; produccion exige la real.
+    # emulador de tests/e2e en desarrollo; staging y produccion exigen la real.
     MERCADOPAGO_API_BASE_URL: str = MERCADOPAGO_API_BASE_URL_REAL
     # Minutos que un turno queda reservado esperando el pago de la seña. Al
     # vencer, el slot vuelve a estar disponible para otro cliente.
@@ -314,7 +314,7 @@ class Settings(BaseSettings):
         return production_data
 
     def _validate_secrets_outside_development(self) -> None:
-        """Secretos: cualquier entorno que no sea desarrollo.
+        """Secretos y destino de los tokens de MP: todo entorno menos desarrollo.
 
         Un staging que firme con el placeholder del repo emite tokens
         forjables contra datos reales, asi que la vara no es solo produccion.
@@ -334,6 +334,13 @@ class Settings(BaseSettings):
             self.FIELD_ENCRYPTION_KEY
         ):
             raise ValueError("FIELD_ENCRYPTION_KEY parece un placeholder del repo")
+        # Mismo alcance que los secretos: staging tambien tiene tokens reales
+        # de MP y no puede mandarlos a otro host (el emulador es de desarrollo).
+        if self.MERCADOPAGO_API_BASE_URL != MERCADOPAGO_API_BASE_URL_REAL:
+            raise ValueError(
+                "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com fuera de "
+                "desarrollo"
+            )
 
     def _validate_production_origins(self) -> None:
         """Produccion: origenes y URLs publicas que no pueden ser locales."""
@@ -349,10 +356,6 @@ class Settings(BaseSettings):
         if self.PUBLIC_API_URL.startswith(_PREFIJOS_LOCALES):
             raise ValueError(
                 "PUBLIC_API_URL no puede apuntar a localhost en produccion"
-            )
-        if self.MERCADOPAGO_API_BASE_URL != MERCADOPAGO_API_BASE_URL_REAL:
-            raise ValueError(
-                "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com en produccion"
             )
 
     def _validate_production_hardening(self) -> None:

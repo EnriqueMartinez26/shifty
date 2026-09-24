@@ -57,8 +57,11 @@ pytestmark = pytest.mark.integration
 ACCESS_TOKEN = "APP_USR-EMU-TIENDA-TOKEN-1"
 SENA = Decimal("2500.00")
 CLIENT_EMAIL = "cliente.e2e@example.com"
-# Presupuesto de una reserva publica con MP lento (lane F1-04).
-PRESUPUESTO_RESERVA_S = 10.0
+# Presupuesto local de una reserva publica con MP lento (lane F1-04) y la
+# latencia que se le inyecta a MP: por encima del presupuesto y muy por debajo
+# del timeout de httpx (20 s), asi el test no espera de mas.
+PRESUPUESTO_RESERVA_S = 2.0
+LATENCIA_MP_MS = 3_000
 
 
 @dataclass
@@ -624,7 +627,7 @@ async def test_i_la_conciliacion_recupera_un_pago_sin_webhook(
     strict=False,
     reason=(
         "F1-04 sin mergear: la llamada a MP de la reserva solo tiene el timeout "
-        "de httpx (20 s), asi que con MP a 12 s la reserva tarda 12 s y responde "
+        "de httpx (20 s), asi que con MP a 3 s la reserva tarda 3 s y responde "
         "201 en vez de cortar dentro del presupuesto y compensar"
     ),
 )
@@ -632,7 +635,7 @@ async def test_j_con_mp_lento_la_reserva_corta_en_presupuesto_y_compensa(
     client: httpx.AsyncClient, test_session: AsyncSession, mp: Emu
 ) -> None:
     t = await _tienda(client, "e2e-latencia")
-    await mp.fault(latency_ms=12_000)
+    await mp.fault(latency_ms=LATENCIA_MP_MS)
 
     inicio = time.monotonic()
     res = await _reservar(client, t, "e2e-latencia-0001")
