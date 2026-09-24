@@ -776,6 +776,16 @@ async def send_confirmation_email(
 # como el OTP: reintentar un mail cuyo DATA pudo haber llegado lo duplica.
 BOOKING_MAIL_REGISTRATION = "registration"
 BOOKING_MAIL_CONFIRMATION = "confirmation"
+
+# F2-02 (plan de rendimiento, R2-01, 2026-09-24): eventos del outbox que
+# terminan en un mail al cliente. Los publica el panel en la MISMA transaccion
+# que el cambio de estado y los manda el lote del outbox despues de su commit
+# (``payments/jobs.py``), releyendo el turno. Payload: ``appointment_id`` y,
+# solo si el mail no va al email del turno, ``email``.
+EVENT_APPOINTMENT_BOOKED_BY_PANEL = "appointment.booked_by_panel"
+EVENT_APPOINTMENT_CONFIRMED = "appointment.confirmed"
+EVENT_APPOINTMENT_COMPLETED = "appointment.completed"
+EVENT_APPOINTMENT_RESCHEDULED = "appointment.rescheduled"
 # Un turno que ya se cayo no recibe "reserva registrada".
 _BOOKING_CLOSED_STATUSES = frozenset({"cancelled", "expired"})
 

@@ -20,11 +20,17 @@ from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
+    EVENT_APPOINTMENT_BOOKED_BY_PANEL,
+    EVENT_APPOINTMENT_COMPLETED,
+    EVENT_APPOINTMENT_CONFIRMED,
+    EVENT_APPOINTMENT_RESCHEDULED,
     build_client_details,
     send_waitlist_offer_email,
     format_local_datetime,
     send_cancellation_email,
     send_confirmation_email,
+    send_rebook_email,
+    send_reschedule_email,
     send_store_notification_email,
     smtp_session,
 )
@@ -147,8 +153,35 @@ def _sender(kind: str) -> PendingEmail | None:
         "cancellation": send_cancellation_email,
         "confirmation": send_confirmation_email,
         "store_notification": send_store_notification_email,
+        "rebook": send_rebook_email,
+        "reschedule": send_reschedule_email,
     }
     return envios.get(kind)
+
+
+# F2-02 (2026-09-24): eventos del panel que terminan en un mail al cliente,
+# con el mail que les toca y los estados en los que el turno tiene que seguir
+# para que el aviso tenga sentido (el lote relee el turno: entre el evento y el
+# tick pudo cambiar).
+_ABIERTOS = frozenset(
+    {
+        AppointmentStatus.PENDING.value,
+        AppointmentStatus.PENDING_PAYMENT.value,
+        AppointmentStatus.CONFIRMED.value,
+    }
+)
+_MAILS_DEL_PANEL: dict[str, tuple[str, frozenset[str]]] = {
+    EVENT_APPOINTMENT_BOOKED_BY_PANEL: ("confirmation", _ABIERTOS),
+    EVENT_APPOINTMENT_CONFIRMED: (
+        "confirmation",
+        frozenset({AppointmentStatus.CONFIRMED.value}),
+    ),
+    EVENT_APPOINTMENT_COMPLETED: (
+        "rebook",
+        frozenset({AppointmentStatus.COMPLETED.value}),
+    ),
+    EVENT_APPOINTMENT_RESCHEDULED: ("reschedule", _ABIERTOS),
+}
 
 
 def _contexto_del_mail(message: OutboxMessage) -> dict[str, str | None]:
@@ -269,6 +302,9 @@ async def _plan_outbox_message(
                 },
             )
         ]
+
+    if message.event_type in _MAILS_DEL_PANEL:
+        return await _panel_client_mail(db, message)
 
     notification = _build_store_notification(message)
     if notification is None:
@@ -821,31 +857,72 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
     return None
 
 
-async def _client_confirmation_mail(
-    db: AsyncSession, appointment_id: str | None
-) -> _Mail | None:
-    """Describe (no manda) el "turno confirmado" al cliente."""
+async def _load_client_mail(
+    db: AsyncSession, appointment_id: str | None, store_id: str | None = None
+) -> tuple[Appointment, Any, dict[str, Any]] | None:
+    """(turno, tienda, detalles de plantilla) para un mail al cliente."""
     if not appointment_id:
         return None
     from sqlalchemy.orm import joinedload
 
     from modules.stores.model import Store
 
-    res = await db.execute(
+    consulta = (
         select(Appointment)
         .options(joinedload(Appointment.service), joinedload(Appointment.staff))
         .where(Appointment.id == appointment_id)
     )
-    appointment = res.scalar_one_or_none()
-    if appointment is None or appointment.status != AppointmentStatus.CONFIRMED.value:
+    if store_id:
+        consulta = consulta.where(Appointment.store_id == store_id)
+    appointment = (await db.execute(consulta)).scalar_one_or_none()
+    if appointment is None:
         return None
     store = await db.get(Store, appointment.store_id)
     details = build_client_details(
         appointment, appointment.service, appointment.staff, store
     )
+    return appointment, store, details
+
+
+async def _client_confirmation_mail(
+    db: AsyncSession, appointment_id: str | None
+) -> _Mail | None:
+    """Describe (no manda) el "turno confirmado" al cliente."""
+    cargado = await _load_client_mail(db, appointment_id)
+    if cargado is None:
+        return None
+    appointment, _store, details = cargado
+    if appointment.status != AppointmentStatus.CONFIRMED.value:
+        return None
     return _Mail(
         "confirmation", {"email": appointment.client_email, "details": details}
     )
+
+
+async def _panel_client_mail(db: AsyncSession, message: OutboxMessage) -> list[_Mail]:
+    """Describe el mail al cliente de un evento del panel (F2-02).
+
+    El turno se relee: si ya no esta en un estado que haga cierto el aviso (un
+    "turno confirmado" de un turno que se cancelo antes del tick), no sale.
+    El completado respeta el interruptor de mails automaticos de la tienda,
+    como los recordatorios. Si el payload trae ``email`` (aunque sea nulo),
+    pisa el del turno: la reserva desde la lista de espera avisa al email que
+    dejo esa persona, y a nadie si no dejo uno.
+    """
+    kind, estados = _MAILS_DEL_PANEL[message.event_type]
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    cargado = await _load_client_mail(
+        db, str(payload.get("appointment_id") or ""), message.store_id
+    )
+    if cargado is None:
+        return []
+    appointment, store, details = cargado
+    if appointment.status not in estados:
+        return []
+    if kind == "rebook" and not getattr(store, "send_email_reminders", True):
+        return []
+    email = payload["email"] if "email" in payload else appointment.client_email
+    return [_Mail(kind, {"email": email, "details": details})]
 
 
 async def _store_owner_mails(

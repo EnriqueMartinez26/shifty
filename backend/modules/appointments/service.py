@@ -36,12 +36,11 @@ from modules.appointments.guards import (
 )
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
-from modules.stores.model import Store
 from modules.notifications.tasks import (
-    build_client_details,
-    send_confirmation_email,
-    send_rebook_email,
-    send_reschedule_email,
+    EVENT_APPOINTMENT_BOOKED_BY_PANEL,
+    EVENT_APPOINTMENT_COMPLETED,
+    EVENT_APPOINTMENT_CONFIRMED,
+    EVENT_APPOINTMENT_RESCHEDULED,
 )
 from modules.payments.model import Payment, PaymentStatus
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
@@ -90,8 +89,8 @@ class AppointmentService:
           1. Resolución de servicio y staff.
           2. Bloqueo pesimista (FOR UPDATE) antes de leer bloqueos y conflictos.
           3. Validación de agenda (con sugerencia de horario si choca).
-          4. Inserción atómica + registro de auditoría.
-          5. Notificación por email e invalidación, fuera de la transacción.
+          4. Inserción atómica + registro de auditoría + aviso en el outbox.
+          5. Invalidación, fuera de la transacción.
 
         `actor` NO esta sujeto a min_booking_notice_hours (regla del cliente
         publico); el "no agendar en el pasado" lo garantiza AppointmentCreate.
@@ -141,34 +140,40 @@ class AppointmentService:
                 "staff_id": staff.public_id,
             },
         )
+        # El mail al cliente lo manda el lote del outbox (F2-02).
+        self._publish_client_mail(appointment, EVENT_APPOINTMENT_BOOKED_BY_PANEL)
         await self._commit_before_network()
         try:
-            # 5. El cupo ya no esta libre: la disponibilidad lo refleja antes
-            # del mail, que puede tardar (SMTP, 10 s por operacion).
+            # 5. El cupo ya no esta libre: la disponibilidad lo refleja ya.
             await invalidate_availability(self.cache, store_id, starts_at)
-            await send_confirmation_email(
-                email=actor.email,
-                details={
-                    "public_id": appointment.public_id,
-                    "service": service.name,
-                    "staff": staff.display_name,
-                    "date": starts_at.isoformat(),
-                },
-            )
         finally:
             await _apply_tenant_context(self.uow.session)
         return appointment, service, staff
 
     async def _commit_before_network(self) -> None:
-        """Commit PLANO antes de salir a la red (mail) (F1-05, R8-05).
+        """Commit PLANO antes de salir a la red (Redis) (F1-05, R8-05).
 
         El commit de ``TenantSession`` reaplica el contexto y con eso abre
-        otra transaccion en el acto: el SMTP corria con la conexion ``idle in
-        transaction``. Patron de AUD2-B2-08: lo que el mail necesita se lee
-        ANTES, commit de ``AsyncSession`` (la conexion vuelve al pool),
-        invalidacion y mail, y recien despues ``_apply_tenant_context``.
+        otra transaccion en el acto: la llamada de red corria con la conexion
+        ``idle in transaction``. Patron de AUD2-B2-08: commit de
+        ``AsyncSession`` (la conexion vuelve al pool), invalidacion, y recien
+        despues ``_apply_tenant_context``. Desde F2-02 el mail ya no sale del
+        request: va por el outbox.
         """
         await AsyncSession.commit(self.uow.session)
+
+    def _publish_client_mail(self, appointment: Appointment, event_type: str) -> None:
+        """Aviso al cliente por el outbox, en la transaccion del cambio (F2-02).
+
+        Antes el request mandaba SMTP despues del commit (hasta 10 s por
+        operacion). El lote del outbox relee el turno y manda tras su commit;
+        si este commit no ocurre, el aviso tampoco existe.
+        """
+        self.uow.outbox.publish(
+            store_id=appointment.store_id,
+            event_type=event_type,
+            payload={"appointment_id": appointment.id},
+        )
 
     async def _lock_and_validate_slot(
         self,
@@ -270,15 +275,10 @@ class AppointmentService:
             payload_after={"status": appointment.status},
         )
 
-        # Mail "turno confirmado" DESPUES del commit, sin lock ni transaccion
-        # (regla 5, F1-05); best-effort: un SMTP caido no deshace la
-        # confirmacion. La tienda se lee antes del commit.
-        store = await self.uow.session.get(Store, appointment.store_id)
-        await self._commit_before_network()
-        try:
-            await self._notify_client_confirmation(appointment, store)
-        finally:
-            await _apply_tenant_context(self.uow.session)
+        # Mail "turno confirmado": por el outbox (F2-02), best-effort; un SMTP
+        # caido no deshace la confirmacion.
+        self._publish_client_mail(appointment, EVENT_APPOINTMENT_CONFIRMED)
+        await self.uow.commit()
         return appointment
 
     def _publish_slot_released(self, appointment: Appointment, *, reason: str) -> None:
@@ -295,14 +295,6 @@ class AppointmentService:
                 reason=reason,
             ),
         )
-
-    async def _notify_client_confirmation(
-        self, appointment: Appointment, store: Store | None
-    ) -> None:
-        details = build_client_details(
-            appointment, appointment.service, appointment.staff, store
-        )
-        await send_confirmation_email(email=appointment.client_email, details=details)
 
     async def complete(self, *, public_id: str, actor: User) -> Appointment:
         """Marca un turno como completado."""
@@ -333,26 +325,11 @@ class AppointmentService:
             },
         )
 
-        # Mail "reserva tu proximo turno" DESPUES del commit y sin transaccion
-        # (F1-05), best-effort: un SMTP caido no deshace el completado.
-        store = await self.uow.session.get(Store, appointment.store_id)
-        await self._commit_before_network()
-        try:
-            await self._notify_client_rebook(appointment, store)
-        finally:
-            await _apply_tenant_context(self.uow.session)
+        # Mail "reserva tu proximo turno": por el outbox (F2-02), que respeta
+        # el interruptor de mails automaticos de la tienda.
+        self._publish_client_mail(appointment, EVENT_APPOINTMENT_COMPLETED)
+        await self.uow.commit()
         return appointment
-
-    async def _notify_client_rebook(
-        self, appointment: Appointment, store: Store | None
-    ) -> None:
-        # Mismo interruptor que los recordatorios: es un mail automatico mas.
-        if store is not None and not getattr(store, "send_email_reminders", True):
-            return
-        details = build_client_details(
-            appointment, appointment.service, appointment.staff, store
-        )
-        await send_rebook_email(email=appointment.client_email, details=details)
 
     async def mark_absent(self, *, public_id: str, actor: User) -> Appointment:
         """
@@ -529,7 +506,8 @@ class AppointmentService:
           1. Lock y lectura del turno original (guarda de cobro pendiente).
           2. Lock del profesional y validación de la nueva fecha/hora.
           3. Cancelar el original y crear el nuevo, con auditoría.
-          4. Todo en una única transacción atómica; mail e invalidación después.
+          4. Todo en una única transacción atómica, con el aviso en el outbox;
+             invalidación después.
 
         El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
         el schema AppointmentReschedule.
@@ -570,17 +548,13 @@ class AppointmentService:
         )
         # El cliente tiene que enterarse del horario nuevo: la fila nueva nace
         # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
-        # le corresponde y sin este mail no se enteraba por ningun canal. La
-        # tienda se lee antes del commit: el mail sale sin transaccion (F1-05).
-        store = await self.uow.session.get(Store, original.store_id)
+        # le corresponde y sin este mail no se enteraba por ningun canal. Va
+        # por el outbox, en esta transaccion (F2-02).
+        self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
         await self._commit_before_network()
         try:
             await invalidate_availability(
                 self.cache, original.store_id, original.starts_at, new_starts_at
-            )
-            await send_reschedule_email(
-                email=new_appointment.client_email,
-                details=build_client_details(new_appointment, service, staff, store),
             )
         finally:
             await _apply_tenant_context(self.uow.session)

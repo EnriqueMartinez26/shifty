@@ -361,7 +361,13 @@ Una instrucción en lenguaje natural no es una garantía.
   `enqueue_registration_email`/`enqueue_confirmation_email`; por el broker
   viajan el tipo de mail, la tienda y el id del turno, nunca el email, y el
   worker relee el turno antes de mandar. El link de MP no se difiere.
-  (`test_mails_al_cliente.py`) Los helpers de `notifications/tasks.py` que
+  El panel tampoco manda en el request (F2-02): reservar, confirmar,
+  completar y reprogramar (y reservar desde la lista de espera) publican
+  `appointment.booked_by_panel`/`confirmed`/`completed`/`rescheduled` en el
+  outbox en la MISMA transacción que el cambio de estado; el lote relee el
+  turno y manda solo si sigue en un estado que haga cierto el aviso (hasta un
+  tick, 20 s, de demora). (`test_mails_al_cliente.py`,
+  `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con

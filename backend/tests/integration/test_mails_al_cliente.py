@@ -10,6 +10,10 @@ F2-01 (plan de rendimiento, R1-04, 2026-09-24): el 201 de ``POST
 ``send_booking_email`` (cola ``interactive``) con el tipo de mail, la tienda y
 el id del turno; el worker relee el turno y manda. En el broker no viaja el
 email ni el nombre del cliente (PV-19).
+
+F2-02 (R2-01, 2026-09-24): ``confirm()`` publica ``appointment.confirmed`` en
+el outbox, en la transaccion de la confirmacion; el mail lo manda el lote del
+outbox despues de su commit.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modules.notifications.tasks as tasks
 from core.utils import ARGENTINA_TZ
 from modules.appointments.model import Appointment
+from modules.payments.jobs import process_outbox_batch
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -158,8 +163,13 @@ async def test_reservar_y_confirmar_mandan_mail_en_hora_argentina(
         headers=auth_headers(token),
     )
     assert confirmar.status_code == 200, confirmar.text
-    assert len(buzon.enviados) == 2
-    _, asunto2, cuerpo2 = buzon.enviados[1]
+    assert len(buzon.enviados) == 1, "confirmar no manda SMTP en el request"
+    await process_outbox_batch(test_session)
+    # El lote manda tambien el aviso al dueno (turno pendiente): se mira solo
+    # lo del cliente.
+    al_cliente = [m for m in buzon.enviados if m[0] == "carla@example.com"]
+    assert len(al_cliente) == 2
+    _, asunto2, cuerpo2 = al_cliente[1]
     assert asunto2.startswith("Turno confirmado")
     assert "10:00 hs" in cuerpo2
 
@@ -183,7 +193,9 @@ async def test_sin_email_real_no_se_encola_ni_se_manda_nada(
         f"/appointments/{reserva.json()['public_id']}/confirm",
         headers=auth_headers(token),
     )
-    assert buzon.enviados == []
+    await process_outbox_batch(test_session)
+    # Solo el aviso al dueno (turno pendiente de confirmar); nada al cliente.
+    assert [m[0] for m in buzon.enviados] == ["mail-sin@example.com"]
 
 
 @pytest.mark.asyncio
@@ -208,6 +220,9 @@ async def test_un_smtp_caido_no_impide_reservar_ni_confirmar(
     )
     assert confirmar.status_code == 200, confirmar.text
     assert confirmar.json()["status"] == "confirmed"
+    # El lote tampoco se cae: el fallo queda en la fila del mail.
+    lote = await process_outbox_batch(test_session)
+    assert lote["failed"] == 0
 
 
 @pytest.mark.asyncio
