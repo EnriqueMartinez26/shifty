@@ -13,6 +13,7 @@ from core.config import settings
 from core.utils import ensure_utc_aware, local_day_start, today_local
 
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.repository import active_block_overlap
 from modules.audit.repository import AuditRepository
 from modules.ledger.model import CustomerLedger
 from modules.payments.model import Payment, PaymentStatus
@@ -857,14 +858,16 @@ class ReportService:
     async def _blocks_by_staff(
         self, staff_ids: list[str], *, start_dt: datetime, end_dt: datetime
     ) -> dict[str, list[StaffBlock]]:
-        """Bloqueos activos que se superponen con el rango, por profesional."""
+        """Bloqueos activos que se superponen con el rango, por profesional.
+
+        El predicado es el compartido (``active_block_overlap``, F1-13): la
+        tienda y ``end_time > inicio`` sobre el indice
+        ``ix_appointment_blocks_store_staff_end``.
+        """
         result = await self.db.execute(
             select(StaffBlock).where(
                 StaffBlock.staff_id.in_(staff_ids),
-                StaffBlock.is_active.is_(True),
-                StaffBlock.starts_at < end_dt,
-                StaffBlock.ends_at > start_dt,
-                *self._store_scope(StaffBlock.store_id),
+                active_block_overlap(self.store_id, start_dt, end_dt),
             )
         )
         by_staff: dict[str, list[StaffBlock]] = defaultdict(list)

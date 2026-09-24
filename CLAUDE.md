@@ -271,8 +271,12 @@ Una instrucción en lenguaje natural no es una garantía.
   `starts_at > inicio - MAX_APPOINTMENT_SPAN`, correcta porque la base exige
   `ends_at <= starts_at + 1 día` (`ck_appointments_max_span`); subir ese tope
   es cambiar el CHECK y la constante juntos. Para bloqueos (hasta 366 días) es
-  `end_time > inicio` sobre `ix_appointment_blocks_store_staff_end`.
-  (`test_pg_solapamiento_con_cotas.py`)
+  `end_time > inicio` sobre `ix_appointment_blocks_store_staff_end`. La base
+  sostiene los supuestos: `ck_services_duration_max` (1440 min) y la
+  migración `c3d5e7f9a1b4` se detiene si un turno o bloqueo tiene otra tienda
+  que su profesional. (`test_pg_solapamiento_con_cotas.py`,
+  `test_solapamiento_por_helper.py`, que falla con un solapamiento escrito a
+  mano fuera del repositorio, y `test_pg_guardas_de_datos_del_solapamiento.py`)
 
 ### Seguridad
 
