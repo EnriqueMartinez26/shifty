@@ -110,6 +110,12 @@ services:
       - .env
     environment: *app_environment_prod
 
+  celery_worker_interactive:
+    image: *app_image_prod
+    env_file:
+      - .env
+    environment: *app_environment_prod
+
   celery_beat:
     image: *app_image_prod
     env_file:

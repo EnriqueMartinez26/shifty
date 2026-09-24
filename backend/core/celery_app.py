@@ -1,8 +1,9 @@
 import logging
+from pathlib import Path
 
 from celery import Celery
 from celery.schedules import crontab
-from celery.signals import beat_init, worker_init
+from celery.signals import beat_init, heartbeat_sent, worker_init
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import assert_rls_capable_role, engine
 from core.model_registry import load_all_models
@@ -41,6 +42,32 @@ def _start_worker_process(**_: object) -> None:
     _abort_if_settings_are_fallback()
     init_observability("worker")
     _abort_if_role_can_bypass_rls()
+
+
+# Archivo de latido del worker (F0-18, decision 7). El healthcheck de compose
+# de los dos workers mira su antiguedad (obsoleto a los 120 s). Vive en
+# /var/lib/shifty, que el Dockerfile crea con dueno appuser.
+WORKER_HEARTBEAT_FILE = "/var/lib/shifty/worker-heartbeat"
+
+
+@heartbeat_sent.connect  # type: ignore[untyped-decorator]
+def _touch_worker_heartbeat(**_: object) -> None:
+    """Renueva el archivo de latido en cada latido de eventos del worker.
+
+    Reemplaza a `celery inspect ping` como healthcheck: ese comando levantaba
+    un Python completo (~120 MB) dentro del cgroup del worker cada minuto. El
+    latido lo emite el consumidor (bootstep Heart, cada 2 s) sobre su conexion
+    al broker: si la conexion se cae o el loop del consumidor se traba, deja
+    de latir y el archivo envejece. Asi el healthcheck sigue probando que el
+    worker CONSUME, no solo que el proceso existe (AUD2-C-09).
+
+    Nunca levanta: un disco que no acepta la escritura se ve como unhealthy en
+    el healthcheck, no como un consumidor muerto.
+    """
+    try:
+        Path(WORKER_HEARTBEAT_FILE).touch()
+    except OSError:
+        logger.debug("worker_heartbeat_touch_failed", exc_info=True)
 
 
 def _abort_if_role_can_bypass_rls() -> None:

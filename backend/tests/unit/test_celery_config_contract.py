@@ -115,3 +115,50 @@ def test_beat_persiste_su_schedule_en_el_volumen() -> None:
     recalculaba; con el volumen `beat_schedule` sobrevive al deploy."""
     archivo = Path(str(celery_app.conf.beat_schedule_filename))
     assert archivo.as_posix() == "/var/lib/shifty/beat/shifty-celerybeat-schedule"
+
+
+# --- Latido del worker (F0-18, decision 7) ------------------------------------
+#
+# El healthcheck del worker era `celery inspect ping`: levantaba un Python
+# completo (~120 MB) dentro del cgroup del worker cada minuto, con el peor caso
+# por encima del limite. Ahora el worker toca un archivo en cada latido de
+# eventos (`heartbeat_sent`, cada 2 s) y el healthcheck mira su antiguedad con
+# `find`. El latido lo emite el consumidor sobre su conexion al broker: si la
+# conexion se cae o el loop del consumidor se traba, deja de latir y el archivo
+# envejece. Sigue detectando "vivo pero sin consumir" (AUD2-C-09).
+
+
+def test_el_worker_late_en_un_archivo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from celery.signals import heartbeat_sent
+
+    import core.celery_app as modulo
+
+    assert modulo.WORKER_HEARTBEAT_FILE == "/var/lib/shifty/worker-heartbeat"
+    archivo = tmp_path / "worker-heartbeat"
+    monkeypatch.setattr(modulo, "WORKER_HEARTBEAT_FILE", str(archivo))
+
+    heartbeat_sent.send(sender=None)
+    assert archivo.exists(), "el latido no creo el archivo"
+
+    os.utime(archivo, (0, 0))
+    heartbeat_sent.send(sender=None)
+    assert archivo.stat().st_mtime > 0, "el latido no renovo el archivo"
+
+
+def test_un_latido_que_no_puede_escribir_no_tumba_al_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from celery.signals import heartbeat_sent
+
+    import core.celery_app as modulo
+
+    # Un directorio que no existe: el healthcheck marcara unhealthy, pero el
+    # consumidor no puede morir por eso.
+    monkeypatch.setattr(
+        modulo, "WORKER_HEARTBEAT_FILE", str(tmp_path / "no-existe" / "latido")
+    )
+    heartbeat_sent.send(sender=None)

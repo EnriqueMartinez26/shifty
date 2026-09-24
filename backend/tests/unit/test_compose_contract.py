@@ -163,7 +163,7 @@ def verificar_paridad_de_entorno(texto: str, servicios: tuple[str, ...]) -> None
 def test_celery_recibe_el_mismo_entorno_que_la_api() -> None:
     verificar_paridad_de_entorno(
         COMPOSE.read_text(encoding="utf-8"),
-        ("backend", "celery_worker", "celery_beat"),
+        ("backend", "celery_worker", "celery_worker_interactive", "celery_beat"),
     )
 
 
@@ -259,7 +259,12 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
             f"{nombre} no declara healthcheck: nadie puede esperar a que este listo"
         )
 
-    for nombre in ("backend", "celery_worker", "celery_beat"):
+    for nombre in (
+        "backend",
+        "celery_worker",
+        "celery_worker_interactive",
+        "celery_beat",
+    ):
         deps = _depends(services[nombre])
         for dependencia in infra:
             assert deps.get(dependencia) == "service_healthy", (
@@ -282,7 +287,12 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
 
 COMPOSE_PROD = Path(__file__).resolve().parents[3] / "docker-compose.prod.yml"
 
-SERVICIOS_DE_LA_APP = ("backend", "celery_worker", "celery_beat")
+SERVICIOS_DE_LA_APP = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+)
 
 # Sin estas no se arranca: tienen que venir del entorno con `:?`, nunca con un
 # valor por default.
@@ -390,11 +400,32 @@ def test_los_procesos_de_celery_declaran_healthcheck() -> None:
     beat que dejo de agendar se ven igual que uno sano en `docker compose ps`.
     Es el incidente de 2026-09-08 que este mismo archivo describe: "ningun job
     corria, y en silencio: el worker se declaraba ready".
+
+    F0-18 (decision 7): la prueba del worker dejo de ser `inspect ping`, que
+    levantaba un Python completo (~120 MB) dentro del cgroup del worker. Ahora
+    mira la antiguedad del archivo que el worker toca en cada `heartbeat_sent`.
+    Sigue probando que CONSUME: ese latido lo emite el consumidor sobre su
+    conexion al broker (bootstep Heart, cada 2 s); con la conexion caida o el
+    loop del consumidor trabado deja de latir, el archivo envejece y el
+    contenedor queda unhealthy. Un proceso que solo esta vivo no lo renueva.
     """
-    worker = _prueba_del_healthcheck("celery_worker")
-    assert "inspect ping" in worker, (
-        f"el healthcheck del worker no pregunta si consume: {worker!r}"
-    )
+    from core.celery_app import WORKER_HEARTBEAT_FILE
+
+    latido = Path(WORKER_HEARTBEAT_FILE)
+    for nombre in ("celery_worker", "celery_worker_interactive"):
+        worker = _prueba_del_healthcheck(nombre)
+        assert "inspect ping" not in worker, (
+            f"{nombre}: inspect ping levanta un Python entero en el cgroup: {worker!r}"
+        )
+        assert f"find {latido.parent.as_posix()} " in worker, (nombre, worker)
+        assert f"-name '{latido.name}'" in worker, (
+            f"{nombre} no mira el archivo que toca core/celery_app.py: {worker!r}"
+        )
+        # Obsoleto a los 120 s (decision 7): 60 latidos perdidos, no uno.
+        assert "-newermt '-120 seconds'" in worker, (nombre, worker)
+        assert "grep -q ." in worker, (
+            f"{nombre}: find sale 0 aunque no encuentre nada: {worker!r}"
+        )
 
     # El archivo de schedule NO vive en /app. La primera version de este
     # healthcheck buscaba /app/celerybeat-schedule* y dejaba a beat unhealthy
@@ -425,7 +456,7 @@ def test_los_procesos_de_celery_declaran_healthcheck() -> None:
         "volumen nuevo copia el dueno de la imagen, y sin el beat no escribe"
     )
 
-    for prueba in (worker, beat):
+    for prueba in (_prueba_del_healthcheck("celery_worker"), beat):
         assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
             f"$HOSTNAME sin escapar lo interpola compose, no el shell: {prueba!r}"
         )
@@ -513,7 +544,13 @@ def test_el_worker_de_celery_acota_su_concurrencia_y_su_memoria() -> None:
 # importar la app por el bind mount tardaba ~131 s, mas que el healthcheck de
 # Celery. uvicorn corre sin --reload: el montaje no daba recarga en caliente.
 
-SERVICIOS_CON_CODIGO = ("backend", "celery_worker", "celery_beat", "frontend")
+SERVICIOS_CON_CODIGO = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+    "frontend",
+)
 FUENTES_DE_CODIGO = ("./backend", "./frontend", "backend", "frontend")
 
 
@@ -782,7 +819,12 @@ def test_el_worker_tiene_tiempo_de_terminar_la_tarea_en_curso() -> None:
 # `pull` de lo que publico CI y el rollback es volver al tag anterior.
 
 REGISTRO = "ghcr.io/enriquemartinez26"
-PROCESOS_DE_LA_APP = ("backend", "celery_worker", "celery_beat")
+PROCESOS_DE_LA_APP = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+)
 
 
 def _imagen(servicio: str) -> str:
@@ -1080,3 +1122,42 @@ def test_produccion_corre_rabbitmq_sin_management() -> None:
     assert "management" in str(_services()["rabbitmq"]["image"]), (
         "desarrollo conserva la consola de management"
     )
+
+
+# --- Workers de Celery (F0-18, plan de rendimiento; decision 7) ---------------
+#
+# El worker general consume solo la cola `celery` y recicla los hijos que pasan
+# 150 MB; el OTP va a la cola `interactive`, que atiende un worker aparte con
+# un solo hijo: su latencia no depende de que termine un lote del outbox.
+
+
+def _comando(nombre: str) -> str:
+    return str(_services()[nombre].get("command", ""))
+
+
+def test_el_worker_general_consume_la_cola_celery_con_tope_de_memoria() -> None:
+    worker = _services()["celery_worker"]
+    comando = _comando("celery_worker")
+    assert re.search(r"(^| )-Q celery( |$)", comando), comando
+    assert "--max-memory-per-child=150000" in comando, comando
+    assert _limite(worker) == "768M", _limite(worker)
+    deploy = worker["deploy"]
+    assert isinstance(deploy, dict)
+    assert str(deploy["resources"]["limits"].get("cpus")) == "1.5", deploy
+
+
+def test_el_otp_tiene_su_propio_worker() -> None:
+    servicios = _services()
+    interactivo = servicios["celery_worker_interactive"]
+    comando = _comando("celery_worker_interactive")
+    assert re.search(r"(^| )-Q interactive( |$)", comando), comando
+    assert "--concurrency=1" in comando, comando
+    assert "--max-memory-per-child=" in comando, comando
+    assert _limite(interactivo) == "256M", _limite(interactivo)
+    assert interactivo.get("image") == servicios["celery_worker"].get("image")
+    assert "build" not in interactivo
+    assert _segundos(interactivo.get("stop_grace_period", "10s")) >= 30
+    # La cola la fija core/celery_app.py; si cambia ahi, este worker no la ve.
+    from core.celery_app import celery_app
+
+    assert celery_app.conf.task_routes["send_otp_email"]["queue"] == "interactive"

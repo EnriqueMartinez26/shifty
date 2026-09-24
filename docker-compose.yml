@@ -249,25 +249,30 @@ services:
   celery_worker:
     # Misma imagen que backend, sin `build` propio (F0-02).
     image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
-    # Sin --concurrency se abria un hijo por CPU del host y llenaba los 512 MB;
+    # Consume SOLO la cola `celery`: el OTP va a `interactive`, que atiende
+    # celery_worker_interactive (F0-18, decision 7).
+    # Sin --concurrency se abria un hijo por CPU del host y llenaba el limite;
     # los jobs ya se serializan por advisory lock y SKIP LOCKED.
-    # --max-memory-per-child va en KB: recicla el hijo que crece de mas.
-    command: celery -A core.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-2} --max-memory-per-child=200000
+    # --max-memory-per-child va en KB: recicla el hijo que pasa 150 MB.
+    command: celery -A core.celery_app worker --loglevel=info -Q celery --concurrency=${CELERY_WORKER_CONCURRENCY:-2} --max-memory-per-child=150000
     # Un worker vivo que dejo de consumir se veia igual que uno sano
-    # (AUD2-C-09; es el incidente de 2026-09-08). `inspect ping` pregunta por
-    # ESTE worker: si no responde, el contenedor queda unhealthy. $$HOSTNAME
-    # va escapado para que lo expanda el shell del contenedor y no compose.
-    # Lo que prueba el ping es que el proceso tiene control sobre el broker
-    # que resolvio, no que su configuracion sea la correcta: eso lo cubre la
-    # regla 21 (con settings de respaldo, Celery no arranca).
+    # (AUD2-C-09; es el incidente de 2026-09-08). F0-18: la prueba es el
+    # archivo que el worker toca en cada latido de eventos (heartbeat_sent,
+    # cada 2 s; core/celery_app.py). Ese latido lo emite el consumidor sobre
+    # su conexion al broker: con la conexion caida o el consumidor trabado,
+    # el archivo envejece y a los 120 s el contenedor queda unhealthy. Antes
+    # era `celery inspect ping`, que levantaba un Python entero (~120 MB)
+    # dentro de este cgroup. Lo que no prueba es que la configuracion sea la
+    # correcta: eso lo cubre la regla 21 (con settings de respaldo, Celery
+    # no arranca).
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "celery -A core.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10",
+          "find /var/lib/shifty -maxdepth 1 -name 'worker-heartbeat' -newermt '-120 seconds' | grep -q .",
         ]
-      interval: 60s
-      timeout: 15s
+      interval: 30s
+      timeout: 5s
       retries: 3
       start_period: 60s
     container_name: shifty_celery
@@ -290,7 +295,47 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          # F0-18/F0-19: dos hijos de hasta 150 MB, el padre y margen.
+          memory: 768M
+          cpus: "1.5"
+
+  # F0-18 (decision 7): worker aparte para la cola `interactive` (el mail del
+  # OTP). Un solo hijo: su latencia no depende de que termine un lote del
+  # outbox en el worker general. Misma imagen y mismo entorno (regla 22).
+  celery_worker_interactive:
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
+    command: celery -A core.celery_app worker --loglevel=info -Q interactive --concurrency=1 --max-memory-per-child=150000
+    # Mismo latido que celery_worker: cada contenedor tiene su archivo.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /var/lib/shifty -maxdepth 1 -name 'worker-heartbeat' -newermt '-120 seconds' | grep -q .",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    container_name: shifty_celery_interactive
+    restart: always
+    # Un mail de OTP dura segundos (timeout SMTP de 10 s).
+    stop_grace_period: 30s
+    environment: *app_environment
+    depends_on:
+      db:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+      redis_state:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   celery_beat:
     # Misma imagen que backend, sin `build` propio (F0-02).

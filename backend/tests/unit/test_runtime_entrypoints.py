@@ -20,7 +20,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 COMPOSE = REPO_ROOT / "docker-compose.yml"
 DOCKERFILE = REPO_ROOT / "backend" / "Dockerfile"
 
-SERVICIOS_DEL_BACKEND = ("backend", "celery_worker", "celery_beat")
+SERVICIOS_DEL_BACKEND = (
+    "backend",
+    "celery_worker",
+    "celery_worker_interactive",
+    "celery_beat",
+)
 
 
 def test_el_path_de_la_imagen_apunta_al_venv_construido() -> None:
