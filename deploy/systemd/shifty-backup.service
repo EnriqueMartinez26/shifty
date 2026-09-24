@@ -1,0 +1,21 @@
+# Backup diario de Postgres con copia fuera del host (F0-20).
+# Instalar: docs/BACKUP_RESTORE_RUNBOOK.md ("Backup diario en el host").
+[Unit]
+Description=Shifty: pg_dump diario, sha256 y copia al bucket (rclone)
+Documentation=file:/opt/shifty/docs/BACKUP_RESTORE_RUNBOOK.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# El `-` lo vuelve opcional: sin el archivo, el script
+# usa sus defaults y avisa que no hay BACKUP_REMOTE.
+EnvironmentFile=-/etc/shifty/ops.env
+WorkingDirectory=/opt/shifty
+ExecStart=/bin/bash /opt/shifty/scripts/backup.sh
+# El dump compite con la API por disco y CPU: que ceda.
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=2h
