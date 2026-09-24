@@ -130,11 +130,15 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // La seña real la decide el backend (antelación e historial del cliente):
   // inferirla desde los campos crudos del servicio divergía en cuanto la
   // tienda configuraba un recargo. Mientras carga, se cae a la inferencia.
+  // El telefono solo viaja dentro del rango que acepta el backend
+  // (client_phone 6..30): a medio tipear era un 422 por tecla (F11a-05). Sin
+  // el, el backend decide la seña sin historial, igual que con uno sin OTP.
+  const depositPhone = bookingState.client.phone.trim()
   const depositQuery = usePublicDepositPreview({
     storePublicId,
     serviceId,
     startsAt: bookingState.startsAt,
-    clientPhone: bookingState.client.phone || undefined,
+    clientPhone: depositPhone.length >= 6 && depositPhone.length <= 30 ? depositPhone : undefined,
     promotionCode: bookingState.promotionCode || undefined
   })
   const inferredDeposit = Boolean(

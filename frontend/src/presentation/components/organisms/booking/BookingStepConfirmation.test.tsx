@@ -243,6 +243,38 @@ describe('BookingStepConfirmation', () => {
         promotionCode: 'BIENVENIDA10'
       })
     })
+
+    it('con un telefono a medio tipear consulta la seña sin telefono', () => {
+      // F11a-05 (2026-09-24): cada tecla cambiaba la queryKey y con menos de 6
+      // caracteres el backend responde 422 (client_phone min_length=6), con
+      // reintento y paso por el manejador global de errores.
+      const { rerender } = render(
+        <BookingStepConfirmation
+          {...props({ bookingState: estado({ client: cliente({ phone: '11555' }) }) })}
+        />
+      )
+      expect(mockDepositPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ clientPhone: undefined })
+      )
+
+      rerender(
+        <BookingStepConfirmation
+          {...props({ bookingState: estado({ client: cliente({ phone: '1'.repeat(31) }) }) })}
+        />
+      )
+      expect(mockDepositPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ clientPhone: undefined })
+      )
+
+      rerender(
+        <BookingStepConfirmation
+          {...props({ bookingState: estado({ client: cliente({ phone: ' 115555 ' }) }) })}
+        />
+      )
+      expect(mockDepositPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ clientPhone: '115555' })
+      )
+    })
   })
 
   describe('codigo promocional', () => {
