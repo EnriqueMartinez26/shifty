@@ -27,9 +27,9 @@ What runs (`scripts/backup.sh`, triggered by `deploy/systemd/shifty-backup.timer
 
 Any failure sends an alert (`ALERT_EMAIL` and/or `ALERT_WEBHOOK_URL`). `scripts/backup-check.sh` runs every hour from cron and alerts when `last-success` is older than 26 h (critical after 48 h). `scripts/deploy.sh` refuses to migrate when it is older than 24 h.
 
-### Compose volume (lane B owns the compose files)
+### Compose volume
 
-The dump is written to a named volume mounted at `/backups` in the `db` service and bound to `/var/backups/shifty` on the host, so the host scripts can checksum and upload it. Add this to `docker-compose.prod.yml`: the `volumes` list of `db` is merged with the base file, which keeps `postgres_data`.
+The dump is written to a named volume mounted at `/backups` in the `db` service and bound to `/var/backups/shifty` on the host, so the host scripts can checksum and upload it. `docker-compose.prod.yml` needs this (if it is missing, `scripts/backup.sh` stops with "el volumen /backups del servicio db no apunta a BACKUP_DIR"); the `volumes` list of `db` is merged with the base file, which keeps `postgres_data`.
 
 ```yaml
 services:

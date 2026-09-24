@@ -17,7 +17,7 @@ make rollback                      # back to .deploy/previous, never migrates
 | --- | --- |
 | Docker Compose >= 2.24 (`ports: !reset []` in `docker-compose.prod.yml`) | `docker compose version` |
 | Server `.env` sets `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` and `COMPOSE_PROJECT_NAME=shifty` | `docker compose config --services` lists the prod services without `-f` |
-| Server `.env` does **not** set `APP_VERSION` (the deploy passes it; a bare `docker compose up` must fail instead of silently running another version) | `grep -c APP_VERSION .env` is 0 |
+| Server `.env` does **not** set `APP_VERSION`. `docker-compose.prod.yml` requires it for every compose command (`${APP_VERSION:?}`); the deploy passes it and records it in `.deploy/current`, and the host scripts (backup, latency) read it from there. A value pinned in `.env` goes stale after the first deploy, and a bare `docker compose up -d` would bring that old version back | `grep -c APP_VERSION .env` is 0 |
 | The deploy user is in the `docker` group (the scripts never use `sudo`) | `docker ps` as that user |
 | `docker login ghcr.io` with a token that has `read:packages` (the packages are private) | `docker pull ghcr.io/enriquemartinez26/shifty-backend:latest` |
 | `/etc/shifty/ops.env` from `deploy/ops.env.example` (`DOMAIN`, `BACKUP_REMOTE`, alerts) | `sudo cat /etc/shifty/ops.env` |
@@ -26,7 +26,7 @@ make rollback                      # back to .deploy/previous, never migrates
 | certbot on the host, webroot `/var/www/acme` mounted into the nginx container, renewal hook reloads nginx | `certbot renew --dry-run` |
 | python3 on the host (the latency report is stdlib only) | `python3 --version` |
 
-certbot: `certbot certonly --webroot -w /var/www/acme -d <domain> --deploy-hook "cd /opt/shifty && docker compose exec nginx nginx -s reload"`, and copy or link the certificates to where `docker-compose.prod.yml` mounts them (`./nginx/certs`). The `/var/www/acme` volume on nginx is part of the compose files (lane B). No OCSP stapling: Let's Encrypt turned it off.
+certbot: `certbot certonly --webroot -w /var/www/acme -d <domain> --deploy-hook "cd /opt/shifty && docker compose exec nginx nginx -s reload"`, and copy or link the certificates to where `docker-compose.prod.yml` mounts them (`./nginx/certs`). The `/var/www/acme` mount on nginx belongs in `docker-compose.prod.yml`; the ACME location is in `nginx/nginx.prod.conf`. No OCSP stapling: Let's Encrypt turned it off.
 
 The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; edit those paths if it lives elsewhere. `SHIFTY_DIR` defaults to the clone the script belongs to, so do not set it in a shared `ops.env`.
 
@@ -34,7 +34,7 @@ The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; ed
 
 `.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: `APP_VERSION` is always a sha that CI published. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
 
-The compose files reference `image: ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` (lane B, `docker-compose.prod.yml`).
+The compose files reference `image: ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` (`docker-compose.prod.yml`, one backend image for the API, the workers and beat).
 
 ## 3. Deploy sequence (`scripts/deploy.sh deploy`)
 
@@ -48,7 +48,7 @@ The compose files reference `image: ghcr.io/enriquemartinez26/shifty-<service>:$
 3. Save the running version to `.deploy/previous` (from `.deploy/current`, or the tag of the running backend image on the first run).
 4. `docker compose pull` of the app services.
 5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps -T backend alembic upgrade head`. If it fails, nothing was recreated.
-6. **Backend, gradually**: `up -d --no-deps --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (lane B, F0-04). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
+6. **Backend, gradually**: `up -d --no-deps --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
 7. The rest of the app: `up -d --no-deps celery_worker celery_worker_interactive celery_beat frontend nginx`. Compose only recreates what changed.
 8. `nginx -t && nginx -s reload` (in case the nginx image or config changed; never `restart`).
 9. Write `.deploy/current`.
@@ -108,11 +108,11 @@ nginx returns canonical JSON for its own errors under `/api`: `502/503/504` as `
 
 Repeated alerts are silenced for a while (30 minutes to 6 hours depending on the check) so a condition that lasts does not send a mail every minute. The guard does nothing while `.deploy/lock` exists.
 
-Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/shifty`). The nginx error log still prints the full request line, query string included (it can carry `client_phone`), on 429 and upstream errors: keep it only in the container's json-file log with the size cap of the compose `x-logging` anchor (lane B) and do not copy it anywhere else. `latency-check.sh` reads the access log into a temporary file and deletes it.
+Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/shifty`). The nginx error log still prints the full request line, query string included (it can carry `client_phone`), on 429 and upstream errors: keep it only in the container's json-file log with the size cap of the compose logging settings (plan F0-22: json-file 20 MB x 5) and do not copy it anywhere else. `latency-check.sh` reads the access log into a temporary file and deletes it.
 
 ## 9. Troubleshooting
 
 - **"hay otro deploy en curso"**: another deploy is running, or one was killed. If none is running, `rmdir .deploy/lock`.
-- **Manual compose commands** need the version: `APP_VERSION=$(cat .deploy/current) docker compose ps`.
+- **Manual compose commands** need the version (the prod compose file refuses to interpolate without it): `APP_VERSION=$(cat .deploy/current) docker compose ps`.
 - **First deploy with this script**: `.deploy/previous` comes from the tag of the running backend image. If that is `latest` or a local build, there is nothing to roll back to; say so in the release notes.
 - **The gate failed but the release is fine** (for example the domain's DNS or certificate): fix the cause and deploy the same sha again; migrations are idempotent at head.
