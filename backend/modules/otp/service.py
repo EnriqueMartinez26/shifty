@@ -4,7 +4,9 @@ import hashlib
 import hmac
 import re
 import secrets
-from collections.abc import Callable
+import asyncio
+import inspect
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -159,11 +161,12 @@ def _notice_body(store_name: str) -> str:
 # Entrega el mail (destino, asunto, cuerpo) FUERA del proceso de la API:
 # ``notifications.tasks.enqueue_otp_email`` en el router (AUD2-B4-06). El
 # servicio decide destino y contenido; quien llama decide el transporte, y
-# nunca manda en linea.
-DispatchScheduler = Callable[[str, str, str], None]
+# nunca manda en linea. Puede ser async (``enqueue_otp_email``, F1-03: encola
+# con tope de tiempo sin bloquear el loop) o sync (dobles de los tests).
+DispatchScheduler = Callable[[str, str, str], Awaitable[None] | None]
 
 
-def _schedule_otp_mail(
+async def _schedule_otp_mail(
     schedule_dispatch: DispatchScheduler,
     *,
     destination: str | None,
@@ -176,12 +179,25 @@ def _schedule_otp_mail(
 
     Los dos usan el mismo asunto y estan acotados por
     ``OTP_MAX_REQUESTS_PER_HOUR``.
+
+    Revision de F1-03 (2026-09-24): los despachos se INICIAN en orden fijo
+    (codigo y despues aviso) y se esperan juntos. En serie, con el broker
+    colgado, el camino de dos mails costaba el doble del tope de encolado que
+    el de uno, y el tiempo volvia a decir si el telefono es cliente.
     """
     asunto = _otp_subject(store_name)
+    envios: list[tuple[str, str]] = []
     if destination:
-        schedule_dispatch(destination, asunto, _code_body(code, store_name))
+        envios.append((destination, _code_body(code, store_name)))
     if notice_to:
-        schedule_dispatch(notice_to, asunto, _notice_body(store_name))
+        envios.append((notice_to, _notice_body(store_name)))
+    pendientes = [
+        pending
+        for pending in (schedule_dispatch(to, asunto, body) for to, body in envios)
+        if inspect.isawaitable(pending)
+    ]
+    if pendientes:
+        await asyncio.gather(*pendientes)
 
 
 def _debug_code(code: str, *, decoy: bool) -> str:
@@ -361,7 +377,7 @@ class OtpService:
             # misma, y tarda lo mismo, haya envio o no, para no revelar si el
             # telefono es cliente ni convertir el SMTP en un oraculo. Tampoco
             # dice a que buzon fue: eso delataria si el telefono es cliente.
-            _schedule_otp_mail(
+            await _schedule_otp_mail(
                 schedule_dispatch,
                 destination=destination,
                 notice_to=notice_to,

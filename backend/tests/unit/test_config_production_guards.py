@@ -162,3 +162,22 @@ def test_produccion_aplica_defaults_endurecidos(
     # atacante anonimo que sondea la infra". El healthcheck del compose sondea
     # 127.0.0.1 dentro de la red interna y le alcanza con el 503.
     assert settings.OPS_ENABLE_PUBLIC_HEALTH is False
+
+
+def test_fail_closed_de_produccion_cierra_solo_las_politicas_de_abuso() -> None:
+    """F1-09 (decision 9, 2026-09-24): el flag sigue obligatorio en produccion,
+    pero ya no cierra toda la API con Redis caido.
+
+    Cerrado: auth, escrituras publicas y OTP (fuerza bruta y abuso anonimo).
+    Abierto con aviso: lectura publica y global (panel, ops y el webhook de
+    Mercado Pago, que tiene HMAC + ventana + idempotencia).
+    """
+    from core import rate_limit
+
+    assert _build().RATE_LIMIT_FAIL_CLOSED is True
+    assert rate_limit.FAIL_CLOSED_POLICIES == {"auth", "public-write", "otp"}
+    assert rate_limit.FAIL_OPEN_POLICIES == {"public-read", "global"}
+    assert not rate_limit.FAIL_CLOSED_POLICIES & rate_limit.FAIL_OPEN_POLICIES
+    assert set(rate_limit.ACTION_POLICIES.values()) <= (
+        rate_limit.FAIL_CLOSED_POLICIES | rate_limit.FAIL_OPEN_POLICIES
+    )

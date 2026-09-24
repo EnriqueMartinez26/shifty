@@ -142,11 +142,17 @@ async def test_la_invalidacion_fallida_se_loguea_y_se_reporta(
 
     avisos: list[dict[str, Any]] = []
     reportados: list[BaseException] = []
-    monkeypatch.setattr(
-        availability_cache.logger,
-        "warning",
-        lambda evento, **kw: avisos.append({"evento": evento, **kw}),
-    )
+
+    class _Logger:
+        def warning(self, evento: str, **kw: Any) -> None:
+            avisos.append({"evento": evento, **kw})
+
+    # Se reemplaza el ATRIBUTO del modulo, no ``logger.warning`` sobre el
+    # proxy perezoso de structlog: monkeypatch guardaba como valor viejo el
+    # metodo ya ligado a un logger concreto y al deshacer lo dejaba pegado
+    # en el proxy; despues de que otro test reconfigura structlog,
+    # ``capture_logs`` dejaba de ver ese log (suite completa, 2026-09-24).
+    monkeypatch.setattr(availability_cache, "logger", _Logger())
     monkeypatch.setattr(
         availability_cache,
         "report_exception",

@@ -21,6 +21,11 @@ def set_tenant_context(store_id: str | None, is_admin: bool = False) -> None:
     _is_global_admin.set(is_admin)
 
 
+def current_tenant_context() -> tuple[str | None, bool]:
+    """Contexto de tenant vigente (``store_id``, ``is_global_admin``)."""
+    return _current_store_id.get(), _is_global_admin.get()
+
+
 class TenantSession(AsyncSession):
     """Sesion que mantiene vivo el contexto de tenant entre transacciones.
 
@@ -110,7 +115,10 @@ async def tenant_bypass(session: AsyncSession) -> AsyncIterator[None]:
 
 # El pool solo se dimensiona para PostgreSQL. SQLite (tests) usa StaticPool,
 # que no acepta pool_size ni max_overflow.
-_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+# hide_parameters (PV-08): sin esto el texto de todo DBAPIError terminaba en
+# "[parameters: (...)]" con emails y telefonos, y de ahi al log db_error y a
+# Sentry.
+_engine_kwargs: dict[str, object] = {"pool_pre_ping": True, "hide_parameters": True}
 if settings.DATABASE_URL.startswith("postgresql"):
     _engine_kwargs.update(
         pool_size=settings.DB_POOL_SIZE,

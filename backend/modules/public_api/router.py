@@ -6,7 +6,7 @@ Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Annotated
 
@@ -30,6 +30,7 @@ from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
+from core.utils import today_local
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -242,6 +243,27 @@ async def get_public_staff(
         ]
 
 
+# Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
+PUBLIC_AVAILABILITY_PAST_DAYS = 1
+PUBLIC_AVAILABILITY_FUTURE_DAYS = 120
+
+
+def _public_availability_date(raw: str) -> date:
+    try:
+        search_date = date.fromisoformat(raw)
+    except ValueError:
+        raise ValidationException("Fecha inválida")
+    today = today_local()
+    earliest = today - timedelta(days=PUBLIC_AVAILABILITY_PAST_DAYS)
+    latest = today + timedelta(days=PUBLIC_AVAILABILITY_FUTURE_DAYS)
+    if not earliest <= search_date <= latest:
+        raise ValidationException(
+            "La fecha esta fuera del rango de reservas: elegi una entre ayer "
+            f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
+        )
+    return search_date
+
+
 @router.get("/availability")
 async def get_public_availability(
     store_public_id: PublicIdQuery,
@@ -251,17 +273,21 @@ async def get_public_availability(
     db: AsyncSession = Depends(get_db),
     availability_cache: Redis = Depends(get_availability_cache),
 ) -> list[object]:
-    from datetime import date as date_type
+    """Slots del dia ``date`` (dia local argentino, ``YYYY-MM-DD``).
+
+    Contrato: ``date`` tiene que caer entre ayer y hoy + 120 dias (hoy local,
+    ``core.utils.today_local``); fuera de ese horizonte responde 422
+    ``VALIDATION_ERROR`` sin tocar la base ni el cache (F1-11, decision 14
+    del dueno, 2026-09-24: cada fecha es una clave de cache y la fecha libre
+    dejaba su cardinalidad sin tope).
+    """
+    search_date = _public_availability_date(date)
 
     async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
-        try:
-            search_date = date_type.fromisoformat(date)
-        except ValueError:
-            raise ValidationException("Fecha inválida")
         return list(
             await AvailabilityService(db, availability_cache).get_available_slots(
                 store.id,

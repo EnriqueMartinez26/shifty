@@ -235,6 +235,14 @@ class Settings(BaseSettings):
     ALLOWED_WRITE_CONTENT_TYPES: str = "application/json"
     TRUST_PROXY_HEADERS: bool = True
     RATE_LIMIT_ENABLED: bool = True
+    # Con Redis caido, responder 503 en vez de dejar pasar sin limite, PERO
+    # solo en las politicas que frenan fuerza bruta y abuso anonimo: ``auth``,
+    # ``public-write`` y ``otp`` (``core.rate_limit.FAIL_CLOSED_POLICIES``),
+    # mas el presupuesto de OTP por telefono y el lockout de login. Lectura
+    # publica, ``global`` (panel, ops) y el webhook de Mercado Pago fallan
+    # abierto con aviso (F1-09, decision 9 del dueno, 2026-09-24): antes el
+    # flag cerraba toda la API y Redis era punto unico de falla. Produccion
+    # lo exige en true (regla 17).
     RATE_LIMIT_FAIL_CLOSED: bool = False
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     RATE_LIMIT_GLOBAL_PER_MINUTE: int = 240
