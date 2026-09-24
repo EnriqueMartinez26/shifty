@@ -49,11 +49,15 @@ def _require_financial_access(user: User) -> None:
 
 
 async def _ensure_ledger_feature_enabled(db: AsyncSession, user: User) -> None:
-    result = await db.execute(select(Store).where(Store.id == user.store_id))
-    store = result.scalar_one_or_none()
-    if not store:
+    # Solo la columna que decide (F3-01): la guarda corre en cada request del
+    # fiado y no necesita la fila entera de la tienda.
+    result = await db.execute(
+        select(Store.feature_flags).where(Store.id == user.store_id)
+    )
+    row = result.one_or_none()
+    if row is None:
         raise StoreNotFoundException(user.store_id)
-    if not is_store_feature_enabled(store.feature_flags, "ledger"):
+    if not is_store_feature_enabled(row.feature_flags, "ledger"):
         raise FeatureDisabledException("deuda")
 
 

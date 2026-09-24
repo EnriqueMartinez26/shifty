@@ -84,8 +84,11 @@ class Store(BaseEntity):
         Integer, default=0, server_default="0"
     )
 
+    # Sin carga implicita (F3-01): solo la ficha del panel lee el horario
+    # comercial, con `selectinload` explicito. Con "selectin" cada
+    # `select(Store)` del sistema sumaba un SELECT.
     schedules: Mapped[list["StoreSchedule"]] = relationship(
-        back_populates="store", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="store", cascade="all, delete-orphan", lazy="raise"
     )
 
     send_email_confirmation: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -115,6 +118,12 @@ class Store(BaseEntity):
 
     @property
     def business_hours(self) -> BusinessHours:
+        """Horario comercial por dia. Exige ``schedules`` cargado.
+
+        ``schedules`` es ``lazy="raise"``: sin ``selectinload(Store.schedules)``
+        esto levanta ``InvalidRequestError`` en lugar de devolver un horario
+        vacio que la ficha mostraria como si fuera el real.
+        """
         hours: BusinessHours = {
             "mon": [],
             "tue": [],

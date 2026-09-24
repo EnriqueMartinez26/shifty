@@ -13,6 +13,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from core.availability_cache import invalidate_store_availability
 from core.database import get_db, tenant_bypass
@@ -58,8 +59,26 @@ PublicIdPath = Annotated[
 BusinessHoursPayload = dict[str, list[dict[str, time]]]
 
 
-async def _get_current_store(user: User, db: AsyncSession) -> Store:
-    result = await db.execute(select(Store).where(Store.id == user.store_id))
+async def _get_current_store(
+    user: User,
+    db: AsyncSession,
+    *,
+    with_schedules: bool = False,
+    reload: bool = False,
+) -> Store:
+    """Tienda del usuario; el horario comercial solo si se va a leer.
+
+    ``Store.schedules`` es ``lazy="raise"`` (F3-01): la ficha
+    (``business_hours``) y su edicion lo piden aca con ``selectinload``; el
+    resto de los endpoints no paga la consulta. ``reload`` relee la fila y la
+    coleccion sobre el objeto del identity map (despues de un commit).
+    """
+    query = select(Store).where(Store.id == user.store_id)
+    if with_schedules:
+        query = query.options(selectinload(Store.schedules))
+    if reload:
+        query = query.execution_options(populate_existing=True)
+    result = await db.execute(query)
     store = result.scalar_one_or_none()
     if not store:
         raise StoreNotFoundException(user.store_id)
@@ -149,7 +168,7 @@ async def get_my_store(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreResponse:
-    store = await _get_current_store(user, db)
+    store = await _get_current_store(user, db, with_schedules=True)
     return to_store_response(store)
 
 
@@ -166,7 +185,8 @@ async def update_my_store(
     if not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("cambiar la configuración del negocio")
 
-    store = await _get_current_store(user, db)
+    # Con horario: `_replace_business_hours` lo reemplaza y la respuesta lo lee.
+    store = await _get_current_store(user, db, with_schedules=True)
     update_data = data.model_dump(exclude_unset=True)
     toca_la_agenda = bool(_CAMPOS_DE_AGENDA & update_data.keys())
 
@@ -233,7 +253,8 @@ async def update_my_store(
         # es otro trabajo, pero la sesion tiene que quedar usable igual.
         await db.rollback()
         raise
-    await db.refresh(store)
+    # Relee fila y horario: un `refresh` dejaba `schedules` expirado.
+    store = await _get_current_store(user, db, with_schedules=True, reload=True)
     if toca_la_agenda:
         await _invalidar_agenda(availability_cache, str(store.id))
     return to_store_response(store)

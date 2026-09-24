@@ -42,12 +42,14 @@ def _active_services(store_id: str) -> LoaderOption:
     construye por llamada porque el `store_id` es del request, igual que en
     `modules/public_api/repository.get_staff`.
 
-    CUIDADO: la garantia depende de que nadie cargue el mismo `Staff` antes en
-    el MISMO request. `Staff.services` es `lazy="selectin"`, asi que un
-    `select(Staff)` sin esta opcion trae la coleccion COMPLETA, y la sesion no
-    refresca una coleccion ya cargada salvo con `populate_existing()`: el
-    objeto del identity map se quedaria con los servicios inactivos adentro y
-    la proxima escritura volveria a marcarlos para DELETE.
+    CUIDADO: la garantia depende de que nadie cargue la coleccion del mismo
+    `Staff` sin este filtro antes en el MISMO request. `Staff.services` es
+    `lazy="raise"` (F3-01), asi que un `select(Staff)` sin opciones ya no la
+    trae; pero un `selectinload(Staff.services)` sin filtro si la trae
+    COMPLETA, y la sesion no refresca una coleccion ya cargada salvo con
+    `populate_existing()`: el objeto del identity map se quedaria con los
+    servicios inactivos adentro y la proxima escritura volveria a marcarlos
+    para DELETE.
     """
     return selectinload(
         Staff.services.and_(

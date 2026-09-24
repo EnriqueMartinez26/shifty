@@ -42,16 +42,19 @@ class StaffModel(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Sin carga implicita (F3-01): quien lee franjas o servicios los pide con
+    # `selectinload`; un acceso sin cargar revienta en vez de ser una consulta
+    # escondida. Con "selectin" cada `select(Staff)` sumaba dos SELECT.
     schedules: Mapped[list["ScheduleModel"]] = relationship(
         "ScheduleModel",
         primaryjoin="StaffModel.id == ScheduleModel.staff_id",
-        lazy="selectin",
+        lazy="raise",
         cascade="all, delete-orphan",
     )
     services: Mapped[list["Service"]] = relationship(
         "Service",
         secondary="staff_services",
-        lazy="selectin",
+        lazy="raise",
     )
 
     def __init__(self, **kwargs: Any) -> None:
