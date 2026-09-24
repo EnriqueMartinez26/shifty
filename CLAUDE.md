@@ -293,8 +293,10 @@ Una instrucción en lenguaje natural no es una garantía.
     fallo de CI. Antes de escribir un efecto: ¿se calcula en el render?
     ¿sincroniza con algo externo? Si no, no va. Sin `useCallback`/`useMemo`
     defensivos.
-28. Cobertura mínima 70% (`jest.config.js`); `npm audit --omit=dev
-    --audit-level=low` limpio. Token de acceso en memoria, nunca
+28. Cobertura con trinquete por capa (`jest.config.js`): se mide todo
+    `src/` y cada carpeta (`domain`, `application`, `infrastructure`,
+    `shared`, `presentation`) tiene su piso en lo medido; se sube, no se
+    baja. `npm audit --omit=dev --audit-level=low` limpio. Token de acceso en memoria, nunca
     `localStorage`. `import.meta` solo en `runtime-env` /
     `shared/utils/env` (ts-jest no lo compila).
 
