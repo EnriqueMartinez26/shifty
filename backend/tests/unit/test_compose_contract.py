@@ -396,23 +396,34 @@ def test_los_procesos_de_celery_declaran_healthcheck() -> None:
         f"el healthcheck del worker no pregunta si consume: {worker!r}"
     )
 
-    # El archivo de schedule NO vive en /app: core/celery_app.py lo manda al
-    # tmp del sistema (en el contenedor, /tmp) con un nombre propio. La primera
-    # version de este healthcheck buscaba /app/celerybeat-schedule* y dejaba a
-    # beat unhealthy para siempre; el test pasaba porque miraba un substring.
+    # El archivo de schedule NO vive en /app. La primera version de este
+    # healthcheck buscaba /app/celerybeat-schedule* y dejaba a beat unhealthy
+    # para siempre; el test pasaba porque miraba un substring. Desde F0-17 vive
+    # en el volumen `beat_schedule` (antes en /tmp, que se perdia en cada
+    # recreacion): el healthcheck, el montaje y core/celery_app.py tienen que
+    # nombrar el MISMO directorio.
     from core.celery_app import celery_app
 
     archivo = Path(str(celery_app.conf.beat_schedule_filename))
+    directorio = archivo.parent.as_posix()
     beat = _prueba_del_healthcheck("celery_beat")
     assert f"-name '{archivo.name}*'" in beat, (
         f"el healthcheck de beat no busca {archivo.name!r}, que es lo que "
         f"escribe core/celery_app.py: {beat!r}"
     )
-    assert "find /tmp " in beat, (
-        "el healthcheck de beat no mira /tmp, que es tempfile.gettempdir() "
-        f"dentro del contenedor: {beat!r}"
+    assert f"find {directorio} " in beat, (
+        f"el healthcheck de beat no mira {directorio}, donde beat escribe: {beat!r}"
     )
     assert "/app" not in beat, f"el healthcheck de beat sigue mirando /app: {beat!r}"
+    montajes = [_montaje(v) for v in _services()["celery_beat"].get("volumes") or []]  # type: ignore[attr-defined]
+    assert ("beat_schedule", directorio) in montajes, (
+        f"el schedule de beat no vive en el volumen beat_schedule: {montajes}"
+    )
+    dockerfile = (COMPOSE.parent / "backend" / "Dockerfile").read_text(encoding="utf-8")
+    assert directorio in dockerfile, (
+        "la imagen no crea el directorio del schedule con dueno appuser: un "
+        "volumen nuevo copia el dueno de la imagen, y sin el beat no escribe"
+    )
 
     for prueba in (worker, beat):
         assert "$HOSTNAME" not in prueba or "$$HOSTNAME" in prueba, (
@@ -1051,7 +1062,9 @@ def test_rabbitmq_frena_a_los_publicadores_antes_del_oom() -> None:
     }.items():
         rabbit = servicios["rabbitmq"]
         montajes = [str(v) for v in rabbit.get("volumes") or []]  # type: ignore[attr-defined]
-        esperado = f"./deploy/rabbitmq/rabbitmq.conf:{RABBITMQ_CONF_EN_EL_CONTENEDOR}:ro"
+        esperado = (
+            f"./deploy/rabbitmq/rabbitmq.conf:{RABBITMQ_CONF_EN_EL_CONTENEDOR}:ro"
+        )
         assert esperado in montajes, (vista, montajes)
         assert _megas(_limite(rabbit)) == 256, (vista, _limite(rabbit))
         # 180 MiB de alarma dentro de 256 MB de limite: margen para Erlang.

@@ -21,8 +21,12 @@ COPY . .
 
 # Usuario no-root: si un atacante logra ejecucion, no arranca como root dentro
 # del contenedor. Se le da la propiedad de /app (incluye el .venv).
+# /var/lib/shifty guarda el estado de los procesos de Celery: el schedule de
+# beat (volumen beat_schedule; un volumen nuevo copia este dueno) y el archivo
+# de latido del worker que mira su healthcheck (core/celery_app.py).
 RUN useradd --system --create-home --uid 10001 appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /var/lib/shifty/beat \
+    && chown -R appuser:appuser /app /var/lib/shifty
 USER appuser
 
 # Environment variables
