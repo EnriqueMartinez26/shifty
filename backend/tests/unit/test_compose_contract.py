@@ -402,3 +402,20 @@ def test_el_override_fija_env_production() -> None:
             f"{servicio}: el override no fija ENV=production y las guardas de "
             "core/config.py no se activan"
         )
+
+
+def test_el_worker_de_celery_acota_su_concurrencia_y_su_memoria() -> None:
+    """2026-09-24: el worker vivia al 99% de su limite de 512 MB.
+
+    Sin `--concurrency`, Celery prefork abre un hijo por CPU del host (8 en la
+    maquina de desarrollo, 9 procesos de 85-110 MB). Los jobs periodicos estan
+    serializados por advisory locks y SKIP LOCKED, asi que mas hijos no procesan
+    mas rapido: solo reservan memoria y un pool de conexiones cada uno. Un hijo
+    que pase el limite del contenedor lo mata el OOM killer en medio de un job.
+    """
+    comando = str(_services()["celery_worker"]["command"])
+    concurrencia = re.search(r"--concurrency[= ](\S+)", comando)
+    assert concurrencia, f"el worker no fija --concurrency: {comando!r}"
+    assert "--max-memory-per-child" in comando, (
+        f"el worker no recicla hijos que crecen: {comando!r}"
+    )

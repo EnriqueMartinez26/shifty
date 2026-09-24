@@ -156,7 +156,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A core.celery_app worker --loglevel=info
+    # Sin --concurrency se abria un hijo por CPU del host y llenaba los 512 MB;
+    # los jobs ya se serializan por advisory lock y SKIP LOCKED.
+    # --max-memory-per-child va en KB: recicla el hijo que crece de mas.
+    command: celery -A core.celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-2} --max-memory-per-child=200000
     # Un worker vivo que dejo de consumir se veia igual que uno sano
     # (AUD2-C-09; es el incidente de 2026-09-08). `inspect ping` pregunta por
     # ESTE worker: si no responde, el contenedor queda unhealthy. $$HOSTNAME
