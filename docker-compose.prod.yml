@@ -118,6 +118,63 @@ services:
 
   db:
     ports: !reset []
+    # F0-14: Postgres para ~4 GB de un VPS de 16 GB. Este `command` REEMPLAZA
+    # al del compose base (compose no fusiona `command`), por eso repite
+    # shared_preload_libraries y el slow log. log_parameter_max_length=0: el
+    # slow log no vuelca los valores de los binds (emails, telefonos). SSD:
+    # random_page_cost 1.1 y effective_io_concurrency 200.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - max_connections=150
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - min_wal_size=512MB
+      - -c
+      - checkpoint_timeout=15min
+      - -c
+      - wal_compression=lz4
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - jit=off
+      - -c
+      - autovacuum_naptime=30s
+      - -c
+      - autovacuum_vacuum_cost_limit=1000
+      - -c
+      - log_min_duration_statement=250
+      - -c
+      - log_parameter_max_length=0
+      - -c
+      - log_lock_waits=on
+      - -c
+      - log_temp_files=0
+      - -c
+      - log_autovacuum_min_duration=5s
+      - -c
+      - track_io_timing=on
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+    # shared_buffers de 1 GB vive en /dev/shm; el default de docker es 64 MB.
+    shm_size: 512m
+    # Ante falta de memoria en el host, el OOM killer elige otro proceso.
+    oom_score_adj: -800
+    deploy:
+      resources:
+        limits:
+          memory: 4G
 
   redis:
     ports: !reset []

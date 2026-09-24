@@ -58,6 +58,17 @@ services:
       # Sin default (AUD2-C-02): es el rol DUENO, con DDL y sin RLS.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}
       POSTGRES_DB: ${POSTGRES_DB:-shifty_db}
+    # F0-14: pg_stat_statements y slow log (250 ms) tambien en desarrollo,
+    # para medir con los mismos instrumentos que produccion. La extension se
+    # crea por migracion; aca solo se precarga. El dimensionamiento de memoria
+    # vive en docker-compose.prod.yml (su `command` reemplaza a este entero).
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=250
+    shm_size: 256m
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:

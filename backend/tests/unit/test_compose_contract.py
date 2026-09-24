@@ -850,3 +850,76 @@ def test_el_contrato_ve_una_imagen_con_solo_la_version_mayor() -> None:
         "db: postgres:16-alpine",
         "mq: rabbitmq:latest",
     ]
+
+
+# --- Postgres dimensionado (F0-14, plan de rendimiento) -----------------------
+#
+# Con los defaults de la imagen (shared_buffers 128 MB, work_mem 4 MB, jit on,
+# sin pg_stat_statements ni slow log) la base no usaba la memoria del VPS y no
+# habia forma de ver que consulta era lenta. `command` NO se fusiona: el del
+# override reemplaza entero al del base, por eso produccion repite
+# shared_preload_libraries y el umbral del slow log.
+
+POSTGRES_PRODUCCION = {
+    "shared_buffers": "1GB",
+    "effective_cache_size": "3GB",
+    "work_mem": "8MB",
+    "maintenance_work_mem": "256MB",
+    "max_connections": "150",
+    "max_wal_size": "2GB",
+    "min_wal_size": "512MB",
+    "checkpoint_timeout": "15min",
+    "wal_compression": "lz4",
+    "random_page_cost": "1.1",
+    "effective_io_concurrency": "200",
+    "jit": "off",
+    "autovacuum_naptime": "30s",
+    "autovacuum_vacuum_cost_limit": "1000",
+    "log_min_duration_statement": "250",
+    # Sin los valores de los parametros: el slow log no puede volcar emails ni
+    # telefonos que vayan como bind.
+    "log_parameter_max_length": "0",
+    "log_lock_waits": "on",
+    "log_temp_files": "0",
+    "log_autovacuum_min_duration": "5s",
+    "track_io_timing": "on",
+    "shared_preload_libraries": "pg_stat_statements",
+}
+
+POSTGRES_DESARROLLO = {
+    "shared_preload_libraries": "pg_stat_statements",
+    "log_min_duration_statement": "250",
+}
+
+
+def parametros_de_postgres(comando: object) -> dict[str, str]:
+    """`-c clave=valor` del command de postgres, en forma de lista o de texto."""
+    partes = comando if isinstance(comando, list) else str(comando).split()
+    partes = [str(p) for p in partes]
+    assert partes and partes[0] == "postgres", f"no arranca postgres: {partes}"
+    parametros: dict[str, str] = {}
+    for i, parte in enumerate(partes):
+        if parte == "-c":
+            clave, _, valor = partes[i + 1].partition("=")
+            parametros[clave] = valor
+    return parametros
+
+
+def test_postgres_de_desarrollo_mide_las_consultas_lentas() -> None:
+    db = _services()["db"]
+    parametros = parametros_de_postgres(db.get("command"))
+    assert parametros == POSTGRES_DESARROLLO, parametros
+    assert db.get("shm_size") == "256m", db.get("shm_size")
+
+
+def test_postgres_de_produccion_usa_la_memoria_del_servidor() -> None:
+    db = _servicios_prod()["db"]
+    assert parametros_de_postgres(db.get("command")) == POSTGRES_PRODUCCION
+    # shared_buffers de 1 GB necesita /dev/shm; el default de docker es 64 MB.
+    assert db.get("shm_size") == "512m", db.get("shm_size")
+    # Si el host se queda sin memoria, el OOM killer elige otro proceso antes
+    # que la base.
+    assert db.get("oom_score_adj") == -800, db.get("oom_score_adj")
+    limites = _servicios_de_produccion()["db"]["deploy"]
+    assert isinstance(limites, dict)
+    assert limites["resources"]["limits"]["memory"] == "4G", limites
