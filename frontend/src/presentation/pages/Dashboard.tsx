@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
-import type { BookingStatusValue } from '@domain/value-objects/BookingStatus'
+import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/BookingStatus'
 
 import type { UpcomingAppointment } from '@application/services/DashboardService'
 import type {
@@ -304,10 +304,8 @@ const APPOINTMENT_TONES: Record<BookingStatusValue, Tone> = {
   expired: 'danger'
 }
 
-const isKnownStatus = (status: string): status is BookingStatusValue => status in APPOINTMENT_TONES
-
 const getAppointmentTone = (status: string): Tone =>
-  isKnownStatus(status) ? APPOINTMENT_TONES[status] : 'neutral'
+  isBookingStatus(status) ? APPOINTMENT_TONES[status] : 'neutral'
 
 const toneTokens = (tone: Tone = 'neutral') => {
   if (tone === 'primary') {

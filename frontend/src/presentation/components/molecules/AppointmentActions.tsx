@@ -2,7 +2,9 @@ import React from 'react'
 
 import { Check, CheckCheck, LockOpen, UserX } from 'lucide-react'
 
-export type AppointmentAction = 'confirm' | 'release' | 'complete' | 'absent'
+import { bookingActionsFor, type BookingAction } from '@domain/value-objects/BookingStatus'
+
+export type AppointmentAction = BookingAction
 
 interface AppointmentActionsProps {
   status: string
@@ -15,8 +17,7 @@ interface AppointmentActionsProps {
   onAction: (action: AppointmentAction) => void
 }
 
-interface ActionSpec {
-  action: AppointmentAction
+interface ActionView {
   label: string
   title: string
   icon: React.ReactNode
@@ -24,54 +25,34 @@ interface ActionSpec {
 }
 
 /**
- * Botones de transicion de un turno en la agenda. Refleja el grafo del
- * backend: pendiente -> confirmar (o liberar); confirmado y ya empezado ->
- * completar o ausente. Los estados terminales no muestran nada.
+ * Como se ve cada transicion. Cuales se ofrecen lo decide el dominio
+ * (bookingActionsFor); aca solo se pinta.
  */
-export const availableActions = (
-  status: string,
-  hasStarted: boolean,
-  canRelease: boolean,
-  canManage: boolean
-): ActionSpec[] => {
-  const actions: ActionSpec[] = []
-  if (status === 'pending' && canManage) {
-    actions.push({
-      action: 'confirm',
-      label: 'Confirmar',
-      title: 'Confirmar turno',
-      icon: <Check className="w-3 h-3" />,
-      tone: 'text-emerald-700 border-emerald-200'
-    })
+const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
+  confirm: {
+    label: 'Confirmar',
+    title: 'Confirmar turno',
+    icon: <Check className="w-3 h-3" />,
+    tone: 'text-emerald-700 border-emerald-200'
+  },
+  release: {
+    label: 'Liberar',
+    title: 'Liberar turno pendiente',
+    icon: <LockOpen className="w-3 h-3" />,
+    tone: 'text-red-700 border-red-200'
+  },
+  complete: {
+    label: 'Completar',
+    title: 'Marcar turno como completado',
+    icon: <CheckCheck className="w-3 h-3" />,
+    tone: 'text-blue-700 border-blue-200'
+  },
+  absent: {
+    label: 'Ausente',
+    title: 'El cliente no vino',
+    icon: <UserX className="w-3 h-3" />,
+    tone: 'text-amber-700 border-amber-200'
   }
-  if (['pending', 'pending_payment'].includes(status) && canRelease) {
-    actions.push({
-      action: 'release',
-      label: 'Liberar',
-      title: 'Liberar turno pendiente',
-      icon: <LockOpen className="w-3 h-3" />,
-      tone: 'text-red-700 border-red-200'
-    })
-  }
-  if (status === 'confirmed' && hasStarted && canManage) {
-    actions.push(
-      {
-        action: 'complete',
-        label: 'Completar',
-        title: 'Marcar turno como completado',
-        icon: <CheckCheck className="w-3 h-3" />,
-        tone: 'text-blue-700 border-blue-200'
-      },
-      {
-        action: 'absent',
-        label: 'Ausente',
-        title: 'El cliente no vino',
-        icon: <UserX className="w-3 h-3" />,
-        tone: 'text-amber-700 border-amber-200'
-      }
-    )
-  }
-  return actions
 }
 
 export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
@@ -83,27 +64,30 @@ export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   compact = false,
   onAction
 }) => {
-  const actions = availableActions(status, hasStarted, canRelease, canManage)
+  const actions = bookingActionsFor(status, { hasStarted, canRelease, canManage })
   if (actions.length === 0) return null
   return (
     <div className={`flex flex-wrap gap-1 ${compact ? 'mt-1' : 'mt-2'}`}>
-      {actions.map((spec) => (
-        <button
-          key={spec.action}
-          type="button"
-          title={spec.title}
-          aria-label={spec.title}
-          onClick={(event) => {
-            event.stopPropagation()
-            onAction(spec.action)
-          }}
-          disabled={busy}
-          className={`inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border disabled:opacity-50 ${spec.tone}`}
-        >
-          {spec.icon}
-          {compact ? null : spec.label}
-        </button>
-      ))}
+      {actions.map((action) => {
+        const spec = ACTION_VIEWS[action]
+        return (
+          <button
+            key={action}
+            type="button"
+            title={spec.title}
+            aria-label={spec.title}
+            onClick={(event) => {
+              event.stopPropagation()
+              onAction(action)
+            }}
+            disabled={busy}
+            className={`inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest border disabled:opacity-50 ${spec.tone}`}
+          >
+            {spec.icon}
+            {compact ? null : spec.label}
+          </button>
+        )
+      })}
     </div>
   )
 }

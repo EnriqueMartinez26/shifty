@@ -1,5 +1,4 @@
 import { DomainError, InvalidValueError } from './DomainError'
-import { BookingStatus } from '../value-objects/BookingStatus'
 import { BookingTimeSpan } from '../value-objects/BookingTimeSpan'
 import { Duration } from '../value-objects/Duration'
 import { Email } from '../value-objects/Email'
@@ -20,7 +19,6 @@ const catchError = (build: () => unknown): unknown => {
 describe('value objects lanzan InvalidValueError con code', () => {
   it.each([
     ['INVALID_ROLE', () => UserRole.create('root')],
-    ['INVALID_BOOKING_STATUS', () => BookingStatus.create('lost')],
     ['INVALID_COLOR', () => ServiceColor.create('rojo')],
     ['INVALID_DURATION', () => Duration.create(0)],
     ['INVALID_DURATION', () => Duration.create(481)],

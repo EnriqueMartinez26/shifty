@@ -2,6 +2,12 @@ import React, { useMemo, useState } from 'react'
 
 import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
 
+import {
+  isBookingStatus,
+  isCollectibleStatus,
+  type BookingStatusValue
+} from '@domain/value-objects/BookingStatus'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -18,7 +24,7 @@ import {
 import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
 
-const statusLabel: Record<string, string> = {
+const statusLabel: Record<BookingStatusValue, string> = {
   pending: 'Pendiente',
   pending_payment: 'Pendiente de pago',
   confirmed: 'Confirmado',
@@ -27,8 +33,6 @@ const statusLabel: Record<string, string> = {
   absent: 'Ausente',
   expired: 'Vencido'
 }
-
-const collectibleStatuses = new Set(['pending', 'pending_payment', 'confirmed'])
 
 const CollectionsPage: React.FC = () => {
   const appointmentsQuery = usePaymentsAppointments()
@@ -42,7 +46,7 @@ const CollectionsPage: React.FC = () => {
   const appointments = useMemo(
     () =>
       (appointmentsQuery.data ?? [])
-        .filter((appointment) => collectibleStatuses.has(appointment.status))
+        .filter((appointment) => isCollectibleStatus(appointment.status))
         .slice(0, 20),
     [appointmentsQuery.data]
   )
@@ -131,7 +135,9 @@ const CollectionsPage: React.FC = () => {
                         color: colors2000s.text.secondary
                       }}
                     >
-                      {statusLabel[appointment.status] ?? appointment.status}
+                      {isBookingStatus(appointment.status)
+                        ? statusLabel[appointment.status]
+                        : appointment.status}
                     </span>
                   </div>
                   <p

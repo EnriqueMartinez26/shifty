@@ -42,6 +42,24 @@ describe('HttpBookingRepository.searchByDateRange', () => {
     expect(range).toMatchObject({ total: 200 })
     expect(range.appointments).toHaveLength(200)
   })
+
+  it('un turno con un estado desconocido no tumba la lista (F8-03)', async () => {
+    const results = [
+      appointmentDto(1),
+      { ...appointmentDto(2), status: 'on_hold' },
+      appointmentDto(3)
+    ]
+    const get = jest.fn().mockResolvedValue({ data: { total: 3, results } })
+    const repository = new HttpBookingRepository({ get } as unknown as AxiosInstance)
+
+    const range = await repository.searchByDateRange('2026-09-01', '2026-09-30')
+
+    expect(range.appointments.map((appointment) => appointment.status)).toEqual([
+      'confirmed',
+      'on_hold',
+      'confirmed'
+    ])
+  })
 })
 
 describe('HttpBookingRepository.create', () => {

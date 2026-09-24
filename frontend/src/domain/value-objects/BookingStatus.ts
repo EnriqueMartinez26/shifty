@@ -1,7 +1,15 @@
-import { InvalidValueError } from '../errors/DomainError'
-
 export type BookingStatusValue =
   'pending' | 'pending_payment' | 'confirmed' | 'completed' | 'cancelled' | 'absent' | 'expired'
+
+const BOOKING_STATUSES: readonly BookingStatusValue[] = [
+  'pending',
+  'pending_payment',
+  'confirmed',
+  'completed',
+  'cancelled',
+  'absent',
+  'expired'
+]
 
 /**
  * Estados absorbentes del turno.
@@ -17,40 +25,47 @@ const TERMINAL_STATUSES: readonly BookingStatusValue[] = [
   'cancelled',
   'absent',
   'expired'
-] as const
+]
 
-export class BookingStatus {
-  private readonly value: BookingStatusValue
+/**
+ * Un estado que el front conoce. El backend puede sumar uno antes que el
+ * front: ese valor no se rechaza (la agenda no se cae), se muestra crudo y
+ * sin acciones.
+ */
+export const isBookingStatus = (value: string): value is BookingStatusValue =>
+  (BOOKING_STATUSES as readonly string[]).includes(value)
 
-  private constructor(value: BookingStatusValue) {
-    this.value = value
-  }
+const isTerminalStatus = (value: string): boolean =>
+  (TERMINAL_STATUSES as readonly string[]).includes(value)
 
-  static create(value: string): BookingStatus {
-    const validStatuses: BookingStatusValue[] = [
-      'pending',
-      'pending_payment',
-      'confirmed',
-      'completed',
-      'cancelled',
-      'absent',
-      'expired'
-    ]
-    if (!validStatuses.includes(value as BookingStatusValue)) {
-      throw new InvalidValueError('INVALID_BOOKING_STATUS', `Estado de reserva inválido: ${value}`)
-    }
-    return new BookingStatus(value as BookingStatusValue)
-  }
+/** Se le puede cobrar: un estado conocido que todavia no termino. */
+export const isCollectibleStatus = (value: string): boolean =>
+  isBookingStatus(value) && !isTerminalStatus(value)
 
-  getValue(): BookingStatusValue {
-    return this.value
-  }
+export type BookingAction = 'confirm' | 'release' | 'complete' | 'absent'
 
-  isPending(): boolean {
-    return this.value === 'pending' || this.value === 'pending_payment'
-  }
+interface BookingActionContext {
+  /** El turno ya empezo o termino: solo entonces se puede completar o marcar ausente. */
+  hasStarted: boolean
+  /** Puede liberar un turno pendiente (anula el link de pago). */
+  canRelease: boolean
+  /** Puede confirmar, completar o marcar ausente. */
+  canManage: boolean
+}
 
-  isFinalized(): boolean {
-    return TERMINAL_STATUSES.includes(this.value)
-  }
+/**
+ * Transiciones que la agenda ofrece para un turno, segun el grafo del backend:
+ * pendiente -> confirmar o liberar; pendiente de pago -> solo liberar (se
+ * confirma con el pago); confirmado y ya empezado -> completar o ausente. Un
+ * estado terminal o desconocido no ofrece nada.
+ */
+export const bookingActionsFor = (
+  status: string,
+  { hasStarted, canRelease, canManage }: BookingActionContext
+): BookingAction[] => {
+  const actions: BookingAction[] = []
+  if (status === 'pending' && canManage) actions.push('confirm')
+  if ((status === 'pending' || status === 'pending_payment') && canRelease) actions.push('release')
+  if (status === 'confirmed' && hasStarted && canManage) actions.push('complete', 'absent')
+  return actions
 }

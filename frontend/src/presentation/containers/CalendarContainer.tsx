@@ -20,6 +20,8 @@ import {
   ShieldBan
 } from 'lucide-react'
 
+import { isBookingStatus } from '@domain/value-objects/BookingStatus'
+
 import type { BlockPreviewResult } from '@application/services/AppointmentBlocksService'
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
@@ -69,6 +71,7 @@ import {
   parseHhMm,
   rangeFromInstants
 } from '../lib/calendarGrid'
+import { reportUnknownStatus } from '../lib/reportUnreadableInstant'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
@@ -285,25 +288,32 @@ export const CalendarContainer: React.FC = () => {
 
   const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
     const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data?.appointments ?? []).map(
-      (appointment) => ({
-        id: appointment.id,
-        type: appointment.status === 'absent' ? 'absence' : 'appointment',
-        staffId: appointment.staffId,
-        // Primero el nombre autoritativo que manda el backend (del join, vale
-        // aunque el profesional este dado de baja o el listado de staff no
-        // haya cargado); el cruce por id queda como respaldo.
-        staffName:
-          appointment.staffName ||
-          staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
-          'Profesional',
-        title: appointment.clientName,
-        subtitle: appointment.serviceName,
-        startsAt: appointment.timeSpan.getStartsAt(),
-        endsAt: appointment.timeSpan.getEndsAt(),
-        status: appointment.status,
-        clientPhone: appointment.clientPhone,
-        serviceId: appointment.serviceId
-      })
+      (appointment) => {
+        // Un estado nuevo del backend se muestra crudo y sin acciones; esto
+        // deja la senal en vez de pasar inadvertido (F8-03).
+        if (!isBookingStatus(appointment.status)) {
+          reportUnknownStatus('agenda', appointment.status)
+        }
+        return {
+          id: appointment.id,
+          type: appointment.status === 'absent' ? 'absence' : 'appointment',
+          staffId: appointment.staffId,
+          // Primero el nombre autoritativo que manda el backend (del join, vale
+          // aunque el profesional este dado de baja o el listado de staff no
+          // haya cargado); el cruce por id queda como respaldo.
+          staffName:
+            appointment.staffName ||
+            staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
+            'Profesional',
+          title: appointment.clientName,
+          subtitle: appointment.serviceName,
+          startsAt: appointment.timeSpan.getStartsAt(),
+          endsAt: appointment.timeSpan.getEndsAt(),
+          status: appointment.status,
+          clientPhone: appointment.clientPhone,
+          serviceId: appointment.serviceId
+        }
+      }
     )
 
     const blockEvents: UnifiedCalendarEvent[] = blocksInRange.map((block) => {
