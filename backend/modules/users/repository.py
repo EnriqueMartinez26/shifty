@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.security import hash_password
+from core.security import hash_password_async
 from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User
@@ -42,7 +42,7 @@ class UserRepository:
 
         new_user = User(
             **payload,
-            hashed_password=hash_password(password),
+            hashed_password=await hash_password_async(password),
             store_id=store_id,
             full_name=f"{first_name} {last_name}".strip(),
         )
@@ -117,7 +117,7 @@ class UserRepository:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
 
         if password:
-            user.hashed_password = hash_password(password)
+            user.hashed_password = await hash_password_async(password)
 
         # Una desactivacion, un cambio de rol o una clave impuesta por el admin
         # deben cortar las sesiones vivas: sin esto, los refresh tokens del
