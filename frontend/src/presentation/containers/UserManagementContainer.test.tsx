@@ -7,6 +7,11 @@ import { UserManagementContainer } from './UserManagementContainer'
 const mockUpdate = jest.fn()
 const mockCreate = jest.fn()
 const mockDelete = jest.fn()
+let mockUsersQuery: { data?: User[]; isLoading: boolean; error: unknown } = {
+  data: [],
+  isLoading: false,
+  error: null
+}
 
 const usuario = User.fromPrimitives({
   id: 'usr-1',
@@ -20,7 +25,7 @@ const usuario = User.fromPrimitives({
 })
 
 jest.mock('../hooks/useManagedDomainUsers', () => ({
-  useManagedDomainUsers: () => ({ data: [usuario], isLoading: false }),
+  useManagedDomainUsers: () => mockUsersQuery,
   useCreateManagedDomainUser: () => ({ mutateAsync: mockCreate }),
   useUpdateManagedDomainUser: () => ({ mutateAsync: mockUpdate }),
   useDeleteManagedDomainUser: () => ({ mutate: mockDelete })
@@ -28,6 +33,7 @@ jest.mock('../hooks/useManagedDomainUsers', () => ({
 
 describe('UserManagementContainer', () => {
   beforeEach(() => {
+    mockUsersQuery = { data: [usuario], isLoading: false, error: null }
     mockDelete.mockReset()
     mockUpdate.mockReset()
     mockUpdate.mockResolvedValue(usuario)
@@ -107,5 +113,12 @@ describe('UserManagementContainer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
     await waitFor(() => expect(mockDelete).toHaveBeenCalledWith('usr-1'))
+  })
+
+  it('si falla la lista lo avisa en vez de mostrarla vacia (N2)', () => {
+    mockUsersQuery = { data: undefined, isLoading: false, error: new Error('500') }
+    render(<UserManagementContainer />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No se pudieron cargar los usuarios.')
   })
 })

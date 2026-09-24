@@ -5,6 +5,7 @@ import { Plus, Search, Loader2 } from 'lucide-react'
 import { Service } from '@domain/entities/Service'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { ServiceCard } from '../components/molecules/ServiceCard'
 import { ServiceFormModal } from '../components/organisms/ServiceFormModal'
 import { useConfirm } from '../hooks/useConfirm'
@@ -22,7 +23,7 @@ export const ServiceManagementContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
 
-  const { data: services, isLoading } = useManagedServices()
+  const { data: services, isLoading, error } = useManagedServices()
   const createMutation = useCreateManagedService()
   const updateMutation = useUpdateManagedService()
   const deleteMutation = useDeleteManagedService()
@@ -116,6 +117,8 @@ export const ServiceManagementContainer: React.FC = () => {
           onChange={(e) => setSearchTerm(e.target.value)}
         />
       </div>
+
+      <QueryErrorNotice error={error} message="No se pudieron cargar los servicios." />
 
       {isLoading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-4">

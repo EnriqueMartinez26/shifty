@@ -37,6 +37,7 @@ import {
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { useAuth } from '../context/AuthContext'
@@ -220,7 +221,7 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
 
-  const { data: staffMembers, isLoading: loadingStaff } = useManagedStaff()
+  const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
   const { data: storeSettings } = useStoreSettings()
   const agendaQuery = useCalendarAgenda(rangeKeyFrom, rangeKeyTo)
@@ -1018,6 +1019,11 @@ export const CalendarContainer: React.FC = () => {
           </button>
         </div>
       </div>
+
+      <QueryErrorNotice
+        error={agendaQuery.error ?? staffError ?? blocksQuery.error}
+        message="No se pudo cargar la agenda."
+      />
 
       {truncatedAgenda && (
         <div

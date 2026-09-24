@@ -5,6 +5,7 @@ import { Plus, User, Loader2, Search } from 'lucide-react'
 import { Staff } from '@domain/entities/Staff'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { StaffCard } from '../components/molecules/StaffCard'
 import { StaffFormModal } from '../components/organisms/StaffFormModal'
 import { useConfirm } from '../hooks/useConfirm'
@@ -21,7 +22,7 @@ export const StaffManagementContainer: React.FC = () => {
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
 
-  const { data: staffList, isLoading } = useManagedStaff()
+  const { data: staffList, isLoading, error } = useManagedStaff()
   const createMutation = useCreateManagedStaff()
   const updateMutation = useUpdateManagedStaff()
   const deleteMutation = useDeleteManagedStaff()
@@ -95,6 +96,8 @@ export const StaffManagementContainer: React.FC = () => {
           onChange={(e) => setSearchTerm(e.target.value)}
         />
       </div>
+
+      <QueryErrorNotice error={error} message="No se pudo cargar el personal." />
 
       {isLoading ? (
         <div

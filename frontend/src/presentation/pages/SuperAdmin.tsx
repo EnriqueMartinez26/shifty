@@ -13,6 +13,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SuperAdminAuditTimeline } from '../components/organisms/SuperAdminAuditTimeline'
 import { SuperAdminHealthPanel } from '../components/organisms/SuperAdminHealthPanel'
 import { useAuth } from '../context/AuthContext'
@@ -614,6 +615,16 @@ const SuperAdminPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {confirmDialog}
+      <QueryErrorNotice
+        error={
+          storesQuery.error ??
+          overviewQuery.error ??
+          auditQuery.error ??
+          plansQuery.error ??
+          couponsQuery.error
+        }
+        message="No se pudieron cargar los datos del panel."
+      />
       {feedback ? (
         <div
           className="flex items-start gap-3 rounded-[1.5rem] px-5 py-4 text-sm font-bold"

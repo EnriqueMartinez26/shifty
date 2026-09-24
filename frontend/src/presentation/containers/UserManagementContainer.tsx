@@ -5,6 +5,7 @@ import { Plus, Search, Loader2, User as UserIcon } from 'lucide-react'
 import { User } from '@domain/entities/User'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { UserCard } from '../components/molecules/UserCard'
 import { UserFormModal } from '../components/organisms/UserFormModal'
 import { useConfirm } from '../hooks/useConfirm'
@@ -22,7 +23,7 @@ export const UserManagementContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
 
-  const { data: users, isLoading } = useManagedDomainUsers()
+  const { data: users, isLoading, error } = useManagedDomainUsers()
   const createMutation = useCreateManagedDomainUser()
   const updateMutation = useUpdateManagedDomainUser()
   const deleteMutation = useDeleteManagedDomainUser()
@@ -132,6 +133,8 @@ export const UserManagementContainer: React.FC = () => {
           onChange={(e) => setSearchTerm(e.target.value)}
         />
       </div>
+
+      <QueryErrorNotice error={error} message="No se pudieron cargar los usuarios." />
 
       {isLoading ? (
         <div
