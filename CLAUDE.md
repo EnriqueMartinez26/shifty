@@ -92,7 +92,7 @@ Una instrucción en lenguaje natural no es una garantía.
 - Capas `domain/ → application/ → infrastructure/ → presentation/`, más
   `shared/` y `theme/`; alias `@domain`, `@application`, etc.
 - `domain/` es puro: entidades, value objects con factory + validación
-  (`Email.create()`), casos de uso, interfaces de repositorio, eventos. Sin
+  (`Email.create()`), casos de uso, interfaces de repositorio. Sin
   React, axios ni react-query.
 - `infrastructure/repositories/` implementa las interfaces vía
   `BaseRepository` (método plantilla: las subclases implementan `*Impl`, la
