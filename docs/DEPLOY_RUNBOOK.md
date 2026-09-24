@@ -23,7 +23,7 @@ make deploy-edge                   # only when nginx's image or nginx/nginx.prod
 | `docker login ghcr.io` with a token that has `read:packages` (the packages are private) | `docker pull ghcr.io/enriquemartinez26/shifty-backend:latest` |
 | `/etc/shifty/ops.env` from `deploy/ops.env.example` (`DOMAIN`, `BACKUP_REMOTE`, alerts) | `sudo cat /etc/shifty/ops.env` |
 | Daily backup timer enabled, rclone remote and bucket (`docs/BACKUP_RESTORE_RUNBOOK.md`) | `systemctl list-timers shifty-backup.timer`, `cat /var/backups/shifty/last-success` |
-| Host cron installed: `deploy/cron/shifty-guard`, `deploy/cron/shifty-latency`, `deploy/logrotate/shifty` | `ls /etc/cron.d/shifty-*` |
+| Host cron installed: `deploy/cron/shifty-guard`, `deploy/cron/shifty-latency`, `deploy/cron/shifty-pg-top`, `deploy/logrotate/shifty` | `ls /etc/cron.d/shifty-*` |
 | certbot on the host with webroot `/opt/shifty/nginx/acme` (compose mounts `./nginx/acme` at `/var/www/acme` in nginx) and `scripts/cert-deploy-hook.sh` as deploy hook | `certbot renew --dry-run` |
 | After adding the `pg_backups` volume to `docker-compose.prod.yml`, the `db` container was recreated once so the volume attaches (see below) | `docker compose exec db ls /backups` |
 | python3 on the host (the latency report is stdlib only) | `python3 --version` |
@@ -152,7 +152,7 @@ The monthly backup drill can restore into staging (`docs/BACKUP_RESTORE_RUNBOOK.
 
 ### Acceptance test against staging
 
-Run Locust from **another machine** (plan §9). The edge limits requests per client IP: `/api/` 20 r/s (burst 40), `/api/auth/` 3 r/s (burst 6), 40 connections per IP, all answered as `429 RATE_LIMITED`. A single load generator hits those limits long before the app does, so use several source IPs or raise the limits temporarily in the staging nginx config, and write down which one was used next to the results.
+Run Locust from **another machine** (plan §9). The edge limits requests per client IP: `/api/` 20 r/s (burst 40), `/api/auth/` 3 r/s (burst 6), 40 connections per IP, all answered as `429 RATE_LIMITED`. A single load generator hits those limits long before the app does, so use several source IPs or raise the limits temporarily in the staging nginx config, and write down which one was used next to the results. The full procedure, pass criteria and the check script are in `docs/PERF_ACCEPTANCE.md`.
 
 ## 7. What the edge answers by itself
 
@@ -170,10 +170,15 @@ The edge also caches, and only what the backend marks cacheable (plan F1-29): `/
 | NTP, TLS certificate, disk, per-container memory, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit |
 | Backup freshness | hourly (cron) | `scripts/backup-check.sh` | last successful backup > 26 h (critical > 48 h) |
 | Latency and 5xx per route | every 5 min (cron) | `scripts/latency-check.sh` + `backend/scripts/latency_report.py` | a route with >= 20 requests over p95 500 ms or 5xx 0.1 %, or global 5xx over 0.1 % with >= 200 requests in the window |
+| Top 20 queries of `pg_stat_statements` | Mondays 06:23 host time (cron; cron.d uses the host timezone) | `backend/scripts/pg_top_queries.py` inside the backend container | never: it is a report, read `/var/log/shifty/pg-top.log` |
 | Daily backup | 03:00 ART (systemd timer) | `scripts/backup.sh` | any failure, or no `BACKUP_REMOTE` |
 | Certificate renewal | certbot's own timer | `scripts/cert-deploy-hook.sh` | nginx did not reload after a renewal |
 
 Repeated alerts are silenced for a while (30 minutes to 6 hours depending on the check) so a condition that lasts does not send a mail every minute. The guard does nothing while `.deploy/lock` exists.
+
+**Weekly query report (plan F5-03).** `deploy/cron/shifty-pg-top` runs `docker compose exec -T backend python scripts/pg_top_queries.py` every Monday and appends to `/var/log/shifty/pg-top.log`: the 20 statements with the most total time and the 20 with the highest mean time, with calls, rows and their share of the total. It connects as the owner role (`BACKUP_DATABASE_URL` or `MIGRATION_DATABASE_URL`, never `DATABASE_URL`: under `shifty_app` the view hides other roles' query text) and prints the URL with the credentials masked; the query text is normalized by Postgres (`$1` instead of values), so it carries no customer data. Totals accumulate since the last reset, so compare week against week; to measure a single week run it by hand with `--reset` (it clears the stats after printing). By hand: `APP_VERSION=$(cat .deploy/current) docker compose exec -T backend python scripts/pg_top_queries.py --limit 20`.
+
+**Sentry (plan F5-02).** With `SENTRY_DSN` set, traces are sampled per route (`backend/core/observability.py`): never `/ops/health/*` or `/ops/slo`, always `/payments/*` and the Mercado Pago webhook, 2 % of public GETs, 20 % of writes, 10 % of other panel reads; the release is `APP_VERSION`. Sentry Crons watches the beat tasks: the 8 crontab tasks become 8 cron monitors, which count against the Sentry plan's cron quota (owner decision; `exclude_beat_tasks` in the `CeleryIntegration` drops the ones not worth a monitor). The outbox task runs every 20 s and Sentry skips intervals under 60 s, so it has no monitor: its lag is covered by `/ops/slo` (`oldest_pending_outbox_seconds`, `oldest_pending_email_send_seconds`).
 
 Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/shifty`). The nginx error log still prints the full request line, query string included (it can carry `client_phone`), on 429 and upstream errors: keep it only in the container's json-file log with the size cap of the compose logging settings (plan F0-22: json-file 20 MB x 5) and do not copy it anywhere else. `latency-check.sh` reads the access log into a temporary file and deletes it.
 

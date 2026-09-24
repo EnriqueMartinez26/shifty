@@ -11,6 +11,10 @@
   Python (pip-audit) y en las tres imagenes (Trivy). Solo sirve si un hallazgo
   pone el workflow en rojo y si las herramientas no entran al repo como
   dependencia.
+- F5-04 (plan §9): `perf-acceptance.yml` corre la prueba de aceptacion con
+  Locust contra STAGING y la juzga `scripts/perf_acceptance_check.py`. Staging
+  comparte el host con produccion, asi que el nocturno esta apagado hasta que
+  el dueno lo prenda (`vars.PERF_NIGHTLY`).
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 DRILL = WORKFLOWS / "monthly-backup-drill.yml"
 BUILD = WORKFLOWS / "build-images.yml"
 SCAN = WORKFLOWS / "security-scan.yml"
+PERF = WORKFLOWS / "perf-acceptance.yml"
 QUALITY = WORKFLOWS / "quality.yml"
 SERVICIOS = ("backend", "frontend", "nginx")
 
@@ -324,3 +329,97 @@ def test_las_herramientas_de_escaneo_no_entran_como_dependencia() -> None:
         texto = manifiesto.read_text(encoding="utf-8").lower()
         for herramienta in ("pip-audit", "pip_audit", "trivy"):
             assert herramienta not in texto, f"{herramienta} en {manifiesto.name}"
+
+
+# --- prueba de aceptacion de rendimiento (F5-04, plan §9) -------------------
+
+SECRETOS_PERF = (
+    "STAGING_URL",
+    "SEED_OWNER_PASSWORD",
+    "SHIFTY_SUPERADMIN_EMAIL",
+    "SHIFTY_SUPERADMIN_PASSWORD",
+)
+
+
+def _job_perf() -> dict[str, Any]:
+    job = _yaml(PERF)["jobs"]["acceptance"]
+    assert isinstance(job, dict)
+    return job
+
+
+def _pasos_perf() -> list[dict[str, Any]]:
+    pasos = _job_perf()["steps"]
+    assert isinstance(pasos, list)
+    return pasos
+
+
+def test_perf_corre_de_noche_y_a_mano_nunca_en_pr() -> None:
+    disparadores = _disparadores(_yaml(PERF))
+    assert "workflow_dispatch" in disparadores
+    assert len(disparadores["schedule"]) == 1
+    assert "pull_request" not in disparadores and "push" not in disparadores
+
+
+def test_el_nocturno_esta_apagado_hasta_que_el_dueno_lo_prenda() -> None:
+    """Staging vive en el host de produccion: 200 usuarios de noche le pegan."""
+    condicion = _job_perf()["if"]
+    assert "workflow_dispatch" in condicion
+    assert "vars.PERF_NIGHTLY == 'true'" in condicion
+    assert "vars.PERF_RUNNER" in _job_perf()["runs-on"]
+    assert _yaml(PERF)["concurrency"]["cancel-in-progress"] is False
+
+
+def test_perf_solo_lee_el_repo() -> None:
+    """Corre con secretos de staging: el token de GitHub no escribe nada."""
+    assert _yaml(PERF)["permissions"] == {"contents": "read"}
+    assert "permissions" not in _job_perf(), "un job no amplia el permiso global"
+
+
+def test_perf_verifica_los_secretos_antes_que_nada() -> None:
+    primero = _pasos_perf()[0]
+    for secreto in SECRETOS_PERF:
+        assert primero["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
+    assert "::error" in primero["run"]
+
+
+@pytest.mark.skipif(BASH is None, reason="hace falta bash")
+def test_sin_secretos_perf_falla_diciendo_cuales_faltan() -> None:
+    assert BASH is not None
+    resultado = subprocess.run(
+        [BASH, "-c", _pasos_perf()[0]["run"]],
+        env={**os.environ, **{s: "" for s in SECRETOS_PERF}, "STAGING_URL": "x"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert resultado.returncode == 1
+    assert (
+        "Faltan los secretos del repo: SEED_OWNER_PASSWORD "
+        "SHIFTY_SUPERADMIN_EMAIL SHIFTY_SUPERADMIN_PASSWORD." in resultado.stdout
+    )
+
+
+def test_perf_corre_locust_y_lo_juzga_el_script() -> None:
+    pasos = _pasos_perf()
+    textos = [str(p.get("run", "")) for p in pasos]
+    locust = next(i for i, t in enumerate(textos) if "locust_aceptacion.py" in t)
+    veredicto = next(i for i, t in enumerate(textos) if "perf_acceptance_check.py" in t)
+    assert locust < veredicto
+    assert "--headless" in textos[locust] and "--csv" in textos[locust]
+    assert "--csv-prefix" in textos[veredicto]
+    assert "--network-offset-ms" in textos[veredicto]
+    for paso in pasos:
+        assert "continue-on-error" not in paso, paso.get("name")
+        assert "|| true" not in str(paso.get("run", "")), paso.get("name")
+        assert "DATABASE_URL" not in (paso.get("env") or {}), paso.get("name")
+
+
+def test_perf_sube_el_csv_aunque_falle() -> None:
+    subida = next(
+        p
+        for p in _pasos_perf()
+        if str(p.get("uses", "")).startswith("actions/upload-artifact@")
+    )
+    assert subida["if"] == "always()"
+    assert "perf" in subida["with"]["path"]
