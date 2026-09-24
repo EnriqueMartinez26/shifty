@@ -126,7 +126,10 @@ async def _invalidar_agenda(redis: Redis, store_id: str) -> None:
     """Best-effort DESPUES del commit, igual que ``services/router.py``.
 
     Un Redis caido no revierte la configuracion ya guardada; en el peor caso
-    el portal muestra lo viejo hasta que vencen los slots (300 s).
+    el portal muestra lo viejo hasta que vence la agenda cacheada del dia:
+    300 s desde que se leyo de la base (``DAY_AGENDA_TTL_SECONDS``), porque
+    los slots derivados de ella viven solo lo que le queda
+    (``_DayAgenda.remaining_ttl``).
     """
     try:
         await invalidate_store_availability(redis, store_id)

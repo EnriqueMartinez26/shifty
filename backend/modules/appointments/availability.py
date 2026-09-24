@@ -177,7 +177,9 @@ class _DayAgenda:
     Es lo que guarda el nivel 2 del cache (F3-02) y sirve para CUALQUIER
     servicio: los slots de un servicio se derivan en memoria con su duracion
     y sus profesionales. ``min_bookable_time`` NO se guarda: depende de
-    "ahora" y se calcula al derivar.
+    "ahora" y se calcula al derivar. ``built_at`` SI: es cuando se leyo de la
+    base, y acota la vida de los slots que se derivan de ella
+    (``remaining_ttl``).
     """
 
     notice_hours: int
@@ -185,13 +187,27 @@ class _DayAgenda:
     schedules: dict[str, list[tuple[time, time]]]
     booked: dict[str, list[Range]]
     blocks: dict[str, list[_Block]]
+    built_at: datetime
     min_bookable_time: datetime = datetime.min.replace(tzinfo=timezone.utc)
+
+    def remaining_ttl(self, now: datetime) -> int:
+        """Segundos que le quedan a la agenda cacheada (al menos 1).
+
+        Los slots derivados de una agenda del nivel 2 viven esto y no un TTL
+        nuevo de 300 s: si no, una agenda de 299 s daba slots de otros 300 y
+        una invalidacion perdida (Redis caido al invalidar, F1-10) podia
+        servirse hasta ~600 s. Asi la cota es ``DAY_AGENDA_TTL_SECONDS``
+        desde la lectura de la base.
+        """
+        edad = int((now - self.built_at).total_seconds())
+        return max(1, DAY_AGENDA_TTL_SECONDS - max(0, edad))
 
     def to_json(self) -> str:
         return json.dumps(
             {
                 "notice_hours": self.notice_hours,
                 "buffer_minutes": int(self.buffer.total_seconds() // 60),
+                "built_at": self.built_at.isoformat(),
                 "schedules": {
                     staff_id: [[a.isoformat(), b.isoformat()] for a, b in franjas]
                     for staff_id, franjas in self.schedules.items()
@@ -216,6 +232,7 @@ class _DayAgenda:
         return cls(
             notice_hours=int(data["notice_hours"]),
             buffer=timedelta(minutes=int(data["buffer_minutes"])),
+            built_at=datetime.fromisoformat(data["built_at"]),
             schedules={
                 staff_id: [
                     (time.fromisoformat(a), time.fromisoformat(b)) for a, b in franjas
@@ -293,13 +310,16 @@ class AvailabilityService:
             await self._write_cache(keys, slots="[]")
             return []
 
-        # 3. Agenda cruda del dia: del nivel 2 o de la base.
-        agenda, agenda_json = await self._day_agenda(
+        # 3. Agenda cruda del dia: del nivel 2 o de la base. Un Redis que
+        # falla al leerla deja el request sin cache: sin escrituras y con un
+        # solo warning (el de esa lectura).
+        agenda, agenda_json, cache_ok = await self._day_agenda(
             keys, store_id, search_date, store_rules
         )
-        agenda.min_bookable_time = core_utils.now_utc() + timedelta(
-            hours=agenda.notice_hours
-        )
+        if not cache_ok:
+            keys = None
+        now = core_utils.now_utc()
+        agenda.min_bookable_time = now + timedelta(hours=agenda.notice_hours)
 
         # 4. Grilla por profesional y por franja horaria.
         all_slots: list[AvailabilitySlot] = []
@@ -317,8 +337,14 @@ class AvailabilityService:
                     )
                 )
 
-        # 5. Cache por 5 minutos (y la agenda, si se leyo de la base).
-        await self._write_cache(keys, slots=json.dumps(all_slots), agenda=agenda_json)
+        # 5. Cache: los slots viven lo que le queda a la agenda (5 minutos si
+        # se acaba de leer de la base, y entonces se escribe tambien).
+        await self._write_cache(
+            keys,
+            slots=json.dumps(all_slots),
+            agenda=agenda_json,
+            slots_ttl=agenda.remaining_ttl(now),
+        )
         return all_slots
 
     async def _write_cache(
@@ -327,10 +353,12 @@ class AvailabilityService:
         *,
         slots: str,
         agenda: str | None = None,
+        slots_ttl: int = SLOTS_TTL_SECONDS,
     ) -> None:
         """Escribe los slots (y la agenda) en una ida y vuelta.
 
-        Sin claves (lectura caida) o con Redis caido, no: un solo warning.
+        Sin claves (alguna lectura cayo) o con Redis caido, no: un solo
+        warning por request.
         """
         if keys is None:
             return
@@ -338,7 +366,7 @@ class AvailabilityService:
             pipe = self.redis.pipeline(transaction=False)
             if agenda is not None:
                 pipe.setex(keys.day_agenda, DAY_AGENDA_TTL_SECONDS, agenda)
-            pipe.setex(keys.slots, SLOTS_TTL_SECONDS, slots)
+            pipe.setex(keys.slots, slots_ttl, slots)
             await pipe.execute()
         except REDIS_UNAVAILABLE_ERRORS as exc:
             _log_cache_unavailable("write", exc)
@@ -395,23 +423,25 @@ class AvailabilityService:
         store_id: str,
         search_date: date,
         store_rules: StoreRules | None,
-    ) -> tuple[_DayAgenda, str | None]:
+    ) -> tuple[_DayAgenda, str | None, bool]:
         """Agenda del dia del nivel 2; si no esta, de la base.
 
         Devuelve tambien el JSON a escribir cuando salio de la base (``None``
-        si salio del cache o si no hay claves).
+        si salio del cache o si no hay claves) y si el cache sigue sano:
+        ``False`` si la lectura de la agenda fallo, y entonces el request no
+        escribe nada (F1-10: un Redis caido es un MISS con un solo warning).
         """
+        cache_ok = keys is not None
         if keys is not None:
             try:
                 raw = await self.redis.get(keys.day_agenda)
             except REDIS_UNAVAILABLE_ERRORS as exc:
                 _log_cache_unavailable("read", exc)
-                raw = None
-                keys = None
+                raw, cache_ok = None, False
             if raw:
-                return _DayAgenda.from_json(raw), None
+                return _DayAgenda.from_json(raw), None, True
         agenda = await self.load_day_agenda(store_id, search_date, store_rules)
-        return agenda, (agenda.to_json() if keys is not None else None)
+        return agenda, (agenda.to_json() if cache_ok else None), cache_ok
 
     async def load_day_agenda(
         self, store_id: str, search_date: date, store_rules: StoreRules | None = None
@@ -461,6 +491,7 @@ class AvailabilityService:
             schedules=schedules,
             booked=booked,
             blocks=blocks,
+            built_at=core_utils.now_utc(),
         )
 
     async def _store_rules(self, store_id: str) -> StoreRules:
