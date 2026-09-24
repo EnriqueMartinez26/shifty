@@ -19,14 +19,17 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import and_, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
 from core.utils import ARGENTINA_TZ, ensure_utc_aware
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.appointments.repository import AppointmentRepository
+from modules.appointments.repository import (
+    AppointmentRepository,
+    appointment_overlap,
+)
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
     format_local_datetime,
@@ -168,6 +171,10 @@ async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
     es el MISMO que usa el alta (``AppointmentRepository.get_overlapping_block``,
     AUD2-POST-03), con el filtro de tienda porque este camino corre con bypass
     de RLS.
+
+    El turno encima se busca con ``appointment_overlap`` (F1-13): la tienda,
+    que este camino no filtraba aunque lo decia y que con bypass de RLS es la
+    unica capa de aislamiento, y las dos cotas sobre ``starts_at``.
     """
     ocupado = await db.execute(
         select(Appointment.id)
@@ -180,10 +187,7 @@ async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
                     AppointmentStatus.CONFIRMED.value,
                 ]
             ),
-            and_(
-                Appointment.starts_at < slot.ends_at,
-                Appointment.ends_at > slot.starts_at,
-            ),
+            appointment_overlap(slot.store_id, slot.starts_at, slot.ends_at),
         )
         .limit(1)
     )

@@ -255,7 +255,7 @@ class AvailabilityService:
             schedules.setdefault(schedule.staff_id, []).append(schedule)
 
         booked, blocks = await self._load_occupancy(
-            staff_ids, day_start, day_end, buffer=buffer
+            store_id, staff_ids, day_start, day_end, buffer=buffer
         )
         return _DayAgenda(
             notice_hours=notice_hours,
@@ -268,6 +268,7 @@ class AvailabilityService:
 
     async def _load_occupancy(
         self,
+        store_id: str,
         staff_ids: list[str],
         day_start: datetime,
         day_end: datetime,
@@ -283,8 +284,18 @@ class AvailabilityService:
         ``available`` para despues ser rechazado con 409. La ventana se
         ensancha por ``buffer`` porque el obstaculo real que arma
         ``_schedule_slots`` es el turno mas el hueco obligatorio a cada lado.
+
+        Las dos consultas llevan la tienda y las dos cotas de
+        ``appointment_overlap`` / ``active_block_overlap`` (F1-13): antes
+        recorrian toda la historia de los profesionales en cada consulta de
+        disponibilidad sin cache.
         """
         from sqlalchemy.orm import joinedload
+
+        from modules.appointments.repository import (
+            active_block_overlap,
+            appointment_overlap,
+        )
 
         appt_res = await self.db.execute(
             select(Appointment)
@@ -293,8 +304,7 @@ class AvailabilityService:
                 and_(
                     Appointment.staff_id.in_(staff_ids),
                     Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
-                    Appointment.starts_at < day_end + buffer,
-                    Appointment.ends_at > day_start - buffer,
+                    appointment_overlap(store_id, day_start - buffer, day_end + buffer),
                 )
             )
         )
@@ -313,9 +323,7 @@ class AvailabilityService:
             select(StaffBlock).where(
                 and_(
                     StaffBlock.staff_id.in_(staff_ids),
-                    StaffBlock.is_active.is_(True),
-                    StaffBlock.starts_at < day_end,
-                    StaffBlock.ends_at > day_start,
+                    active_block_overlap(store_id, day_start, day_end),
                 )
             )
         )

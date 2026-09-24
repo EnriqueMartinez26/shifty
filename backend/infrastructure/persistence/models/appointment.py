@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -22,6 +22,20 @@ from infrastructure.persistence.models.base import Base
 
 if TYPE_CHECKING:
     from modules.appointments.model import AppointmentStatus
+
+
+# Tope de duracion de un turno EN LA BASE: ``ck_appointments_max_span``
+# (``ends_at <= starts_at + interval '1 day'``, migraciones e9f1b3d5a7c0 +
+# f0a2c4e6b8d1; decision 15 del plan de rendimiento). El tope real del
+# producto es 480 minutos (``services/schemas.py``); este es holgado a
+# proposito. Lo que sostiene es la cota inferior de toda consulta de
+# solapamiento (``appointments.repository.active_appointment_overlap``): un
+# turno que termina despues de ``inicio`` empezo despues de
+# ``inicio - MAX_APPOINTMENT_SPAN``, y con esa cota el indice
+# ``(store_id, staff_id, starts_at)`` recorre solo la ventana y no toda la
+# historia del profesional (F1-13, R7-02). No se declara como CheckConstraint
+# del modelo porque SQLite (la suite de integracion) no tiene ``interval``.
+MAX_APPOINTMENT_SPAN = timedelta(days=1)
 
 
 # Unica fuente de verdad del grafo de transiciones del turno.

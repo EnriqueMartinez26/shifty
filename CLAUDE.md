@@ -254,8 +254,16 @@ Una instrucción en lenguaje natural no es una garantía.
   (R7-01: el login con `lower(email)` recorría `users` entera; hoy compara la
   columna normalizada, `tests/architecture/test_email_por_igualdad.py` y
   `tests/postgres/test_pg_email_por_igualdad.py`; R7-02: el solapamiento
-  recorre toda la historia del profesional, incluso bajo `FOR UPDATE`).
+  recorría toda la historia del profesional, incluso bajo `FOR UPDATE`).
   Marcar funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
+- **Toda consulta de solapamiento pasa por `appointment_overlap` /
+  `active_block_overlap`** (`modules/appointments/repository.py`, F1-13):
+  `store_id` más las dos cotas. Para turnos la inferior es
+  `starts_at > inicio - MAX_APPOINTMENT_SPAN`, correcta porque la base exige
+  `ends_at <= starts_at + 1 día` (`ck_appointments_max_span`); subir ese tope
+  es cambiar el CHECK y la constante juntos. Para bloqueos (hasta 366 días) es
+  `end_time > inicio` sobre `ix_appointment_blocks_store_staff_end`.
+  (`test_pg_solapamiento_con_cotas.py`)
 
 ### Seguridad
 
