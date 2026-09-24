@@ -16,7 +16,8 @@ from core.exceptions import AppException, ResourceNotFoundException
 from core.utils import ensure_utc_aware
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.notifications.tasks import build_client_details, send_confirmation_email
+from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
+from modules.payments.model import JsonValue, OutboxMessage
 from modules.public_api.repository import PublicRepository
 from modules.services.model import Service
 from modules.staff.model import Staff
@@ -217,12 +218,23 @@ class WaitlistService:
             service_id=service.id,
             starts_at=appointment.starts_at,
         )
+        # "Turno confirmado" por el outbox, en esta transaccion (F2-02): antes
+        # el request mandaba SMTP despues del commit. Va al email que dejo la
+        # persona en la lista, que puede no ser el de su ficha de cliente (y a
+        # nadie si no dejo uno, como antes).
+        payload: dict[str, JsonValue] = {
+            "appointment_id": appointment.id,
+            "email": entry.client_email,
+        }
+        self.db.add(
+            OutboxMessage(
+                store_id=store.id,
+                event_type=EVENT_APPOINTMENT_CONFIRMED,
+                payload=payload,
+            )
+        )
         await self.db.commit()
         await invalidate_availability(cache, store.id, appointment.starts_at)
-        await send_confirmation_email(
-            email=entry.client_email,
-            details=build_client_details(appointment, service, staff, store),
-        )
         return appointment, service, staff
 
     async def _create_confirmed(

@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 BACKEND = Path(__file__).resolve().parents[2]
 DESPACHOS = {"delay", "apply_async", "send_task", "publish"}
@@ -60,3 +63,37 @@ def test_ninguna_funcion_enqueue_manda_en_linea() -> None:
         "funciones enqueue_* que no encolan (se llaman send_* si mandan en "
         f"linea): {impostoras}"
     )
+
+
+class _Cola:
+    def __init__(self) -> None:
+        self.encolados: list[tuple[Any, ...]] = []
+
+    def delay(self, *args: Any) -> None:
+        self.encolados.append(args)
+
+
+@pytest.mark.asyncio
+async def test_los_mails_de_la_reserva_publica_se_encolan_con_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F2-01 (2026-09-24): ``enqueue_registration_email`` y
+    ``enqueue_confirmation_email`` publican ``send_booking_email`` con el tipo
+    de mail, la tienda y el turno. Ni email ni nombre en el broker (PV-19): el
+    worker relee el turno."""
+    import modules.notifications.tasks as tasks
+
+    cola = _Cola()
+    monkeypatch.setattr(tasks, "send_booking_email", cola)
+
+    assert await tasks.enqueue_registration_email(
+        store_id="tienda-1", appointment_id="turno-1"
+    )
+    assert await tasks.enqueue_confirmation_email(
+        store_id="tienda-1", appointment_id="turno-2"
+    )
+
+    assert cola.encolados == [
+        ("registration", "tienda-1", "turno-1"),
+        ("confirmation", "tienda-1", "turno-2"),
+    ]

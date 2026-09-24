@@ -32,7 +32,10 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 import modules.payments.jobs as jobs
 from core.database import TenantSession
 from modules.payments.model import OutboxMessage
-from tests.integration.test_outbox_sesion_smtp_y_presupuesto import _mensajes
+from tests.integration.test_outbox_sesion_smtp_y_presupuesto import (
+    _mensajes,
+    destino_del_mail,
+)
 
 _MIGRACION_TIMEOUTS = next(
     Path(__file__).resolve().parents[2].glob("alembic/versions/*app_role_timeouts*.py")
@@ -92,12 +95,17 @@ async def test_entre_el_commit_del_lote_y_los_envios_no_hay_transaccion_abierta(
     assert abierta_al_conectar == [False], "la sesion SMTP se abrio en transaccion"
     assert abierta_al_mandar == [False, False, False], abierta_al_mandar
 
-    # El fallo queda anotado de verdad (otra sesion: solo ve lo commiteado).
+    # El fallo queda anotado de verdad (otra sesion: solo ve lo commiteado),
+    # en la fila del mail (F2-03).
     async with AsyncSession(test_engine) as otra:
-        fila = await otra.scalar(
-            select(OutboxMessage).where(OutboxMessage.id == mensajes[1].id)
-        )
-    assert fila is not None
+        filas = (
+            await otra.scalars(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == jobs.EVENT_EMAIL_SEND
+                )
+            )
+        ).all()
+    [fila] = [f for f in filas if destino_del_mail(f) == "cliente-1@example.com"]
     assert fila.attempts == 1
     assert fila.error == "ConnectionRefusedError"
     assert fila.processed_at is not None

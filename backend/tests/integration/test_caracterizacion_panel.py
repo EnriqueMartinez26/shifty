@@ -6,6 +6,11 @@ partirlas estos tests fijan el camino completo tal como es HOY: cuerpos,
 filas, auditoria, eventos del outbox, invalidaciones del cache, mails y el
 orden commit -> cache -> mail. Pasan sobre la base y siguen pasando despues
 del refactor sin cambiar una asercion.
+
+F2-02 (2026-09-24): el mail del panel dejo de salir en el request. El alta y
+la reprogramacion publican su aviso en el outbox (en la transaccion del
+cambio) y el orden del request queda commit -> cache; el mail lo manda el
+lote del outbox, que se corre aca para fijar destinatario.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import modules.notifications.tasks as tasks
 from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditLog
+from modules.payments.jobs import process_outbox_batch
 from modules.payments.model import Payment
 from tests.integration.test_caracterizacion_alta_publica import (
     _contar,
@@ -133,10 +139,14 @@ async def test_alta_del_panel_cuerpo_filas_auditoria_y_orden(
         "completed_at": None,
     }
     assert ensure_utc_aware(datetime.fromisoformat(cuerpo["starts_at"])) == t.slot
-    # Commit -> invalidacion -> mail de confirmacion al actor. Hasta F1-05
-    # (2026-09-24) el mail iba antes de la invalidacion: con un SMTP lento el
-    # horario tomado seguia libre en la disponibilidad publica.
-    assert orden == ["commit", "cache", "mail"], orden
+    # Commit -> invalidacion. Hasta F1-05 (2026-09-24) el mail iba antes de
+    # la invalidacion; desde F2-02 no sale del request: va por el outbox.
+    assert orden == ["commit", "cache"], orden
+    assert buzon.enviados == []
+    assert await _eventos(test_session) == [
+        ("appointment.booked_by_panel", {"appointment_id": cuerpo["public_id"]})
+    ]
+    await process_outbox_batch(test_session)
     assert [m[0] for m in buzon.enviados] == ["carac-panel-alta@example.com"]
     fila = await _turno(test_session, cuerpo["public_id"])
     assert (fila.price_amount, fila.client_email, fila.idempotency_key) == (
@@ -150,7 +160,6 @@ async def test_alta_del_panel_cuerpo_filas_auditoria_y_orden(
     # Hoy el alta audita "status": None (el default del modelo recien se
     # aplica en el flush). Se fija tal cual: B1-12 no cambia comportamiento.
     assert nuevas[0][2]["status"] is None
-    assert await _eventos(test_session) == []
 
 
 @pytest.mark.asyncio
@@ -242,9 +251,10 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
         "Traer estudios",
         t.staff,
     )
-    # Commit -> invalidacion -> mail de reprogramacion al CLIENTE.
-    assert orden == ["commit", "cache", "mail"], orden
-    assert [m[0] for m in buzon.enviados] == ["cliente-panel@example.com"]
+    # Commit -> invalidacion; el mail de reprogramacion al CLIENTE va por el
+    # outbox (F2-02).
+    assert orden == ["commit", "cache"], orden
+    assert buzon.enviados == []
     assert (await _turno(test_session, turno)).status == "cancelled"
     nuevo = await _turno(test_session, cuerpo["public_id"])
     assert (nuevo.client_name, nuevo.client_email, nuevo.client_phone) == (
@@ -261,8 +271,14 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
     ]
     assert nuevas[1][2]["rescheduled_from"] == turno
     eventos = (await _eventos(test_session))[eventos_antes:]
-    assert [(e[0], e[1]["reason"]) for e in eventos] == [
-        ("appointment.slot_released", "rescheduled")
+    assert sorted((e[0], e[1].get("reason")) for e in eventos) == [
+        ("appointment.rescheduled", None),
+        ("appointment.slot_released", "rescheduled"),
+    ]
+    assert {"appointment_id": cuerpo["public_id"]} in [e[1] for e in eventos]
+    await process_outbox_batch(test_session)
+    assert [m[0] for m in buzon.enviados if m[1].startswith("Te movimos el turno")] == [
+        "cliente-panel@example.com"
     ]
 
 
@@ -327,6 +343,7 @@ async def test_liberar_del_panel_cuerpo_outbox_auditoria_y_orden(
     t = await _tienda(client, "carac-panel-libera")
     _buzon_en_orden(None, monkeypatch)
     turno = (await _alta_panel(client, t, t.slot, "carac-pl-0001")).json()["public_id"]
+    eventos_antes = len(await _eventos(test_session))
     auditoria_antes = len(await _auditoria(test_session))
     orden = _espiar_orden(test_session, await _redis(), monkeypatch)
 
@@ -337,7 +354,7 @@ async def test_liberar_del_panel_cuerpo_outbox_auditoria_y_orden(
     assert res.status_code == 200, res.text
     assert (res.json()["public_id"], res.json()["status"]) == (turno, "expired")
     assert orden == ["commit", "cache"], orden
-    eventos = await _eventos(test_session)
+    eventos = (await _eventos(test_session))[eventos_antes:]
     assert [e[0] for e in eventos] == [
         "appointment.released",
         "appointment.slot_released",
@@ -390,11 +407,12 @@ async def test_liberar_del_panel_rechazos(
         objetivo = "01J00000000000000000000000"
         esperado = (404, "APPOINTMENT_NOT_FOUND")
     estado_antes = (await _turno(test_session, turno)).status
+    eventos_antes = await _eventos(test_session)
 
     res = await client.patch(
         f"/appointments/{objetivo}/release", headers=auth_headers(t.token)
     )
 
     assert (res.status_code, res.json()["error_code"]) == esperado, res.text
-    assert await _eventos(test_session) == []
+    assert await _eventos(test_session) == eventos_antes
     assert (await _turno(test_session, turno)).status == estado_antes

@@ -102,7 +102,8 @@ Una instrucción en lenguaje natural no es una garantía.
   jobs de Celery fijan bypass explícito (`set_tenant_context(None, True)` +
   `_apply_tenant_context`).
 - **Outbox/Inbox** para efectos secundarios y webhooks (`OutboxMessage`,
-  `WebhookInbox`), procesados por Celery beat cada minuto.
+  `WebhookInbox`), procesados por Celery beat (outbox cada 20 s, inbox cada
+  minuto).
 - **Dos Redis con papeles distintos** (plan §7, decisión 5). El caché de
   disponibilidad va a `redis_cache` por `core/redis.py::get_availability_cache`
   (`REDIS_CACHE_URL`; `volatile-ttl`, sin persistencia: perderlo solo cuesta
@@ -355,7 +356,18 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Mails al cliente**: "reserva registrada" al crear, "turno confirmado"
   desde `confirm()` y desde el pago acreditado; siempre best-effort tras el
   commit, nunca a un email técnico `.noreply` (`is_deliverable_email`).
-  (`test_mails_al_cliente.py`) Los helpers de `notifications/tasks.py` que
+  La reserva pública no espera al SMTP (F2-01, 2026-09-24): encola
+  `send_booking_email` (cola `interactive`, la del OTP, `max_retries=0`) con
+  `enqueue_registration_email`/`enqueue_confirmation_email`; por el broker
+  viajan el tipo de mail, la tienda y el id del turno, nunca el email, y el
+  worker relee el turno antes de mandar. El link de MP no se difiere.
+  El panel tampoco manda en el request (F2-02): reservar, confirmar,
+  completar y reprogramar (y reservar desde la lista de espera) publican
+  `appointment.booked_by_panel`/`confirmed`/`completed`/`rescheduled` en el
+  outbox en la MISMA transacción que el cambio de estado; el lote relee el
+  turno y manda solo si sigue en un estado que haga cierto el aviso (hasta un
+  tick, 20 s, de demora). (`test_mails_al_cliente.py`,
+  `test_mails_del_panel_sin_transaccion.py`) Los helpers de `notifications/tasks.py` que
   mandan SMTP en línea se llaman `send_*`; una función `enqueue_*` tiene que
   encolar de verdad (`test_enqueue_encola_de_verdad.py`).
 - **OTP solo por email** (SMTP existente); `whatsapp`/`sms` existen solo con
@@ -377,6 +389,14 @@ Una instrucción en lenguaje natural no es una garantía.
   espera; `process_outbox_batch` en `payments/jobs.py` acumula así también
   los avisos al dueño, la confirmación al cliente y la cancelación por
   bloqueo). (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`)
+  En el outbox cada mail es su propia fila `email.send`, escrita en la
+  transacción del evento que lo genera (F2-03, 2026-09-24). El despacho la
+  reclama (`processed_at` + commit, `SKIP LOCKED`) antes de mandar, de a una;
+  lo que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el
+  tick siguiente: ningún mail se pierde por presupuesto y `processed_at` no
+  se reabre nunca. Un envío fallido no se reintenta (el DATA pudo haber
+  llegado): queda con `attempts` y `error` en su fila.
+  (`test_outbox_mails_diferidos.py`)
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
