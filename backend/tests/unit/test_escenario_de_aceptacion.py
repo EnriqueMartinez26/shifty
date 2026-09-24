@@ -156,3 +156,41 @@ def test_se_desenvuelve_la_respuesta_canonica_de_la_api() -> None:
     ]
     assert m.datos_de([1, 2]) == [1, 2], "una respuesta cruda pasa igual"
     assert m.datos_de({"access_token": "t"}) == {"access_token": "t"}
+
+
+def test_el_manifiesto_se_arma_desde_la_api_publica_de_staging() -> None:
+    """CI no tiene el archivo del seed: lo reconstruye por slug ``cap-NNN``."""
+    m = _modulo()
+    pedidos: list[str] = []
+    respuestas = {
+        "/public/stores/cap-001": {"success": True, "data": {"public_id": "S1"}},
+        "/public/services?store_public_id=S1": {
+            "success": True,
+            "data": [{"public_id": "SV1"}, {"public_id": "SV2"}],
+        },
+        "/public/staff?store_public_id=S1": {
+            "success": True,
+            "data": [{"public_id": "ST1"}],
+        },
+        # cap-002 no existe (404): se saltea.
+    }
+
+    def obtener(ruta: str) -> object:
+        pedidos.append(ruta)
+        return respuestas.get(ruta)
+
+    manifiesto = m.manifiesto_desde_api(
+        obtener, tiendas=2, dominio="capacidad.example.com"
+    )
+
+    assert manifiesto["stores"] == [
+        {
+            "slug": "cap-001",
+            "store_public_id": "S1",
+            "owner_email": "owner-001@capacidad.example.com",
+            "service_ids": ["SV1", "SV2"],
+            "staff_ids": ["ST1"],
+        }
+    ]
+    assert "/public/stores/cap-002" in pedidos
+    assert not any("cap-002" in p and "services" in p for p in pedidos)

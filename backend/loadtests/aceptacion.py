@@ -8,10 +8,15 @@ lo importan sin riesgo. ``locust_aceptacion.py`` es el que arma los usuarios.
 
 from __future__ import annotations
 
+import argparse
 import json
 import random
+import sys
+import time
+import urllib.error
+import urllib.request
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -32,6 +37,10 @@ RAFAGA_CADA_S = 300
 RAFAGA_TAMANO = 10
 # Muestreo de /ops/slo durante la corrida.
 SLO_CADA_S = 30
+# Mismo patron que scripts/seed_capacidad.py (slug_de y el email del dueno).
+SLUG_PREFIX = "cap-"
+TIENDAS_SEMBRADAS = 200
+DOMINIO_DUENOS = "capacidad.example.com"
 
 
 @dataclass(frozen=True)
@@ -135,3 +144,76 @@ class ConteoDeCodigos:
             "errores_de_conexion": self.errores_de_conexion,
             "rafagas": list(self.rafagas),
         }
+
+
+def manifiesto_desde_api(
+    obtener: Callable[[str], Any], *, tiendas: int, dominio: str = DOMINIO_DUENOS
+) -> dict[str, Any]:
+    """Manifiesto armado con la API publica, por slug ``cap-NNN``.
+
+    CI no tiene el archivo que escribe el seed dentro del contenedor de
+    staging: lo reconstruye con los mismos endpoints que usa un cliente.
+    ``obtener(ruta)`` devuelve el JSON o ``None`` (404). Las tiendas que no
+    existen se saltean.
+    """
+    entradas = []
+    for indice in range(1, tiendas + 1):
+        slug = f"{SLUG_PREFIX}{indice:03d}"
+        tienda = datos_de(obtener(f"/public/stores/{slug}"))
+        if not isinstance(tienda, dict) or not tienda.get("public_id"):
+            continue
+        store_id = str(tienda["public_id"])
+        consulta = f"?store_public_id={store_id}"
+        servicios = datos_de(obtener(f"/public/services{consulta}")) or []
+        profesionales = datos_de(obtener(f"/public/staff{consulta}")) or []
+        entradas.append(
+            {
+                "slug": slug,
+                "store_public_id": store_id,
+                "owner_email": f"owner-{indice:03d}@{dominio}",
+                "service_ids": [str(s["public_id"]) for s in servicios],
+                "staff_ids": [str(p["public_id"]) for p in profesionales],
+            }
+        )
+    return {"stores": entradas}
+
+
+def _obtener_http(host: str, pausa_s: float) -> Callable[[str], Any]:
+    def obtener(ruta: str) -> Any:
+        time.sleep(pausa_s)
+        try:
+            with urllib.request.urlopen(f"{host}{ruta}", timeout=15) as respuesta:
+                return json.loads(respuesta.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+
+    return obtener
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``python loadtests/aceptacion.py --host URL/api --out manifiesto.json``."""
+    parser = argparse.ArgumentParser(
+        description="Arma el manifiesto de la prueba desde la API de staging."
+    )
+    parser.add_argument("--host", required=True, help="URL de la API, con /api")
+    parser.add_argument("--stores", type=int, default=TIENDAS_SEMBRADAS)
+    parser.add_argument("--domain", default=DOMINIO_DUENOS)
+    parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--pause", type=float, default=0.05, help="pausa entre requests (limites)"
+    )
+    args = parser.parse_args(argv)
+    manifiesto = manifiesto_desde_api(
+        _obtener_http(args.host.rstrip("/"), args.pause),
+        tiendas=args.stores,
+        dominio=args.domain,
+    )
+    Path(args.out).write_text(json.dumps(manifiesto, indent=2), encoding="utf-8")
+    print(f"{len(manifiesto['stores'])} tiendas en {args.out}")
+    return 0 if manifiesto["stores"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
