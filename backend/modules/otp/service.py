@@ -195,6 +195,13 @@ def _debug_code(code: str, *, decoy: bool) -> str:
     alcanzaba para autogestionar los turnos de la victima. Cuando el codigo
     no fue al email tipeado, la respuesta lleva un codigo de mentira con la
     misma forma y siempre distinto del guardado, que no conoce nadie.
+
+    AUD2-SYNC-02 (2026-09-23): el senuelo se decidia por "hubo aviso sin
+    codigo", que solo existe si alguien TIPEO un email distinto. Sin email
+    tipeado y con el codigo yendo a la casilla de la ficha, volvia el codigo
+    real. Decision del dueno: senuelo siempre que el destino no sea el email
+    tipeado, tipee algo o no; quien llama lo decide por ``destination !=
+    typed``, no por el aviso.
     """
     if not decoy:
         return code
@@ -235,9 +242,12 @@ class OtpService:
         )
 
     async def _resolve_destination(
-        self, store_id: str, normalized_phone: str, email: str | None
+        self, store_id: str, normalized_phone: str, typed: str | None
     ) -> tuple[str | None, str | None]:
         """(buzon del codigo, buzon del aviso sin codigo). NO lo elige quien pide.
+
+        ``typed`` es el email tipeado ya pasado por ``_normalize_email``
+        (``None`` si no se tipeo ninguno).
 
         B4-01 (2026-09-18) y 2026-09-20: el codigo prueba posesion del EMAIL al
         que llega, y ``/public/otp/request`` es publico. Si el telefono ya es
@@ -248,7 +258,6 @@ class OtpService:
         dice si el telefono es cliente). Telefono nuevo, o cliente sin email
         entregable: el codigo va al email tipeado, como siempre.
         """
-        typed = _normalize_email(email)
         registered = await self._registered_client_email(store_id, normalized_phone)
         if registered is None:
             return typed, None
@@ -335,8 +344,9 @@ class OtpService:
         # El buzon se decide para todos los canales: es lo que queda en
         # ``otp_verifications.email`` y contra lo que se compara despues
         # (``is_client_contact_verified``), aunque solo el canal email mande.
+        typed = _normalize_email(email)
         destination, notice_to = await self._resolve_destination(
-            store_id, normalized_phone, email
+            store_id, normalized_phone, typed
         )
 
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
@@ -361,9 +371,12 @@ class OtpService:
 
         response = {"ok": True, "expires_at": otp.expires_at.isoformat()}
         if settings.OTP_DEBUG_EXPOSE_CODE:
-            # Si el codigo NO fue al email tipeado, quien pide no lo puede
-            # ver ni en debug: recibe un senuelo con la misma forma.
-            response["debug_code"] = _debug_code(code, decoy=notice_to is not None)
+            # Senuelo SIEMPRE que el codigo fue a un buzon distinto del que
+            # tipeo quien pide, haya tipeado algo o no: la regla es sobre el
+            # DESTINO, no sobre el aviso (AUD2-SYNC-02). Los canales de
+            # consola no despachan nada y siguen mostrando el codigo.
+            decoy = channel == "email" and destination != typed
+            response["debug_code"] = _debug_code(code, decoy=decoy)
         return response
 
     async def verify_code(

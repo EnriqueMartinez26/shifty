@@ -258,6 +258,64 @@ async def test_canal_sin_email_no_loguea_una_falsa_falta_de_coincidencia(
 
 
 @pytest.mark.asyncio
+async def test_sin_email_tipeado_el_debug_code_tambien_es_un_senuelo(
+    test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AUD2-SYNC-02 (2026-09-23): el senuelo estaba atado al AVISO, no al destino.
+
+    Sintoma: ``request_code`` decidia ``decoy=notice_to is not None``, y el
+    aviso sin codigo solo existe cuando alguien TIPEO un email distinto. Si en
+    el canal email no queda ningun email tipeado y el telefono es de un
+    cliente con email entregable, el codigo iba a la casilla de la ficha y la
+    respuesta traia el codigo REAL en ``debug_code`` (``OTP_DEBUG_EXPOSE_CODE``
+    es el default del compose: local y staging). Hoy el unico camino que deja
+    el tipeado vacio es un email en blanco, que pasa la guarda ``not email``
+    del servicio y ``_normalize_email`` convierte en ``None``; la validacion
+    HTTP lo frena, el servicio no. Decision del dueno (Enrique, confirmada por
+    Mateo): el senuelo aplica SIEMPRE que el destino no sea el email que tipeo
+    quien pide, haya tipeado algo o no. La regla es sobre el destino, no sobre
+    el aviso.
+    """
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", True)
+    store_id = await _store_con_cliente_directo(test_session, "otp-senuelo-sin-email")
+    cola = _Cola()
+    servicio = OtpService(test_session)
+
+    respuesta = await servicio.request_code(
+        store_id=store_id,
+        phone=TELEFONO_CLIENTE,
+        channel="email",
+        email="   ",
+        store_name="Demo",
+        schedule_dispatch=cola,
+    )
+    senuelo = str(respuesta["debug_code"])
+    assert re.fullmatch(r"\d{6}", senuelo), "misma forma que un codigo real"
+
+    # El codigo real salio SOLO al email de la ficha, y es OTRO.
+    assert [destino for destino, _, _ in cola.encolados] == [EMAIL_CLIENTE]
+    real = _CODIGO.search(cola.encolados[0][2])
+    assert real is not None
+    assert real.group(0) != senuelo
+
+    with pytest.raises(OTPException):
+        await servicio.verify_code(
+            store_id=store_id, phone=TELEFONO_CLIENTE, code=senuelo
+        )
+    assert not await servicio.is_client_contact_verified(
+        store_id=store_id, phone=TELEFONO_CLIENTE
+    )
+
+    # El titular, con el codigo que le llego, si verifica.
+    await servicio.verify_code(
+        store_id=store_id, phone=TELEFONO_CLIENTE, code=real.group(0)
+    )
+    assert await servicio.is_client_contact_verified(
+        store_id=store_id, phone=TELEFONO_CLIENTE
+    )
+
+
+@pytest.mark.asyncio
 async def test_email_distinto_tarda_lo_mismo_que_el_exito(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
