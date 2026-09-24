@@ -23,7 +23,10 @@ import sqlalchemy as sa
 from alembic import context, op
 
 revision: str = "d2f4a6b8c0e2"
-down_revision: Union[str, Sequence[str], None] = "c9e1f3a5b7d9"
+# Nacio sobre c9e1f3a5b7d9 en la rama del backend; main ya tenia aplicada
+# b8d1c4f70a25 sobre esa misma base, asi que la cadena del backend cuelga
+# detras de main (una sola cabeza, test_migrations.py).
+down_revision: Union[str, Sequence[str], None] = "b8d1c4f70a25"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

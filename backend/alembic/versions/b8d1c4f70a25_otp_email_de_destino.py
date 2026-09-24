@@ -38,10 +38,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b8d1c4f70a25"
-# Nacio sobre c9e1f3a5b7d9 en main; al integrar la rama del backend (que ya
-# tenia d2f4a6b8c0e2 ... d1f3b5a7c9e2 sobre esa misma base) se reencadena al
-# head para que Alembic siga con una sola cabeza (test_migrations.py).
-down_revision: Union[str, Sequence[str], None] = "d1f3b5a7c9e2"
+down_revision: Union[str, Sequence[str], None] = "c9e1f3a5b7d9"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
