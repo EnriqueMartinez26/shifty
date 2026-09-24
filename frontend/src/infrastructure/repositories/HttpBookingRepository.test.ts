@@ -23,3 +23,45 @@ describe('HttpBookingRepository.findAll', () => {
     )
   })
 })
+
+const appointmentDto = (index: number) => ({
+  public_id: `appt-${index}`,
+  service_id: 'service-1',
+  service_name: 'Corte',
+  staff_id: 'staff-1',
+  client_name: 'Ana',
+  starts_at: '2026-09-10T12:00:00Z',
+  ends_at: '2026-09-10T12:30:00Z',
+  status: 'confirmed',
+  notes: null
+})
+
+const page = (size: number, total: number) => ({
+  data: { total, results: Array.from({ length: size }, (_, i) => appointmentDto(i)) }
+})
+
+describe('HttpBookingRepository.searchByDateRange', () => {
+  it('con mas turnos que el tope de paginas devuelve el total del servidor (F10-12)', async () => {
+    // 5.100 turnos: el tope de 50 paginas de 100 trae 5.000 y el llamador
+    // tiene que poder ver que faltan 100, no recibir la lista como completa.
+    const get = jest.fn().mockResolvedValue(page(100, 5100))
+    const repository = new HttpBookingRepository({ get } as unknown as AxiosInstance)
+
+    const range = await repository.searchByDateRange('2026-09-01', '2026-09-30')
+
+    expect(get).toHaveBeenCalledTimes(50)
+    expect(range.appointments).toHaveLength(5000)
+    expect(range.total).toBe(5100)
+  })
+
+  it('corta cuando ya tiene el total, sin pedir una pagina vacia de mas', async () => {
+    const get = jest.fn().mockResolvedValue(page(100, 200))
+    const repository = new HttpBookingRepository({ get } as unknown as AxiosInstance)
+
+    const range = await repository.searchByDateRange('2026-09-01', '2026-09-30')
+
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(range).toMatchObject({ total: 200 })
+    expect(range.appointments).toHaveLength(200)
+  })
+})

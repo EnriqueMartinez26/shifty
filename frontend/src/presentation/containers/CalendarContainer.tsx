@@ -222,6 +222,13 @@ export const CalendarContainer: React.FC = () => {
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
   const { data: storeSettings } = useStoreSettings()
   const agendaQuery = useCalendarAgenda(rangeKeyFrom, rangeKeyTo)
+  // La agenda trae hasta un tope de paginas; si el servidor tiene mas turnos
+  // en el rango, se avisa en vez de mostrar la lista como completa (F10-12).
+  const agendaRange = agendaQuery.data
+  const truncatedAgenda =
+    agendaRange && agendaRange.total > agendaRange.appointments.length
+      ? { shown: agendaRange.appointments.length, total: agendaRange.total }
+      : null
   const blocksQuery = useAppointmentBlocks()
   const templatesQuery = useBlockTemplates()
   const createBlock = useCreateAppointmentBlock()
@@ -274,7 +281,7 @@ export const CalendarContainer: React.FC = () => {
   }, [blocksInRange, dateStr])
 
   const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
-    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data || []).map(
+    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data?.appointments ?? []).map(
       (appointment) => ({
         id: appointment.id,
         type: appointment.status === 'absent' ? 'absence' : 'appointment',
@@ -1008,6 +1015,16 @@ export const CalendarContainer: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {truncatedAgenda && (
+        <div
+          role="status"
+          className="p-4 rounded-[6px] text-sm font-bold"
+          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+        >
+          {`Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Pasá a la vista de día o de semana para verlos todos.`}
+        </div>
+      )}
 
       {message && (
         <div

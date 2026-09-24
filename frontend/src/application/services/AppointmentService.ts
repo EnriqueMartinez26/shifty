@@ -1,6 +1,9 @@
 import { BaseService } from './BaseService'
 import type { Appointment } from '../../domain/entities/Appointment'
-import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
+import type {
+  AppointmentRange,
+  IBookingRepository
+} from '../../domain/repositories/IBookingRepository'
 import apiClient from '../../infrastructure/http/client'
 import { HttpBookingRepository } from '../../infrastructure/repositories/HttpBookingRepository'
 import type { CreateBookingRequestDTO } from '../dtos/BookingDTO'
@@ -22,7 +25,11 @@ export class AppointmentService extends BaseService<Appointment> {
     this.repository = repository
   }
 
-  async getCalendarRange(fromDate: string, toDate: string, pageSize = 100): Promise<Appointment[]> {
+  async getCalendarRange(
+    fromDate: string,
+    toDate: string,
+    pageSize = 100
+  ): Promise<AppointmentRange> {
     return await this.execute(async () => {
       return await this.repository.searchByDateRange(fromDate, toDate, pageSize)
     }, 'getCalendarRange')

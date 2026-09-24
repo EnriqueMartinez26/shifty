@@ -1,12 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { Appointment } from '@domain/entities/Appointment'
-import type { CreateBookingInput } from '@domain/repositories/IBookingRepository'
+import type { AppointmentRange, CreateBookingInput } from '@domain/repositories/IBookingRepository'
 
 import { appointmentService } from '@application/services/AppointmentService'
 
 export const useCalendarAgenda = (fromDate: string, toDate: string) => {
-  return useQuery<Appointment[]>({
+  return useQuery<AppointmentRange>({
     queryKey: ['calendar-agenda', fromDate, toDate],
     enabled: Boolean(fromDate && toDate),
     queryFn: () => appointmentService.getCalendarRange(fromDate, toDate)

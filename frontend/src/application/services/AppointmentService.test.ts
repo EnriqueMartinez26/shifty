@@ -47,11 +47,12 @@ describe('AppointmentService', () => {
           notes: null
         })
       ]
-      mockRepository.searchByDateRange.mockResolvedValue(appointments)
+      const range = { appointments, total: 1 }
+      mockRepository.searchByDateRange.mockResolvedValue(range)
 
       const result = await service.getCalendarRange('2026-05-18', '2026-05-25')
 
-      expect(result).toBe(appointments)
+      expect(result).toBe(range)
       // 100 es el tope que acepta el backend; pedir 500 hacia fallar la agenda con 422.
       expect(mockRepository.searchByDateRange).toHaveBeenCalledWith('2026-05-18', '2026-05-25', 100)
     })

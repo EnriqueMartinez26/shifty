@@ -9,7 +9,10 @@ import type {
 } from '../../application/dtos/BookingDTO'
 import { BookingMapper } from '../../application/mappers/BookingMapper'
 import { Appointment } from '../../domain/entities/Appointment'
-import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
+import type {
+  AppointmentRange,
+  IBookingRepository
+} from '../../domain/repositories/IBookingRepository'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import { formatArgentinaDate } from '../../shared/utils/argentinaTime'
 import { createUuid } from '../../shared/utils/uuid'
@@ -21,7 +24,11 @@ type BookingUpdatePayload = {
 /** Tope de `page_size` que acepta GET /appointments/search en el backend. */
 const MAX_PAGE_SIZE = 100
 
-/** Guarda contra un bucle infinito si el backend dejara de acortar la ultima pagina. */
+/**
+ * Tope de paginas por rango (5.000 turnos con page_size 100). Lo que pase de
+ * ahi no se trae: se devuelve el `total` del servidor para que la agenda avise
+ * que la lista esta recortada (F10-12).
+ */
 const MAX_PAGES = 50
 
 export class HttpBookingRepository
@@ -53,16 +60,19 @@ export class HttpBookingRepository
    * tercero que la interfaz no declara, asi que el `pageSize` del llamador
    * caia en `page` y salia `page=500&page_size=500`: la agenda respondia 422
    * y no cargaba nunca. Ahora la firma coincide con IBookingRepository y se
-   * recorren las paginas hasta agotar el rango.
+   * recorren las paginas hasta agotar el rango. El `total` de la primera
+   * pagina dice cuantas hay; con mas de MAX_PAGES se corta y el llamador lo
+   * ve porque `appointments.length < total`.
    */
   async searchByDateRange(
     fromDate: string,
     toDate: string,
     pageSize = MAX_PAGE_SIZE
-  ): Promise<Appointment[]> {
+  ): Promise<AppointmentRange> {
     try {
       const limit = Math.min(Math.max(pageSize, 1), MAX_PAGE_SIZE)
       const appointments: Appointment[] = []
+      let total = 0
 
       for (let page = 1; page <= MAX_PAGES; page += 1) {
         const { data } = await this.client.get('/appointments/search', {
@@ -75,10 +85,11 @@ export class HttpBookingRepository
         })
         const batch: AppointmentResponseDTO[] = data.results || []
         appointments.push(...batch.map(BookingMapper.toDomain))
-        if (batch.length < limit) break
+        if (page === 1) total = typeof data.total === 'number' ? data.total : batch.length
+        if (batch.length < limit || appointments.length >= total) break
       }
 
-      return appointments
+      return { appointments, total: Math.max(total, appointments.length) }
     } catch (error) {
       this.handleRepositoryError('searchByDateRange', error)
     }
@@ -165,7 +176,7 @@ export class HttpBookingRepository
     // en dias argentinos: `toISOString()` da el dia UTC, que de 21:00 a 23:59
     // ya es el siguiente (F10-10).
     const now = new Date()
-    const todas = await this.searchByDateRange(
+    const { appointments: todas } = await this.searchByDateRange(
       formatArgentinaDate(subDays(now, 30).toISOString()),
       formatArgentinaDate(now.toISOString())
     )
