@@ -49,7 +49,8 @@ x-app-environment: &app_environment
 
 services:
   db:
-    image: postgres:16-alpine
+    # F0-05: version menor fija. Subirla es un commit, no un efecto de `pull`.
+    image: postgres:16.14-alpine
     container_name: shifty_db
     restart: always
     environment:
@@ -78,7 +79,7 @@ services:
           memory: 256M
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     container_name: shifty_redis
     restart: always
     ports:
@@ -96,7 +97,7 @@ services:
           memory: 128M
 
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:3.13.7-management-alpine
     container_name: shifty_rabbitmq
     restart: always
     environment:

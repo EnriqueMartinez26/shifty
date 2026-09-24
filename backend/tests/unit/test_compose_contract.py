@@ -809,3 +809,44 @@ def test_produccion_no_corre_una_imagen_sin_version() -> None:
         assert "${APP_VERSION:?" in imagen, (
             f"{nombre} en produccion no exige APP_VERSION: {imagen!r}"
         )
+
+
+# --- Infraestructura con version fija (F0-05, plan de rendimiento) ------------
+#
+# `postgres:16-alpine` o `redis:7-alpine` se mueven solos: un `pull` + `up`
+# recreaba la base con otra version menor sin que nadie lo decidiera. Cada
+# imagen de terceros declara al menos version menor; subirla es un commit.
+
+VERSION_FIJA = re.compile(r"^[a-z0-9./-]+:\d+\.\d+(\.\d+)?(-[a-z0-9]+)*$")
+
+
+def imagenes_sin_version_fija(servicios: dict[str, dict[str, object]]) -> list[str]:
+    return [
+        f"{nombre}: {imagen}"
+        for nombre, servicio in servicios.items()
+        if (imagen := str(servicio.get("image", "")))
+        and not imagen.startswith(f"{REGISTRO}/")
+        and not VERSION_FIJA.match(imagen)
+    ]
+
+
+def test_la_infraestructura_corre_versiones_fijas() -> None:
+    for vista, servicios in {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }.items():
+        sueltas = imagenes_sin_version_fija(servicios)
+        assert not sueltas, f"{vista}: imagenes sin version menor fija: {sueltas}"
+    assert _services()["db"]["image"] == "postgres:16.14-alpine"
+
+
+def test_el_contrato_ve_una_imagen_con_solo_la_version_mayor() -> None:
+    servicios: dict[str, dict[str, object]] = {
+        "db": {"image": "postgres:16-alpine"},
+        "cache": {"image": "redis:7.4-alpine"},
+        "mq": {"image": "rabbitmq:latest"},
+    }
+    assert imagenes_sin_version_fija(servicios) == [
+        "db: postgres:16-alpine",
+        "mq: rabbitmq:latest",
+    ]
