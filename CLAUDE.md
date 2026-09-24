@@ -113,11 +113,10 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Publicar a Celery desde un request pasa por un helper único** con
   `asyncio.to_thread` y tope de 2 s que nunca propaga; ninguna llamada
   síncrona de red dentro de un `async def` (R8-02: con el broker caído,
-  publicar en línea congelaba la API hasta 33 s). El helper es F1-03 del
-  plan de rendimiento y todavía no existe: hoy el único `enqueue_*` es
-  `notifications/tasks.py::enqueue_otp_email`, que atrapa todo y se despacha
-  con `BackgroundTasks`. Un `enqueue_*` nuevo usa el helper (o lo crea, con
-  su test), no copia ese patrón.
+  publicar en línea congelaba la API hasta 33 s). El helper es
+  `core/enqueue.py::enqueue` (F1-03, 2026-09-24): todo `enqueue_*` pasa por
+  ahí y `tests/architecture/test_encolado_solo_por_el_helper.py` prohíbe
+  `.delay(`/`.apply_async(` fuera de él.
 - **Circuit breaker** (`core/circuit_breaker.py`) envuelve Mercado Pago. No
   se llama al SDK del proveedor desde un camino nuevo. El **rate limit**
   (`core/rate_limit.py`) es un middleware por IP con política propia solo
