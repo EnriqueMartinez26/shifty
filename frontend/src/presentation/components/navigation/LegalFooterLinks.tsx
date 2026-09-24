@@ -16,10 +16,7 @@ interface LegalFooterLinksProps {
  * Deben estar accesibles desde cualquier pantalla donde el cliente pueda
  * reservar o pagar: es lo que respalda a Shifty ante un reclamo.
  */
-export const LegalFooterLinks: React.FC<LegalFooterLinksProps> = ({
-  depositPolicy,
-  className = ''
-}) => (
+const LegalFooterLinks: React.FC<LegalFooterLinksProps> = ({ depositPolicy, className = '' }) => (
   <div className={`flex flex-wrap items-center justify-center gap-x-3 gap-y-1 ${className}`}>
     <Link
       to="/legal/terminos"

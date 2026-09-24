@@ -14,8 +14,12 @@ from pathlib import Path
 from main import app
 
 FRONTEND_SRC = Path(__file__).resolve().parents[3] / "frontend" / "src"
+# apiClient.* cubre la mayoria de los llamadores; los HttpXRepository reciben
+# el mismo apiClient inyectado como this.client (para poder testear con un
+# mock), asi que sus llamadas quedaban invisibles para este auditor.
 CALL_RE = re.compile(
-    r"apiClient\.(get|post|put|patch|delete)(?:<[^(]*?>)?\(\s*([`'\"])([^`'\"]+)\2"
+    r"(?:apiClient|this\.client)\.(get|post|put|patch|delete)"
+    r"(?:<[^(]*?>)?\(\s*([`'\"])([^`'\"]+)\2"
 )
 
 

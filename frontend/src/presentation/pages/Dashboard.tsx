@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 
-import { format, subDays } from 'date-fns'
+import { subDays } from 'date-fns'
 import {
   ArrowUpRight,
   CalendarClock,
@@ -19,6 +19,8 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
+import type { BookingStatusValue } from '@domain/value-objects/BookingStatus'
+
 import type { UpcomingAppointment } from '@application/services/DashboardService'
 import type {
   ProfessionalReportItem,
@@ -26,6 +28,12 @@ import type {
   ReportTopServiceItem,
   ReportTrendPoint
 } from '@application/services/ReportsService'
+
+import {
+  formatArgentinaDate,
+  formatArgentinaDayMonth,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import SalesDonut from '../components/organisms/dashboard/SalesDonut'
@@ -281,12 +289,30 @@ const canViewReports = (role: string | undefined, isGlobalAdmin: boolean) =>
 const canViewFinancialAdmin = (role: string | undefined, isGlobalAdmin: boolean) =>
   isGlobalAdmin || role === ROLE_STORE_ADMIN || role === ROLE_SUPER_ADMIN
 
-const getAppointmentTone = (status: string): Tone => {
-  if (['CANCELLED', 'EXPIRED', 'REJECTED'].includes(status)) return 'danger'
-  if (['PENDING', 'PENDING_PAYMENT'].includes(status)) return 'warning'
-  if (['CONFIRMED', 'COMPLETED'].includes(status)) return 'success'
-  return 'neutral'
+/**
+ * La API manda los estados en minusculas (`appointments/model.py`); esto los
+ * comparaba en MAYUSCULAS, asi que las tres ramas eran codigo muerto y todo
+ * caia en 'neutral': un turno cancelado se pintaba igual que uno confirmado.
+ *
+ * El mapa completo reemplaza a los tres `includes`: si el backend agrega un
+ * estado, `BookingStatusValue` cambia y esto deja de compilar, en vez de
+ * volver al gris en silencio. `'REJECTED'` no existia en el enum, y `absent`
+ * no estaba en ninguna de las tres listas.
+ */
+const APPOINTMENT_TONES: Record<BookingStatusValue, Tone> = {
+  pending: 'warning',
+  pending_payment: 'warning',
+  confirmed: 'success',
+  completed: 'success',
+  cancelled: 'danger',
+  absent: 'danger',
+  expired: 'danger'
 }
+
+const isKnownStatus = (status: string): status is BookingStatusValue => status in APPOINTMENT_TONES
+
+const getAppointmentTone = (status: string): Tone =>
+  isKnownStatus(status) ? APPOINTMENT_TONES[status] : 'neutral'
 
 const toneTokens = (tone: Tone = 'neutral') => {
   if (tone === 'primary') {
@@ -338,7 +364,7 @@ const getTopProfessional = (items: ProfessionalReportItem[] | undefined) =>
 const mapAgenda = (appointments: UpcomingAppointment[] | undefined): AgendaItem[] =>
   (appointments ?? []).map((appointment) => ({
     id: appointment.public_id,
-    time: format(new Date(appointment.starts_at), 'HH:mm'),
+    time: formatArgentinaTime(appointment.starts_at),
     title: appointment.client_name,
     subtitle: `${appointment.service_name} - ${appointment.staff_name}`,
     status: appointment.status,
@@ -360,7 +386,7 @@ const mapTransactions = (items: ReportAppointmentItem[] | undefined): Transactio
     .map((item) => ({
       id: item.public_id,
       title: item.client_name,
-      subtitle: `${item.service_name} - ${format(new Date(item.starts_at), 'dd/MM HH:mm')}`,
+      subtitle: `${item.service_name} - ${formatArgentinaDayMonth(item.starts_at)} ${formatArgentinaTime(item.starts_at)}`,
       amount: formatCurrency(item.service_price),
       status: item.status,
       tone: getAppointmentTone(item.status)
@@ -372,8 +398,10 @@ const Dashboard = () => {
   const isGlobalAdmin = Boolean(user?.is_global_admin)
   const reportsAllowed = canViewReports(user?.role, isGlobalAdmin)
   const financialAdminAllowed = canViewFinancialAdmin(user?.role, isGlobalAdmin)
-  const fromDate = useMemo(() => format(subDays(new Date(), 7), 'yyyy-MM-dd'), [])
-  const toDate = useMemo(() => format(new Date(), 'yyyy-MM-dd'), [])
+  // El rango del reporte es un dia de negocio argentino: con `format` de
+  // date-fns, un navegador en otra zona pedia el dia equivocado.
+  const fromDate = useMemo(() => formatArgentinaDate(subDays(new Date(), 7).toISOString()), [])
+  const toDate = useMemo(() => formatArgentinaDate(new Date().toISOString()), [])
 
   const summaryQuery = useDashboardSummary(Boolean(token))
   const featureFlagsQuery = useStoreFeatureFlags()

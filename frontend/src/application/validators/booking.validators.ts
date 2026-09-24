@@ -26,5 +26,3 @@ export const createBookingSchema = z.object({
   notes: z.string().optional().or(z.literal('')),
   idempotency_key: z.string().min(10, 'Clave de idempotencia invalida').optional()
 })
-
-export type CreateBookingSchema = z.infer<typeof createBookingSchema>

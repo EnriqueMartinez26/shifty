@@ -7,7 +7,11 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from '../hooks/useLedger'
 import { useManagedUsers } from '../hooks/useManagedUsers'
-import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
+import {
+  currencyFmtEsAr as currencyFmt,
+  formatDateEsAr,
+  formatDateTimeEsAr
+} from '../lib/formatters'
 import { create2000sListCardStyle } from '../lib/surfaceStyles'
 
 const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund', string> = {
@@ -285,7 +289,7 @@ const LedgerPage: React.FC = () => {
                     className="text-[11px] font-bold"
                     style={{ color: colors2000s.text.secondary }}
                   >
-                    {new Date(movement.created_at).toLocaleString('es-AR')}
+                    {formatDateTimeEsAr(movement.created_at)}
                     {movement.notes ? ` · ${movement.notes}` : ''}
                   </p>
                 </div>
@@ -339,7 +343,7 @@ const LedgerPage: React.FC = () => {
                   className="text-[11px] font-bold mt-1"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  Ultimo movimiento: {new Date(debtor.last_movement_at).toLocaleDateString('es-AR')}
+                  Ultimo movimiento: {formatDateEsAr(debtor.last_movement_at)}
                 </p>
                 <p className="text-sm font-black mt-2" style={{ color: colors2000s.orange.accent }}>
                   {currencyFmt.format(Number(debtor.balance))}

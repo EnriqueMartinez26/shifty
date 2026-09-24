@@ -3,7 +3,7 @@ import { Email } from '../value-objects/Email'
 import { UserId } from '../value-objects/UserId'
 import { UserRole } from '../value-objects/UserRole'
 
-export interface UserProps {
+interface UserProps {
   id: UserId
   email: Email
   firstName: string | null

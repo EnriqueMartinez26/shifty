@@ -34,7 +34,6 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 from tests.integration.test_mails_al_cliente import Buzon
 
 TELEFONO = "+5491155551111"
-OTRO_TELEFONO = "+5491155552222"
 
 
 async def _tienda(client: AsyncClient, slug: str) -> tuple[str, str, str, datetime]:
@@ -109,17 +108,18 @@ async def test_volver_con_otra_capitalizacion_no_choca_contra_el_indice(
     await test_session.commit()
     assert primero.email == "juan@gmail.com"
 
-    # Mismo email, otro telefono, con el telefono verificado por OTP: el camino
-    # de adopcion tiene que ENCONTRAR la fila, no intentar un INSERT que el
-    # indice funcional aborta.
+    # Mismo telefono, el email con otra capitalizacion: tiene que ENCONTRAR la
+    # fila (por telefono), no intentar un INSERT que el indice funcional
+    # aborta. Desde el 2026-09-20 el flujo publico no adopta contacto ni busca
+    # por email: el telefono es la unica llave de la ficha.
     segundo = await repo.get_or_create_client(
         store_id=str(store_id),
-        phone=OTRO_TELEFONO.lstrip("+"),
+        phone=TELEFONO.lstrip("+"),
         name="Juan",
-        email="juan@gmail.com",
-        adopt_contact=True,
+        email="JUAN@gmail.com",
     )
     await test_session.commit()
-    assert segundo.id == primero.id, (
-        "la busqueda por email tiene que ser case-insensitive, como el login"
+    assert segundo.id == primero.id
+    assert segundo.email == "juan@gmail.com", (
+        "la ficha existente conserva su email; el flujo publico no lo pisa"
     )

@@ -50,6 +50,9 @@ async def test_reprogramar_pegado_al_turno_vecino_respeta_el_buffer(
             "staff_id": staff,
             "starts_at": starts_at.isoformat(),
             "client_name": "Buffer",
+            # La autogestion exige una ficha con email ENTREGABLE verificado por
+            # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+            "client_email": f"buffer-{phone.lstrip('+')}@example.com",
             "client_phone": phone,
             "idempotency_key": key,
         }

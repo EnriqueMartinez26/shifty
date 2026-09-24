@@ -12,15 +12,17 @@ sintomas:
   devuelve con zona) levantaban ``TypeError`` -- no ``ValueError`` --, que
   pydantic no convierte en 422: salia un 500.
 
-El audit no define el tratamiento en el backend; se normaliza igual que
-``appointments/schemas.py``: sin offset se toma como UTC, y con offset se
-lleva a UTC. La conversion desde hora argentina es del front (F11b-02,
-``argentinaLocalToUtcIso``).
+Tratamiento (2026-09-20, unificado con el fix del panel): un valor SIN offset
+se rechaza con 422 en vez de suponerlo UTC -suponer una zona aca solo mueve la
+adivinanza de lugar-, y con offset se lleva a UTC. La conversion desde hora
+argentina es del front (``argentinaLocalToUtcIso``), que ahora manda siempre
+el instante con zona.
 """
 
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from pydantic import ValidationError
 
 from modules.promotions.schemas import PromotionCreate, PromotionUpdate
 
@@ -28,12 +30,17 @@ BASE: dict[str, object] = {"code": "VIGENCIA", "title": "Vigencia", "value": 10}
 ART = timezone(timedelta(hours=-3))
 
 
-def test_una_vigencia_sin_offset_se_toma_como_utc() -> None:
-    promo = PromotionCreate.model_validate(
-        {**BASE, "valid_from": "2026-03-01T00:00", "valid_until": "2026-03-01T23:59"}
-    )
-    assert promo.valid_from == datetime(2026, 3, 1, 0, 0, tzinfo=timezone.utc)
-    assert promo.valid_until == datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc)
+@pytest.mark.parametrize("schema", [PromotionCreate, PromotionUpdate])
+def test_una_vigencia_sin_offset_se_rechaza(
+    schema: type[PromotionCreate] | type[PromotionUpdate],
+) -> None:
+    """Antes: se tomaba como UTC y la promo vencia tres horas antes."""
+    datos = {
+        **(BASE if schema is PromotionCreate else {}),
+        "valid_until": "2026-03-01T23:59",
+    }
+    with pytest.raises(ValidationError, match="zona horaria"):
+        schema.model_validate(datos)
 
 
 def test_una_vigencia_con_offset_se_lleva_a_utc() -> None:
@@ -49,17 +56,17 @@ def test_una_vigencia_con_offset_se_lleva_a_utc() -> None:
 def test_mezclar_naive_y_aware_no_revienta(
     schema: type[PromotionCreate] | type[PromotionUpdate],
 ) -> None:
-    """Antes: TypeError (500) al comparar un naive con un aware."""
+    """Antes: TypeError (500) al comparar un naive con un aware. Ahora el
+    naive se rechaza como ValueError (422) antes de llegar a la comparacion."""
     datos = {
         **(BASE if schema is PromotionCreate else {}),
         "valid_from": "2026-03-01T10:00",
         "valid_until": datetime(2026, 3, 1, 12, 0, tzinfo=ART).isoformat(),
     }
-    promo = schema.model_validate(datos)
-    assert promo.valid_from is not None and promo.valid_from.tzinfo is not None
-    assert promo.valid_until is not None and promo.valid_until.tzinfo is not None
+    with pytest.raises(ValidationError, match="zona horaria"):
+        schema.model_validate(datos)
 
 
 def test_el_patch_normaliza_igual_que_el_alta() -> None:
-    cambio = PromotionUpdate.model_validate({"valid_until": "2026-03-01T23:59"})
-    assert cambio.valid_until == datetime(2026, 3, 1, 23, 59, tzinfo=timezone.utc)
+    cambio = PromotionUpdate.model_validate({"valid_until": "2026-03-01T23:59-03:00"})
+    assert cambio.valid_until == datetime(2026, 3, 2, 2, 59, tzinfo=timezone.utc)

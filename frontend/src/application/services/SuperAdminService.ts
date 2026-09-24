@@ -37,7 +37,7 @@ export interface SuperAdminUser {
   updated_at: string
 }
 
-export interface SuperAdminAppliedCoupon {
+interface SuperAdminAppliedCoupon {
   public_id: string
   code: string
   coupon_type: string
@@ -68,7 +68,7 @@ export interface SuperAdminSubscriptionOverview {
   applied_coupon: SuperAdminAppliedCoupon | null
 }
 
-export interface SuperAdminUsersOverview {
+interface SuperAdminUsersOverview {
   admins: SuperAdminUser[]
   users: SuperAdminUser[]
   admins_count: number
@@ -252,7 +252,7 @@ export interface UpdateSuperAdminCouponPayload {
   is_active?: boolean
 }
 
-export class SuperAdminService {
+class SuperAdminService {
   async listStores(params: ListStoresParams = {}): Promise<SuperAdminStoreRow[]> {
     const searchParams = new URLSearchParams()
     if (params.search) searchParams.set('search', params.search)

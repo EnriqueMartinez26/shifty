@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import AppException, ValidationException
+from core.utils import ensure_utc_aware
 from modules.promotions.model import PromotionRedemption, StorePromotion
 from modules.promotions.schemas import PromotionCreate, PromotionUpdate
 from modules.services.model import Service
@@ -16,6 +17,10 @@ from modules.users.model import User
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    return ensure_utc_aware(value) if value is not None else None
 
 
 def normalize_promotion_code(value: str | None) -> str | None:
@@ -41,9 +46,11 @@ def _validate_promotion_window(
     now = datetime.now(timezone.utc)
     if not promotion.is_active:
         return "La promocion no esta activa"
-    if promotion.valid_from and promotion.valid_from > now:
+    # SQLite devuelve la vigencia naive aun con DateTime(timezone=True): sin
+    # normalizar, comparar contra `now` (aware) revienta con TypeError.
+    if promotion.valid_from and ensure_utc_aware(promotion.valid_from) > now:
         return "La promocion todavia no esta vigente"
-    if promotion.valid_until and promotion.valid_until < now:
+    if promotion.valid_until and ensure_utc_aware(promotion.valid_until) < now:
         return "La promocion ya vencio"
     if promotion.max_uses is not None and promotion.current_uses >= promotion.max_uses:
         return "La promocion ya alcanzo su limite de usos"
@@ -223,8 +230,10 @@ async def update_store_promotion(
     ):
         raise ValidationException("El descuento porcentual no puede superar 100")
 
-    candidate_valid_from = payload.get("valid_from", promotion.valid_from)
-    candidate_valid_until = payload.get("valid_until", promotion.valid_until)
+    # El payload llega aware (lo exige el schema) y lo guardado puede venir
+    # naive de SQLite: compararlos crudos levanta TypeError -> 500.
+    candidate_valid_from = _aware(payload.get("valid_from", promotion.valid_from))
+    candidate_valid_until = _aware(payload.get("valid_until", promotion.valid_until))
     if (
         candidate_valid_from
         and candidate_valid_until

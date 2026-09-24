@@ -1,16 +1,16 @@
-export interface StepOptions {
+interface StepOptions {
   /** Servicios publicados por la tienda (undefined mientras carga). */
   services: ReadonlyArray<{ public_id: string }> | undefined
 }
 
-export interface StepJump {
+interface StepJump {
   step: number
   /** Seleccion que hay que aplicar al saltear el paso trivial. */
   serviceId?: string
 }
 
-export const STEP_SERVICE = 0
-export const STEP_DATETIME = 1
+const STEP_SERVICE = 0
+const STEP_DATETIME = 1
 
 /**
  * Un paso con una sola opcion no es una eleccion: se elige solo y se saltea.

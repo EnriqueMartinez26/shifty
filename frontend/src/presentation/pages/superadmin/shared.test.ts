@@ -1,14 +1,9 @@
-import { daysUntil, expiryLabel, fromDateTimeInput, toDateTimeInput } from './shared'
+import { daysUntil, expiryLabel } from './shared'
 
+// El ida y vuelta de `toDateTimeInput`/`fromDateTimeInput` se prueba en
+// `shared/utils/argentinaTime.test.ts`, donde viven los helpers desde que las
+// promociones de tienda los necesitaron (2026-09-20).
 describe('fechas del superadmin', () => {
-  it('el input datetime-local va y vuelve en hora argentina sin deriva', () => {
-    // 2026-09-20 15:30 en Buenos Aires = 18:30 UTC.
-    expect(toDateTimeInput('2026-09-20T18:30:00+00:00')).toBe('2026-09-20T15:30')
-    expect(fromDateTimeInput('2026-09-20T15:30')).toBe('2026-09-20T18:30:00.000Z')
-    expect(fromDateTimeInput('')).toBeNull()
-    expect(toDateTimeInput(null)).toBe('')
-  })
-
   it('cuenta dias de calendario hasta el vencimiento', () => {
     const hoy = new Date()
     const enTres = new Date(hoy.getTime() + 3 * 86_400_000).toISOString()

@@ -20,20 +20,7 @@ import {
   type WaitlistJoinPayload
 } from '@application/services/PublicBookingService'
 
-export type {
-  AvailabilitySlot,
-  BookingConfirmation,
-  OtpRequestPayload,
-  OtpRequestResponse,
-  OtpVerifyPayload,
-  OtpVerifyResponse,
-  PublicBookingPayload,
-  PublicPaymentStatus,
-  PromotionPreview,
-  PublicService,
-  PublicStaff,
-  PublicStore
-}
+export type { PublicStore }
 
 export const usePublicStore = (slug: string) =>
   useQuery<PublicStore>({

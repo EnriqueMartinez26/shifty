@@ -10,12 +10,3 @@ export interface UserResponseDTO {
   created_at: string
   updated_at: string
 }
-
-export interface CreateUserRequestDTO {
-  email: string
-  password: string
-  first_name?: string
-  last_name?: string
-  phone?: string
-  role: 'admin' | 'staff' | 'receptionist' | 'client'
-}

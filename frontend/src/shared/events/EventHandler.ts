@@ -11,4 +11,3 @@ export interface EventHandler<T extends DomainEvent> {
    */
   handle(event: T): Promise<void>
 }
-export default EventHandler

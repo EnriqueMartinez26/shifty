@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 
 import {
   Store,
@@ -21,8 +21,7 @@ import { useSearchParams } from 'react-router'
 
 import type {
   StoreCustomField,
-  StoreCustomFieldOption,
-  StoreFeatureFlags
+  StoreCustomFieldOption
 } from '@application/services/StoreSettingsService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
@@ -38,6 +37,7 @@ import {
   useRefreshMercadoPagoOAuth,
   useStartMercadoPagoOAuth
 } from '../hooks/usePayments'
+import { useSettingsForm } from '../hooks/useSettingsForm'
 import {
   useStoreFeatureFlags,
   useStoreSettings,
@@ -46,6 +46,7 @@ import {
   useUploadStoreMedia
 } from '../hooks/useStores'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
+import { planSave, type BusinessHoursPeriod } from '../lib/settingsDraft'
 import { create2000sPanelStyle, createSettingsInputStyle } from '../lib/surfaceStyles'
 
 const TABS = [
@@ -67,47 +68,6 @@ const DAYS = [
   { id: 'sat', label: 'Sábado' },
   { id: 'sun', label: 'Domingo' }
 ]
-
-const DEFAULT_FEATURE_FLAGS = {
-  payments: false,
-  ledger: false,
-  advanced_reports: false,
-  new_calendar: false,
-  otp_booking: false
-}
-
-type BusinessHoursPeriod = {
-  open: string
-  close: string
-}
-
-type SettingsFormData = {
-  name: string
-  slug: string
-  business_type: BusinessType
-  logo_url: string
-  cover_url: string
-  description: string
-  whatsapp_number: string
-  instagram_url: string
-  facebook_url: string
-  website_url: string
-  custom_client_fields: StoreCustomField[]
-  primary_color: string
-  cancellation_hours: number
-  min_booking_notice_hours: number
-  buffer_minutes: number
-  allow_manual_coordination: boolean
-  deposit_policy: string
-  deposit_far_notice_days: number
-  deposit_far_notice_extra_percent: number
-  deposit_new_client_extra_percent: number
-  deposit_absent_client_extra_percent: number
-  business_hours: Record<string, BusinessHoursPeriod[]>
-  send_email_confirmation: boolean
-  send_email_reminders: boolean
-  feature_flags: StoreFeatureFlags
-}
 
 const FEATURE_LABELS = [
   {
@@ -175,6 +135,17 @@ const parseFieldOptions = (rawValue: string): StoreCustomFieldOption[] =>
       return { label, value }
     })
 
+/**
+ * Una de las dos llamadas del guardado. `run` en `null` es "esta mitad no
+ * tiene cambios": el plan igual la describe para que el orden y el mensaje de
+ * error se decidan en un solo lugar.
+ */
+type SaveHalf = {
+  label: string
+  fallback: string
+  run: (() => Promise<unknown>) | null
+}
+
 const SettingsPage: React.FC = () => {
   const [searchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'identity')
@@ -190,42 +161,16 @@ const SettingsPage: React.FC = () => {
   const refreshMercadoPagoOAuth = useRefreshMercadoPagoOAuth()
   const disconnectMercadoPagoOAuth = useDisconnectMercadoPagoOAuth()
 
-  const [formData, setFormData] = useState<SettingsFormData | null>(null)
+  // El formulario se deriva del servidor + el borrador local; no hay ningun
+  // efecto que lo repueble, asi que un refetch de ['store-settings'] ya no
+  // puede borrar lo que el admin esta editando.
+  const { base, formData, setFormData, draft, hasChanges, resetDraft } = useSettingsForm(
+    store,
+    featureFlagsQuery.data?.flags
+  )
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' })
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
-
-  useEffect(() => {
-    if (store) {
-      setFormData({
-        name: store.name,
-        slug: store.slug,
-        business_type: store.business_type || 'generic',
-        logo_url: store.logo_url || '',
-        cover_url: store.cover_url || '',
-        description: store.description || '',
-        whatsapp_number: store.whatsapp_number || '',
-        instagram_url: store.instagram_url || '',
-        facebook_url: store.facebook_url || '',
-        website_url: store.website_url || '',
-        custom_client_fields: store.custom_client_fields || [],
-        primary_color: store.primary_color,
-        cancellation_hours: store.cancellation_hours,
-        min_booking_notice_hours: store.min_booking_notice_hours ?? 2,
-        buffer_minutes: store.buffer_minutes,
-        allow_manual_coordination: store.allow_manual_coordination ?? true,
-        deposit_policy: store.deposit_policy || '',
-        deposit_far_notice_days: store.deposit_far_notice_days ?? 0,
-        deposit_far_notice_extra_percent: store.deposit_far_notice_extra_percent ?? 0,
-        deposit_new_client_extra_percent: store.deposit_new_client_extra_percent ?? 0,
-        deposit_absent_client_extra_percent: store.deposit_absent_client_extra_percent ?? 0,
-        business_hours: store.business_hours,
-        send_email_confirmation: store.send_email_confirmation,
-        send_email_reminders: store.send_email_reminders,
-        feature_flags: featureFlagsQuery.data?.flags || store.feature_flags || DEFAULT_FEATURE_FLAGS
-      })
-    }
-  }, [store, featureFlagsQuery.data])
 
   const labels = getBusinessLabels(formData?.business_type)
 
@@ -261,25 +206,63 @@ const SettingsPage: React.FC = () => {
   }
 
   const handleSave = async () => {
-    if (!formData) return
-    setSaveStatus('saving')
-    try {
-      const { feature_flags, ...storePayload } = formData
-      if (activeTab === 'features') {
-        await updateFeatureFlags.mutateAsync(feature_flags)
-      } else {
-        await updateStore.mutateAsync(storePayload)
-      }
+    if (!formData || !base) return
+    // Sin nada editado se muestra "Guardado" sin llamar a ningun endpoint: el
+    // boton es uno solo para las siete pestanas, asi que apretarlo sin cambios
+    // es lo normal, y dejarlo mudo se lee como que la pagina se colgo.
+    if (!hasChanges) {
       setSaveStatus('success')
       setTimeout(() => setSaveStatus('idle'), 3000)
-    } catch (error: unknown) {
-      setSaveStatus('error')
-      setErrorMessage(getErrorMessage(error, 'Error al guardar'))
+      return
     }
+    const plan = planSave(base, draft)
+    setSaveStatus('saving')
+    setErrorMessage('')
+    const storePayload = plan.store
+    const flagsPayload = plan.flags
+    const storeHalf: SaveHalf = {
+      label: 'la configuración del negocio',
+      fallback: 'No se pudo guardar la configuración del negocio',
+      run: storePayload ? () => updateStore.mutateAsync(storePayload) : null
+    }
+    const flagsHalf: SaveHalf = {
+      label: 'las funciones',
+      fallback: 'No se pudieron guardar las funciones',
+      run: flagsPayload ? () => updateFeatureFlags.mutateAsync(flagsPayload) : null
+    }
+    // Secuencial y por mitades: el error tiene que decir cual fallo, y el
+    // borrador se conserva ante cualquier falla para no perder lo editado. El
+    // orden lo decide `planSave`, no esta pantalla: cada endpoint valida
+    // contra lo que la OTRA mitad tiene hoy en la base.
+    const halves = plan.order === 'flags-first' ? [flagsHalf, storeHalf] : [storeHalf, flagsHalf]
+    const saved: string[] = []
+    for (const half of halves) {
+      if (!half.run) continue
+      try {
+        await half.run()
+        saved.push(half.label)
+      } catch (error: unknown) {
+        setSaveStatus('error')
+        const detail = getErrorMessage(error, half.fallback)
+        // Decir que mitad SI quedo guardada: sin eso el admin no distingue
+        // "no paso nada" de "una mitad ya esta en el servidor" y reintenta a
+        // ciegas sobre un estado que ya cambio.
+        setErrorMessage(
+          saved.length > 0
+            ? `Se guardó ${saved.join(' y ')}, pero no ${half.label}. ${detail}`
+            : detail
+        )
+        return
+      }
+    }
+    resetDraft()
+    setSaveStatus('success')
+    setTimeout(() => setSaveStatus('idle'), 3000)
   }
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
+    setErrorMessage('')
     if (passwordForm.new !== passwordForm.confirm) {
       setErrorMessage('Las contraseñas no coinciden')
       return
@@ -399,7 +382,14 @@ const SettingsPage: React.FC = () => {
         ))}
       </div>
 
-      {saveStatus === 'error' && (
+      {/*
+        La condicion era `saveStatus === 'error'`, pero cuatro caminos escriben
+        errorMessage sin tocar saveStatus: el "las contrasenas no coinciden" y
+        los tres de Mercado Pago. Con saveStatus en 'idle' el cartel no se
+        montaba y el usuario no recibia ninguna senal. El mensaje es ahora su
+        propia condicion de render; saveStatus queda solo para el boton.
+      */}
+      {errorMessage && (
         <div
           className="p-4 rounded-lg flex items-center gap-3 text-xs font-bold"
           style={{

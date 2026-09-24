@@ -9,10 +9,11 @@ import {
   Video,
   DollarSign,
   Check,
+  Wallet,
   Image as ImageIcon
 } from 'lucide-react'
 
-import { Service } from '@domain/entities/Service'
+import { Service, type ServiceDepositMode, type ServiceDepositType } from '@domain/entities/Service'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -38,6 +39,32 @@ const PRESET_COLORS = [
   '#71717a'
 ]
 
+const DEPOSIT_MODE_LABELS: ReadonlyArray<{ value: ServiceDepositMode; label: string }> = [
+  { value: 'none', label: 'Sin seña' },
+  { value: 'optional', label: 'Opcional' },
+  { value: 'required', label: 'Obligatoria' }
+]
+
+const DEPOSIT_TYPE_LABELS: ReadonlyArray<{ value: ServiceDepositType; label: string }> = [
+  { value: 'percent', label: 'Porcentaje' },
+  { value: 'fixed', label: 'Monto fijo' },
+  { value: 'full', label: 'Total' }
+]
+
+const EMPTY_FORM: ServiceFormValues = {
+  name: '',
+  description: '',
+  durationMinutes: 30,
+  price: 0,
+  color: '#3b82f6',
+  imageUrl: '',
+  youtubeTrailerUrl: '',
+  // Espejo de los defaults del backend: un servicio nuevo nace sin seña.
+  depositMode: 'none',
+  depositType: 'percent',
+  depositAmount: null
+}
+
 export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   isOpen,
   onClose,
@@ -46,15 +73,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
 }) => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    durationMinutes: 30,
-    price: 0,
-    color: '#3b82f6',
-    imageUrl: '',
-    youtubeTrailerUrl: ''
-  })
+  const [formData, setFormData] = useState<ServiceFormValues>(EMPTY_FORM)
 
   useEffect(() => {
     if (editingService) {
@@ -66,22 +85,24 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
         price: p.price,
         color: p.color || '#3b82f6',
         imageUrl: p.image_url || '',
-        youtubeTrailerUrl: p.youtube_trailer_url || ''
+        youtubeTrailerUrl: p.youtube_trailer_url || '',
+        // Los tres valores REALES del servicio. Si arrancaran en los defaults,
+        // guardar el formulario apagaria una seña ya configurada y la tienda
+        // dejaria de cobrarla sin que nadie lo pidiera.
+        depositMode: p.deposit_mode,
+        depositType: p.deposit_type,
+        depositAmount: p.deposit_amount
       })
     } else {
-      setFormData({
-        name: '',
-        description: '',
-        durationMinutes: 30,
-        price: 0,
-        color: '#3b82f6',
-        imageUrl: '',
-        youtubeTrailerUrl: ''
-      })
+      setFormData(EMPTY_FORM)
     }
   }, [editingService, isOpen])
 
   if (!isOpen) return null
+
+  // Se calcula en el render, no en un efecto: `full` significa 100% del precio
+  // y no lleva monto aparte, y sin seña el monto no significa nada.
+  const needsDepositAmount = formData.depositMode !== 'none' && formData.depositType !== 'full'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -208,6 +229,112 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                   required
                 />
               </div>
+            </div>
+
+            <div className="space-y-4 pt-2">
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">
+                <Wallet size={14} /> Seña
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="deposit-mode"
+                    className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1"
+                  >
+                    Modo
+                  </label>
+                  <select
+                    id="deposit-mode"
+                    value={formData.depositMode}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        depositMode: e.target.value as ServiceDepositMode
+                      })
+                    }
+                    className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
+                    style={create2000sModalInputStyle()}
+                  >
+                    {DEPOSIT_MODE_LABELS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {formData.depositMode !== 'none' && (
+                  <div className="space-y-1.5">
+                    <label
+                      htmlFor="deposit-type"
+                      className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1"
+                    >
+                      Tipo
+                    </label>
+                    <select
+                      id="deposit-type"
+                      value={formData.depositType}
+                      onChange={(e) => {
+                        const depositType = e.target.value as ServiceDepositType
+                        setFormData({
+                          ...formData,
+                          depositType,
+                          // `full` es 100% del precio: no lleva monto aparte.
+                          depositAmount: depositType === 'full' ? null : formData.depositAmount
+                        })
+                      }}
+                      className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
+                      style={create2000sModalInputStyle()}
+                    >
+                      {DEPOSIT_TYPE_LABELS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              {needsDepositAmount && (
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="deposit-amount"
+                    className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1"
+                  >
+                    {formData.depositType === 'percent' ? 'Porcentaje (%)' : 'Monto fijo ($)'}
+                  </label>
+                  <input
+                    id="deposit-amount"
+                    type="number"
+                    value={formData.depositAmount ?? ''}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        depositAmount: e.target.value === '' ? null : Number(e.target.value)
+                      })
+                    }
+                    className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
+                    style={create2000sModalInputStyle()}
+                    min={0}
+                    // Sin `max`: el backend acepta hasta 10.000.000 para
+                    // cualquier tipo, y un formulario mas estricto que el
+                    // contrato traba datos legitimos. Con `max=100` un servicio
+                    // ya cargado con 500% quedaba IMPOSIBLE de editar: la
+                    // validacion nativa bloqueaba el submit en un campo que el
+                    // dueno ni tocaba, y no se podia ni cambiarle el nombre.
+                    // Si se quiere el tope del 100%, va en el backend, que es
+                    // donde protege tambien a la API (2026-09-21).
+                    placeholder={formData.depositType === 'percent' ? 'Ej: 30' : 'Ej: 5000'}
+                    required
+                  />
+                  <p className="text-[10px] font-bold text-gray-400 ml-1">
+                    {formData.depositType === 'percent'
+                      ? 'Porcentaje del precio que el cliente paga para reservar.'
+                      : 'Importe fijo que el cliente paga para reservar.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="space-y-1.5">

@@ -35,7 +35,7 @@ const formatMonthLabel = (month: string) => {
   return `${label.charAt(0).toUpperCase()}${label.slice(1)}`
 }
 
-export type TrendChartProps = {
+type TrendChartProps = {
   points: ReportTrendPoint[]
   isLoading?: boolean
 }
@@ -100,7 +100,7 @@ const tooltipContentStyle: CSSProperties = {
   padding: '8px 12px'
 }
 
-export function TrendChart({ points, isLoading }: TrendChartProps) {
+function TrendChart({ points, isLoading }: TrendChartProps) {
   const data = points.map((point) => ({
     ...point,
     label: formatMonthLabel(point.month)

@@ -1,6 +1,6 @@
 import apiClient from '@infrastructure/http/client'
 
-export interface NotificationRecord {
+interface NotificationRecord {
   public_id: string
   type: string
   title: string
@@ -20,7 +20,7 @@ export interface NotificationMarkReadResult {
   unread_count: number
 }
 
-export class NotificationsService {
+class NotificationsService {
   async list(limit = 20, unreadOnly = false): Promise<NotificationList> {
     const { data } = await apiClient.get<NotificationList>('/notifications', {
       params: { limit, unread_only: unreadOnly }

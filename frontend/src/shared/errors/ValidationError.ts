@@ -5,4 +5,3 @@ export class ValidationError extends ApplicationError {
   public readonly statusCode = 400
   public readonly isOperational = true
 }
-export default ValidationError

@@ -8,7 +8,7 @@
  * por tienda; se lee con try/catch porque el storage puede no existir.
  */
 
-export const OTP_WINDOW_MINUTES = 30
+const OTP_WINDOW_MINUTES = 30
 
 interface OtpSession {
   phone: string
@@ -17,7 +17,12 @@ interface OtpSession {
 
 const key = (storeSlug: string): string => `shifty:otp:${storeSlug}`
 
-const digits = (phone: string): string => phone.replace(/\D/g, '')
+/**
+ * Solo los digitos del telefono. El backend devuelve el verificado en formato
+ * internacional (`+54...`, `normalize_phone`) y la persona lo tipea como
+ * quiere: comparar las dos cadenas crudas nunca coincide (F11a-02).
+ */
+export const phoneDigits = (phone: string): string => phone.replace(/\D/g, '')
 
 export const rememberOtpVerification = (
   storeSlug: string,
@@ -25,7 +30,7 @@ export const rememberOtpVerification = (
   verifiedAt: string
 ): void => {
   try {
-    const session: OtpSession = { phone: digits(phone), verifiedAt }
+    const session: OtpSession = { phone: phoneDigits(phone), verifiedAt }
     window.sessionStorage.setItem(key(storeSlug), JSON.stringify(session))
   } catch {
     // sin storage (privado, bloqueado): simplemente no se recuerda
@@ -50,7 +55,7 @@ export const isOtpStillValid = (
     const raw = window.sessionStorage.getItem(key(storeSlug))
     if (!raw) return false
     const session = JSON.parse(raw) as Partial<OtpSession>
-    if (!session.phone || !session.verifiedAt || session.phone !== digits(phone)) return false
+    if (!session.phone || !session.verifiedAt || session.phone !== phoneDigits(phone)) return false
     const verifiedAt = new Date(session.verifiedAt).getTime()
     if (Number.isNaN(verifiedAt)) return false
     return now.getTime() - verifiedAt < OTP_WINDOW_MINUTES * 60_000

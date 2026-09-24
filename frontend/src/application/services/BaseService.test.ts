@@ -8,15 +8,6 @@ class TestService extends BaseService<unknown> {
     fetchData: jest.fn()
   }
 
-  constructor() {
-    super()
-    // Reduce retry delay to make tests run instantly
-    this.retryOptions = {
-      maxAttempts: 2,
-      delayMs: 2
-    }
-  }
-
   async runSuccessOperation(data: string): Promise<string> {
     return await this.execute(async () => {
       return data
@@ -36,15 +27,8 @@ class TestService extends BaseService<unknown> {
     }, 'runTypeErrorOperation')
   }
 
-  async runRetryableOperation(attemptsBeforeSuccess: number): Promise<string> {
-    let callCount = 0
-    return await this.execute(async () => {
-      callCount++
-      if (callCount < attemptsBeforeSuccess) {
-        throw new Error('Network timeout occurred')
-      }
-      return 'success after retry'
-    }, 'runRetryableOperation')
+  async runCountedFailingOperation(operation: () => Promise<string>): Promise<string> {
+    return await this.execute(operation, 'runCountedFailingOperation')
   }
 
   async runValidationOperation(data: unknown, schema: z.ZodSchema): Promise<void> {
@@ -87,23 +71,23 @@ describe('BaseService', () => {
       )
     })
 
-    it('should retry a failed operation if the error is retryable and succeeds eventually', async () => {
-      const result = await service.runRetryableOperation(2)
+    it.each(['timeout', 'Network Error', 'fetch failed', 'rate limit exceeded', 'ECONNREFUSED'])(
+      'should invoke the operation exactly once when it fails with "%s" (HTTP layer owns retries)',
+      async (message) => {
+        // Regression: a POST that timed out client-side but was processed by the server
+        // was replayed here and hit the GiST overlap exclusion, so the user saw a conflict
+        // on their own booking. Retries belong to axios-retry (idempotent methods only).
+        const operation = jest.fn<Promise<string>, []>().mockRejectedValue(new Error(message))
 
-      expect(result).toBe('success after retry')
-      // Should log the start, the warning/retry, and the ultimate completion
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[INFO] TestService.runRetryableOperation - started')
-      )
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          '[WARNING] TestService.runRetryableOperation - Attempt 1 failed. Retrying'
+        await expect(service.runCountedFailingOperation(operation)).rejects.toThrow(message)
+
+        expect(operation).toHaveBeenCalledTimes(1)
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(`[ERROR] TestService - Exception: ${message}`)
         )
-      )
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[SUCCESS] TestService.runRetryableOperation - completed')
-      )
-    })
+        expect(consoleWarnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Retrying'))
+      }
+    )
   })
 
   describe('Validation', () => {

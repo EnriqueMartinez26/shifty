@@ -16,7 +16,9 @@ jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => ({ data: { name: 'Peluqueria Sol', slug: 'sol' } })
 }))
 
-const mockUser = { role: 'admin', is_global_admin: false }
+// El rol que expone useAuth() ya viene canonicalizado por AuthContext
+// (canonicalRole convierte 'admin' -> 'store_admin'); el mock refleja eso.
+const mockUser = { role: 'store_admin', is_global_admin: false }
 jest.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: mockUser })
 }))
@@ -47,7 +49,7 @@ describe('WaitlistContainer', () => {
     mockWaitlist.mockReset()
     mockRemove.mockReset()
     mockBook.mockReset()
-    mockUser.role = 'admin'
+    mockUser.role = 'store_admin'
   })
 
   it('muestra la entrada con el cupo ofrecido y el link de WhatsApp con deep-link', () => {
@@ -82,7 +84,7 @@ describe('WaitlistContainer', () => {
   })
 
   it('el personal sin rol de administrador no ve reservar ni quitar', () => {
-    mockUser.role = 'staff'
+    mockUser.role = 'professional'
     mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_phone: null }], isLoading: false })
 
     render(<WaitlistContainer />)

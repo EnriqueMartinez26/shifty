@@ -58,7 +58,7 @@ from modules.notifications.tasks import (
     send_confirmation_email,
     send_registration_email,
 )
-from modules.otp.service import OtpService
+from modules.otp.service import OtpService, mask_phone
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
     ClientHistory,
@@ -203,10 +203,31 @@ def resolve_payment_requirement(
 async def require_recent_client_otp(
     db: AsyncSession, *, store_id: str, phone: str
 ) -> None:
-    is_verified = await OtpService(db).is_recently_verified(
-        store_id=store_id, phone=phone
-    )
-    if not is_verified:
+    """Autogestion: el email verificado tiene que ser el de ESA ficha.
+
+    Un OTP prueba posesion del EMAIL, no del telefono, y `/public/otp/request`
+    es publico: quien pedia el codigo elegia el buzon. Con el predicado viejo
+    (`is_recently_verified(store_id, phone)`) saber un telefono ajeno y poner el
+    email propio alcanzaba para listar, cancelar y reprogramar los turnos de esa
+    persona. 2026-09-20.
+    """
+    service = OtpService(db)
+    if not await service.is_client_contact_verified(store_id=store_id, phone=phone):
+        # El motivo se resuelve SOLO en el camino de rechazo y va al log del
+        # servidor: es lo unico con lo que se atiende el ticket de un cliente
+        # legitimo trabado, y antes los 403 de OTP salian sin ninguna traza
+        # (`main.py` no loguea `AppException`).
+        logger.warning(
+            "otp_self_service_denied",
+            store_id=store_id,
+            phone=mask_phone(phone),
+            reason=await service.client_contact_verification_reason(
+                store_id=store_id, phone=phone
+            ),
+        )
+        # Mensaje NEUTRO (regla 20): no dice si el telefono no es cliente, si
+        # la ficha no tiene email cargado o si el codigo se verifico contra
+        # otro. Cualquiera de las tres seria un oraculo anonimo.
         raise OTPException(
             message="Se requiere validar OTP antes de autogestionar turnos",
             error_code="OTP_VERIFICATION_REQUIRED",
@@ -306,7 +327,7 @@ class _BookingRequest:
     store_id: str
     service: Service
     starts_at_utc: datetime
-    phone_verified: bool
+    contact_verified: bool
     custom_fields: dict[str, str]
     base_price: Decimal
     discounted_price: Decimal
@@ -398,20 +419,21 @@ class PublicBookingService:
         if starts_at_utc < datetime.now(timezone.utc) + timedelta(hours=notice_hours):
             raise BookingNoticeException(notice_hours)
 
-        # El OTP es lo unico que prueba que quien reserva es dueno del
-        # telefono: sin el, los datos de contacto de esta peticion no pisan
-        # los del cliente que ya existe (ver get_or_create_client).
-        phone_verified = await OtpService(self.db).is_recently_verified(
+        # Un OTP prueba posesion de un EMAIL, no del telefono. El gate de
+        # reserva NO recibe ningun email del request: `client_email` es
+        # opcional y en el wizard publico es un campo distinto del email del
+        # codigo, asi que exigir que coincidan trababa reservas legitimas sin
+        # aportar seguridad (quien ataca controla los dos campos). La garantia
+        # esta en el despacho: si el telefono tiene ficha con email entregable,
+        # el codigo va a ESE buzon. La ramificacion vive en el servicio.
+        # 2026-09-20.
+        otp_service = OtpService(self.db)
+        if is_store_feature_enabled(store.feature_flags, "otp_booking"):
+            await self._require_booking_otp(otp_service, store.id, data.client_phone)
+        contact_verified = await otp_service.is_client_contact_verified(
             store_id=store.id,
             phone=data.client_phone,
         )
-        if is_store_feature_enabled(store.feature_flags, "otp_booking"):
-            if not phone_verified:
-                raise OTPException(
-                    message="Se requiere validar OTP antes de reservar",
-                    error_code="OTP_VERIFICATION_REQUIRED",
-                    http_status=status.HTTP_403_FORBIDDEN,
-                )
 
         custom_fields = validate_custom_fields(store, data.custom_fields)
         base_price = Decimal(str(service.price or 0))
@@ -423,19 +445,42 @@ class PublicBookingService:
             store=store,
             service=service,
             starts_at_utc=starts_at_utc,
-            phone_verified=phone_verified,
+            contact_verified=contact_verified,
             custom_fields=custom_fields,
             base_price=base_price,
             discounted_price=discounted_price,
             history=(
-                # Mismo criterio que el preview: un telefono sin verificar no
-                # trae el historial de nadie, ni para mostrar ni para cobrar.
-                # Si no, quien tipea el telefono de otro hereda (o le carga)
-                # sus recargos. Una sola consulta agregada, antes del lock.
+                # Mismo criterio que el preview: un telefono sin CONTACTO
+                # verificado no trae el historial de nadie, ni para mostrar ni
+                # para cobrar. Si no, quien tipea el telefono de otro hereda
+                # (o le carga) sus recargos. Una sola consulta agregada, antes
+                # del lock.
                 await self.repo.get_client_history(store.id, data.client_phone)
-                if phone_verified
+                if contact_verified
                 else UNKNOWN_HISTORY
             ),
+        )
+
+    @staticmethod
+    async def _require_booking_otp(
+        otp_service: OtpService, store_id: str, phone: str
+    ) -> None:
+        if await otp_service.may_book_with_otp(store_id=store_id, phone=phone):
+            return
+        # El motivo se resuelve SOLO en el camino de rechazo y va al log del
+        # servidor: antes los 403 de OTP salian sin ninguna traza (`main.py`
+        # no loguea `AppException`), asi que un cliente legitimo trabado era
+        # un ticket sin datos.
+        logger.warning(
+            "otp_booking_denied",
+            store_id=store_id,
+            phone=mask_phone(phone),
+            reason=await otp_service.booking_otp_reason(store_id=store_id, phone=phone),
+        )
+        raise OTPException(
+            message="Se requiere validar OTP antes de reservar",
+            error_code="OTP_VERIFICATION_REQUIRED",
+            http_status=status.HTTP_403_FORBIDDEN,
         )
 
     async def _discounted_price(
@@ -464,7 +509,7 @@ class PublicBookingService:
         store: Store,
         service: Service,
         starts_at_utc: datetime,
-        phone_verified: bool,
+        contact_verified: bool,
         custom_fields: dict[str, str],
         base_price: Decimal,
         discounted_price: Decimal,
@@ -492,7 +537,7 @@ class PublicBookingService:
             store_id=store.id,
             service=service,
             starts_at_utc=starts_at_utc,
-            phone_verified=phone_verified,
+            contact_verified=contact_verified,
             custom_fields=custom_fields,
             base_price=base_price,
             discounted_price=discounted_price,
@@ -532,7 +577,6 @@ class PublicBookingService:
             phone=data.client_phone,
             name=data.client_name,
             email=data.client_email,
-            adopt_contact=request.phone_verified,
         )
         # Toma el FOR UPDATE del profesional antes de leer disponibilidad
         # (regla 4) y aplica el buffer de la tienda.

@@ -50,6 +50,9 @@ async def test_cancelar_desde_el_portal_lee_el_servicio_una_vez(
                 hour=13, minute=0, second=0, microsecond=0
             ).isoformat(),
             "client_name": "Cancela",
+            # La autogestion exige una ficha con email ENTREGABLE verificado por
+            # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+            "client_email": "cancela@example.com",
             "client_phone": TELEFONO,
             "idempotency_key": "cancel-servicio-0001",
         },

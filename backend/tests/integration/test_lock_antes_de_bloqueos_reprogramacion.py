@@ -82,6 +82,9 @@ async def _tienda_con_turno(
             "staff_id": staff,
             "starts_at": base.isoformat(),
             "client_name": "Orden",
+            # La autogestion exige una ficha con email ENTREGABLE verificado por
+            # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+            "client_email": "orden@example.com",
             "client_phone": phone,
             "idempotency_key": f"{slug}-original",
         },

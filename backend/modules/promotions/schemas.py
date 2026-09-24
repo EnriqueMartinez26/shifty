@@ -27,19 +27,27 @@ def _normalize_code(value: str) -> str:
     return value.strip().upper()
 
 
-def _vigencia_en_utc(value: datetime | None) -> datetime | None:
-    """Sin offset se toma como UTC; con offset se lleva a UTC.
+def _require_aware(value: datetime | None) -> datetime | None:
+    """Rechaza una vigencia sin offset en vez de suponer que es UTC.
 
-    Mismo criterio que appointments/schemas.py (F11b-02, 2026-09-18). La
-    columna es timestamptz y el service compara contra now(UTC); un naive
-    mezclado con un aware levantaba TypeError (500, no 422) en el
-    ``valid_from >= valid_until`` del schema y en el PATCH contra la fecha
-    guardada. Pasar de hora argentina a UTC es trabajo del front.
+    El panel mandaba el valor crudo de un input `datetime-local`
+    ("2026-12-31T23:59"): hora de pared argentina sin offset. La base lo
+    guardaba como si fuera UTC y la promo vencia tres horas antes de lo que el
+    dueno habia tipeado (2026-09-20). Suponer una zona aca solo mueve la
+    adivinanza de lugar; el front ahora manda siempre el instante en UTC.
+
+    Con offset se lleva a UTC (F11b-02, 2026-09-18): la columna es timestamptz
+    y el service compara contra now(UTC); un naive mezclado con un aware
+    levantaba TypeError (500, no 422) en el ``valid_from >= valid_until`` del
+    schema y en el PATCH contra la fecha guardada.
     """
     if value is None:
         return None
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        raise ValueError(
+            "La vigencia debe incluir zona horaria (por ejemplo "
+            "2026-12-31T23:59:00-03:00)"
+        )
     return value.astimezone(timezone.utc)
 
 
@@ -57,15 +65,15 @@ class PromotionBase(BaseModel):
     valid_until: datetime | None = None
     is_active: bool = True
 
-    @field_validator("valid_from", "valid_until")
-    @classmethod
-    def vigencia_en_utc(cls, value: datetime | None) -> datetime | None:
-        return _vigencia_en_utc(value)
-
     @field_validator("code")
     @classmethod
     def normalize_code(cls, value: str) -> str:
         return _normalize_code(value)
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def require_aware_window(cls, value: datetime | None) -> datetime | None:
+        return _require_aware(value)
 
     @model_validator(mode="after")
     def validate_window(self) -> "PromotionBase":
@@ -98,17 +106,17 @@ class PromotionUpdate(BaseModel):
     valid_until: datetime | None = None
     is_active: bool | None = None
 
-    @field_validator("valid_from", "valid_until")
-    @classmethod
-    def vigencia_en_utc(cls, value: datetime | None) -> datetime | None:
-        return _vigencia_en_utc(value)
-
     @field_validator("code")
     @classmethod
     def normalize_code(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return _normalize_code(value)
+
+    @field_validator("valid_from", "valid_until")
+    @classmethod
+    def require_aware_window(cls, value: datetime | None) -> datetime | None:
+        return _require_aware(value)
 
     @model_validator(mode="after")
     def validate_window(self) -> "PromotionUpdate":

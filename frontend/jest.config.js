@@ -20,7 +20,9 @@ export default {
   collectCoverageFrom: [
     'src/infrastructure/http/api-contract.ts',
     'src/presentation/components/navigation/Sidebar.tsx',
-    'src/presentation/pages/ForgotPassword.tsx'
+    'src/presentation/pages/ForgotPassword.tsx',
+    'src/presentation/lib/settingsDraft.ts',
+    'src/presentation/hooks/useSettingsForm.ts'
   ],
   coverageThreshold: {
     global: {

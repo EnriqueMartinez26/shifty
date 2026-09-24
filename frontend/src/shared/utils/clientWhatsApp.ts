@@ -1,7 +1,7 @@
 import { formatArgentinaDateDisplay, formatArgentinaTime } from './argentinaTime'
 import { sanitizePhoneForUrl } from './safeUrl'
 
-export type ClientMessageKind = 'reminder' | 'rebook'
+type ClientMessageKind = 'reminder' | 'rebook'
 
 export interface ClientMessageInput {
   clientName: string

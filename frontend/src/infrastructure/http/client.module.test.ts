@@ -103,4 +103,78 @@ describe('api client module wiring', () => {
 
     expect(clientModule.getAuthToken()).toBeNull()
   })
+
+  it('un 401 del propio login no avisa sesion expirada, uno de otra ruta si', async () => {
+    // F11c-03: el cliente avisaba sesion expirada ante CUALQUIER 401, tambien
+    // el de `/auth/login`. AuthContext escucha ese evento y recarga con
+    // "Sesion expirada. Redirigiendo...", asi que una clave mal tipeada
+    // borraba el error del formulario antes de que se pudiera leer.
+    const clientModule = await import('./client')
+    const [, errorHandler] = mockResponseUse.mock.calls[0]
+
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+
+    try {
+      const respuesta401 = {
+        status: 401,
+        data: { success: false, error_code: 'AUTH_REQUIRED', message: 'Credenciales invalidas' }
+      }
+
+      await expect(
+        errorHandler({
+          config: { url: 'http://test-api/auth/login' },
+          response: respuesta401,
+          message: 'HTTP 401'
+        })
+      ).rejects.toBeTruthy()
+      expect(avisos).toHaveLength(0)
+
+      // Un 401 del login SIN el envelope de la app (un proxy o un middleware
+      // que responde antes) cae por la otra rama del interceptor, la de
+      // payload crudo. Tiene que quedar igual de silenciosa: sin este caso,
+      // sacar el guard de esa rama no rompia ningun test.
+      await expect(
+        errorHandler({
+          config: { url: 'http://test-api/auth/login' },
+          response: { status: 401, data: 'Unauthorized' },
+          message: 'HTTP 401'
+        })
+      ).rejects.toBeTruthy()
+      expect(avisos).toHaveLength(0)
+
+      // La contraprueba: el mismo 401 en otra ruta SI tiene que avisar, o
+      // quedaria un cascaron logueado dando 401 en cada request.
+      await expect(
+        errorHandler({
+          config: { url: 'http://test-api/appointments', __shiftyRetried: true },
+          response: respuesta401,
+          message: 'HTTP 401'
+        })
+      ).rejects.toBeTruthy()
+      expect(avisos).toHaveLength(1)
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
+  })
+
+  it('no reintenta un 409 en un POST, pero sí en métodos idempotentes', async () => {
+    const clientModule = await import('./client')
+    const { shouldRetryRequest } = clientModule
+
+    // Un 409 al crear un turno es un conflicto de negocio real (el slot ya no
+    // está libre), no algo transitorio: reintentarlo no lo resuelve y puede
+    // terminar reservando después de que la UI ya mostró el conflicto.
+    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'post' } })).toBe(
+      false
+    )
+    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'post' } })).toBe(true)
+    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'patch' } })).toBe(
+      true
+    )
+    expect(shouldRetryRequest({ code: 'ERR_CONNECTION_REFUSED', config: { method: 'get' } })).toBe(
+      false
+    )
+  })
 })

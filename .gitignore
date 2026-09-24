@@ -52,3 +52,6 @@ Thumbs.db
 backups/
 *.dump
 *.dump.sha256
+# Indice local de CodeGraph: 32 MB por checkout y no es reutilizable
+# entre clones ni worktrees (sus bytes dependen del arbol indexado).
+.codegraph/

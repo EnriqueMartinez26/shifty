@@ -98,4 +98,3 @@ export class InMemoryUserRepository
     this.store.clear()
   }
 }
-export default InMemoryUserRepository

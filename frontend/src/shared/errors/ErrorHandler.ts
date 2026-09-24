@@ -15,4 +15,3 @@ export abstract class ErrorHandler {
    */
   public abstract handle(error: ApplicationError): Promise<void>
 }
-export default ErrorHandler

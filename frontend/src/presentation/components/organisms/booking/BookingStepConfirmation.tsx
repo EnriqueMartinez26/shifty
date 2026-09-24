@@ -412,6 +412,13 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
             Te mandamos un codigo por email para confirmar el {client.phone}
           </p>
+          {/* Si el telefono ya tiene ficha con email cargado, el backend manda
+              el codigo a ESE email y no al que se tipee aca: quien pide el
+              codigo no elige el buzon (2026-09-20). Decirlo evita que alguien
+              espere el mail en una casilla que nunca lo va a recibir. */}
+          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+            Si ya reservaste en este negocio, el codigo va al email que tenes registrado.
+          </p>
         </div>
       </div>
 
@@ -1001,5 +1008,3 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     </div>
   )
 }
-
-export default BookingStepConfirmation

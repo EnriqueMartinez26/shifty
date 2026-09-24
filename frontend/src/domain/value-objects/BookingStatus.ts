@@ -10,7 +10,7 @@ export type BookingStatusValue =
  * si el backend agrega un estado terminal, su CI falla indicando que hay que
  * actualizar esta lista.
  */
-export const TERMINAL_STATUSES: readonly BookingStatusValue[] = [
+const TERMINAL_STATUSES: readonly BookingStatusValue[] = [
   'completed',
   'cancelled',
   'absent',

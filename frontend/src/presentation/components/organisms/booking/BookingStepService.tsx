@@ -135,4 +135,3 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
     </div>
   )
 }
-export default BookingStepService

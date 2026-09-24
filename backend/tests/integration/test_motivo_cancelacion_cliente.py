@@ -71,6 +71,9 @@ async def test_el_motivo_llega_al_duenio_en_una_linea_y_el_asunto_no_cambia(
                 hour=13, minute=0, second=0, microsecond=0
             ).isoformat(),
             "client_name": "Motivo",
+            # La autogestion exige una ficha con email ENTREGABLE verificado por
+            # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+            "client_email": "motivo@example.com",
             "client_phone": TELEFONO,
             "idempotency_key": "motivo-cancel-0001",
         },

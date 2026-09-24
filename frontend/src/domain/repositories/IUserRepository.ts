@@ -11,4 +11,3 @@ export interface IUserRepository extends IRepository<User, User, Partial<User>> 
   findByEmail(email: Email): Promise<User | null>
   findByRole(role: UserRole): Promise<User[]>
 }
-export default IUserRepository

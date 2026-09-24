@@ -7,12 +7,14 @@ email propio alcanzaba para "verificar" ese telefono durante 30 minutos:
 adoptar su contacto (``get_or_create_client(adopt_contact=True)``), leer su
 historial para la sena y autogestionar sus turnos.
 
-Decision (coordinador, con OK global del usuario): si el telefono ya es de un
-cliente de la tienda con email entregable, el codigo SOLO va a ese email, y
-el email tipeado tiene que coincidir (normalizado). Si no coincide: respuesta
-neutra con la misma forma, nadie recibe codigo y el codigo guardado no lo
-conoce nadie. Si el telefono no es cliente, o su cliente no tiene email
-entregable, el comportamiento es el de siempre.
+Decision (coordinador, con OK global del usuario; unificada el 2026-09-23 con
+el fix del front del 2026-09-20): si el telefono ya es de un cliente de la
+tienda con email entregable, el codigo SOLO va a ese email, tipee lo que tipee
+quien lo pide. Si el tipeado es otro, a ese le llega un aviso sin codigo
+(AUD2-B4-05) y la respuesta es neutra con la misma forma. El registro guarda a
+que buzon fue el codigo (``otp_verifications.email``) y la autogestion exige
+que coincida con el de la ficha. Si el telefono no es cliente, o su cliente
+no tiene email entregable, el comportamiento es el de siempre.
 """
 
 from __future__ import annotations
@@ -119,13 +121,13 @@ async def test_email_coincidente_recibe_el_codigo_y_verifica(
     await servicio.verify_code(
         store_id=store_id, phone=TELEFONO_CLIENTE, code=str(cuerpo["debug_code"])
     )
-    assert await servicio.is_recently_verified(
+    assert await servicio.is_client_contact_verified(
         store_id=store_id, phone=TELEFONO_CLIENTE
     )
 
 
 @pytest.mark.asyncio
-async def test_email_distinto_respuesta_neutra_y_nadie_recibe_el_codigo(
+async def test_email_distinto_respuesta_neutra_y_el_codigo_solo_va_a_la_ficha(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cola = Cola()
@@ -144,19 +146,20 @@ async def test_email_distinto_respuesta_neutra_y_nadie_recibe_el_codigo(
     assert set(neutra) == set(exito)
     assert neutra["ok"] is True
     assert EMAIL_CLIENTE not in str(neutra)
-    # Nadie recibe el CODIGO: al email tipeado le llega el aviso sin codigo
-    # de AUD2-B4-05 y al del cliente no le llega nada.
-    assert [destino for destino, _, _ in cola.enviados] == ["atacante@example.com"]
-    assert _sin_codigo(cola.enviados)
+    # El CODIGO va solo al email de la ficha (quien pide no elige el buzon);
+    # al email tipeado le llega el aviso sin codigo de AUD2-B4-05.
+    assert [destino for destino, _, _ in cola.enviados] == [
+        EMAIL_CLIENTE,
+        "atacante@example.com",
+    ]
+    con_codigo = [d for d, _, cuerpo in cola.enviados if _CODIGO.search(cuerpo)]
+    assert con_codigo == [EMAIL_CLIENTE]
+    assert _sin_codigo([m for m in cola.enviados if m[0] != EMAIL_CLIENTE])
 
-    # El codigo de la respuesta (solo existe en modo debug) no verifica, y
-    # el telefono no queda verificado para quien lo pidio.
+    # Quien pidio no tiene el codigo (fue al buzon de la ficha): el telefono
+    # no queda verificado para nadie hasta que el titular lo use.
     servicio = OtpService(test_session)
-    with pytest.raises(OTPException):
-        await servicio.verify_code(
-            store_id=store_id, phone=TELEFONO_CLIENTE, code=str(neutra["debug_code"])
-        )
-    assert not await servicio.is_recently_verified(
+    assert not await servicio.is_client_contact_verified(
         store_id=store_id, phone=TELEFONO_CLIENTE
     )
 
@@ -338,11 +341,11 @@ async def test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico(
     nuevo, envios_nuevo = await trabajo("5491166660000", "nuevo@example.com")
 
     assert coincide == distinto == nuevo, (coincide, distinto, nuevo)
-    # Ninguno manda en linea. Los tres encolan exactamente un envio: el
-    # camino "email distinto" manda el aviso sin codigo de AUD2-B4-05, asi
-    # la entrega tampoco distingue si el telefono es cliente.
+    # Ninguno manda en linea. El camino "email distinto" encola dos envios:
+    # el codigo al email de la ficha y el aviso sin codigo de AUD2-B4-05 al
+    # tipeado, asi la entrega tampoco distingue si el telefono es cliente.
     assert buzon.enviados == []
-    assert (envios_ok, envios_neutros, envios_nuevo) == (1, 1, 1)
+    assert (envios_ok, envios_neutros, envios_nuevo) == (1, 2, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -404,10 +407,11 @@ async def test_el_cliente_guardado_con_00_se_encuentra_en_cualquier_forma(
         },
     )
     assert respuesta.status_code == 200, respuesta.text
-    assert _sin_codigo(cola.enviados), (
+    assert _sin_codigo([m for m in cola.enviados if m[0] != EMAIL_CLIENTE]), (
         "el codigo salio al email del atacante: el cliente guardado con 00 "
         "no se encontro"
     )
+    assert [d for d, _, c in cola.enviados if _CODIGO.search(c)] == [EMAIL_CLIENTE]
     cola.enviados.clear()
 
     # Y con el email del cliente, en la misma forma de telefono, si sale.

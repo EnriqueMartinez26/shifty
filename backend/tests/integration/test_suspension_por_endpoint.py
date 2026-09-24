@@ -259,6 +259,9 @@ async def test_portal_publico_con_la_tienda_suspendida(
             "staff_id": staff,
             "starts_at": inicio.isoformat(),
             "client_name": "Cliente",
+            # La autogestion exige una ficha con email ENTREGABLE verificado por
+            # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+            "client_email": "cliente@example.com",
             "client_phone": TELEFONO,
             "idempotency_key": "susp-portal-0001",
         },

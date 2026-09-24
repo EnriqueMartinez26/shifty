@@ -8,4 +8,3 @@ export class NotifyAdminsOnUserCreated implements EventHandler<UserCreatedEvent>
     )
   }
 }
-export default NotifyAdminsOnUserCreated

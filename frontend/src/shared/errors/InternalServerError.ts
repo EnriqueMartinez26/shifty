@@ -5,4 +5,3 @@ export class InternalServerError extends ApplicationError {
   public readonly statusCode = 500
   public readonly isOperational = false
 }
-export default InternalServerError

@@ -432,19 +432,23 @@ Una instrucción en lenguaje natural no es una garantía.
   capas es ESLint. El `IMPORT_RULES.md` que menciona solo existe archivado
   en `docs/archive/refactoring/02-IMPORT_RULES.md`.
 - `docs/DOCUMENTACION_TURNERO.md` y `docs/SETUP_GUIDE.md` declaran deriva
-  contra el código (`docs/AUDIT_MATRIX_SHARED.md`). `docs/ROLE_MATRIX.md`
-  se re-verificó el 2026-09-19 y separa lo que hace el código del objetivo
-  de producto. Para un cambio de permisos se verifica en código, no en la
-  doc.
-- El pre-commit hook (`.githooks/pre-commit`) existe pero **solo corre si
-  cada clon hace `git config core.hooksPath .githooks`**; en este clon no
-  estaba activado. Además `verify-toolchain` acepta solo un conjunto de
-  versiones exactas (Node 24.18.0 o 26.5.0, npm 11.16.0 u 11.17.0, igual que
-  `engines` de `frontend/package.json`) y valida Node y npm por separado, así
-  que también deja pasar combinaciones que CI no ejercita (Node 24.18.0 con
-  npm 11.17.0). En una máquina con otra versión (2026-09-16: 24.16.0)
-  activarlo bloquea todos los commits, y `npm ci` necesita
-  `--engine-strict=false`. Antes de activarlo, alinear el toolchain.
+  contra el código (`docs/AUDIT_MATRIX_SHARED.md`), en particular los
+  permisos de `/reports/professionals` y `/reports/summary|export`.
+  `docs/ROLE_MATRIX.md` se re-verificó el 2026-09-19 y separa lo que hace el
+  código del objetivo de producto. Para un cambio de permisos se verifica en
+  código, no en la doc.
+- El pre-commit hook (`.githooks/pre-commit`) **solo corre si cada clon hace
+  `git config core.hooksPath .githooks`** (activado en el clon de Enrique el
+  2026-09-22; en el clon del backend no lo estaba). Corre `verify-toolchain`
+  más `npm run check`; los checks de backend se omiten si `uv` no está en el
+  PATH local, porque corren en Docker/CI. `verify-toolchain` acepta el
+  CONJUNTO soportado, no una versión única (Node 24.18.0 o 26.5.0, npm
+  11.16.0 u 11.17.0, igual que `engines` de `frontend/package.json`) y valida
+  Node y npm por separado, así que también deja pasar combinaciones que CI no
+  ejercita (Node 24.18.0 con npm 11.17.0). En una máquina fuera de ese
+  conjunto (2026-09-16: 24.16.0) el hook bloquea todos los commits y `npm ci`
+  necesita `--engine-strict=false`: el toolchain se alinea antes de
+  activarlo.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
   detrás de nginx (`E2E_BASE_URL=http://localhost`,
@@ -457,10 +461,10 @@ Una instrucción en lenguaje natural no es una garantía.
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
   prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
-- Falta todavía: activar el pre-commit hook por clon (`git config
-  core.hooksPath .githooks`, con el toolchain alineado); descomponer las 8
-  funciones de más de 80 líneas que quedan en el backend (regla 29); zona
-  horaria por tienda; unicidad de email de clientes POR tienda (hoy es
+- Falta todavía: activar el pre-commit hook en cada clon que falte (`git
+  config core.hooksPath .githooks`, con el toolchain alineado); descomponer
+  las 8 funciones de más de 80 líneas que quedan en el backend (regla 29);
+  zona horaria por tienda; unicidad de email de clientes POR tienda (hoy es
   global, así que un mismo email no puede ser cliente en dos tiendas);
   migrar los commits de routers/repos que quedan en
   `COMMITS_DECLARADOS_FUERA_DE_SERVICE` al patrón de `appointments`; medir
@@ -471,7 +475,8 @@ Una instrucción en lenguaje natural no es una garantía.
   (auditado, no había), teléfono único por tienda y primera corrida del E2E.
   Cerrado el 2026-09-19: descomposición de `create_public_booking` y
   `client_reschedule_appointment` y migración de `public_api` al service
-  (B1-12).
+  (B1-12). Cerrado el 2026-09-22: el pre-commit hook quedó activado en el
+  clon de Enrique.
 
 ## 6. Compuertas de proceso
 

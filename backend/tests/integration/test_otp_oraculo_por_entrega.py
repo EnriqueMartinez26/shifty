@@ -10,9 +10,9 @@ donde es cliente una persona, que es dato personal (mismo invariante que
 motivo ``UNKNOWN_HISTORY`` en ``/public/deposit/preview``).
 ``OTP_MAX_REQUESTS_PER_HOUR`` acota el ritmo, no el oraculo.
 
-Decision del coordinador: respuesta neutra tambien en el canal de entrega. El
-camino retenido manda SIEMPRE un aviso al email tipeado, sin codigo, asi
-"llego algo" deja de discriminar (regla 20).
+Decision del coordinador: respuesta neutra tambien en el canal de entrega.
+Cuando el codigo va al email de la ficha y no al tipeado, al tipeado le llega
+SIEMPRE un aviso sin codigo, asi "llego algo" deja de discriminar (regla 20).
 """
 
 from __future__ import annotations
@@ -89,11 +89,12 @@ async def test_al_email_tipeado_le_llega_algo_sea_cliente_el_telefono_o_no(
     tienda = await _tienda_con_cliente(client, test_session, "otp-oraculo")
 
     assert await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_TIPEADO) == 200
-    con_cliente = [d for d, _, _ in cola.enviados]
+    con_cliente = [d for d, _, _ in cola.enviados if d == EMAIL_TIPEADO]
     cola.enviados.clear()
     assert await _pedir(client, tienda, TELEFONO_DESCONOCIDO, EMAIL_TIPEADO) == 200
-    sin_cliente = [d for d, _, _ in cola.enviados]
+    sin_cliente = [d for d, _, _ in cola.enviados if d == EMAIL_TIPEADO]
 
+    # Lo que ve la casilla tipeada es lo mismo en los dos casos: un mail.
     assert con_cliente == sin_cliente == [EMAIL_TIPEADO], (
         "la llegada del mail discrimina si el telefono es cliente"
     )
@@ -109,14 +110,16 @@ async def test_el_aviso_del_camino_retenido_no_lleva_codigo_ni_el_email_del_clie
 
     assert await _pedir(client, tienda, TELEFONO_CLIENTE, EMAIL_TIPEADO) == 200
 
-    assert len(cola.enviados) == 1, "exactamente un envio, como el camino feliz"
-    destino, asunto, cuerpo = cola.enviados[0]
+    al_tipeado = [m for m in cola.enviados if m[0] == EMAIL_TIPEADO]
+    assert len(al_tipeado) == 1, "exactamente un envio al tipeado, como el feliz"
+    destino, asunto, cuerpo = al_tipeado[0]
     assert destino == EMAIL_TIPEADO
-    assert not _tiene_codigo(cuerpo), "el aviso retenido no puede traer el codigo"
+    assert not _tiene_codigo(cuerpo), "el aviso sin codigo no puede traer el codigo"
     assert EMAIL_CLIENTE not in cuerpo and EMAIL_CLIENTE not in asunto
     # Mismo asunto que el codigo: el asunto tampoco discrimina.
+    cola.enviados.clear()
     assert await _pedir(client, tienda, TELEFONO_DESCONOCIDO, EMAIL_TIPEADO) == 200
-    assert cola.enviados[1][1] == asunto
+    assert cola.enviados[0][1] == asunto
 
 
 @pytest.mark.asyncio

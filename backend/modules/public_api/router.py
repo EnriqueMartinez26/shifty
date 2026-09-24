@@ -288,9 +288,11 @@ async def preview_public_deposit(
     Sin esto el front inferia "hay sena" desde los campos crudos del servicio
     y divergia en cuanto la tienda configuraba un recargo.
 
-    El historial del cliente SOLO entra si ese telefono paso por OTP en esta
-    tienda: sin esa guarda el endpoint era un oraculo anonimo que decia, por
-    telefono, si era cliente y si tenia ausencias. 2026-09-11.
+    El historial del cliente SOLO entra si el OTP se verifico contra el email
+    que ESA ficha tiene guardado: sin esa guarda el endpoint era un oraculo
+    anonimo que decia, por telefono, si era cliente y si tenia ausencias
+    (2026-09-11), y con el predicado viejo bastaba pedir el codigo al email
+    propio para abrirlo igual (2026-09-20).
     """
     telefono = re.sub(r"[\s\-\(\)\+]", "", client_phone) if client_phone else ""
     await enforce_rate_limit(
@@ -316,7 +318,7 @@ async def preview_public_deposit(
             if quote:
                 price = quote.final_amount
         history = UNKNOWN_HISTORY
-        if telefono and await OtpService(db).is_recently_verified(
+        if telefono and await OtpService(db).is_client_contact_verified(
             store_id=store.id, phone=telefono
         ):
             history = await repo.get_client_history(store.id, telefono)

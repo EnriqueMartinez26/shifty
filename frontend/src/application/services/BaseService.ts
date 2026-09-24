@@ -4,7 +4,7 @@ import { isProduction } from '@shared/utils/env'
 
 /**
  * Base abstract class defining standard operations, validation,
- * automatic logging, performance tracing, retry mechanisms, and error boundaries for all domain services.
+ * automatic logging, performance tracing, and error boundaries for all domain services.
  *
  * @template T The primary domain entity type that this service manages.
  */
@@ -21,14 +21,6 @@ export abstract class BaseService<T> {
   protected _phantomEntity?: T
 
   /**
-   * Configures retry options for resilient operations.
-   */
-  protected retryOptions = {
-    maxAttempts: 3,
-    delayMs: 200
-  }
-
-  /**
    * Creates an instance of BaseService.
    */
   constructor() {
@@ -37,7 +29,11 @@ export abstract class BaseService<T> {
 
   /**
    * Execution template method. Wraps any asynchronous action in an automatic transaction-like flow.
-   * This handles performance profiling, standardized success/error logging, retry logic, and centralized error translation.
+   * This handles performance profiling, standardized success/error logging, and centralized error translation.
+   *
+   * This method never retries: the operation runs exactly once. Retrying non-idempotent calls
+   * (e.g. a booking POST that timed out but was processed by the server) replays the mutation
+   * and surfaces a spurious conflict. HTTP-level retries live in the axios client (idempotent methods only).
    *
    * @template R The return type of the operation.
    * @param operation The callback performing the core database/API action.
@@ -54,31 +50,15 @@ export abstract class BaseService<T> {
     this.log('INFO', `${fullOperationName} - started`)
     const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
-    let attempt = 0
+    try {
+      const result = await operation()
+      const endTime = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      const duration = (endTime - startTime).toFixed(0)
 
-    while (true) {
-      attempt++
-      try {
-        const result = await operation()
-        const endTime = typeof performance !== 'undefined' ? performance.now() : Date.now()
-        const duration = (endTime - startTime).toFixed(0)
-
-        this.log('SUCCESS', `${fullOperationName} - completed (${duration}ms)`)
-        return result
-      } catch (error) {
-        const isRetryable = this.isRetryableError(error)
-
-        if (isRetryable && attempt < this.retryOptions.maxAttempts) {
-          this.log(
-            'WARNING',
-            `${fullOperationName} - Attempt ${attempt} failed. Retrying in ${this.retryOptions.delayMs * attempt}ms... Error: ${error instanceof Error ? error.message : String(error)}`
-          )
-          await this.sleep(this.retryOptions.delayMs * attempt)
-          continue
-        }
-
-        this.handleError(error)
-      }
+      this.log('SUCCESS', `${fullOperationName} - completed (${duration}ms)`)
+      return result
+    } catch (error) {
+      this.handleError(error)
     }
   }
 
@@ -184,38 +164,5 @@ export abstract class BaseService<T> {
         console.warn(formattedMessage)
       }
     }
-  }
-
-  /**
-   * Simple helper to delay execution. Used during retries.
-   *
-   * @param ms Delay length in milliseconds.
-   */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
-  }
-
-  /**
-   * Determines if the exception is temporary (e.g. Network error, server overloaded)
-   * and should trigger the retry logic.
-   *
-   * @param error The raw error encountered.
-   * @returns True if retryable, false otherwise.
-   */
-  private isRetryableError(error: unknown): boolean {
-    if (!error) return false
-
-    const message =
-      error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
-
-    // Check for common retryable scenarios like network timeout, connection refused, or locking issues
-    return (
-      message.includes('network') ||
-      message.includes('timeout') ||
-      message.includes('fetch') ||
-      message.includes('rate limit') ||
-      message.includes('locked') ||
-      message.includes('econnrefused')
-    )
   }
 }

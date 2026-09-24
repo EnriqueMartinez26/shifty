@@ -110,5 +110,3 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
     </div>
   )
 }
-
-export default SuperAdminFormModal

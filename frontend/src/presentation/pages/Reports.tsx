@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react'
 
-import { format, subDays } from 'date-fns'
+import { subDays } from 'date-fns'
 import {
   Download,
   FileSpreadsheet,
@@ -12,6 +12,13 @@ import {
   Wallet
 } from 'lucide-react'
 
+import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import {
+  formatArgentinaDate,
+  formatArgentinaDateDisplay,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
+
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
@@ -22,7 +29,9 @@ import {
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
-const toInputDate = (date: Date) => format(date, 'yyyy-MM-dd')
+/** El rango del reporte es un dia de negocio argentino, no el del navegador. */
+const toInputDate = (date: Date) => formatArgentinaDate(date.toISOString())
+
 const ReportsPage: React.FC = () => {
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
@@ -30,22 +39,34 @@ const ReportsPage: React.FC = () => {
   const summaryQuery = useReportSummary(fromDate, toDate)
   const professionalsQuery = useProfessionalReports(fromDate, toDate)
   const exportMutation = useExportReport()
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const summary = summaryQuery.data
   const stats = useMemo(() => summary?.stats, [summary])
   const clientStats = summary?.client_stats
   const debtSummary = summary?.debt_summary
 
+  /**
+   * Sin este `catch`, un export rechazado quedaba en nada: la promesa se
+   * descartaba con `void`, `isPending` volvia a false y el boton no decia
+   * nada. Un rango mayor a REPORT_MAX_RANGE_DAYS devuelve 400 con el motivo
+   * exacto; el usuario no lo veia y volvia a apretar.
+   */
   const downloadFile = async (formatName: ReportExportFormat) => {
-    const result = await exportMutation.mutateAsync({ format: formatName, fromDate, toDate })
-    const url = window.URL.createObjectURL(result.blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = result.filename
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    window.URL.revokeObjectURL(url)
+    setExportError(null)
+    try {
+      const result = await exportMutation.mutateAsync({ format: formatName, fromDate, toDate })
+      const url = window.URL.createObjectURL(result.blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = result.filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (error: unknown) {
+      setExportError(getErrorMessage(error, 'No se pudo exportar el reporte'))
+    }
   }
 
   const inputStyle = create2000sInputStyle()
@@ -85,9 +106,9 @@ const ReportsPage: React.FC = () => {
         <div
           className="text-sm p-4 rounded-lg font-bold"
           style={{
-            background: '#ffeeee',
-            border: '1px solid #ffcccc',
-            color: '#cc0000',
+            background: colors2000s.status.danger.bg,
+            border: `1px solid ${colors2000s.status.danger.border}`,
+            color: colors2000s.status.danger.text,
             boxShadow: colors2000s.shadows.insetDark
           }}
         >
@@ -285,6 +306,21 @@ const ReportsPage: React.FC = () => {
         </button>
       </div>
 
+      {exportError && (
+        <div
+          role="alert"
+          className="text-sm p-4 rounded-lg font-bold"
+          style={{
+            background: colors2000s.status.danger.bg,
+            border: `1px solid ${colors2000s.status.danger.border}`,
+            color: colors2000s.status.danger.text,
+            boxShadow: colors2000s.shadows.insetDark
+          }}
+        >
+          {exportError}
+        </div>
+      )}
+
       <div className="grid xl:grid-cols-3 gap-6">
         <div className="rounded-lg overflow-hidden" style={create2000sListCardStyle()}>
           <div
@@ -468,7 +504,8 @@ const ReportsPage: React.FC = () => {
               {summary?.appointments.map((item) => (
                 <tr key={item.public_id} className="hover:bg-zinc-50 transition-colors">
                   <td className="px-6 py-4 font-bold" style={{ color: colors2000s.text.primary }}>
-                    {format(new Date(item.starts_at), 'dd/MM/yyyy HH:mm')}
+                    {formatArgentinaDateDisplay(item.starts_at)}{' '}
+                    {formatArgentinaTime(item.starts_at)}
                   </td>
                   <td className="px-6 py-4">
                     <span

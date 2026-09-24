@@ -114,7 +114,7 @@ export interface PromotionPayload {
   is_active?: boolean
 }
 
-export class PaymentsService {
+class PaymentsService {
   async getGatewayConfig(): Promise<GatewayConfig> {
     const { data } = await apiClient.get<GatewayConfig>('/payments/gateway-config')
     return data

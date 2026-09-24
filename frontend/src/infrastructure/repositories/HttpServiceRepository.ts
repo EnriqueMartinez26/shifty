@@ -3,12 +3,12 @@ import type { AxiosInstance } from 'axios'
 import { BaseRepository } from './BaseRepository'
 import type { ServiceResponseDTO } from '../../application/dtos/ServiceDTO'
 import { ServiceMapper } from '../../application/mappers/ServiceMapper'
-import { Service } from '../../domain/entities/Service'
+import { Service, type ServiceWriteInput } from '../../domain/entities/Service'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
 
 export class HttpServiceRepository
-  extends BaseRepository<Service, Service, Partial<Service>>
+  extends BaseRepository<Service, Service, ServiceWriteInput>
   implements IServiceRepository
 {
   private client: AxiosInstance
@@ -37,56 +37,21 @@ export class HttpServiceRepository
   }
 
   protected async createImpl(service: Service): Promise<Service> {
-    const primitives = service.toPrimitives()
-    const { data } = await this.client.post<ServiceResponseDTO>('/services/', {
-      name: primitives.name,
-      description: primitives.description,
-      duration_minutes: primitives.duration_minutes,
-      price: primitives.price,
-      color: primitives.color,
-      image_url: primitives.image_url,
-      youtube_trailer_url: primitives.youtube_trailer_url
-    })
+    const { data } = await this.client.post<ServiceResponseDTO>(
+      '/services/',
+      ServiceMapper.toWritePayload(service)
+    )
     return ServiceMapper.toDomain(data)
   }
 
-  protected async updateImpl(id: string, service: Partial<Service>): Promise<Service> {
-    const updateData: Record<string, unknown> = {}
-    const serviceData = service as Partial<Service> & {
-      durationMinutes?: number
-      image_url?: string | null
-      youtube_trailer_url?: string | null
-      isActive?: boolean
-    }
-
-    if (serviceData.name !== undefined) updateData.name = serviceData.name
-    if (serviceData.description !== undefined) updateData.description = serviceData.description
-    if (serviceData.durationMinutes !== undefined) {
-      updateData.duration_minutes = serviceData.durationMinutes
-    } else if (serviceData.duration !== undefined) {
-      updateData.duration_minutes = serviceData.duration.getValue()
-    }
-    if (serviceData.price !== undefined) {
-      updateData.price =
-        typeof serviceData.price === 'number' ? serviceData.price : serviceData.price.getValue()
-    }
-    if (serviceData.color !== undefined) {
-      updateData.color = serviceData.color
-    }
-    if (serviceData.imageUrl !== undefined) {
-      updateData.image_url = serviceData.imageUrl
-    }
-    if (serviceData.image_url !== undefined) {
-      updateData.image_url = serviceData.image_url
-    }
-    if (serviceData.youtubeTrailerUrl !== undefined) {
-      updateData.youtube_trailer_url = serviceData.youtubeTrailerUrl
-    }
-    if (serviceData.youtube_trailer_url !== undefined) {
-      updateData.youtube_trailer_url = serviceData.youtube_trailer_url
-    }
-    if (serviceData.isActive !== undefined) {
-      updateData.is_active = serviceData.isActive
+  protected async updateImpl(id: string, service: ServiceWriteInput): Promise<Service> {
+    // `toWritePayload` cubre lo que POST y PATCH comparten y omite todo campo
+    // `undefined`. `is_active` se agrega aca porque solo existe en
+    // `ServiceUpdate`: mandarlo en el POST seria un campo que el backend
+    // descarta en silencio.
+    const updateData = ServiceMapper.toWritePayload(service)
+    if (service.isActive !== undefined) {
+      updateData.is_active = service.isActive
     }
 
     const { data: responseData } = await this.client.patch<ServiceResponseDTO>(
@@ -100,5 +65,3 @@ export class HttpServiceRepository
     await this.client.delete(`/services/${id}`)
   }
 }
-
-export default HttpServiceRepository

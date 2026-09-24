@@ -373,6 +373,188 @@ async def test_baja_de_promocion_la_saca_de_uso(client: AsyncClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Vigencia de promociones (2026-09-20)
+#
+# El panel mandaba la hora de pared argentina del input `datetime-local` sin
+# offset y nadie comparaba la vigencia con `ensure_utc_aware`: en SQLite la
+# columna vuelve naive y `valid_until < now` reventaba con TypeError (500),
+# mientras que en Postgres la promo vencia tres horas antes de lo tipeado.
+# ---------------------------------------------------------------------------
+
+
+async def _crear_promo_con_vigencia(
+    client: AsyncClient,
+    token: str,
+    code: str,
+    *,
+    valid_from: datetime,
+    valid_until: datetime,
+) -> str:
+    res = await client.post(
+        "/promotions/",
+        headers=auth_headers(token),
+        json={
+            "code": code,
+            "title": "Descuento con vigencia",
+            "promotion_type": "percent",
+            "value": 10,
+            "valid_from": valid_from.isoformat(),
+            "valid_until": valid_until.isoformat(),
+        },
+    )
+    assert res.status_code == 201, res.text
+    return cast(str, res.json()["public_id"])
+
+
+@pytest.mark.asyncio
+async def test_promocion_vencida_no_se_puede_canjear(client: AsyncClient) -> None:
+    store, token = await register_and_login(
+        client, slug="promo-venc", email="promo-venc@test.com"
+    )
+    servicio = await create_service(client, token)
+    ahora = datetime.now(timezone.utc)
+    await _crear_promo_con_vigencia(
+        client,
+        token,
+        "PROMOVIEJA",
+        valid_from=ahora - timedelta(days=30),
+        valid_until=ahora - timedelta(days=1),
+    )
+
+    preview = await client.get(
+        f"/promotions/preview?service_id={servicio}&code=PROMOVIEJA",
+        headers=auth_headers(token),
+    )
+    assert preview.status_code == 422, preview.text
+    assert "ya vencio" in preview.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_promocion_futura_todavia_no_esta_vigente(client: AsyncClient) -> None:
+    store, token = await register_and_login(
+        client, slug="promo-fut", email="promo-fut@test.com"
+    )
+    servicio = await create_service(client, token)
+    ahora = datetime.now(timezone.utc)
+    await _crear_promo_con_vigencia(
+        client,
+        token,
+        "PROMOFUTURA",
+        valid_from=ahora + timedelta(days=1),
+        valid_until=ahora + timedelta(days=30),
+    )
+
+    preview = await client.get(
+        f"/promotions/preview?service_id={servicio}&code=PROMOFUTURA",
+        headers=auth_headers(token),
+    )
+    assert preview.status_code == 422, preview.text
+    assert "todavia no esta vigente" in preview.json()["message"]
+
+
+@pytest.mark.asyncio
+async def test_promocion_vigente_se_cotiza(client: AsyncClient) -> None:
+    store, token = await register_and_login(
+        client, slug="promo-vig", email="promo-vig@test.com"
+    )
+    servicio = await create_service(client, token)  # price 10000
+    ahora = datetime.now(timezone.utc)
+    await _crear_promo_con_vigencia(
+        client,
+        token,
+        "PROMOAHORA",
+        valid_from=ahora - timedelta(days=1),
+        valid_until=ahora + timedelta(days=1),
+    )
+
+    preview = await client.get(
+        f"/promotions/preview?service_id={servicio}&code=PROMOAHORA",
+        headers=auth_headers(token),
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["discount_amount"] == "1000.00"
+
+
+@pytest.mark.asyncio
+async def test_vigencia_sin_zona_horaria_se_rechaza(client: AsyncClient) -> None:
+    """Una hora de pared sin offset no se supone UTC: se rechaza con 422."""
+    store, token = await register_and_login(
+        client, slug="promo-naive", email="promo-naive@test.com"
+    )
+    res = await client.post(
+        "/promotions/",
+        headers=auth_headers(token),
+        json={
+            "code": "PROMONAIVE",
+            "title": "Sin zona horaria",
+            "promotion_type": "percent",
+            "value": 10,
+            "valid_until": "2026-12-31T23:59:00",
+        },
+    )
+    assert res.status_code == 422, res.text
+    assert "zona horaria" in res.text
+
+    # Lo mismo al editar una promo ya creada.
+    promo = await _crear_promo(client, token, "PROMOOK")
+    patch = await client.patch(
+        f"/promotions/{promo}",
+        headers=auth_headers(token),
+        json={"valid_until": "2026-12-31T23:59:00"},
+    )
+    assert patch.status_code == 422, patch.text
+    assert "zona horaria" in patch.text
+
+
+@pytest.mark.asyncio
+async def test_editar_solo_una_punta_de_la_vigencia(
+    client: AsyncClient,
+) -> None:
+    """El PATCH compara lo nuevo (aware) contra lo guardado (naive en SQLite).
+
+    Cubre las dos salidas: la punta valida se persiste en el instante que se
+    mando, y la que invierte la ventana se rechaza antes del commit.
+    """
+    store, token = await register_and_login(
+        client, slug="promo-patch", email="promo-patch@test.com"
+    )
+    ahora = datetime.now(timezone.utc)
+    promo = await _crear_promo_con_vigencia(
+        client,
+        token,
+        "PROMOPATCH",
+        valid_from=ahora - timedelta(days=1),
+        valid_until=ahora + timedelta(days=1),
+    )
+
+    nueva_punta = ahora + timedelta(days=10)
+    patch = await client.patch(
+        f"/promotions/{promo}",
+        headers=auth_headers(token),
+        json={"valid_until": nueva_punta.isoformat()},
+    )
+    assert patch.status_code == 200, patch.text
+
+    # Un 200 solo prueba que no revento: hay que leer de vuelta el instante
+    # para demostrar que se guardo el que se mando y no otro corrido.
+    guardado = datetime.fromisoformat(patch.json()["valid_until"])
+    if guardado.tzinfo is None:  # SQLite devuelve la columna naive
+        guardado = guardado.replace(tzinfo=timezone.utc)
+    assert abs((guardado - nueva_punta).total_seconds()) < 1
+
+    # La otra mitad de la comparacion: mover `valid_from` DESPUES del
+    # `valid_until` guardado tiene que rechazarse, no pasar al commit y
+    # romper el CHECK de base.
+    invalido = await client.patch(
+        f"/promotions/{promo}",
+        headers=auth_headers(token),
+        json={"valid_from": (nueva_punta + timedelta(days=1)).isoformat()},
+    )
+    assert invalido.status_code == 422, invalido.text
+    assert "vigencia" in invalido.json()["message"]
+
+
+# ---------------------------------------------------------------------------
 # Reversa de movimientos de fiado
 # ---------------------------------------------------------------------------
 

@@ -1,10 +1,6 @@
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
-import {
-  argentinaLocalToUtcIso,
-  formatArgentinaDate,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../../theme/colors'
 import {
@@ -22,7 +18,7 @@ import {
 
 export type ActivityFilter = 'active' | 'inactive' | 'all'
 export type SubscriptionFilter = 'all' | 'with' | 'without'
-export type FeedbackTone = 'success' | 'error' | 'warning'
+type FeedbackTone = 'success' | 'error' | 'warning'
 export type SuperAdminModalKey =
   | 'create-store'
   | 'edit-store'
@@ -214,26 +210,6 @@ export const statusLabel = (active: boolean) => (active ? 'Activa' : 'Inactiva')
 export const parseOptionalInt = (value: string) => {
   const trimmed = value.trim()
   return trimmed ? Number.parseInt(trimmed, 10) : null
-}
-
-/**
- * Instante UTC -> valor de un input datetime-local, en hora ARGENTINA.
- * Antes usaba la hora del navegador y el valor volvia al backend como naive,
- * que lo interpretaba como UTC: tres horas de deriva en cada guardado.
- */
-export const toDateTimeInput = (value: string | null) => {
-  if (!value) return ''
-  const fecha = formatArgentinaDate(value)
-  const hora = formatArgentinaTime(value)
-  return fecha && hora ? `${fecha}T${hora}` : ''
-}
-
-/** Valor de un input datetime-local (hora argentina) -> instante UTC ISO. */
-export const fromDateTimeInput = (value: string): string | null => {
-  if (!value) return null
-  const [fecha, hora] = value.split('T')
-  if (!fecha || !hora) return null
-  return argentinaLocalToUtcIso(fecha, hora.slice(0, 5))
 }
 
 /** "vence en N dias" contando dias de calendario en hora argentina. */

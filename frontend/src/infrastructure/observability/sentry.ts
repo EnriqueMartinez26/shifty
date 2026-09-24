@@ -1,6 +1,8 @@
 ﻿import * as Sentry from '@sentry/react'
 
-const parseSampleRate = (rawValue: string | undefined): number | undefined => {
+import { getRuntimeEnv } from '../http/runtime-env'
+
+export const parseSampleRate = (rawValue: string | undefined): number | undefined => {
   if (!rawValue) return undefined
 
   const sampleRate = Number(rawValue)
@@ -10,13 +12,13 @@ const parseSampleRate = (rawValue: string | undefined): number | undefined => {
 }
 
 export const initSentry = (): boolean => {
-  const dsn = import.meta.env.VITE_SENTRY_DSN
-  if (!dsn) return false
+  const env = getRuntimeEnv()
+  if (!env.sentryDsn) return false
 
   Sentry.init({
-    dsn,
-    environment: import.meta.env.VITE_SENTRY_ENVIRONMENT || import.meta.env.MODE,
-    tracesSampleRate: parseSampleRate(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE),
+    dsn: env.sentryDsn,
+    environment: env.sentryEnvironment || env.mode,
+    tracesSampleRate: parseSampleRate(env.sentryTracesSampleRate),
     // No mandar PII por defecto (queda en false, pero explicito) ni cookies/headers.
     sendDefaultPii: false,
     // Los breadcrumbs de consola arrastran lo que se loguea (datos de cliente,

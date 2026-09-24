@@ -780,10 +780,10 @@ async def _dispatch_reminder(
         result = await notify_client_reminder(
             # AUD2-B4-01 (2026-09-20): el email de ESTA reserva, como los
             # otros cinco mails al cliente. El registro puede tener una
-            # direccion vieja (o una que el titular nunca dio: sin OTP,
-            # adopt_contact=False no la actualiza) y el recordatorio era el
-            # unico aviso que la usaba. Se cae al registro si el turno no
-            # trae email.
+            # direccion vieja (o una que el titular nunca dio: el flujo
+            # publico no pisa el contacto de una ficha existente) y el
+            # recordatorio era el unico aviso que la usaba. Se cae al registro
+            # si el turno no trae email.
             email=getattr(appointment, "client_email", None)
             or getattr(client, "email", None),
             details=details,

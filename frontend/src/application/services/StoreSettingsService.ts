@@ -2,12 +2,12 @@ import apiClient from '@infrastructure/http/client'
 
 import type { BusinessType } from '@shared/types/business'
 
-export interface BusinessHourPeriod {
+interface BusinessHourPeriod {
   open: string
   close: string
 }
 
-export type StoreCustomFieldType = 'text' | 'textarea' | 'tel' | 'email' | 'date' | 'select'
+type StoreCustomFieldType = 'text' | 'textarea' | 'tel' | 'email' | 'date' | 'select'
 
 export interface StoreCustomFieldOption {
   label: string
@@ -110,7 +110,7 @@ export interface StoreFeatureFlagsResponse {
   flags: StoreFeatureFlags
 }
 
-export class StoreSettingsService {
+class StoreSettingsService {
   async getSubscription(): Promise<StoreSubscriptionStatus> {
     const { data } = await apiClient.get<StoreSubscriptionStatus>('/stores/me/subscription')
     return data

@@ -54,6 +54,13 @@ export default [
       react: {
         version: 'detect'
       },
+      // Sin estas dos claves, `import/no-unused-modules` arma su lista de
+      // archivos con las extensiones por defecto (.js, .mjs, .cjs) y no evalua
+      // NI UNO de un proyecto TypeScript: el job `dead-code` que CLAUDE.md
+      // declara como compuerta (regla 26) daba verde sobre cero archivos
+      // (F12-01, 2026-09-20).
+      'import/extensions': ['.ts', '.tsx'],
+      'import/parsers': { '@typescript-eslint/parser': ['.ts', '.tsx'] },
       'import/resolver': {
         typescript: {
           project: './tsconfig.json'
@@ -205,6 +212,32 @@ export default [
             {
               group: ['@presentation/**'],
               message: 'Infrastructure cannot depend on presentation.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    // Application orchestrates; it must never reach up into the UI. Importing
+    // infrastructure is still allowed on purpose: the services take the axios
+    // client directly because there is no DI container, and banning it here
+    // would be a refactor, not a guard.
+    files: ['src/application/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@presentation/**'],
+              message: 'Application cannot depend on presentation.'
+            }
+          ],
+          paths: [
+            {
+              name: 'react',
+              message: 'Application must stay free of React dependencies.'
             }
           ]
         }

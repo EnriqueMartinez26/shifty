@@ -95,8 +95,16 @@ def _slot(dias: int) -> datetime:
 async def _verificar_telefono(
     session: AsyncSession, store_slug: str, telefono: str
 ) -> None:
-    """El historial solo se usa con el telefono verificado por OTP."""
+    """Deja el telefono con CONTACTO verificado: ficha con email entregable.
+
+    Desde el 2026-09-20 el historial no se abre con "este telefono paso por
+    OTP" (el codigo iba al email que elegia el que lo pedia), sino con "el
+    email verificado es el que ESA ficha tiene guardado". Por eso el helper
+    crea la ficha con un email entregable antes de pedir el codigo: pedirlo
+    devuelve el codigo al email de la ficha, no al del request.
+    """
     from modules.otp.service import OtpService
+    from modules.public_api.repository import PublicRepository
     from modules.users.model import User
 
     tienda = (
@@ -104,12 +112,17 @@ async def _verificar_telefono(
             select(User).where(User.email == f"{store_slug}@example.com")
         )
     ).scalar_one()
+    contacto = f"cliente-{telefono}@example.com"
+    await PublicRepository(session).get_or_create_client(
+        tienda.store_id, telefono, "Cliente Demo", contacto
+    )
+    await session.commit()
     servicio = OtpService(session)
     pedido = await servicio.request_code(
         store_id=tienda.store_id,
         phone=telefono,
         channel="email",
-        email="cliente@example.com",
+        email=contacto,
         store_name="Demo",
         # El envio (post-respuesta desde B4-01) no importa aca.
         schedule_dispatch=lambda *args: None,

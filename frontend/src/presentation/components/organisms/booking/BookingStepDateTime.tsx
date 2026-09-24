@@ -342,5 +342,3 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     </div>
   )
 }
-
-export default BookingStepDateTime

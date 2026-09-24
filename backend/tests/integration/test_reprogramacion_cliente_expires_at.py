@@ -53,6 +53,9 @@ async def test_el_turno_reprogramado_expira_como_uno_del_alta(
             "staff_id": staff,
             "starts_at": base.isoformat(),
             "client_name": "Expira",
+            # La autogestion exige una ficha con email ENTREGABLE verificado por
+            # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+            "client_email": "expira@example.com",
             "client_phone": TELEFONO,
             "idempotency_key": "repro-expira-0001",
         },

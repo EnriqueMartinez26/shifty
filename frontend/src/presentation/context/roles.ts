@@ -2,10 +2,12 @@ export const ROLE_SUPER_ADMIN = 'super_admin'
 export const ROLE_STORE_ADMIN = 'store_admin'
 export const ROLE_PROFESSIONAL = 'professional'
 export const ROLE_RECEPTIONIST = 'receptionist'
-export const ROLE_CLIENT = 'client'
+// No hay `ROLE_CLIENT`: `canonicalRole` devuelve el rol crudo cuando no es uno
+// de los de arriba, asi que el cliente nunca necesito su constante y nadie la
+// importaba (2026-09-21).
 
-export const LEGACY_ROLE_ADMIN = 'admin'
-export const LEGACY_ROLE_STAFF = 'staff'
+const LEGACY_ROLE_ADMIN = 'admin'
+const LEGACY_ROLE_STAFF = 'staff'
 
 export const canonicalRole = (role: string | null | undefined, isGlobalAdmin?: boolean): string => {
   if (isGlobalAdmin) return ROLE_SUPER_ADMIN

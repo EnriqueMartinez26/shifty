@@ -1,6 +1,6 @@
 import apiClient from '@infrastructure/http/client'
 
-export interface DashboardStats {
+interface DashboardStats {
   appointments_today: number
   pending_confirmations: number
   occupancy_rate: number
@@ -24,7 +24,7 @@ export interface DashboardSummary {
   upcoming_appointments: UpcomingAppointment[]
 }
 
-export class DashboardService {
+class DashboardService {
   async getSummary(): Promise<DashboardSummary> {
     const { data } = await apiClient.get<DashboardSummary>('/dashboard/summary')
     return data

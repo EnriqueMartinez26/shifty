@@ -259,6 +259,9 @@ async def _originales(
                     "staff_id": staff,
                     "starts_at": inicio.isoformat(),
                     "client_name": "Reprogramador",
+                    # La autogestion exige una ficha con email ENTREGABLE verificado por
+                    # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
+                    "client_email": "reprogramador@example.com",
                     "client_phone": TELEFONO_CLIENTE,
                     "idempotency_key": f"pg-orig-{via}-{i:03d}",
                 },

@@ -10,7 +10,7 @@
  * (2026-09-10).
  */
 
-export const ARGENTINA_TZ = 'America/Argentina/Buenos_Aires'
+const ARGENTINA_TZ = 'America/Argentina/Buenos_Aires'
 
 const partsFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: ARGENTINA_TZ,
@@ -94,6 +94,36 @@ export const formatArgentinaDateDisplay = (iso: string): string => {
 }
 
 /**
+ * `dd/MM` en hora argentina, para listas ya acotadas a un rango conocido.
+ * Se compone desde el wall clock en vez de recortar la salida de
+ * `formatArgentinaDateDisplay`: un slice deja el resultado atado al largo
+ * exacto de otro formateador, sin que nada lo sostenga.
+ */
+export const formatArgentinaDayMonth = (iso: string): string => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return `${pad(soloFecha.day)}/${pad(soloFecha.month)}`
+  const instant = parseInstant(iso)
+  if (!instant) return ''
+  const wall = wallClockInArgentina(instant)
+  return `${pad(wall.day)}/${pad(wall.month)}`
+}
+
+/**
+ * Minutos transcurridos desde la medianoche argentina de un instante ISO.
+ * `null` si el ISO no se puede leer. Es lo que necesita la grilla del
+ * calendario para ubicar una tarjeta: la posicion vertical se calcula sobre
+ * la hora de pared argentina, igual que el rotulo que la acompania.
+ */
+export const argentinaMinutesOfDay = (iso: string): number | null => {
+  const soloFecha = calendarParts(iso)
+  if (soloFecha) return soloFecha.hour * 60 + soloFecha.minute
+  const instant = parseInstant(iso)
+  if (!instant) return null
+  const wall = wallClockInArgentina(instant)
+  return wall.hour * 60 + wall.minute
+}
+
+/**
  * Convierte una fecha `yyyy-MM-dd` y una hora `HH:mm` tipeadas en hora
  * argentina al instante UTC en ISO (con `Z`). Es la inversa de
  * `formatArgentinaDate`/`formatArgentinaTime` y no depende de la zona del
@@ -122,4 +152,27 @@ export const argentinaLocalToUtcIso = (date: string, time: string): string => {
   const wallAsUtc = Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, 0, 0)
   const offsetMs = wallAsUtc - naiveAsUtc
   return new Date(naiveAsUtc - offsetMs).toISOString()
+}
+
+/**
+ * Instante UTC -> valor de un input `datetime-local`, en hora ARGENTINA.
+ * Antes usaba la hora del navegador y el valor volvia al backend como naive,
+ * que lo interpretaba como UTC: tres horas de deriva en cada guardado.
+ * Vivia en `pages/superadmin/shared.ts` (cupones de plataforma); se movio aca
+ * cuando aparecio el mismo bug en las promociones de tienda (2026-09-20), que
+ * mandaban el `datetime-local` crudo y vencian tres horas antes.
+ */
+export const toDateTimeInput = (value: string | null | undefined): string => {
+  if (!value) return ''
+  const fecha = formatArgentinaDate(value)
+  const hora = formatArgentinaTime(value)
+  return fecha && hora ? `${fecha}T${hora}` : ''
+}
+
+/** Valor de un input `datetime-local` (hora argentina) -> instante UTC ISO. */
+export const fromDateTimeInput = (value: string): string | null => {
+  if (!value) return null
+  const [fecha, hora] = value.split('T')
+  if (!fecha || !hora) return null
+  return argentinaLocalToUtcIso(fecha, hora.slice(0, 5))
 }

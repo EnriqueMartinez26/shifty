@@ -9,6 +9,7 @@ import App from './App.tsx'
 import { initSentry, Sentry } from './infrastructure/observability/sentry'
 import { setupEventHandlers } from './infrastructure/setup/setupEventHandlers'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
+import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
 import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 import {
   ValidationErrorHandler,
@@ -22,6 +23,10 @@ import {
 import { eventBus } from './shared/events/EventBus'
 
 initSentry()
+
+// Una fecha ilegible degrada a texto de respaldo en vez de tumbar la pantalla;
+// esto evita que ademas se pierda la senal de que llego un dato corrupto.
+setUnreadableInstantReporter((message) => Sentry.captureMessage(message, 'warning'))
 
 // 1. Wire Event Handlers
 setupEventHandlers(eventBus, {})
