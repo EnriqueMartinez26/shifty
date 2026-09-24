@@ -198,7 +198,9 @@ export const CalendarContainer: React.FC = () => {
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
   const [blockForm, setBlockForm] = useState({
     staff_id: '',
-    date: toDateInput(new Date()),
+    // null = el bloqueo nuevo sigue al dia que muestra el calendario. Una fecha
+    // la fija quien edita un bloqueo o la tipea (F11c-05).
+    date: null as string | null,
     starts_at: '10:00',
     ends_at: '11:00',
     reason: 'No atender',
@@ -223,6 +225,10 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
+  // Antes un efecto copiaba dateStr a blockForm.date en cada navegacion, tambien
+  // mientras se editaba un bloqueo: "Editar" el del 20, flecha ">" y "Actualizar
+  // bloqueo" lo movia al 21 sin que nadie tocara la fecha.
+  const blockDate = blockForm.date ?? dateStr
 
   const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
@@ -268,10 +274,6 @@ export const CalendarContainer: React.FC = () => {
       setBlockForm((prev) => ({ ...prev, staff_id: firstStaff.id }))
     }
   }, [blockForm.staff_id, staffMembers])
-
-  useEffect(() => {
-    setBlockForm((prev) => ({ ...prev, date: dateStr }))
-  }, [dateStr])
 
   const blocksInRange = useMemo(() => {
     return (blocksQuery.data || []).filter((block) => {
@@ -427,7 +429,7 @@ export const CalendarContainer: React.FC = () => {
     setEditingBlockId(null)
     setBlockForm((prev) => ({
       ...prev,
-      date: dateStr,
+      date: null,
       starts_at: '10:00',
       ends_at: '11:00',
       reason: 'No atender',
@@ -440,8 +442,8 @@ export const CalendarContainer: React.FC = () => {
   const blockPayloadFromForm = () => {
     // La hora tipeada es hora argentina; antes se mandaba como si fuera UTC
     // (el bloqueo quedaba corrido 3 horas respecto de lo que el dueno veia).
-    const startsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.starts_at)
-    const endsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.ends_at)
+    const startsAt = argentinaLocalToUtcIso(blockDate, blockForm.starts_at)
+    const endsAt = argentinaLocalToUtcIso(blockDate, blockForm.ends_at)
     const recurrenceUntil =
       blockForm.recurrence === 'none'
         ? undefined
@@ -1128,7 +1130,7 @@ export const CalendarContainer: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <input
               type="date"
-              value={blockForm.date}
+              value={blockDate}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, date: e.target.value }))}
               className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}
