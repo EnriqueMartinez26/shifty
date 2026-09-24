@@ -17,7 +17,9 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] rclone is installed with a remote for the off-host bucket (created by the owner), and `BACKUP_REMOTE` is set in `/etc/shifty/ops.env`.
 - [ ] `shifty-backup.timer` is enabled (`systemctl list-timers shifty-backup.timer`) and `/var/backups/shifty/last-success` is younger than 24 h.
 - [ ] Host cron and logrotate are installed: `/etc/cron.d/shifty-guard`, `/etc/cron.d/shifty-latency`, `/etc/logrotate.d/shifty`.
-- [ ] certbot is installed on the host with webroot `/var/www/acme` (mounted into the nginx container) and a deploy hook that runs `docker compose exec nginx nginx -s reload`; `certbot renew --dry-run` passes.
+- [ ] certbot is installed on the host with webroot `/opt/shifty/nginx/acme` (compose mounts it at `/var/www/acme` in nginx) and `--deploy-hook /opt/shifty/scripts/cert-deploy-hook.sh`, which copies the certificates into `nginx/certs` and reloads nginx with `APP_VERSION` from `.deploy/current`; `certbot renew --dry-run` passes.
+- [ ] The `db` container was recreated once after adding the `pg_backups` volume (`docker compose exec db ls -ld /backups` works).
+- [ ] If this release changes `nginx/nginx.prod.conf` or the edge image, `make deploy-edge` is scheduled outside peak hours (`make deploy` only reloads the edge).
 - [ ] At least one alert channel works (`ALERT_EMAIL` with msmtp/sendmail, or `ALERT_WEBHOOK_URL`): trigger a test alert with `SHIFTY_STATE_DIR=$(mktemp -d) BACKUP_DIR=$(mktemp -d) bash scripts/backup-check.sh` (the temporary state dir keeps the real alert from being silenced).
 
 ## 2. Observability and health

@@ -404,12 +404,16 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Imágenes con versión y deploy por script.** CI construye y publica
   `ghcr.io/enriquemartinez26/shifty-{backend,frontend,nginx}:<sha>`
   (`.github/workflows/build-images.yml`); el VPS no construye, hace `pull`
-  del sha. `make deploy APP_VERSION=<sha>` corre `scripts/deploy.sh`:
-  preflight (Compose >= 2.24, disco, backup de menos de 24 h), migración con
-  el código viejo sirviendo, backend nuevo al lado del viejo, `up -d
-  --no-deps` con lista explícita (nunca recrea db, redis ni rabbitmq),
-  `nginx -s reload` (nunca restart), compuerta de 60 s y rollback automático
-  sin migrar. `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
+  del sha (todo `up` y `run` lleva `--no-build`). `make deploy
+  APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
+  `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
+  24 h), imágenes verificadas con `docker image inspect`, migración con el
+  código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps`
+  con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
+  compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
+  borde (nginx) solo se RECARGA (`nginx -t && nginx -s reload`); se recrea
+  únicamente con `make deploy-edge`, cuando cambió su imagen o
+  `nginx/nginx.prod.conf`. `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
   de compose; no se fija en el `.env` del servidor (queda en
   `.deploy/current`).
 - **Toda llamada externa dentro de un request tiene un presupuesto total
@@ -421,7 +425,9 @@ Una instrucción en lenguaje natural no es una garantía.
 - **El host se opera con scripts versionados, no a mano**
   (`docs/DEPLOY_RUNBOOK.md` §8): backup diario con copia fuera del host
   (timer de systemd, `scripts/backup.sh`), guard que reinicia contenedores
-  `unhealthy` con tope de 3 por hora (sin `autoheal` ni `docker.sock`),
+  `unhealthy` con tope de 3 por contenedor y 6 en total por hora, sin tocar
+  db ni rabbitmq ni reiniciar nada con db o redis_state caídos (sin
+  `autoheal` ni `docker.sock`),
   chequeos horarios de NTP, certificado, disco y memoria, y latencia por
   ruta cada 5 minutos. Se prueban con binarios falsos
   (`tests/unit/host_falso.py`).

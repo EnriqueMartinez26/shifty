@@ -46,7 +46,7 @@ volumes:
       device: ${BACKUP_DIR:-/var/backups/shifty}
 ```
 
-The host directory must exist before `docker compose up` (`install -d -m 0700 /var/backups/shifty`); a bind volume does not create it.
+The host directory must exist before `docker compose up` (`install -d -m 0700 /var/backups/shifty`); a bind volume does not create it. The running `db` container only gets the mount when it is recreated, and `make deploy` never recreates `db`: do it once, in a maintenance window, with `APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build db` (`docs/DEPLOY_RUNBOOK.md` §1).
 
 ### One-time setup on the VPS (owner)
 
