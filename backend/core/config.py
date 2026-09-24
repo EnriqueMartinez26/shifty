@@ -213,6 +213,14 @@ class Settings(BaseSettings):
     MERCADOPAGO_OAUTH_AUTH_URL: str = "https://auth.mercadopago.com/authorization"
     MERCADOPAGO_OAUTH_STATE_TTL_SECONDS: int = 900
     MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS: int = 300
+    # Presupuesto TOTAL de un request para hablar con Mercado Pago (preferencia
+    # + refresh OAuth + reintento), no por llamada. Tiene que quedar debajo de
+    # los 30 s de nginx con margen para la base, la compensacion y el mail en
+    # linea: por encima el cliente ve 504 con la reserva ya commiteada (F1-04,
+    # R8-01, R11-08). 8 s: una preferencia tarda 1-2 s y la reserva tiene que
+    # contestar en menos de 10 s aun con MP degradado (flujo (j) de
+    # tests/e2e); lo que no entra se compensa y el cliente reintenta.
+    MERCADOPAGO_REQUEST_BUDGET_SECONDS: float = Field(default=8.0, gt=0, lt=25)
     # Base de la API de Mercado Pago. Configurable SOLO para apuntar al
     # emulador de tests/e2e en desarrollo; staging y produccion exigen la real.
     MERCADOPAGO_API_BASE_URL: str = MERCADOPAGO_API_BASE_URL_REAL

@@ -67,6 +67,7 @@ async def _tienda_con_turnos(
                 "client_name": f"Cliente {i}",
                 "client_email": f"cliente{i}-{slug}@example.com",
                 "client_phone": f"+54911555{i:05d}",
+                "accepts_terms": True,
                 "idempotency_key": f"bloqueo-{slug}-{i:03d}",
             },
         )

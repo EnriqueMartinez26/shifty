@@ -62,6 +62,7 @@ async def _turno_de_las_22_local(client: AsyncClient) -> tuple[str, str, datetim
             "starts_at": slot["starts_at"],
             "client_name": "Noche",
             "client_phone": "+5491155550808",
+            "accepts_terms": True,
             "idempotency_key": "agenda-noche-2200",
         },
     )

@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from typing import cast
+from typing import Any, cast
 from httpx import AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -47,7 +47,7 @@ async def _tienda_reservable(
 
 def _reserva(
     store: str, service: str, staff: str, slot: datetime, i: int, key: str
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,
@@ -55,6 +55,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
+        "accepts_terms": True,
         "idempotency_key": key,
     }
 
@@ -263,6 +264,7 @@ async def _originales(
                     # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
                     "client_email": "reprogramador@example.com",
                     "client_phone": TELEFONO_CLIENTE,
+                    "accepts_terms": True,
                     "idempotency_key": f"pg-orig-{via}-{i:03d}",
                 },
             )

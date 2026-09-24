@@ -420,7 +420,7 @@ def _reserva(
     tel: str,
     nombre: str,
     clave: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,
@@ -428,6 +428,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": nombre,
         "client_phone": tel,
+        "accepts_terms": True,
         "idempotency_key": clave,
     }
 

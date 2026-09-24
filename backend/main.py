@@ -21,6 +21,7 @@ from core.exceptions import AppException
 from core.rate_limit import RedisRateLimitMiddleware
 from core.redis import close_redis
 from core.request_id import RequestIdMiddleware
+from modules.payments.service import close_mercadopago_client
 from core.security_middleware import RequestGuardMiddleware, SecurityHeadersMiddleware
 from modules.appointment_blocks.router import router as appointment_blocks_router
 from modules.auth.router import router as auth_router
@@ -116,6 +117,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await _close_redis_on_shutdown()
+        await _close_mercadopago_client_on_shutdown()
         await _dispose_db_pool_on_shutdown()
 
 
@@ -130,6 +132,18 @@ async def _close_redis_on_shutdown() -> None:
         await close_redis()
     except Exception:
         logger.warning("redis_close_failed_on_shutdown", exc_info=True)
+
+
+async def _close_mercadopago_client_on_shutdown() -> None:
+    """Cierra el cliente httpx compartido de Mercado Pago (F1-04, R11-20).
+
+    Sus conexiones keep-alive quedaban abiertas hasta que el proceso moria.
+    Best-effort como el de Redis: el apagado no se traba por esto.
+    """
+    try:
+        await close_mercadopago_client()
+    except Exception:
+        logger.warning("mercadopago_client_close_failed_on_shutdown", exc_info=True)
 
 
 async def _dispose_db_pool_on_shutdown() -> None:

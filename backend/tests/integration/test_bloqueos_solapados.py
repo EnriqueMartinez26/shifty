@@ -71,6 +71,7 @@ async def test_reserva_publica_dentro_de_dos_bloqueos_solapados_responde_409(
             "starts_at": slot.isoformat(),
             "client_name": "Solape",
             "client_phone": "+5491155550202",
+            "accepts_terms": True,
             "idempotency_key": "solape-publico-001",
         },
     )

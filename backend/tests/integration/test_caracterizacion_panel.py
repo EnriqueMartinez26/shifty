@@ -38,6 +38,26 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 from tests.integration.test_mails_al_cliente import Buzon
 
 
+def _espiar_orden_con_commit_plano(
+    session: AsyncSession, redis: Any, monkeypatch: pytest.MonkeyPatch
+) -> list[str]:
+    """``_espiar_orden`` mas el commit PLANO de ``AsyncSession``.
+
+    Desde F1-05 (2026-09-24) el service commitea con ``AsyncSession.commit``
+    antes del mail, para no mandarlo con una transaccion abierta: ese commit
+    no pasa por el metodo de la instancia que espia ``_espiar_orden``.
+    """
+    orden = _espiar_orden(session, redis, monkeypatch)
+    commit_plano = AsyncSession.commit
+
+    async def commit(self: AsyncSession) -> None:
+        orden.append("commit")
+        await commit_plano(self)
+
+    monkeypatch.setattr(AsyncSession, "commit", commit)
+    return orden
+
+
 def _buzon_en_orden(orden: list[str] | None, monkeypatch: pytest.MonkeyPatch) -> Buzon:
     buzon = Buzon()
 
@@ -90,7 +110,7 @@ async def test_alta_del_panel_cuerpo_filas_auditoria_y_orden(
 ) -> None:
     t = await _tienda(client, "carac-panel-alta")
     auditoria_antes = len(await _auditoria(test_session))
-    orden = _espiar_orden(test_session, await _redis(), monkeypatch)
+    orden = _espiar_orden_con_commit_plano(test_session, await _redis(), monkeypatch)
     buzon = _buzon_en_orden(orden, monkeypatch)
 
     res = await _alta_panel(client, t, t.slot, "carac-panel-alta-0001")
@@ -113,8 +133,10 @@ async def test_alta_del_panel_cuerpo_filas_auditoria_y_orden(
         "completed_at": None,
     }
     assert ensure_utc_aware(datetime.fromisoformat(cuerpo["starts_at"])) == t.slot
-    # Commit -> mail de confirmacion al actor -> invalidacion.
-    assert orden == ["commit", "mail", "cache"], orden
+    # Commit -> invalidacion -> mail de confirmacion al actor. Hasta F1-05
+    # (2026-09-24) el mail iba antes de la invalidacion: con un SMTP lento el
+    # horario tomado seguia libre en la disponibilidad publica.
+    assert orden == ["commit", "cache", "mail"], orden
     assert [m[0] for m in buzon.enviados] == ["carac-panel-alta@example.com"]
     fila = await _turno(test_session, cuerpo["public_id"])
     assert (fila.price_amount, fila.client_email, fila.idempotency_key) == (
@@ -189,6 +211,7 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
             "starts_at": t.slot.isoformat(),
             "client_name": "Cliente Panel",
             "client_phone": "+5491155559001",
+            "accepts_terms": True,
             "client_email": "cliente-panel@example.com",
             "notes": "Traer estudios",
             "idempotency_key": "carac-panel-repro-alta",
@@ -198,7 +221,7 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
     turno = alta.json()["public_id"]
     eventos_antes = len(await _eventos(test_session))
     auditoria_antes = len(await _auditoria(test_session))
-    orden = _espiar_orden(test_session, await _redis(), monkeypatch)
+    orden = _espiar_orden_con_commit_plano(test_session, await _redis(), monkeypatch)
     buzon = _buzon_en_orden(orden, monkeypatch)
     nuevo_inicio = t.slot + timedelta(hours=2)
 

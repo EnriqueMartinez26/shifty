@@ -412,6 +412,7 @@ class Mundo:
                 "starts_at": self.slot(tienda).isoformat(),
                 "client_name": nombre,
                 "client_phone": telefono,
+                "accepts_terms": True,
                 "client_email": email,
                 "idempotency_key": self.unico("clave-publica"),
             },

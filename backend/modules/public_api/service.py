@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import invalidate_availability
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
+from core.database import _apply_tenant_context
 from core.exceptions import (
     AppException,
     AppointmentConflictException,
@@ -67,7 +68,11 @@ from modules.payments.deposit_rules import (
     decide_deposit,
 )
 from modules.payments.model import JsonValue, OutboxMessage, Payment, PaymentStatus
-from modules.payments.service import ensure_payment_preference
+from modules.payments.service import (
+    MercadoPagoAPIError,
+    ensure_payment_preference,
+    mercadopago_budget,
+)
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import PromotionQuote, quote_promotion, redeem_promotion
 from modules.public_api.repository import PublicRepository, RangeRejection
@@ -376,7 +381,15 @@ class PublicBookingService:
             self.cache, request.store_id, booking.appointment.starts_at
         )
         await self._attach_payment_link(request, booking)
-        await self._notify_client(request, booking)
+        # El mail (SMTP, hasta 10 s por operacion) sale sin transaccion: el
+        # commit de TenantSession deja otra abierta al reaplicar el contexto
+        # (F1-05, R8-05; patron de AUD2-B2-08). No hay nada pendiente: esto
+        # solo la cierra, y el contexto vuelve antes de la lista de espera.
+        await AsyncSession.commit(self.db)
+        try:
+            await self._notify_client(request, booking)
+        finally:
+            await _apply_tenant_context(self.db)
         response = _booking_response(data, request, booking)
         await self._close_waitlist_entry(data, request, booking)
         return response
@@ -606,8 +619,10 @@ class PublicBookingService:
             appointment.expires_at = payment_hold_deadline(appointment.starts_at)
         else:
             appointment.expires_at = appointment.starts_at
-        if data.accepts_terms:
-            appointment.terms_accepted_at = datetime.now(timezone.utc)
+        # El schema ya exige accepts_terms (PV-09): todo turno publico nace con
+        # el instante del consentimiento. No hay columna de version de
+        # terminos; si hace falta, la agrega una migracion.
+        appointment.terms_accepted_at = datetime.now(timezone.utc)
         promotion_quote = None
         if data.promotion_code:
             try:
@@ -696,22 +711,30 @@ class PublicBookingService:
         if not request.payment_required or payment is None:
             return
         try:
-            await ensure_payment_preference(
-                self.db,
-                appointment=booking.appointment,
-                service=booking.service,
-                store_id=request.store_id,
-                amount_override=payment.amount,
-                original_amount=payment.original_amount,
-                discount_amount=payment.discount_amount,
-                promotion_code=payment.promotion_code,
-                create_provider_link=True,
-            )
+            # Presupuesto total de la cadena de MP (F1-04): agotarlo es
+            # MercadoPagoAPIError(transient=True) y se compensa como cualquier
+            # fallo del proveedor, antes de que nginx corte con un 504 y el
+            # cliente reintente contra una reserva ya commiteada.
+            with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+                await ensure_payment_preference(
+                    self.db,
+                    appointment=booking.appointment,
+                    service=booking.service,
+                    store_id=request.store_id,
+                    amount_override=payment.amount,
+                    original_amount=payment.original_amount,
+                    discount_amount=payment.discount_amount,
+                    promotion_code=payment.promotion_code,
+                    create_provider_link=True,
+                )
             await self.db.commit()
         except CircuitBreakerOpenError as exc:
             await revert_failed_booking(self.db, self.cache, booking.appointment)
             raise _payment_provider_unavailable(exc)
-        except RuntimeError as exc:
+        except (MercadoPagoAPIError, RuntimeError, TimeoutError) as exc:
+            # MercadoPagoAPIError es RuntimeError; se nombra porque es EL caso.
+            # TimeoutError por si un tope ajeno al presupuesto corta la red:
+            # antes no era RuntimeError y el turno quedaba retenido sin link.
             await revert_failed_booking(self.db, self.cache, booking.appointment)
             raise _payment_link_failed(exc)
 

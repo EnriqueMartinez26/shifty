@@ -1,11 +1,12 @@
 import csv
 import unicodedata
+from collections.abc import Iterator
 from io import BytesIO, StringIO
 from datetime import datetime
 from typing import Any
 
 from core.utils import ARGENTINA_TZ, ensure_utc_aware
-from modules.reports.schemas import ReportSummaryResponse
+from modules.reports.schemas import ReportAppointmentItem, ReportSummaryResponse
 
 # Caracteres con los que Excel/Sheets arrancan una FORMULA. client_name lo
 # controla un atacante anonimo via la reserva publica: una celda que empieza con
@@ -85,7 +86,23 @@ def _summary_metrics(
     )
 
 
+# Filas por bloque del CSV en streaming: cada bloque es un ``yield`` y
+# Starlette itera el generador en su pool de hilos, nunca en el del loop.
+_CSV_CHUNK_ROWS = 500
+
+
 def export_to_csv(summary: ReportSummaryResponse) -> bytes:
+    """El CSV entero (tests y llamadores sin streaming)."""
+    return b"".join(iter_csv(summary))
+
+
+def iter_csv(summary: ReportSummaryResponse) -> Iterator[bytes]:
+    """CSV en bloques para ``StreamingResponse`` (F1-07, R2-02).
+
+    Iterador SINCRONO a proposito: Starlette lo recorre con
+    ``iterate_in_threadpool``, asi que el formateo de filas no corre en el
+    hilo del event loop. El primer bloque lleva el BOM de ``utf-8-sig``.
+    """
     buffer = StringIO()
     writer = csv.writer(buffer)
 
@@ -110,23 +127,37 @@ def export_to_csv(summary: ReportSummaryResponse) -> bytes:
         ]
     )
 
-    for item in summary.appointments:
-        writer.writerow(
-            [
-                item.public_id,
-                _local_datetime(item.starts_at),
-                _local_datetime(item.ends_at),
-                _neutralize_cell(item.status),
-                _neutralize_cell(item.service_name),
-                _neutralize_cell(item.staff_name),
-                _neutralize_cell(item.client_name),
-                item.service_price,
-            ]
-        )
-
     # utf-8-sig antepone el BOM: sin el, Excel es-AR abre el CSV como ANSI y
-    # los acentos salen rotos ("Corte clÃ¡sico"). B5-16.
-    return buffer.getvalue().encode("utf-8-sig")
+    # los acentos salen rotos ("Corte clÃ¡sico"). B5-16. Solo el primer
+    # bloque: los demas van en utf-8 plano.
+    encoding = "utf-8-sig"
+    for index, item in enumerate(summary.appointments, start=1):
+        writer.writerow(_appointment_cells(item))
+        if index % _CSV_CHUNK_ROWS == 0:
+            yield _drain(buffer, encoding)
+            encoding = "utf-8"
+    yield _drain(buffer, encoding)
+
+
+def _drain(buffer: StringIO, encoding: str) -> bytes:
+    chunk = buffer.getvalue().encode(encoding)
+    buffer.seek(0)
+    buffer.truncate(0)
+    return chunk
+
+
+def _appointment_cells(item: ReportAppointmentItem) -> list[object]:
+    """Fila de turno de CSV y Excel, con las celdas neutralizadas (regla 19)."""
+    return [
+        item.public_id,
+        _local_datetime(item.starts_at),
+        _local_datetime(item.ends_at),
+        _neutralize_cell(item.status),
+        _neutralize_cell(item.service_name),
+        _neutralize_cell(item.staff_name),
+        _neutralize_cell(item.client_name),
+        item.service_price,
+    ]
 
 
 def export_to_excel(summary: ReportSummaryResponse) -> bytes:
@@ -135,9 +166,10 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
     except ImportError as exc:
         raise RuntimeError("Falta dependencia openpyxl para exportar Excel") from exc
 
-    wb = Workbook()
-    summary_sheet = wb.active
-    summary_sheet.title = "Summary"
+    # write_only: las filas se serializan al agregarlas en vez de quedar como
+    # celdas en memoria hasta el save (F1-07). El orden de hojas no cambia.
+    wb = Workbook(write_only=True)
+    summary_sheet = wb.create_sheet(title="Summary")
 
     summary_sheet.append(["from_date", summary.from_date.isoformat()])
     summary_sheet.append(["to_date", summary.to_date.isoformat()])
@@ -160,18 +192,7 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
         ]
     )
     for item in summary.appointments:
-        appointments_sheet.append(
-            [
-                item.public_id,
-                _local_datetime(item.starts_at),
-                _local_datetime(item.ends_at),
-                _neutralize_cell(item.status),
-                _neutralize_cell(item.service_name),
-                _neutralize_cell(item.staff_name),
-                _neutralize_cell(item.client_name),
-                item.service_price,
-            ]
-        )
+        appointments_sheet.append(_appointment_cells(item))
 
     buffer = BytesIO()
     wb.save(buffer)
@@ -192,12 +213,22 @@ _ELLIPSIS = "..."
 
 
 def _fit_pdf_text(text: str, width: float, font: str, string_width: Any) -> str:
-    """Recorta ``text`` para que entre en ``width`` puntos, marcando el corte."""
+    """Recorta ``text`` para que entre en ``width`` puntos, marcando el corte.
+
+    Busca por biseccion el prefijo mas largo que entra con el "..." (el ancho
+    crece con el largo): O(log n) mediciones. Antes sacaba un caracter por
+    vuelta y medía el texto entero cada vez, O(n^2) por celda (F1-07, R8-06).
+    """
     if string_width(text, font, _PDF_FONT_SIZE) <= width:
         return text
-    while text and string_width(text + _ELLIPSIS, font, _PDF_FONT_SIZE) > width:
-        text = text[:-1]
-    return text.rstrip() + _ELLIPSIS
+    entra, no_entra = 0, len(text)
+    while no_entra - entra > 1:
+        medio = (entra + no_entra) // 2
+        if string_width(text[:medio] + _ELLIPSIS, font, _PDF_FONT_SIZE) <= width:
+            entra = medio
+        else:
+            no_entra = medio
+    return text[:entra].rstrip() + _ELLIPSIS
 
 
 def _draw_pdf_row(

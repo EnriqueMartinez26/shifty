@@ -119,10 +119,13 @@ def _mercadopago_que_anota(
 
 
 def _mercadopago_caido(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Se dobla la request a MP: desde F1-05 (2026-09-24) el link se pide en
+    # dos pasos (lecturas, commit plano, red) y el wrapper que se doblaba
+    # antes (create_mercadopago_preference) ya no existe.
     async def caido(*args: Any, **kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("Mercado Pago no responde")
 
-    monkeypatch.setattr(payments_service, "create_mercadopago_preference", caido)
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", caido)
 
 
 @pytest.mark.asyncio

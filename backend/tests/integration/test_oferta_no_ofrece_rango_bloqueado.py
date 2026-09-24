@@ -84,6 +84,7 @@ async def _reservar_y_cancelar(
             "starts_at": slot.isoformat(),
             "client_name": "Titular",
             "client_phone": "+5491155550200",
+            "accepts_terms": True,
             "client_email": "titular@example.com",
             "idempotency_key": "bloqueo-espera-0001",
         },

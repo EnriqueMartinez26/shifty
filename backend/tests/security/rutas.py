@@ -877,6 +877,7 @@ async def _reserva_publica(m: Mundo, a: Actor, t: Tienda) -> Llamada:
             "starts_at": m.slot(t).isoformat(),
             "client_name": "Cliente Portal",
             "client_phone": m.telefono_nuevo(),
+            "accepts_terms": True,
             "idempotency_key": m.unico("clave-portal"),
         },
     )
@@ -1619,7 +1620,9 @@ TABLA: tuple[Ruta, ...] = (
         TODOS,
         A.PUBLICA_TIENDA,
         _reserva_publica,
-        idor=frozenset({400, 404, 422}),
+        # Sin 422: la llamada manda el consentimiento (PV-09), asi que un 422
+        # seria un cuerpo invalido y no la guarda de tienda cruzada.
+        idor=frozenset({400, 404}),
     ),
     R(
         "GET",

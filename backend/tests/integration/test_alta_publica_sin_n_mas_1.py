@@ -101,6 +101,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
+        "accepts_terms": True,
         "idempotency_key": f"alta-lote-{i:04d}",
     }
 

@@ -9,7 +9,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.security import hash_password
+from core.security import hash_password_async
 from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.audit.model import AuditAction, AuditLog
@@ -431,7 +431,7 @@ class UserAdminRepository(_BaseAdminRepository):
             raise ValueError("Ya existe un usuario con ese email")
         user = User(
             **data,
-            hashed_password=hash_password(password),
+            hashed_password=await hash_password_async(password),
             full_name=f"{first_name} {last_name}".strip(),
             role=UserRole.ADMIN,
             store_id=store.id,
@@ -456,6 +456,9 @@ class UserAdminRepository(_BaseAdminRepository):
     ) -> User:
         data = payload.copy()
         password = data.pop("password", None)
+        # bcrypt ANTES de la guarda, que toma FOR UPDATE: fuera del loop y sin
+        # sostener el lock los ~250 ms del hash (F1-06, R8-03).
+        nuevo_hash = await hash_password_async(password) if password else None
         # Regla 14, en el unico lugar donde vive (AUD2-B3-01): la misma guarda
         # corre en PATCH /users/{id} y en DELETE /users/{id}.
         await assert_deactivation_allowed(
@@ -469,8 +472,8 @@ class UserAdminRepository(_BaseAdminRepository):
         apply_patch(user, data)
         if "first_name" in data or "last_name" in data:
             user.full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-        if password:
-            user.hashed_password = hash_password(password)
+        if nuevo_hash is not None:
+            user.hashed_password = nuevo_hash
         if data.get("is_active") is False or data.get("role") is not None or password:
             await revoke_sessions_for_user(self.db, user.id)
         try:

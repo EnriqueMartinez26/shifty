@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
 from urllib.parse import urlencode, urlparse
@@ -14,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 from core.config import settings
 from core.crypto import decrypt_secret, encrypt_secret
+from core.database import _apply_tenant_context
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
@@ -32,11 +39,109 @@ ACTIVE_APPOINTMENT_STATUSES = {
     AppointmentStatus.PENDING_PAYMENT.value,
     AppointmentStatus.CONFIRMED.value,
 }
+# Timeouts por fase de httpx (F1-04, R8-01). Antes era un 20 s plano por
+# fase: una request lenta podia sumar mucho mas que eso.
+MERCADOPAGO_HTTP_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=3.0)
+# Tope duro de UNA request a MP, fases sumadas. Lo asume la cuenta del lease
+# de vencimientos (``jobs.MP_REQUEST_TIMEOUT``): no puede ser mayor.
+MERCADOPAGO_REQUEST_DEADLINE_SECONDS = 20.0
 _mercadopago_breaker = AsyncCircuitBreaker(
     name="mercadopago",
     failure_threshold=settings.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     recovery_timeout_seconds=settings.PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS,
 )
+
+
+# Cliente httpx compartido (F1-04, R8-08, R11-20). Antes cada llamada abria
+# uno nuevo: SSLContext + certifi sincronos (5-20 ms de loop) y DNS + TCP + TLS
+# cada vez. Sus conexiones quedan atadas al event loop que las abrio, asi que
+# se cachea POR LOOP: la API tiene uno por proceso y Celery otro por proceso
+# hijo (``core.worker_loop``, regla 8). Un cliente de otro loop no se reusa.
+# La API lo cierra en el lifespan (``close_mercadopago_client``).
+_http_client: httpx.AsyncClient | None = None
+_http_client_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _mercadopago_http_client() -> httpx.AsyncClient:
+    global _http_client, _http_client_loop
+    loop = asyncio.get_running_loop()
+    if _http_client is None or _http_client_loop is not loop or _http_client.is_closed:
+        _http_client = httpx.AsyncClient(timeout=MERCADOPAGO_HTTP_TIMEOUT)
+        _http_client_loop = loop
+    return _http_client
+
+
+async def close_mercadopago_client() -> None:
+    """Cierra el cliente compartido si es de este loop (apagado de la API)."""
+    global _http_client, _http_client_loop
+    client, loop = _http_client, _http_client_loop
+    _http_client, _http_client_loop = None, None
+    if client is None or client.is_closed:
+        return
+    if loop is asyncio.get_running_loop():
+        await client.aclose()
+
+
+# Vencimiento del presupuesto total del request en curso (reloj del loop).
+# Lo fija ``mercadopago_budget`` y lo respeta cada request a MP POR DEBAJO del
+# circuit breaker: un ``asyncio.timeout`` por fuera cancelaria la llamada en
+# medio del breaker y dejaria su sonda de half-open tomada para siempre.
+_budget_deadline: ContextVar[float | None] = ContextVar(
+    "mercadopago_budget_deadline", default=None
+)
+
+
+@contextmanager
+def mercadopago_budget(seconds: float) -> Iterator[None]:
+    """Presupuesto total para toda la cadena de llamadas a MP de un request.
+
+    Preferencia + refresh OAuth + reintento no pueden pasar de ``seconds``
+    sumados; agotarlo es ``MercadoPagoAPIError(transient=True)`` y el
+    llamador compensa. Anidado, gana el vencimiento mas cercano.
+    """
+    deadline = asyncio.get_running_loop().time() + seconds
+    current = _budget_deadline.get()
+    if current is not None:
+        deadline = min(deadline, current)
+    token = _budget_deadline.set(deadline)
+    try:
+        yield
+    finally:
+        _budget_deadline.reset(token)
+
+
+def _request_deadline_seconds() -> float:
+    """Lo que le queda a esta request: su tope o el resto del presupuesto."""
+    deadline = _budget_deadline.get()
+    if deadline is None:
+        return MERCADOPAGO_REQUEST_DEADLINE_SECONDS
+    remaining = deadline - asyncio.get_running_loop().time()
+    return min(MERCADOPAGO_REQUEST_DEADLINE_SECONDS, remaining)
+
+
+async def _send_to_mercadopago(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    json_body: dict[str, JsonValue] | None = None,
+    form_data: dict[str, str] | None = None,
+) -> httpx.Response:
+    """Una request al cliente compartido, acotada por su tope y el presupuesto.
+
+    Levanta ``TimeoutError`` si se agoto el tiempo (sea de httpx o propio) y
+    ``httpx.RequestError`` si la red fallo; cada llamador lo traduce.
+    """
+    remaining = _request_deadline_seconds()
+    if remaining <= 0:
+        raise TimeoutError("presupuesto de Mercado Pago agotado")
+    try:
+        async with asyncio.timeout(remaining):
+            return await _mercadopago_http_client().request(
+                method, url, headers=headers, json=json_body, data=form_data
+            )
+    except httpx.TimeoutException as exc:
+        raise TimeoutError(str(exc)) from exc
 
 
 class MercadoPagoAPIError(RuntimeError):
@@ -182,6 +287,12 @@ async def _mercadopago_api_request(
     path: str,
     json_body: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
+    # Presupuesto ya agotado: no sale ninguna request, asi que no es una falla
+    # de MP y no pasa por el breaker (no suma ni ocupa la sonda half-open).
+    if _request_deadline_seconds() <= 0:
+        raise MercadoPagoAPIError(
+            "Se agoto el tiempo para hablar con Mercado Pago", transient=True
+        )
     result = await _mercadopago_breaker.call(
         lambda: _perform_mercadopago_request(
             access_token,
@@ -211,13 +322,13 @@ async def _perform_mercadopago_request(
         "Accept": "application/json",
     }
     try:
-        async with httpx.AsyncClient(
-            base_url=settings.MERCADOPAGO_API_BASE_URL, timeout=20.0
-        ) as client:
-            response = await client.request(
-                method, path, headers=headers, json=json_body
-            )
-    except httpx.TimeoutException as exc:
+        response = await _send_to_mercadopago(
+            method,
+            f"{settings.MERCADOPAGO_API_BASE_URL}{path}",
+            headers=headers,
+            json_body=json_body,
+        )
+    except TimeoutError as exc:
         raise MercadoPagoAPIError(
             "Mercado Pago no respondio a tiempo", transient=True
         ) from exc
@@ -361,20 +472,22 @@ async def _mercadopago_oauth_token_request(
         raise RuntimeError("Mercado Pago OAuth no esta configurado")
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                f"{settings.MERCADOPAGO_API_BASE_URL}/oauth/token",
-                data=form_data,
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Accept": "application/json",
-                },
-            )
-    except httpx.TimeoutException as exc:
-        raise RuntimeError("Mercado Pago no respondio a tiempo durante OAuth") from exc
+        response = await _send_to_mercadopago(
+            "POST",
+            f"{settings.MERCADOPAGO_API_BASE_URL}/oauth/token",
+            form_data=form_data,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+        )
+    except TimeoutError as exc:
+        raise MercadoPagoAPIError(
+            "Mercado Pago no respondio a tiempo durante OAuth", transient=True
+        ) from exc
     except httpx.RequestError as exc:
-        raise RuntimeError(
-            "Mercado Pago no esta disponible para completar OAuth"
+        raise MercadoPagoAPIError(
+            "Mercado Pago no esta disponible para completar OAuth", transient=True
         ) from exc
 
     if response.status_code >= 400:
@@ -428,6 +541,50 @@ async def refresh_mercadopago_oauth_connection(
     else:
         await persist(config)
     return config
+
+
+async def exchange_mercadopago_oauth_code_without_transaction(
+    db: AsyncSession, *, code: str, code_verifier: str
+) -> dict[str, JsonValue]:
+    """Canje del codigo OAuth sin transaccion abierta (F1-05, R8-05).
+
+    Patron de AUD2-B2-08: lo que el callback leyo antes (el actor) dejaba la
+    transaccion abierta y la conexion "idle in transaction" durante el POST a
+    MP. Commit PLANO de ``AsyncSession`` (el de ``TenantSession`` reaplica el
+    contexto y la reabre en el acto), red con el presupuesto del request, y
+    el contexto (el bypass del callback) se reaplica antes de volver a la
+    base.
+    """
+    await AsyncSession.commit(db)
+    try:
+        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+            return await exchange_mercadopago_oauth_code(
+                code=code, code_verifier=code_verifier
+            )
+    finally:
+        await _apply_tenant_context(db)
+
+
+async def refresh_mercadopago_oauth_without_transaction(
+    db: AsyncSession, *, config: PaymentGatewayConfig
+) -> PaymentGatewayConfig:
+    """Refresh OAuth pedido desde el panel, sin transaccion abierta (F1-05).
+
+    Mismo patron que el canje; la config refrescada se persiste en su propia
+    transaccion corta con el contexto reaplicado (``persist_gateway_refresh``),
+    igual que el webhook y los jobs.
+    """
+    # Import diferido: jobs importa este modulo.
+    from modules.payments.jobs import persist_gateway_refresh
+
+    await AsyncSession.commit(db)
+    try:
+        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+            return await refresh_mercadopago_oauth_connection(
+                db, config=config, persist=partial(persist_gateway_refresh, db)
+            )
+    finally:
+        await _apply_tenant_context(db)
 
 
 def apply_mercadopago_oauth_payload(
@@ -506,7 +663,38 @@ async def _mercadopago_api_request_for_store(
         raise
 
 
-async def create_mercadopago_preference(
+@dataclass(frozen=True)
+class PreparedPreference:
+    """Todo lo que la preferencia necesita de la base, leido ANTES de la red.
+
+    Con esto la llamada a MP no vuelve a consultar nada: quien la hace puede
+    cerrar la transaccion antes de salir (F1-05, regla 5).
+    """
+
+    store_id: str
+    payload: dict[str, JsonValue]
+    configs: dict[str, PaymentGatewayConfig]
+
+
+async def request_mercadopago_preference(
+    db: AsyncSession,
+    prepared: PreparedPreference,
+    *,
+    persist_refresh: PersistRefresh | None = None,
+) -> dict[str, JsonValue] | None:
+    """El POST a MP con la config ya leida: no consulta la base."""
+    return await _mercadopago_api_request_for_store(
+        db,
+        store_id=prepared.store_id,
+        method="POST",
+        path="/checkout/preferences",
+        json_body=prepared.payload,
+        configs=prepared.configs,
+        persist_refresh=persist_refresh,
+    )
+
+
+async def prepare_mercadopago_preference(
     db: AsyncSession,
     *,
     payment: Payment,
@@ -514,9 +702,10 @@ async def create_mercadopago_preference(
     service: Service,
     store_id: str,
     amount: Decimal,
-) -> dict[str, JsonValue] | None:
+) -> PreparedPreference | None:
+    """Lecturas de la preferencia (gateway, tienda, pagador). None: sin token."""
     config = await _get_gateway_config(db, store_id)
-    if not _resolve_access_token(config):
+    if config is None or not _resolve_access_token(config):
         return None
 
     store = await _get_store(db, store_id)
@@ -568,12 +757,8 @@ async def create_mercadopago_preference(
             },
         ),
     )
-    return await _mercadopago_api_request_for_store(
-        db,
-        store_id=store_id,
-        method="POST",
-        path="/checkout/preferences",
-        json_body=payload,
+    return PreparedPreference(
+        store_id=store_id, payload=payload, configs={store_id: config}
     )
 
 
@@ -789,13 +974,27 @@ async def _attach_provider_link(
     store_id: str,
     amount: Decimal,
 ) -> None:
-    """Pide la preferencia a Mercado Pago y la sella en el cobro.
+    """Pide la preferencia a Mercado Pago y la sella en el cobro (sin commit).
 
-    Es la unica parte de esta funcion que sale a la red: quien la llama tiene
-    que haber commiteado antes (regla 5), para no sostener la fila del cobro
-    bloqueada ni una conexion del pool durante una request de hasta 20 s.
+    Quien la llama ya commiteo lo que retenia el lock (regla 5), pero las
+    lecturas de aca (cobro, gateway, tienda, pagador) abrian OTRA transaccion
+    que quedaba ``idle in transaction`` durante la request a MP, con el pool
+    de 15 (F1-05, R8-05). Patron de AUD2-B2-08: se lee todo, commit PLANO de
+    ``AsyncSession`` (el de ``TenantSession`` reaplica el contexto y reabre la
+    transaccion en el acto), red, y se reaplica el contexto antes de volver a
+    escribir. El commit plano tambien persiste lo que el llamador dejo
+    pendiente en esta fase (re-tarifa, reapertura del cobro): ya estaba
+    decidido y no depende de la respuesta de MP.
+
+    Un 401 refresca el OAuth y lo persiste en su propia transaccion corta
+    (``persist_gateway_refresh``), cerrada antes del segundo HTTP. Si MP falla,
+    el contexto igual se reaplica: la compensacion del llamador escribe bajo
+    RLS.
     """
-    preference_payload = await create_mercadopago_preference(
+    # Import diferido: jobs importa este modulo.
+    from modules.payments.jobs import persist_gateway_refresh
+
+    prepared = await prepare_mercadopago_preference(
         db,
         payment=payment,
         appointment=appointment,
@@ -803,6 +1002,15 @@ async def _attach_provider_link(
         store_id=store_id,
         amount=amount,
     )
+    preference_payload = None
+    if prepared is not None:
+        await AsyncSession.commit(db)
+        try:
+            preference_payload = await request_mercadopago_preference(
+                db, prepared, persist_refresh=partial(persist_gateway_refresh, db)
+            )
+        finally:
+            await _apply_tenant_context(db)
     if not preference_payload:
         raise PaymentGatewayNotConnectedError(
             "La tienda debe conectar su cuenta de Mercado Pago antes de cobrar"
@@ -1026,18 +1234,19 @@ async def create_panel_payment_preference(
     await db.commit()
 
     try:
-        payment = await ensure_payment_preference(
-            db,
-            appointment=appointment,
-            service=service,
-            store_id=store_id,
-            amount_override=payment.amount,
-            original_amount=payment.original_amount,
-            discount_amount=payment.discount_amount,
-            promotion_code=payment.promotion_code,
-            keep_existing_amount=True,
-            create_provider_link=True,
-        )
+        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+            payment = await ensure_payment_preference(
+                db,
+                appointment=appointment,
+                service=service,
+                store_id=store_id,
+                amount_override=payment.amount,
+                original_amount=payment.original_amount,
+                discount_amount=payment.discount_amount,
+                promotion_code=payment.promotion_code,
+                keep_existing_amount=True,
+                create_provider_link=True,
+            )
         await db.commit()
     except RuntimeError, CircuitBreakerOpenError:
         # Fallo del PROVEEDOR (MercadoPagoAPIError es RuntimeError): si el

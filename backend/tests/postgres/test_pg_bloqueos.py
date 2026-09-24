@@ -52,6 +52,7 @@ async def test_reserva_y_bloqueo_concurrentes_no_dejan_un_turno_adentro(
                     "starts_at": (slot + timedelta(hours=intento)).isoformat(),
                     "client_name": "Carrera",
                     "client_phone": f"+54911555{intento:05d}",
+                    "accepts_terms": True,
                     "idempotency_key": f"pg-carrera-{intento:03d}",
                 },
             ),
@@ -146,6 +147,7 @@ async def _turnos_originales(
                 ).isoformat(),
                 "client_name": "Reprogramar",
                 "client_phone": phone,
+                "accepts_terms": True,
                 "idempotency_key": f"{prefijo}-original-{i:03d}",
             },
         )

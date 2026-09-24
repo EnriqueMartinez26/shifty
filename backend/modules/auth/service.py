@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import secrets
 import smtplib
+import ssl
 from typing import NoReturn, TypedDict
 
 import structlog
@@ -203,7 +204,10 @@ def access_token_for_user(user: User, session_id: str) -> str:
 def _send_email(message: EmailMessage, *, event: str) -> None:
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
-            smtp.starttls()
+            # Sin context, starttls() no verifica certificado ni hostname
+            # (PV-06): el link de reset y las credenciales SMTP viajaban a
+            # quien se hiciera pasar por el servidor.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
             smtp.send_message(message)
     except Exception as exc:

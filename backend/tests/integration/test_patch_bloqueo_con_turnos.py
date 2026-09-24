@@ -75,6 +75,7 @@ async def _reservar(client: AsyncClient, t: Tienda, cuando: datetime) -> str:
             "client_name": "Cliente Uno",
             "client_email": f"cliente-{t.slug}@example.com",
             "client_phone": "+5491155550123",
+            "accepts_terms": True,
             "idempotency_key": f"patch-bloqueo-{t.slug}",
         },
     )

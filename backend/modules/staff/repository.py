@@ -19,6 +19,14 @@ from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User, UserRole
 import ulid
 
+# La cuenta del profesional nace sin clave usable hasta que se le asigna una.
+# Hashear un ULID al azar en cada alta era
+# bcrypt sincrono (~250 ms) con el loop congelado (F1-06, R8-03). Se calcula
+# UNA vez al importar, igual que el de los clientes del portal
+# (public_api/repository.py): sigue siendo un bcrypt valido que no verifica
+# contra nada tipeable.
+_UNUSABLE_STAFF_PASSWORD_HASH = hash_password(str(ulid.ULID()))
+
 
 def _active_services(store_id: str) -> LoaderOption:
     """Carga de la relacion con SOLO los servicios activos de ESA tienda.
@@ -130,7 +138,7 @@ class StaffRepository:
 
         user = User(
             email=email,
-            hashed_password=hash_password(str(ulid.ULID())),
+            hashed_password=_UNUSABLE_STAFF_PASSWORD_HASH,
             first_name=data["first_name"],
             last_name=data["last_name"],
             role=UserRole.STAFF,

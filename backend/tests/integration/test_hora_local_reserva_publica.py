@@ -9,6 +9,7 @@ recomponia fecha local + hora UTC y el instante caia en el dia anterior.
 ``start_time``/``end_time`` pasan a ser hora local de Argentina.
 """
 
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -119,6 +120,7 @@ async def test_reservar_con_el_starts_at_del_slot_cae_en_el_dia_elegido(
             "starts_at": slot["starts_at"],
             "client_name": "Noche",
             "client_phone": "+5491155550099",
+            "accepts_terms": True,
             "idempotency_key": "hora-noche-2200",
         },
     )
@@ -156,7 +158,7 @@ async def test_la_reserva_publica_respeta_el_buffer_y_congela_el_precio(
     )
     base = dia.replace(hour=13, minute=0, second=0, microsecond=0)
 
-    def reserva(starts_at: datetime, key: str) -> dict[str, str]:
+    def reserva(starts_at: datetime, key: str) -> dict[str, Any]:
         return {
             "store_public_id": store,
             "service_id": service,
@@ -164,6 +166,7 @@ async def test_la_reserva_publica_respeta_el_buffer_y_congela_el_precio(
             "starts_at": starts_at.isoformat(),
             "client_name": "Buffer",
             "client_phone": "+5491155550077",
+            "accepts_terms": True,
             "idempotency_key": key,
         }
 

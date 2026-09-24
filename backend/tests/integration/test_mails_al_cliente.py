@@ -53,7 +53,7 @@ async def _tienda_reservable(
 
 def _reserva(
     store: str, service: str, staff: str, slot: datetime, **extra: str
-) -> dict[str, str]:
+) -> dict[str, Any]:
     cuerpo = {
         "store_public_id": store,
         "service_id": service,
@@ -61,6 +61,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": "Carla Ruiz",
         "client_phone": "+5491155550031",
+        "accepts_terms": True,
         "idempotency_key": "mail-cliente-000001",
     }
     cuerpo.update(extra)

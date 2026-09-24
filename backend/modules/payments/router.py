@@ -63,9 +63,9 @@ from modules.payments.service import (
     calculate_service_payment_amount,
     create_panel_payment_preference,
     load_gateway_configs,
-    exchange_mercadopago_oauth_code,
+    exchange_mercadopago_oauth_code_without_transaction,
     mercadopago_oauth_is_configured,
-    refresh_mercadopago_oauth_connection,
+    refresh_mercadopago_oauth_without_transaction,
 )
 from modules.payments.schemas import (
     GatewayConfigResponse,
@@ -540,9 +540,10 @@ async def mercadopago_oauth_callback(
         if actor_result.scalar_one_or_none() is None:
             return _oauth_frontend_redirect("forbidden")
 
+        # Sin transaccion abierta durante el POST a MP (F1-05, R8-05).
         try:
-            token_payload = await exchange_mercadopago_oauth_code(
-                code=code, code_verifier=code_verifier
+            token_payload = await exchange_mercadopago_oauth_code_without_transaction(
+                db, code=code, code_verifier=code_verifier
             )
         except RuntimeError:
             return _oauth_frontend_redirect("exchange_failed")
@@ -590,15 +591,16 @@ async def refresh_mercadopago_oauth(
             resource="Conexion de Mercado Pago", identifier=user.store_id
         )
 
+    # Sin transaccion abierta durante el POST a MP (F1-05, R8-05); la config
+    # refrescada se persiste en su propia transaccion corta.
     try:
-        config = await refresh_mercadopago_oauth_connection(db, config=config)
+        config = await refresh_mercadopago_oauth_without_transaction(db, config=config)
     except RuntimeError as exc:
         raise AppException(
             message=str(exc),
             http_status=status.HTTP_409_CONFLICT,
             error_code="MERCADOPAGO_REFRESH_FAILED",
         )
-    await db.commit()
     await db.refresh(config)
     return GatewayConfigResponse(
         provider=config.provider,

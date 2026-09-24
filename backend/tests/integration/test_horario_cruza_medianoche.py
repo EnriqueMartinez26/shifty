@@ -16,6 +16,8 @@ feliz.
 
 from __future__ import annotations
 
+from typing import Any
+
 from datetime import datetime, time, timedelta
 
 import pytest
@@ -81,7 +83,7 @@ async def _tienda_de_dia(client: AsyncClient, slug: str) -> tuple[str, str, str,
 
 def _reserva(
     store: str, service: str, staff: str, inicio: datetime, clave: str
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,
@@ -92,6 +94,7 @@ def _reserva(
         # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
         "client_email": "trasnoche@example.com",
         "client_phone": "+5491155550303",
+        "accepts_terms": True,
         "idempotency_key": clave,
     }
 

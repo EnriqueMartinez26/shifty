@@ -123,6 +123,7 @@ async def test_servicio_de_50_minutos_con_un_turno_en_el_medio(
             "starts_at": _utc(dia, "11:00"),
             "client_name": "Ocupa",
             "client_phone": "+5491155552001",
+            "accepts_terms": True,
             "idempotency_key": "grilla-50-turno-0001",
         },
     )
@@ -202,6 +203,7 @@ async def test_cada_slot_ofrecido_se_puede_reservar(client: AsyncClient) -> None
             "starts_at": primero["starts_at"],
             "client_name": "Reserva",
             "client_phone": "+5491155552002",
+            "accepts_terms": True,
             "idempotency_key": "grilla-reserva-0001",
         },
     )

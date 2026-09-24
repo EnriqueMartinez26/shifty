@@ -8,6 +8,7 @@ exclusion GiST no lo atrapa (los rangos no se solapan): el profesional se
 quedaba sin el hueco que la tienda configuro.
 """
 
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -43,7 +44,7 @@ async def test_reprogramar_pegado_al_turno_vecino_respeta_el_buffer(
     await add_staff_schedule(client, token, staff, target_date=dia)
     base = dia.replace(hour=13, minute=0, second=0, microsecond=0)  # 10:00 local
 
-    def reserva(starts_at: datetime, phone: str, key: str) -> dict[str, str]:
+    def reserva(starts_at: datetime, phone: str, key: str) -> dict[str, Any]:
         return {
             "store_public_id": store,
             "service_id": service,
@@ -54,6 +55,7 @@ async def test_reprogramar_pegado_al_turno_vecino_respeta_el_buffer(
             # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
             "client_email": f"buffer-{phone.lstrip('+')}@example.com",
             "client_phone": phone,
+            "accepts_terms": True,
             "idempotency_key": key,
         }
 

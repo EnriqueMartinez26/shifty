@@ -263,6 +263,7 @@ async def test_portal_publico_con_la_tienda_suspendida(
             # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
             "client_email": "cliente@example.com",
             "client_phone": TELEFONO,
+            "accepts_terms": True,
             "idempotency_key": "susp-portal-0001",
         },
     )
@@ -294,6 +295,7 @@ async def test_portal_publico_con_la_tienda_suspendida(
             "starts_at": (inicio + timedelta(hours=2)).isoformat(),
             "client_name": "Otra",
             "client_phone": "+5491155550978",
+            "accepts_terms": True,
             "idempotency_key": "susp-portal-0002",
         },
     )
