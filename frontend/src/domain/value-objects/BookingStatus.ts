@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export type BookingStatusValue =
   'pending' | 'pending_payment' | 'confirmed' | 'completed' | 'cancelled' | 'absent' | 'expired'
 
@@ -35,7 +37,7 @@ export class BookingStatus {
       'expired'
     ]
     if (!validStatuses.includes(value as BookingStatusValue)) {
-      throw new Error(`Estado de reserva inválido: ${value}`)
+      throw new InvalidValueError('INVALID_BOOKING_STATUS', `Estado de reserva inválido: ${value}`)
     }
     return new BookingStatus(value as BookingStatusValue)
   }

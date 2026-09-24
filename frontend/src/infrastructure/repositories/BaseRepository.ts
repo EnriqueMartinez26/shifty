@@ -1,6 +1,8 @@
+import { DomainError } from '../../domain/errors/DomainError'
 import { IRepository, QueryOptions } from '../../domain/repositories/IRepository'
 import { ApplicationError } from '../../shared/errors/ApplicationError'
 import { InternalServerError } from '../../shared/errors/InternalServerError'
+import { ValidationError } from '../../shared/errors/ValidationError'
 
 /**
  * Clase base abstracta para repositorios que implementa el Template Method Pattern.
@@ -59,13 +61,20 @@ export abstract class BaseRepository<
   protected abstract deleteImpl(id: string): Promise<void>
 
   /**
-   * Estandariza errores imprevistos a nivel de base de datos a InternalServerError.
+   * Traduce lo que falle abajo a un ApplicationError tipado. Un DomainError (un
+   * value object que rechazo un dato) sale como ValidationError con su `code`
+   * en el contexto; el mensaje es el mismo que antes para no cambiar lo que ve
+   * el usuario. Lo demas imprevisto queda como InternalServerError.
    */
   protected handleRepositoryError(operation: string, error: unknown): never {
     if (error instanceof ApplicationError) {
       throw error
     }
     const msg = error instanceof Error ? error.message : 'Unknown repository error'
-    throw new InternalServerError(`Database operation '${operation}' failed: ${msg}`)
+    const message = `Database operation '${operation}' failed: ${msg}`
+    if (error instanceof DomainError) {
+      throw new ValidationError(message, { code: error.code, operation })
+    }
+    throw new InternalServerError(message)
   }
 }

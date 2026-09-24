@@ -1,6 +1,8 @@
 import { BaseRepository } from './BaseRepository'
+import { InvalidValueError } from '../../domain/errors/DomainError'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import { InternalServerError } from '../../shared/errors/InternalServerError'
+import { ValidationError } from '../../shared/errors/ValidationError'
 
 class TestRepository extends BaseRepository<unknown, unknown, unknown> {
   public mockFindAll: jest.Mock<Promise<unknown[]>, [QueryOptions | boolean | undefined]> =
@@ -42,5 +44,19 @@ describe('BaseRepository', () => {
     await expect(repository.findAll()).rejects.toThrow(
       "Database operation 'findAll' failed: Connection timed out"
     )
+  })
+
+  it('traduce un error de dominio a ValidationError con su code, sin cambiar el mensaje', async () => {
+    repository.mockFindAll.mockRejectedValue(
+      new InvalidValueError('INVALID_EMAIL', 'Email inválido: x')
+    )
+
+    const error = await repository.findAll().catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ValidationError)
+    expect(error).toMatchObject({
+      message: "Database operation 'findAll' failed: Email inválido: x",
+      context: { code: 'INVALID_EMAIL', operation: 'findAll' }
+    })
   })
 })

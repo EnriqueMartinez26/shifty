@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export class Price {
   private readonly value: number
   private readonly currency: string
@@ -9,7 +11,7 @@ export class Price {
 
   static create(value: number, currency: string = 'ARS'): Price {
     if (value < 0) {
-      throw new Error('El precio no puede ser negativo')
+      throw new InvalidValueError('INVALID_PRICE', 'El precio no puede ser negativo')
     }
     return new Price(value, currency)
   }

@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 type RoleValue = 'admin' | 'staff' | 'receptionist' | 'client'
 
 export class UserRole {
@@ -10,7 +12,7 @@ export class UserRole {
   static create(value: string): UserRole {
     const validRoles: RoleValue[] = ['admin', 'staff', 'receptionist', 'client']
     if (!validRoles.includes(value as RoleValue)) {
-      throw new Error(`Rol inválido: ${value}`)
+      throw new InvalidValueError('INVALID_ROLE', `Rol inválido: ${value}`)
     }
     return new UserRole(value as RoleValue)
   }
