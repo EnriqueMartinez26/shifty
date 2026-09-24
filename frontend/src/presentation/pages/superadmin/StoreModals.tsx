@@ -244,7 +244,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           onChange={(event) =>
             setAdminForm((current) => ({ ...current, password: event.target.value }))
           }
-          minLength={8}
+          minLength={12}
           required
         />
       </div>
