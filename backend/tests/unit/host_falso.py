@@ -187,12 +187,18 @@ class Host:
         return archivo.read_text(encoding="utf-8").splitlines()
 
     def correr(
-        self, script: str, *args: str, cwd: Path | None = None, **extra: str
+        self, script: str, *args: str, **extra: str
     ) -> subprocess.CompletedProcess[str]:
+        return self.correr_desde(self.repo, script, *args, **extra)
+
+    def correr_desde(
+        self, cwd: Path, script: str, *args: str, **extra: str
+    ) -> subprocess.CompletedProcess[str]:
+        """Como `correr`, pero con otro directorio actual."""
         assert BASH is not None
         return subprocess.run(
             [BASH, str(SCRIPTS / script), *args],
-            cwd=self.repo if cwd is None else cwd,
+            cwd=cwd,
             env={**self.env, **extra},
             capture_output=True,
             text=True,

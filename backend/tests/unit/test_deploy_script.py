@@ -321,8 +321,8 @@ def test_deploy_habla_con_compose_desde_el_clon_aunque_se_llame_de_otro_lado(
     otro = host.raiz / "otro-directorio"
     otro.mkdir()
 
-    resultado = host.correr(
-        "deploy.sh", "deploy", cwd=otro, APP_VERSION="v2", **_BASE_DEPLOY
+    resultado = host.correr_desde(
+        otro, "deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY
     )
 
     assert resultado.returncode == 0, resultado.stderr
