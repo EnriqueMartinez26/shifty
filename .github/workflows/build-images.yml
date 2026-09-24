@@ -1,0 +1,112 @@
+name: Build images
+
+# F0-02 (plan-correccion-rendimiento.md): las imagenes se construyen en CI y
+# el VPS solo hace `pull` (scripts/deploy.sh). Antes se construian en el mismo
+# servidor, sin version: no habia a que volver en un rollback.
+#
+# Cada push a main publica en GHCR (privado, del repo) tres imagenes con el sha
+# del commit y `latest`:
+#   ghcr.io/enriquemartinez26/shifty-backend:<sha>   (API, worker y beat)
+#   ghcr.io/enriquemartinez26/shifty-frontend:<sha>
+#   ghcr.io/enriquemartinez26/shifty-nginx:<sha>
+# El deploy usa SIEMPRE el sha (APP_VERSION); `latest` es solo de referencia.
+#
+# Retencion: el job `retention` borra las versiones sin tag y conserva las 5
+# mas nuevas de cada paquete (rollback = la anterior). Decision 2
+# del plan §7.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR exige minusculas en el nombre del paquete.
+  OWNER: enriquemartinez26
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: backend
+            context: ./backend
+          - service: frontend
+            context: ./frontend
+          - service: nginx
+            context: ./nginx
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Login a GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build y push
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/shifty-${{ matrix.service }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/shifty-${{ matrix.service }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          # Solo el Dockerfile del frontend los lee (el DSN publico de Sentry
+          # va en el bundle); los otros dos los ignoran.
+          build-args: |
+            VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
+          # Sin attestation de provenance: agrega un manifiesto SIN tag que
+          # cuelga de la imagen, y la limpieza de versiones sin tag (job
+          # retention) lo borraria y romperia la imagen.
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  retention:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        service: [backend, frontend, nginx]
+    steps:
+      # La limpieza no gatea nada: si falla (permisos del paquete), las
+      # imagenes ya estan publicadas y el deploy sigue.
+      - name: Borrar versiones sin tag
+        continue-on-error: true
+        uses: actions/delete-package-versions@v5.0.0
+        with:
+          package-name: shifty-${{ matrix.service }}
+          package-type: container
+          delete-only-untagged-versions: "true"
+          min-versions-to-keep: 0
+
+      - name: Conservar las 5 versiones mas nuevas
+        continue-on-error: true
+        uses: actions/delete-package-versions@v5.0.0
+        with:
+          package-name: shifty-${{ matrix.service }}
+          package-type: container
+          # `latest` es un tag mas de la version mas nueva: queda entre las 5.
+          min-versions-to-keep: 5
