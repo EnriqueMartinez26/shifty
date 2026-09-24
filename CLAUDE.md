@@ -102,7 +102,8 @@ Una instrucción en lenguaje natural no es una garantía.
   jobs de Celery fijan bypass explícito (`set_tenant_context(None, True)` +
   `_apply_tenant_context`).
 - **Outbox/Inbox** para efectos secundarios y webhooks (`OutboxMessage`,
-  `WebhookInbox`), procesados por Celery beat cada minuto.
+  `WebhookInbox`), procesados por Celery beat (outbox cada 20 s, inbox cada
+  minuto).
 - **Dos Redis con papeles distintos** (plan §7, decisión 5). El caché de
   disponibilidad va a `redis_cache` por `core/redis.py::get_availability_cache`
   (`REDIS_CACHE_URL`; `volatile-ttl`, sin persistencia: perderlo solo cuesta
@@ -382,6 +383,14 @@ Una instrucción en lenguaje natural no es una garantía.
   espera; `process_outbox_batch` en `payments/jobs.py` acumula así también
   los avisos al dueño, la confirmación al cliente y la cancelación por
   bloqueo). (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`)
+  En el outbox cada mail es su propia fila `email.send`, escrita en la
+  transacción del evento que lo genera (F2-03, 2026-09-24). El despacho la
+  reclama (`processed_at` + commit, `SKIP LOCKED`) antes de mandar, de a una;
+  lo que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el
+  tick siguiente: ningún mail se pierde por presupuesto y `processed_at` no
+  se reabre nunca. Un envío fallido no se reintenta (el DATA pudo haber
+  llegado): queda con `attempts` y `error` en su fila.
+  (`test_outbox_mails_diferidos.py`)
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
