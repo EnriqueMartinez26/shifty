@@ -366,7 +366,9 @@ async def test_cliente_sin_email_entregable_sigue_como_siempre(
         client,
         test_session,
         "otp-cliente-noreply",
-        email_cliente=f"{TELEFONO_CLIENTE}@storeX.noreply",
+        # En minusculas como el que arma get_or_create_client: la base exige
+        # el email normalizado (ck_users_email_lower, F1-12).
+        email_cliente=f"{TELEFONO_CLIENTE}@storex.noreply",
     )
     status, cuerpo = await _pedir(client, tienda, "real@example.com")
     assert status == 200, cuerpo

@@ -189,8 +189,8 @@ class PublicRepository:
             return existing
 
         # El tecnico tambien va en minusculas: el store_id es un ULID en
-        # mayusculas y una identidad no canonica estorba a cualquier
-        # comparacion posterior con func.lower(...).
+        # mayusculas y la base exige el email normalizado
+        # (ck_users_email_lower, F1-12).
         technical_email = email or f"{phone}@store{store_id}.noreply".lower()
         new_client = User(
             email=technical_email,

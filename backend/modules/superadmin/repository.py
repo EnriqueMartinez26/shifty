@@ -416,16 +416,16 @@ class UserAdminRepository(_BaseAdminRepository):
         password = data.pop("password")
         first_name = data.get("first_name") or ""
         last_name = data.get("last_name") or ""
-        # El email se guarda normalizado (minusculas): el login matchea con
-        # func.lower(email). La garantia de unicidad case-insensitive es el
-        # indice funcional uq_users_email_lower; este pre-chequeo es solo el
+        # El email se guarda normalizado (minusculas, ck_users_email_lower) y
+        # se busca por igualdad, que bajo RLS usa ix_users_email (F1-12). La
+        # garantia de unicidad es el indice unico; este pre-chequeo es solo el
         # mensaje amable (regla 16). Con limit(1) no puede dar 500 aunque la
         # base traiga duplicados heredados, y no se atrapa la IntegrityError:
         # en la carrera entre el SELECT y el INSERT decide el indice y main.py
         # responde 409 neutro (regla 20).
         data["email"] = normalize_email(str(data["email"]))
         existing = await self.db.execute(
-            select(User.id).where(func.lower(User.email) == data["email"]).limit(1)
+            select(User.id).where(User.email == data["email"]).limit(1)
         )
         if existing.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import ulid
-from sqlalchemy import Boolean, DateTime, Index, String, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from infrastructure.persistence.models.base import Base
@@ -25,11 +25,13 @@ class UserModel(Base):
     # repositorio ya elige la mas reciente, y este indice impide que vuelvan
     # a aparecer. Solo clientes: el personal comparte telefonos del local.
     #
-    # lower(email) es la identidad real del login (func.lower +
-    # scalar_one_or_none): dos filas que difieran solo en mayusculas lo rompen
-    # con 500. La columna `email` es unica case-sensitive, asi que la unicidad
-    # de verdad vive en el indice funcional uq_users_email_lower, no en las
-    # normalizaciones repetidas en Python.
+    # El email se guarda normalizado (minusculas) y ck_users_email_lower lo
+    # exige en la base (F1-12, migraciones c4e6a8b0d2f1 + d5f7b9c1e3a2): el
+    # login lo busca por IGUALDAD sobre la columna, que bajo RLS usa
+    # ix_users_email (lower() no es leakproof y recorria la tabla entera). Con
+    # el CHECK, la columna unica ya es unica sin importar mayusculas; el
+    # indice funcional uq_users_email_lower queda como red previa hasta que un
+    # release posterior lo retire (expand/contract).
     __table_args__ = (
         Index(
             "uq_users_client_phone_per_store",
@@ -40,6 +42,7 @@ class UserModel(Base):
             sqlite_where=text("role = 'client' AND phone IS NOT NULL"),
         ),
         Index("uq_users_email_lower", text("lower(email)"), unique=True),
+        CheckConstraint("email = lower(email)", name="ck_users_email_lower"),
     )
 
     id: Mapped[str] = mapped_column(

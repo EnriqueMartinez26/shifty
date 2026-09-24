@@ -1,7 +1,7 @@
 from datetime import time
 from typing import Any
 
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.interfaces import LoaderOption
@@ -15,7 +15,7 @@ from infrastructure.persistence.models.staff import (
     STAFF_KIND_RESOURCE,
 )
 from modules.staff.model import Schedule, Staff
-from modules.auth.service import revoke_sessions_for_user
+from modules.auth.service import normalize_email, revoke_sessions_for_user
 from modules.users.model import User, UserRole
 import ulid
 
@@ -115,14 +115,15 @@ class StaffRepository:
             await self.db.flush()
             return resource
 
-        # Normalizamos el email igual que el login (lower). La unicidad
-        # case-insensitive la garantiza el indice uq_users_email_lower: este
-        # pre-chequeo es el mensaje amable (regla 16), con limit(1) para no dar
-        # 500 ante duplicados heredados. En la carrera SELECT/INSERT decide el
-        # indice: la IntegrityError sube hasta main.py y sale como 409.
-        email = str(data["email"]).strip().lower()
+        # El email se guarda y se busca normalizado (regla 16): la base exige
+        # minusculas (ck_users_email_lower) y la igualdad usa ix_users_email
+        # bajo RLS (F1-12). Este pre-chequeo es el mensaje amable, con limit(1)
+        # para no dar 500 ante duplicados heredados. En la carrera
+        # SELECT/INSERT decide el indice unico: la IntegrityError sube hasta
+        # main.py y sale como 409.
+        email = normalize_email(str(data["email"]))
         user_res = await self.db.execute(
-            select(User.id).where(func.lower(User.email) == email).limit(1)
+            select(User.id).where(User.email == email).limit(1)
         )
         if user_res.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")
@@ -316,13 +317,11 @@ class StaffRepository:
         is_active: bool | None = None,
     ) -> Staff:
         if email is not None:
-            email = email.strip().lower()
+            email = normalize_email(email)
         if email is not None and email != staff.email:
-            # Mensaje amable; la garantia es uq_users_email_lower (ver create).
+            # Mensaje amable; la garantia es el indice unico (ver create).
             existing_res = await self.db.execute(
-                select(User.id)
-                .where(func.lower(User.email) == email, User.id != staff.id)
-                .limit(1)
+                select(User.id).where(User.email == email, User.id != staff.id).limit(1)
             )
             if existing_res.first() is not None:
                 raise ValueError("Ya existe un usuario con ese email")

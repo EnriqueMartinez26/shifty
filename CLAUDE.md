@@ -251,10 +251,11 @@ Una instrucción en lenguaje natural no es una garantía.
   aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
   que el filtro `store_id` explícito es el camino al índice, no solo defensa.
   Nada de `lower()`, `&&`, `timezone()` ni `ILIKE` en consultas calientes
-  (R7-01: el login recorre `users` entera; R7-02: el solapamiento recorre
-  toda la historia del profesional, incluso bajo `FOR UPDATE`). Hoy
-  el login todavía compara `lower(User.email)` (F1-12 lo cambia) y marcar
-  funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
+  (R7-01: el login con `lower(email)` recorría `users` entera; hoy compara la
+  columna normalizada, `tests/architecture/test_email_por_igualdad.py` y
+  `tests/postgres/test_pg_email_por_igualdad.py`; R7-02: el solapamiento
+  recorre toda la historia del profesional, incluso bajo `FOR UPDATE`).
+  Marcar funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
 
 ### Seguridad
 
@@ -266,15 +267,17 @@ Una instrucción en lenguaje natural no es una garantía.
     validado contra `auth_sessions`.
 16. **Alta de admins solo por superadmin, con email normalizado a
     minúsculas y rechazo del duplicado case-insensitive antes del insert**:
-    el login usa `lower(email)` con `scalar_one_or_none` y dos filas que
-    difieran en mayúsculas lo rompen con 500. Todo camino de alta normaliza
-    con `auth.service.normalize_email` y el índice `uq_users_email_lower` lo
-    sostiene en la base. Un admin de tienda no crea ni asciende admins por
+    el login busca por igualdad `users.email = normalize_email(x)` con
+    `scalar_one_or_none` (bajo RLS usa `ix_users_email`; `lower(email)`
+    recorría la tabla). Todo camino de alta normaliza con
+    `auth.service.normalize_email` y la base lo sostiene:
+    `CHECK (email = lower(email))` (`ck_users_email_lower`, F1-12) más la
+    columna única, con `uq_users_email_lower` como red previa. Un admin de tienda no crea ni asciende admins por
     `/users/` (`core/roles.py::assert_can_grant_role`), no ve ni edita la
     cuenta de un superadmin y no cambia clave, estado, rol ni email de otro
     admin (`assert_can_change_access`, también por `/staff/`).
     (`test_superadmin.py`, `test_alta_de_admin_solo_superadmin.py`,
-    `test_email_unico_apoyado_en_indice.py`,
+    `test_email_unico_apoyado_en_indice.py`, `test_pg_email_por_igualdad.py`,
     `test_panel_no_toca_superadmin.py`, `test_staff_no_toca_cuentas_admin.py`)
 17. **Config de producción falla cerrada** (`core/config.py`,
     `test_config_production_guards.py`): sin placeholders en `SECRET_KEY` /
