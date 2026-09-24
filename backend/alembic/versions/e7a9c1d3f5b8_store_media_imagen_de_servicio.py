@@ -45,7 +45,7 @@ anterior las sigue sirviendo por id y ``services.image_url`` las sigue
 apuntando; solo se pierde el vinculo fila -> servicio.
 
 Revision ID: e7a9c1d3f5b8
-Revises: d4e6f8a0b2c5
+Revises: e5f7a9b1c3d6
 Create Date: 2026-09-24
 """
 
@@ -55,7 +55,7 @@ import sqlalchemy as sa
 from alembic import context, op
 
 revision: str = "e7a9c1d3f5b8"
-down_revision: Union[str, Sequence[str], None] = "d4e6f8a0b2c5"
+down_revision: Union[str, Sequence[str], None] = "e5f7a9b1c3d6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
