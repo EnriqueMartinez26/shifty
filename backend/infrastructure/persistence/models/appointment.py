@@ -9,11 +9,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -175,5 +177,19 @@ class AppointmentModel(Base):
         CheckConstraint(
             "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",
             name="check_appointment_status_v3",
+        ),
+        # Retenciones vivas para el job de vencimiento (cada minuto):
+        # ``expires_at`` nunca se limpia y el indice plano barria todas las
+        # retenciones viejas ya resueltas (F1-14, migracion a6c8e0f2b4d7). El
+        # predicado es el de ``payments/jobs.py::_expired_holds_query``.
+        Index(
+            "ix_appointments_hold_expiry",
+            "expires_at",
+            postgresql_where=text(
+                "status IN ('pending', 'pending_payment') AND expires_at IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status IN ('pending', 'pending_payment') AND expires_at IS NOT NULL"
+            ),
         ),
     )

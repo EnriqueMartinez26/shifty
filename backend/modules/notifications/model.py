@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import enum
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
@@ -30,8 +30,20 @@ class NotificationType(str, enum.Enum):
 
 class Notification(BaseEntity):
     __tablename__ = "notifications"
+    # El contador de no leidas del panel (cada 60 s por usuario) solo recorre
+    # las no leidas de la tienda (F1-14, migracion a6c8e0f2b4d7). Reemplaza a
+    # los indices planos de ``store_id`` (prefijo de
+    # ``ix_notifications_store_created``) y de ``read_at`` (sin uso).
+    __table_args__ = (
+        Index(
+            "ix_notifications_store_unread",
+            "store_id",
+            postgresql_where=text("read_at IS NULL"),
+            sqlite_where=text("read_at IS NULL"),
+        ),
+    )
 
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     type: Mapped[str] = mapped_column(String(100), index=True)
     title: Mapped[str] = mapped_column(String(255))
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -39,7 +51,7 @@ class Notification(BaseEntity):
         String, nullable=True, index=True
     )
     read_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, index=True
+        DateTime(timezone=True), nullable=True
     )
 
     def mark_read(self) -> None:
