@@ -37,6 +37,11 @@ ACTIVE_APPOINTMENT_STATUSES = {
     AppointmentStatus.CONFIRMED.value,
 }
 MERCADOPAGO_API_BASE_URL = "https://api.mercadopago.com"
+
+
+def _mercadopago_base_url() -> str:
+    """Base de la API: el setting si existe (emulador de tests/e2e), si no la real."""
+    return str(getattr(settings, "MERCADOPAGO_API_BASE_URL", MERCADOPAGO_API_BASE_URL))
 # Timeouts por fase de httpx (F1-04, R8-01). Antes era un 20 s plano por
 # fase: una request lenta podia sumar mucho mas que eso.
 MERCADOPAGO_HTTP_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=3.0)
@@ -308,7 +313,7 @@ async def _perform_mercadopago_request(
     try:
         response = await _send_to_mercadopago(
             method,
-            f"{MERCADOPAGO_API_BASE_URL}{path}",
+            f"{_mercadopago_base_url()}{path}",
             headers=headers,
             json_body=json_body,
         )
@@ -458,7 +463,7 @@ async def _mercadopago_oauth_token_request(
     try:
         response = await _send_to_mercadopago(
             "POST",
-            f"{MERCADOPAGO_API_BASE_URL}/oauth/token",
+            f"{_mercadopago_base_url()}/oauth/token",
             form_data=form_data,
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
