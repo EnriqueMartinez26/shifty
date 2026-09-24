@@ -2,8 +2,9 @@
 #   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 #
 # Endurece respecto del compose base (que es de desarrollo):
-#   - Quita los bind-mounts de codigo (./backend, ./frontend): en prod corre la
-#     imagen construida, no el arbol del host.
+#   - No toca volumenes de codigo: el compose base ya no monta ./backend ni
+#     ./frontend y todo corre la imagen construida. Un `volumes: []` aca no
+#     quitaria nada, porque compose fusiona las listas (2026-09-24).
 #   - Despublica del host los puertos internos (db/redis/rabbitmq/backend): los
 #     servicios se hablan por la red interna. Publicar backend:8000 en loopback
 #     permitia, desde el host, saltear nginx y spoofear X-Forwarded-For para
@@ -77,23 +78,19 @@ services:
     env_file:
       - .env
     environment: *app_environment_prod
-    volumes: []
     ports: []
 
   celery_worker:
     env_file:
       - .env
     environment: *app_environment_prod
-    volumes: []
 
   celery_beat:
     env_file:
       - .env
     environment: *app_environment_prod
-    volumes: []
 
   frontend:
-    volumes: []
     ports: []
 
   db:

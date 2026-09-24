@@ -34,5 +34,5 @@ EXPOSE 8000
 
 # Sin `uv run`: el entorno ya quedo resuelto por `uv sync --frozen --no-dev`
 # y el PATH de arriba apunta a ese venv. `uv run` reconciliaba el proyecto
-# en cada arranque contra /app, que en desarrollo es un bind-mount del host.
+# en cada arranque contra /app, que en desarrollo era un bind-mount del host.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

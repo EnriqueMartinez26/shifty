@@ -9,8 +9,8 @@
 #
 # CLAUDE.md §1 sigue rigiendo para toda dependencia nueva: hay que verificarla
 # a mano en el registro oficial (slopsquatting), y un paquete de Python nuevo
-# exige rebuild de las imagenes con --renew-anon-volumes; un PR verde de
-# Dependabot no reemplaza esa verificacion.
+# exige rebuild de las imagenes; un PR verde de Dependabot no reemplaza esa
+# verificacion.
 version: 2
 
 updates:

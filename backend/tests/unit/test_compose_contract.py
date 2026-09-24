@@ -419,3 +419,95 @@ def test_el_worker_de_celery_acota_su_concurrencia_y_su_memoria() -> None:
     assert "--max-memory-per-child" in comando, (
         f"el worker no recicla hijos que crecen: {comando!r}"
     )
+
+
+# --- El codigo sale de la imagen (2026-09-24) ---------------------------------
+#
+# Sintoma: el compose base montaba ./backend:/app (con /app/.venv anonimo
+# encima) en backend, celery_worker y celery_beat, y ./frontend:/app (con
+# /app/node_modules) en frontend. El override de produccion intentaba
+# cancelarlos con `volumes: []`, pero compose FUSIONA las listas: una lista
+# vacia no quita nada (solo `!reset` lo haria), y `docker-compose config` de
+# produccion seguia mostrando los montajes. Produccion corria el checkout del
+# servidor en vez de la imagen; el .venv anonimo sobrevivia entre deploys y
+# quedaba viejo (el crash-loop del contenedor no-root); y en Docker Desktop
+# importar la app por el bind mount tardaba ~131 s, mas que el healthcheck de
+# Celery. uvicorn corre sin --reload: el montaje no daba recarga en caliente.
+
+SERVICIOS_CON_CODIGO = ("backend", "celery_worker", "celery_beat", "frontend")
+FUENTES_DE_CODIGO = ("./backend", "./frontend", "backend", "frontend")
+
+
+def _montaje(volumen: object) -> tuple[str, str]:
+    """(origen, destino) de un volumen en forma corta o larga; origen '' si es anonimo."""
+    if isinstance(volumen, dict):
+        return str(volumen.get("source") or ""), str(volumen.get("target") or "")
+    partes = str(volumen).split(":")
+    if len(partes) == 1:
+        return "", partes[0]
+    return partes[0], partes[1]
+
+
+def montajes_de_codigo(texto: str, servicios: tuple[str, ...]) -> list[str]:
+    """Volumenes que tapan /app o que traen el codigo del host."""
+    data = yaml.safe_load(texto)
+    encontrados: list[str] = []
+    for nombre in servicios:
+        for volumen in (data["services"][nombre] or {}).get("volumes") or []:
+            origen, destino = _montaje(volumen)
+            origen = origen.rstrip("/")
+            tapa_app = destino == "/app" or destino.startswith("/app/")
+            trae_codigo = any(
+                origen == fuente or origen.startswith(f"{fuente}/")
+                for fuente in FUENTES_DE_CODIGO
+            )
+            if tapa_app or trae_codigo:
+                encontrados.append(f"{nombre}: {volumen}")
+    return encontrados
+
+
+def test_los_servicios_de_la_app_no_montan_codigo_del_host() -> None:
+    encontrados = montajes_de_codigo(
+        COMPOSE.read_text(encoding="utf-8"), SERVICIOS_CON_CODIGO
+    )
+    assert not encontrados, (
+        "el codigo tiene que salir de la imagen, no de un montaje sobre /app: "
+        f"{encontrados}"
+    )
+
+
+_COMPOSE_CON_MONTAJES_DE_CODIGO = """
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+  frontend:
+    volumes:
+      - type: bind
+        source: ./frontend/src
+        target: /srv/src
+"""
+
+
+def test_el_contrato_ve_los_montajes_de_codigo_en_cualquier_forma() -> None:
+    """Sin este contraejemplo, el test de arriba podria no detectar nada."""
+    encontrados = montajes_de_codigo(
+        _COMPOSE_CON_MONTAJES_DE_CODIGO, ("backend", "frontend")
+    )
+    assert len(encontrados) == 3, encontrados
+
+
+def test_produccion_no_cancela_volumenes_con_una_lista_vacia() -> None:
+    """`volumes: []` en el override no quita los del base: compose fusiona listas."""
+    vacias = [
+        nombre
+        for nombre, servicio in _servicios_prod().items()
+        if isinstance(servicio, dict)
+        and "volumes" in servicio
+        and servicio["volumes"] in ([], None)
+    ]
+    assert not vacias, (
+        "estos servicios del override declaran `volumes: []`, que no cancela "
+        f"los montajes del compose base: {vacias}"
+    )

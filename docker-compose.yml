@@ -121,11 +121,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: shifty_backend
+    # Sin bind mount del codigo (2026-09-24): el contenedor corre lo que trae
+    # la imagen. Un cambio en backend/ exige `docker-compose build` de
+    # backend, celery_worker y celery_beat juntos (regla 22).
     restart: always
     environment: *app_environment
-    volumes:
-      - ./backend:/app
-      - /app/.venv
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -180,9 +180,6 @@ services:
     container_name: shifty_celery
     restart: always
     environment: *app_environment
-    volumes:
-      - ./backend:/app
-      - /app/.venv
     depends_on:
       db:
         condition: service_healthy
@@ -223,9 +220,6 @@ services:
     container_name: shifty_celery_beat
     restart: always
     environment: *app_environment
-    volumes:
-      - ./backend:/app
-      - /app/.venv
     depends_on:
       db:
         condition: service_healthy
@@ -250,9 +244,6 @@ services:
     restart: always
     ports:
       - "127.0.0.1:3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     networks:
       - shifty_network
     deploy:

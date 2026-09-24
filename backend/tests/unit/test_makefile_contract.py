@@ -49,38 +49,39 @@ def test_los_atajos_de_dev_piden_el_grupo_dev() -> None:
                 f"`make {objetivo}` invoca una herramienta del grupo dev sin "
                 f"pedirlo, y la imagen se construye con --no-dev: {comando!r}"
             )
-            # Sin --frozen, `uv run` puede re-resolver y reescribir uv.lock,
-            # que en el contenedor de desarrollo es el del host (bind-mount).
+            # Sin --frozen, `uv run` puede re-resolver y reescribir uv.lock.
             assert "uv run --frozen" in comando, (
                 f"`make {objetivo}` corre `uv run` sin --frozen y puede reescribir "
-                f"uv.lock en el bind-mount: {comando!r}"
+                f"uv.lock: {comando!r}"
             )
 
 
-def test_el_arranque_con_build_renueva_el_venv_anonimo() -> None:
-    """Defecto real (2026-09-18, C-20): `make dev` no renovaba `/app/.venv`.
+# 2026-09-24: el codigo sale de la imagen, no de un bind mount del host
+# (tests/unit/test_compose_contract.py). El volumen anonimo /app/.venv que
+# obligaba a `--renew-anon-volumes` (C-20, 2026-09-18) ya no existe: esa
+# proteccion vive ahora en test_los_servicios_de_la_app_no_montan_codigo_del_host.
+# Lo que dependia del montaje son los atajos que leen o escriben archivos del
+# arbol del host desde el contenedor.
 
-    docker-compose.yml monta `/app/.venv` como volumen anonimo encima del
-    bind-mount del codigo. `docker compose up --build` reconstruye la imagen
-    pero reutiliza ese volumen: una dependencia nueva queda en la imagen y no
-    en el contenedor. Sintoma: `make build && make dev` verde y despues
-    `ModuleNotFoundError`. CLAUDE.md §1 exige `--renew-anon-volumes`; el
-    unico lugar del repo que lo nombraba era CLAUDE.md.
-    """
-    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    # Si el volumen anonimo desaparece, este contrato pierde su motivo.
-    assert "- /app/.venv" in compose
 
-    arranques = [
-        comando
-        for linea in MAKEFILE.read_text(encoding="utf-8").splitlines()
-        if linea.startswith("\t")
-        for comando in [linea.strip()]
-        if " up " in f" {comando} " and "--build" in comando
-    ]
-    assert arranques, "el Makefile no tiene ningun `docker compose up --build`"
-    for comando in arranques:
-        assert "--renew-anon-volumes" in comando, (
-            "`up --build` sin --renew-anon-volumes reutiliza el .venv viejo: "
-            f"{comando!r}"
+def test_make_test_no_corre_dentro_del_contenedor() -> None:
+    """La imagen no trae tests/ (backend/.dockerignore): sin el montaje, pytest
+    dentro del contenedor no encuentra nada que correr."""
+    ignorados = (REPO_ROOT / "backend" / ".dockerignore").read_text(encoding="utf-8")
+    assert "tests" in ignorados.split(), "la imagen volvio a traer tests/"
+    receta = _receta("test")
+    assert receta, "El Makefile no define el objetivo test"
+    for comando in receta:
+        assert "exec backend" not in comando, (
+            f"`make test` corre pytest en el contenedor, que no tiene tests/: {comando!r}"
         )
+
+
+def test_makemigrations_trae_la_revision_al_host() -> None:
+    """Sin el montaje, la revision que genera alembic en el contenedor solo
+    existiria ahi y se perderia al recrearlo."""
+    receta = " ".join(_receta("makemigrations"))
+    assert "alembic revision" in receta, receta
+    assert "docker compose cp" in receta, (
+        f"`make makemigrations` deja la revision dentro del contenedor: {receta!r}"
+    )

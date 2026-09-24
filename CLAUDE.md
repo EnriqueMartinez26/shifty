@@ -43,8 +43,8 @@ Una instrucción en lenguaje natural no es una garantía.
   comprobar en el registro oficial que el paquete existe, quién lo publica
   y desde cuándo. Va a `pyproject.toml`/`package.json` y al lockfile en el
   mismo commit. En Docker exige rebuild de TODAS las imágenes que lo usan
-  con `--renew-anon-volumes`; un `restart` deja el contenedor no-root en
-  crash-loop.
+  (`docker-compose build`): el código y el venv salen de la imagen, sin bind
+  mount ni volumen anónimo, y un `restart` sigue corriendo la imagen vieja.
 - **Reglas del dueño que no se discuten**: el alta de tiendas es SOLO desde
   el superadmin (no existe ni vuelve el registro público); la zona horaria
   por tienda es un flujo aparte (hoy solo Argentina); la consolidación del
@@ -355,7 +355,10 @@ Una instrucción en lenguaje natural no es una garantía.
 22. **Un solo bloque `x-app-environment` en compose** para API, worker y
     beat; `test_compose_contract` exige paridad. Las imágenes se
     reconstruyen juntas (reconstruir solo `backend` dejó a Celery con la
-    imagen vieja, como root).
+    imagen vieja, como root). Ningún servicio de la app monta el código del
+    host sobre `/app`: corre la imagen, también en producción, donde un
+    `volumes: []` del override no cancelaba el montaje porque compose fusiona
+    listas (2026-09-24, `test_compose_contract`).
 23. **`redirect_slashes=False`**: detrás de nginx el 307 pierde `/api` y el
     front recibe HTML. Cada `apiClient` usa la ruta exacta;
     `test_frontend_routes_contract` lo audita.

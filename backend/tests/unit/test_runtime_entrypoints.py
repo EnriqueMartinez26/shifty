@@ -4,7 +4,7 @@ Defecto real (2026-09-17, C-16): la imagen se construye con
 `uv sync --frozen --no-dev` (backend/Dockerfile) pero el `CMD` y los dos
 `command:` de Celery arrancaban con `uv run`, que reconcilia el proyecto
 antes de ejecutar: lee pyproject.toml/uv.lock desde /app -- que en
-desarrollo es un bind-mount del host -- y puede escribir ahi y en
+desarrollo era un bind-mount del host -- y puede escribir ahi y en
 /app/.venv como uid 10001 sobre un directorio del uid del host. Sin
 `--no-dev` ademas apunta a un entorno distinto del construido. Es el mismo
 modo de fallo que CLAUDE.md §1 ya documenta ("un restart deja el contenedor
