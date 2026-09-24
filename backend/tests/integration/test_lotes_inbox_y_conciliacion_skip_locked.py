@@ -23,6 +23,8 @@ cobros; el SKIP LOCKED paso al lock del turno de cada cobro, para respetar el
 orden unico turno -> pago.
 """
 
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -33,7 +35,8 @@ from modules.payments.jobs import (
     process_webhook_inbox_batch,
     reconcile_pending_payments,
 )
-from modules.payments.model import Payment, WebhookInbox
+import modules.payments.jobs as jobs
+from modules.payments.model import Payment, PaymentGatewayConfig, WebhookInbox
 
 
 def _espiar_sentencias(
@@ -106,10 +109,39 @@ async def test_la_conciliacion_no_bloquea_el_lote_de_cobros(
     turno con SKIP LOCKED y despues el pago
     (``test_webhook_lockea_turno_antes_que_pago.py``).
     """
+    # Revision de f2b: con la tabla vacia la fase B ni corre y el test no
+    # podia fallar. Un cobro viejo pendiente la hace leer el lote.
+    test_session.add(
+        PaymentGatewayConfig(
+            store_id="t-f118", provider="mercadopago", encrypted_access_token="x"
+        )
+    )
+    test_session.add(
+        Payment(
+            store_id="t-f118",
+            appointment_id="t-f118-turno",
+            provider="mercadopago",
+            amount=Decimal("1000"),
+            created_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+    )
+    await test_session.commit()
+
+    async def sin_respuesta(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(jobs, "_fetch_remote_payment", sin_respuesta)
     ejecutadas = _espiar_sentencias(monkeypatch, test_session)
 
     stats = await reconcile_pending_payments(test_session)
 
-    assert stats == {"reconciled": 0, "failed": 0, "inspected": 0}
+    assert stats == {"reconciled": 0, "failed": 0, "inspected": 1}
+    # La fase B leyo el lote de cobros (sin lock).
+    assert any(
+        isinstance(s, Select)
+        and s.column_descriptions
+        and s.column_descriptions[0].get("entity") is Payment
+        for s in ejecutadas
+    )
     with pytest.raises(AssertionError, match="no bloqueo ninguna fila de Payment"):
         _consulta_bloqueada_del_lote(ejecutadas, Payment)
