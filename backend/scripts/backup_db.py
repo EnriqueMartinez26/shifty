@@ -1,29 +1,65 @@
+"""Backup logico de la base con pg_dump (formato custom + sha256).
+
+Corre con el rol DUENO de la base, nunca con el de la app (F0-20,
+2026-09-24): `DATABASE_URL` es `shifty_app`, sin BYPASSRLS, y bajo RLS
+`pg_dump` aborta o vuelca solo lo que la politica deja ver. La URL sale de
+`--database-url`, `BACKUP_DATABASE_URL` o `MIGRATION_DATABASE_URL`, en ese
+orden; una URL del rol de la app se rechaza aunque venga explicita.
+
+El backup diario de produccion NO usa este script: lo hace `scripts/backup.sh`
+en el host, con `pg_dump` dentro del contenedor de la base. Este queda para el
+drill mensual y para un backup manual contra una base alcanzable por red.
+"""
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import os
 import subprocess
+import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
+
+# Se invoca como `python scripts/backup_db.py`: sys.path[0] es scripts/, no la
+# raiz del backend, y core.config vive ahi.
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from core.config import parse_db_url, redact_url  # noqa: E402
+
+# Variables que pueden traer la URL del dueno, en orden de preferencia.
+# DATABASE_URL NO esta: es el rol de la app, con RLS.
+OWNER_URL_VARIABLES = ("BACKUP_DATABASE_URL", "MIGRATION_DATABASE_URL")
+DEFAULT_APP_DB_USER = "shifty_app"
 
 
-def _normalize_postgres_url(raw_url: str) -> str:
-    return (
-        raw_url.replace("postgresql+asyncpg://", "postgresql://")
-        .replace("postgres+asyncpg://", "postgresql://")
-        .replace("postgres://", "postgresql://")
-    )
+def _default_database_url(environ: Mapping[str, str]) -> str:
+    for variable in OWNER_URL_VARIABLES:
+        valor = environ.get(variable, "").strip()
+        if valor:
+            return valor
+    return ""
+
+
+def _es_rol_de_la_app(database_url: str, environ: Mapping[str, str]) -> bool:
+    """Si la URL es la del rol con RLS: la misma que DATABASE_URL o su usuario."""
+    app_url = environ.get("DATABASE_URL", "").strip()
+    if app_url and app_url == database_url.strip():
+        return True
+    usuario = parse_db_url(database_url, label="BACKUP_DATABASE_URL")["user"]
+    return bool(usuario) and usuario == environ.get("APP_DB_USER", DEFAULT_APP_DB_USER)
 
 
 def _build_pg_dump_command(
     database_url: str, backup_path: Path
 ) -> tuple[list[str], dict[str, str]]:
-    parsed = urlparse(_normalize_postgres_url(database_url))
-    database_name = parsed.path.lstrip("/")
-    if not database_name:
-        raise ValueError("DATABASE_URL no contiene nombre de base de datos")
+    # Misma lectura que las migraciones (core.config.parse_db_url, regla 17):
+    # `ssl` de asyncpg o `sslmode`, `require` si la URL no dice nada, y la
+    # contrasena decodificada (`%40` es `@`).
+    partes = parse_db_url(database_url, label="BACKUP_DATABASE_URL")
 
     command = [
         "pg_dump",
@@ -31,19 +67,20 @@ def _build_pg_dump_command(
         "--no-owner",
         "--no-privileges",
         "--host",
-        parsed.hostname or "localhost",
+        str(partes["host"]),
         "--port",
-        str(parsed.port or 5432),
+        str(partes["port"]),
         "--username",
-        parsed.username or "postgres",
+        str(partes["user"] or "postgres"),
         "--file",
         str(backup_path),
-        database_name,
+        str(partes["dbname"]),
     ]
 
     env = os.environ.copy()
-    if parsed.password:
-        env["PGPASSWORD"] = parsed.password
+    env["PGSSLMODE"] = str(partes["sslmode"])
+    if partes["password"]:
+        env["PGPASSWORD"] = str(partes["password"])
     return command, env
 
 
@@ -69,13 +106,26 @@ def main() -> int:
     )
     parser.add_argument(
         "--database-url",
-        default=os.environ.get("DATABASE_URL", ""),
-        help="URL de base de datos. Si se omite, usa DATABASE_URL",
+        default=_default_database_url(os.environ),
+        help=(
+            "URL del rol DUENO de la base. Si se omite, usa BACKUP_DATABASE_URL "
+            "o MIGRATION_DATABASE_URL (nunca DATABASE_URL: es el rol con RLS)"
+        ),
     )
     args = parser.parse_args()
 
     if not args.database_url:
-        raise SystemExit("DATABASE_URL requerido")
+        raise SystemExit(
+            "Falta la URL del dueno de la base: BACKUP_DATABASE_URL o "
+            "MIGRATION_DATABASE_URL (DATABASE_URL es el rol de la app, con RLS, "
+            "y no sirve para pg_dump)"
+        )
+    if _es_rol_de_la_app(args.database_url, os.environ):
+        raise SystemExit(
+            "La URL de backup es la del rol de la app, sujeto a RLS: pg_dump "
+            "abortaria o volcaria solo lo que la politica deja ver. Usar el rol "
+            f"dueno ({redact_url(args.database_url, keep_target=True)})"
+        )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

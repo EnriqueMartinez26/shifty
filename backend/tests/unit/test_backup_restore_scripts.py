@@ -186,7 +186,8 @@ def test_backup_restore_drill_fails_when_checksum_file_is_missing(
 def test_backup_restore_drill_records_failed_backup_without_database(
     tmp_path: Path, monkeypatch: MonkeyPatch
 ) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
+    for clave in ("DATABASE_URL", "BACKUP_DATABASE_URL", "MIGRATION_DATABASE_URL"):
+        monkeypatch.delenv(clave, raising=False)
     drill = load_script("backup_restore_drill")
     evidence_dir = tmp_path / "evidence"
 
@@ -524,3 +525,145 @@ def test_el_directorio_de_backups_esta_ignorado_por_git() -> None:
             check=False,
         )
         assert resultado.returncode == 0, f"git no ignora {ruta}"
+
+
+# --- F0-20 (2026-09-24): el backup sale con el rol dueno, nunca con el de RLS --
+#
+# Sintoma: `backup_db.py` tomaba `DATABASE_URL` por defecto, que en compose es
+# el rol `shifty_app`, sin BYPASSRLS. Con RLS activa `pg_dump` aborta ("query
+# would be affected by row-level security policy") o, peor, vuelca solo lo que
+# la politica deja ver. El workflow mensual ademas lo alimentaba con
+# `DATABASE_URL: secrets.BACKUP_DATABASE_URL`, asi que el nombre del secreto no
+# decia que rol esperaba.
+
+URL_RLS = "postgresql+asyncpg://shifty_app:app_secret@db:5432/shifty_db?ssl=disable"
+URL_DUENO = (
+    "postgresql+asyncpg://shifty_user:owner_secret@db:5432/shifty_db?ssl=disable"
+)
+URL_BACKUP = "postgresql://backup_owner:backup_secret@db:5432/shifty_db?ssl=require"
+
+
+@pytest.mark.parametrize(
+    ("entorno", "esperada"),
+    [
+        (
+            {"DATABASE_URL": URL_RLS, "MIGRATION_DATABASE_URL": URL_DUENO},
+            URL_DUENO,
+        ),
+        (
+            {
+                "DATABASE_URL": URL_RLS,
+                "MIGRATION_DATABASE_URL": URL_DUENO,
+                "BACKUP_DATABASE_URL": URL_BACKUP,
+            },
+            URL_BACKUP,
+        ),
+        ({"DATABASE_URL": URL_RLS}, ""),
+    ],
+    ids=["migracion", "backup-gana", "solo-rls"],
+)
+def test_backup_db_toma_la_url_del_dueno_y_nunca_database_url(
+    entorno: dict[str, str], esperada: str
+) -> None:
+    backup_db = load_script("backup_db")
+
+    assert backup_db._default_database_url(entorno) == esperada
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        URL_RLS,
+        # Misma URL que DATABASE_URL aunque el usuario tenga otro nombre.
+        "postgresql+asyncpg://otro_app:x@db:5432/shifty_db?ssl=disable",
+    ],
+    ids=["usuario-shifty_app", "igual-a-database-url"],
+)
+def test_backup_db_rechaza_el_rol_de_la_app_aunque_se_pase_explicito(
+    url: str, tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_db = load_script("backup_db")
+    lanzados: list[list[str]] = []
+    monkeypatch.setattr(
+        backup_db.subprocess,
+        "run",
+        lambda command, **_: lanzados.append(list(command)),
+    )
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://otro_app:x@db:5432/shifty_db?ssl=disable",
+    )
+    monkeypatch.delenv("APP_DB_USER", raising=False)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["backup_db.py", "--output-dir", str(tmp_path), "--database-url", url],
+    )
+
+    with pytest.raises(SystemExit) as salida:
+        backup_db.main()
+
+    assert "RLS" in str(salida.value)
+    assert lanzados == [], "lanzo pg_dump con el rol de la app"
+    # El mensaje no filtra credenciales (regla 20).
+    assert "app_secret" not in str(salida.value)
+
+
+def test_backup_db_sin_url_de_dueno_falla_nombrando_las_variables(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_db = load_script("backup_db")
+    for clave in ("BACKUP_DATABASE_URL", "MIGRATION_DATABASE_URL"):
+        monkeypatch.delenv(clave, raising=False)
+    monkeypatch.setenv("DATABASE_URL", URL_RLS)
+    monkeypatch.setattr("sys.argv", ["backup_db.py", "--output-dir", str(tmp_path)])
+
+    with pytest.raises(SystemExit) as salida:
+        backup_db.main()
+
+    mensaje = str(salida.value)
+    assert "BACKUP_DATABASE_URL" in mensaje
+    assert "MIGRATION_DATABASE_URL" in mensaje
+
+
+@pytest.mark.parametrize(
+    ("url", "modo"),
+    [
+        (URL_DUENO, "disable"),
+        (URL_BACKUP, "require"),
+        (URL_DUENO.split("?")[0], "require"),
+    ],
+    ids=["ssl-disable", "ssl-require", "sin-nada-require"],
+)
+def test_backup_db_respeta_el_modo_tls_de_la_url(
+    url: str, modo: str, tmp_path: Path
+) -> None:
+    """La URL del repo es de asyncpg (`?ssl=`): pg_dump lo ignoraba y usaba el
+    default de libpq. Ahora se lee con `core.config.parse_db_url`, la misma
+    lectura que las migraciones (regla 17)."""
+    backup_db = load_script("backup_db")
+
+    command, env = backup_db._build_pg_dump_command(url, tmp_path / "x.dump")
+
+    assert env["PGSSLMODE"] == modo
+    assert not any("ssl" in parte for parte in command)
+
+
+def test_backup_db_decodifica_la_contrasena_de_la_url(tmp_path: Path) -> None:
+    backup_db = load_script("backup_db")
+
+    _, env = backup_db._build_pg_dump_command(
+        "postgresql://dueno:p%40ss%2Fword@db:5432/shifty_db?ssl=disable",
+        tmp_path / "x.dump",
+    )
+
+    assert env["PGPASSWORD"] == "p@ss/word"
+
+
+def test_el_drill_tampoco_toma_database_url(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", URL_RLS)
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", URL_DUENO)
+    monkeypatch.delenv("BACKUP_DATABASE_URL", raising=False)
+    monkeypatch.setattr("sys.argv", ["backup_restore_drill.py"])
+    drill = load_script("backup_restore_drill")
+
+    assert drill._parse_args().database_url == URL_DUENO
