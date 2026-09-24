@@ -36,7 +36,8 @@ def test_guard_reinicia_el_unhealthy_y_avisa(host: Host) -> None:
     assert _hay(
         llamadas,
         r"docker ps -q --filter health=unhealthy "
-        r"--filter label=com.docker.compose.project=shifty",
+        r"--filter label=com.docker.compose.project=shifty "
+        r"--filter label=com.docker.compose.oneoff=False",
     )
     assert _hay(llamadas, r"docker restart abc123")
     assert _hay(llamadas, r"curl .*https://hook")
@@ -71,6 +72,61 @@ def test_guard_no_actua_durante_un_deploy(host: Host) -> None:
 
     assert resultado.returncode == 0
     assert not _hay(host.llamadas(), r"docker restart")
+
+
+# --- revision 2026-09-24: que NO reinicia el guard ----------------------------
+# Convencion del docker falso: el contenedor `shifty-<servicio>-<n>` es del
+# servicio <servicio> (label com.docker.compose.service).
+
+
+def _reinicios(host: Host) -> list[str]:
+    return [ll for ll in host.llamadas() if ll.startswith("docker restart")]
+
+
+@pytest.mark.parametrize("servicio", ["db", "rabbitmq"])
+def test_guard_no_reinicia_la_base_ni_rabbitmq_solo_avisa(
+    host: Host, servicio: str
+) -> None:
+    """Reiniciar Postgres o RabbitMQ en caliente corta todas las conexiones y
+    puede empeorar lo que lo puso unhealthy: eso lo decide una persona."""
+    resultado = host.correr("guard.sh", FAKE_UNHEALTHY_IDS=f"shifty-{servicio}-1")
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    assert "ALERTA" in resultado.stderr
+    assert f"shifty-{servicio}-1" in resultado.stderr
+
+
+@pytest.mark.parametrize("dependencia", ["db", "redis_state"])
+def test_guard_no_reinicia_nada_si_una_dependencia_esta_caida(
+    host: Host, dependencia: str
+) -> None:
+    """Con la base o el Redis de estado caidos, el backend queda unhealthy por
+    arrastre: reiniciarlo en bucle no arregla nada y quema el tope."""
+    resultado = host.correr(
+        "guard.sh",
+        FAKE_UNHEALTHY_IDS=f"shifty-{dependencia}-1 shifty-backend-1 shifty-backend-2",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _reinicios(host) == []
+    assert "ALERTA" in resultado.stderr
+    assert dependencia in resultado.stderr
+
+
+def test_guard_tiene_un_tope_global_de_seis_reinicios_por_hora(host: Host) -> None:
+    ids = " ".join(f"shifty-backend-{n}" for n in range(1, 9))
+
+    resultado = host.correr("guard.sh", FAKE_UNHEALTHY_IDS=ids)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert len(_reinicios(host)) == 6
+    assert "tope global" in resultado.stderr
+
+    # La hora siguiente sigue contando los 6 de antes.
+    (host.fake / "calls").unlink()
+    host.correr("guard.sh", FAKE_UNHEALTHY_IDS="shifty-backend-9")
+    assert _reinicios(host) == []
 
 
 # --- checks.sh --------------------------------------------------------------
@@ -126,8 +182,15 @@ def test_checks_alerta_cada_problema(
 # --- cron y logrotate --------------------------------------------------------
 
 
+def test_los_archivos_de_cron_no_llevan_punto_en_el_nombre() -> None:
+    """cron.d ignora en silencio los archivos con punto en el nombre."""
+    archivos = sorted((DEPLOY / "cron").iterdir())
+    assert archivos
+    for archivo in archivos:
+        assert "." not in archivo.name, archivo.name
+
+
 def test_cron_del_guard_corre_cada_minuto_como_root() -> None:
-    assert "." not in "shifty-guard", "cron.d ignora nombres con punto"
     lineas = _lineas_de_cron("shifty-guard")
     guard = next(ll for ll in lineas if "guard.sh" in ll)
     assert guard.split()[:6] == ["*", "*", "*", "*", "*", "root"]
