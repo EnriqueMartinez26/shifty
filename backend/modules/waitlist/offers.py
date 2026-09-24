@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import settings
@@ -107,20 +107,14 @@ class OfferResult:
 async def matching_entries(
     db: AsyncSession, slot: ReleasedSlot
 ) -> list[tuple[WaitlistEntry, Service]]:
-    """Entradas en espera a las que les sirve este hueco, por orden de llegada."""
-    servicios_del_staff = set(
-        (
-            await db.execute(
-                select(StaffServiceModel.service_id).where(
-                    StaffServiceModel.staff_id == slot.staff_id
-                )
-            )
-        )
-        .scalars()
-        .all()
+    """Entradas en espera a las que les sirve este hueco, por orden de llegada.
+
+    Una consulta (F3-07): los servicios del profesional entran como
+    subconsulta ``IN`` en vez de una lectura aparte antes de las entradas.
+    """
+    servicios_del_staff = select(StaffServiceModel.service_id).where(
+        StaffServiceModel.staff_id == slot.staff_id
     )
-    if not servicios_del_staff:
-        return []
     rows = await db.execute(
         select(WaitlistEntry, Service)
         .join(Service, WaitlistEntry.service_id == Service.id)
@@ -260,8 +254,7 @@ async def offer_released_slot(
     if not encajan:
         return OfferResult(candidates=0, offered_entry_id=None, owner_notified=False)
 
-    store = await db.get(Store, slot.store_id)
-    staff = await db.get(Staff, slot.staff_id)
+    store, staff = await _store_and_staff(db, slot)
     staff_name = getattr(staff, "display_name", None) or "el profesional"
     # Solo la primera vez que se libera el hueco: una re-oferta a la persona
     # siguiente no es una novedad para el duenio.
@@ -302,11 +295,80 @@ async def offer_released_slot(
     )
 
 
+@dataclass(frozen=True)
+class _StoreInfo:
+    """Las columnas de la tienda que usan la oferta y su mail."""
+
+    min_booking_notice_hours: int | None
+    slug: str | None
+    name: str | None
+    whatsapp_number: str | None
+
+
+@dataclass(frozen=True)
+class _StaffInfo:
+    """Las columnas del profesional que usan la oferta y su mail."""
+
+    id: str
+    display_name: str | None
+    kind: str | None
+
+    @property
+    def public_id(self) -> str:
+        # Mismo valor que ``Staff.public_id`` (el id); lo lee ``rebook_url``.
+        return self.id
+
+
+async def _store_and_staff(
+    db: AsyncSession, slot: ReleasedSlot
+) -> tuple[_StoreInfo | None, _StaffInfo | None]:
+    """Tienda y profesional del cupo en UNA consulta de columnas (F3-07).
+
+    Antes eran ``db.get(Store)`` y ``db.get(Staff)``: las dos entidades
+    enteras, con sus horarios (y los servicios del profesional) en cascada,
+    para leer unas pocas columnas. El profesional va por LEFT JOIN y con la tienda
+    del cupo: este camino corre con bypass de RLS.
+    """
+    row = (
+        await db.execute(
+            select(
+                Store.min_booking_notice_hours,
+                Store.slug,
+                Store.name,
+                # ``Store.whatsapp_number`` es una propiedad sobre theme_config.
+                Store.theme_config,
+                Staff.id,
+                Staff.display_name,
+                Staff.kind,
+            )
+            .select_from(Store)
+            .outerjoin(
+                Staff, and_(Staff.id == slot.staff_id, Staff.store_id == Store.id)
+            )
+            .where(Store.id == slot.store_id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None, None
+    store = _StoreInfo(
+        min_booking_notice_hours=row.min_booking_notice_hours,
+        slug=row.slug,
+        name=row.name,
+        whatsapp_number=(row.theme_config or {}).get("whatsapp_number"),
+    )
+    staff = (
+        _StaffInfo(id=row.id, display_name=row.display_name, kind=row.kind)
+        if row.id is not None
+        else None
+    )
+    return store, staff
+
+
 def _offer_email(
     entry: WaitlistEntry,
     service: Service,
-    staff: Staff | None,
-    store: Store | None,
+    staff: _StaffInfo | None,
+    store: _StoreInfo | None,
     slot: ReleasedSlot,
     staff_name: str,
 ) -> PendingOfferEmail | None:
