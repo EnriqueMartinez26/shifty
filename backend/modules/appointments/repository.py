@@ -531,14 +531,22 @@ class AppointmentRepository:
         conditions: list[ColumnElement[bool]],
         by_client: ColumnElement[bool] | None,
         service_public_id: str | None,
+        store_id: str,
     ) -> Select[Any]:
         """Filas de la busqueda leyendo solo ``appointments`` (y lo que filtra).
 
         Base del total y de las claves de la pagina (F3-06/F3-08): los joins
         entran solo si filtran, ``services`` para ``service_id`` (se filtra
-        por su ``public_id``) y ``users`` para ``client_name``. Sin el join a
-        ``users`` se exige ``client_id IS NOT NULL``: el listado siempre hizo
-        inner join a ``users``, y un turno sin cliente vinculado no entra.
+        por su ``public_id``) y ``users`` para ``client_name``.
+
+        Pertenencia UNICA para el total y la pagina: el turno tiene un cliente
+        que es usuario de ESTA tienda. Sin filtro de nombre es un ``EXISTS``
+        por la PK de ``users`` (semi-join barato, sin traer columnas); con
+        filtro, el join lleva el mismo ``users.store_id``. Antes el total
+        exigia solo ``client_id IS NOT NULL`` y la pagina hacia inner join a
+        ``users`` (acotado por tienda bajo RLS): un cliente de otra tienda
+        contaba en el total y no aparecia en ninguna pagina, y ``total`` y
+        ``next_cursor`` podian contradecir a la pagina.
         """
         query = select(*columns).select_from(Appointment)
         if service_public_id:
@@ -546,9 +554,16 @@ class AppointmentRepository:
                 Service.public_id == service_public_id
             )
         if by_client is not None:
-            query = query.join(User, Appointment.client_id == User.id).where(by_client)
+            query = query.join(
+                User,
+                and_(Appointment.client_id == User.id, User.store_id == store_id),
+            ).where(by_client)
         else:
-            query = query.where(Appointment.client_id.is_not(None))
+            query = query.where(
+                select(User.id)
+                .where(User.id == Appointment.client_id, User.store_id == store_id)
+                .exists()
+            )
         return query.where(*conditions)
 
     async def search_appointments(
@@ -588,6 +603,7 @@ class AppointmentRepository:
             "conditions": conditions,
             "by_client": by_client,
             "service_public_id": filters.service_id,
+            "store_id": store_id,
         }
         total = None
         if include_total:

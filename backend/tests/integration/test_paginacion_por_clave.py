@@ -74,6 +74,67 @@ async def _sembrar_turnos(client: AsyncClient, test_session: AsyncSession) -> st
     return token
 
 
+async def _recorrer(
+    client: AsyncClient, token: str, **params: Any
+) -> tuple[int, list[str]]:
+    """Total de la primera pagina y todas las filas, pagina por cursor."""
+    primera = await _buscar(client, token, page_size=2, **params)
+    total = int(primera["total"])
+    vistos = [r["public_id"] for r in primera["results"]]
+    cursor = primera["next_cursor"]
+    while cursor is not None:
+        pagina = await _buscar(
+            client, token, page_size=2, after=cursor, include_total="false", **params
+        )
+        assert pagina["results"], "un next_cursor nunca apunta a una pagina vacia"
+        vistos += [r["public_id"] for r in pagina["results"]]
+        cursor = pagina["next_cursor"]
+    return total, vistos
+
+
+@pytest.mark.asyncio
+async def test_total_y_cursor_hablan_de_las_mismas_filas_que_la_pagina(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Un cliente que es usuario de OTRA tienda no cuenta ni aparece.
+
+    Revision de F3-06/F3-08: el total exigia solo ``client_id IS NOT NULL``
+    y la pagina hacia inner join a ``users``, que en Postgres acota por
+    tienda la RLS. Con un cliente ajeno (dato corrupto, armado a mano en la
+    base) el total contaba filas que ninguna pagina mostraba. Ahora los dos
+    usan la misma pertenencia: cliente que es usuario de ESTA tienda.
+    """
+    token, store, staff, corto = await _tienda(client, test_session, "f308-ajeno")
+    semilla = _Semilla(test_session, store, staff)
+    propia = semilla.cliente("Ana", "Propia")
+    ajeno = User(
+        email="ajeno-f308@test.com",
+        hashed_password="no-se-loguea",
+        first_name="Ana",
+        last_name="Ajena",
+        role=UserRole.CLIENT,
+        store_id="otra-tienda",
+    )
+    test_session.add(ajeno)
+    await test_session.commit()
+    propios: list[str] = []
+    for indice, cliente in enumerate([propia, ajeno, propia, ajeno, propia]):
+        public_id = await semilla.turno(
+            f"f308-ajeno-{indice}", date(2026, 9, 1 + indice), time(10, 0), corto,
+            cliente, AppointmentStatus.CONFIRMED, precio=Decimal("10000"),
+        )  # fmt: skip
+        if cliente is propia:
+            propios.append(public_id)
+
+    total, vistos = await _recorrer(client, token)
+    assert total == len(vistos) == 3
+    assert sorted(vistos) == sorted(propios)
+    # Con filtro de nombre (join a users) la pertenencia es la misma.
+    total, vistos = await _recorrer(client, token, client_name="ana")
+    assert total == len(vistos) == 3
+    assert sorted(vistos) == sorted(propios)
+
+
 async def _buscar(client: AsyncClient, token: str, **params: Any) -> dict[str, Any]:
     res = await client.get(
         "/appointments/search", params=params, headers=auth_headers(token)

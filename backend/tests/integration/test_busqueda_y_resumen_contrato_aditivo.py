@@ -137,7 +137,9 @@ async def test_el_total_de_la_busqueda_es_un_count_sin_entidades(
     assert len(conteos) == 1, turnos
     (conteo,) = conteos
     assert " join " not in conteo, conteo
-    assert "appointments.client_id is not null" in conteo, conteo
+    # Misma pertenencia que la pagina: cliente que es usuario de la tienda,
+    # por EXISTS sobre la PK de users (sin join).
+    assert "exists (select" in conteo and "users.store_id" in conteo, conteo
     assert "appointments.store_id" in conteo, conteo
     # Sin los selectin de Staff: nada toca staff_services ni schedules.
     assert not [s for s in sentencias if "staff_services" in s], sentencias
