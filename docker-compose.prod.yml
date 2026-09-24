@@ -50,6 +50,9 @@ x-app-environment-prod: &app_environment_prod
   DATABASE_URL: ${DATABASE_URL:?Falta DATABASE_URL en .env (rol de la app, ver backend/.env.production.example)}
   MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Falta MIGRATION_DATABASE_URL en .env (rol dueno, con DDL)}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
+  # F2-04: 5 + 5 por proceso (ver compose base y max_connections, abajo).
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
   # F0-15: dos Redis; el de estado no desaloja, el de cache si (ver compose base).
   REDIS_URL: ${REDIS_URL:?Falta REDIS_URL en .env (Redis de ESTADO, noeviction)}
   REDIS_CACHE_URL: ${REDIS_CACHE_URL:?Falta REDIS_CACHE_URL en .env (Redis de CACHE, volatile-ttl)}
@@ -145,6 +148,11 @@ services:
     # shared_preload_libraries y el slow log. log_parameter_max_length=0: el
     # slow log no vuelca los valores de los binds (emails, telefonos). SSD:
     # random_page_cost 1.1 y effective_io_concurrency 200.
+    # max_connections=150 (F2-04): la app abre como maximo 3 replicas x (5 + 5)
+    # = 30 mas los hijos de Celery (2 del general + 1 del interactivo) x 10 =
+    # 30; beat no corre tareas y los padres de prefork desechan su pool. El
+    # resto queda para migraciones, backups y una consola
+    # (test_los_pools_de_produccion_entran_en_max_connections).
     command:
       - postgres
       - -c
