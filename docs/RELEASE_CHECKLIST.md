@@ -38,7 +38,8 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] Every migration is expand-only for this release (contract steps ship one release later), indexes use `CONCURRENTLY` in an autocommit block, and constraints go `NOT VALID` + `VALIDATE`: the previous release must run against the new schema, or rollback is not possible.
 - [ ] Migrations ran through `make deploy` (`compose run --rm --no-deps --no-build backend alembic upgrade head`, before recreating the app), not by hand on a running container.
 - [ ] The deploy ran through `scripts/deploy.sh`, which passes `APP_VERSION` and uses `up --no-build --remove-orphans` (a renamed service, such as `redis` split into `redis_cache`/`redis_state`, otherwise leaves the old container holding its port).
-- [ ] Pending from Fase 1: the migration that runs `CREATE EXTENSION pg_stat_statements` (the library is preloaded by the compose `shared_preload_libraries`; the extension does not exist until that migration ships).
+- [ ] The migration role is a Postgres superuser: migration `b2c4e6a8d0f3` runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`, which is not a trusted extension (the library is preloaded by the compose `shared_preload_libraries`). With a non-superuser migration role the deploy stops at that revision.
+- [ ] The pre-deploy data checks of `docs/DEPLOY_RUNBOOK.md` §5b returned 0 on production; any non-zero count stops the migrations.
 - [ ] Post-migration schema version and application startup were verified.
 
 ## 4. Backup, restore, RPO, and RTO
