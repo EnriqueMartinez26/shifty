@@ -104,7 +104,7 @@ Verified in the 2026-09-24 drill (`postgres:16.14-alpine`). The dump keeps the `
    ALTER ROLE shifty_app SET idle_in_transaction_session_timeout = '60s';
    ```
 
-   Feed it to `psql` through stdin, not `-c`, so the password stays out of the process list and shell history. Or let `restore_backup.py --create-app-role` do it (it reads `APP_DB_PASSWORD` and never prints it). `globals.sql` in each daily dump directory shows the source's roles and settings for comparison; it has no passwords, so it is not a drop-in replacement for this step.
+   Feed it to `psql` through stdin, not `-c`, so the password stays out of the process list and shell history. Or let `restore_backup.py --create-app-role` do it (it reads `APP_DB_PASSWORD` and never prints it). `globals.sql` in each daily dump directory shows the source's roles and settings for comparison; it has no passwords, so it is not a drop-in replacement for this step. It starts with a `\restrict <key>` line (added by `pg_dumpall` 16.10+), so only a `psql` of that era can replay it.
 
 `restore_backup.py` checks step 2 and refuses to restore when the role is missing. A scratch database in the **same** cluster (the example below) already has both roles.
 
@@ -169,12 +169,13 @@ After restore, run health checks for:
 - Schedule: first day of each month (`cron: 0 5 1 * *`) and manual dispatch.
 - Evidence: `backup-drill-evidence` artifact with JSON and checksums.
 - What `backup_restore_drill.py` checks after the restore: `verify-restore` (as the owner: `alembic_version` and the critical tables) and `verify-app-role` (the privileges of `APP_DB_USER`/`shifty_app`: not superuser, no `BYPASSRLS`, the three timeouts in `rolconfig`, `USAGE` on `public`, and `SELECT`/`INSERT`/`UPDATE`/`DELETE` on every table plus `USAGE`/`SELECT` on every sequence). Either one failing fails the drill.
-- The drill target must already have `shifty_app`, or the drill runs with `--create-app-role` and an `APP_DB_PASSWORD` secret; without either, `restore_backup.py` refuses to restore and the drill fails with that reason.
+- The workflow runs the drill with `--create-app-role`, so it is self-sufficient: it creates `shifty_app` in the target when missing, with the `APP_DB_PASSWORD` secret. That secret is required; the first step fails naming it when it is empty.
 
 Required secrets (the first step fails with an explicit error naming the missing ones):
 
 - `BACKUP_DATABASE_URL`: the **owner** role of the source database, never the app role.
 - `DRILL_DATABASE_URL`: a separate database to restore into. The drill refuses to restore onto the source (same host, port and database name).
+- `APP_DB_PASSWORD`: the password the drill uses to create `shifty_app` in the target when it is missing.
 
 Where it runs: production publishes no database port (`ports: !reset []` in `docker-compose.prod.yml`), so a GitHub-hosted runner cannot reach it. Run the drill on a self-hosted runner on the VPS, or point both secrets at staging (the second compose project, see `docs/DEPLOY_RUNBOOK.md`). Set the repository variable `BACKUP_DRILL_RUNNER` to the runner label (for example `self-hosted`); without it the job uses `ubuntu-latest` and only works against a database reachable from the internet.
 

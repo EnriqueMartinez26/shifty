@@ -29,12 +29,14 @@ jobs:
         env:
           BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
           DRILL_DATABASE_URL: ${{ secrets.DRILL_DATABASE_URL }}
+          APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
         run: |
           faltan=""
           [ -n "$BACKUP_DATABASE_URL" ] || faltan="$faltan BACKUP_DATABASE_URL"
           [ -n "$DRILL_DATABASE_URL" ] || faltan="$faltan DRILL_DATABASE_URL"
+          [ -n "$APP_DB_PASSWORD" ] || faltan="$faltan APP_DB_PASSWORD"
           if [ -n "$faltan" ]; then
-            echo "::error title=Drill de backup sin configurar::Faltan los secretos del repo:$faltan. BACKUP_DATABASE_URL = rol DUENO de la base de origen (nunca el rol de la app, con RLS); DRILL_DATABASE_URL = una base APARTE donde restaurar. Ver docs/BACKUP_RESTORE_RUNBOOK.md."
+            echo "::error title=Drill de backup sin configurar::Faltan los secretos del repo:$faltan. BACKUP_DATABASE_URL = rol DUENO de la base de origen (nunca el rol de la app, con RLS); DRILL_DATABASE_URL = una base APARTE donde restaurar; APP_DB_PASSWORD = contrasena con la que el drill crea shifty_app en el destino si falta (restore_backup.py --create-app-role). Ver docs/BACKUP_RESTORE_RUNBOOK.md."
             exit 1
           fi
 
@@ -52,12 +54,17 @@ jobs:
           # Rol dueno: backup_db.py rechaza DATABASE_URL (rol de la app, RLS).
           BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
           DRILL_DATABASE_URL: ${{ secrets.DRILL_DATABASE_URL }}
+          # Los roles no viajan en el dump (drill 2026-09-24): sin shifty_app
+          # en el destino pg_restore aborta en el primer GRANT. El drill lo
+          # crea si falta; restore_backup.py nunca imprime la contrasena.
+          APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
         run: |
           uv run python scripts/backup_restore_drill.py \
             --backup-dir ../backups \
             --evidence-dir ../backups/evidence \
             --run-backup \
-            --run-restore
+            --run-restore \
+            --create-app-role
 
       - name: Upload drill evidence
         if: always()

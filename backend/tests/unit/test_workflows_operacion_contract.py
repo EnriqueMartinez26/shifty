@@ -55,22 +55,28 @@ def test_el_drill_verifica_los_secretos_antes_que_nada() -> None:
     pasos = _pasos_del_drill()
     primero = pasos[0]
     assert "run" in primero, "el primer paso del drill no es la verificacion"
-    for secreto in ("BACKUP_DATABASE_URL", "DRILL_DATABASE_URL"):
+    for secreto in ("BACKUP_DATABASE_URL", "DRILL_DATABASE_URL", "APP_DB_PASSWORD"):
         assert primero["env"][secreto] == f"${{{{ secrets.{secreto} }}}}"
     assert "::error" in primero["run"]
 
 
 @pytest.mark.skipif(BASH is None, reason="hace falta bash")
 @pytest.mark.parametrize(
-    ("backup", "drill", "falta"),
+    ("backup", "drill", "clave", "falta"),
     [
-        ("", "", "BACKUP_DATABASE_URL DRILL_DATABASE_URL"),
-        ("postgresql://o:x@db/shifty", "", "DRILL_DATABASE_URL"),
-        ("", "postgresql://o:x@drill/shifty", "BACKUP_DATABASE_URL"),
+        ("", "", "", "BACKUP_DATABASE_URL DRILL_DATABASE_URL APP_DB_PASSWORD"),
+        ("postgresql://o:x@db/shifty", "", "x", "DRILL_DATABASE_URL"),
+        ("", "postgresql://o:x@drill/shifty", "x", "BACKUP_DATABASE_URL"),
+        (
+            "postgresql://o:x@db/shifty",
+            "postgresql://o:x@drill/shifty",
+            "",
+            "APP_DB_PASSWORD",
+        ),
     ],
 )
 def test_sin_secretos_el_drill_falla_diciendo_cuales_faltan(
-    backup: str, drill: str, falta: str
+    backup: str, drill: str, clave: str, falta: str
 ) -> None:
     assert BASH is not None
     resultado = subprocess.run(
@@ -79,6 +85,7 @@ def test_sin_secretos_el_drill_falla_diciendo_cuales_faltan(
             **os.environ,
             "BACKUP_DATABASE_URL": backup,
             "DRILL_DATABASE_URL": drill,
+            "APP_DB_PASSWORD": clave,
         },
         capture_output=True,
         text=True,
@@ -98,6 +105,7 @@ def test_con_los_secretos_el_drill_sigue() -> None:
             **os.environ,
             "BACKUP_DATABASE_URL": "postgresql://o:x@db/shifty",
             "DRILL_DATABASE_URL": "postgresql://o:x@drill/shifty_drill",
+            "APP_DB_PASSWORD": "x",
         },
         capture_output=True,
         text=True,
@@ -105,6 +113,17 @@ def test_con_los_secretos_el_drill_sigue() -> None:
         check=False,
     )
     assert resultado.returncode == 0, resultado.stdout
+
+
+def test_el_drill_crea_el_rol_de_la_app_en_el_destino() -> None:
+    """Drill 2026-09-24: sin shifty_app en el destino, pg_restore aborta en el
+    primer GRANT y restore_backup.py se niega. Decision del dueno: el drill
+    mensual se basta solo, crea el rol con APP_DB_PASSWORD."""
+    paso = next(
+        p for p in _pasos_del_drill() if "backup_restore_drill.py" in p.get("run", "")
+    )
+    assert "--create-app-role" in paso["run"]
+    assert paso["env"]["APP_DB_PASSWORD"] == "${{ secrets.APP_DB_PASSWORD }}"
 
 
 def test_el_drill_nunca_pasa_database_url() -> None:
