@@ -189,7 +189,23 @@ def _clave_del_rol_app(environ: Mapping[str, str], rol: str) -> str:
     return clave
 
 
+def _usuario_de_la_conexion(database_url: str) -> str:
+    """El usuario con el que psql y pg_restore se conectan (mismo default que
+    `_conexion`)."""
+    return urlparse(_normalize_postgres_url(database_url)).username or "postgres"
+
+
 def _asegurar_rol_de_la_app(database_url: str, rol: str, *, crear: bool) -> None:
+    # Revision 2026-09-24: con APP_DB_USER igual al usuario de la conexion,
+    # --create-app-role le aplicaba NOSUPERUSER NOBYPASSRLS al superusuario de
+    # arranque del cluster. Se frena antes de lanzar nada.
+    if crear and rol == _usuario_de_la_conexion(database_url):
+        raise SystemExit(
+            f"APP_DB_USER ({rol}) es el mismo usuario con el que se conecta el "
+            "restore: --create-app-role le quitaria el superusuario y BYPASSRLS "
+            "al superusuario del cluster. La URL destino va con el superusuario "
+            "y APP_DB_USER es el rol de la app (shifty_app)."
+        )
     existe = _existe_rol(database_url, rol)
     if not existe and not crear:
         raise SystemExit(

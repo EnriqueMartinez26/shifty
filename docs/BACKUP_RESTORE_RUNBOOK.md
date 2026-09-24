@@ -94,7 +94,7 @@ Verified in the 2026-09-24 drill (`postgres:16.14-alpine`). The dump keeps the `
 
 1. **Same `POSTGRES_USER` as the source** (`shifty_user` unless `.env` says otherwise). The dump carries `ALTER DEFAULT PRIVILEGES FOR ROLE shifty_user`; with a different owner, `pg_restore --exit-on-error` aborts.
 2. **`shifty_app` exists BEFORE `pg_restore`.** Otherwise `--exit-on-error` aborts at `GRANT USAGE ON SCHEMA public TO shifty_app` and leaves a half-restored database.
-3. **The role settings are applied.** They are cluster-level and are not in the dump (migration `c2e4f6a8b0d1_app_role_timeouts`):
+3. **The role settings are applied, as a superuser** (on PostgreSQL 16 setting `NOBYPASSRLS` needs one). They are cluster-level and are not in the dump (migration `c2e4f6a8b0d1_app_role_timeouts`):
 
    ```sql
    CREATE ROLE shifty_app LOGIN PASSWORD '<APP_DB_PASSWORD>'
@@ -136,7 +136,7 @@ python scripts/restore_backup.py --backup-file ../backups/shifty-YYYYMMDDTHHMMSS
 APP_DB_PASSWORD=... python scripts/restore_backup.py --create-app-role --backup-file ...
 ```
 
-`restore_backup.py` uses `DATABASE_URL` or `--database-url` as the target (an owner/superuser of the target cluster) and `APP_DB_USER` (default `shifty_app`) as the app role. With `--create-app-role` it creates the role when missing and, in both cases, sets `NOSUPERUSER NOBYPASSRLS` and the three timeouts. It never changes the password of an existing role.
+`restore_backup.py` uses `DATABASE_URL` or `--database-url` as the target and `APP_DB_USER` (default `shifty_app`) as the app role. With `--create-app-role` the target URL must be a **superuser** of the target cluster: on PostgreSQL 16 `CREATE ROLE ... NOBYPASSRLS` and `ALTER ROLE ... NOBYPASSRLS` need it. It creates the role when missing and, in both cases, sets `NOSUPERUSER NOBYPASSRLS` and the three timeouts. It never changes the password of an existing role, and it refuses when `APP_DB_USER` is the same user as the connection (it would strip the cluster's own superuser).
 
 ### Optional: boot the app against the restored database
 

@@ -999,6 +999,28 @@ def test_restore_create_app_role_sin_app_db_password_no_crea_nada(
     assert [c[0] for c in _comandos(lanzados)] == ["psql"]
 
 
+def test_restore_create_app_role_no_toca_al_usuario_de_la_conexion(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    """Revision 2026-09-24: con APP_DB_USER igual al usuario de la URL destino
+    (el superusuario del cluster), --create-app-role le aplicaba
+    `ALTER ROLE ... NOSUPERUSER NOBYPASSRLS` al propio superusuario de
+    arranque y dejaba el cluster sin quien lo administre."""
+    monkeypatch.setenv("APP_DB_USER", "dueno")
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=True, extra=["--create-app-role"]
+    )
+
+    with pytest.raises(SystemExit) as salida:
+        restore_backup.main()
+
+    mensaje = str(salida.value)
+    assert "dueno" in mensaje
+    assert "superusuario" in mensaje
+    assert "dueno_secret" not in mensaje
+    assert lanzados == [], "lanzo psql contra el usuario de la conexion"
+
+
 def test_restore_no_filtra_la_clave_si_psql_falla_al_crear_el_rol(
     tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
