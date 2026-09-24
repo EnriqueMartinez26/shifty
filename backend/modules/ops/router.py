@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, status
 from fastapi.responses import JSONResponse
 from core.router import CanonicalAPIRouter
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import PermissionDeniedException
@@ -24,7 +24,9 @@ from core.roles import (
     has_any_role,
     store_scope_for,
 )
+from core.utils import ensure_utc_aware
 from modules.auth.dependencies import get_current_user
+from modules.payments.jobs import OUTBOX_EMAIL_BUDGET_REASON
 from modules.payments.model import OutboxMessage, WebhookInbox
 from modules.stores.model import Store
 from modules.users.model import User
@@ -110,37 +112,63 @@ async def readiness() -> dict[str, object] | JSONResponse:
     return body
 
 
+def _segundos_desde(ahora: datetime, desde: datetime | None) -> int:
+    """Antiguedad en segundos enteros; 0 si no hay pendiente."""
+    if desde is None:
+        return 0
+    return max(0, int((ahora - ensure_utc_aware(desde)).total_seconds()))
+
+
 async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]:
-    """Webhooks pendientes / fallidos y outbox pendiente; ``None`` = global."""
+    """Colas y atraso del inbox y del outbox; ``None`` = global.
+
+    UNA sentencia agregada por tabla (regla 11; F1-25, R9-16): los contadores
+    solos no distinguian un outbox al dia de uno que despacha con minutos de
+    atraso, ni mostraban los mails que el presupuesto del lote dejo sin
+    despachar (``OUTBOX_EMAIL_BUDGET_REASON``, anotado con ``register_failure``
+    y por eso con ``updated_at`` del corte).
+    """
+    ahora = datetime.now(timezone.utc)
+    hace_una_hora = ahora - timedelta(hours=1)
     store_filter = [] if store_id is None else [WebhookInbox.store_id == store_id]
     outbox_filter = [] if store_id is None else [OutboxMessage.store_id == store_id]
 
-    pending_webhooks_res = await db.execute(
-        select(func.count(WebhookInbox.id)).where(
-            WebhookInbox.processed_at.is_(None),
-            WebhookInbox.is_active.is_(True),
-            *store_filter,
+    inbox_pendiente = WebhookInbox.processed_at.is_(None)
+    inbox = (
+        await db.execute(
+            select(
+                func.count(WebhookInbox.id),
+                func.count(case((WebhookInbox.error.is_not(None), 1))),
+                func.min(WebhookInbox.created_at),
+            ).where(inbox_pendiente, WebhookInbox.is_active.is_(True), *store_filter)
         )
+    ).one()
+
+    outbox_pendiente = OutboxMessage.processed_at.is_(None)
+    corte_de_presupuesto = and_(
+        OutboxMessage.error == OUTBOX_EMAIL_BUDGET_REASON,
+        OutboxMessage.updated_at >= hace_una_hora,
     )
-    failed_webhooks_res = await db.execute(
-        select(func.count(WebhookInbox.id)).where(
-            WebhookInbox.processed_at.is_(None),
-            WebhookInbox.error.is_not(None),
-            WebhookInbox.is_active.is_(True),
-            *store_filter,
+    outbox = (
+        await db.execute(
+            select(
+                func.count(case((outbox_pendiente, 1))),
+                func.min(case((outbox_pendiente, OutboxMessage.created_at))),
+                func.count(case((corte_de_presupuesto, 1))),
+            ).where(
+                or_(outbox_pendiente, corte_de_presupuesto),
+                OutboxMessage.is_active.is_(True),
+                *outbox_filter,
+            )
         )
-    )
-    pending_outbox_res = await db.execute(
-        select(func.count(OutboxMessage.id)).where(
-            OutboxMessage.processed_at.is_(None),
-            OutboxMessage.is_active.is_(True),
-            *outbox_filter,
-        )
-    )
+    ).one()
     return {
-        "pending_webhooks": int(pending_webhooks_res.scalar_one() or 0),
-        "failed_webhooks": int(failed_webhooks_res.scalar_one() or 0),
-        "pending_outbox": int(pending_outbox_res.scalar_one() or 0),
+        "pending_webhooks": int(inbox[0] or 0),
+        "failed_webhooks": int(inbox[1] or 0),
+        "pending_outbox": int(outbox[0] or 0),
+        "oldest_pending_outbox_seconds": _segundos_desde(ahora, outbox[1]),
+        "oldest_pending_inbox_seconds": _segundos_desde(ahora, inbox[2]),
+        "outbox_budget_drops_1h": int(outbox[2] or 0),
     }
 
 
@@ -149,6 +177,9 @@ def _slo_thresholds() -> dict[str, int]:
         "pending_webhooks": settings.SLO_MAX_PENDING_WEBHOOKS,
         "failed_webhooks": settings.SLO_MAX_FAILED_WEBHOOKS,
         "pending_outbox": settings.SLO_MAX_PENDING_OUTBOX,
+        "oldest_pending_outbox_seconds": settings.SLO_MAX_OLDEST_PENDING_OUTBOX_SECONDS,
+        "oldest_pending_inbox_seconds": settings.SLO_MAX_OLDEST_PENDING_INBOX_SECONDS,
+        "outbox_budget_drops_1h": settings.SLO_MAX_OUTBOX_BUDGET_DROPS_1H,
     }
 
 
@@ -157,6 +188,10 @@ _SLO_ALERTS = (
     ("pending_webhooks", "pending_webhooks_high", "critical"),
     ("failed_webhooks", "failed_webhooks_high", "critical"),
     ("pending_outbox", "pending_outbox_high", "warning"),
+    # F1-25: un cobro acreditado sin aplicar es "pague y sigue pendiente".
+    ("oldest_pending_inbox_seconds", "inbox_lag_high", "critical"),
+    ("oldest_pending_outbox_seconds", "outbox_lag_high", "warning"),
+    ("outbox_budget_drops_1h", "outbox_budget_drops", "warning"),
 )
 
 
