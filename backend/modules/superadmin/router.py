@@ -40,6 +40,7 @@ from modules.superadmin.schemas import (
     UserGlobalResponse,
     UserGlobalUpdate,
 )
+from modules.stores.media import resolve_image_link
 from modules.stores.model import Store
 from modules.users.model import User
 
@@ -238,9 +239,17 @@ async def update_store(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
+    payload = data.model_dump(exclude_unset=True)
+    # Misma regla que PATCH /stores/me (F1-30, decision 21): el logo subido se
+    # conserva por id, otra URL de medios es 422 y desvincularlo borra la fila.
+    unlinked_media_id = None
+    if "logo_url" in payload:
+        payload["logo_url"], unlinked_media_id = resolve_image_link(
+            "logo_url", store.logo_url, payload["logo_url"]
+        )
     try:
         updated = await repo.stores.update_store(
-            store, data.model_dump(exclude_unset=True), actor
+            store, payload, actor, unlinked_media_id=unlinked_media_id
         )
         return _store_response(updated)
     except ValueError as exc:

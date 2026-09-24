@@ -30,6 +30,7 @@ from modules.payments.model import (
     PaymentStatus,
 )
 from modules.services.model import Service
+from modules.stores.media import absolute_media_url
 from modules.stores.model import Store
 from modules.users.model import User
 
@@ -723,7 +724,11 @@ async def prepare_mercadopago_preference(
                         "id": service.public_id,
                         "title": service.name,
                         "description": service.description,
-                        "picture_url": service.image_url,
+                        # Una imagen subida es una ruta relativa (F1-28): el
+                        # checkout de MP la muestra fuera del sitio.
+                        "picture_url": absolute_media_url(
+                            service.image_url, settings.PUBLIC_API_URL
+                        ),
                         "quantity": 1,
                         "currency_id": payment.currency or "ARS",
                         "unit_price": float(amount),

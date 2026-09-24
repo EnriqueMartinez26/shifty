@@ -123,7 +123,11 @@ NO_LLEGA_A_LA_BASE: dict[tuple[str, str, str], str] = {
 
 # Bodies que la fabrica no manda como JSON: el logout toma el refresh de la
 # cookie y la imagen va como multipart.
-SIN_BODY_JSON = {("POST", "/auth/logout"), ("POST", "/stores/me/media")}
+SIN_BODY_JSON = {
+    ("POST", "/auth/logout"),
+    ("POST", "/stores/me/media"),
+    ("POST", "/services/{public_id}/image"),
+}
 
 # Vacio desde SEG-02: el titulo de la promocion pasa por reject_control_chars.
 DEFECTOS_INVISIBLES: dict[tuple[str, str, str], str] = {}

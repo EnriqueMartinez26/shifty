@@ -28,7 +28,14 @@ from tests.security.rutas import (
 # suscripcion suspendida por diseno (CLAUDE.md, "Una tienda suspendida no
 # escribe": exentos auth, ops, superadmin y el portal publico).
 PREFIJOS_SIN_GUARDA_DE_SUSPENSION = ("/auth/", "/ops/", "/superadmin/", "/public/")
-RUTAS_SIN_GUARDA_DE_SUSPENSION = {("GET", "/"), ("GET", "/me")}
+RUTAS_SIN_GUARDA_DE_SUSPENSION = {
+    ("GET", "/"),
+    ("GET", "/me"),
+    # Servir una imagen: lectura publica en un router aparte, para que el 304
+    # no abra la base (F1-27). La guarda no mira lecturas.
+    ("GET", "/stores/media/{media_id}"),
+    ("HEAD", "/stores/media/{media_id}"),
+}
 
 
 def test_cada_ruta_de_la_app_tiene_su_fila() -> None:

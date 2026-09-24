@@ -276,6 +276,18 @@ async def _borrar_servicio(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("DELETE", f"/services/{await m.servicio(t)}")
 
 
+async def _subir_imagen_servicio(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "POST",
+        f"/services/{await m.servicio(t)}/image",
+        files={"file": ("servicio.png", PNG_1X1, "image/png")},
+    )
+
+
+async def _borrar_imagen_servicio(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("DELETE", f"/services/{await m.servicio(t)}/image")
+
+
 async def _listar_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", "/staff/")
 
@@ -496,6 +508,10 @@ async def _subir_imagen(m: Mundo, a: Actor, t: Tienda) -> Llamada:
 
 async def _ver_imagen(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/stores/media/{await m.media(t)}")
+
+
+async def _ver_imagen_head(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("HEAD", f"/stores/media/{await m.media(t)}")
 
 
 # -- bloqueos -----------------------------------------------------------------
@@ -1027,6 +1043,22 @@ TABLA: tuple[Ruta, ...] = (
         _borrar_servicio,
         idor=IDOR_POR_ID,
     ),
+    R(
+        "POST",
+        "/services/{public_id}/image",
+        ADMINS,
+        A.RECURSO,
+        _subir_imagen_servicio,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "DELETE",
+        "/services/{public_id}/image",
+        ADMINS,
+        A.RECURSO,
+        _borrar_imagen_servicio,
+        idor=IDOR_POR_ID,
+    ),
     # personal
     R("GET", "/staff/", PERSONAL, A.PROPIA, _listar_staff),
     R("POST", "/staff/", ADMINS, A.RECURSO, _crear_staff, idor=IDOR_EN_BODY),
@@ -1216,6 +1248,7 @@ TABLA: tuple[Ruta, ...] = (
     # La imagen es publica por diseno: el portal muestra el logo sin login y
     # el id es un ULID que solo se conoce por la vitrina.
     R("GET", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen),
+    R("HEAD", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen_head),
     # bloqueos
     R(
         "GET",

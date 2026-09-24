@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Annotated
 
 import structlog
-from fastapi import BackgroundTasks, Depends, Path, Query, Request, status
+from fastapi import BackgroundTasks, Depends, Path, Query, Request, Response, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -171,11 +171,23 @@ async def get_store_by_slug(
         )
 
 
+# F1-29 (decision 11): servicios y profesionales se cachean en el edge
+# (nginx proxy_cache) hasta 30 s, y 30 s mas mientras se renuevan; el
+# navegador revalida siempre. Solo el 200: un error sale con el no-store del
+# middleware. La vitrina, la disponibilidad, los previews, el OTP y la
+# autogestion quedan no-store (suspension, politica de sena, flags).
+PUBLIC_CATALOG_CACHE_CONTROL = (
+    "public, max-age=0, s-maxage=30, stale-while-revalidate=30"
+)
+
+
 @router.get("/services", response_model=list[PublicServiceResponse])
 async def get_public_services(
     store_public_id: PublicIdQuery,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> list[PublicServiceResponse]:
+    response.headers["Cache-Control"] = PUBLIC_CATALOG_CACHE_CONTROL
     async with tenant_bypass(db):
         repo = PublicRepository(db)
         store = await repo.get_store_by_public_id(store_public_id)
@@ -209,8 +221,11 @@ async def get_public_staff(
     service_id: Annotated[
         str | None, Query(max_length=64, pattern=PUBLIC_ID_PATTERN)
     ] = None,
+    *,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> list[PublicStaffResponse]:
+    response.headers["Cache-Control"] = PUBLIC_CATALOG_CACHE_CONTROL
     async with tenant_bypass(db):
         repo = PublicRepository(db)
         store_id = None
