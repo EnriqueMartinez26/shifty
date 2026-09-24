@@ -3,6 +3,7 @@ import type React from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 
 import { ToggleSwitch } from './ToggleSwitch'
+import { colors2000s } from '../../../theme/colors'
 
 describe('ToggleSwitch', () => {
   it('se anuncia como interruptor con su nombre y su estado', () => {
@@ -32,5 +33,15 @@ describe('ToggleSwitch', () => {
 
     expect(onToggle).toHaveBeenCalledTimes(1)
     expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('prendido conserva el relleno de marca y suma un anillo acento contra el blanco', () => {
+    // Solo el naranja de marca contra la tarjeta blanca da 2.31:1 (N4); el
+    // anillo #c85a0f lleva el borde a 4.26:1.
+    render(<ToggleSwitch label="Seña" checked onToggle={jest.fn()} />)
+
+    const interruptor = screen.getByRole('switch', { name: 'Seña' })
+    expect(interruptor.style.boxShadow).toContain(`inset 0 0 0 1px ${colors2000s.orange.accent}`)
+    expect(interruptor.style.background).toBe('rgb(255, 140, 66)')
   })
 })
