@@ -8,7 +8,7 @@ commitea transacciones.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from core.utils import local_day_start, now_utc, today_local
 from modules.dashboard.repository import DashboardRepository, UpcomingRow
@@ -17,7 +17,6 @@ from modules.dashboard.schemas import (
     DashboardSummaryResponse,
     UpcomingAppointmentItem,
 )
-from modules.staff.model import Schedule
 
 UPCOMING_LIMIT = 5
 
@@ -39,14 +38,14 @@ def _local_days(first_day: date, days: int) -> _Window:
     )
 
 
-def _available_minutes(schedules: list[Schedule]) -> float:
+def _available_minutes(schedules: list[tuple[time, time]]) -> float:
     # Calculamos la duración en Python para que sea agnóstico a la base de
     # datos (PostgreSQL vs SQLite).
     total = 0.0
-    for sch in schedules:
-        if sch.start_time and sch.end_time:
-            t1 = datetime.combine(datetime.today(), sch.start_time)
-            t2 = datetime.combine(datetime.today(), sch.end_time)
+    for start_time, end_time in schedules:
+        if start_time and end_time:
+            t1 = datetime.combine(datetime.today(), start_time)
+            t2 = datetime.combine(datetime.today(), end_time)
             if t2 > t1:
                 total += (t2 - t1).total_seconds() / 60.0
     return total
@@ -68,14 +67,20 @@ def _revenue_trend(current: float, previous: float) -> float:
 
 
 def _upcoming_item(row: UpcomingRow) -> UpcomingAppointmentItem:
-    appointment, service, staff, client = row
+    # Mismo nombre que ``User.full_name`` (nombre y apellido sin blancos
+    # sobrantes) y, si no hay, el email.
+    full_name = " ".join(
+        part.strip()
+        for part in (row.client_first_name, row.client_last_name)
+        if part and part.strip()
+    )
     return UpcomingAppointmentItem(
-        public_id=appointment.public_id,
-        starts_at=appointment.starts_at,
-        status=appointment.status,
-        service_name=service.name,
-        staff_name=staff.display_name,
-        client_name=client.full_name or client.email,
+        public_id=row.public_id,
+        starts_at=row.starts_at,
+        status=row.status,
+        service_name=row.service_name,
+        staff_name=row.staff_name,
+        client_name=full_name or row.client_email,
     )
 
 
@@ -83,42 +88,42 @@ class DashboardService:
     def __init__(self, repository: DashboardRepository) -> None:
         self.repository = repository
 
-    async def _occupancy_today(self, today: date, window: _Window) -> float:
-        """Minutos reservados hoy sobre la agenda del dia del staff activo."""
-        booked = await self.repository.booked_minutes_between(
-            window.desde, window.hasta
-        )
-        schedules = await self.repository.schedules_for_weekday(today.weekday())
-        return _occupancy_rate(booked, _available_minutes(schedules))
-
     async def get_summary(self) -> DashboardSummaryResponse:
-        """Devuelve métricas resumidas y próximos turnos para el dashboard."""
+        """Devuelve métricas resumidas y próximos turnos para el dashboard.
+
+        Cuatro sentencias (F3-04): "hoy" + pendientes + clientes nuevos, la
+        semana y la anterior, los horarios de hoy y los proximos turnos.
+        """
         repo = self.repository
         now = now_utc()
         today = today_local()
         monday = today - timedelta(days=today.weekday())
         today_window = _local_days(today, 1)
         week = _local_days(monday, 7)
-        last_week = _Window(local_day_start(monday - timedelta(days=7)), week.desde)
+        last_week_start = local_day_start(monday - timedelta(days=7))
 
-        weekly_revenue = await repo.accredited_revenue_between(week.desde, week.hasta)
-        last_week_revenue = await repo.accredited_revenue_between(
-            last_week.desde, last_week.hasta
+        day = await repo.day_counters(
+            today_window.desde,
+            today_window.hasta,
+            now,
+            new_clients_since=now - timedelta(days=30),
         )
-        average_minutes = await repo.average_duration_between(week.desde, week.hasta)
+        week_totals = await repo.week_totals(week.desde, week.hasta, last_week_start)
+        schedules = await repo.schedules_for_weekday(today.weekday())
 
         stats = DashboardStatSummary(
-            appointments_today=await repo.count_active_between(
-                today_window.desde, today_window.hasta
+            appointments_today=day.appointments_today,
+            pending_confirmations=day.pending_from_now,
+            # Minutos reservados hoy sobre la agenda del dia del staff activo.
+            occupancy_rate=_occupancy_rate(
+                day.booked_minutes_today, _available_minutes(schedules)
             ),
-            pending_confirmations=await repo.count_pending(now),
-            occupancy_rate=await self._occupancy_today(today, today_window),
-            new_clients_last_30d=await repo.count_new_clients_since(
-                now - timedelta(days=30)
+            new_clients_last_30d=day.new_clients,
+            weekly_revenue=week_totals.revenue,
+            revenue_trend=_revenue_trend(
+                week_totals.revenue, week_totals.previous_revenue
             ),
-            weekly_revenue=weekly_revenue,
-            revenue_trend=_revenue_trend(weekly_revenue, last_week_revenue),
-            average_appointment_minutes=int(round(average_minutes)),
+            average_appointment_minutes=int(round(week_totals.average_minutes)),
         )
         upcoming = await repo.upcoming(now, UPCOMING_LIMIT)
         return DashboardSummaryResponse(

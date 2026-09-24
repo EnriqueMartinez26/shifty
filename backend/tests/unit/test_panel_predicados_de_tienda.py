@@ -34,12 +34,17 @@ class _SesionEspia:
         self.sentencias: list[str] = []
 
     async def execute(self, statement: Any) -> Any:
-        self.sentencias.append(str(statement.compile()))
+        sentencia = str(statement.compile())
+        self.sentencias.append(sentencia)
 
         class _Resultado:
             @staticmethod
             def scalar() -> int:
                 return 0
+
+            @staticmethod
+            def one() -> tuple[int, ...]:
+                return (0, 0, 0, 0)[: 4 if "users" in sentencia else 3]
 
             @staticmethod
             def scalars() -> Any:
@@ -56,7 +61,7 @@ class _SesionEspia:
 async def test_el_ingreso_del_panel_acota_tambien_la_tabla_de_pagos() -> None:
     espia = _SesionEspia()
     repo = DashboardRepository(cast(AsyncSession, espia), store_id=TIENDA)
-    await repo.accredited_revenue_between(DESDE, HASTA)
+    await repo.week_totals(DESDE, HASTA, DESDE)
     sentencia = espia.sentencias[0]
     assert "appointments.store_id" in sentencia
     assert "payments.store_id" in sentencia, "falta el predicado sobre payments"
@@ -66,14 +71,15 @@ async def test_el_ingreso_del_panel_acota_tambien_la_tabla_de_pagos() -> None:
 async def test_toda_consulta_del_panel_nombra_la_tienda() -> None:
     espia = _SesionEspia()
     repo = DashboardRepository(cast(AsyncSession, espia), store_id=TIENDA)
-    await repo.count_active_between(DESDE, HASTA)
-    await repo.count_pending(DESDE)
-    await repo.booked_minutes_between(DESDE, HASTA)
+    await repo.day_counters(DESDE, HASTA, DESDE, DESDE)
+    await repo.week_totals(DESDE, HASTA, DESDE)
     await repo.schedules_for_weekday(2)
-    await repo.count_new_clients_since(DESDE)
-    await repo.accredited_revenue_between(DESDE, HASTA)
-    await repo.average_duration_between(DESDE, HASTA)
     await repo.upcoming(DESDE, 5)
-    assert len(espia.sentencias) == 8
+    # F3-04: cuatro sentencias por panel (antes ocho, una por metrica).
+    assert len(espia.sentencias) == 4
     for sentencia in espia.sentencias:
         assert ".store_id" in sentencia
+    # La subconsulta de clientes nuevos lleva su propia tienda, no la del
+    # agregado de turnos que la envuelve.
+    assert "users.store_id" in espia.sentencias[0]
+    assert "appointments.store_id" in espia.sentencias[0]

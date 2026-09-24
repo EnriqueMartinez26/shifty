@@ -42,7 +42,8 @@ def test_los_limites_del_rango_viajan_aware() -> None:
 
 
 def test_ninguna_consulta_del_panel_descarta_la_zona() -> None:
-    """Las otras dos ventanas (nuevos clientes y proximos turnos) tambien.
+    """Las otras dos ventanas (nuevos clientes, en ``day_counters``, y
+    proximos turnos) tambien.
 
     Se mira el archivo porque el defecto es una llamada puntual repetida: si
     vuelve en una consulta nueva, el sintoma no lo ve ningun test en SQLite.
@@ -51,7 +52,7 @@ def test_ninguna_consulta_del_panel_descarta_la_zona() -> None:
     assert "replace(tzinfo=None)" not in fuente
 
 
-@pytest.mark.parametrize("nombre", ["count_new_clients_since", "upcoming"])
+@pytest.mark.parametrize("nombre", ["day_counters", "upcoming"])
 def test_las_ventanas_sueltas_siguen_existiendo(nombre: str) -> None:
     """Guarda del test anterior: si el metodo se renombra, hay que revisarlo."""
     assert hasattr(repositorio.DashboardRepository, nombre)
