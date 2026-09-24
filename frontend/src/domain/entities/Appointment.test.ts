@@ -20,4 +20,26 @@ describe('Appointment.fromPrimitives', () => {
     expect(appointment.status).toBe('on_hold')
     expect(appointment.toPrimitives().status).toBe('on_hold')
   })
+
+  it('ida y vuelta completa staff y telefono opcionales con null', () => {
+    const out = Appointment.fromPrimitives({ ...props, status: 'confirmed' }).toPrimitives()
+
+    expect(out).toEqual({
+      ...props,
+      status: 'confirmed',
+      staff_name: null,
+      client_phone: null,
+      starts_at: '2026-09-10T12:00:00.000Z',
+      ends_at: '2026-09-10T12:30:00.000Z'
+    })
+  })
+
+  it.each([
+    ['fin antes del inicio', { ends_at: '2026-09-10T11:00:00Z' }],
+    ['fin igual al inicio', { ends_at: '2026-09-10T12:00:00Z' }],
+    ['fecha invalida', { starts_at: 'no-es-fecha' }],
+    ['id vacio', { public_id: '' }]
+  ])('rechaza %s', (_caso, override) => {
+    expect(() => Appointment.fromPrimitives({ ...props, status: 'pending', ...override })).toThrow()
+  })
 })
