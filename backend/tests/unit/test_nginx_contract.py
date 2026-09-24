@@ -338,3 +338,74 @@ def test_los_buffers_del_proxy_no_vuelcan_a_disco_una_respuesta_mediana(
             assert efectivo("proxy_buffer_size", *niveles) == ("16k",), loc.args
             assert efectivo("proxy_buffers", *niveles) == ("16", "16k"), loc.args
             assert efectivo("proxy_busy_buffers_size", *niveles) == ("32k",)
+
+
+# --- F0-09: rate limit y conexiones por IP en el edge -------------------------
+
+
+def _tasa_por_segundo(http: list[Directiva], zona: str) -> int:
+    for d in todas(http, "limit_req_zone"):
+        if f"zone={zona}:10m" in d.args:
+            assert d.args[0] == "$binary_remote_addr", d.args
+            rate = next(a for a in d.args if a.startswith("rate="))
+            match = re.fullmatch(r"rate=(\d+)r/s", rate)
+            assert match, rate
+            return int(match.group(1))
+    raise AssertionError(f"falta limit_req_zone zone={zona}:10m")
+
+
+def _limit_req(loc: list[Directiva]) -> tuple[str, int]:
+    args = una(loc, "limit_req").args
+    assert "nodelay" in args, args
+    zona = next(a for a in args if a.startswith("zone="))
+    burst = next(a for a in args if a.startswith("burst="))
+    return zona.removeprefix("zone="), int(burst.removeprefix("burst="))
+
+
+def _conexiones_por_ip(http: list[Directiva], server: list[Directiva]) -> int:
+    limite = efectivo("limit_conn", http, server)
+    assert limite is not None and limite[0] == "perip", limite
+    return int(limite[1])
+
+
+@EDGES
+def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
+    http = leer(ruta)
+    _tasa_por_segundo(http, "api")
+    _tasa_por_segundo(http, "auth")
+    assert una(http, "limit_conn_zone").args == ("$binary_remote_addr", "zone=perip:10m")
+    # 429 y no el 503 por defecto: el front y el backoff lo leen como limite.
+    assert una(http, "limit_req_status").args == ("429",)
+    assert una(http, "limit_conn_status").args == ("429",)
+    server = server_de_la_app(http)
+    assert _conexiones_por_ip(http, server) > 0
+    apis = locations_de_api(server)
+    assert apis
+    for loc in apis:
+        zona, _burst = _limit_req(loc.bloque)
+        esperada = "auth" if loc.args == ("/api/auth/",) else "api"
+        assert zona == esperada, loc.args
+
+
+def test_produccion_limita_muy_por_encima_de_la_app() -> None:
+    # Solo corta inundaciones: el limite fino (por ruta, por sujeto) es el de
+    # core/rate_limit.py. Si el edge cortara antes, el front veria un 429 sin
+    # el Retry-After calculado por la app.
+    http = leer(EDGE_PROD)
+    assert _tasa_por_segundo(http, "api") == 20
+    assert _tasa_por_segundo(http, "auth") == 3
+    server = server_de_la_app(http)
+    assert _limit_req(location(server, "/api/")) == ("api", 40)
+    assert _limit_req(location(server, "/api/auth/")) == ("auth", 6)
+    assert _conexiones_por_ip(http, server) == 40
+
+
+def test_desarrollo_no_limita_mas_que_produccion() -> None:
+    # Las simulaciones locales salen todas de una IP: dev puede ser mas laxo,
+    # nunca mas estricto (un 429 del edge falsearia la medicion).
+    dev, prod = leer(EDGE_DEV), leer(EDGE_PROD)
+    for zona in ("api", "auth"):
+        assert _tasa_por_segundo(dev, zona) >= _tasa_por_segundo(prod, zona)
+    assert _conexiones_por_ip(dev, server_de_la_app(dev)) >= _conexiones_por_ip(
+        prod, server_de_la_app(prod)
+    )
