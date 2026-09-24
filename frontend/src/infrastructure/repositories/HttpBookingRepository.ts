@@ -14,12 +14,9 @@ import type {
   IBookingRepository
 } from '../../domain/repositories/IBookingRepository'
 import { QueryOptions } from '../../domain/repositories/IRepository'
+import { InternalServerError } from '../../shared/errors/InternalServerError'
 import { formatArgentinaDate } from '../../shared/utils/argentinaTime'
 import { createUuid } from '../../shared/utils/uuid'
-
-type BookingUpdatePayload = {
-  notes_staff?: string
-}
 
 /** Tope de `page_size` que acepta GET /appointments/search en el backend. */
 const MAX_PAGE_SIZE = 100
@@ -32,7 +29,7 @@ const MAX_PAGE_SIZE = 100
 const MAX_PAGES = 50
 
 export class HttpBookingRepository
-  extends BaseRepository<Appointment, CreateBookingRequestDTO, BookingUpdatePayload>
+  extends BaseRepository<Appointment, CreateBookingRequestDTO, Record<string, never>>
   implements IBookingRepository
 {
   private client: AxiosInstance
@@ -186,29 +183,26 @@ export class HttpBookingRepository
     return options.limit ? todas.slice(offset, offset + options.limit) : todas.slice(offset)
   }
 
-  protected async findByIdImpl(id: string): Promise<Appointment | null> {
-    const { data } = await this.client.get('/appointments/search', {
-      params: {
-        page: 1,
-        page_size: 100
-      }
-    })
-    const found = (data.results || []).find((item: AppointmentResponseDTO) => item.public_id === id)
-    return found ? BookingMapper.toDomain(found) : null
+  // El backend no expone GET /appointments/{id} ni un PUT/DELETE generico de
+  // turnos: buscar en la primera pagina de /search devolvia null para
+  // cualquier turno fuera de las 100 primeras filas y el update tiraba
+  // despues de haber guardado la nota (F10-05). Nadie los llama; si alguien
+  // lo hace, falla de entrada en vez de hacer requests enganosos.
+  protected async findByIdImpl(_id: string): Promise<Appointment | null> {
+    throw new InternalServerError(
+      'findById de turnos no soportado: el backend no expone GET /appointments/{id}'
+    )
   }
 
-  protected async updateImpl(id: string, data: BookingUpdatePayload): Promise<Appointment> {
-    if (data?.notes_staff) {
-      await this.client.patch(`/appointments/${id}/notes-staff`, { notes_staff: data.notes_staff })
-    }
-    const refreshed = await this.findByIdImpl(id)
-    if (!refreshed) {
-      throw new Error('Turno no encontrado')
-    }
-    return refreshed
+  protected async updateImpl(_id: string, _data: Record<string, never>): Promise<Appointment> {
+    throw new InternalServerError(
+      'update de turnos no soportado: el backend no expone GET /appointments/{id}'
+    )
   }
 
-  protected async deleteImpl(id: string): Promise<void> {
-    await this.cancel(id)
+  protected async deleteImpl(_id: string): Promise<void> {
+    throw new InternalServerError(
+      'delete de turnos no soportado: se cancela o se libera con su transicion'
+    )
   }
 }

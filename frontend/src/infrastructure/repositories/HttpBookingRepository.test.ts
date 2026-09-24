@@ -1,6 +1,7 @@
 import type { AxiosInstance } from 'axios'
 
 import { HttpBookingRepository } from './HttpBookingRepository'
+import { InternalServerError } from '../../shared/errors/InternalServerError'
 
 describe('HttpBookingRepository.findAll', () => {
   afterEach(() => {
@@ -63,5 +64,23 @@ describe('HttpBookingRepository.searchByDateRange', () => {
     expect(get).toHaveBeenCalledTimes(2)
     expect(range).toMatchObject({ total: 200 })
     expect(range.appointments).toHaveLength(200)
+  })
+})
+
+describe('HttpBookingRepository: CRUD que el backend no expone (F10-05)', () => {
+  it.each([
+    ['findById', (repository: HttpBookingRepository) => repository.findById('appt-1')],
+    ['update', (repository: HttpBookingRepository) => repository.update('appt-1', {})],
+    ['delete', (repository: HttpBookingRepository) => repository.delete('appt-1')]
+  ])('%s rechaza sin tocar la red', async (_, call) => {
+    const client = { get: jest.fn(), patch: jest.fn(), put: jest.fn(), delete: jest.fn() }
+    const repository = new HttpBookingRepository(client as unknown as AxiosInstance)
+
+    await expect(call(repository)).rejects.toBeInstanceOf(InternalServerError)
+
+    expect(client.get).not.toHaveBeenCalled()
+    expect(client.patch).not.toHaveBeenCalled()
+    expect(client.put).not.toHaveBeenCalled()
+    expect(client.delete).not.toHaveBeenCalled()
   })
 })
