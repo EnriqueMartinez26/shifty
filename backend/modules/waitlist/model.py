@@ -55,7 +55,7 @@ MAX_LAPSED_OFFERS = 2
 class WaitlistEntry(BaseEntity):
     __tablename__ = "waitlist_entries"
 
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     client_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     client_name: Mapped[str] = mapped_column(String(100))
     client_phone: Mapped[str] = mapped_column(String(30), index=True)

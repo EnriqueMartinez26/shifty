@@ -106,7 +106,7 @@ class StoreSubscription(BaseEntity):
 class CouponRedemption(BaseEntity):
     __tablename__ = "coupon_redemptions"
 
-    coupon_id: Mapped[str] = mapped_column(ForeignKey("saas_coupons.id"), index=True)
+    coupon_id: Mapped[str] = mapped_column(ForeignKey("saas_coupons.id"))
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
     subscription_id: Mapped[str | None] = mapped_column(
         ForeignKey("store_subscriptions.id"), nullable=True, index=True

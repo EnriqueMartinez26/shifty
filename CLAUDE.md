@@ -246,7 +246,11 @@ Una instrucción en lenguaje natural no es una garantía.
   EXISTS` antes; restricciones con `NOT VALID` y `VALIDATE` aparte; backfills
   por lotes; sin `ALTER TYPE` que reescriba la tabla. `alembic/env.py` fija
   `lock_timeout = '3s'` y una transacción por revisión (F0-06): una migración
-  que espera un lock falla en vez de encolar todas las requests detrás.
+  que espera un lock falla en vez de encolar todas las requests detrás. Un
+  índice vive a la vez en el modelo y en su migración (sin `index=True` que
+  la migración no cree): `tests/postgres/test_pg_modelo_y_migraciones.py`
+  compara los dos como `alembic check` y fija la deriva previa como techo que
+  solo baja (F1-15).
 - **Bajo RLS solo los predicados leakproof usan índices.** Postgres no
   aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
   que el filtro `store_id` explícito es el camino al índice, no solo defensa.

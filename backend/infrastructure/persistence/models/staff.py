@@ -20,7 +20,7 @@ class StaffModel(Base):
     )
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     # "person": profesional con usuario de login. "resource": cancha, sala,
     # box... un calendario reservable sin email ni usuario (2026-09-10).

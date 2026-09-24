@@ -57,13 +57,13 @@ class AppointmentModel(Base):
     __tablename__ = "appointments"
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     service_id: Mapped[str] = mapped_column(
         String, ForeignKey("services.id"), index=True
     )
     staff_id: Mapped[str] = mapped_column(String, ForeignKey("staff.id"), index=True)
-    store_id: Mapped[str] = mapped_column(String, ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(String, ForeignKey("stores.id"))
     client_id: Mapped[Optional[str]] = mapped_column(
         String, ForeignKey("users.id"), index=True
     )
@@ -173,6 +173,9 @@ class AppointmentModel(Base):
 
     __mapper_args__ = {"version_id_col": version}
 
+    # La tabla lleva ``fillfactor = 90`` (F1-15, migracion b7d9f1a3c5e8): deja
+    # lugar en la pagina para UPDATE HOT. Vive solo en la migracion porque el
+    # modelo no declara parametros de almacenamiento.
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",

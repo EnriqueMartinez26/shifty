@@ -46,7 +46,7 @@ class UserModel(Base):
     )
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     email: Mapped[str] = mapped_column(String(255), index=True, unique=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)

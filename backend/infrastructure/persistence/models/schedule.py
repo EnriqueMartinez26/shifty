@@ -9,7 +9,7 @@ class ScheduleModel(Base):
     __tablename__ = "schedules"
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     staff_id: Mapped[str] = mapped_column(String, ForeignKey("staff.id"), index=True)
     store_id: Mapped[str] = mapped_column(String, index=True)
