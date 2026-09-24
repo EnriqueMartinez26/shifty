@@ -1,16 +1,20 @@
-"""Los mails del panel salen despues del commit, sin transaccion y con el cache ya invalidado.
+"""Los mails del panel salen por el outbox, no dentro del request.
 
 2026-09-24, F1-05 (R8-05): en ``AppointmentService.book`` el mail iba ANTES
-de ``invalidate_availability``: con un SMTP lento (10 s por operacion) la
-disponibilidad publica seguia mostrando libre un horario ya tomado todo ese
-rato. Y ``confirm``, ``complete`` y ``reschedule`` releian la tienda DESPUES
-del commit, asi que el SMTP corria con una transaccion recien abierta
-(``idle in transaction`` en Postgres, con el pool de 15).
+de ``invalidate_availability``, y ``confirm``, ``complete`` y ``reschedule``
+mandaban SMTP en el request (hasta 10 s por operacion) con la conexion de la
+base tomada.
 
-Ahora: lo que el mail necesita se lee antes del commit; commit plano,
-invalidacion, mail y recien despues se reaplica el contexto. En SQLite se
-observa el orden con eventos del engine; el estado de la conexion en
-Postgres lo fija ``tests/postgres/test_pg_sin_idle_en_transaccion.py``.
+2026-09-24, F2-02 (R2-01): el panel ya no manda nada en el request. Reservar,
+confirmar, completar y reprogramar publican un evento en el outbox
+(``appointment.booked_by_panel``, ``appointment.confirmed``,
+``appointment.completed``, ``appointment.rescheduled``) en la MISMA
+transaccion que el cambio de estado: si el cambio se commitea, el aviso
+existe; si no, tampoco. El lote del outbox (cada 20 s) relee el turno y manda
+despues de su commit, con el presupuesto y el diferido de F2-03. Se eligio el
+outbox y no una tarea de Celery porque es durable (sin broker en el camino del
+request, sin mail perdido si el broker esta caido) y reintenta lo diferido;
+el costo es hasta un tick de demora, aceptable para un aviso del panel.
 """
 
 from __future__ import annotations
@@ -20,10 +24,14 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 import modules.appointments.service as appointments_service
+import modules.notifications.tasks as tasks
 from core.availability_cache import invalidate_availability
+from modules.payments.jobs import process_outbox_batch
+from modules.payments.model import OutboxMessage
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -31,26 +39,32 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
-from tests.integration.test_lotes_sin_transaccion_abierta import (
-    _dejar_de_escuchar,
-    _escuchar,
-)
+from tests.integration.test_mails_al_cliente import Buzon
 
 
-def _registrar_mails_e_invalidaciones(
-    monkeypatch: pytest.MonkeyPatch, linea: list[str]
-) -> None:
-    async def mail(*args: Any, **kwargs: Any) -> bool:
-        linea.append("mail")
-        return True
+def _escuchar(engine: AsyncEngine, linea: list[str]) -> tuple[Any, Any]:
+    """Anota escrituras de turnos y del outbox, y cada commit."""
 
-    for nombre in (
-        "send_confirmation_email",
-        "send_rebook_email",
-        "send_reschedule_email",
-    ):
-        monkeypatch.setattr(appointments_service, nombre, mail)
+    def sql(_conn: Any, _cursor: Any, statement: str, *args: Any) -> None:
+        texto = " ".join(statement.split()).lower()
+        for tabla in ("appointments", "outbox_messages"):
+            if texto.startswith((f"insert into {tabla}", f"update {tabla}")):
+                linea.append(tabla)
 
+    def commit(*args: Any, **kwargs: Any) -> None:
+        linea.append("commit")
+
+    event.listen(engine.sync_engine, "before_cursor_execute", sql)
+    event.listen(engine.sync_engine, "commit", commit)
+    return sql, commit
+
+
+def _dejar_de_escuchar(engine: AsyncEngine, sql: Any, commit: Any) -> None:
+    event.remove(engine.sync_engine, "before_cursor_execute", sql)
+    event.remove(engine.sync_engine, "commit", commit)
+
+
+def _espiar_invalidacion(monkeypatch: pytest.MonkeyPatch, linea: list[str]) -> None:
     invalidar_original = invalidate_availability
 
     async def invalidar(*args: Any, **kwargs: Any) -> None:
@@ -58,15 +72,6 @@ def _registrar_mails_e_invalidaciones(
         await invalidar_original(*args, **kwargs)
 
     monkeypatch.setattr(appointments_service, "invalidate_availability", invalidar)
-
-
-def _tramo_del_mail(linea: list[str]) -> list[str]:
-    """Lo que paso entre el ultimo commit anterior al mail y el mail."""
-    assert linea.count("mail") == 1, linea
-    mail = linea.index("mail")
-    commits = [i for i, e in enumerate(linea[:mail]) if e == "commit"]
-    assert commits, f"el mail salio sin commit previo: {linea}"
-    return linea[commits[-1] + 1 : mail]
 
 
 async def _pedir(engine: AsyncEngine, linea: list[str], pedido: Any) -> Any:
@@ -78,96 +83,194 @@ async def _pedir(engine: AsyncEngine, linea: list[str], pedido: Any) -> Any:
         _dejar_de_escuchar(engine, sql, commit)
 
 
+def _evento_en_la_transaccion_del_turno(linea: list[str]) -> None:
+    """El evento y el turno se escriben en la misma transaccion (el primer
+    commit del request los lleva a los dos; el orden entre ellos lo decide el
+    flush)."""
+    assert "commit" in linea, linea
+    transaccion = linea[: linea.index("commit")]
+    assert "outbox_messages" in transaccion, linea
+    assert "appointments" in transaccion, linea
+
+
+async def _eventos(session: AsyncSession, tipo: str) -> list[OutboxMessage]:
+    return list(
+        (
+            await session.execute(
+                select(OutboxMessage).where(OutboxMessage.event_type == tipo)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def _agenda(client: AsyncClient, slug: str) -> tuple[str, str, str, datetime]:
     _store, token = await register_and_login(client, slug=slug, email=f"{slug}@t.com")
     servicio = await create_service(client, token)
     staff = await create_staff(client, token, servicio, email=f"pro-{slug}@t.com")
-    dia = datetime.now(timezone.utc) + timedelta(days=6)
+    dia = (datetime.now(timezone.utc) + timedelta(days=6)).replace(
+        minute=0, second=0, microsecond=0
+    )
     await add_staff_schedule(client, token, staff, target_date=dia)
     return token, servicio, staff, dia
 
 
+async def _turno(
+    client: AsyncClient, token: str, servicio: str, staff: str, cuando: datetime
+) -> Any:
+    return await client.post(
+        "/appointments/",
+        headers=auth_headers(token),
+        json={
+            "service_id": servicio,
+            "staff_id": staff,
+            "starts_at": cuando.isoformat(),
+            "idempotency_key": f"f202-turno-{cuando.hour:02d}",
+        },
+    )
+
+
 @pytest.mark.asyncio
-async def test_reservar_desde_el_panel_invalida_antes_del_mail_y_sin_sql_en_el_medio(
-    client: AsyncClient, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+async def test_reservar_desde_el_panel_publica_el_aviso_y_no_manda_en_el_request(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
     linea: list[str] = []
-    _registrar_mails_e_invalidaciones(monkeypatch, linea)
-    token, servicio, staff, dia = await _agenda(client, "f105-book")
+    _espiar_invalidacion(monkeypatch, linea)
+    token, servicio, staff, dia = await _agenda(client, "f202-book")
 
     async def reservar() -> Any:
-        return await client.post(
-            "/appointments/",
-            headers=auth_headers(token),
-            json={
-                "service_id": servicio,
-                "staff_id": staff,
-                "starts_at": dia.replace(
-                    hour=10, minute=0, second=0, microsecond=0
-                ).isoformat(),
-                "idempotency_key": "f105-book-turno",
-            },
-        )
+        return await _turno(client, token, servicio, staff, dia.replace(hour=10))
 
     res = await _pedir(test_engine, linea, reservar)
 
     assert res.status_code == 201, res.text
-    assert _tramo_del_mail(linea) == ["invalidar"], linea
+    assert buzon.enviados == [], "el request del panel no manda SMTP"
+    _evento_en_la_transaccion_del_turno(linea)
+    # El cupo se invalida despues del commit del turno.
+    assert linea.index("invalidar") > linea.index("commit"), linea
+    [evento] = await _eventos(test_session, "appointment.booked_by_panel")
+    assert evento.payload["appointment_id"] == res.json()["public_id"]
+    assert evento.store_id is not None
+
+    await process_outbox_batch(test_session)
+
+    assert [(to, asunto.split(" - ")[0]) for to, asunto, _ in buzon.enviados] == [
+        ("f202-book@t.com", "Turno confirmado")
+    ]
 
 
 @pytest.mark.asyncio
-async def test_confirmar_completar_y_reprogramar_mandan_el_mail_sin_sql_despues_del_commit(
-    client: AsyncClient, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+async def test_confirmar_completar_y_reprogramar_publican_su_aviso_y_el_lote_lo_manda(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    test_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
     linea: list[str] = []
-    _registrar_mails_e_invalidaciones(monkeypatch, linea)
-    token, servicio, staff, dia = await _agenda(client, "f105-estados")
+    token, servicio, staff, dia = await _agenda(client, "f202-estados")
     turnos = []
     for hora in (10, 11):
-        res = await client.post(
-            "/appointments/",
-            headers=auth_headers(token),
-            json={
-                "service_id": servicio,
-                "staff_id": staff,
-                "starts_at": dia.replace(
-                    hour=hora, minute=0, second=0, microsecond=0
-                ).isoformat(),
-                "idempotency_key": f"f105-estados-{hora}",
-            },
-        )
+        res = await _turno(client, token, servicio, staff, dia.replace(hour=hora))
         assert res.status_code == 201, res.text
         turnos.append(res.json()["public_id"])
+    await process_outbox_batch(test_session)
+    buzon.enviados.clear()
     headers = auth_headers(token)
 
-    async def confirmar() -> Any:
-        return await client.patch(f"/appointments/{turnos[0]}/confirm", headers=headers)
-
-    res = await _pedir(test_engine, linea, confirmar)
-    assert res.status_code == 200, res.text
-    assert _tramo_del_mail(linea) == [], f"confirmar: {linea}"
-
-    async def completar() -> Any:
-        return await client.patch(
-            f"/appointments/{turnos[0]}/complete", headers=headers
-        )
-
-    res = await _pedir(test_engine, linea, completar)
-    assert res.status_code == 200, res.text
-    assert _tramo_del_mail(linea) == [], f"completar: {linea}"
-
-    async def reprogramar() -> Any:
-        return await client.patch(
-            f"/appointments/{turnos[1]}/reschedule",
-            headers=headers,
-            json={
-                "new_starts_at": dia.replace(
-                    hour=12, minute=0, second=0, microsecond=0
-                ).isoformat(),
-                "idempotency_key": "f105-estados-reprog",
+    casos = [
+        ("confirm", turnos[0], None, "appointment.confirmed", "Turno confirmado"),
+        ("complete", turnos[0], None, "appointment.completed", "Gracias por tu visita"),
+        (
+            "reschedule",
+            turnos[1],
+            {
+                "new_starts_at": dia.replace(hour=12).isoformat(),
+                "idempotency_key": "f202-estados-reprog",
             },
-        )
+            "appointment.rescheduled",
+            "Te movimos el turno",
+        ),
+    ]
+    for accion, turno, cuerpo, tipo, asunto in casos:
 
-    res = await _pedir(test_engine, linea, reprogramar)
-    assert res.status_code == 200, res.text
-    assert _tramo_del_mail(linea) == ["invalidar"], f"reprogramar: {linea}"
+        async def pedir(
+            accion: str = accion, turno: str = turno, cuerpo: Any = cuerpo
+        ) -> Any:
+            return await client.patch(
+                f"/appointments/{turno}/{accion}", headers=headers, json=cuerpo
+            )
+
+        res = await _pedir(test_engine, linea, pedir)
+        assert res.status_code == 200, res.text
+        assert buzon.enviados == [], f"{accion}: mando SMTP en el request"
+        _evento_en_la_transaccion_del_turno(linea)
+        [evento] = await _eventos(test_session, tipo)
+        assert evento.payload["appointment_id"] == res.json()["public_id"], accion
+
+        await process_outbox_batch(test_session)
+
+        assert [a.split(" - ")[0] for _, a, _ in buzon.enviados] == [asunto], accion
+        buzon.enviados.clear()
+
+
+@pytest.mark.asyncio
+async def test_el_lote_no_confirma_un_turno_que_se_cancelo_antes_del_tick(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El lote relee el turno: entre el evento y el tick pudo cambiar."""
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    token, servicio, staff, dia = await _agenda(client, "f202-cancelado")
+    res = await _turno(client, token, servicio, staff, dia.replace(hour=10))
+    turno = res.json()["public_id"]
+    headers = auth_headers(token)
+    confirmar = await client.patch(f"/appointments/{turno}/confirm", headers=headers)
+    assert confirmar.status_code == 200, confirmar.text
+    cancelar = await client.patch(f"/appointments/{turno}/cancel", headers=headers)
+    assert cancelar.status_code == 200, cancelar.text
+
+    await process_outbox_batch(test_session)
+
+    assert buzon.enviados == []
+
+
+@pytest.mark.asyncio
+async def test_el_email_del_evento_pisa_el_del_turno_incluso_si_es_nulo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La reserva desde la lista de espera avisa al email que dejo esa persona
+    (``email`` en el payload), y a nadie si no dejo uno: sin la clave, el del
+    turno."""
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    token, servicio, staff, dia = await _agenda(client, "f202-email")
+    res = await _turno(client, token, servicio, staff, dia.replace(hour=10))
+    turno = res.json()["public_id"]
+    confirmar = await client.patch(
+        f"/appointments/{turno}/confirm", headers=auth_headers(token)
+    )
+    assert confirmar.status_code == 200, confirmar.text
+    await process_outbox_batch(test_session)
+    buzon.enviados.clear()
+    [evento] = await _eventos(test_session, "appointment.confirmed")
+    for email in (None, "lista@example.com"):
+        test_session.add(
+            OutboxMessage(
+                store_id=evento.store_id,
+                event_type="appointment.confirmed",
+                payload={"appointment_id": turno, "email": email},
+            )
+        )
+    await test_session.commit()
+
+    await process_outbox_batch(test_session)
+
+    assert [to for to, _a, _c in buzon.enviados] == ["lista@example.com"]

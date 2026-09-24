@@ -991,6 +991,55 @@ def test_postgres_de_produccion_usa_la_memoria_del_servidor() -> None:
     assert limites["resources"]["limits"]["memory"] == "4G", limites
 
 
+# --- Pool de la base: 5 + 5 por proceso (F2-04, plan de rendimiento) ---------
+#
+# Con los mails y Mercado Pago fuera de las transacciones (F1-05, F2-01,
+# F2-02) ningun request retiene una conexion durante una llamada de red, asi
+# que el pool por proceso baja de 10 + 5 a 5 + 5. La suma de todos los
+# procesos que abren conexiones tiene que entrar en max_connections con lugar
+# para migraciones, backups y una consola.
+
+POOL_POR_PROCESO = {
+    "DB_POOL_SIZE": "${DB_POOL_SIZE:-5}",
+    "DB_MAX_OVERFLOW": "${DB_MAX_OVERFLOW:-5}",
+}
+
+
+def _concurrencia(servicio: str) -> int:
+    encontrado = re.search(r"--concurrency=(?:\$\{[A-Z_]+:-)?(\d+)", _comando(servicio))
+    assert encontrado, _comando(servicio)
+    return int(encontrado.group(1))
+
+
+def test_el_pool_de_la_base_es_de_5_mas_5_por_proceso() -> None:
+    desarrollo = _env_items(_services()["backend"])
+    for clave, valor in POOL_POR_PROCESO.items():
+        assert desarrollo.get(clave) == valor, (clave, desarrollo.get(clave))
+        assert _env_prod("backend").get(clave) == valor, clave
+
+
+def _default_de(valor: str) -> int:
+    encontrado = re.fullmatch(r"\$\{[A-Z_]+:-(\d+)\}", valor)
+    assert encontrado, valor
+    return int(encontrado.group(1))
+
+
+def test_los_pools_de_produccion_entran_en_max_connections() -> None:
+    entorno = _env_prod("backend")
+    por_proceso = _default_de(entorno.get("DB_POOL_SIZE", "")) + _default_de(
+        entorno.get("DB_MAX_OVERFLOW", "")
+    )
+    deploy = _servicios_prod()["backend"]["deploy"]
+    assert isinstance(deploy, dict)
+    replicas = int(deploy["replicas"])
+    hijos = _concurrencia("celery_worker") + _concurrencia("celery_worker_interactive")
+    de_la_app = (replicas + hijos) * por_proceso
+    tope = int(POSTGRES_PRODUCCION["max_connections"])
+    # Beat no corre tareas y los padres de prefork desechan su pool antes del
+    # fork (core/celery_app.py): no suman. Margen: la mitad para el resto.
+    assert de_la_app <= tope // 2, (de_la_app, tope)
+
+
 # --- Dos Redis: cache y estado (F0-15, plan de rendimiento; decision 5) -------
 #
 # Un solo Redis con desalojo expulsaba lockout, idempotencia y rate limit bajo
@@ -1178,6 +1227,7 @@ def test_el_otp_tiene_su_propio_worker() -> None:
     from core.celery_app import celery_app
 
     assert celery_app.conf.task_routes["send_otp_email"]["queue"] == "interactive"
+    assert celery_app.conf.task_routes["send_booking_email"]["queue"] == "interactive"
 
 
 # --- Limites de memoria para el VPS de 16 GB (F0-19, plan de rendimiento) -----

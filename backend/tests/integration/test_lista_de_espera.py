@@ -310,7 +310,7 @@ async def test_un_cupo_dentro_de_la_antelacion_minima_no_se_mailea(
 
 @pytest.mark.asyncio
 async def test_el_dueno_reserva_a_mano_desde_la_lista(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
@@ -326,7 +326,25 @@ async def test_el_dueno_reserva_a_mano_desde_la_lista(
     )
     assert reserva.status_code == 201, reserva.text
     assert reserva.json()["status"] == "confirmed"
-    assert any(e[1].startswith("Turno confirmado") for e in buzon.enviados)
+    # F2-02: el aviso va por el outbox, en la transaccion de la reserva, al
+    # email que dejo la persona en la lista. El request no manda nada.
+    assert not any(e[1].startswith("Turno confirmado") for e in buzon.enviados)
+    [aviso] = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == "appointment.confirmed"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert aviso.payload["appointment_id"] == reserva.json()["public_id"]
+    await process_outbox_batch(test_session)
+    assert [e[0] for e in buzon.enviados if e[1].startswith("Turno confirmado")] == [
+        "lucia@example.com"
+    ]
 
     listado = await client.get("/waitlist/", headers=auth_headers(token))
     assert listado.json() == []

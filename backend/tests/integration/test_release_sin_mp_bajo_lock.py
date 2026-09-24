@@ -331,6 +331,21 @@ async def test_los_lotes_del_outbox_no_usan_or_y_el_principal_usa_el_indice(
     await process_outbox_batch(test_session)
     monkeypatch.undo()
 
+    # F2-03: el despacho reclama los mails (filas email.send) de a uno, con
+    # su propia consulta; tambien sin OR y sobre processed_at IS NULL.
+    from modules.payments.jobs import EVENT_EMAIL_SEND
+
+    def _reclamo_de_mail(s: Any) -> bool:
+        return "event_type !=" not in str(s) and EVENT_EMAIL_SEND in (
+            s.compile().params.values()
+        )
+
+    reclamos = [str(s) for s in lotes if _reclamo_de_mail(s)]
+    assert reclamos, "el despacho no reclamo ningun mail"
+    assert all(" OR " not in t and "processed_at IS NULL" in t for t in reclamos), (
+        reclamos
+    )
+    lotes = [s for s in lotes if not _reclamo_de_mail(s)]
     textos = [str(s) for s in lotes]
     assert len(textos) == 3, textos
     assert all(" OR " not in t for t in textos), textos

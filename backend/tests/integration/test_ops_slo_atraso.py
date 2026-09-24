@@ -8,8 +8,10 @@ lado. Se suman:
 - ``oldest_pending_outbox_seconds`` (umbral 180 s) y
   ``oldest_pending_inbox_seconds`` (umbral 300 s): antiguedad del pendiente
   mas viejo;
-- ``outbox_budget_drops_1h`` (umbral 0): mensajes que en la ultima hora
-  quedaron con el error de presupuesto agotado del despacho.
+- ``oldest_pending_email_send_seconds`` (umbral 180 s): desde F2-03 un mail
+  que el presupuesto del despacho no alcanza queda como fila ``email.send``
+  pendiente y sale en el tick siguiente. Ya no se pierde, pero se atrasa: se
+  mide su antiguedad. El atraso de eventos no cuenta estas filas.
 
 Cada tabla se resuelve con UNA sentencia agregada (regla 11) y conserva el
 filtro por tienda del admin. La profundidad de la cola del broker no se
@@ -26,7 +28,7 @@ from httpx import AsyncClient
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from modules.payments.jobs import OUTBOX_EMAIL_BUDGET_REASON
+from modules.payments.jobs import EVENT_EMAIL_SEND
 from modules.payments.model import OutboxMessage, WebhookInbox
 from modules.stores.model import Store
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -85,24 +87,20 @@ async def test_el_slo_mide_atraso_y_mails_cortados_por_presupuesto(
                 created_at=hace(9000),
                 processed_at=hace(8000),
             ),
-            # Mails cortados por el presupuesto: solo cuenta la ultima hora.
+            # Mails diferidos por el presupuesto: el mas viejo manda, y no
+            # cuentan como atraso de eventos.
             OutboxMessage(
                 store_id=tienda.id,
-                event_type="x",
+                event_type=EVENT_EMAIL_SEND,
                 payload={},
-                created_at=hace(700),
-                processed_at=hace(650),
-                error=OUTBOX_EMAIL_BUDGET_REASON,
-                updated_at=hace(600),
+                created_at=hace(600),
             ),
             OutboxMessage(
                 store_id=tienda.id,
-                event_type="x",
+                event_type=EVENT_EMAIL_SEND,
                 payload={},
                 created_at=hace(9000),
                 processed_at=hace(8000),
-                error=OUTBOX_EMAIL_BUDGET_REASON,
-                updated_at=hace(7200),
             ),
             # Otra tienda: el admin no la ve.
             OutboxMessage(
@@ -138,19 +136,19 @@ async def test_el_slo_mide_atraso_y_mails_cortados_por_presupuesto(
     assert res.status_code == 200, res.text
     cuerpo = res.json()
     metricas = cuerpo["metrics"]
-    assert metricas["pending_outbox"] == 2
+    assert metricas["pending_outbox"] == 3
     assert metricas["pending_webhooks"] == 1
     assert 200 <= metricas["oldest_pending_outbox_seconds"] < 260
     assert 400 <= metricas["oldest_pending_inbox_seconds"] < 460
-    assert metricas["outbox_budget_drops_1h"] == 1
+    assert 600 <= metricas["oldest_pending_email_send_seconds"] < 660
     assert cuerpo["thresholds"]["oldest_pending_outbox_seconds"] == 180
     assert cuerpo["thresholds"]["oldest_pending_inbox_seconds"] == 300
-    assert cuerpo["thresholds"]["outbox_budget_drops_1h"] == 0
+    assert cuerpo["thresholds"]["oldest_pending_email_send_seconds"] == 180
     assert cuerpo["status"] == "degraded"
     assert {a["code"] for a in cuerpo["alerts"]} == {
         "outbox_lag_high",
         "inbox_lag_high",
-        "outbox_budget_drops",
+        "email_send_lag_high",
     }
     # Una sentencia agregada por tabla, con el filtro de la tienda.
     assert len(sentencias) == 2, sentencias
@@ -169,5 +167,5 @@ async def test_sin_pendientes_el_atraso_es_cero(client: AsyncClient) -> None:
     metricas = res.json()["metrics"]
     assert metricas["oldest_pending_outbox_seconds"] == 0
     assert metricas["oldest_pending_inbox_seconds"] == 0
-    assert metricas["outbox_budget_drops_1h"] == 0
+    assert metricas["oldest_pending_email_send_seconds"] == 0
     assert res.json()["status"] == "ok"

@@ -294,10 +294,10 @@ class Settings(BaseSettings):
     SLO_MAX_PENDING_OUTBOX: int = 200
     # Atraso tolerado (F1-25, R9-16): el outbox corre cada 20 s y el inbox
     # cada minuto, con reintento a los 15 s tras un webhook fallido. Un mail
-    # cortado por el presupuesto del despacho ya es una alerta.
+    # (fila email.send, F2-03) diferido mas de 3 minutos ya es una alerta.
     SLO_MAX_OLDEST_PENDING_OUTBOX_SECONDS: int = 180
     SLO_MAX_OLDEST_PENDING_INBOX_SECONDS: int = 300
-    SLO_MAX_OUTBOX_BUDGET_DROPS_1H: int = 0
+    SLO_MAX_OLDEST_PENDING_EMAIL_SEND_SECONDS: int = 180
     # Edad minima de un cobro pendiente para que la conciliacion le pregunte a
     # Mercado Pago (F1-20, decision 20): antes de eso el cliente sigue en el
     # checkout y la consulta solo gasta la corrida.

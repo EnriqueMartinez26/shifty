@@ -21,9 +21,6 @@ from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parents[2]
 AMPLIOS = {"Exception", "BaseException"}
-# Transitorio: perf/f2a reescribe los envios de este archivo; las guardas se
-# ponen sobre su version al integrar y esta excepcion se borra en ese commit.
-PENDIENTES_DEL_MERGE = {"modules/notifications/tasks.py"}
 GUARDA = "SoftTimeLimitExceeded"
 
 
@@ -72,8 +69,6 @@ def test_ningun_job_se_traga_el_soft_time_limit() -> None:
     malas: list[str] = []
     for archivo in _archivos():
         ruta = archivo.relative_to(BACKEND).as_posix()
-        if ruta in PENDIENTES_DEL_MERGE:
-            continue
         malas += _violaciones(archivo.read_text(encoding="utf-8"), ruta)
     assert malas == [], (
         "except Exception sin 'except SoftTimeLimitExceeded: raise' antes: el "

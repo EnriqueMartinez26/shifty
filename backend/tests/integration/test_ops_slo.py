@@ -65,7 +65,7 @@ async def test_el_admin_ve_su_tienda_y_nunca_el_id_interno(
         # F1-25: atraso (tests/integration/test_ops_slo_atraso.py).
         "oldest_pending_outbox_seconds",
         "oldest_pending_inbox_seconds",
-        "outbox_budget_drops_1h",
+        "oldest_pending_email_send_seconds",
     }
     assert cuerpo["status"] == "ok"
     assert cuerpo["alerts"] == []

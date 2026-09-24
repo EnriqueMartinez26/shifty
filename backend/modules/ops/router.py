@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Depends, status
 from fastapi.responses import JSONResponse
 from core.router import CanonicalAPIRouter
-from sqlalchemy import and_, case, func, or_, select, text
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import PermissionDeniedException
@@ -26,7 +26,7 @@ from core.roles import (
 )
 from core.utils import ensure_utc_aware
 from modules.auth.dependencies import get_current_user
-from modules.payments.jobs import OUTBOX_EMAIL_BUDGET_REASON
+from modules.payments.jobs import EVENT_EMAIL_SEND
 from modules.payments.model import OutboxMessage, WebhookInbox
 from modules.stores.model import Store
 from modules.users.model import User
@@ -124,12 +124,11 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
 
     UNA sentencia agregada por tabla (regla 11; F1-25, R9-16): los contadores
     solos no distinguian un outbox al dia de uno que despacha con minutos de
-    atraso, ni mostraban los mails que el presupuesto del lote dejo sin
-    despachar (``OUTBOX_EMAIL_BUDGET_REASON``, anotado con ``register_failure``
-    y por eso con ``updated_at`` del corte).
+    atraso. Desde F2-03 un mail que el presupuesto del despacho no alcanza
+    queda como fila ``email.send`` pendiente para el tick siguiente: su
+    antiguedad va aparte y no cuenta como atraso de eventos.
     """
     ahora = datetime.now(timezone.utc)
-    hace_una_hora = ahora - timedelta(hours=1)
     store_filter = [] if store_id is None else [WebhookInbox.store_id == store_id]
     outbox_filter = [] if store_id is None else [OutboxMessage.store_id == store_id]
 
@@ -144,19 +143,15 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
         )
     ).one()
 
-    outbox_pendiente = OutboxMessage.processed_at.is_(None)
-    corte_de_presupuesto = and_(
-        OutboxMessage.error == OUTBOX_EMAIL_BUDGET_REASON,
-        OutboxMessage.updated_at >= hace_una_hora,
-    )
+    es_mail = OutboxMessage.event_type == EVENT_EMAIL_SEND
     outbox = (
         await db.execute(
             select(
-                func.count(case((outbox_pendiente, 1))),
-                func.min(case((outbox_pendiente, OutboxMessage.created_at))),
-                func.count(case((corte_de_presupuesto, 1))),
+                func.count(OutboxMessage.id),
+                func.min(case((~es_mail, OutboxMessage.created_at))),
+                func.min(case((es_mail, OutboxMessage.created_at))),
             ).where(
-                or_(outbox_pendiente, corte_de_presupuesto),
+                OutboxMessage.processed_at.is_(None),
                 OutboxMessage.is_active.is_(True),
                 *outbox_filter,
             )
@@ -168,7 +163,7 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
         "pending_outbox": int(outbox[0] or 0),
         "oldest_pending_outbox_seconds": _segundos_desde(ahora, outbox[1]),
         "oldest_pending_inbox_seconds": _segundos_desde(ahora, inbox[2]),
-        "outbox_budget_drops_1h": int(outbox[2] or 0),
+        "oldest_pending_email_send_seconds": _segundos_desde(ahora, outbox[2]),
     }
 
 
@@ -179,7 +174,9 @@ def _slo_thresholds() -> dict[str, int]:
         "pending_outbox": settings.SLO_MAX_PENDING_OUTBOX,
         "oldest_pending_outbox_seconds": settings.SLO_MAX_OLDEST_PENDING_OUTBOX_SECONDS,
         "oldest_pending_inbox_seconds": settings.SLO_MAX_OLDEST_PENDING_INBOX_SECONDS,
-        "outbox_budget_drops_1h": settings.SLO_MAX_OUTBOX_BUDGET_DROPS_1H,
+        "oldest_pending_email_send_seconds": (
+            settings.SLO_MAX_OLDEST_PENDING_EMAIL_SEND_SECONDS
+        ),
     }
 
 
@@ -191,7 +188,7 @@ _SLO_ALERTS = (
     # F1-25: un cobro acreditado sin aplicar es "pague y sigue pendiente".
     ("oldest_pending_inbox_seconds", "inbox_lag_high", "critical"),
     ("oldest_pending_outbox_seconds", "outbox_lag_high", "warning"),
-    ("outbox_budget_drops_1h", "outbox_budget_drops", "warning"),
+    ("oldest_pending_email_send_seconds", "email_send_lag_high", "warning"),
 )
 
 

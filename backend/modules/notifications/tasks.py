@@ -13,6 +13,7 @@ from email.message import EmailMessage
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 
 from core.celery_app import celery_app
 from core.enqueue import enqueue
@@ -166,6 +167,8 @@ class SmtpSession:
         if smtp is not None:
             try:
                 smtp.close()
+            except SoftTimeLimitExceeded:
+                raise
             except Exception:
                 pass
 
@@ -175,6 +178,8 @@ class SmtpSession:
             return
         try:
             code, _ = self._smtp.noop()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             logger.warning("smtp_session_reconnect", error_type=type(exc).__name__)
             self._discard()
@@ -206,6 +211,8 @@ class SmtpSession:
             message = _build_message(to, subject, body)
             await asyncio.to_thread(self._send_sync, message)
             return True
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             logger.error(
                 "smtp_send_failed",
@@ -221,9 +228,13 @@ class SmtpSession:
             return
         try:
             smtp.quit()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             try:
                 smtp.close()
+            except SoftTimeLimitExceeded:
+                raise
             except Exception:
                 pass
 
@@ -480,6 +491,8 @@ async def send_reschedule_email(
         success = await _send_email(
             email, _rescheduled_subject(details), _rescheduled_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "reschedule_email_dispatch_failed",
@@ -645,6 +658,8 @@ async def send_registration_email(
     assert email is not None
     try:
         return await send_appointment_registration(email, details, smtp)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "registration_email_dispatch_failed",
@@ -665,6 +680,8 @@ async def send_cancellation_email(
         success = await _send_email(
             email, _cancellation_subject(details), _cancellation_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "cancellation_email_dispatch_failed",
@@ -688,6 +705,8 @@ async def send_rebook_email(
         success = await _send_email(
             email, _rebook_subject(details), _rebook_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "rebook_email_dispatch_failed",
@@ -731,6 +750,8 @@ async def send_waitlist_offer_email(
         success = await _send_email(
             email, _waitlist_offer_subject(details), _waitlist_offer_body(details), smtp
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "waitlist_offer_email_dispatch_failed",
@@ -752,6 +773,8 @@ async def send_confirmation_email(
     assert email is not None
     try:
         return await send_appointment_confirmation(email, details, smtp)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         # Confirmations are operational side effects; they must never abort bookings.
         logger.warning(
@@ -765,6 +788,140 @@ async def send_confirmation_email(
             "status": "failed",
             "reason": type(exc).__name__,
         }
+
+
+# F2-01 (plan de rendimiento, R1-04, 2026-09-24): el 201 de la reserva publica
+# esperaba al SMTP (conexion + STARTTLS + LOGIN + DATA, hasta 10 s por
+# operacion). El request ahora solo encola ``send_booking_email`` por el helper
+# unico (``core.enqueue``) y el worker de la cola ``interactive`` -el del OTP-
+# relee el turno y manda. Por el broker viajan el tipo de mail, la tienda y el
+# id del turno: ni el email ni el nombre del cliente (PV-19). Sin reintento,
+# como el OTP: reintentar un mail cuyo DATA pudo haber llegado lo duplica.
+BOOKING_MAIL_REGISTRATION = "registration"
+BOOKING_MAIL_CONFIRMATION = "confirmation"
+
+# F2-02 (plan de rendimiento, R2-01, 2026-09-24): eventos del outbox que
+# terminan en un mail al cliente. Los publica el panel en la MISMA transaccion
+# que el cambio de estado y los manda el lote del outbox despues de su commit
+# (``payments/jobs.py``), releyendo el turno. Payload: ``appointment_id`` y,
+# solo si el mail no va al email del turno, ``email``.
+EVENT_APPOINTMENT_BOOKED_BY_PANEL = "appointment.booked_by_panel"
+EVENT_APPOINTMENT_CONFIRMED = "appointment.confirmed"
+EVENT_APPOINTMENT_COMPLETED = "appointment.completed"
+EVENT_APPOINTMENT_RESCHEDULED = "appointment.rescheduled"
+# Un turno que ya se cayo no recibe "reserva registrada".
+_BOOKING_CLOSED_STATUSES = frozenset({"cancelled", "expired"})
+
+
+async def _load_booking_mail(
+    store_id: str, appointment_id: str
+) -> tuple[str | None, dict[str, Any], str] | None:
+    """(email, detalles, estado) del turno, leidos en una sesion propia.
+
+    Bypass de RLS como los demas jobs (el worker no tiene tienda), con la
+    tienda en el filtro igual. La sesion se cierra ANTES de volver: el SMTP
+    nunca corre con una transaccion abierta (regla 5).
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import joinedload
+
+    from modules.appointments.model import Appointment
+    from modules.stores.model import Store
+
+    async with AsyncSessionFactory() as db:
+        set_tenant_context(None, True)
+        try:
+            await _apply_tenant_context(db)
+            appointment = (
+                await db.execute(
+                    select(Appointment)
+                    .options(
+                        joinedload(Appointment.service), joinedload(Appointment.staff)
+                    )
+                    .where(
+                        Appointment.id == appointment_id,
+                        Appointment.store_id == store_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if appointment is None:
+                return None
+            store = await db.get(Store, store_id)
+            details = build_client_details(
+                appointment, appointment.service, appointment.staff, store
+            )
+            return appointment.client_email, details, str(appointment.status)
+        finally:
+            set_tenant_context(None, False)
+
+
+async def deliver_booking_email(
+    kind: str, store_id: str, appointment_id: str
+) -> dict[str, str]:
+    """Cuerpo de la tarea ``send_booking_email``: relee el turno y manda.
+
+    El turno pudo cambiar entre el encolado y el envio: la confirmacion sale
+    solo si sigue confirmado y "reserva registrada" no sale para un turno
+    cancelado o vencido. El resultado no lleva el destinatario.
+    """
+    cargado = await _load_booking_mail(store_id, appointment_id)
+    if cargado is None:
+        logger.warning("booking_email_appointment_missing", appointment=appointment_id)
+        return {"status": "skipped", "reason": "not-found"}
+    email, details, status = cargado
+    if kind == BOOKING_MAIL_CONFIRMATION:
+        if status != "confirmed":
+            return {"status": "skipped", "reason": "status"}
+        resultado = await send_confirmation_email(email=email, details=details)
+    else:
+        if status in _BOOKING_CLOSED_STATUSES:
+            return {"status": "skipped", "reason": "status"}
+        resultado = await send_registration_email(email=email, details=details)
+    salida = {"status": resultado.get("status", "failed")}
+    if "reason" in resultado:
+        salida["reason"] = resultado["reason"]
+    return salida
+
+
+def _send_booking_email_task(
+    kind: str, store_id: str, appointment_id: str
+) -> dict[str, str]:
+    """Tarea de Celery del mail de la reserva publica (cola ``interactive``)."""
+    return run_in_worker_loop(deliver_booking_email(kind, store_id, appointment_id))
+
+
+# Anotada ``Any`` como ``send_otp_email``.
+send_booking_email: Any = celery_app.task(name="send_booking_email", max_retries=0)(
+    _send_booking_email_task
+)
+
+
+async def enqueue_registration_email(*, store_id: str, appointment_id: str) -> bool:
+    """Encola "reserva registrada". Nunca propaga; False si no se encolo."""
+    encolado = await enqueue(
+        send_booking_email, BOOKING_MAIL_REGISTRATION, store_id, appointment_id
+    )
+    if not encolado:
+        logger.warning(
+            "booking_email_enqueue_failed",
+            kind=BOOKING_MAIL_REGISTRATION,
+            appointment=appointment_id,
+        )
+    return encolado
+
+
+async def enqueue_confirmation_email(*, store_id: str, appointment_id: str) -> bool:
+    """Encola "turno confirmado". Nunca propaga; False si no se encolo."""
+    encolado = await enqueue(
+        send_booking_email, BOOKING_MAIL_CONFIRMATION, store_id, appointment_id
+    )
+    if not encolado:
+        logger.warning(
+            "booking_email_enqueue_failed",
+            kind=BOOKING_MAIL_CONFIRMATION,
+            appointment=appointment_id,
+        )
+    return encolado
 
 
 async def _dispatch_reminder(
@@ -794,6 +951,8 @@ async def _dispatch_reminder(
             details=details,
             smtp=smtp,
         )
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         # Se libera la marca para reintentar en la proxima corrida.
         await repo.release_reminder(appointment.id, stage.column)
@@ -1005,6 +1164,8 @@ def _process_appointment_reminders_task(
 
     try:
         return run_in_worker_loop(_run())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 
@@ -1057,6 +1218,8 @@ async def send_store_notification_email(
             email, f"Shifty - {title}", _store_notification_body(title, body), smtp
         )
         return {"status": "sent" if delivered else "failed"}
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "store_notification_email_failed",

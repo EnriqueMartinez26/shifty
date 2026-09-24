@@ -19,7 +19,6 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-import modules.appointments.service as appointments_service
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -89,14 +88,15 @@ def _doblar_la_red(monkeypatch: pytest.MonkeyPatch, obs: _Observador) -> None:
         await obs.mirar("smtp")
         return True
 
-    async def mail_del_panel(*args: Any, **kwargs: Any) -> bool:
-        await obs.mirar("mail del panel")
+    # F2-01: la reserva publica ya no manda SMTP; publica la tarea en el broker
+    # (``core.enqueue``, en un hilo). Eso es lo que sale a la red en el request.
+    async def encolar(*args: Any, **kwargs: Any) -> bool:
+        await obs.mirar("encolado")
         return True
 
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", mercadopago)
     monkeypatch.setattr(tasks, "_send_email", smtp)
-    for nombre in ("send_confirmation_email", "send_reschedule_email"):
-        monkeypatch.setattr(appointments_service, nombre, mail_del_panel)
+    monkeypatch.setattr(tasks, "enqueue", encolar)
 
 
 async def _tienda_con_cobros(
@@ -148,7 +148,7 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
     )
     await obs.empezar()
 
-    # Reserva publica con sena: link de MP + mail "reserva registrada".
+    # Reserva publica con sena: link de MP + encolado de "reserva registrada".
     reserva = await client.post(
         "/public/appointments",
         json={
@@ -167,7 +167,8 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
     )
     assert reserva.status_code == 201, reserva.text
 
-    # Turno del panel (mail de confirmacion) y su link de pago (MP).
+    # Turno del panel y su link de pago (MP). Desde F2-02 el mail del panel
+    # va por el outbox: el request no sale a la red por el.
     panel = await client.post(
         "/appointments/",
         headers=auth_headers(token),
@@ -188,7 +189,8 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
     assert link.status_code == 200, link.text
 
     lugares = {donde.split(" ")[0] for donde, _ in obs.muestras}
-    assert {"mp", "smtp", "mail"} <= lugares, obs.muestras
+    assert {"mp", "encolado"} <= lugares, obs.muestras
+    assert "smtp" not in lugares, "un request mando SMTP"
     # La consulta ve a la app: sin esto una vista sin permisos pasaria vacia.
     assert all(estados for _, estados in obs.muestras), obs.muestras
     assert obs.en_transaccion() == [], (

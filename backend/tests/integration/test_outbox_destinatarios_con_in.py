@@ -9,6 +9,8 @@ transaccion que sostiene el ``FOR UPDATE SKIP LOCKED``.
 
 Ahora se resuelven antes del ``for`` con un ``in_()`` sobre las tiendas del
 lote, y cada consulta conserva el filtro por ``store_id`` (CLAUDE.md §2).
+Desde la integracion con F2-02 los eventos del panel (mail al cliente) usan
+lo mismo: turno y tienda leidos una vez por lote, no dos SELECT por mensaje.
 """
 
 from __future__ import annotations
@@ -18,12 +20,16 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 import modules.notifications.tasks as tasks
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
+from modules.notifications.tasks import (
+    EVENT_APPOINTMENT_BOOKED_BY_PANEL,
+    EVENT_APPOINTMENT_CONFIRMED,
+)
 from modules.payments.jobs import process_outbox_batch
 from modules.payments.model import OutboxMessage
 from modules.stores.model import Store
@@ -81,6 +87,13 @@ async def test_el_lote_resuelve_admins_y_tiendas_con_una_consulta_cada_uno(
                 select(Appointment).where(Appointment.id == turno_publico)
             )
         ).scalar_one()
+        # El alta del panel ya publico su propio evento (F2-02): fuera del
+        # lote que se mide.
+        await test_session.execute(
+            update(OutboxMessage)
+            .where(OutboxMessage.event_type == EVENT_APPOINTMENT_BOOKED_BY_PANEL)
+            .values(processed_at=datetime.now(timezone.utc))
+        )
         if turno.status != AppointmentStatus.CONFIRMED.value:
             turno.apply_status_transition(AppointmentStatus.CONFIRMED)
         # El turno del panel no trae email del cliente: se fija para que la
@@ -90,6 +103,7 @@ async def test_el_lote_resuelve_admins_y_tiendas_con_una_consulta_cada_uno(
         for evento in (
             NotificationType.PAYMENT_APPROVED.value,
             NotificationType.SUBSCRIPTION_EXPIRING.value,
+            EVENT_APPOINTMENT_CONFIRMED,
         ):
             test_session.add(
                 OutboxMessage(
@@ -104,7 +118,7 @@ async def test_el_lote_resuelve_admins_y_tiendas_con_una_consulta_cada_uno(
     # Solo cuentan los mails del lote, no los del alta del turno.
     buzon.enviados.clear()
 
-    lecturas: dict[str, list[str]] = {"users": [], "stores": []}
+    lecturas: dict[str, list[str]] = {"users": [], "stores": [], "appointments": []}
 
     def contar(
         conn: Any, cursor: Any, statement: str, *args: Any, **kwargs: Any
@@ -119,18 +133,21 @@ async def test_el_lote_resuelve_admins_y_tiendas_con_una_consulta_cada_uno(
     finally:
         event.remove(test_engine.sync_engine, "before_cursor_execute", contar)
 
-    assert resultado["processed"] == TIENDAS * 2, resultado
+    assert resultado["processed"] == TIENDAS * 3, resultado
     assert len(lecturas["users"]) == 1, lecturas["users"]
     assert len(lecturas["stores"]) == 1, lecturas["stores"]
+    assert len(lecturas["appointments"]) == 1, lecturas["appointments"]
+    assert "appointments.id IN" in lecturas["appointments"][0]
     # Tenancy: las dos consultas siguen acotadas a las tiendas del lote.
     assert "users.store_id IN" in lecturas["users"][0]
     assert "stores.id IN" in lecturas["stores"][0]
-    # Y el resultado es el mismo: un aviso por mensaje a SU admin, mas la
-    # confirmacion al cliente de cada sena acreditada.
+    # Y el resultado es el mismo: un aviso por mensaje al dueno a SU admin, mas
+    # la confirmacion al cliente de cada sena acreditada y de cada evento del
+    # panel.
     destinatarios = sorted(to for to, _asunto, _cuerpo in buzon.enviados)
     esperados = sorted(
         [f"outbox-n1-{i}@test.com" for i in range(TIENDAS)] * 2
-        + [f"cliente-outbox-n1-{i}@t.com" for i in range(TIENDAS)]
+        + [f"cliente-outbox-n1-{i}@t.com" for i in range(TIENDAS)] * 2
     )
     assert destinatarios == esperados
     assert len(set(tiendas)) == TIENDAS

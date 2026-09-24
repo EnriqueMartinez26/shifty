@@ -32,6 +32,11 @@ x-app-environment: &app_environment
   # Las migraciones necesitan DDL: van con el dueno de la base.
   MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
+  # F2-04: pool de 5 + 5 conexiones por proceso (antes 10 + 5). Los mails y
+  # Mercado Pago ya no retienen una conexion: el SMTP sale del worker o del
+  # lote del outbox despues de su commit y MP corre sin transaccion abierta.
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
   # F0-15: dos Redis. El de ESTADO (rate limit, idempotencia, lockout, OTP,
   # resultados de Celery) no desaloja; el de CACHE (solo disponibilidad)
   # desaloja y no persiste.
