@@ -32,7 +32,6 @@ ACTIVE_APPOINTMENT_STATUSES = {
     AppointmentStatus.PENDING_PAYMENT.value,
     AppointmentStatus.CONFIRMED.value,
 }
-MERCADOPAGO_API_BASE_URL = "https://api.mercadopago.com"
 _mercadopago_breaker = AsyncCircuitBreaker(
     name="mercadopago",
     failure_threshold=settings.PAYMENTS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
@@ -205,7 +204,7 @@ async def _perform_mercadopago_request(
     }
     try:
         async with httpx.AsyncClient(
-            base_url=MERCADOPAGO_API_BASE_URL, timeout=20.0
+            base_url=settings.MERCADOPAGO_API_BASE_URL, timeout=20.0
         ) as client:
             response = await client.request(
                 method, path, headers=headers, json=json_body
@@ -356,7 +355,7 @@ async def _mercadopago_oauth_token_request(
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             response = await client.post(
-                f"{MERCADOPAGO_API_BASE_URL}/oauth/token",
+                f"{settings.MERCADOPAGO_API_BASE_URL}/oauth/token",
                 data=form_data,
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",

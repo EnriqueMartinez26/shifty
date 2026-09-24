@@ -71,6 +71,12 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
         ({"ACCESS_TOKEN_EXPIRE_MINUTES": 120}, "ACCESS_TOKEN_EXPIRE_MINUTES"),
         # AUD2-B7-12 (2026-09-20): el detalle del readiness venia abierto.
         ({"OPS_ENABLE_PUBLIC_HEALTH": True}, "OPS_ENABLE_PUBLIC_HEALTH"),
+        # 2026-09-24: la base de MP es configurable para el emulador de
+        # tests/e2e; en produccion otra base recibiria los tokens de MP.
+        (
+            {"MERCADOPAGO_API_BASE_URL": "http://host.docker.internal:9999"},
+            "MERCADOPAGO_API_BASE_URL",
+        ),
     ],
 )
 def test_produccion_rechaza_configuraciones_inseguras(

@@ -155,6 +155,10 @@ _BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
 # retornos de Mercado Pago apuntando a ningun lado.
 _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
 
+# Unica API de Mercado Pago que produccion acepta (regla 17): otra base
+# mandaria access tokens de las tiendas a un host ajeno.
+MERCADOPAGO_API_BASE_URL_REAL = "https://api.mercadopago.com"
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shifty"
@@ -209,6 +213,9 @@ class Settings(BaseSettings):
     MERCADOPAGO_OAUTH_AUTH_URL: str = "https://auth.mercadopago.com/authorization"
     MERCADOPAGO_OAUTH_STATE_TTL_SECONDS: int = 900
     MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS: int = 300
+    # Base de la API de Mercado Pago. Configurable SOLO para apuntar al
+    # emulador de tests/e2e en desarrollo; produccion exige la real.
+    MERCADOPAGO_API_BASE_URL: str = MERCADOPAGO_API_BASE_URL_REAL
     # Minutos que un turno queda reservado esperando el pago de la seña. Al
     # vencer, el slot vuelve a estar disponible para otro cliente.
     PAYMENT_HOLD_MINUTES: int = 30
@@ -342,6 +349,10 @@ class Settings(BaseSettings):
         if self.PUBLIC_API_URL.startswith(_PREFIJOS_LOCALES):
             raise ValueError(
                 "PUBLIC_API_URL no puede apuntar a localhost en produccion"
+            )
+        if self.MERCADOPAGO_API_BASE_URL != MERCADOPAGO_API_BASE_URL_REAL:
+            raise ValueError(
+                "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com en produccion"
             )
 
     def _validate_production_hardening(self) -> None:
