@@ -125,16 +125,8 @@ NO_LLEGA_A_LA_BASE: dict[tuple[str, str, str], str] = {
 # cookie y la imagen va como multipart.
 SIN_BODY_JSON = {("POST", "/auth/logout"), ("POST", "/stores/me/media")}
 
-_PROMO_PUBLICADA = (
-    "SEG-02 (media): el titulo de una promocion acepta bidi y zero-width y se "
-    "publica tal cual en /public/promotions/preview (title). Regla 19: falta "
-    "reject_control_chars en modules/promotions/schemas.py (PromotionBase y "
-    "PromotionUpdate)."
-)
-DEFECTOS_INVISIBLES: dict[tuple[str, str, str], str] = {
-    ("POST", "/promotions/", "title"): _PROMO_PUBLICADA,
-    ("PATCH", "/promotions/{promotion_public_id}", "title"): _PROMO_PUBLICADA,
-}
+# Vacio desde SEG-02: el titulo de la promocion pasa por reject_control_chars.
+DEFECTOS_INVISIBLES: dict[tuple[str, str, str], str] = {}
 
 # Vacio desde SEG-03: RequestGuardMiddleware rechaza el NUL antes del router.
 DEFECTOS_NUL: dict[tuple[str, str, str], str] = {}
