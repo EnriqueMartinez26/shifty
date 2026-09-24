@@ -21,9 +21,10 @@ from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from modules.staff.model import StaffBlock
+from modules.staff.model import Staff, StaffBlock
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     auth_headers,
@@ -178,7 +179,15 @@ async def test_la_relectura_bajo_lock_descarta_al_elegido_si_cambio_en_el_medio(
     store, _token, service, pros, slot = await _tienda_con_cuatro_candidatos(
         client, "alta-relectura"
     )
-    store_id = store  # el seed de tests fuerza public_id == id
+    # La tienda REAL del profesional: el seed de SQLite genera id y public_id
+    # por separado (dos ULID del mismo milisegundo que difieren en el ultimo
+    # caracter). Con el public_id el bloqueo quedaba en "otra tienda" y la
+    # relectura solo lo veia porque no filtraba por tienda (F1-13 la filtra).
+    store_id = (
+        await test_session.execute(
+            select(Staff.store_id).where(Staff.id == pros["Beto"])
+        )
+    ).scalar_one()
 
     async def bloquear_a_beto_en_el_medio() -> None:
         test_session.add(

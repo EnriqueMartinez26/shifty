@@ -8,9 +8,11 @@ triggers ni constraints) para simular un bug o un acceso directo a la base:
 - La exclusion GiST ``ex_appointments_no_active_overlap`` rechaza un segundo
   turno activo que se superponga para el mismo profesional, y deja pasar el
   mismo turno si esta cancelado (el WHERE de la constraint).
-- El indice unico funcional ``uq_users_email_lower`` rechaza un segundo
-  usuario cuyo email difiera del existente solo en mayusculas, aunque el
-  camino de escritura se olvide de normalizar (auditoria B3-01, 2026-09-16).
+- La base rechaza un segundo usuario cuyo email difiera del existente solo
+  en mayusculas, aunque el camino de escritura se olvide de normalizar
+  (auditoria B3-01, 2026-09-16). Desde F1-12 (2026-09-24) lo frena primero
+  ``ck_users_email_lower`` (el email se guarda en minusculas); el indice
+  funcional ``uq_users_email_lower`` quedo como red previa.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -177,18 +179,19 @@ async def _copiar_usuario(
 
 
 @pytest.mark.asyncio
-async def test_el_indice_de_email_frena_la_colision_de_mayusculas(
+async def test_la_base_frena_la_colision_de_mayusculas_del_email(
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
 ) -> None:
     # Auditoria B3-01 (2026-09-16): POST /users/ insertaba "COLISION@x.com"
     # junto a "colision@x.com" y el login de ambos pasaba a 500. La columna
-    # email es unica case-sensitive, asi que esa segunda fila entraba: es el
-    # indice funcional uq_users_email_lower (migracion d2f4a6b8c0e2) el que
-    # la rechaza, sin importar por donde se escriba.
+    # email es unica case-sensitive, asi que esa segunda fila entraba. Hoy la
+    # rechaza ck_users_email_lower (F1-12: el email se guarda en minusculas),
+    # antes que el indice funcional uq_users_email_lower, sin importar por
+    # donde se escriba.
     await seed_store_and_admin(app_sessions, slug="email-idx", email="dueno@demo.com")
 
-    with pytest.raises(IntegrityError, match="uq_users_email_lower"):
+    with pytest.raises(IntegrityError, match="ck_users_email_lower"):
         await _copiar_usuario(
             owner_engine, "dueno@demo.com", nuevo_email="DUENO@demo.com"
         )

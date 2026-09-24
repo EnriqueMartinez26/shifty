@@ -9,9 +9,18 @@ de staff y la edicion de staff hacian "SELECT lower(email) y despues INSERT":
    difieren en mayusculas, la propia guarda levantaba MultipleResultsFound
    (500) en los tres sitios.
 
-La garantia determinista es el indice funcional ``uq_users_email_lower``
-(B3-01, migracion ``d2f4a6b8c0e2``): el pre-chequeo queda solo como mensaje
-amable (regla 16) y la carrera termina en la base -> ``IntegrityError`` -> 409.
+La garantia determinista es la base: el email se guarda en minusculas
+(``ck_users_email_lower``, F1-12) y la columna es unica, asi que dos
+capitalizaciones son la misma fila; el indice funcional ``uq_users_email_lower``
+(B3-01, migracion ``d2f4a6b8c0e2``) sigue como red previa. El pre-chequeo queda
+solo como mensaje amable (regla 16), busca por IGUALDAD sobre la columna (bajo
+RLS usa ``ix_users_email``; ``lower()`` recorria la tabla) y la carrera termina
+en la base -> ``IntegrityError`` -> 409.
+
+2026-09-24 (F1-12): los "duplicados heredados que solo difieren en mayusculas"
+ya no pueden existir (la migracion del CHECK se detiene si los hay), asi que
+los dos tests que los sembraban pasan a probar lo que queda: una capitalizacion
+distinta de un email existente recibe el mensaje amable, no un 500.
 """
 
 from collections.abc import Callable
@@ -19,11 +28,10 @@ from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import func, select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.security import hash_password
-from modules.users.model import User, UserRole
+from modules.users.model import User
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
@@ -46,18 +54,26 @@ class _SinFilas:
         return self
 
 
+def _es_pre_chequeo_de_email(statement: Any) -> bool:
+    sql = " ".join(str(statement).split())
+    return (
+        sql.startswith("SELECT users.id FROM users WHERE users.email =")
+        and "LIMIT" in sql
+    )
+
+
 def _simular_carrera(test_session: AsyncSession) -> Callable[[], None]:
-    """Hace que el pre-chequeo por lower(email) "no vea" la fila existente.
+    """Hace que el pre-chequeo por email "no vea" la fila existente.
 
     Es la carrera real: otra transaccion inserta el email entre el SELECT y el
-    INSERT. Solo se intercepta la consulta con ``lower(``; el resto corre
-    contra la base y el INSERT choca con ``uq_users_email_lower``. Devuelve
-    la funcion que restaura el ``execute`` real.
+    INSERT. Solo se intercepta el pre-chequeo (``SELECT users.id ... WHERE
+    users.email = ... LIMIT``); el resto corre contra la base y el INSERT choca
+    con el indice unico. Devuelve la funcion que restaura el ``execute`` real.
     """
     real_execute = test_session.execute
 
     async def execute(statement: Any, *args: Any, **kwargs: Any) -> Any:
-        if "lower(" in str(statement).lower():
+        if _es_pre_chequeo_de_email(statement):
             return _SinFilas()
         return await real_execute(statement, *args, **kwargs)
 
@@ -67,25 +83,6 @@ def _simular_carrera(test_session: AsyncSession) -> Callable[[], None]:
         test_session.execute = real_execute  # type: ignore[method-assign]
 
     return restaurar
-
-
-async def _sembrar_duplicados_heredados(
-    test_session: AsyncSession, store_id: str, email: str
-) -> None:
-    """Base anterior a la migracion: dos filas que solo difieren en mayusculas."""
-    await test_session.execute(text("DROP INDEX uq_users_email_lower"))
-    for variante in (email, email.upper()):
-        test_session.add(
-            User(
-                email=variante,
-                hashed_password=hash_password(PASSWORD),
-                first_name="Dup",
-                last_name="Heredado",
-                role=UserRole.STAFF,
-                store_id=store_id,
-            )
-        )
-    await test_session.commit()
 
 
 def _staff_payload(email: str) -> dict[str, Any]:
@@ -99,11 +96,10 @@ def _staff_payload(email: str) -> dict[str, Any]:
 
 
 async def _contar(test_session: AsyncSession, email: str) -> int:
-    return (
-        await test_session.execute(
-            select(func.count()).where(func.lower(User.email) == email.lower())
-        )
-    ).scalar_one()
+    filas = await test_session.execute(
+        select(User.id).where(User.email == email.lower())
+    )
+    return len(filas.all())
 
 
 async def _superadmin_con_tienda(
@@ -205,54 +201,55 @@ async def test_edicion_de_staff_en_carrera_da_409_neutro(
 
 
 @pytest.mark.asyncio
-async def test_pre_chequeo_del_superadmin_no_da_500_con_duplicados_heredados(
+async def test_pre_chequeo_del_superadmin_ve_el_email_con_otra_capitalizacion(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
     headers, store_pid = await _superadmin_con_tienda(
-        client, test_session, "heredado-admin"
+        client, test_session, "capitalizacion-admin"
     )
-    store_id = (
-        await test_session.execute(
-            select(User.store_id).where(User.email == "root-heredado-admin@demo.com")
-        )
-    ).scalar_one()
-    await _sembrar_duplicados_heredados(test_session, store_id, "viejo@demo.com")
+    base = {"password": PASSWORD, "first_name": "Dup", "last_name": "Tres"}
+    primero = await client.post(
+        f"/superadmin/stores/{store_pid}/admins",
+        headers=headers,
+        json={**base, "email": "viejo@demo.com"},
+    )
+    assert primero.status_code == 201, primero.text
 
     res = await client.post(
         f"/superadmin/stores/{store_pid}/admins",
         headers=headers,
-        json={
-            "email": "Viejo@demo.com",
-            "password": PASSWORD,
-            "first_name": "Dup",
-            "last_name": "Tres",
-        },
+        json={**base, "email": "Viejo@demo.com"},
     )
-    # Antes: MultipleResultsFound -> 500. La guarda amable responde 400.
+    # La igualdad sobre la columna normalizada la encuentra: mensaje amable.
     assert res.status_code == 400, res.text
 
 
 @pytest.mark.asyncio
-async def test_pre_chequeo_de_staff_no_da_500_con_duplicados_heredados(
+async def test_pre_chequeo_de_staff_ve_el_email_con_otra_capitalizacion(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    store_id, token = await register_and_login(
-        client, slug="heredado-staff", email="dueno-heredado@test.com"
+    _, token = await register_and_login(
+        client, slug="capitalizacion-staff", email="dueno-capitalizacion@test.com"
     )
-    await _sembrar_duplicados_heredados(test_session, store_id, "viejo@test.com")
+    existente = await client.post(
+        "/staff/",
+        headers=auth_headers(token),
+        json=_staff_payload("viejo@test.com"),
+    )
+    assert existente.status_code == 201, existente.text
 
     alta = await client.post(
         "/staff/",
         headers=auth_headers(token),
         json=_staff_payload("Viejo@test.com"),
     )
-    # Antes: MultipleResultsFound -> 500. El staff responde 422 (ValidationException).
+    # El staff responde 422 (ValidationException) con el mensaje amable.
     assert alta.status_code == 422, alta.text
 
     nuevo = await client.post(
         "/staff/",
         headers=auth_headers(token),
-        json=_staff_payload("pro-heredado@test.com"),
+        json=_staff_payload("pro-capitalizacion@test.com"),
     )
     assert nuevo.status_code == 201, nuevo.text
     edicion = await client.patch(

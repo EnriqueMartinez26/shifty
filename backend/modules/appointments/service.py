@@ -179,6 +179,7 @@ class AppointmentService:
             exclude_appointment_id=exclude_appointment_id,
         )
         await self._validate_or_suggest(
+            store_id=store_id,
             staff_id=staff_id,
             requested_start=starts_at,
             requested_end=ends_at,
@@ -607,6 +608,7 @@ class AppointmentService:
     async def _validate_or_suggest(
         self,
         *,
+        store_id: str,
         staff_id: str,
         requested_start: datetime,
         requested_end: datetime,
@@ -633,7 +635,7 @@ class AppointmentService:
                 assert block is not None
                 search_start = block.ends_at
             suggestion = await self._find_suggestion(
-                staff_id, search_start, duration_minutes, buffer_minutes
+                store_id, staff_id, search_start, duration_minutes, buffer_minutes
             )
             if isinstance(e, AppointmentConflictException):
                 assert conflict is not None
@@ -652,6 +654,7 @@ class AppointmentService:
 
     async def _find_suggestion(
         self,
+        store_id: str,
         staff_id: str,
         start_from: datetime,
         duration_mins: int,
@@ -680,13 +683,16 @@ class AppointmentService:
         blocks = [
             (ensure_utc_aware(block.starts_at), ensure_utc_aware(block.ends_at))
             for block in await self.uow.appointments.list_active_blocks_in_window(
-                staff_id, current, max_search + duration
+                staff_id, current, max_search + duration, store_id=store_id
             )
         ]
         booked = [
             (ensure_utc_aware(appt.starts_at), ensure_utc_aware(appt.ends_at))
             for appt in await self.uow.appointments.list_active_appointments_in_window(
-                staff_id, current - buffer, max_search + duration + buffer
+                staff_id,
+                current - buffer,
+                max_search + duration + buffer,
+                store_id=store_id,
             )
         ]
 

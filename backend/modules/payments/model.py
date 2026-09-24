@@ -6,12 +6,14 @@ from typing import Any, TypeAlias
 from sqlalchemy import (
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
@@ -219,6 +221,19 @@ class WebhookInbox(BaseEntity):
 
 class OutboxMessage(BaseEntity):
     __tablename__ = "outbox_messages"
+    # Retome de reclamos de ``payment.preference.expire`` con lease vencido
+    # (``payments/jobs.py::_claim_and_expire_preferences``, cada minuto): sin
+    # el parcial caia en ``ix_outbox_messages_event_type`` y recorria todo el
+    # historico del evento (F1-14, migracion a6c8e0f2b4d7). El predicado es el
+    # literal de ``PREFERENCE_EXPIRE_CLAIM``.
+    __table_args__ = (
+        Index(
+            "ix_outbox_expire_claims",
+            "processed_at",
+            postgresql_where=text("error = 'claimed:payment.preference.expire'"),
+            sqlite_where=text("error = 'claimed:payment.preference.expire'"),
+        ),
+    )
 
     store_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
     event_type: Mapped[str] = mapped_column(String(100), index=True)

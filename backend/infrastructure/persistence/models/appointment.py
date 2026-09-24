@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -9,11 +9,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -22,6 +24,20 @@ from infrastructure.persistence.models.base import Base
 
 if TYPE_CHECKING:
     from modules.appointments.model import AppointmentStatus
+
+
+# Tope de duracion de un turno EN LA BASE: ``ck_appointments_max_span``
+# (``ends_at <= starts_at + interval '1 day'``, migraciones e9f1b3d5a7c0 +
+# f0a2c4e6b8d1; decision 15 del plan de rendimiento). El tope real del
+# producto es 480 minutos (``services/schemas.py``); este es holgado a
+# proposito. Lo que sostiene es la cota inferior de toda consulta de
+# solapamiento (``appointments.repository.active_appointment_overlap``): un
+# turno que termina despues de ``inicio`` empezo despues de
+# ``inicio - MAX_APPOINTMENT_SPAN``, y con esa cota el indice
+# ``(store_id, staff_id, starts_at)`` recorre solo la ventana y no toda la
+# historia del profesional (F1-13, R7-02). No se declara como CheckConstraint
+# del modelo porque SQLite (la suite de integracion) no tiene ``interval``.
+MAX_APPOINTMENT_SPAN = timedelta(days=1)
 
 
 # Unica fuente de verdad del grafo de transiciones del turno.
@@ -41,13 +57,13 @@ class AppointmentModel(Base):
     __tablename__ = "appointments"
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     service_id: Mapped[str] = mapped_column(
         String, ForeignKey("services.id"), index=True
     )
     staff_id: Mapped[str] = mapped_column(String, ForeignKey("staff.id"), index=True)
-    store_id: Mapped[str] = mapped_column(String, ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(String, ForeignKey("stores.id"))
     client_id: Mapped[Optional[str]] = mapped_column(
         String, ForeignKey("users.id"), index=True
     )
@@ -157,9 +173,26 @@ class AppointmentModel(Base):
 
     __mapper_args__ = {"version_id_col": version}
 
+    # La tabla lleva ``fillfactor = 90`` (F1-15, migracion b7d9f1a3c5e8): deja
+    # lugar en la pagina para UPDATE HOT. Vive solo en la migracion porque el
+    # modelo no declara parametros de almacenamiento.
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending', 'pending_payment', 'confirmed', 'absent', 'completed', 'cancelled', 'expired')",
             name="check_appointment_status_v3",
+        ),
+        # Retenciones vivas para el job de vencimiento (cada minuto):
+        # ``expires_at`` nunca se limpia y el indice plano barria todas las
+        # retenciones viejas ya resueltas (F1-14, migracion a6c8e0f2b4d7). El
+        # predicado es el de ``payments/jobs.py::_expired_holds_query``.
+        Index(
+            "ix_appointments_hold_expiry",
+            "expires_at",
+            postgresql_where=text(
+                "status IN ('pending', 'pending_payment') AND expires_at IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "status IN ('pending', 'pending_payment') AND expires_at IS NOT NULL"
+            ),
         ),
     )

@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 
 import structlog
 from sqlalchemy import Select, select, tuple_
+from sqlalchemy import true as sa_true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.utils import ARGENTINA_TZ
@@ -38,11 +39,15 @@ def today_local(now: datetime | None = None) -> date:
 async def get_active_subscription(
     db: AsyncSession, store_id: str
 ) -> StoreSubscription | None:
+    # ``= true`` y no ``IS true``: el indice parcial
+    # uq_store_subscriptions_active_store es ``WHERE is_active = true`` y
+    # Postgres no prueba que ``IS true`` lo implique; con ``IS`` leia todo el
+    # historial de la tienda en cada escritura del panel (F1-17, R7-09).
     result = await db.execute(
         select(StoreSubscription)
         .where(
             StoreSubscription.store_id == store_id,
-            StoreSubscription.is_active.is_(True),
+            StoreSubscription.is_active == sa_true(),
         )
         .order_by(StoreSubscription.created_at.desc())
         .limit(1)

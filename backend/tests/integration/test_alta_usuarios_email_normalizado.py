@@ -7,9 +7,11 @@ chequear colision). Desde ese momento ``POST /auth/login`` con
 ``scalar_one_or_none`` levantaba MultipleResultsFound: 500 permanente para la
 victima. Regla 16 de CLAUDE.md.
 
-La garantia determinista es el indice unico funcional ``uq_users_email_lower``
-(migracion ``d2f4a6b8c0e2``); la normalizacion en ``UserRepository.create`` es
-el camino feliz.
+La garantia determinista es la base: ``CHECK (email = lower(email))``
+(``ck_users_email_lower``, F1-12) rechaza un email sin normalizar y la columna
+unica hace el resto; el indice funcional ``uq_users_email_lower`` (migracion
+``d2f4a6b8c0e2``) queda como red previa. La normalizacion en
+``UserRepository.create`` es el camino feliz.
 """
 
 import pytest
@@ -87,7 +89,7 @@ async def test_alta_por_users_guarda_el_email_en_minusculas(
 
 
 @pytest.mark.asyncio
-async def test_el_indice_funcional_frena_la_colision_aunque_el_codigo_no_normalice(
+async def test_la_base_frena_la_colision_aunque_el_codigo_no_normalice(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
     # Simula un camino de escritura futuro que se olvide de normalizar: la
@@ -107,6 +109,7 @@ async def test_el_indice_funcional_frena_la_colision_aunque_el_codigo_no_normali
             store_id=store_id,
         )
     )
-    with pytest.raises(IntegrityError, match="uq_users_email_lower"):
+    # F1-12: el CHECK rechaza la fila antes que el indice funcional.
+    with pytest.raises(IntegrityError, match="ck_users_email_lower"):
         await test_session.flush()
     await test_session.rollback()

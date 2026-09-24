@@ -130,6 +130,13 @@ async def enrich_mercadopago_webhook_payload(
 async def find_payment_for_webhook(
     db: AsyncSession, store_id: str, payload: dict[str, Any]
 ) -> Payment | None:
+    """El cobro al que se refiere el webhook, SIN lock.
+
+    Solo dice de que turno es: el lock lo toma ``apply_mercadopago_webhook_payload``
+    en el orden unico turno -> pago (F1-18, decision 23 del plan). Antes esta
+    busqueda lockeaba el pago primero y el panel y el job de vencimiento lockean
+    el turno primero: dos ordenes opuestos sobre las mismas filas.
+    """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     raw_metadata = data.get("metadata")
@@ -148,12 +155,10 @@ async def find_payment_for_webhook(
 
     if external_payment_id:
         result = await db.execute(
-            select(Payment)
-            .where(
+            select(Payment).where(
                 Payment.store_id == store_id,
                 Payment.external_payment_id == external_payment_id,
             )
-            .with_for_update()
         )
         payment = result.scalar_one_or_none()
         if payment:
@@ -161,12 +166,10 @@ async def find_payment_for_webhook(
 
     if preference_id:
         result = await db.execute(
-            select(Payment)
-            .where(
+            select(Payment).where(
                 Payment.store_id == store_id,
                 Payment.preference_id == str(preference_id),
             )
-            .with_for_update()
         )
         payment = result.scalar_one_or_none()
         if payment:
@@ -174,12 +177,10 @@ async def find_payment_for_webhook(
 
     if appointment_id:
         result = await db.execute(
-            select(Payment)
-            .where(
+            select(Payment).where(
                 Payment.store_id == store_id,
                 Payment.appointment_id == str(appointment_id),
             )
-            .with_for_update()
         )
         return result.scalar_one_or_none()
 
@@ -401,9 +402,36 @@ async def apply_mercadopago_webhook_payload(
     payload: dict[str, Any],
     configs: GatewayConfigs | None = None,
 ) -> bool:
-    payment = await find_payment_for_webhook(db, store_id, payload)
+    encontrado = await find_payment_for_webhook(db, store_id, payload)
     payment_status = resolve_payment_status(payload)
-    if not payment or not payment_status:
+    if not encontrado or not payment_status:
+        return False
+
+    # Orden unico de locks: TURNO -> PAGO (F1-18, decision 23 del plan), el
+    # mismo que liberar desde el panel y el job de vencimiento. Turno y pago se
+    # releen bajo su lock (populate_existing): entre la busqueda sin lock y el
+    # lock pudieron cambiar, y todo lo que sigue decide sobre la version
+    # lockeada.
+    appointment = (
+        await db.execute(
+            select(Appointment)
+            .where(
+                Appointment.id == encontrado.appointment_id,
+                Appointment.store_id == store_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    payment = (
+        await db.execute(
+            select(Payment)
+            .where(Payment.id == encontrado.id, Payment.store_id == store_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if payment is None:
         return False
 
     await _validate_payment_integrity(
@@ -430,14 +458,6 @@ async def apply_mercadopago_webhook_payload(
     # A. Un cobro sin id lo toma igual: es la unica trazabilidad que hay.
     if external_payment_id and (aplicada or not payment.external_payment_id):
         payment.external_payment_id = external_payment_id
-    appointment_result = await db.execute(
-        select(Appointment)
-        .where(
-            Appointment.id == payment.appointment_id, Appointment.store_id == store_id
-        )
-        .with_for_update()
-    )
-    appointment = appointment_result.scalar_one_or_none()
     if appointment:
         appointment_start = appointment.starts_at
         if appointment_start.tzinfo is None:
