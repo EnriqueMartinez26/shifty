@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from typing import Any, Generic, TypeVar, cast
 
 from fastapi.encoders import jsonable_encoder
@@ -72,6 +72,16 @@ def is_canonical_payload(payload: Any) -> bool:
     return "error_code" in payload and "message" in payload
 
 
+# Clave del scope ASGI con la que ``CanonicalRoute`` avisa que el cuerpo ya
+# salio envuelto y validado contra ``ApiSuccess`` (F1-02). Vive en el scope y
+# no en un header: no puede llegar al cliente ni la puede mandar el cliente.
+_CANONICAL_BODY_SCOPE_KEY = "shifty.canonical_body"
+
+
+def mark_canonical_body(scope: MutableMapping[str, Any]) -> None:
+    scope[_CANONICAL_BODY_SCOPE_KEY] = True
+
+
 def raw_response_requested(request: Request) -> bool:
     """Unico lugar que decide si la respuesta sale sin el sobre canonico.
 
@@ -92,6 +102,10 @@ class CanonicalJsonMiddleware(BaseHTTPMiddleware):
     `raw_response_requested`, desenvuelve lo que `CanonicalRoute` ya envolvio.
     Antes el handler de `CanonicalRoute` tomaba la misma decision por su
     cuenta, con otras reglas.
+
+    Lo que `CanonicalRoute` ya envolvio sale tal cual (F1-02, plan de
+    rendimiento): leerlo, decodificarlo y volver a codificarlo producia los
+    mismos bytes y costaba 7-13 % del request, mas en payloads grandes.
     """
 
     async def dispatch(
@@ -102,6 +116,8 @@ class CanonicalJsonMiddleware(BaseHTTPMiddleware):
             return cast(Response, response)
 
         raw = raw_response_requested(request)
+        if not raw and request.scope.get(_CANONICAL_BODY_SCOPE_KEY):
+            return cast(Response, response)
         body = b""
         async for chunk in response.body_iterator:
             body += chunk
