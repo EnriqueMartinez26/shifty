@@ -16,7 +16,7 @@ from core.availability_cache import AvailabilityCacheClient
 from core.router import CanonicalAPIRouter
 from core.database import get_db, tenant_bypass
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
-from core.redis import get_redis
+from core.redis import get_availability_cache, get_redis
 from core.roles import STORE_MANAGERS, has_any_role, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
@@ -69,9 +69,11 @@ async def get_uow(
 
 def get_appointment_service(
     uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> AppointmentService:
-    return AppointmentService(uow=uow, cache=cast(AvailabilityCacheClient, redis))
+    return AppointmentService(
+        uow=uow, cache=cast(AvailabilityCacheClient, availability_cache)
+    )
 
 
 def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:
@@ -140,14 +142,14 @@ async def get_availability(
     date: date_type,
     user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> list[object]:
     """Consulta slots disponibles para un servicio en una fecha.
 
     Sin token la respuesta es la del portal: un bloqueo sale como "No
     disponible" y nunca con el motivo que tipeo el duenio (AUD2-B1-04).
     """
-    svc = AvailabilityService(db, redis)
+    svc = AvailabilityService(db, availability_cache)
     if user is None:
         async with tenant_bypass(db):
             repo = PublicRepository(db)

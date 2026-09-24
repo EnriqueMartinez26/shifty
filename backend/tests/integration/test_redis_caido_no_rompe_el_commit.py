@@ -25,7 +25,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 import core.availability_cache as availability_cache
 import modules.notifications.tasks as tasks
-from core.redis import get_redis
+from core.redis import get_availability_cache, get_redis
 from main import app
 from tests.conftest import MockRedis
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -58,7 +58,9 @@ def _usar_redis(doble: MockRedis) -> None:
     async def fake_get_redis() -> MockRedis:
         return doble
 
+    # La invalidacion va al Redis de cache (F0-15): el doble ocupa los dos.
     app.dependency_overrides[get_redis] = fake_get_redis
+    app.dependency_overrides[get_availability_cache] = fake_get_redis
 
 
 async def _tienda_reservable(

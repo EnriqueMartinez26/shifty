@@ -21,9 +21,17 @@ x-app-environment: &app_environment
   # Las migraciones necesitan DDL: van con el dueno de la base.
   MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
-  REDIS_URL: redis://redis:6379/0
+  # F0-15: dos Redis. El de ESTADO (rate limit, idempotencia, lockout, OTP,
+  # resultados de Celery) no desaloja; el de CACHE (solo disponibilidad)
+  # desaloja y no persiste.
+  REDIS_URL: redis://redis_state:6379/0
+  REDIS_CACHE_URL: redis://redis_cache:6379/0
+  # 2 s x 2 intentos por operacion retenian un request hasta ~24 s con Redis
+  # caido; con 0,5 s el peor caso baja a ~6 s (minimo del validador: 0.1).
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-0.5}
+  REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: ${REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS:-0.5}
   CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}@rabbitmq:5672//
-  CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+  CELERY_RESULT_BACKEND_URL: redis://redis_state:6379/1
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
   MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:-}
@@ -89,10 +97,63 @@ services:
         limits:
           memory: 256M
 
-  redis:
+  # F0-15 (decision 5): dos Redis. Uno con desalojo expulsaba lockout,
+  # idempotencia y rate limit bajo presion de memoria; uno sin desalojo se
+  # llenaba de cache y hacia fallar TODA escritura.
+  #
+  # CACHE: solo la disponibilidad (core/redis.py::get_availability_cache).
+  # Desaloja lo menos usado y no persiste: perderlo es recalcular.
+  redis_cache:
     image: redis:7.4-alpine
-    container_name: shifty_redis
+    container_name: shifty_redis_cache
     restart: always
+    command:
+      - redis-server
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    ports:
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          # maxmemory no cuenta fragmentacion ni buffers de clientes.
+          memory: 192M
+
+  # ESTADO: rate limit, idempotencia, lockout, OTP, OAuth y resultados de
+  # Celery. Nunca desaloja: sin memoria, la escritura falla a la vista (y el
+  # rate limit decide segun RATE_LIMIT_FAIL_CLOSED) en vez de aflojar una
+  # proteccion en silencio. RDB cada 60 s si hubo un cambio: un reinicio no
+  # borra lockouts ni el replay de idempotencia de un cobro.
+  redis_state:
+    image: redis:7.4-alpine
+    container_name: shifty_redis_state
+    restart: always
+    command:
+      - redis-server
+      - --maxmemory
+      - 48mb
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - "60"
+      - "1"
+      - --appendonly
+      - "no"
+    volumes:
+      - redis_state_data:/data
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
@@ -105,7 +166,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 96M
 
   rabbitmq:
     image: rabbitmq:3.13.7-management-alpine
@@ -156,7 +217,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      redis_cache:
+        condition: service_healthy
+      redis_state:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -210,7 +273,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      redis_cache:
+        condition: service_healthy
+      redis_state:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -249,7 +314,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      redis:
+      redis_cache:
+        condition: service_healthy
+      redis_state:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -307,3 +374,4 @@ networks:
 volumes:
   postgres_data:
   rabbitmq_data:
+  redis_state_data:

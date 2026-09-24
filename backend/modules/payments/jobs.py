@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
 from core.database import _apply_tenant_context
-from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
@@ -1246,9 +1246,9 @@ async def _expire_unpaid_appointments(
     # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
     if liberados:
         try:
-            redis = await get_redis()
+            cache = await get_availability_cache()
             for store_id, starts_at in liberados:
-                await invalidate_availability(redis, store_id, starts_at)
+                await invalidate_availability(cache, store_id, starts_at)
         except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning("availability_cache_invalidation_failed", error=str(exc))
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}

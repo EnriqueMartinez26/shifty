@@ -19,7 +19,7 @@ from core.exceptions import (
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
-from core.redis import get_redis
+from core.redis import get_availability_cache
 from core.roles import STORE_MANAGERS, has_any_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
@@ -129,7 +129,7 @@ async def update_my_store(
     data: StoreUpdate,
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> StoreResponse:
     # Rol canonico de core/roles.py, no el enum crudo (B3-18): un superadmin
     # cuyo role no sea 'admin' quedaba afuera, y era una segunda llave de rol
@@ -198,7 +198,7 @@ async def update_my_store(
         raise
     await db.refresh(store)
     if toca_la_agenda:
-        await _invalidar_agenda(redis, str(store.id))
+        await _invalidar_agenda(availability_cache, str(store.id))
     return to_store_response(store)
 
 

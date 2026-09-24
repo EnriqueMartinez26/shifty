@@ -259,6 +259,10 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 5
     DB_POOL_RECYCLE_SECONDS: int = 1800
     REDIS_URL: str
+    # Redis del cache de disponibilidad (F0-15): `allkeys-lru`, sin persistencia.
+    # Vacio = el mismo REDIS_URL (compatibilidad con un deploy de un solo Redis).
+    # Nada que sea estado (rate limit, idempotencia, lockout, OTP) va aca.
+    REDIS_CACHE_URL: str | None = None
     CELERY_BROKER_URL: str = "memory://"
     CELERY_RESULT_BACKEND_URL: str | None = None
     CELERY_WORKER_PREFETCH_MULTIPLIER: int = 1

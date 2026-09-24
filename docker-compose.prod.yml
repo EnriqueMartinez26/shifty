@@ -49,7 +49,11 @@ x-app-environment-prod: &app_environment_prod
   DATABASE_URL: ${DATABASE_URL:?Falta DATABASE_URL en .env (rol de la app, ver backend/.env.production.example)}
   MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Falta MIGRATION_DATABASE_URL en .env (rol dueno, con DDL)}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
-  REDIS_URL: ${REDIS_URL:?Falta REDIS_URL en .env}
+  # F0-15: dos Redis; el de estado no desaloja, el de cache si (ver compose base).
+  REDIS_URL: ${REDIS_URL:?Falta REDIS_URL en .env (Redis de ESTADO, noeviction)}
+  REDIS_CACHE_URL: ${REDIS_CACHE_URL:?Falta REDIS_CACHE_URL en .env (Redis de CACHE, allkeys-lru)}
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-0.5}
+  REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: ${REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS:-0.5}
   CELERY_BROKER_URL: ${CELERY_BROKER_URL:?Falta CELERY_BROKER_URL en .env}
   CELERY_RESULT_BACKEND_URL: ${CELERY_RESULT_BACKEND_URL:?Falta CELERY_RESULT_BACKEND_URL en .env}
   FRONTEND_URL: ${FRONTEND_URL:?Falta FRONTEND_URL en .env}
@@ -176,7 +180,10 @@ services:
         limits:
           memory: 4G
 
-  redis:
+  redis_cache:
+    ports: !reset []
+
+  redis_state:
     ports: !reset []
 
   rabbitmq:

@@ -252,7 +252,7 @@ def test_los_procesos_esperan_a_que_sus_dependencias_esten_sanas() -> None:
     unico sin la guarda.
     """
     services = _services()
-    infra = ("db", "redis", "rabbitmq")
+    infra = ("db", "redis_cache", "redis_state", "rabbitmq")
 
     for nombre in infra:
         assert services[nombre].get("healthcheck"), (
@@ -293,6 +293,7 @@ CRITICAS_EN_PRODUCCION = (
     "MIGRATION_DATABASE_URL",
     "APP_DB_PASSWORD",
     "REDIS_URL",
+    "REDIS_CACHE_URL",
     "CELERY_BROKER_URL",
     "CELERY_RESULT_BACKEND_URL",
     "CORS_ORIGINS",
@@ -354,9 +355,14 @@ def test_produccion_no_repite_ningun_valor_de_desarrollo() -> None:
             )
         # Los servicios del compose no pueden quedar cableados: en produccion
         # la base, Redis y el broker pueden ser administrados.
-        for clave in ("DATABASE_URL", "REDIS_URL", "CELERY_BROKER_URL"):
+        for clave in (
+            "DATABASE_URL",
+            "REDIS_URL",
+            "REDIS_CACHE_URL",
+            "CELERY_BROKER_URL",
+        ):
             valor = env.get(clave, "")
-            for host in ("@db:", "//redis:", "@rabbitmq:"):
+            for host in ("@db:", "//redis", "@rabbitmq:"):
                 assert host not in valor, (
                     f"{servicio}.{clave} apunta al contenedor del compose: {valor!r}"
                 )
@@ -923,3 +929,90 @@ def test_postgres_de_produccion_usa_la_memoria_del_servidor() -> None:
     limites = _servicios_de_produccion()["db"]["deploy"]
     assert isinstance(limites, dict)
     assert limites["resources"]["limits"]["memory"] == "4G", limites
+
+
+# --- Dos Redis: cache y estado (F0-15, plan de rendimiento; decision 5) -------
+#
+# Un solo Redis con desalojo expulsaba lockout, idempotencia y rate limit bajo
+# presion de memoria; sin desalojo, el cache de disponibilidad lo llenaba y
+# TODA escritura fallaba. El de cache desaloja y no persiste (se recalcula); el
+# de estado no desaloja y guarda RDB (un reinicio no borra lockouts ni el replay
+# de idempotencia de un cobro). El codigo solo manda al de cache la
+# disponibilidad (core/redis.py::get_availability_cache).
+
+
+def _argumentos(comando: object) -> list[str]:
+    assert isinstance(comando, list), (
+        f"el command no esta en forma de lista: {comando!r}"
+    )
+    return [str(parte) for parte in comando]
+
+
+def _opcion(argumentos: list[str], nombre: str) -> list[str]:
+    i = argumentos.index(nombre)
+    siguiente = [
+        j for j in range(i + 1, len(argumentos)) if argumentos[j].startswith("--")
+    ]
+    return argumentos[i + 1 : siguiente[0] if siguiente else len(argumentos)]
+
+
+def _megas(valor: str) -> int:
+    match = re.fullmatch(r"(\d+)(mb|m|M)", valor)
+    assert match, valor
+    return int(match.group(1))
+
+
+def _limite(servicio: dict[str, object]) -> str:
+    deploy = servicio.get("deploy")
+    assert isinstance(deploy, dict), servicio
+    return str(deploy["resources"]["limits"]["memory"])
+
+
+def test_el_redis_de_cache_desaloja_y_no_persiste() -> None:
+    servicios = _services()
+    assert "redis" not in servicios, "sigue el Redis unico"
+    cache = servicios["redis_cache"]
+    argumentos = _argumentos(cache.get("command"))
+    assert argumentos[0] == "redis-server", argumentos
+    assert _opcion(argumentos, "--maxmemory-policy") == ["allkeys-lru"]
+    assert _opcion(argumentos, "--save") == [""], "el cache no persiste"
+    assert _opcion(argumentos, "--appendonly") == ["no"]
+    maxmemory = _megas(_opcion(argumentos, "--maxmemory")[0])
+    assert maxmemory == 96
+    # El limite del contenedor deja margen para la fragmentacion y los buffers
+    # de clientes, que maxmemory no cuenta.
+    assert _megas(_limite(cache)) >= 2 * maxmemory
+    assert not cache.get("volumes"), "el cache no necesita volumen"
+
+
+def test_el_redis_de_estado_no_desaloja_y_persiste() -> None:
+    estado = _services()["redis_state"]
+    argumentos = _argumentos(estado.get("command"))
+    assert _opcion(argumentos, "--maxmemory-policy") == ["noeviction"]
+    assert _opcion(argumentos, "--save") == ["60", "1"]
+    maxmemory = _megas(_opcion(argumentos, "--maxmemory")[0])
+    assert maxmemory == 48
+    assert _megas(_limite(estado)) >= 2 * maxmemory
+    volumenes = estado.get("volumes") or []
+    assert isinstance(volumenes, list), volumenes
+    destinos = [_montaje(v) for v in volumenes]
+    assert ("redis_state_data", "/data") in destinos, destinos
+
+
+def test_cada_uso_de_redis_apunta_a_su_instancia() -> None:
+    env = _env_items(_services()["backend"])
+    assert env["REDIS_URL"].startswith("redis://redis_state:"), env["REDIS_URL"]
+    assert env["REDIS_CACHE_URL"].startswith("redis://redis_cache:"), env
+    # Los resultados de Celery son estado, no cache.
+    assert env["CELERY_RESULT_BACKEND_URL"].startswith("redis://redis_state:"), env
+    # 2 s x 2 intentos x ~6 operaciones por request retenian un request 24 s
+    # con Redis caido; con 0,5 s el peor caso baja a 6.
+    for clave in (
+        "REDIS_SOCKET_TIMEOUT_SECONDS",
+        "REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS",
+    ):
+        for vista, valor in (
+            ("desarrollo", env[clave]),
+            ("produccion", _env_prod("backend")[clave]),
+        ):
+            assert valor == "0.5" or valor.endswith(":-0.5}"), (vista, clave, valor)

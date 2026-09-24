@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import invalidate_store_availability
 from core.database import get_db
 from core.exceptions import ServiceNotFoundException, ValidationException
-from core.redis import get_redis
+from core.redis import get_availability_cache
 from core.roles import STORE_MANAGERS, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
@@ -96,7 +96,7 @@ async def update_service(
     data: ServiceUpdate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> ServiceResponse:
     repo = ServiceRepository(db)
     service = await repo.get_by_id(public_id, admin.store_id)
@@ -106,7 +106,7 @@ async def update_service(
     changes = data.model_dump(exclude_unset=True)
     _validate_deposit_patch(service, changes)
     updated = await repo.update(service, changes)
-    await _invalidate_store_cache(redis, str(updated.store_id))
+    await _invalidate_store_cache(availability_cache, str(updated.store_id))
     return to_service_response(updated)
 
 
@@ -136,14 +136,14 @@ async def delete_service(
     public_id: PublicIdPath,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> Response:
     repo = ServiceRepository(db)
     service = await repo.get_by_id(public_id, admin.store_id)
     if not service:
         raise ServiceNotFoundException(public_id)
     await repo.soft_delete(service)
-    await _invalidate_store_cache(redis, str(service.store_id))
+    await _invalidate_store_cache(availability_cache, str(service.store_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
