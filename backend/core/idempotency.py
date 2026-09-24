@@ -17,12 +17,13 @@ logger = structlog.get_logger()
 
 
 def _log_redis_fallback(operation: str, key: str, exc: Exception) -> None:
+    # PV-22: solo el tipo; el texto de un error de redis-py puede repetir la
+    # URL de conexion con la clave.
     logger.warning(
         "idempotency_redis_unavailable",
         operation=operation,
         key=key,
         error_type=type(exc).__name__,
-        error=str(exc),
     )
 
 

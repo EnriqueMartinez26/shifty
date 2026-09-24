@@ -191,14 +191,16 @@ def _tolerar_redis_caido(operacion: str, store_id: str, exc: Exception) -> None:
     levantar aca es un 500 sobre una reserva YA commiteada, antes del link de
     pago y del mail: una reserva fantasma, sin cobro ni aviso. Entre los dos,
     se sigue; queda el log con la tienda y el evento en Sentry.
+
+    El log lleva solo el tipo (PV-22): el texto y el traceback de un error de
+    redis-py pueden repetir la URL de conexion con la clave. El detalle
+    completo va a Sentry.
     """
     logger.warning(
         "availability_cache_invalidation_failed",
         operacion=operacion,
         store_id=store_id,
         error_type=type(exc).__name__,
-        error=str(exc),
-        exc_info=True,
     )
     report_exception(exc, operacion=operacion, store_id=store_id)
 

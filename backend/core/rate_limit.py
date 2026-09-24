@@ -118,7 +118,13 @@ async def enforce_rate_limit(
                 f"subject:{subject.lower()}", action, limit, window
             )
     except REDIS_UNAVAILABLE_ERRORS as exc:
-        logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
+        # PV-22: solo el tipo; el texto de un error de redis-py puede repetir
+        # la URL de conexion con la clave.
+        logger.warning(
+            "rate_limit_redis_unavailable",
+            action=action,
+            error_type=type(exc).__name__,
+        )
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
                 message=_MENSAJE_LIMITE_NO_DISPONIBLE,
@@ -205,7 +211,9 @@ class RedisRateLimitMiddleware:
             )
         except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning(
-                "rate_limit_middleware_redis_unavailable", action=action, error=str(exc)
+                "rate_limit_middleware_redis_unavailable",
+                action=action,
+                error_type=type(exc).__name__,
             )
             if settings.RATE_LIMIT_FAIL_CLOSED:
                 await _send_rate_limit_response(
