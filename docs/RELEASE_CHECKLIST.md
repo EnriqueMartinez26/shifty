@@ -19,6 +19,8 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] Host cron and logrotate are installed: `/etc/cron.d/shifty-guard`, `/etc/cron.d/shifty-latency`, `/etc/logrotate.d/shifty`.
 - [ ] certbot is installed on the host with webroot `/opt/shifty/nginx/acme` (compose mounts it at `/var/www/acme` in nginx) and `--deploy-hook /opt/shifty/scripts/cert-deploy-hook.sh`, which copies the certificates into `nginx/certs` and reloads nginx with `APP_VERSION` from `.deploy/current`; `certbot renew --dry-run` passes.
 - [ ] The `db` container was recreated once after adding the `pg_backups` volume (`docker compose exec db ls -ld /backups` works).
+- [ ] `BACKUP_DIR` (`/var/backups/shifty`) exists on the host. `scripts/deploy.sh` creates it in the preflight if it can; a bind-type named volume does not create it, and without it `db` cannot be recreated.
+- [ ] First deploy with the two Redis instances: `redis_state` starts empty once. Login lockouts, idempotency replays and pending OTP codes from before the switch are gone; tell the store owners that a code requested just before the deploy must be requested again.
 - [ ] If this release changes `nginx/nginx.prod.conf` or the edge image, `make deploy-edge` is scheduled outside peak hours (`make deploy` only reloads the edge).
 - [ ] At least one alert channel works (`ALERT_EMAIL` with msmtp/sendmail, or `ALERT_WEBHOOK_URL`): trigger a test alert with `SHIFTY_STATE_DIR=$(mktemp -d) BACKUP_DIR=$(mktemp -d) bash scripts/backup-check.sh` (the temporary state dir keeps the real alert from being silenced).
 
@@ -34,7 +36,9 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] Alembic has exactly one head before release.
 - [ ] Migration SQL has been reviewed for destructive operations, long locks, table rewrites, and backfill volume.
 - [ ] Every migration is expand-only for this release (contract steps ship one release later), indexes use `CONCURRENTLY` in an autocommit block, and constraints go `NOT VALID` + `VALIDATE`: the previous release must run against the new schema, or rollback is not possible.
-- [ ] Migrations ran through `make deploy` (`compose run --rm --no-deps backend alembic upgrade head`, before recreating the app), not by hand on a running container.
+- [ ] Migrations ran through `make deploy` (`compose run --rm --no-deps --no-build backend alembic upgrade head`, before recreating the app), not by hand on a running container.
+- [ ] The deploy ran through `scripts/deploy.sh`, which passes `APP_VERSION` and uses `up --no-build --remove-orphans` (a renamed service, such as `redis` split into `redis_cache`/`redis_state`, otherwise leaves the old container holding its port).
+- [ ] Pending from Fase 1: the migration that runs `CREATE EXTENSION pg_stat_statements` (the library is preloaded by the compose `shared_preload_libraries`; the extension does not exist until that migration ships).
 - [ ] Post-migration schema version and application startup were verified.
 
 ## 4. Backup, restore, RPO, and RTO
@@ -57,6 +61,7 @@ Use this checklist for every production release. A release is ready only when ea
 
 - [ ] Deployment artifact/image/tag is immutable and recorded: the git sha passed as `make deploy APP_VERSION=<sha>`, also in `.deploy/current`.
 - [ ] Smoke tests cover login, appointment read/write, reporting, payment webhook path, and worker processing.
+- [ ] After the deploy, `docker compose exec rabbitmq rabbitmq-diagnostics alarms` reports no alarms (the deploy gate checks it). The prod broker runs with a 384M memory limit, an absolute watermark of 280MiB and `+S 2:2`: with the alarm on, publishers block and OTP mails stop.
 - [ ] Rollback target is known: `.deploy/previous` (what `make rollback` deploys, without migrating), previous environment values, and the forward-fix plan for the migration.
 - [ ] Rollback trigger thresholds are defined for error rate, latency, failed payments, failed workers, and failed health checks.
 - [ ] Release notes include owner, time window, risks, checklist exceptions, and exact verification evidence.

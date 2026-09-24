@@ -52,7 +52,7 @@ The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; ed
 
 ## 2. Images (CI)
 
-`.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: every `up` and `run` in `scripts/deploy.sh` carries `--no-build`, and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
+`.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: every `up` and `run` in `scripts/deploy.sh` carries `--no-build` (and every `up` `--remove-orphans`, so a renamed service does not leave its old container behind), and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
 
 `docker-compose.prod.yml` references `ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` for backend (API, workers and beat) and frontend. The production edge runs the base image `nginx:1.27.5-alpine` with `nginx/nginx.prod.conf` bind-mounted, so its image does not change per release; the `shifty-nginx` image CI publishes is not what production runs.
 
@@ -61,6 +61,7 @@ The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; ed
 1. **Lock** `.deploy/lock` (a second deploy stops; the guard does not restart containers while it exists).
 2. **Preflight**, before touching anything:
    - `COMPOSE_FILE` (from the environment or the clone's `.env`) includes `docker-compose.prod.yml`. The script `cd`s into the clone first, so it can be called from anywhere.
+   - `BACKUP_DIR` exists (created with mode 0700 if missing: the `pg_backups` volume is a bind and does not create it).
    - Compose >= 2.24 and `docker compose config -q` passes.
    - Every service in `DEPLOY_SERVICES` exists (default: `backend celery_worker celery_worker_interactive celery_beat frontend`; nginx is not in the list).
    - The `db` service is running (the deploy uses `--no-deps` and never starts or recreates db, redis or rabbitmq).
@@ -69,13 +70,14 @@ The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; ed
 3. Save the running version to `.deploy/previous` (from `.deploy/current`, or the tag of the running backend image on the first run).
 4. `docker compose pull` of the app services, then `docker image inspect` of every expected `image:tag`. A failed pull or a missing image stops the deploy here, before migrating.
 5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps --no-build -T backend alembic upgrade head`. If it fails, nothing was recreated.
-6. **Backend, gradually**: `up -d --no-deps --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
-7. The rest of the app: `up -d --no-deps --no-build celery_worker celery_worker_interactive celery_beat frontend`. Compose only recreates what changed. The frontend container is recreated when its image changes (every release): the SPA answers 502 for a moment while it restarts. Accepted: the API keeps serving and the browser retries.
+6. **Backend, gradually**: `up -d --no-deps --no-build --remove-orphans --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
+7. The rest of the app: `up -d --no-deps --no-build --remove-orphans celery_worker celery_worker_interactive celery_beat frontend`. Compose only recreates what changed. The frontend container is recreated when its image changes (every release): the SPA answers 502 for a moment while it restarts. Accepted: the API keeps serving and the browser retries.
 8. `nginx -t && nginx -s reload`. On a normal deploy the edge is only **reloaded**, never recreated or restarted; it re-resolves `backend` by itself.
 9. Write `.deploy/current`.
 10. **Gate** (60 s: 12 checks, 5 s apart):
     - `https://$DOMAIN/api/ops/health/ready` and `https://$DOMAIN/` answer 2xx; one failed check in total is tolerated.
     - No container of the project is `unhealthy`.
+    - `rabbitmq-diagnostics alarms` is empty (with a memory or disk alarm RabbitMQ blocks publishers: OTP and jobs stall while `/ready` still answers).
     - 5xx rate in the last 2 minutes of the nginx access log (`"s":"5..."`) under 0.5 %, counted only when there are at least 3 errors (one stray 502 on low traffic does not trigger a rollback).
 11. Gate failed: **automatic rollback** (`DEPLOY_AUTO_ROLLBACK=1`), then exit 1. If the rollback's own gate also fails, the script alerts and exits 2: a person has to look.
 

@@ -101,6 +101,13 @@ Una instrucción en lenguaje natural no es una garantía.
   `_apply_tenant_context`).
 - **Outbox/Inbox** para efectos secundarios y webhooks (`OutboxMessage`,
   `WebhookInbox`), procesados por Celery beat cada minuto.
+- **Dos Redis con papeles distintos** (plan §7, decisión 5). El caché de
+  disponibilidad va a `redis_cache` por `core/redis.py::get_availability_cache`
+  (`REDIS_CACHE_URL`; `allkeys-lru`, sin persistencia: perderlo solo cuesta
+  recalcular). Rate limit, idempotencia, OTP, lockout, OAuth y los resultados
+  de Celery van a `redis_state` por `REDIS_URL` (`noeviction`): un desalojo
+  nunca puede aflojar una protección. Nada de estado nuevo en el Redis de
+  caché, ni caché nuevo en el de estado.
 - **Publicar a Celery desde un request pasa por un helper único** con
   `asyncio.to_thread` y tope de 2 s que nunca propaga; ninguna llamada
   síncrona de red dentro de un `async def` (R8-02: con el broker caído,
@@ -179,9 +186,9 @@ Una instrucción en lenguaje natural no es una garantía.
    LOCKED` y commit, llamada sin lock, resultado en otra transacción;
    `payments/jobs.py::_claim_and_expire_preferences`, B1-04,
    `test_pg_vencimiento_preferencia.py`).
-6. **Idempotencia de mutaciones por `core/idempotency.py`** (Redis;
-   fail-open documentado si Redis cae: `RedisError` → sigue sin
-   protección). `idempotency_key` único en el turno. No se inventan claves
+6. **Idempotencia de mutaciones por `core/idempotency.py`** (Redis de
+   ESTADO, `redis_state` por `REDIS_URL`, `noeviction`; fail-open
+   documentado si Redis cae: `RedisError` → sigue sin protección). `idempotency_key` único en el turno. No se inventan claves
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
@@ -195,6 +202,10 @@ Una instrucción en lenguaje natural no es una garantía.
    `asyncio.run` por tarea; `SKIP LOCKED` en los batches, recordatorios
    incluidos. (2026-09-08: el pool quedaba atado a un loop cerrado.)
    (`test_pg_lotes_skip_locked.py`, `test_pg_recordatorios_skip_locked.py`)
+   El OTP va a la cola `interactive` (`core/celery_app.py::task_routes`),
+   que atiende un worker aparte, `celery_worker_interactive`
+   (`--concurrency=1`): su latencia no depende de los lotes de la cola
+   `celery`. Los mails de reserva irán ahí también (Fase 2).
 9. **Todo parámetro numérico de la API lleva `ge` Y `le`.** Un solo lado
    deja un 500 alcanzable (desborde de bigint con `offset`, 2026-09-04).
 
@@ -221,7 +232,10 @@ Una instrucción en lenguaje natural no es una garantía.
     `NotImplementedError` y se vuelve desde backup. Head único:
     `tests/architecture/test_migrations.py` en el job
     `contract-and-migrations` (`alembic heads` solo lista). Los timeouts del
-    rol de la app viven en la migración `app_role_timeouts`.
+    rol de la app viven en la migración `app_role_timeouts`; los de las
+    migraciones, en `alembic/env.py` (`SET lock_timeout = '3s'` y
+    `transaction_per_migration=True`: una revisión que espera un lock aborta
+    y no arrastra a las demás).
 
 - **Migraciones sin corte (expand/contract).** El deploy migra ANTES de
   recrear, con el código viejo sirviendo, y el rollback vuelve al código
@@ -300,7 +314,9 @@ Una instrucción en lenguaje natural no es una garantía.
   cambia todos los días (editar o borrar un servicio) usa
   `invalidate_store_availability`. Las claves de versión y generación tienen
   TTL y se leen con `GETEX`, que lo estira; nunca `delete` a mano ni
-  comodines. (`test_cache_disponibilidad.py`,
+  comodines. La invalidación recibe el cliente del Redis de caché
+  (`core/redis.py::get_availability_cache`), nunca el de estado.
+  (`test_cache_disponibilidad.py`,
   `test_generacion_de_cache_por_tienda.py`, `test_version_de_cache_expira.py`)
 - **La hora que ve el cliente es hora argentina.** `start_time`/`end_time` de
   la disponibilidad y todos los mails se formatean con `ARGENTINA_TZ`;
@@ -382,11 +398,22 @@ Una instrucción en lenguaje natural no es una garantía.
     (`main.py::BootErrorMiddleware`; con settings de respaldo el lifespan no
     toca la base, `test_boot_error_lifespan.py`); Celery aborta en
     `worker_init`/`beat_init`. (2026-09-08: worker y beat corrían "ready"
-    con base inválida.)
-22. **Un solo bloque `x-app-environment` en compose** para API, worker y
-    beat; `test_compose_contract` exige paridad. Las imágenes se
-    reconstruyen juntas (reconstruir solo `backend` dejó a Celery con la
-    imagen vieja, como root). Ningún servicio de la app monta el código del
+    con base inválida.) El healthcheck de los dos workers es un archivo de
+    latido: `core/celery_app.py` lo toca en cada `heartbeat_sent`
+    (`/var/lib/shifty/worker-heartbeat`) y más de 120 s sin tocarlo es
+    `unhealthy`. El latido lo emite el consumidor sobre su conexión al broker:
+    solo late mientras esa conexión vive, así que sigue detectando un worker
+    vivo que dejó de consumir (AUD2-C-09) sin levantar un Python por chequeo
+    como `inspect ping`.
+22. **Un solo bloque `x-app-environment` en compose** para `backend`,
+    `celery_worker`, `celery_worker_interactive` y `celery_beat`;
+    `test_compose_contract` exige paridad. Los cuatro corren UNA imagen,
+    `ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION}`, que solo
+    `backend` construye; después se recrean los cuatro juntos (recrear solo
+    `backend` dejó a Celery con la imagen vieja, como root). Producción nunca
+    construye (`build: !reset null` en `docker-compose.prod.yml`: la imagen
+    sale de GHCR) y su borde es `nginx:1.27.5-alpine` con la config montada,
+    no una imagen propia. Ningún servicio de la app monta el código del
     host sobre `/app`: corre la imagen, también en producción, donde un
     `volumes: []` del override no cancelaba el montaje porque compose fusiona
     listas (2026-09-24, `test_compose_contract`). Por lo mismo, lo que el
@@ -408,8 +435,8 @@ Una instrucción en lenguaje natural no es una garantía.
   APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
   `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
   24 h), imágenes verificadas con `docker image inspect`, migración con el
-  código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps`
-  con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
+  código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps
+  --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
   compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
   borde (nginx) solo se RECARGA (`nginx -t && nginx -s reload`); se recrea
   únicamente con `make deploy-edge`, cuando cambió su imagen o
@@ -521,6 +548,11 @@ Una instrucción en lenguaje natural no es una garantía.
   conjunto (2026-09-16: 24.16.0) el hook bloquea todos los commits y `npm ci`
   necesita `--engine-strict=false`: el toolchain se alinea antes de
   activarlo.
+- Nombres de contenedor: las réplicas del backend son
+  `<proyecto>-backend-N` (sin `container_name`, F0-04); el resto,
+  `${COMPOSE_PROJECT_NAME:-shifty}_<servicio>`. Scripts, docs y comandos usan
+  `docker compose exec backend ...`, nunca `shifty_backend`: ese nombre ya no
+  existe y con un segundo proyecto (staging) apuntaría al equivocado.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
   detrás de nginx (`E2E_BASE_URL=http://localhost`,
