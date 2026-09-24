@@ -250,9 +250,16 @@ async def test_cada_consulta_de_solapamiento_acota_por_tienda_y_por_los_dos_lado
                 )
             finally:
                 set_tenant_context(None, False)
+        # Reporte de profesionales: horas bloqueadas del periodo.
+        reporte = await client.get(
+            "/reports/professionals", headers=auth_headers(token)
+        )
+        assert reporte.status_code == 200, reporte.text
 
     turnos, bloqueos = _consultas_de_solapamiento(capturadas)
     assert len({sql for sql, _ in turnos}) >= 6, [sql for sql, _ in turnos]
+    # El reporte arma la MISMA sentencia que la agenda del dia (el helper
+    # compartido): son cuatro formas distintas, y todas se explican abajo.
     assert len({sql for sql, _ in bloqueos}) >= 4, [sql for sql, _ in bloqueos]
 
     for sentencia in turnos:

@@ -103,6 +103,30 @@ Rollback is safe only because of the migration rule below: the previous release 
 - Backfills in batches, never one `UPDATE` over the whole table; no `ALTER TYPE` that rewrites a table.
 - `lock_timeout` for the migration role (`alembic/env.py`, plan F0-06): a migration that waits for a lock fails fast instead of queueing every request behind it.
 
+## 5b. Pre-deploy data checks
+
+Some migrations add a constraint that the application code already respected, and first count the rows that would violate it. If a count is not zero the migration **stops with the count** and changes nothing: it does not normalize, trim or delete data for anyone. Run these on production (read-only) before the deploy that ships them; every one must return 0.
+
+```sql
+-- c4e6a8b0d2f1: emails with uppercase letters (ck_users_email_lower).
+-- Two rows may collapse into the same identity: decide by hand.
+SELECT count(*) FROM users WHERE email <> lower(email);
+
+-- e9f1b3d5a7c0: appointments longer than one day (ck_appointments_max_span).
+SELECT count(*) FROM appointments WHERE ends_at > starts_at + interval '1 day';
+
+-- c3d5e7f9a1b4: services longer than 1440 minutes (ck_services_duration_max).
+SELECT count(*) FROM services WHERE duration_minutes > 1440;
+
+-- c3d5e7f9a1b4: blocks and appointments whose store is not their staff's store.
+SELECT count(*) FROM appointment_blocks b JOIN staff s ON s.id = b.staff_id
+WHERE b.store_id <> s.store_id;
+SELECT count(*) FROM appointments a JOIN staff s ON s.id = a.staff_id
+WHERE a.store_id <> s.store_id;
+```
+
+Run them as the migration role (or any role that bypasses RLS): as `shifty_app` without a tenant context, RLS hides every row and the counts are a false 0.
+
 ## 6. Staging: a second compose project on the same VPS
 
 Until launch (plan §7, decision 29) staging is another clone, for example `/opt/shifty-staging`, with its own `.env`:

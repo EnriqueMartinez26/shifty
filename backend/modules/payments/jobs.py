@@ -935,6 +935,19 @@ async def _enrich_inbox_payloads(
     return enriquecidos
 
 
+async def _lock_appointment_or_skip(db: AsyncSession, payment: Payment) -> bool:
+    """``FOR UPDATE SKIP LOCKED`` sobre el turno del cobro. False si otro lo tiene."""
+    tomado = await db.execute(
+        select(Appointment.id)
+        .where(
+            Appointment.id == payment.appointment_id,
+            Appointment.store_id == payment.store_id,
+        )
+        .with_for_update(skip_locked=True)
+    )
+    return tomado.scalar_one_or_none() is not None
+
+
 def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
     cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
     return (
@@ -994,11 +1007,13 @@ async def _reconcile_pending_payments(
     )
     await _apply_tenant_context(db)
 
-    result = await db.execute(
-        consulta.with_for_update(skip_locked=True, of=Payment).execution_options(
-            populate_existing=True
-        )
-    )
+    # Fase B SIN lock de lote: el orden unico de locks es turno -> pago
+    # (F1-18, decision 23) y un ``FOR UPDATE ... OF payments`` sobre el lote
+    # lo invertia (pago -> turno, el orden que F1-18 le saco al webhook). La
+    # exclusion entre corridas ya la da el advisory lock (``_exclusive_job``);
+    # la exclusion con un webhook o un "liberar" la dan los locks de fila que
+    # se toman abajo, cobro por cobro y en orden.
+    result = await db.execute(consulta.execution_options(populate_existing=True))
     reconciled = 0
     inspected = 0
     # Un cobro que aparecio despues de la fase A no tiene respuesta de MP: lo
@@ -1007,9 +1022,10 @@ async def _reconcile_pending_payments(
     for payment in result.scalars().all():
         if payment.id not in vistos:
             continue
-        inspected += 1
         remote = remotos.get(payment.id)
         if not remote:
+            # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
+            inspected += 1
             continue
         try:
             # Savepoint por cobro (AUD2-B2-11): "no frenar al resto del lote"
@@ -1018,6 +1034,14 @@ async def _reconcile_pending_payments(
             # perdian en el commit final. Este lote no tiene attempts propio:
             # el cobro sigue pendiente y lo toma la corrida siguiente.
             async with db.begin_nested():
+                # Primero el turno, con SKIP LOCKED: si un webhook o un
+                # "liberar" lo tiene tomado, este cobro queda para la corrida
+                # siguiente en vez de esperar (la semantica que antes daba el
+                # SKIP LOCKED del lote de pagos). Despues el apply lockea el
+                # pago, ya en el orden turno -> pago.
+                if not await _lock_appointment_or_skip(db, payment):
+                    continue
+                inspected += 1
                 applied = await apply_mercadopago_webhook_payload(
                     db,
                     store_id=payment.store_id,
