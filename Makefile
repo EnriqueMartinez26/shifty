@@ -2,8 +2,11 @@
 
 # El codigo sale de la imagen (no hay bind mount del host): un cambio en
 # backend/ o frontend/ exige reconstruir, y `up --build` lo hace.
+# --remove-orphans: un servicio que se renombra o se parte (redis ->
+# redis_cache + redis_state, F0-15) deja su contenedor viejo publicando el
+# mismo puerto que el nuevo.
 dev:
-	DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build
+	DOCKER_BUILDKIT=0 COMPOSE_DOCKER_CLI_BUILD=0 docker compose up --build --remove-orphans
 
 down:
 	docker compose down
