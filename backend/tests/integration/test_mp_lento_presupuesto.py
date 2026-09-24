@@ -51,7 +51,7 @@ _REQUEST_ORIGINAL = httpx.AsyncClient.request
 
 
 def _es_mercadopago(cliente: Any, url: Any) -> bool:
-    base = payments_service._mercadopago_base_url()
+    base = settings.MERCADOPAGO_API_BASE_URL
     return str(url).startswith(base) or str(cliente.base_url).startswith(base)
 
 

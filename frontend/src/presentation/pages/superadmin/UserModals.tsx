@@ -115,7 +115,7 @@ export const UserModals: React.FC<UserModalsProps> = ({
           onChange={(event) =>
             setUserForm((current) => ({ ...current, password: event.target.value }))
           }
-          minLength={8}
+          minLength={12}
         />
       </div>
 

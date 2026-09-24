@@ -16,8 +16,8 @@ Este archivo fija las dos mitades del contrato ANTES de reorganizar nada:
    borrarla, moverla mal o cambiarle el alcance la deja en rojo.
 
 Es la guarda de la regla 17 (config de produccion falla cerrada) escrita como
-lista: mientras las 35 filas pasen, las 19 condiciones de las dos tablas de
-datos y los 13 `if` sueltos (16 filas) siguen vivos.
+lista: mientras las 36 filas pasen, las 19 condiciones de las dos tablas de
+datos y los 14 `if` sueltos (17 filas) siguen vivos.
 """
 
 from __future__ import annotations
@@ -64,7 +64,14 @@ BASE: dict[str, Any] = {
 # encerrado en el bloque de produccion, y "development" que el limite operativo
 # vale en cualquier entorno.
 INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
-    # --- Secretos: todo entorno que no sea desarrollo (2 `if` sueltos, 4 filas) ---
+    # --- Fuera de desarrollo: secretos y la API de MP (3 `if` sueltos, 5 filas) ---
+    # Staging tampoco puede mandar los tokens de MP a otro host (2026-09-24).
+    (
+        "staging",
+        {"MERCADOPAGO_API_BASE_URL": "http://host.docker.internal:9999"},
+        "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com fuera de "
+        "desarrollo",
+    ),
     (
         "staging",
         {"SECRET_KEY": "generate_a_very_secret_key_here_for_production"},
@@ -249,10 +256,10 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
 ]
 
 # Filas de los chequeos sueltos: los `if` escritos uno por uno, fuera de las
-# dos tablas de datos de `config.py`. Son 13 `if` que ocupan 16 filas, porque
+# dos tablas de datos de `config.py`. Son 14 `if` que ocupan 17 filas, porque
 # SECRET_KEY tiene tres ramas en un mismo `or` (3 filas para 1 `if`) y
 # CORS_ORIGINS/localhost dos.
-N_SUELTOS = 16
+N_SUELTOS = 17
 
 # El total NO se escribe a mano suelto: se ata a las tablas de `config.py`
 # (`test_el_inventario_cubre_las_dos_tablas`). Agregar una fila a
@@ -261,7 +268,7 @@ N_SUELTOS = 16
 # nuevos no llegaron aca y el inventario, que solo detectaba borrados, no dijo
 # nada. Bajar este numero es borrar una proteccion; subirlo sin agregar la
 # fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 35
+FILAS_ESPERADAS = 36
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 

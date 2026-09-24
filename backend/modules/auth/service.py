@@ -11,7 +11,7 @@ from typing import NoReturn, TypedDict
 
 import structlog
 from fastapi import status
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -315,9 +315,9 @@ async def login_user(
         )
 
     async with tenant_bypass(db):
-        result = await db.execute(
-            select(User).where(func.lower(User.email) == normalized_email)
-        )
+        # Igualdad sobre la columna normalizada (ck_users_email_lower): bajo
+        # RLS usa ix_users_email; lower(email) recorria users entera (F1-12).
+        result = await db.execute(select(User).where(User.email == normalized_email))
         user = result.scalar_one_or_none()
 
         # Se verifica SIEMPRE una password (real o de sacrificio) para que el
@@ -575,9 +575,7 @@ async def request_password_reset(
     normalized_email = normalize_email(str(data.email))
     async with tenant_bypass(db):
         result = await db.execute(
-            select(User).where(
-                func.lower(User.email) == normalized_email, User.is_active.is_(True)
-            )
+            select(User).where(User.email == normalized_email, User.is_active.is_(True))
         )
         user = result.scalar_one_or_none()
 

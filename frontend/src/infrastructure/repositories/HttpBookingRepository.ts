@@ -1,5 +1,7 @@
 import type { AxiosInstance } from 'axios'
 
+import { subDays } from 'date-fns'
+
 import { BaseRepository } from './BaseRepository'
 import type {
   AppointmentResponseDTO,
@@ -9,6 +11,7 @@ import { BookingMapper } from '../../application/mappers/BookingMapper'
 import { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
 import { QueryOptions } from '../../domain/repositories/IRepository'
+import { formatArgentinaDate } from '../../shared/utils/argentinaTime'
 import { createUuid } from '../../shared/utils/uuid'
 
 type BookingUpdatePayload = {
@@ -158,13 +161,13 @@ export class HttpBookingRepository
 
   protected async findAllImpl(options?: QueryOptions | boolean): Promise<Appointment[]> {
     // Tenia el mismo desfasaje de argumentos que searchByDateRange: pasaba
-    // `page` como tercer parametro cuando la firma no lo declara.
-    const fromDate = new Date()
-    fromDate.setDate(fromDate.getDate() - 30)
-    const toDate = new Date()
+    // `page` como tercer parametro cuando la firma no lo declara. El rango va
+    // en dias argentinos: `toISOString()` da el dia UTC, que de 21:00 a 23:59
+    // ya es el siguiente (F10-10).
+    const now = new Date()
     const todas = await this.searchByDateRange(
-      fromDate.toISOString().slice(0, 10),
-      toDate.toISOString().slice(0, 10)
+      formatArgentinaDate(subDays(now, 30).toISOString()),
+      formatArgentinaDate(now.toISOString())
     )
 
     if (typeof options !== 'object' || !options) return todas

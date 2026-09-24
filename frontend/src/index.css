@@ -35,3 +35,13 @@ body {
 #root {
   width: 100%;
 }
+
+/* Tiras con scroll horizontal sin barra visible (paso de fecha y hora). */
+@utility hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

@@ -155,6 +155,10 @@ _BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
 # retornos de Mercado Pago apuntando a ningun lado.
 _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
 
+# Unica API de Mercado Pago que se acepta fuera de desarrollo (regla 17): otra
+# base mandaria access tokens de las tiendas a un host ajeno.
+MERCADOPAGO_API_BASE_URL_REAL = "https://api.mercadopago.com"
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shifty"
@@ -217,6 +221,9 @@ class Settings(BaseSettings):
     # contestar en menos de 10 s aun con MP degradado (flujo (j) de
     # tests/e2e); lo que no entra se compensa y el cliente reintenta.
     MERCADOPAGO_REQUEST_BUDGET_SECONDS: float = Field(default=8.0, gt=0, lt=25)
+    # Base de la API de Mercado Pago. Configurable SOLO para apuntar al
+    # emulador de tests/e2e en desarrollo; staging y produccion exigen la real.
+    MERCADOPAGO_API_BASE_URL: str = MERCADOPAGO_API_BASE_URL_REAL
     # Minutos que un turno queda reservado esperando el pago de la seña. Al
     # vencer, el slot vuelve a estar disponible para otro cliente.
     PAYMENT_HOLD_MINUTES: int = 30
@@ -236,6 +243,14 @@ class Settings(BaseSettings):
     ALLOWED_WRITE_CONTENT_TYPES: str = "application/json"
     TRUST_PROXY_HEADERS: bool = True
     RATE_LIMIT_ENABLED: bool = True
+    # Con Redis caido, responder 503 en vez de dejar pasar sin limite, PERO
+    # solo en las politicas que frenan fuerza bruta y abuso anonimo: ``auth``,
+    # ``public-write`` y ``otp`` (``core.rate_limit.FAIL_CLOSED_POLICIES``),
+    # mas el presupuesto de OTP por telefono y el lockout de login. Lectura
+    # publica, ``global`` (panel, ops) y el webhook de Mercado Pago fallan
+    # abierto con aviso (F1-09, decision 9 del dueno, 2026-09-24): antes el
+    # flag cerraba toda la API y Redis era punto unico de falla. Produccion
+    # lo exige en true (regla 17).
     RATE_LIMIT_FAIL_CLOSED: bool = False
     RATE_LIMIT_WINDOW_SECONDS: int = 60
     RATE_LIMIT_GLOBAL_PER_MINUTE: int = 240
@@ -315,7 +330,7 @@ class Settings(BaseSettings):
         return production_data
 
     def _validate_secrets_outside_development(self) -> None:
-        """Secretos: cualquier entorno que no sea desarrollo.
+        """Secretos y destino de los tokens de MP: todo entorno menos desarrollo.
 
         Un staging que firme con el placeholder del repo emite tokens
         forjables contra datos reales, asi que la vara no es solo produccion.
@@ -335,6 +350,13 @@ class Settings(BaseSettings):
             self.FIELD_ENCRYPTION_KEY
         ):
             raise ValueError("FIELD_ENCRYPTION_KEY parece un placeholder del repo")
+        # Mismo alcance que los secretos: staging tambien tiene tokens reales
+        # de MP y no puede mandarlos a otro host (el emulador es de desarrollo).
+        if self.MERCADOPAGO_API_BASE_URL != MERCADOPAGO_API_BASE_URL_REAL:
+            raise ValueError(
+                "MERCADOPAGO_API_BASE_URL debe ser https://api.mercadopago.com fuera de "
+                "desarrollo"
+            )
 
     def _validate_production_origins(self) -> None:
         """Produccion: origenes y URLs publicas que no pueden ser locales."""

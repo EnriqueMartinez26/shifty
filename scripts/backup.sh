@@ -9,7 +9,11 @@
 # 2. El dump cae en /backups del contenedor, un volumen con nombre atado a
 #    BACKUP_DIR del host (/var/backups/shifty). El YAML del volumen esta en
 #    docs/BACKUP_RESTORE_RUNBOOK.md.
-# 3. SHA256SUMS de cada archivo del dump.
+# 2b. globals.sql dentro del mismo directorio: pg_dumpall --globals-only
+#    --no-role-passwords. Los roles son del cluster y el dump de la base no
+#    los trae (ni shifty_app ni sus ALTER ROLE ... SET de timeouts); sin
+#    contrasenas, que no salen del host. Drill 2026-09-24.
+# 3. SHA256SUMS de cada archivo del dump (globals.sql incluido).
 # 4. El dia BACKUP_WEEKLY_DAY (7 = domingo) se guarda ademas en weekly/.
 # 5. rclone copy a BACKUP_REMOTE (bucket S3-compatible, fuera del host).
 # 6. Retencion: 7 diarios y 4 semanales, en el host (por cantidad) y en el
@@ -31,8 +35,8 @@ set -Eeuo pipefail
 : "${BACKUP_KEEP_WEEKLY:=4}"
 : "${BACKUP_WEEKLY_DAY:=7}"
 : "${BACKUP_JOBS:=2}"
-# pg_dump 16 acepta gzip, lz4 y zstd si la imagen los trae compilados; si
-# postgres:16-alpine no trae zstd, usar gzip:6.
+# zstd:3 verificado con postgres:16.14-alpine en el drill del 2026-09-24. Con
+# otra imagen sin zstd compilado, usar gzip:6.
 : "${BACKUP_COMPRESS:=zstd:3}"
 
 nombre="shifty-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -84,6 +88,13 @@ if [ ! -f "$a_medias/toc.dat" ]; then
   log "backup: el volumen /backups del servicio db no apunta a $BACKUP_DIR"
   false
 fi
+
+# Globales por stdout al directorio del dump: viajan con el en el mismo
+# checksum y el mismo rclone copy. Si falla, el ERR borra el dump entero.
+# shellcheck disable=SC2016
+docker compose exec -T db sh -c \
+  'pg_dumpall -U "$POSTGRES_USER" -l "$POSTGRES_DB" --globals-only --no-role-passwords' \
+  >"$a_medias/globals.sql"
 
 sumas="$diarios/.$nombre.sha256.tmp"
 (cd "$a_medias" && find . -type f -print0 | sort -z | xargs -0 sha256sum) >"$sumas"

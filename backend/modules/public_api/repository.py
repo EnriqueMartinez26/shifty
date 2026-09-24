@@ -21,7 +21,11 @@ import ulid
 from core.security import hash_password
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.auth.service import normalize_email
-from modules.appointments.repository import AppointmentRepository
+from modules.appointments.repository import (
+    AppointmentRepository,
+    active_block_overlap,
+    appointment_overlap,
+)
 from modules.payments.deposit_rules import ClientHistory
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock
@@ -189,8 +193,8 @@ class PublicRepository:
             return existing
 
         # El tecnico tambien va en minusculas: el store_id es un ULID en
-        # mayusculas y una identidad no canonica estorba a cualquier
-        # comparacion posterior con func.lower(...).
+        # mayusculas y la base exige el email normalizado
+        # (ck_users_email_lower, F1-12).
         technical_email = email or f"{phone}@store{store_id}.noreply".lower()
         new_client = User(
             email=technical_email,
@@ -292,7 +296,11 @@ class PublicRepository:
         }
 
     async def _staff_ids_with_overlapping_block(
-        self, staff_ids: list[str], starts_at: datetime, ends_at: datetime
+        self,
+        store_id: str,
+        staff_ids: list[str],
+        starts_at: datetime,
+        ends_at: datetime,
     ) -> set[str]:
         """Profesionales (de ``staff_ids``) con un bloqueo activo que solapa. Una consulta.
 
@@ -309,9 +317,7 @@ class PublicRepository:
             select(StaffBlock.staff_id)
             .where(
                 StaffBlock.staff_id.in_(staff_ids),
-                StaffBlock.is_active.is_(True),
-                StaffBlock.starts_at < ends_at,
-                StaffBlock.ends_at > starts_at,
+                active_block_overlap(store_id, starts_at, ends_at),
             )
             .distinct()
         )
@@ -319,6 +325,7 @@ class PublicRepository:
 
     async def _staff_ids_with_conflicting_appointment(
         self,
+        store_id: str,
         staff_ids: list[str],
         starts_at: datetime,
         ends_at: datetime,
@@ -344,8 +351,7 @@ class PublicRepository:
                         AppointmentStatus.CONFIRMED.value,
                     ]
                 ),
-                Appointment.starts_at < ends_at + buffer,
-                Appointment.ends_at > starts_at - buffer,
+                appointment_overlap(store_id, starts_at - buffer, ends_at + buffer),
             )
             .distinct()
         )
@@ -353,6 +359,7 @@ class PublicRepository:
 
     async def _pick_staff_for_slot(
         self,
+        store_id: str,
         candidates: list[Staff],
         starts_at: datetime,
         ends_at: datetime,
@@ -388,10 +395,10 @@ class PublicRepository:
         taken: set[str] = set()
         if len(ids) > 1:
             taken = await self._staff_ids_with_overlapping_block(
-                ids, starts_at, ends_at
+                store_id, ids, starts_at, ends_at
             )
             taken |= await self._staff_ids_with_conflicting_appointment(
-                ids, starts_at, ends_at, buffer_minutes
+                store_id, ids, starts_at, ends_at, buffer_minutes
             )
         for staff in candidates:
             if staff.id not in with_schedule or staff.id in taken:
@@ -464,7 +471,7 @@ class PublicRepository:
             store_id, service_public_id, staff_public_id
         )
         selected_staff = await self._pick_staff_for_slot(
-            candidates, starts_at, ends_at, buffer_minutes
+            store_id, candidates, starts_at, ends_at, buffer_minutes
         )
 
         if not selected_staff:

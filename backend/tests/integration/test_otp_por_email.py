@@ -152,7 +152,9 @@ async def test_un_fallo_de_envio_responde_byte_a_byte_igual_que_el_camino_sano(
     assert caido.content == sano.content, "la respuesta cambia cuando falla el envio"
     assert caido.headers["content-type"] == sano.headers["content-type"]
 
-    aviso = next(e for e in eventos if e["event"] == "otp_email_enqueue_failed")
+    assert any(e["event"] == "otp_email_enqueue_failed" for e in eventos)
+    # F1-03: el tipo de error lo registra el helper unico de encolado.
+    aviso = next(e for e in eventos if e["event"] == "enqueue_failed")
     assert aviso["error_type"] == "RuntimeError"
     assert "cliente@example.com" not in str(aviso)
     assert "5555" not in str(aviso)

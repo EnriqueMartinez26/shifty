@@ -45,6 +45,7 @@ import { useLedgerSummary } from '../hooks/useLedger'
 import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
 import { useProfessionalReports, useReportSummary, useReportTrend } from '../hooks/useReports'
 import { useStoreFeatureFlags } from '../hooks/useStores'
+import { currencyFmtEsAr } from '../lib/formatters'
 import { createDashboardListItemStyle, createDashboardPanelStyle } from '../lib/surfaceStyles'
 
 type Tone = 'neutral' | 'primary' | 'warning' | 'danger' | 'success'
@@ -165,12 +166,6 @@ type EnterpriseDashboardProps = {
   isLoading: boolean
   errorMessage?: string
 }
-
-const currencyFormatter = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
 
 const numberFormatter = new Intl.NumberFormat('es-AR', {
   maximumFractionDigits: 0
@@ -351,7 +346,7 @@ const toneTokens = (tone: Tone = 'neutral') => {
 }
 
 const formatCurrency = (value: number | string | null | undefined) =>
-  currencyFormatter.format(Number(value ?? 0))
+  currencyFmtEsAr.format(Number(value ?? 0))
 
 const formatPercent = (value: number | null | undefined) =>
   `${percentFormatter.format(Number(value ?? 0))}%`
@@ -393,7 +388,7 @@ const mapTransactions = (items: ReportAppointmentItem[] | undefined): Transactio
     }))
 
 const Dashboard = () => {
-  const navigate = useNavigate() as unknown as (path: string) => void
+  const navigate = useNavigate()
   const { token, user } = useAuth()
   const isGlobalAdmin = Boolean(user?.is_global_admin)
   const reportsAllowed = canViewReports(user?.role, isGlobalAdmin)
@@ -493,21 +488,21 @@ const Dashboard = () => {
           title: 'Ver agenda',
           description: 'Gestionar turnos y estados',
           tone: 'primary',
-          onSelect: () => navigate('/dashboard/calendar')
+          onSelect: () => void navigate('/dashboard/calendar')
         },
         {
           id: 'cobros',
           title: 'Registrar cobro',
           description: 'Ir a cobros pendientes del dia',
           tone: 'success',
-          onSelect: () => navigate('/dashboard/collections')
+          onSelect: () => void navigate('/dashboard/collections')
         },
         {
           id: 'reportes',
           title: 'Abrir reportes',
           description: 'Revisar tendencia semanal',
           tone: 'neutral',
-          onSelect: () => navigate('/dashboard/reports')
+          onSelect: () => void navigate('/dashboard/reports')
         }
       ]
     }
@@ -525,7 +520,7 @@ const Dashboard = () => {
         signal: Number(stats?.revenue_trend ?? 0) >= 0 ? 'Tendencia positiva' : 'Revisar caida',
         icon: <DollarSign size={18} />,
         tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'success',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       },
       {
         id: 'new-clients',
@@ -538,7 +533,7 @@ const Dashboard = () => {
             : 'Sin altas recientes',
         icon: <UserRoundPlus size={18} />,
         tone: 'success',
-        onSelect: () => navigate('/dashboard/users')
+        onSelect: () => void navigate('/dashboard/users')
       },
       {
         id: 'occupancy',
@@ -553,7 +548,7 @@ const Dashboard = () => {
               : 'Ritmo estable',
         icon: <Gauge size={18} />,
         tone: occupancy >= 85 ? 'warning' : 'neutral',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       },
       {
         id: 'cancellations',
@@ -566,7 +561,7 @@ const Dashboard = () => {
             : 'Sin cancelaciones',
         icon: <CalendarX size={18} />,
         tone: Number(reportStats?.cancelled_appointments ?? 0) > 0 ? 'warning' : 'success',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       }
     ],
     [
@@ -628,7 +623,7 @@ const Dashboard = () => {
         description: 'Reservas esperando decision',
         meta: numberFormatter.format(stats?.pending_confirmations ?? 0),
         tone: 'warning',
-        onSelect: () => navigate('/dashboard/calendar')
+        onSelect: () => void navigate('/dashboard/calendar')
       })
     }
 
@@ -639,7 +634,7 @@ const Dashboard = () => {
         description: formatCurrency(paymentsQuery.data?.total_pending_amount),
         meta: numberFormatter.format(paymentsQuery.data?.pending_payments ?? 0),
         tone: 'warning',
-        onSelect: () => navigate('/dashboard/collections')
+        onSelect: () => void navigate('/dashboard/collections')
       })
     }
 
@@ -650,7 +645,7 @@ const Dashboard = () => {
         description: 'Hay pagos pendientes de actualizar',
         meta: numberFormatter.format(paymentErrors),
         tone: 'danger',
-        onSelect: () => navigate('/dashboard/payments')
+        onSelect: () => void navigate('/dashboard/payments')
       })
     }
 
@@ -661,7 +656,7 @@ const Dashboard = () => {
         description: formatCurrency(outstandingBalance),
         meta: numberFormatter.format(debtorsCount),
         tone: 'warning',
-        onSelect: () => navigate('/dashboard/ledger')
+        onSelect: () => void navigate('/dashboard/ledger')
       })
     }
 
@@ -678,7 +673,8 @@ const Dashboard = () => {
         ),
         detail: paymentsEnabled ? 'Pagos aprobados y manuales' : 'Ingresos por turnos',
         tone: 'success',
-        onSelect: () => navigate(paymentsEnabled ? '/dashboard/collections' : '/dashboard/reports')
+        onSelect: () =>
+          void navigate(paymentsEnabled ? '/dashboard/collections' : '/dashboard/reports')
       },
       {
         id: 'average-ticket',
@@ -686,7 +682,7 @@ const Dashboard = () => {
         value: formatCurrency(reportStats?.average_ticket),
         detail: 'Promedio movil de 7 dias',
         tone: 'neutral',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       },
       {
         id: 'outstanding-balance',
@@ -694,7 +690,7 @@ const Dashboard = () => {
         value: formatCurrency(outstandingBalance),
         detail: `${numberFormatter.format(debtorsCount)} clientes con deuda`,
         tone: debtorsCount > 0 ? 'warning' : 'neutral',
-        onSelect: () => navigate('/dashboard/ledger')
+        onSelect: () => void navigate('/dashboard/ledger')
       }
     ],
     [debtorsCount, navigate, outstandingBalance, paymentsEnabled, paymentsQuery.data, reportStats]
@@ -733,7 +729,7 @@ const Dashboard = () => {
         title: 'Cobros online desactivados',
         description: 'No hay cobro automatico activo',
         tone: 'neutral',
-        onSelect: () => navigate('/dashboard/settings')
+        onSelect: () => void navigate('/dashboard/settings')
       })
     }
 
@@ -743,7 +739,7 @@ const Dashboard = () => {
         title: 'Cuentas pendientes desactivadas',
         description: 'No se lleva la deuda de cada cliente',
         tone: 'neutral',
-        onSelect: () => navigate('/dashboard/settings')
+        onSelect: () => void navigate('/dashboard/settings')
       })
     }
 
@@ -754,7 +750,7 @@ const Dashboard = () => {
         description: 'Revisar patron por servicio o profesional',
         meta: numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
         tone: 'warning',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       })
     }
 
@@ -764,7 +760,7 @@ const Dashboard = () => {
         title: 'Ingreso semanal en baja',
         description: `${formatPercent(stats?.revenue_trend)} contra la semana anterior`,
         tone: 'danger',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       })
     }
 
@@ -781,7 +777,7 @@ const Dashboard = () => {
         description: `Queda ${formatPercent(availableCapacity)} sin ocupar. Conviene reforzar agenda o activar promociones.`,
         tone: 'primary',
         actionLabel: 'Ver agenda',
-        onSelect: () => navigate('/dashboard/calendar')
+        onSelect: () => void navigate('/dashboard/calendar')
       })
     }
 
@@ -794,7 +790,7 @@ const Dashboard = () => {
         )}. Sirve como benchmark interno.`,
         tone: 'success',
         actionLabel: 'Ver rendimiento',
-        onSelect: () => navigate('/dashboard/reports')
+        onSelect: () => void navigate('/dashboard/reports')
       })
     }
 
@@ -807,7 +803,7 @@ const Dashboard = () => {
         )} clientes nuevos ingresaron al periodo. Conviene trabajar recurrencia y rebook.`,
         tone: 'warning',
         actionLabel: 'Abrir usuarios',
-        onSelect: () => navigate('/dashboard/users')
+        onSelect: () => void navigate('/dashboard/users')
       })
     }
 
@@ -823,7 +819,7 @@ const Dashboard = () => {
       topServices={reportsQuery.data?.top_services ?? []}
       salesLoading={reportsQuery.isLoading}
       transactions={mapTransactions(reportsQuery.data?.appointments)}
-      onViewTransactions={() => navigate('/dashboard/reports')}
+      onViewTransactions={() => void navigate('/dashboard/reports')}
       todayMetrics={todayMetrics}
       urgentActions={urgentActions}
       agenda={mapAgenda(upcomingAppointments)}

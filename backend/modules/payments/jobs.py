@@ -1271,7 +1271,12 @@ async def _expire_unpaid_appointments(
             for store_id, starts_at in liberados:
                 await invalidate_availability(cache, store_id, starts_at)
         except REDIS_UNAVAILABLE_ERRORS as exc:
-            logger.warning("availability_cache_invalidation_failed", error=str(exc))
+            # PV-22: solo el tipo; el texto de redis-py puede traer la URL
+            # de conexion con la clave.
+            logger.warning(
+                "availability_cache_invalidation_failed",
+                error_type=type(exc).__name__,
+            )
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
 
 

@@ -27,13 +27,19 @@ def _archivos() -> list[Path]:
     ]
 
 
+# F1-03 (2026-09-24): el helper unico de encolado (``core.enqueue.enqueue``)
+# publica con ``.delay``/``.apply_async`` en un hilo con tope de tiempo; llamarlo
+# es encolar de verdad.
+HELPER_DE_ENCOLADO = "enqueue"
+
+
 def _despacha_a_una_cola(funcion: ast.AST) -> bool:
     for nodo in ast.walk(funcion):
-        if (
-            isinstance(nodo, ast.Call)
-            and isinstance(nodo.func, ast.Attribute)
-            and nodo.func.attr in DESPACHOS
-        ):
+        if not isinstance(nodo, ast.Call):
+            continue
+        if isinstance(nodo.func, ast.Attribute) and nodo.func.attr in DESPACHOS:
+            return True
+        if isinstance(nodo.func, ast.Name) and nodo.func.id == HELPER_DE_ENCOLADO:
             return True
     return False
 

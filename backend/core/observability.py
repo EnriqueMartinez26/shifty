@@ -4,7 +4,9 @@ Sin esto, un webhook que falla o una tarea de Celery que revienta en produccion
 pasan en silencio: nadie se entera hasta que un cliente reclama.
 """
 
+import re
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import structlog
 
@@ -32,6 +34,12 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
         # El body puede traer passwords, tokens OAuth o datos personales.
         request.pop("data", None)
         request.pop("cookies", None)
+        # PV-02: la query lleva telefonos (``deposit/preview?client_phone=``)
+        # y la ruta tambien (``/public/client/{store}/{phone}/...``).
+        request.pop("query_string", None)
+        url = request.get("url")
+        if isinstance(url, str):
+            request["url"] = _mask_url(url)
         headers = request.get("headers")
         if isinstance(headers, dict):
             for header in ("authorization", "cookie", "x-signature"):
@@ -40,10 +48,63 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
 
     # extra/contexts pueden traer PII o secretos si algun logger los adjunta.
     # Se recortan por clave sensible en vez de confiar en que nadie los ponga.
-    _scrub_mapping(event.get("extra"))
+    extra: Any = event.get("extra")
+    if isinstance(extra, dict):
+        # PV-02: la integracion de Celery adjunta los argumentos de la tarea
+        # que fallo; los de ``send_otp_email`` son email, asunto y el cuerpo
+        # CON el codigo. El nombre de la tarea queda.
+        job = extra.get("celery-job")
+        if isinstance(job, dict):
+            for key in ("args", "kwargs"):
+                if key in job:
+                    job[key] = "[redacted]"
+    _scrub_mapping(extra)
     for context in (event.get("contexts") or {}).values():
         _scrub_mapping(context)
+    _mask_breadcrumb_urls(event)
+    _drop_frame_vars(event)
     return event
+
+
+# Un segmento de ruta que, decodificado, es un telefono: 8 o mas digitos con
+# los separadores habituales y un ``+`` opcional. Un ULID o un slug tienen
+# letras y no entran.
+_PHONE_SEGMENT = re.compile(r"\+?[\d\s\-().]{8,}")
+
+
+def _mask_url(url: str) -> str:
+    """URL sin query ni fragmento y con los segmentos-telefono tapados."""
+    parts = urlsplit(url)
+    segments = [
+        "[phone]"
+        if _PHONE_SEGMENT.fullmatch(unquote(segment))
+        and sum(ch.isdigit() for ch in unquote(segment)) >= 8
+        else segment
+        for segment in parts.path.split("/")
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, "/".join(segments), "", ""))
+
+
+def _mask_breadcrumb_urls(event: "Event") -> None:
+    """Las migas HTTP (``data.url``) pasan por la misma mascara que la URL."""
+    breadcrumbs: Any = event.get("breadcrumbs")
+    values = breadcrumbs.get("values") if isinstance(breadcrumbs, dict) else None
+    for crumb in values or []:
+        data = crumb.get("data") if isinstance(crumb, dict) else None
+        if isinstance(data, dict) and isinstance(data.get("url"), str):
+            data["url"] = _mask_url(data["url"])
+
+
+def _drop_frame_vars(event: "Event") -> None:
+    """Defensa en profundidad de ``include_local_variables=False`` (PV-02)."""
+    exception: Any = event.get("exception")
+    values = exception.get("values") if isinstance(exception, dict) else None
+    for value in values or []:
+        stacktrace = value.get("stacktrace") if isinstance(value, dict) else None
+        frames = stacktrace.get("frames") if isinstance(stacktrace, dict) else None
+        for frame in frames or []:
+            if isinstance(frame, dict):
+                frame.pop("vars", None)
 
 
 _SENSITIVE_KEYS = (
@@ -95,7 +156,13 @@ def init_observability(component: str) -> bool:
         traces_sample_rate=0.1 if is_production else 1.0,
         # Nunca mandamos PII: los turnos llevan nombre, telefono y email.
         send_default_pii=False,
+        # PV-02: sin esto cada frame viajaba con sus variables locales (p. ej.
+        # el payload de la reserva con nombre, telefono y email).
+        include_local_variables=False,
         before_send=_scrub_event,
+        # ``before_send`` no corre sobre transacciones: sin esto el 10 %
+        # muestreado salia con ``request.url``, la query y las migas crudas.
+        before_send_transaction=_scrub_event,
     )
     sentry_sdk.set_tag("component", component)
     _initialized = True

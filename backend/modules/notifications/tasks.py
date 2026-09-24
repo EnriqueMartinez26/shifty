@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import smtplib
+import ssl
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,6 +15,7 @@ from typing import Any
 import structlog
 
 from core.celery_app import celery_app
+from core.enqueue import enqueue
 from core.worker_loop import run_in_worker_loop
 from core.config import settings
 from core.utils import ARGENTINA_TZ
@@ -150,7 +152,9 @@ class SmtpSession:
     def _connect(self) -> smtplib.SMTP:
         smtp = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10)
         try:
-            smtp.starttls()
+            # PV-06: sin contexto smtplib cifra pero no verifica certificado
+            # ni hostname; cualquiera en el camino leia mails y la clave SMTP.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
         except Exception:
             smtp.close()
@@ -302,18 +306,19 @@ send_otp_email: Any = celery_app.task(name="send_otp_email", max_retries=0)(
 )
 
 
-def enqueue_otp_email(to: str, subject: str, body: str) -> None:
+async def enqueue_otp_email(to: str, subject: str, body: str) -> None:
     """Encola el mail del OTP. Nunca propaga.
 
     La respuesta del pedido de OTP es neutra por contrato (regla 20): no
     puede cambiar de forma ni de tiempo porque el broker este caido. Un
     fallo de encolado se trata como un fallo de envio: se loguea sin datos
     personales y el cliente vuelve a pedir el codigo.
+
+    F1-03 (2026-09-24): por ``core.enqueue.enqueue``. El ``.delay`` directo
+    bloqueaba el event loop hasta 33 s con el broker inalcanzable.
     """
-    try:
-        send_otp_email.delay(to, subject, body)
-    except Exception as exc:
-        logger.warning("otp_email_enqueue_failed", error_type=type(exc).__name__)
+    if not await enqueue(send_otp_email, to, subject, body):
+        logger.warning("otp_email_enqueue_failed")
 
 
 def is_deliverable_email(email: str | None) -> bool:

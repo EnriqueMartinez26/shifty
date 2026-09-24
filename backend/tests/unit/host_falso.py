@@ -100,6 +100,13 @@ if [ "$1" = compose ]; then
       exit "${FAKE_UP_EXIT:-0}" ;;
     exec)
       if [ "$3" = db ]; then
+        case "$*" in
+          *pg_dumpall*)
+            # Los globales salen por stdout; backup.sh los redirige al host.
+            echo "CREATE ROLE shifty_app;"
+            echo "ALTER ROLE shifty_app SET statement_timeout TO '30s';"
+            exit "${FAKE_PG_DUMPALL_EXIT:-0}" ;;
+        esac
         # pg_dump escribe en /backups del contenedor = BACKUP_DIR del host.
         for ultimo in "$@"; do :; done
         destino="$BACKUP_DIR${ultimo#/backups}"

@@ -18,13 +18,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
 from sqlalchemy.orm import selectinload
 
+import structlog
+
 from core.availability_cache import SLOTS_TTL_SECONDS, resolve_slots_key
+from core.redis import REDIS_UNAVAILABLE_ERRORS
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
 from modules.staff.model import Staff, Schedule, StaffBlock
 from modules.stores.model import Store
+
+
+logger = structlog.get_logger()
+
+
+def _log_cache_unavailable(operation: str, exc: Exception) -> None:
+    """Un warning por request: si la lectura falla, la escritura no se intenta.
+
+    Solo el tipo de error (PV-22): el texto de redis-py puede traer la URL.
+    """
+    logger.warning(
+        "availability_cache_unavailable",
+        operation=operation,
+        error_type=type(exc).__name__,
+    )
 
 
 class AvailabilitySlot(TypedDict):
@@ -146,15 +164,22 @@ class AvailabilityService:
         (``tests/integration/test_caracterizacion_disponibilidad.py``).
         """
         # 1. Caché: generacion de la tienda (B6-08) + version del dia (B7-09).
-        cache_key = await resolve_slots_key(
-            self.redis,
-            store_id,
-            search_date,
-            service_public_id,
-            force_all=force_all,
-            hide_private_reasons=hide_private_reasons,
-        )
-        cached = await self.redis.get(cache_key)
+        # Un Redis caido o lleno es un MISS (F1-10): se calcula desde la base
+        # y no se escribe el cache (``cache_key`` queda en None).
+        cache_key: str | None
+        try:
+            cache_key = await resolve_slots_key(
+                self.redis,
+                store_id,
+                search_date,
+                service_public_id,
+                force_all=force_all,
+                hide_private_reasons=hide_private_reasons,
+            )
+            cached = await self.redis.get(cache_key)
+        except REDIS_UNAVAILABLE_ERRORS as exc:
+            _log_cache_unavailable("read", exc)
+            cache_key, cached = None, None
         if cached:
             return cast(list[AvailabilitySlot], json.loads(cached))
 
@@ -173,7 +198,7 @@ class AvailabilityService:
         # 3. Staff que realiza el servicio.
         staff_members = await self._staff_for_service(store_id, service_public_id)
         if not staff_members:
-            await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, "[]")
+            await self._write_cache(cache_key, "[]")
             return []
 
         # 4 a 6. Reglas de la tienda, horarios, turnos y bloqueos del dia.
@@ -199,8 +224,17 @@ class AvailabilityService:
                 )
 
         # 8. Caché por 5 minutos
-        await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, json.dumps(all_slots))
+        await self._write_cache(cache_key, json.dumps(all_slots))
         return all_slots
+
+    async def _write_cache(self, cache_key: str | None, payload: str) -> None:
+        """Escribe los slots; sin clave (lectura caida) o con Redis caido, no."""
+        if cache_key is None:
+            return
+        try:
+            await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, payload)
+        except REDIS_UNAVAILABLE_ERRORS as exc:
+            _log_cache_unavailable("write", exc)
 
     async def _staff_for_service(
         self, store_id: str, service_public_id: str
@@ -255,7 +289,7 @@ class AvailabilityService:
             schedules.setdefault(schedule.staff_id, []).append(schedule)
 
         booked, blocks = await self._load_occupancy(
-            staff_ids, day_start, day_end, buffer=buffer
+            store_id, staff_ids, day_start, day_end, buffer=buffer
         )
         return _DayAgenda(
             notice_hours=notice_hours,
@@ -268,6 +302,7 @@ class AvailabilityService:
 
     async def _load_occupancy(
         self,
+        store_id: str,
         staff_ids: list[str],
         day_start: datetime,
         day_end: datetime,
@@ -283,8 +318,18 @@ class AvailabilityService:
         ``available`` para despues ser rechazado con 409. La ventana se
         ensancha por ``buffer`` porque el obstaculo real que arma
         ``_schedule_slots`` es el turno mas el hueco obligatorio a cada lado.
+
+        Las dos consultas llevan la tienda y las dos cotas de
+        ``appointment_overlap`` / ``active_block_overlap`` (F1-13): antes
+        recorrian toda la historia de los profesionales en cada consulta de
+        disponibilidad sin cache.
         """
         from sqlalchemy.orm import joinedload
+
+        from modules.appointments.repository import (
+            active_block_overlap,
+            appointment_overlap,
+        )
 
         appt_res = await self.db.execute(
             select(Appointment)
@@ -293,8 +338,7 @@ class AvailabilityService:
                 and_(
                     Appointment.staff_id.in_(staff_ids),
                     Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
-                    Appointment.starts_at < day_end + buffer,
-                    Appointment.ends_at > day_start - buffer,
+                    appointment_overlap(store_id, day_start - buffer, day_end + buffer),
                 )
             )
         )
@@ -313,9 +357,7 @@ class AvailabilityService:
             select(StaffBlock).where(
                 and_(
                     StaffBlock.staff_id.in_(staff_ids),
-                    StaffBlock.is_active.is_(True),
-                    StaffBlock.starts_at < day_end,
-                    StaffBlock.ends_at > day_start,
+                    active_block_overlap(store_id, day_start, day_end),
                 )
             )
         )

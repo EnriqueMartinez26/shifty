@@ -1,9 +1,11 @@
+import { NotFoundError } from '@shared/errors'
+
 import { BaseService } from './BaseService'
 import { Staff } from '../../domain/entities/Staff'
 import type { IStaffRepository } from '../../domain/repositories/IStaffRepository'
+import { Email } from '../../domain/value-objects/Email'
 import apiClient from '../../infrastructure/http/client'
 import { HttpStaffRepository } from '../../infrastructure/repositories/HttpStaffRepository'
-import { createUuid } from '../../shared/utils/uuid'
 import type { CreateStaffSchema } from '../validators/staff.validators'
 import { createStaffSchema } from '../validators/staff.validators'
 
@@ -46,15 +48,15 @@ export class StaffService extends BaseService<Staff> {
       this.validate(data, createStaffSchema)
       const validated = createStaffSchema.parse(data)
 
-      const staff = Staff.fromPrimitives({
-        public_id: createUuid(),
+      // El id lo asigna el backend: se arma con la fabrica de entidad nueva,
+      // igual que ServiceService, en vez de inventar un public_id aca.
+      const staff = Staff.create({
         kind: validated.kind,
-        first_name: validated.first_name,
-        last_name: validated.last_name,
-        email: validated.kind === 'resource' ? null : validated.email,
-        display_name: validated.display_name,
-        is_active: true,
-        service_ids: validated.service_ids
+        firstName: validated.first_name,
+        lastName: validated.last_name,
+        email: validated.kind === 'resource' ? null : Email.create(validated.email),
+        displayName: validated.display_name,
+        serviceIds: validated.service_ids
       })
 
       return await this.repository.create(staff)
@@ -67,12 +69,12 @@ export class StaffService extends BaseService<Staff> {
    * @param id The unique identifier of the staff member.
    * @param data The new staff data to replace existing values.
    * @returns A promise that resolves to the updated Staff entity.
-   * @throws Error if the staff member is not found.
+   * @throws NotFoundError (as `originalError`) if the staff member is not found.
    */
   async updateStaff(id: string, data: CreateStaffSchema): Promise<Staff> {
     return await this.execute(async () => {
       const existing = await this.repository.findById(id)
-      if (!existing) throw new Error('Staff no encontrado')
+      if (!existing) throw new NotFoundError('Staff no encontrado')
 
       this.validate(data, createStaffSchema)
       const validated = createStaffSchema.parse(data)

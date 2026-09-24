@@ -30,7 +30,7 @@ CustomClientFieldData = dict[str, Any]
 class StoreSchedule(BaseEntity):
     __tablename__ = "store_schedules"
 
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     day_of_week: Mapped[int] = mapped_column(Integer)
     open_time: Mapped[time] = mapped_column(Time)
     close_time: Mapped[time] = mapped_column(Time)

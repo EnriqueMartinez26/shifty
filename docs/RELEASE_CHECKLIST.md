@@ -46,6 +46,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] A fresh backup exists before migration or any irreversible data operation.
 - [ ] Backup artifact and checksum are stored outside the application host.
 - [ ] Current restore drill evidence is available and not older than 31 days.
+- [ ] The drill verifies as the app role: its evidence has a `verify-app-role` step with `ok: true` (grants, no `BYPASSRLS`, timeouts of `shifty_app`), not only the owner's `verify-restore`.
 - [ ] RPO target is `<= 24h`; latest restorable backup age is within that target.
 - [ ] RTO target is `<= 4h`; most recent drill duration is within that target or has an approved exception.
 - [ ] Restore owner and escalation path are listed in the release notes.
@@ -60,6 +61,7 @@ Use this checklist for every production release. A release is ready only when ea
 ## 6. Release, smoke test, and rollback
 
 - [ ] Deployment artifact/image/tag is immutable and recorded: the git sha passed as `make deploy APP_VERSION=<sha>`, also in `.deploy/current`.
+- [ ] `.github/workflows/security-scan.yml` is green on the commit being deployed (pip-audit on `backend/uv.lock`, Trivy on the three images). Every entry in `backend/.pip-audit-ignore` or `.trivyignore` has an owner-approved reason.
 - [ ] Smoke tests cover login, appointment read/write, reporting, payment webhook path, and worker processing.
 - [ ] After the deploy, `docker compose exec rabbitmq rabbitmq-diagnostics alarms` reports no alarms (the deploy gate checks it). The prod broker runs with a 384M memory limit, an absolute watermark of 280MiB and `+S 2:2`: with the alarm on, publishers block and OTP mails stop.
 - [ ] Rollback target is known: `.deploy/previous` (what `make rollback` deploys, without migrating), previous environment values, and the forward-fix plan for the migration.

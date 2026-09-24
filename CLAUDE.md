@@ -62,7 +62,9 @@ Una instrucción en lenguaje natural no es una garantía.
   service.
 - **`appointments` es el módulo de referencia** de "commit solo en service"
   (con una excepción propia: `claim_reminder`/`release_reminder` de su
-  repositorio commitean como operación técnica atómica). Los archivos que
+  repositorio commitean como operación técnica atómica, con el commit plano
+  de `AsyncSession` para no quedar "idle in transaction" durante el SMTP,
+  F1-22). Los archivos que
   todavía commitean en router o repositorio NO se listan acá: la lista es
   `COMMITS_DECLARADOS_FUERA_DE_SERVICE` en
   `tests/architecture/test_boundaries.py`, un techo por archivo que solo
@@ -111,11 +113,10 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Publicar a Celery desde un request pasa por un helper único** con
   `asyncio.to_thread` y tope de 2 s que nunca propaga; ninguna llamada
   síncrona de red dentro de un `async def` (R8-02: con el broker caído,
-  publicar en línea congelaba la API hasta 33 s). El helper es F1-03 del
-  plan de rendimiento y todavía no existe: hoy el único `enqueue_*` es
-  `notifications/tasks.py::enqueue_otp_email`, que atrapa todo y se despacha
-  con `BackgroundTasks`. Un `enqueue_*` nuevo usa el helper (o lo crea, con
-  su test), no copia ese patrón.
+  publicar en línea congelaba la API hasta 33 s). El helper es
+  `core/enqueue.py::enqueue` (F1-03, 2026-09-24): todo `enqueue_*` pasa por
+  ahí y `tests/architecture/test_encolado_solo_por_el_helper.py` prohíbe
+  `.delay(`/`.apply_async(` fuera de él.
 - **Circuit breaker** (`core/circuit_breaker.py`) envuelve Mercado Pago. No
   se llama al SDK del proveedor desde un camino nuevo. El **rate limit**
   (`core/rate_limit.py`) es un middleware por IP con política propia solo
@@ -194,7 +195,10 @@ Una instrucción en lenguaje natural no es una garantía.
    `event_id` + verificar collector y monto (`payments/router.py`,
    `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
-   (`modules/payments/model.py`). `X-Request-ID` es parte de la firma de MP
+   (`modules/payments/model.py`). Orden único de locks turno → pago: el
+   webhook busca el cobro sin lock y lockea turno y después pago, como liberar
+   desde el panel y el job de vencimiento (F1-18,
+   `test_webhook_lockea_turno_antes_que_pago.py`). `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
    (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
    `tests/unit/test_nginx_contract.py`).
@@ -246,15 +250,28 @@ Una instrucción en lenguaje natural no es una garantía.
   EXISTS` antes; restricciones con `NOT VALID` y `VALIDATE` aparte; backfills
   por lotes; sin `ALTER TYPE` que reescriba la tabla. `alembic/env.py` fija
   `lock_timeout = '3s'` y una transacción por revisión (F0-06): una migración
-  que espera un lock falla en vez de encolar todas las requests detrás.
+  que espera un lock falla en vez de encolar todas las requests detrás. Un
+  índice vive a la vez en el modelo y en su migración (sin `index=True` que
+  la migración no cree): `tests/postgres/test_pg_modelo_y_migraciones.py`
+  compara los dos como `alembic check` y fija la deriva previa como techo que
+  solo baja (F1-15).
 - **Bajo RLS solo los predicados leakproof usan índices.** Postgres no
   aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
   que el filtro `store_id` explícito es el camino al índice, no solo defensa.
   Nada de `lower()`, `&&`, `timezone()` ni `ILIKE` en consultas calientes
-  (R7-01: el login recorre `users` entera; R7-02: el solapamiento recorre
-  toda la historia del profesional, incluso bajo `FOR UPDATE`). Hoy
-  el login todavía compara `lower(User.email)` (F1-12 lo cambia) y marcar
-  funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
+  (R7-01: el login con `lower(email)` recorría `users` entera; hoy compara la
+  columna normalizada, `tests/architecture/test_email_por_igualdad.py` y
+  `tests/postgres/test_pg_email_por_igualdad.py`; R7-02: el solapamiento
+  recorría toda la historia del profesional, incluso bajo `FOR UPDATE`).
+  Marcar funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
+- **Toda consulta de solapamiento pasa por `appointment_overlap` /
+  `active_block_overlap`** (`modules/appointments/repository.py`, F1-13):
+  `store_id` más las dos cotas. Para turnos la inferior es
+  `starts_at > inicio - MAX_APPOINTMENT_SPAN`, correcta porque la base exige
+  `ends_at <= starts_at + 1 día` (`ck_appointments_max_span`); subir ese tope
+  es cambiar el CHECK y la constante juntos. Para bloqueos (hasta 366 días) es
+  `end_time > inicio` sobre `ix_appointment_blocks_store_staff_end`.
+  (`test_pg_solapamiento_con_cotas.py`)
 
 ### Seguridad
 
@@ -266,21 +283,28 @@ Una instrucción en lenguaje natural no es una garantía.
     validado contra `auth_sessions`.
 16. **Alta de admins solo por superadmin, con email normalizado a
     minúsculas y rechazo del duplicado case-insensitive antes del insert**:
-    el login usa `lower(email)` con `scalar_one_or_none` y dos filas que
-    difieran en mayúsculas lo rompen con 500. Todo camino de alta normaliza
-    con `auth.service.normalize_email` y el índice `uq_users_email_lower` lo
-    sostiene en la base. Un admin de tienda no crea ni asciende admins por
+    el login busca por igualdad `users.email = normalize_email(x)` con
+    `scalar_one_or_none` (bajo RLS usa `ix_users_email`; `lower(email)`
+    recorría la tabla). Todo camino de alta normaliza con
+    `auth.service.normalize_email` y la base lo sostiene:
+    `CHECK (email = lower(email))` (`ck_users_email_lower`, F1-12) más la
+    columna única, con `uq_users_email_lower` como red previa. Un admin de tienda no crea ni asciende admins por
     `/users/` (`core/roles.py::assert_can_grant_role`), no ve ni edita la
     cuenta de un superadmin y no cambia clave, estado, rol ni email de otro
     admin (`assert_can_change_access`, también por `/staff/`).
     (`test_superadmin.py`, `test_alta_de_admin_solo_superadmin.py`,
-    `test_email_unico_apoyado_en_indice.py`,
+    `test_email_unico_apoyado_en_indice.py`, `test_pg_email_por_igualdad.py`,
     `test_panel_no_toca_superadmin.py`, `test_staff_no_toca_cuentas_admin.py`)
 17. **Config de producción falla cerrada** (`core/config.py`,
     `test_config_production_guards.py`): sin placeholders en `SECRET_KEY` /
     `FIELD_ENCRYPTION_KEY`, CORS sin `*` ni localhost,
     `RATE_LIMIT_FAIL_CLOSED`, docs apagados, OTP no `console`. No se agrega
-    un default que deje pasar uno de estos en prod. La URL de la base se lee
+    un default que deje pasar uno de estos en prod. `RATE_LIMIT_FAIL_CLOSED`
+    cierra por política, no en bloque (`core/rate_limit.py::ACTION_POLICIES`,
+    2026-09-24): sin Redis, `auth`, `public-write`, OTP y el lockout de login
+    responden 503; `public-read`, `global` y el webhook de MP (que ya tiene
+    HMAC, ventana e idempotencia) siguen abiertos con aviso a Sentry. Una
+    acción de `enforce_rate_limit` sin política declarada falla cerrada. La URL de la base se lee
     en un solo lugar (`core/config.py::parse_db_url`, parámetro `ssl` de
     asyncpg, `require` si la URL no dice nada); las URLs locales y de CI
     llevan `?ssl=disable` explícito y compose lo toma de `POSTGRES_SSL`.

@@ -9,7 +9,7 @@ from core.models import BaseEntity
 class OtpVerification(BaseEntity):
     __tablename__ = "otp_verifications"
 
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     phone: Mapped[str] = mapped_column(String(30), index=True)
     channel: Mapped[str] = mapped_column(String(20), default="whatsapp")
     code_hash: Mapped[str] = mapped_column(String(128), index=True)

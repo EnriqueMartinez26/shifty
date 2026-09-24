@@ -20,6 +20,7 @@ from core.responses import CanonicalJsonMiddleware, error_response
 from core.exceptions import AppException
 from core.rate_limit import RedisRateLimitMiddleware
 from core.redis import close_redis
+from core.request_id import RequestIdMiddleware
 from modules.payments.service import close_mercadopago_client
 from core.security_middleware import RequestGuardMiddleware, SecurityHeadersMiddleware
 from modules.appointment_blocks.router import router as appointment_blocks_router
@@ -499,6 +500,10 @@ app.add_middleware(
     expose_headers=["X-Idempotency-Key", "Content-Disposition"],
     max_age=600,
 )
+
+# La mas externa de todas: todo log del request -incluidos los del rate limit,
+# los de CORS y el del 500 no manejado- lleva el request_id del borde.
+app.add_middleware(RequestIdMiddleware)
 
 # 3. Registrar Routers
 # Una tienda suspendida no escribe desde el panel (la lectura sigue). Va a
