@@ -4,7 +4,8 @@ import hashlib
 import hmac
 import re
 import secrets
-from collections.abc import Callable
+import inspect
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
@@ -159,11 +160,20 @@ def _notice_body(store_name: str) -> str:
 # Entrega el mail (destino, asunto, cuerpo) FUERA del proceso de la API:
 # ``notifications.tasks.enqueue_otp_email`` en el router (AUD2-B4-06). El
 # servicio decide destino y contenido; quien llama decide el transporte, y
-# nunca manda en linea.
-DispatchScheduler = Callable[[str, str, str], None]
+# nunca manda en linea. Puede ser async (``enqueue_otp_email``, F1-03: encola
+# con tope de tiempo sin bloquear el loop) o sync (dobles de los tests).
+DispatchScheduler = Callable[[str, str, str], Awaitable[None] | None]
 
 
-def _schedule_otp_mail(
+async def _dispatch(
+    schedule_dispatch: DispatchScheduler, to: str, subject: str, body: str
+) -> None:
+    pending = schedule_dispatch(to, subject, body)
+    if inspect.isawaitable(pending):
+        await pending
+
+
+async def _schedule_otp_mail(
     schedule_dispatch: DispatchScheduler,
     *,
     destination: str | None,
@@ -179,9 +189,11 @@ def _schedule_otp_mail(
     """
     asunto = _otp_subject(store_name)
     if destination:
-        schedule_dispatch(destination, asunto, _code_body(code, store_name))
+        await _dispatch(
+            schedule_dispatch, destination, asunto, _code_body(code, store_name)
+        )
     if notice_to:
-        schedule_dispatch(notice_to, asunto, _notice_body(store_name))
+        await _dispatch(schedule_dispatch, notice_to, asunto, _notice_body(store_name))
 
 
 def _debug_code(code: str, *, decoy: bool) -> str:
@@ -361,7 +373,7 @@ class OtpService:
             # misma, y tarda lo mismo, haya envio o no, para no revelar si el
             # telefono es cliente ni convertir el SMTP en un oraculo. Tampoco
             # dice a que buzon fue: eso delataria si el telefono es cliente.
-            _schedule_otp_mail(
+            await _schedule_otp_mail(
                 schedule_dispatch,
                 destination=destination,
                 notice_to=notice_to,
