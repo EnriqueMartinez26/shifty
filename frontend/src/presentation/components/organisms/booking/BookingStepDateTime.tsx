@@ -230,19 +230,28 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <Clock size={14} className="text-orange-500" />
             <span>Horarios Disponibles</span>
           </div>
-          <label className="flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity">
+          {/* Un boton real con role="switch": entra en el orden de Tab y
+              Enter/Espacio lo activan. Antes era un div con onClick dentro de
+              un label sin control, inalcanzable por teclado (F11a-09). */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={forceAll}
+            onClick={() => setForceAll(!forceAll)}
+            className="flex items-center gap-2 cursor-pointer opacity-80 hover:opacity-100 transition-opacity rounded-full bg-transparent border-0 p-1 focus:outline-none focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+          >
             <span className="text-[9px] font-black uppercase text-gray-500 tracking-wider">
               Ver todos
             </span>
-            <div
-              className={`w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? 'bg-orange-500' : 'bg-gray-300'}`}
-              onClick={() => setForceAll(!forceAll)}
+            <span
+              aria-hidden="true"
+              className={`block w-9 h-5 rounded-full p-1 transition-colors ${forceAll ? 'bg-orange-500' : 'bg-gray-300'}`}
             >
-              <div
-                className={`w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? 'translate-x-4' : 'translate-x-0'}`}
+              <span
+                className={`block w-3 h-3 bg-white rounded-full shadow-sm transform transition-transform ${forceAll ? 'translate-x-4' : 'translate-x-0'}`}
               />
-            </div>
-          </label>
+            </span>
+          </button>
         </div>
 
         {isLoading ? (
