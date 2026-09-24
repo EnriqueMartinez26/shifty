@@ -39,10 +39,6 @@ export class BookingTimeSpan {
     return Math.round((this.endsAt.getTime() - this.startsAt.getTime()) / 60000)
   }
 
-  isInPast(): boolean {
-    return this.startsAt < new Date()
-  }
-
   formatDate(): string {
     return this.startsAt.toISOString().slice(0, 10)
   }
