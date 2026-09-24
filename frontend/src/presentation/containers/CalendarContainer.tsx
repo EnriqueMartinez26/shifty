@@ -970,6 +970,7 @@ export const CalendarContainer: React.FC = () => {
           style={fieldStyle}
         >
           <button
+            type="button"
             onClick={() =>
               setSelectedDate((prev) =>
                 subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
@@ -995,6 +996,7 @@ export const CalendarContainer: React.FC = () => {
             </p>
           </div>
           <button
+            type="button"
             onClick={() =>
               setSelectedDate((prev) =>
                 addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)

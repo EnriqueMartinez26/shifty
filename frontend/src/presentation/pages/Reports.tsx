@@ -268,6 +268,7 @@ const ReportsPage: React.FC = () => {
 
       <div className="flex flex-wrap gap-3">
         <button
+          type="button"
           onClick={() => {
             void downloadFile('csv')
           }}
@@ -278,6 +279,7 @@ const ReportsPage: React.FC = () => {
           <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
         </button>
         <button
+          type="button"
           onClick={() => {
             void downloadFile('excel')
           }}
@@ -292,6 +294,7 @@ const ReportsPage: React.FC = () => {
           <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
         </button>
         <button
+          type="button"
           onClick={() => {
             void downloadFile('pdf')
           }}

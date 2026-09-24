@@ -62,4 +62,11 @@ describe('ReportsPage', () => {
     expect(screen.queryByText('pending_payment')).not.toBeInTheDocument()
     expect(screen.getByText('on_hold')).toBeInTheDocument()
   })
+
+  // Un <button> sin type es submit: movido dentro de un <form> lo envia.
+  it('los botones de exportar declaran type="button" (F11b-26)', () => {
+    const { container } = render(<ReportsPage />)
+
+    expect(container.querySelectorAll('button:not([type])')).toHaveLength(0)
+  })
 })

@@ -335,6 +335,7 @@ const SettingsPage: React.FC = () => {
         </h1>
         {!['security', 'payments'].includes(activeTab) && (
           <button
+            type="button"
             onClick={() => {
               void handleSave()
             }}
@@ -371,6 +372,7 @@ const SettingsPage: React.FC = () => {
       >
         {TABS.map((tab) => (
           <button
+            type="button"
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap"
@@ -1004,6 +1006,7 @@ const SettingsPage: React.FC = () => {
                               style={createSettingsInputStyle()}
                             />
                             <button
+                              type="button"
                               onClick={() => {
                                 const newHours = { ...formData.business_hours }
                                 newHours[day.id] = (newHours[day.id] ?? []).filter(
@@ -1022,6 +1025,7 @@ const SettingsPage: React.FC = () => {
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => {
                         const newHours = { ...formData.business_hours }
                         newHours[day.id] = [

@@ -109,6 +109,31 @@ describe('SettingsPage - Guardar Cambios (N3)', () => {
   })
 })
 
+describe('SettingsPage - botones (F11b-26)', () => {
+  beforeEach(() => {
+    storeQuery = { data: store, isLoading: false, error: null }
+  })
+
+  // Un <button> sin type es submit: movido dentro de un <form> lo envia.
+  it('ningun boton de ninguna pestana queda con el type implicito', () => {
+    const { container } = renderSettings()
+    const tabs = [
+      'Identidad',
+      'Horarios',
+      'Políticas',
+      'Notificaciones',
+      'Funciones',
+      'Mercado Pago',
+      'Seguridad'
+    ]
+
+    for (const tab of tabs) {
+      fireEvent.click(screen.getByRole('button', { name: tab }))
+      expect(container.querySelectorAll('button:not([type])')).toHaveLength(0)
+    }
+  })
+})
+
 describe('SettingsPage - error de carga (N2)', () => {
   it('si falla la configuracion lo dice, en vez de quedarse cargando para siempre', () => {
     storeQuery = { data: undefined, isLoading: false, error: new Error('500') }
