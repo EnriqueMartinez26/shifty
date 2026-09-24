@@ -275,7 +275,9 @@ def test_todo_proxy_reescribe_las_cabeceras_de_origen(ruta: Path) -> None:
 @EDGES
 def test_las_zonas_de_memoria_compartida_no_repiten_nombre(ruta: Path) -> None:
     http = leer(ruta)
-    nombres = [una(bloque_con(http, "upstream", u), "zone").args[0] for u in ("api", "spa")]
+    nombres = [
+        una(bloque_con(http, "upstream", u), "zone").args[0] for u in ("api", "spa")
+    ]
     for d in http:
         if d.nombre in {"limit_req_zone", "limit_conn_zone"}:
             zona = next(a for a in d.args if a.startswith("zone="))
@@ -373,7 +375,10 @@ def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
     http = leer(ruta)
     _tasa_por_segundo(http, "api")
     _tasa_por_segundo(http, "auth")
-    assert una(http, "limit_conn_zone").args == ("$binary_remote_addr", "zone=perip:10m")
+    assert una(http, "limit_conn_zone").args == (
+        "$binary_remote_addr",
+        "zone=perip:10m",
+    )
     # 429 y no el 503 por defecto: el front y el backoff lo leen como limite.
     assert una(http, "limit_req_status").args == ("429",)
     assert una(http, "limit_conn_status").args == ("429",)
@@ -571,7 +576,9 @@ def test_los_assets_con_hash_no_se_loguean(ruta: Path) -> None:
 
 def test_el_desafio_acme_se_sirve_en_claro_y_el_resto_redirige() -> None:
     http = leer(EDGE_PROD)
-    en_claro = [s for s in servidores(http) if ("80",) in [d.args for d in todas(s, "listen")]]
+    en_claro = [
+        s for s in servidores(http) if ("80",) in [d.args for d in todas(s, "listen")]
+    ]
     assert len(en_claro) == 1
     server = en_claro[0]
     # Un `return` a nivel server corre antes de elegir location: taparia el
@@ -587,7 +594,9 @@ def test_el_desafio_acme_se_sirve_en_claro_y_el_resto_redirige() -> None:
 
 def test_https_conserva_hsts() -> None:
     cabeceras = _cabeceras_agregadas(server_de_la_app(leer(EDGE_PROD)))
-    assert cabeceras["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    assert (
+        cabeceras["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+    )
 
 
 # --- F0-13: cache de la SPA ----------------------------------------------------
@@ -600,7 +609,9 @@ def _server_spa() -> list[Directiva]:
 
 def _cache_control(bloque: list[Directiva]) -> list[str]:
     return [
-        d.args[1] for d in todas(bloque, "add_header") if d.args[0].lower() == "cache-control"
+        d.args[1]
+        for d in todas(bloque, "add_header")
+        if d.args[0].lower() == "cache-control"
     ]
 
 
@@ -623,7 +634,9 @@ def test_solo_los_assets_con_hash_son_inmutables() -> None:
     assert una(assets, "access_log").args == ("off",)
     for loc in locations(server):
         if loc.bloque is not assets:
-            assert not any("immutable" in v for v in _cache_control(loc.bloque)), loc.args
+            assert not any("immutable" in v for v in _cache_control(loc.bloque)), (
+                loc.args
+            )
     (estaticos,) = [loc.bloque for loc in locations(server) if loc.args[0] == "~*"]
     assert _cache_control(estaticos) == ["public, max-age=3600"]
     # El shell del SPA revalida siempre (manifiesto de chunks tras un deploy).
@@ -635,3 +648,21 @@ def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() 
         if todas(loc.bloque, "add_header"):
             incluidos = [d.args for d in todas(loc.bloque, "include")]
             assert ("/etc/nginx/security-headers.conf",) in incluidos, loc.args
+
+
+# --- paridad dev/prod -----------------------------------------------------------
+
+SOLO_DESARROLLO = {("/docs",), ("/openapi.json",)}
+
+
+def test_dev_y_prod_enrutan_igual() -> None:
+    # Lo que se prueba en local tiene que ser lo que corre en prod: mismas
+    # locations en el server de la app (prod solo quita la documentacion) y
+    # los mismos upstreams.
+    dev, prod = leer(EDGE_DEV), leer(EDGE_PROD)
+    rutas_dev = {loc.args for loc in locations(server_de_la_app(dev))}
+    rutas_prod = {loc.args for loc in locations(server_de_la_app(prod))}
+    assert rutas_dev - SOLO_DESARROLLO == rutas_prod
+    assert {d.args for d in todas(dev, "upstream")} == {
+        d.args for d in todas(prod, "upstream")
+    }
