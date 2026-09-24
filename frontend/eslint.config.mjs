@@ -179,7 +179,14 @@ export default [
         {
           patterns: [
             {
-              group: ['@application/**', '@infrastructure/**', '@presentation/**'],
+              group: [
+                '@application/**',
+                '@infrastructure/**',
+                '@presentation/**',
+                '**/application/**',
+                '**/infrastructure/**',
+                '**/presentation/**'
+              ],
               message: 'Domain cannot depend on application, infrastructure, or presentation.'
             }
           ],
@@ -209,7 +216,7 @@ export default [
         {
           patterns: [
             {
-              group: ['@presentation/**'],
+              group: ['@presentation/**', '**/presentation/**'],
               message: 'Infrastructure cannot depend on presentation.'
             }
           ]
@@ -248,9 +255,11 @@ export default [
   },
   {
     // Application orchestrates; it must never reach up into the UI. Importing
-    // infrastructure is still allowed on purpose: the services take the axios
-    // client directly because there is no DI container, and banning it here
-    // would be a refactor, not a guard.
+    // infrastructure is still allowed on purpose (CLAUDE.md section 2: no DI
+    // container, services are module singletons that take the axios client
+    // directly), so banning it here would be a refactor, not a guard. Every
+    // layer block also bans the relative form (`**/presentation/**`): with only
+    // the alias banned, `../../presentation/...` walked around the rule.
     files: ['src/application/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [
@@ -258,7 +267,7 @@ export default [
         {
           patterns: [
             {
-              group: ['@presentation/**'],
+              group: ['@presentation/**', '**/presentation/**'],
               message: 'Application cannot depend on presentation.'
             }
           ],
