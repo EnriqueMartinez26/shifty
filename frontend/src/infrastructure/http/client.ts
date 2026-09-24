@@ -1,7 +1,5 @@
 import axios from 'axios'
 
-import axiosRetry from 'axios-retry'
-
 import { resolveApiBaseUrl } from './api-base-url'
 import { normalizeApiError, isApiEnvelope, unwrapApiEnvelope } from './api-contract'
 import { getRuntimeEnv } from './runtime-env'
@@ -60,33 +58,13 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
-// Lo unico que se reintenta es un 409 de un metodo que no sea POST: el
-// backend lo devuelve cuando choca un lock (transitorio). Un POST nunca se
-// reintenta: su 409 es un conflicto de negocio real -el slot ya no esta
-// libre- y, si el servidor ya lo habia aplicado, reenviarlo reserva dos veces
-// o le muestra al usuario un conflicto contra su propia reserva. Sin `timeout`
-// en axios.create no hay ECONNABORTED por vencimiento, asi que no se lista.
-export const shouldRetryRequest = (error: {
-  code?: string
-  response?: { status?: number }
-  config?: { method?: string }
-}): boolean => {
-  if (error.config?.method?.toLowerCase() === 'post') {
-    return false
-  }
-  return error.response?.status === 409
-}
-
-axiosRetry(apiClient, {
-  retries: 3,
-  retryDelay: (retryCount) => {
-    // Backoff exponencial con Jitter: 1s, 2s, 4s (+ random offset)
-    const delay = Math.pow(2, retryCount) * 1000
-    const jitter = Math.random() * 1000
-    return delay + jitter
-  },
-  retryCondition: shouldRetryRequest
-})
+// Sin reintentos automaticos: todo 409 del backend es determinista (choque
+// de integridad, estado viejo, conflicto de agenda), asi que reintentarlo no
+// lo resuelve y solo demora el error; y un reintento de reprogramacion podia
+// aplicarse en silencio porque el backend libera la clave de idempotencia. Un
+// POST tampoco se reenvia: el servidor pudo haberlo aplicado. No hay `timeout`
+// a proposito: el proxy (nginx, 30s) ya acota y uno mas corto dejaria POST
+// fantasma aplicados en el servidor pero dados por fallidos aca.
 
 // Refresh single-flight: muchos requests pueden caer en 401 a la vez cuando el
 // access token (15 min) vence; todos esperan el MISMO refresh en vez de

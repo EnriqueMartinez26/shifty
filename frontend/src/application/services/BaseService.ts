@@ -33,7 +33,7 @@ export abstract class BaseService<T> {
    *
    * This method never retries: the operation runs exactly once. Retrying non-idempotent calls
    * (e.g. a booking POST that timed out but was processed by the server) replays the mutation
-   * and surfaces a spurious conflict. HTTP-level retries live in the axios client (idempotent methods only).
+   * and surfaces a spurious conflict. The axios client does not retry either.
    *
    * @template R The return type of the operation.
    * @param operation The callback performing the core database/API action.

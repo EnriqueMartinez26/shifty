@@ -10,7 +10,6 @@ const mockAxiosCreate = jest.fn(() => ({
     }
   }
 }))
-const mockAxiosRetry = jest.fn()
 // El interceptor de 401 intenta una rehidratacion via POST /auth/refresh; en
 // estos tests no hay sesion, asi que el refresh "falla" y el flujo debe caer
 // al error normalizado original.
@@ -22,11 +21,6 @@ jest.mock('axios', () => ({
     create: mockAxiosCreate,
     post: mockAxiosPost
   }
-}))
-
-jest.mock('axios-retry', () => ({
-  __esModule: true,
-  default: mockAxiosRetry
 }))
 
 jest.mock('./runtime-env', () => ({
@@ -44,7 +38,6 @@ describe('api client module wiring', () => {
     mockRequestUse.mockClear()
     mockResponseUse.mockClear()
     mockAxiosCreate.mockClear()
-    mockAxiosRetry.mockClear()
     mockAxiosPost.mockClear()
   })
 
@@ -60,7 +53,6 @@ describe('api client module wiring', () => {
         }
       })
     )
-    expect(mockAxiosRetry).toHaveBeenCalledTimes(1)
     expect(mockRequestUse).toHaveBeenCalledTimes(1)
     expect(mockResponseUse).toHaveBeenCalledTimes(1)
 
@@ -157,33 +149,5 @@ describe('api client module wiring', () => {
     } finally {
       window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
     }
-  })
-
-  it('no reintenta nunca un POST; sí el 409 de métodos idempotentes', async () => {
-    const clientModule = await import('./client')
-    const { shouldRetryRequest } = clientModule
-
-    expect(mockAxiosRetry).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ retryCondition: shouldRetryRequest })
-    )
-
-    // Un 409 al crear un turno es un conflicto de negocio real (el slot ya no
-    // está libre), no algo transitorio: reintentarlo no lo resuelve y puede
-    // terminar reservando después de que la UI ya mostró el conflicto.
-    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'post' } })).toBe(
-      false
-    )
-    // Un POST abortado pudo haberse aplicado en el servidor: no se reenvia.
-    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'post' } })).toBe(false)
-    // Sin timeout configurado, ECONNABORTED solo llega por un aborto del
-    // navegador; no es un error transitorio a reintentar.
-    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'get' } })).toBe(false)
-    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'patch' } })).toBe(
-      true
-    )
-    expect(shouldRetryRequest({ code: 'ERR_CONNECTION_REFUSED', config: { method: 'get' } })).toBe(
-      false
-    )
   })
 })

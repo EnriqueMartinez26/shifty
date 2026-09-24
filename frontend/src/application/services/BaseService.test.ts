@@ -72,11 +72,11 @@ describe('BaseService', () => {
     })
 
     it.each(['timeout', 'Network Error', 'fetch failed', 'rate limit exceeded', 'ECONNREFUSED'])(
-      'should invoke the operation exactly once when it fails with "%s" (HTTP layer owns retries)',
+      'should invoke the operation exactly once when it fails with "%s" (no automatic retries)',
       async (message) => {
         // Regression: a POST that timed out client-side but was processed by the server
         // was replayed here and hit the GiST overlap exclusion, so the user saw a conflict
-        // on their own booking. Retries belong to axios-retry (idempotent methods only).
+        // on their own booking. There are no automatic retries at any layer.
         const operation = jest.fn<Promise<string>, []>().mockRejectedValue(new Error(message))
 
         await expect(service.runCountedFailingOperation(operation)).rejects.toThrow(message)
