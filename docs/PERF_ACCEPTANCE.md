@@ -41,11 +41,11 @@ Output next to the `--csv` prefix:
 | --- | --- |
 | p95 per route with ≥ 20 samples | < 500 ms (`--p95-ms`) |
 | p95 global (Aggregated row) | < 500 ms |
-| Login p95 (bcrypt, 12 rounds) | < 1 s (`--login-p95-ms`) |
+| Login p95 (bcrypt, 12 rounds) | < 1 s (`--login-p95-ms`): a deliberate deviation from plan §9's "p95 < 500 ms per route", taken from plan-capacidad §5.2. Login is bound by bcrypt's CPU cost and happens once per session, not per page |
 | Excluded from p95 | `/reports/export` and the burst requests |
-| 5xx, 429, connection errors | 0 (a 409 outside the burst is legitimate: the slot was taken between availability and booking) |
+| 5xx, 429, connection errors | 0 over the WHOLE run, ramp included (the status-code tally is not reset when the plateau starts, unlike the latency stats). A 409 outside the burst is legitimate: the slot was taken between availability and booking |
 | Each burst | exactly 1 × 201, the rest 409, at least one burst recorded |
-| Every SLO sample | `oldest_pending_outbox_seconds` and `oldest_pending_email_send_seconds` ≤ 120 s; `outbox_budget_drops` = 0 if the metric exists |
+| Every SLO sample | `oldest_pending_outbox_seconds` and `oldest_pending_email_send_seconds` present and ≤ 120 s (a sample without them fails: a missing value is not a zero); `outbox_budget_drops` = 0 if the metric exists. A malformed line in `<prefix>_slo.jsonl` is an input error (exit 2) |
 | Memory (optional `--docker-stats` log) | every container < 70 % of its limit |
 
 `outbox_budget_drops` does not exist as a metric today: since F2-03 a mail the dispatch budget cannot reach stays as a pending `email.send` row, so its age (`oldest_pending_email_send_seconds`) is the signal. The check also accepts the named metric if a later phase adds it.
@@ -54,17 +54,34 @@ Checked by hand after the run (the script does not see the host): no container r
 
 ## 3. Staging setup (once per test)
 
-Never against production: the seed creates owner accounts with a known password, and the test writes. The seed refuses to run when `ENV` or the loaded settings say production.
+Never against production: the seed creates owner accounts with a known password, and the test writes. The seed fails closed in two layers, both checked before it connects:
+
+- **Target database.** `--expect-database` and `--expect-host` are mandatory and must match the database and host in the container's `DATABASE_URL`, and the database name must contain `staging`. A database without `staging` in its name is accepted only when named again with `--allow-database-name <name>`, and that is printed in the log. `ENV` alone is not enough: staging runs with `docker-compose.prod.yml`, which sets `ENV: production`, so the operator overrides it with `-e ENV=staging`, and the same command run from the production clone would seed production. The target check is what tells the two apart.
+- **`ENV`.** It must be `staging` or `development`; `production` is refused even when the database matches.
+
+So staging's own `.env` names its database with `staging` in it: `POSTGRES_DB=shifty_staging`, with `DATABASE_URL` and `MIGRATION_DATABASE_URL` pointing at it. `POSTGRES_DB` only takes effect when the staging volume is created; an existing staging volume named `shifty_db` needs `--allow-database-name shifty_db` run from the staging clone, which is exactly the check this layer cannot make for you.
 
 1. Staging per `docs/DEPLOY_RUNBOOK.md` §6, with SMTP pointed at a sink or disabled and no Mercado Pago credentials.
-2. Rate limits. Every request comes from the load generator's IP. The edge (`nginx.prod.conf`) allows 20 r/s per IP on `/api/` (burst 40) and 3 r/s on `/api/auth/`; the app allows 120 requests/min per IP for public reads. The mix produces roughly 40-60 r/s, so either use several source IPs or raise the limits in staging only (`RATE_LIMIT_PUBLIC_READ_PER_MINUTE` and the staging nginx `limit_req` zones). Keep `RATE_LIMIT_ENABLED=true` in staging so the Redis cost is measured. Nothing of this goes to the production `.env`; the rule-17 guards stay as they are. Write down which option was used next to the results.
+2. Rate limits. Every request comes from the load generator's IP, and every per-IP limit below is hit by a single-runner run:
+
+   | Layer | Limit per IP | Hit by |
+   | --- | --- | --- |
+   | Edge `nginx.prod.conf`, `/api/` | 20 r/s, burst 40 | the whole mix (roughly 40-60 r/s) |
+   | Edge `nginx.prod.conf`, `/api/auth/` | 3 r/s, burst 6 | logins during the ramp |
+   | App `RATE_LIMIT_PUBLIC_READ_PER_MINUTE` | 120/min | the 150 clients' public reads |
+   | App `RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE` | 20/min | bookings, and every 10-request burst |
+   | App `RATE_LIMIT_GLOBAL_PER_MINUTE` | 240/min | owners' and superadmins' panel requests, `/ops/slo` |
+   | App `RATE_LIMIT_AUTH_PER_MINUTE` | 12/min | 50 logins in the 5-minute ramp, refreshes, the SLO sampler's login |
+
+   Either use several source IPs, or raise the limits in staging only. Recommended staging override, in the staging `.env`: `RATE_LIMIT_PUBLIC_READ_PER_MINUTE=20000`, `RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE=2000`, `RATE_LIMIT_GLOBAL_PER_MINUTE=5000`, `RATE_LIMIT_AUTH_PER_MINUTE=600`, and in the staging nginx config `zone=api` at 200 r/s (burst 400) and `zone=auth` at 30 r/s (burst 60), the dev `nginx.conf` values. Keep `RATE_LIMIT_ENABLED=true` in staging so the Redis cost is measured. Nothing of this goes to the production `.env` or `nginx.prod.conf`; the rule-17 guards stay as they are. Write down which option was used next to the results.
 3. Superadmin: `scripts/bootstrap_superadmin.py` with `SUPERADMIN_EMAIL` and `SUPERADMIN_PASSWORD` from the environment.
 4. Seed, first with 5 stores to validate, then the 200. Inside the staging backend container:
 
    ```bash
    APP_VERSION=$(cat .deploy/current) docker compose exec -T \
      -e ENV=staging -e SEED_OWNER_PASSWORD="$SEED_OWNER_PASSWORD" backend \
-     python scripts/seed_capacidad.py --stores 200 --manifest /tmp/capacidad.json
+     python scripts/seed_capacidad.py --expect-database shifty_staging --expect-host db \
+       --stores 200 --manifest /tmp/capacidad.json
    ```
 
    Each store is one transaction; a store whose slug already exists is left alone and only listed in the manifest, so re-running is safe. The manifest has public ids and owner emails, no passwords. Seed close to the test day: the "next 14 days" are counted from the seed date.
@@ -101,12 +118,13 @@ done >> stats.log
 
 Useful to check the scenario, not to judge capacity (the numbers of a desktop mean nothing for the VPS). The local seed writes `cap-` stores into your local database.
 
-1. Disable the app rate limit for the run: `RATE_LIMIT_ENABLED=false docker-compose up -d backend` (the dev compose reads it from the shell or `.env`; ENV is not production, so rule 17 does not apply). Put it back afterwards.
+1. Disable the app rate limit for the run: `RATE_LIMIT_ENABLED=false docker compose up -d backend` (the dev compose reads it from the shell or `.env`; ENV is not production, so rule 17 does not apply). Put it back afterwards.
 2. Seed a few stores and copy the manifest out:
    ```bash
-   docker exec -e ENV=development -e SEED_OWNER_PASSWORD=... shifty-backend-1 \
-     python scripts/seed_capacidad.py --stores 5 --manifest /tmp/capacidad.json
-   docker cp shifty-backend-1:/tmp/capacidad.json manifiesto.json
+   docker compose exec -e ENV=development -e SEED_OWNER_PASSWORD=... backend \
+     python scripts/seed_capacidad.py --expect-database shifty_db --expect-host db \
+       --allow-database-name shifty_db --stores 5 --manifest /tmp/capacidad.json
+   docker compose cp backend:/tmp/capacidad.json manifiesto.json
    ```
 3. Point Locust at `http://localhost/api` to go through nginx (the dev `nginx.conf` allows 200 r/s per IP, ten times production, so a single IP fits) or at the backend directly (`--host http://127.0.0.1:8000`) to leave the edge out.
 4. Shorten the run with `SHIFTY_USUARIOS=20 SHIFTY_RAMPA_S=20 SHIFTY_MESETA_S=90 SHIFTY_RAFAGA_CADA_S=40 SHIFTY_THINK_SCALE=0.3`. These overrides exist only for rehearsals; the acceptance is judged with the plan's values.
@@ -130,7 +148,7 @@ Runner location matters. A GitHub-hosted runner is in the US and adds 120-150 ms
 
 ## 5. Reading the results
 
-- `FALLA p95 de GET /dashboard/summary: 620 ms >= 500 ms (90 muestras)`: that route is over. Look at its statement count first (`test_pg_presupuesto_de_sentencias.py` prints it), then at `scripts/pg_top_queries.py` on staging for the slowest statements.
+- `FALLA p95 de GET /dashboard/summary: 620 ms >= 500 ms (90 muestras)`: that route is over. Look at its statement count first (run `test_pg_presupuesto_de_sentencias.py` with `PRESUPUESTO_MEDIR=1` to print it and each statement; it also prints the table when a ceiling is exceeded), then at `scripts/pg_top_queries.py` on staging for the slowest statements.
 - `FALLA 5xx: ...` or `429: ...`: open `<prefix>_codigos.json` for the route; 429 in a single-IP run usually means the limits of §3.2 were not raised.
 - `FALLA rafaga N: ...`: two 201s is a double booking (the GiST exclusion or the lock failed) and blocks the release; a 5xx inside the burst is a lock or deadlock handled as an error.
 - `FALLA SLO ...`: the outbox or the mail dispatch fell behind under load; check the Celery worker and `process_outbox_batch` logs for that window.

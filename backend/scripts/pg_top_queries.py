@@ -35,7 +35,11 @@ for _ruta in (BACKEND_ROOT, SCRIPTS_DIR):
     if str(_ruta) not in sys.path:
         sys.path.insert(0, str(_ruta))
 
-from backup_db import _default_database_url, _es_rol_de_la_app  # noqa: E402
+from backup_db import (  # noqa: E402
+    OWNER_URL_VARIABLES,
+    _default_database_url,
+    _es_rol_de_la_app,
+)
 from core.config import parse_db_url, redact_url  # noqa: E402
 
 DEFAULT_LIMIT = 20
@@ -91,6 +95,14 @@ class Reporte:
 
 def _owner_url(environ: Mapping[str, str]) -> str:
     return str(_default_database_url(environ))
+
+
+def _origen(environ: Mapping[str, str]) -> str:
+    """Variable de la que salio la URL por defecto, para nombrarla en errores."""
+    for variable in OWNER_URL_VARIABLES:
+        if environ.get(variable, "").strip():
+            return str(variable)
+    return "MIGRATION_DATABASE_URL"
 
 
 def recolectar(cursor: Cursor, *, limite: int) -> Reporte:
@@ -150,10 +162,10 @@ def formatear(reporte: Reporte, *, destino: str) -> str:
     return "\n".join(lineas) + "\n"
 
 
-def _connect(database_url: str) -> Any:
+def _connect(database_url: str, *, label: str) -> Any:
     import psycopg2
 
-    partes = parse_db_url(database_url, label="MIGRATION_DATABASE_URL")
+    partes = parse_db_url(database_url, label=label)
     return psycopg2.connect(**partes, connect_timeout=10)
 
 
@@ -163,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--database-url",
-        default=_owner_url(os.environ),
+        default=None,
         help=(
             "URL del rol DUENO. Si se omite, BACKUP_DATABASE_URL o "
             "MIGRATION_DATABASE_URL (nunca DATABASE_URL: es el rol con RLS)"
@@ -176,6 +188,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Vacia las estadisticas despues de imprimirlas",
     )
     args = parser.parse_args(argv)
+    if args.database_url is None:
+        args.database_url = _owner_url(os.environ)
+        origen = _origen(os.environ)
+    else:
+        origen = "--database-url"
 
     if not args.database_url:
         raise SystemExit(
@@ -183,7 +200,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "MIGRATION_DATABASE_URL (DATABASE_URL es el rol de la app, con RLS)"
         )
     destino = redact_url(args.database_url, keep_target=True)
-    if _es_rol_de_la_app(args.database_url, os.environ):
+    try:
+        es_de_la_app = _es_rol_de_la_app(args.database_url, os.environ)
+    except ValueError as exc:
+        raise SystemExit(f"{origen}: {exc}") from None
+    if es_de_la_app:
         raise SystemExit(
             "La URL es la del rol de la app, sujeto a RLS: pg_stat_statements "
             f"le esconde el texto de las consultas ajenas. Usar el rol dueno "
@@ -191,7 +212,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     limite = max(1, min(int(args.limit), 200))
 
-    conexion = _connect(args.database_url)
+    try:
+        conexion = _connect(args.database_url, label=origen)
+    except Exception as exc:
+        raise SystemExit(
+            f"No se pudo conectar a {destino} (URL de {origen}): "
+            f"{type(exc).__name__}: {redact_url(str(exc), keep_target=True)}"
+        ) from None
     try:
         conexion.autocommit = True
         cursor = conexion.cursor()

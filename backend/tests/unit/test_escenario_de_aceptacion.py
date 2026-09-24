@@ -57,6 +57,15 @@ def test_el_locustfile_usa_la_mezcla_y_no_importa_locust_en_el_modulo_puro() -> 
         assert peso in texto
     assert "LoadTestShape" in texto
     assert "reset_all()" in texto, "el p95 se juzga en la meseta, no en la rampa"
+    # Sin superadmin no hay muestras del SLO: se corta al arrancar, no al final.
+    validar = texto[texto.index("def _validar") : texto.index("class ClientePublico")]
+    for variable in (
+        "SHIFTY_MANIFEST",
+        "SEED_OWNER_PASSWORD",
+        "SHIFTY_SUPERADMIN_EMAIL",
+        "SHIFTY_SUPERADMIN_PASSWORD",
+    ):
+        assert variable in validar, variable
     assert "import locust" not in MODULO.read_text(encoding="utf-8")
     assert "from locust" not in MODULO.read_text(encoding="utf-8")
 

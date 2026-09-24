@@ -153,6 +153,10 @@ def _validar(environment: Environment, **_kwargs: Any) -> None:
         raise SystemExit("Falta SHIFTY_MANIFEST (manifiesto de seed_capacidad.py)")
     if not OWNER_PASSWORD:
         raise SystemExit("Falta SEED_OWNER_PASSWORD")
+    if not SUPERADMIN_EMAIL or not SUPERADMIN_PASSWORD:
+        # Sin superadmin no hay muestras de /ops/slo y el veredicto rechaza
+        # despues de 25 minutos: mejor cortar ahora.
+        raise SystemExit("Faltan SHIFTY_SUPERADMIN_EMAIL / SHIFTY_SUPERADMIN_PASSWORD")
 
 
 class ClientePublico(HttpUser):

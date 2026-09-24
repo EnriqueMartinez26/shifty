@@ -228,12 +228,45 @@ def test_sin_rafagas_registradas_falla(tmp_path: Path) -> None:
 def test_el_atraso_del_outbox_se_mide_en_cada_muestra(
     tmp_path: Path, metricas: dict[str, int], esperado: int
 ) -> None:
+    al_dia = {
+        "oldest_pending_outbox_seconds": 3,
+        "oldest_pending_email_send_seconds": 0,
+    }
     slo = [
-        {"t": "a", "metrics": {"oldest_pending_outbox_seconds": 3}},
-        {"t": "b", "metrics": metricas},
+        {"t": "a", "metrics": al_dia},
+        {"t": "b", "metrics": {**al_dia, **metricas}},
     ]
 
     assert _modulo().main(_escribir(tmp_path, FILAS_OK, slo=slo)) == esperado
+
+
+@pytest.mark.parametrize(
+    "falta", ["oldest_pending_outbox_seconds", "oldest_pending_email_send_seconds"]
+)
+def test_una_muestra_sin_la_metrica_de_atraso_falla(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], falta: str
+) -> None:
+    """Sin la metrica no se sabe si el outbox estaba al dia: no es un 0."""
+    metricas = {
+        "oldest_pending_outbox_seconds": 1,
+        "oldest_pending_email_send_seconds": 1,
+    }
+    metricas.pop(falta)
+    slo = [{"t": "a", "metrics": metricas}]
+
+    assert _modulo().main(_escribir(tmp_path, FILAS_OK, slo=slo)) == 1
+    assert falta in capsys.readouterr().out
+
+
+def test_una_linea_rota_del_slo_es_error_de_entrada(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argumentos = _escribir(tmp_path, FILAS_OK)
+    with (tmp_path / "run_slo.jsonl").open("a", encoding="utf-8") as archivo:
+        archivo.write('{"t": "b", "metrics": {\n')
+
+    assert _modulo().main(argumentos) == 2
+    assert "run_slo.jsonl" in capsys.readouterr().out
 
 
 def test_sin_muestras_del_slo_no_se_aprueba(tmp_path: Path) -> None:

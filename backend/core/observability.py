@@ -32,8 +32,8 @@ _RATE_PAYMENTS = 1.0
 _RATE_PUBLIC_READ = 0.02
 _RATE_WRITE = 0.2
 _RATE_PANEL_READ = 0.1
-# Beat dispara varias tareas por minuto; si corren o no lo cubre Sentry Crons
-# (``monitor_beat_tasks``), no la traza.
+# Beat dispara varias tareas por minuto; si corren o no lo cubren Sentry Crons
+# (``monitor_beat_tasks``, periodos de 60 s o mas) y ``/ops/slo``, no la traza.
 _RATE_TASK = 0.02
 _READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _UNTRACED_PREFIXES = ("/ops/health/",)
@@ -218,8 +218,13 @@ def init_observability(component: str) -> bool:
         release=settings.VERSION,
         # F5-02: tasa por ruta; fuera de produccion se ve todo menos health.
         traces_sampler=_traces_sampler,
-        # Sentry Crons: cada tarea de beat reporta inicio y fin, y una que
-        # deja de correr (beat caido, worker trabado) avisa sola.
+        # Sentry Crons: las tareas de beat con periodo de un minuto o mas
+        # reportan inicio y fin, y una que deja de correr (beat caido, worker
+        # trabado) avisa sola; son un monitor cada una (cuota del plan de
+        # Sentry, decision del dueno; ``exclude_beat_tasks`` saca las que no
+        # hagan falta). El SDK saltea los intervalos de menos de 60 s: el
+        # outbox (cada 20 s) no tiene monitor y su atraso lo cubre
+        # ``/ops/slo`` (``oldest_pending_*``).
         integrations=[CeleryIntegration(monitor_beat_tasks=True)],
         # Nunca mandamos PII: los turnos llevan nombre, telefono y email.
         send_default_pii=False,

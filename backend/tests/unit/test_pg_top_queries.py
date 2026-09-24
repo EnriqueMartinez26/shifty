@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from tests.unit.host_falso import _lineas_de_cron
+from tests.unit.host_falso import REPO_ROOT, _lineas_de_cron
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = BACKEND_ROOT / "scripts" / "pg_top_queries.py"
@@ -99,7 +99,7 @@ def test_rechaza_el_rol_de_la_app_sin_imprimir_la_clave(
 ) -> None:
     modulo = _modulo()
     monkeypatch.setattr(
-        modulo, "_connect", lambda _url: pytest.fail("no debe conectar")
+        modulo, "_connect", lambda _url, *, label: pytest.fail("no debe conectar")
     )
     monkeypatch.delenv("APP_DB_USER", raising=False)
     monkeypatch.setenv("DATABASE_URL", URL_RLS)
@@ -189,7 +189,7 @@ def test_sin_la_extension_sale_con_un_mensaje_claro(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(modulo, "_connect", lambda _url: Conexion())
+    monkeypatch.setattr(modulo, "_connect", lambda _url, *, label: Conexion())
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     with pytest.raises(SystemExit) as salida:
@@ -197,6 +197,53 @@ def test_sin_la_extension_sale_con_un_mensaje_claro(
 
     assert "pg_stat_statements" in str(salida.value)
     assert "clave-del-dueno" not in str(salida.value)
+
+
+def test_una_conexion_fallida_sale_con_un_mensaje_claro(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    modulo = _modulo()
+
+    def conectar(_url: str, *, label: str) -> None:
+        raise OSError("could not connect to server: clave-del-dueno@db")
+
+    monkeypatch.setattr(modulo, "_connect", conectar)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    with pytest.raises(SystemExit) as salida:
+        modulo.main(["--database-url", URL_DUENO])
+
+    assert "No se pudo conectar" in str(salida.value)
+    assert "--database-url" in str(salida.value)
+
+
+@pytest.mark.parametrize(
+    ("entorno", "origen"),
+    [
+        ({"MIGRATION_DATABASE_URL": "postgresql://x"}, "MIGRATION_DATABASE_URL"),
+        (
+            {
+                "BACKUP_DATABASE_URL": "postgresql://x",
+                "MIGRATION_DATABASE_URL": "postgresql://y",
+            },
+            "BACKUP_DATABASE_URL",
+        ),
+    ],
+)
+def test_el_error_nombra_la_variable_de_la_que_salio_la_url(
+    monkeypatch: pytest.MonkeyPatch, entorno: dict[str, str], origen: str
+) -> None:
+    """``postgresql://x`` no se puede parsear: el mensaje dice donde mirar."""
+    modulo = _modulo()
+    for variable in ("BACKUP_DATABASE_URL", "MIGRATION_DATABASE_URL", "DATABASE_URL"):
+        monkeypatch.delenv(variable, raising=False)
+    for variable, valor in entorno.items():
+        monkeypatch.setenv(variable, valor)
+
+    with pytest.raises(SystemExit) as salida:
+        modulo.main([])
+
+    assert origen in str(salida.value)
 
 
 def test_cron_semanal_dentro_del_contenedor_del_backend() -> None:
@@ -208,3 +255,7 @@ def test_cron_semanal_dentro_del_contenedor_del_backend() -> None:
     assert "docker compose exec -T backend" in linea
     assert ".deploy/current" in linea, "compose de prod exige APP_VERSION"
     assert ">> /var/log/shifty/pg-top.log" in linea, "logrotate cubre *.log"
+    texto = (REPO_ROOT / "deploy" / "cron" / "shifty-pg-top").read_text(
+        encoding="utf-8"
+    )
+    assert "zona horaria del host" in texto, "cron.d no fija UTC como el timer"

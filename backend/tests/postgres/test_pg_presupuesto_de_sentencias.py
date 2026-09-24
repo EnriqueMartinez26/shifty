@@ -6,7 +6,7 @@ veces, N+1 en listados, un ``SELECT`` por fila en reportes): nada de eso rompe
 un test funcional, y la suite de SQLite ni siquiera ejecuta los ``set_config``
 del contexto RLS. Este test cuenta, contra Postgres real y con datos de una
 tienda con volumen (varios profesionales, servicios, turnos del dia, historial
-de una semana, notificaciones), cuantas sentencias manda la app en cada
+de una semana, turnos de hoy, notificaciones), cuantas sentencias manda la app en cada
 request caliente y falla si alguna pasa su techo.
 
 Como se usa la tabla:
@@ -173,6 +173,9 @@ ADMIN_EMAIL = "presupuesto@demo.com"
 PROFESIONALES = 3
 SERVICIOS = 4
 TURNOS_DEL_DIA = 6
+# Turnos de HOY: el dashboard corta por el dia local de hoy y sin ellos
+# mediria un dia vacio (revision de perf/f5, 2026-09-24).
+ESTADOS_DE_HOY = ("completed", "confirmed", "confirmed", "pending")
 DIAS_DE_HISTORIAL = 7
 TURNOS_POR_DIA_PASADO = 4
 NOTIFICACIONES = 12
@@ -290,6 +293,10 @@ async def _tienda_con_volumen(sessions: async_sessionmaker[AsyncSession]) -> Tie
             for i in range(TURNOS_DEL_DIA):
                 estado = "confirmed" if i % 2 else "pending"
                 session.add(turno(n, local_to_utc(dia, time(9 + i, 0)), estado))
+                n += 1
+            hoy = today_local()
+            for i, estado in enumerate(ESTADOS_DE_HOY):
+                session.add(turno(n, local_to_utc(hoy, time(9 + i, 0)), estado))
                 n += 1
             # Historial de la semana: completados, cancelados y ausentes.
             estados_pasados = ("completed", "completed", "cancelled", "absent")

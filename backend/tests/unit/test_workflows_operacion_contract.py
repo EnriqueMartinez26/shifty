@@ -369,6 +369,12 @@ def test_el_nocturno_esta_apagado_hasta_que_el_dueno_lo_prenda() -> None:
     assert _yaml(PERF)["concurrency"]["cancel-in-progress"] is False
 
 
+def test_perf_solo_lee_el_repo() -> None:
+    """Corre con secretos de staging: el token de GitHub no escribe nada."""
+    assert _yaml(PERF)["permissions"] == {"contents": "read"}
+    assert "permissions" not in _job_perf(), "un job no amplia el permiso global"
+
+
 def test_perf_verifica_los_secretos_antes_que_nada() -> None:
     primero = _pasos_perf()[0]
     for secreto in SECRETOS_PERF:

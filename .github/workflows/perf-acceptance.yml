@@ -29,6 +29,10 @@ on:
         required: false
         default: ""
 
+# El token de GitHub solo lee el repo: el job maneja secretos de staging.
+permissions:
+  contents: read
+
 concurrency:
   group: perf-acceptance
   cancel-in-progress: false

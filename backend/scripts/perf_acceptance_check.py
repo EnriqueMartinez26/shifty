@@ -21,8 +21,9 @@ Criterios (plan-capacidad §5.2, plan de correccion §9):
 - 0 respuestas 5xx, 0 respuestas 429, 0 errores de conexion. Un 409 fuera de
   la rafaga es legitimo (el slot se tomo entre la disponibilidad y la reserva).
 - Cada rafaga: exactamente 1 x 201 y el resto 409, sin 5xx; al menos una.
-- En cada muestra del SLO: atraso del outbox y de los mails <= 120 s y, si la
-  metrica existe, 0 ``outbox_budget_drops``. Sin muestras no se aprueba.
+- En cada muestra del SLO: atraso del outbox y de los mails presente y
+  <= 120 s y, si la metrica existe, 0 ``outbox_budget_drops``. Sin muestras,
+  o con una muestra sin esas metricas, no se aprueba.
 - Memoria de cada contenedor < 70 % de su limite (si hay log).
 
 Solo stdlib: corre en el runner de CI o en la maquina del generador.
@@ -102,11 +103,17 @@ def _leer_slo(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
     muestras = []
-    for linea in path.read_text(encoding="utf-8").splitlines():
-        if linea.strip():
+    lineas = path.read_text(encoding="utf-8").splitlines()
+    for numero, linea in enumerate(lineas, start=1):
+        if not linea.strip():
+            continue
+        try:
             muestra = json.loads(linea)
-            if isinstance(muestra, dict):
-                muestras.append(muestra)
+        except json.JSONDecodeError as exc:
+            raise EntradaInvalida(f"{path}:{numero}: JSON invalido ({exc})") from None
+        if not isinstance(muestra, dict):
+            raise EntradaInvalida(f"{path}:{numero}: se esperaba un objeto")
+        muestras.append(muestra)
     return muestras
 
 
@@ -174,7 +181,11 @@ def evaluar_slo(muestras: list[dict[str, Any]], *, max_lag_seconds: int) -> list
         metricas = muestra.get("metrics") or {}
         momento = muestra.get("t", "?")
         for clave in LAG_METRICS:
-            valor = int(metricas.get(clave) or 0)
+            # Sin la metrica no se sabe si estaba al dia: no vale como 0.
+            if metricas.get(clave) is None:
+                fallas.append(f"SLO {momento}: falta {clave} en la muestra")
+                continue
+            valor = int(metricas[clave])
             if valor > max_lag_seconds:
                 fallas.append(f"SLO {momento}: {clave}={valor} s > {max_lag_seconds} s")
         descartes = metricas.get("outbox_budget_drops")

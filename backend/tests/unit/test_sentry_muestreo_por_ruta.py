@@ -141,8 +141,15 @@ def test_init_usa_el_sampler_la_version_y_monitorea_beat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import sentry_sdk
-    from sentry_sdk.integrations.celery import CeleryIntegration
+    import sentry_sdk.integrations.celery as integracion_celery
 
+    class CeleryIntegrationFalsa:
+        """Registra los argumentos: la real parchea Celery en todo el proceso."""
+
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(integracion_celery, "CeleryIntegration", CeleryIntegrationFalsa)
     capturado: dict[str, Any] = {}
     monkeypatch.setattr(sentry_sdk, "init", lambda **kw: capturado.update(kw))
     monkeypatch.setattr(sentry_sdk, "set_tag", lambda *_a, **_kw: None)
@@ -155,9 +162,11 @@ def test_init_usa_el_sampler_la_version_y_monitorea_beat(
     assert capturado["release"] == "v2026.09.24-abc1234"
     assert capturado["traces_sampler"] is observability._traces_sampler
     assert "traces_sample_rate" not in capturado, "el sampler es la unica fuente"
-    celery = [i for i in capturado["integrations"] if isinstance(i, CeleryIntegration)]
+    celery = [
+        i for i in capturado["integrations"] if isinstance(i, CeleryIntegrationFalsa)
+    ]
     assert len(celery) == 1
-    assert celery[0].monitor_beat_tasks is True
+    assert celery[0].kwargs == {"monitor_beat_tasks": True}
     # El scrubbing de F1-A sigue enchufado a eventos y transacciones.
     assert capturado["before_send"] is observability._scrub_event
     assert capturado["before_send_transaction"] is observability._scrub_event
