@@ -754,3 +754,58 @@ def test_la_api_se_apaga_antes_de_que_docker_la_mate() -> None:
 def test_el_worker_tiene_tiempo_de_terminar_la_tarea_en_curso() -> None:
     gracia = _segundos(_services()["celery_worker"].get("stop_grace_period", "10s"))
     assert gracia >= 60, f"el worker recibe SIGKILL a los {gracia}s"
+
+
+# --- Imagenes con version, una sola para la app (F0-02, plan de rendimiento) --
+#
+# API, worker y beat corren EL MISMO codigo: si cada uno construye su imagen,
+# reconstruir solo uno deja a los otros con el codigo viejo (regla 22; paso con
+# Celery como root). Ahora hay una imagen, construida solo por `backend` y
+# reutilizada por los procesos de Celery, con el tag de la version: el VPS hace
+# `pull` de lo que publico CI y el rollback es volver al tag anterior.
+
+REGISTRO = "ghcr.io/enriquemartinez26"
+PROCESOS_DE_LA_APP = ("backend", "celery_worker", "celery_beat")
+
+
+def _imagen(servicio: str) -> str:
+    return f"{REGISTRO}/shifty-{servicio}:${{APP_VERSION:-dev}}"
+
+
+def test_la_app_corre_una_sola_imagen_versionada() -> None:
+    servicios = _services()
+    for nombre in PROCESOS_DE_LA_APP:
+        assert servicios[nombre].get("image") == _imagen("backend"), (
+            f"{nombre} no corre la imagen versionada de la app: "
+            f"{servicios[nombre].get('image')!r}"
+        )
+    constructores = [n for n in PROCESOS_DE_LA_APP if "build" in servicios[n]]
+    assert constructores == ["backend"], (
+        "la imagen de la app la construye solo backend; los procesos de Celery "
+        f"la reutilizan: construyen {constructores}"
+    )
+    for nombre in ("frontend", "nginx"):
+        assert servicios[nombre].get("image") == _imagen(nombre), (
+            f"{nombre}: {servicios[nombre].get('image')!r}"
+        )
+
+
+def test_la_version_llega_a_los_procesos_de_la_app() -> None:
+    # Alimenta Settings.VERSION: el release de Sentry y el de la API.
+    assert _env_items(_services()["backend"]).get("VERSION") == "${APP_VERSION:-dev}"
+    for servicio in SERVICIOS_DE_LA_APP:
+        assert "${APP_VERSION:?" in _env_prod(servicio).get("VERSION", ""), (
+            f"{servicio}: produccion no exige la version desplegada"
+        )
+
+
+def test_produccion_no_corre_una_imagen_sin_version() -> None:
+    """Sin APP_VERSION, `:-dev` en el servidor corre lo que haya quedado con ese
+    tag (un build local viejo) en vez de fallar."""
+    produccion = _servicios_de_produccion()
+    for nombre in (*PROCESOS_DE_LA_APP, "frontend", "nginx"):
+        imagen = str(produccion[nombre].get("image", ""))
+        assert imagen.startswith(f"{REGISTRO}/shifty-"), (nombre, imagen)
+        assert "${APP_VERSION:?" in imagen, (
+            f"{nombre} en produccion no exige APP_VERSION: {imagen!r}"
+        )

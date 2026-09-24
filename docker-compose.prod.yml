@@ -41,6 +41,7 @@
 # gana al default de produccion.
 x-app-environment-prod: &app_environment_prod
   ENV: production
+  VERSION: ${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
   SENTRY_DSN: ${SENTRY_DSN:-}
   SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
@@ -80,8 +81,14 @@ x-app-environment-prod: &app_environment_prod
   RATE_LIMIT_PUBLIC_READ_PER_MINUTE: ${RATE_LIMIT_PUBLIC_READ_PER_MINUTE:-120}
   RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE: ${RATE_LIMIT_PUBLIC_WRITE_PER_MINUTE:-20}
 
+# F0-02: en produccion la imagen sale de GHCR con el tag de APP_VERSION, sin
+# default. Con `:-dev` un servidor sin APP_VERSION corria cualquier build local
+# viejo con ese tag en vez de fallar. El deploy hace `pull` y `up --no-build`.
+x-app-image-prod: &app_image_prod ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
+
 services:
   backend:
+    image: *app_image_prod
     env_file:
       - .env
     environment: *app_environment_prod
@@ -94,16 +101,19 @@ services:
       replicas: 3
 
   celery_worker:
+    image: *app_image_prod
     env_file:
       - .env
     environment: *app_environment_prod
 
   celery_beat:
+    image: *app_image_prod
     env_file:
       - .env
     environment: *app_environment_prod
 
   frontend:
+    image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
     ports: !reset []
 
   db:
@@ -116,6 +126,7 @@ services:
     ports: !reset []
 
   nginx:
+    image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
     ports:
       - "80:80"
       - "443:443"

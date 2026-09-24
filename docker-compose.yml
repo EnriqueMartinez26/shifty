@@ -3,6 +3,9 @@
 # menos, Settings() falla, cae al respaldo y los jobs no procesan nada.
 x-app-environment: &app_environment
   ENV: ${ENV:-development}
+  # F0-02: la version desplegada (tag de la imagen). Alimenta Settings.VERSION,
+  # que es el release de Sentry y la version de la API.
+  VERSION: ${APP_VERSION:-dev}
   SENTRY_DSN: ${SENTRY_DSN:-}
   # Sin default: un secreto de firma publicado en el repo permite forjar
   # tokens. Genera uno con: openssl rand -hex 32 (ver .env.example).
@@ -117,14 +120,20 @@ services:
           memory: 256M
 
   backend:
+    # F0-02: UNA imagen para la API, el worker y beat. Solo backend la construye
+    # (`docker compose build`); los procesos de Celery reutilizan el mismo tag,
+    # asi que nunca corren un codigo distinto del de la API (regla 22). En
+    # produccion el tag lo fija APP_VERSION y la imagen sale de GHCR (pull).
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
     build:
       context: ./backend
       dockerfile: Dockerfile
     # Sin container_name (F0-04): en produccion corren tres replicas de un
     # proceso (docker-compose.prod.yml) y un nombre fijo impide mas de una.
     # Sin bind mount del codigo (2026-09-24): el contenedor corre lo que trae
-    # la imagen. Un cambio en backend/ exige `docker-compose build` de
-    # backend, celery_worker y celery_beat juntos (regla 22).
+    # la imagen. Un cambio en backend/ exige `docker compose build` (construye
+    # la imagen una vez) y recrear backend, celery_worker y celery_beat juntos
+    # (regla 22).
     restart: always
     # F0-21: uvicorn se rinde a los 30 s (--timeout-graceful-shutdown en el
     # Dockerfile); docker espera 35 antes del SIGKILL.
@@ -157,9 +166,8 @@ services:
           memory: 512M
 
   celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    # Misma imagen que backend, sin `build` propio (F0-02).
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
     # Sin --concurrency se abria un hijo por CPU del host y llenaba los 512 MB;
     # los jobs ya se serializan por advisory lock y SKIP LOCKED.
     # --max-memory-per-child va en KB: recicla el hijo que crece de mas.
@@ -202,9 +210,8 @@ services:
           memory: 512M
 
   celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    # Misma imagen que backend, sin `build` propio (F0-02).
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
     command: celery -A core.celery_app beat --loglevel=info
     # beat no es un worker: no responde `inspect ping`. Lo que prueba que
     # sigue agendando es que su archivo de schedule se siga sincronizando;
@@ -242,6 +249,7 @@ services:
           memory: 256M
 
   frontend:
+    image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:-dev}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -259,6 +267,7 @@ services:
           memory: 512M
 
   nginx:
+    image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:-dev}
     build:
       context: ./nginx
       dockerfile: Dockerfile
