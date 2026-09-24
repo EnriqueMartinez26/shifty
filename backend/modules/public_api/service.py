@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import invalidate_availability
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import settings
+from core.database import _apply_tenant_context
 from core.exceptions import (
     AppException,
     AppointmentConflictException,
@@ -380,7 +381,15 @@ class PublicBookingService:
             self.cache, request.store_id, booking.appointment.starts_at
         )
         await self._attach_payment_link(request, booking)
-        await self._notify_client(request, booking)
+        # El mail (SMTP, hasta 10 s por operacion) sale sin transaccion: el
+        # commit de TenantSession deja otra abierta al reaplicar el contexto
+        # (F1-05, R8-05; patron de AUD2-B2-08). No hay nada pendiente: esto
+        # solo la cierra, y el contexto vuelve antes de la lista de espera.
+        await AsyncSession.commit(self.db)
+        try:
+            await self._notify_client(request, booking)
+        finally:
+            await _apply_tenant_context(self.db)
         response = _booking_response(data, request, booking)
         await self._close_waitlist_entry(data, request, booking)
         return response

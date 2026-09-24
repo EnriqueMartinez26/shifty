@@ -4,7 +4,9 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import partial
 from decimal import Decimal, ROUND_HALF_UP
 from json import JSONDecodeError
 from urllib.parse import urlencode, urlparse
@@ -18,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 from core.config import settings
 from core.crypto import decrypt_secret, encrypt_secret
+from core.database import _apply_tenant_context
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
@@ -608,7 +611,38 @@ async def _mercadopago_api_request_for_store(
         raise
 
 
-async def create_mercadopago_preference(
+@dataclass(frozen=True)
+class PreparedPreference:
+    """Todo lo que la preferencia necesita de la base, leido ANTES de la red.
+
+    Con esto la llamada a MP no vuelve a consultar nada: quien la hace puede
+    cerrar la transaccion antes de salir (F1-05, regla 5).
+    """
+
+    store_id: str
+    payload: dict[str, JsonValue]
+    configs: dict[str, PaymentGatewayConfig]
+
+
+async def request_mercadopago_preference(
+    db: AsyncSession,
+    prepared: PreparedPreference,
+    *,
+    persist_refresh: PersistRefresh | None = None,
+) -> dict[str, JsonValue] | None:
+    """El POST a MP con la config ya leida: no consulta la base."""
+    return await _mercadopago_api_request_for_store(
+        db,
+        store_id=prepared.store_id,
+        method="POST",
+        path="/checkout/preferences",
+        json_body=prepared.payload,
+        configs=prepared.configs,
+        persist_refresh=persist_refresh,
+    )
+
+
+async def prepare_mercadopago_preference(
     db: AsyncSession,
     *,
     payment: Payment,
@@ -616,9 +650,10 @@ async def create_mercadopago_preference(
     service: Service,
     store_id: str,
     amount: Decimal,
-) -> dict[str, JsonValue] | None:
+) -> PreparedPreference | None:
+    """Lecturas de la preferencia (gateway, tienda, pagador). None: sin token."""
     config = await _get_gateway_config(db, store_id)
-    if not _resolve_access_token(config):
+    if config is None or not _resolve_access_token(config):
         return None
 
     store = await _get_store(db, store_id)
@@ -670,12 +705,8 @@ async def create_mercadopago_preference(
             },
         ),
     )
-    return await _mercadopago_api_request_for_store(
-        db,
-        store_id=store_id,
-        method="POST",
-        path="/checkout/preferences",
-        json_body=payload,
+    return PreparedPreference(
+        store_id=store_id, payload=payload, configs={store_id: config}
     )
 
 
@@ -891,13 +922,27 @@ async def _attach_provider_link(
     store_id: str,
     amount: Decimal,
 ) -> None:
-    """Pide la preferencia a Mercado Pago y la sella en el cobro.
+    """Pide la preferencia a Mercado Pago y la sella en el cobro (sin commit).
 
-    Es la unica parte de esta funcion que sale a la red: quien la llama tiene
-    que haber commiteado antes (regla 5), para no sostener la fila del cobro
-    bloqueada ni una conexion del pool durante una request de hasta 20 s.
+    Quien la llama ya commiteo lo que retenia el lock (regla 5), pero las
+    lecturas de aca (cobro, gateway, tienda, pagador) abrian OTRA transaccion
+    que quedaba ``idle in transaction`` durante la request a MP, con el pool
+    de 15 (F1-05, R8-05). Patron de AUD2-B2-08: se lee todo, commit PLANO de
+    ``AsyncSession`` (el de ``TenantSession`` reaplica el contexto y reabre la
+    transaccion en el acto), red, y se reaplica el contexto antes de volver a
+    escribir. El commit plano tambien persiste lo que el llamador dejo
+    pendiente en esta fase (re-tarifa, reapertura del cobro): ya estaba
+    decidido y no depende de la respuesta de MP.
+
+    Un 401 refresca el OAuth y lo persiste en su propia transaccion corta
+    (``persist_gateway_refresh``), cerrada antes del segundo HTTP. Si MP falla,
+    el contexto igual se reaplica: la compensacion del llamador escribe bajo
+    RLS.
     """
-    preference_payload = await create_mercadopago_preference(
+    # Import diferido: jobs importa este modulo.
+    from modules.payments.jobs import persist_gateway_refresh
+
+    prepared = await prepare_mercadopago_preference(
         db,
         payment=payment,
         appointment=appointment,
@@ -905,6 +950,15 @@ async def _attach_provider_link(
         store_id=store_id,
         amount=amount,
     )
+    preference_payload = None
+    if prepared is not None:
+        await AsyncSession.commit(db)
+        try:
+            preference_payload = await request_mercadopago_preference(
+                db, prepared, persist_refresh=partial(persist_gateway_refresh, db)
+            )
+        finally:
+            await _apply_tenant_context(db)
     if not preference_payload:
         raise RuntimeError(
             "La tienda debe conectar su cuenta de Mercado Pago antes de cobrar"

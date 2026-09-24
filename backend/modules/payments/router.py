@@ -537,6 +537,12 @@ async def mercadopago_oauth_callback(
         if actor_result.scalar_one_or_none() is None:
             return _oauth_frontend_redirect("forbidden")
 
+        # Canje del codigo sin transaccion abierta (F1-05, R8-05; patron de
+        # AUD2-B2-08): la lectura del actor la abria y quedaba "idle in
+        # transaction" durante el POST a MP. Commit plano (el de
+        # TenantSession reaplica el contexto y la reabre), red, y el contexto
+        # (bypass) se reaplica antes de volver a leer y escribir.
+        await AsyncSession.commit(db)
         try:
             with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
                 token_payload = await exchange_mercadopago_oauth_code(
@@ -544,6 +550,7 @@ async def mercadopago_oauth_callback(
                 )
         except RuntimeError:
             return _oauth_frontend_redirect("exchange_failed")
+        await _apply_tenant_context(db)
 
         result = await db.execute(
             select(PaymentGatewayConfig).where(
@@ -588,16 +595,24 @@ async def refresh_mercadopago_oauth(
             resource="Conexion de Mercado Pago", identifier=user.store_id
         )
 
+    # Refresh sin transaccion abierta (F1-05, R8-05; patron de AUD2-B2-08):
+    # commit plano antes del POST a MP; la config refrescada se persiste en
+    # su propia transaccion corta con el contexto reaplicado
+    # (persist_gateway_refresh), igual que el webhook y los jobs.
+    await AsyncSession.commit(db)
     try:
         with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
-            config = await refresh_mercadopago_oauth_connection(db, config=config)
+            config = await refresh_mercadopago_oauth_connection(
+                db, config=config, persist=partial(persist_gateway_refresh, db)
+            )
     except RuntimeError as exc:
         raise AppException(
             message=str(exc),
             http_status=status.HTTP_409_CONFLICT,
             error_code="MERCADOPAGO_REFRESH_FAILED",
         )
-    await db.commit()
+    finally:
+        await _apply_tenant_context(db)
     await db.refresh(config)
     return GatewayConfigResponse(
         provider=config.provider,
