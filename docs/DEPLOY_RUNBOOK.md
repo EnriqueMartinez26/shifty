@@ -164,6 +164,24 @@ Repeated alerts are silenced for a while (30 minutes to 6 hours depending on the
 
 Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/shifty`). The nginx error log still prints the full request line, query string included (it can carry `client_phone`), on 429 and upstream errors: keep it only in the container's json-file log with the size cap of the compose logging settings (plan F0-22: json-file 20 MB x 5) and do not copy it anywhere else. `latency-check.sh` reads the access log into a temporary file and deletes it.
 
+## 8b. Data retention (Celery beat, not cron)
+
+`purge_expired_data` runs daily at 04:30 UTC (`core/celery_app.py`; code in `backend/modules/housekeeping/retention.py`). The owner decided the windows (plan F1-19, decision 17). Each one is a setting with a floor of 1 day, so a typo cannot turn into "delete everything":
+
+| Table | Deleted when | Setting (default) | Never deleted |
+| --- | --- | --- | --- |
+| `outbox_messages` | processed more than 90 days ago | `RETENTION_OUTBOX_PROCESSED_DAYS` (90) | pending rows (`processed_at` NULL) and in-flight Mercado Pago link-expiry claims |
+| `webhook_inbox` | processed more than 90 days ago | `RETENTION_INBOX_PROCESSED_DAYS` (90) | pending rows |
+| `otp_verifications` | expired more than 7 days ago | `RETENTION_OTP_EXPIRED_DAYS` (7) | codes still valid or expired less than 7 days ago |
+| `notifications` | read more than 180 days ago | `RETENTION_NOTIFICATIONS_READ_DAYS` (180) | unread notifications |
+| `audit_logs` | never | — | everything: it is evidence, archive it outside the database |
+
+It deletes in batches of `RETENTION_BATCH_SIZE` (5000) with a commit per batch. Only one run goes at a time (session advisory lock), and each run has a 90 s budget: whatever does not fit is picked up the next day. `auth_sessions` keeps its own job (`purge_expired_auth_sessions`, 04:00 UTC, 30 days).
+
+- **Dry run first**: set `RETENTION_DRY_RUN=true` for the first days after the first deploy; the task then only counts and logs `purge_expired_data_done`. One manual dry run: `APP_VERSION=$(cat .deploy/current) docker compose exec celery_worker celery -A core.celery_app call purge_expired_data --kwargs '{"dry_run": true}'`.
+- **Restores**: a backup restored today brings back rows that the next 04:30 run deletes again. That is expected.
+- **Indexes**: `outbox_messages`, `webhook_inbox` and `notifications` have no index on the column the purge filters by (only partial indexes for pending/unread rows), so each batch scans the table. The budget bounds it; if the tables grow, add partial indexes in a separate migration.
+
 ## 9. Troubleshooting
 
 - **"hay otro deploy en curso"**: another deploy is running, or one was killed. If none is running, `rmdir .deploy/lock`.

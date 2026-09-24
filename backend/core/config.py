@@ -105,6 +105,25 @@ _MINIMOS_OPERATIVOS: tuple[tuple[str, float, str], ...] = (
         1024,
         "MAX_UPLOAD_BODY_BYTES no puede ser menor a 1024 bytes",
     ),
+    # Retencion (F1-19): una ventana en 0 borraria todo lo procesado HOY, y
+    # un lote en 0 no avanza nunca. Un typo en el .env no puede ser una purga.
+    (
+        "RETENTION_OUTBOX_PROCESSED_DAYS",
+        1,
+        "RETENTION_OUTBOX_PROCESSED_DAYS debe ser >= 1",
+    ),
+    (
+        "RETENTION_INBOX_PROCESSED_DAYS",
+        1,
+        "RETENTION_INBOX_PROCESSED_DAYS debe ser >= 1",
+    ),
+    ("RETENTION_OTP_EXPIRED_DAYS", 1, "RETENTION_OTP_EXPIRED_DAYS debe ser >= 1"),
+    (
+        "RETENTION_NOTIFICATIONS_READ_DAYS",
+        1,
+        "RETENTION_NOTIFICATIONS_READ_DAYS debe ser >= 1",
+    ),
+    ("RETENTION_BATCH_SIZE", 1, "RETENTION_BATCH_SIZE debe ser >= 1"),
     # Un timeout en 0 no significa "sin espera": redis-py lo toma como no
     # bloqueante y toda operacion falla.
     (
@@ -282,6 +301,15 @@ class Settings(BaseSettings):
     # Mercado Pago (F1-20, decision 20): antes de eso el cliente sigue en el
     # checkout y la consulta solo gasta la corrida.
     RECONCILIATION_MIN_AGE_MINUTES: int = 10
+    # Retencion (F1-19, decision 17 del dueno): purga diaria por lotes de lo
+    # ya procesado/vencido/leido. audit_logs no se purga nunca. Con
+    # RETENTION_DRY_RUN la tarea solo cuenta (modules/housekeeping/retention.py).
+    RETENTION_OUTBOX_PROCESSED_DAYS: int = 90
+    RETENTION_INBOX_PROCESSED_DAYS: int = 90
+    RETENTION_OTP_EXPIRED_DAYS: int = 7
+    RETENTION_NOTIFICATIONS_READ_DAYS: int = 180
+    RETENTION_BATCH_SIZE: int = 5000
+    RETENTION_DRY_RUN: bool = False
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
 
     DATABASE_URL: str

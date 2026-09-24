@@ -1362,6 +1362,11 @@ async def _exclusive_job(db: AsyncSession, name: str) -> AsyncIterator[bool]:
                 await _release_job_lock(conn, params)
 
 
+# Nombre publico para los jobs de otros modulos (retencion, F1-19): mismo
+# lock de sesion y mismo namespace. Los de este modulo usan ``_exclusive_job``.
+exclusive_job = _exclusive_job
+
+
 async def expire_unpaid_appointments(
     db: AsyncSession, *, limit: int = 100
 ) -> dict[str, int]:

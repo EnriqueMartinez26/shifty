@@ -204,6 +204,7 @@ celery_app.conf.update(
         "modules.notifications.tasks",
         "modules.waitlist.tasks",
         "modules.billing.tasks",
+        "modules.housekeeping.tasks",
     ],
     # ----------------------------------------------------------------
     # Celery Beat — Tareas periódicas
@@ -253,6 +254,14 @@ celery_app.conf.update(
         "purge-expired-auth-sessions-daily": {
             "task": "purge_expired_auth_sessions",
             "schedule": crontab(minute=0, hour=4),
+            "options": _EXPIRES_DIARIO,
+        },
+        # Retencion (F1-19): outbox/inbox procesados, OTP vencidos y avisos
+        # leidos, por lotes. 04:30 UTC: despues de la purga de sesiones y con
+        # el trafico mas bajo del dia en Argentina (01:30).
+        "purge-expired-data-daily": {
+            "task": "purge_expired_data",
+            "schedule": crontab(minute=30, hour=4),
             "options": _EXPIRES_DIARIO,
         },
         # Ciclo de vida de la suscripcion: aviso, vencimiento y suspension.
