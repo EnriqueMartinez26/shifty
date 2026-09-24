@@ -93,13 +93,22 @@ Una instrucción en lenguaje natural no es una garantía.
   en las consultas.** Las dos capas conviven a propósito: RLS es la
   garantía (rol `shifty_app` sin BYPASSRLS, `main.py` aborta si el rol
   puede saltarla) y los filtros `store_id` de repositorios, reportes y panel
-  son defensa en profundidad (`test_aislamiento_multitenant.py`,
+  son defensa en profundidad y, bajo RLS, el camino al índice (§3, Base de
+  datos) (`test_aislamiento_multitenant.py`,
   `test_reportes_aislamiento_por_tienda.py`; la cuenta de filtros no es un
   control, cambia con cada consulta). No se quita ninguno de los dos. Los
   jobs de Celery fijan bypass explícito (`set_tenant_context(None, True)` +
   `_apply_tenant_context`).
 - **Outbox/Inbox** para efectos secundarios y webhooks (`OutboxMessage`,
   `WebhookInbox`), procesados por Celery beat cada minuto.
+- **Publicar a Celery desde un request pasa por un helper único** con
+  `asyncio.to_thread` y tope de 2 s que nunca propaga; ninguna llamada
+  síncrona de red dentro de un `async def` (R8-02: con el broker caído,
+  publicar en línea congelaba la API hasta 33 s). El helper es F1-03 del
+  plan de rendimiento y todavía no existe: hoy el único `enqueue_*` es
+  `notifications/tasks.py::enqueue_otp_email`, que atrapa todo y se despacha
+  con `BackgroundTasks`. Un `enqueue_*` nuevo usa el helper (o lo crea, con
+  su test), no copia ese patrón.
 - **Circuit breaker** (`core/circuit_breaker.py`) envuelve Mercado Pago. No
   se llama al SDK del proveedor desde un camino nuevo. El **rate limit**
   (`core/rate_limit.py`) es un middleware por IP con política propia solo
@@ -178,7 +187,10 @@ Una instrucción en lenguaje natural no es una garantía.
    `event_id` + verificar collector y monto (`payments/router.py`,
    `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
-   (`modules/payments/model.py`).
+   (`modules/payments/model.py`). `X-Request-ID` es parte de la firma de MP
+   y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
+   (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
+   `tests/unit/test_nginx_contract.py`).
 8. **Jobs de Celery**: un loop por proceso (`core/worker_loop`), nunca
    `asyncio.run` por tarea; `SKIP LOCKED` en los batches, recordatorios
    incluidos. (2026-09-08: el pool quedaba atado a un loop cerrado.)
@@ -210,6 +222,25 @@ Una instrucción en lenguaje natural no es una garantía.
     `tests/architecture/test_migrations.py` en el job
     `contract-and-migrations` (`alembic heads` solo lista). Los timeouts del
     rol de la app viven en la migración `app_role_timeouts`.
+
+- **Migraciones sin corte (expand/contract).** El deploy migra ANTES de
+  recrear, con el código viejo sirviendo, y el rollback vuelve al código
+  anterior SIN migrar (`scripts/deploy.sh`, `docs/DEPLOY_RUNBOOK.md`): cada
+  release solo agrega, y lo que quita (columna, tabla, restricción) va un
+  release después. Índices sobre tablas vivas con `CREATE INDEX
+  CONCURRENTLY` dentro de `autocommit_block()` y `DROP INDEX CONCURRENTLY IF
+  EXISTS` antes; restricciones con `NOT VALID` y `VALIDATE` aparte; backfills
+  por lotes; sin `ALTER TYPE` que reescriba la tabla. `alembic/env.py` fija
+  `lock_timeout = '3s'` y una transacción por revisión (F0-06): una migración
+  que espera un lock falla en vez de encolar todas las requests detrás.
+- **Bajo RLS solo los predicados leakproof usan índices.** Postgres no
+  aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
+  que el filtro `store_id` explícito es el camino al índice, no solo defensa.
+  Nada de `lower()`, `&&`, `timezone()` ni `ILIKE` en consultas calientes
+  (R7-01: el login recorre `users` entera; R7-02: el solapamiento recorre
+  toda la historia del profesional, incluso bajo `FOR UPDATE`). Hoy
+  el login todavía compara `lower(User.email)` (F1-12 lo cambia) y marcar
+  funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
 
 ### Seguridad
 
@@ -364,7 +395,36 @@ Una instrucción en lenguaje natural no es una garantía.
     Compose >= 2.24.
 23. **`redirect_slashes=False`**: detrás de nginx el 307 pierde `/api` y el
     front recibe HTML. Cada `apiClient` usa la ruta exacta;
-    `test_frontend_routes_contract` lo audita.
+    `test_frontend_routes_contract` lo audita. Los errores propios del borde
+    bajo `/api` tampoco son HTML: nginx responde JSON canónico
+    (`UPSTREAM_UNAVAILABLE` para 502/503/504 con `Retry-After`,
+    `REQUEST_TOO_LARGE` para 413, `RATE_LIMITED` para 429;
+    `tests/unit/test_nginx_contract.py`).
+
+- **Imágenes con versión y deploy por script.** CI construye y publica
+  `ghcr.io/enriquemartinez26/shifty-{backend,frontend,nginx}:<sha>`
+  (`.github/workflows/build-images.yml`); el VPS no construye, hace `pull`
+  del sha. `make deploy APP_VERSION=<sha>` corre `scripts/deploy.sh`:
+  preflight (Compose >= 2.24, disco, backup de menos de 24 h), migración con
+  el código viejo sirviendo, backend nuevo al lado del viejo, `up -d
+  --no-deps` con lista explícita (nunca recrea db, redis ni rabbitmq),
+  `nginx -s reload` (nunca restart), compuerta de 60 s y rollback automático
+  sin migrar. `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
+  de compose; no se fija en el `.env` del servidor (queda en
+  `.deploy/current`).
+- **Toda llamada externa dentro de un request tiene un presupuesto total
+  menor que el `proxy_read_timeout` de nginx (30 s)**, y la conexión de la
+  base se libera con commit plano antes de salir a la red (patrón B2-08).
+  Hoy la reserva con seña puede pasarlo: el cliente ve 504 y la reserva se
+  crea igual (R8-01); F1-04 y F1-05 lo cierran. Es regla para todo camino
+  nuevo desde ya.
+- **El host se opera con scripts versionados, no a mano**
+  (`docs/DEPLOY_RUNBOOK.md` §8): backup diario con copia fuera del host
+  (timer de systemd, `scripts/backup.sh`), guard que reinicia contenedores
+  `unhealthy` con tope de 3 por hora (sin `autoheal` ni `docker.sock`),
+  chequeos horarios de NTP, certificado, disco y memoria, y latencia por
+  ruta cada 5 minutos. Se prueban con binarios falsos
+  (`tests/unit/host_falso.py`).
 
 ### Tiempo
 
@@ -467,6 +527,16 @@ Una instrucción en lenguaje natural no es una garantía.
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
   prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
+- Ya cubierto EN EL REPO (2026-09-24, Fase 0 del plan de rendimiento):
+  backup diario con copia fuera del host y alerta de frescura, deploy con
+  migración previa, backend gradual y rollback, guard de `unhealthy`,
+  chequeos del host, latencia por ruta, imágenes por sha en GHCR
+  (`docs/DEPLOY_RUNBOOK.md`); el contrato del borde vive en
+  `tests/unit/test_nginx_contract.py`. En el VPS nada de eso corre hasta que
+  el dueño hace la preparación de `docs/DEPLOY_RUNBOOK.md` §1: crear el
+  bucket, instalar rclone y certbot, `docker login ghcr.io`, copiar
+  `/etc/shifty/ops.env` y habilitar el timer y los cron. Hasta entonces el
+  RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
   las 8 funciones de más de 80 líneas que quedan en el backend (regla 29);
@@ -477,8 +547,12 @@ Una instrucción en lenguaje natural no es una garantía.
   la cobertura del backend en CI (`fail_under = 80` en `pyproject.toml`,
   pero CI corre `pytest` sin `--cov`); probar la cadena completa de
   downgrades (regla 13); pasar CodeQL a bloqueante cuando el ruido inicial
-  esté limpio. Cerrado el 2026-09-16: N+1 en `get_available_slots`
-  (auditado, no había), teléfono único por tienda y primera corrida del E2E.
+  esté limpio; correr por primera vez el drill mensual de backup (secretos
+  `BACKUP_DATABASE_URL`/`DRILL_DATABASE_URL` y un runner propio o staging:
+  con `ports: !reset []` la base no se alcanza desde GitHub) y confirmar ahí
+  el restore del rol `shifty_app` en un cluster vacío. Cerrado el
+  2026-09-16: N+1 en `get_available_slots` (auditado, no había), teléfono
+  único por tienda y primera corrida del E2E.
   Cerrado el 2026-09-19: descomposición de `create_public_booking` y
   `client_reschedule_appointment` y migración de `public_api` al service
   (B1-12). Cerrado el 2026-09-22: el pre-commit hook quedó activado en el
@@ -494,6 +568,10 @@ Una instrucción en lenguaje natural no es una garantía.
   integración, `backend-postgres` y los dos jobs de front; `dead-code`
   espera solo a `standards` y `secret-scan` (gitleaks) corre suelto. El
   front corre con cobertura; el backend no la mide (ver §5).
+  `build-images.yml` publica las imágenes en cada push a `main`; no gatea
+  PRs.
 - `docs/RELEASE_CHECKLIST.md` y `docs/BACKUP_RESTORE_RUNBOOK.md` (RPO ≤24h,
   RTO ≤4h) gatean releases: un ítem sin marcar necesita excepción explícita
-  del dueño, no un salto silencioso.
+  del dueño, no un salto silencioso. El deploy a producción es
+  `make deploy APP_VERSION=<sha>` (`docs/DEPLOY_RUNBOOK.md`), que además se
+  niega a migrar sin un backup de menos de 24 h.
