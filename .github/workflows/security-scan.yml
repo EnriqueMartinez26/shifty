@@ -1,0 +1,151 @@
+name: Security scan
+
+# C-23: vulnerabilidades conocidas en dependencias e imagenes. Antes CI solo
+# corria `npm audit` sobre el front (quality.yml); el backend y las imagenes
+# que llegan al VPS no los miraba nadie.
+#
+# - python-audit: pip-audit sobre las dependencias de PRODUCCION de
+#   backend/uv.lock, exportadas con hashes. `--disable-pip` hace que audite
+#   exactamente esa lista, sin resolver ni instalar nada.
+# - image-scan: Trivy sobre las tres imagenes que publica build-images.yml
+#   (backend, frontend, nginx), construidas aca sin push.
+# - npm-audit: solo en el cron y a mano. En PR y push a main el mismo audit ya
+#   corre en quality.yml (frontend-quality, `npm audit --omit=dev
+#   --audit-level=low`); este job existe para enterarse de un CVE nuevo en un
+#   lockfile que no cambio.
+#
+# Todo falla el workflow ante un hallazgo: no hay `continue-on-error` ni
+# `|| true`. Una vulnerabilidad aceptada se declara en su archivo de
+# excepciones, con motivo y fecha en la linea de comentario de arriba:
+#   backend/.pip-audit-ignore   (pip-audit)
+#   .trivyignore                (Trivy)
+# El cron no abre issues: el aviso es el workflow en rojo.
+#
+# Ninguna herramienta entra al repo como dependencia (CLAUDE.md §1): pip-audit
+# corre con `uvx` en una version fija y Trivy con su accion, tambien fija.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Lunes 06:00 UTC, antes de la ventana de Dependabot.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PIP_AUDIT_VERSION: "2.10.1"
+  TRIVY_VERSION: "v0.70.0"
+  # Mismas versiones que quality.yml.
+  NODE_VERSION: "26.5.0"
+  NPM_VERSION: "11.17.0"
+
+jobs:
+  python-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
+      - name: Exportar las dependencias de produccion del lock
+        # --frozen: el lock tal cual, sin re-resolver. --no-dev: lo que va a la
+        # imagen. --no-emit-project: el paquete propio no esta en PyPI.
+        run: >-
+          uv export --frozen --no-dev --no-emit-project
+          --format requirements-txt
+          --output-file "$RUNNER_TEMP/requirements-prod.txt"
+      - name: pip-audit
+        run: |
+          ignorados=()
+          while IFS= read -r linea || [ -n "$linea" ]; do
+            linea="${linea%%#*}"
+            linea="${linea//[[:space:]]/}"
+            if [ -n "$linea" ]; then
+              ignorados+=(--ignore-vuln "$linea")
+            fi
+          done < .pip-audit-ignore
+          uvx --from "pip-audit==${PIP_AUDIT_VERSION}" pip-audit \
+            --strict --desc on --disable-pip --require-hashes \
+            -r "$RUNNER_TEMP/requirements-prod.txt" \
+            "${ignorados[@]}"
+
+  image-scan:
+    runs-on: ubuntu-latest
+    strategy:
+      # Los tres reportes, aunque falle uno.
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: ./backend
+          - service: frontend
+            context: ./frontend
+          - service: nginx
+            context: ./nginx
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v4.4.1
+
+      - name: Build sin push
+        uses: docker/build-push-action@v7.4.0
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: shifty-scan-${{ matrix.service }}:${{ github.sha }}
+          provenance: false
+          # Solo lee la cache de build-images.yml; no la escribe.
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+      - name: Trivy
+        # Fijada por sha y no por tag: un tag se puede mover (en marzo de 2026
+        # se reportaron tags de esta accion reescritos con codigo malicioso).
+        # El sha es el commit del tag v0.36.0.
+        # La accion guarda la base de Trivy con actions/cache (clave por dia),
+        # asi que las corridas del mismo dia no la bajan de nuevo.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          image-ref: shifty-scan-${{ matrix.service }}:${{ github.sha }}
+          scan-type: image
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          trivyignores: .trivyignore
+          cache: true
+
+  npm-audit:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+      - name: Setup Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Setup npm
+        run: npm install --global "npm@${NPM_VERSION}"
+      - name: npm audit
+        # Lee solo package-lock.json: no hace falta `npm ci` para auditar.
+        run: npm audit --omit=dev --audit-level=low --package-lock-only
