@@ -575,6 +575,10 @@ async def get_public_payment_status(
         )
 
 
+CLIENT_HISTORY_DEFAULT_LIMIT = 50
+CLIENT_HISTORY_MAX_LIMIT = 200
+
+
 @router.get(
     "/client/{store_public_id}/{phone}/appointments",
     response_model=ClientAppointmentsResponse,
@@ -583,6 +587,11 @@ async def get_client_appointments(
     request: Request,
     store_public_id: PublicIdPath,
     phone: Annotated[str, Path(min_length=6, max_length=30)],
+    # F3-09 (R1-09): aditivo. Antes devolvia la historia completa del
+    # cliente; ahora los ``limit`` turnos mas recientes (regla 9: ge y le).
+    limit: Annotated[int, Query(ge=1, le=CLIENT_HISTORY_MAX_LIMIT)] = (
+        CLIENT_HISTORY_DEFAULT_LIMIT
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> ClientAppointmentsResponse:
     phone = re.sub(r"[\s\-\(\)\+]", "", phone)
@@ -594,7 +603,7 @@ async def get_client_appointments(
     )
     async with tenant_bypass(db):
         repo = PublicRepository(db)
-        store = await repo.get_store_by_public_id(store_public_id)
+        store = await repo.get_store_ref(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
 
@@ -608,8 +617,10 @@ async def get_client_appointments(
                 error_code="CLIENT_APPOINTMENTS_NOT_FOUND",
             )
 
-        appointments = await repo.get_client_appointments(client.id, store.id)
-        cancellation_cutoff_hours = getattr(store, "cancellation_hours", 2)
+        appointments = await repo.get_client_appointments(
+            client.id, store.id, limit=limit
+        )
+        cancellation_cutoff_hours = store.cancellation_hours
         items = []
         for appt in appointments:
             now = _now_compatible_with(appt.starts_at)

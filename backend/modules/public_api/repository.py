@@ -7,6 +7,7 @@ Responsabilidades:
 - Consulta y autogestion publica de turnos.
 """
 
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
@@ -14,7 +15,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, raiseload, selectinload
 
 import ulid
 
@@ -57,6 +58,16 @@ def _schedule_covers(
     return apertura <= starts_at and ends_at <= cierre
 
 
+@dataclass(frozen=True)
+class StoreRef:
+    """Columnas de una tienda activa que leen los endpoints publicos de lectura."""
+
+    id: str
+    min_booking_notice_hours: int
+    buffer_minutes: int
+    cancellation_hours: int
+
+
 class RangeRejection(str, Enum):
     """Por que un profesional no puede tomar un rango (``staff_can_take_range``)."""
 
@@ -80,6 +91,32 @@ class PublicRepository:
             select(Store).where(Store.public_id == public_id, Store.is_active == True)
         )
         return result.scalar_one_or_none()
+
+    async def get_store_ref(self, public_id: str) -> StoreRef | None:
+        """Id y reglas de agenda de una tienda activa, en columnas (F3-02/F3-09).
+
+        Para los endpoints que no necesitan la entidad: ``select(Store)`` trae
+        ademas sus horarios comerciales (``lazy="selectin"``), una consulta mas
+        que ni la disponibilidad ni el historial usan.
+        """
+        row = (
+            await self.db.execute(
+                select(
+                    Store.id,
+                    Store.min_booking_notice_hours,
+                    Store.buffer_minutes,
+                    Store.cancellation_hours,
+                ).where(Store.public_id == public_id, Store.is_active == True)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return StoreRef(
+            id=row.id,
+            min_booking_notice_hours=row.min_booking_notice_hours,
+            buffer_minutes=row.buffer_minutes,
+            cancellation_hours=row.cancellation_hours,
+        )
 
     async def get_store_by_id(self, store_id: str) -> Store | None:
         result = await self.db.execute(
@@ -552,12 +589,27 @@ class PublicRepository:
         return result.scalars().first()
 
     async def get_client_appointments(
-        self, client_id: str, store_id: str
+        self, client_id: str, store_id: str, *, limit: int
     ) -> list[Appointment]:
+        """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional.
+
+        Un solo SELECT con JOIN (F3-09, R1-09): antes eran ``selectinload`` de
+        servicio y profesional, y el profesional arrastraba en cascada sus
+        ``services`` y ``schedules`` (``lazy="selectin"``), que la respuesta no
+        usa. ``raiseload`` las deja SIN cargar (no vacias): nada que el flush
+        pueda tomar por una coleccion modificada (AUD2-B6-02), y un acceso
+        accidental levanta en vez de volver a consultar.
+        """
         result = await self.db.execute(
             select(Appointment)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
-            .options(selectinload(Appointment.service), selectinload(Appointment.staff))
-            .order_by(Appointment.starts_at.desc())
+            .options(
+                joinedload(Appointment.service),
+                joinedload(Appointment.staff).options(
+                    raiseload(Staff.services), raiseload(Staff.schedules)
+                ),
+            )
+            .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
+            .limit(limit)
         )
         return list(result.scalars().all())

@@ -75,6 +75,7 @@ os.environ.update(_TEST_ENV)
 from core.config import settings  # noqa: E402
 from main import app  # noqa: E402
 from core.redis import get_availability_cache, get_redis  # noqa: E402
+from tests.redis_pipeline_double import PipelineDouble  # noqa: E402
 
 # Disable rate limit globally during tests
 settings.RATE_LIMIT_ENABLED = False
@@ -128,6 +129,9 @@ class MockRedis:
 
     async def expire(self, key: str, seconds: int) -> bool:
         return True
+
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
 
 
 @pytest.fixture(autouse=True)

@@ -24,6 +24,7 @@ import core.availability_cache as availability_cache
 import core.rate_limit as rate_limit
 from core.config import settings
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
+from tests.redis_pipeline_double import PipelineDouble
 
 _SECRETO = "clave-de-redis-super-secreta"
 _URL = f"redis://:{_SECRETO}@redis:6379/0"
@@ -51,6 +52,9 @@ class _RedisCaido:
 
     async def expire(self, *_args: object, **_kwargs: object) -> Any:
         raise _error()
+
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
 
 
 def _sin_secreto(eventos: Sequence[Mapping[str, Any]]) -> None:

@@ -30,6 +30,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from core import availability_cache as cache
+from tests.redis_pipeline_double import PipelineDouble
 
 UN_TURNO = datetime(2026, 9, 15, 13, 0, tzinfo=timezone.utc)
 DIA_LOCAL = date(2026, 9, 15)
@@ -67,6 +68,9 @@ class FakeRedisConTtl:
             return False
         self.ttl[key] = seconds
         return True
+
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
 
 
 @pytest.mark.asyncio
@@ -191,6 +195,9 @@ class RelojRedis:
             return False
         self._datos[key] = (dato, self.ahora + seconds)
         return True
+
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
 
 
 async def _consultar_disponibilidad(redis: RelojRedis, contenido: str) -> str:

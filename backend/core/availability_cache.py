@@ -54,6 +54,22 @@ SLOTS_TTL_SECONDS = 300
 VERSION_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
+class AvailabilityCachePipeline(Protocol):
+    """Pipeline de ``redis.asyncio``: los comandos se encolan y van juntos.
+
+    Cada comando devuelve el pipeline (no se espera); ``execute`` manda todo
+    en una ida y vuelta y devuelve los resultados en orden (F3-09).
+    """
+
+    def getex(self, key: str, /, *, ex: int) -> Any: ...
+
+    def incr(self, key: str, /) -> Any: ...
+
+    def expire(self, key: str, seconds: int, /) -> Any: ...
+
+    def execute(self) -> Awaitable[list[Any]]: ...
+
+
 @runtime_checkable
 class AvailabilityCacheClient(Protocol):
     """Lo minimo que se necesita de Redis (o de un doble en tests).
@@ -75,24 +91,40 @@ class AvailabilityCacheClient(Protocol):
 
     def expire(self, key: str, seconds: int, /) -> Awaitable[Any]: ...
 
+    # F3-09 (R1-08): los pares GETEX e INCR + EXPIRE iban en serie, una ida y
+    # vuelta cada uno; ahora van en un pipeline.
+    def pipeline(self, transaction: bool = ...) -> AvailabilityCachePipeline: ...
+
 
 def version_key(store_id: str, day: date) -> str:
     return f"availability:v:{store_id}:{day.isoformat()}"
 
 
-async def _bump_version(
-    client: AvailabilityCacheClient, store_id: str, day: date
-) -> None:
-    """Sube la version de un dia y le (re)pone vencimiento.
+async def _bump_counters(client: AvailabilityCacheClient, keys: Iterable[str]) -> None:
+    """Sube cada contador (version o generacion) y le (re)pone vencimiento.
 
     Sigue siendo un `INCR`: no se borra ninguna clave ni se usan comodines.
     El `EXPIRE` va despues de CADA `INCR`, asi que un dia que se sigue tocando
-    nunca vence; si el proceso se muere entre los dos, la clave queda como
-    quedaba antes de B7-09 (sin TTL) y el proximo INCR la arregla.
+    nunca vence. Todo va en UN pipeline con MULTI/EXEC (F3-09): una sola ida y
+    vuelta para todos los dias, y el INCR y su EXPIRE se aplican juntos (antes,
+    si el proceso se moria entre los dos, la clave quedaba sin TTL hasta el
+    proximo INCR).
     """
-    key = version_key(store_id, day)
-    await client.incr(key)
-    await client.expire(key, VERSION_TTL_SECONDS)
+    pipe = client.pipeline(transaction=True)
+    queued = False
+    for key in keys:
+        pipe.incr(key)
+        pipe.expire(key, VERSION_TTL_SECONDS)
+        queued = True
+    if queued:
+        await pipe.execute()
+
+
+def _counter_value(raw: Any) -> str:
+    """Valor de un contador leido de Redis; "0" si la clave no existe."""
+    if raw is None:
+        return "0"
+    return raw.decode() if isinstance(raw, bytes) else str(raw)
 
 
 async def current_version(
@@ -103,10 +135,9 @@ async def current_version(
     El GETEX es lo que impide el reciclado: ver `VERSION_TTL_SECONDS`. Si la
     clave no existe no la crea (la version es "0" hasta el primer INCR).
     """
-    raw = await client.getex(version_key(store_id, day), ex=VERSION_TTL_SECONDS)
-    if raw is None:
-        return "0"
-    return raw.decode() if isinstance(raw, bytes) else str(raw)
+    return _counter_value(
+        await client.getex(version_key(store_id, day), ex=VERSION_TTL_SECONDS)
+    )
 
 
 def store_generation_key(store_id: str) -> str:
@@ -121,10 +152,25 @@ async def current_store_generation(
     Mismas reglas que ``current_version`` (B7-09): el GETEX impide que la
     generacion venza y se recicle bajo un slot vivo; si no existe es "0".
     """
-    raw = await client.getex(store_generation_key(store_id), ex=VERSION_TTL_SECONDS)
-    if raw is None:
-        return "0"
-    return raw.decode() if isinstance(raw, bytes) else str(raw)
+    return _counter_value(
+        await client.getex(store_generation_key(store_id), ex=VERSION_TTL_SECONDS)
+    )
+
+
+async def current_generation_and_version(
+    client: AvailabilityCacheClient, store_id: str, day: date
+) -> tuple[str, str]:
+    """Generacion de la tienda y version del dia en UNA ida y vuelta (F3-09).
+
+    Los dos GETEX de ``current_store_generation`` y ``current_version`` en un
+    pipeline sin MULTI (no hace falta atomicidad: cada uno estira su propio
+    TTL, igual que antes).
+    """
+    pipe = client.pipeline(transaction=False)
+    pipe.getex(store_generation_key(store_id), ex=VERSION_TTL_SECONDS)
+    pipe.getex(version_key(store_id, day), ex=VERSION_TTL_SECONDS)
+    generation, version = await pipe.execute()
+    return _counter_value(generation), _counter_value(version)
 
 
 def slots_key(
@@ -160,8 +206,7 @@ async def resolve_slots_key(
     hide_private_reasons: bool,
 ) -> str:
     """Lee generacion de la tienda y version del dia y arma la clave vigente."""
-    generation = await current_store_generation(client, store_id)
-    version = await current_version(client, store_id, day)
+    generation, version = await current_generation_and_version(client, store_id, day)
     return slots_key(
         store_id,
         day,
@@ -214,8 +259,7 @@ async def _bump_days(
 ) -> None:
     """Sube la version de cada dia; un Redis caido no corta la operacion."""
     try:
-        for day in days:
-            await _bump_version(client, store_id, day)
+        await _bump_counters(client, [version_key(store_id, day) for day in days])
     except REDIS_UNAVAILABLE_ERRORS as exc:
         _tolerar_redis_caido(operacion, store_id, exc)
 
@@ -269,13 +313,11 @@ async def invalidate_store_availability(
     """Invalida la disponibilidad de TODOS los dias de la tienda (B6-08).
 
     Para cambios que no tienen un instante: editar o borrar un servicio. Un
-    ``INCR`` de la generacion + ``EXPIRE`` (como ``_bump_version``); no se
+    ``INCR`` de la generacion + ``EXPIRE`` (como la version de un dia); no se
     borra ninguna clave ni se usan comodines. Igual que
     ``invalidate_availability``, un Redis caido no corta la operacion.
     """
-    key = store_generation_key(store_id)
     try:
-        await client.incr(key)
-        await client.expire(key, VERSION_TTL_SECONDS)
+        await _bump_counters(client, [store_generation_key(store_id)])
     except REDIS_UNAVAILABLE_ERRORS as exc:
         _tolerar_redis_caido("invalidate_store_availability", store_id, exc)

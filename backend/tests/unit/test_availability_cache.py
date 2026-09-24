@@ -18,6 +18,7 @@ from core.availability_cache import (
     slots_key,
     version_key,
 )
+from tests.redis_pipeline_double import PipelineDouble
 
 
 class FakeRedis:
@@ -43,6 +44,9 @@ class FakeRedis:
         # tests/unit/test_version_de_cache_expira.py; aca solo hace falta que
         # el doble satisfaga el protocolo.
         return key in self.store
+
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
 
 
 @pytest.mark.asyncio

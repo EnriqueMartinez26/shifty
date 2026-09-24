@@ -847,6 +847,10 @@ class _TuberiaFalsa:
         self._ops.append(("expire", (key, seconds)))
         return self
 
+    def getex(self, key: str, ex: int | None = None) -> "_TuberiaFalsa":
+        self._ops.append(("getex", (key, ex)))
+        return self
+
     async def execute(self) -> list[Any]:
         resultados: list[Any] = []
         for nombre, args in self._ops:
@@ -902,7 +906,7 @@ class RedisFalso:
     async def expire(self, key: str, seconds: int) -> bool:
         return True
 
-    def pipeline(self) -> _TuberiaFalsa:
+    def pipeline(self, transaction: bool = True) -> _TuberiaFalsa:
         return _TuberiaFalsa(self)
 
 
