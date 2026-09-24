@@ -22,6 +22,7 @@ import {
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
+import { bookingStatusLabel } from '../lib/bookingStatusLabel'
 import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
 import {
   create2000sInputStyle,
@@ -515,7 +516,7 @@ const ReportsPage: React.FC = () => {
                         color: colors2000s.text.secondary
                       }}
                     >
-                      {item.status}
+                      {bookingStatusLabel(item.status)}
                     </span>
                   </td>
                   <td className="px-6 py-4 font-black" style={{ color: colors2000s.orange.accent }}>

@@ -2,11 +2,7 @@ import React, { useMemo, useState } from 'react'
 
 import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
 
-import {
-  isBookingStatus,
-  isCollectibleStatus,
-  type BookingStatusValue
-} from '@domain/value-objects/BookingStatus'
+import { isCollectibleStatus } from '@domain/value-objects/BookingStatus'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -21,18 +17,9 @@ import {
   usePaymentsAppointments,
   useReconciliationSummary
 } from '../hooks/usePayments'
+import { bookingStatusLabel } from '../lib/bookingStatusLabel'
 import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
-
-const statusLabel: Record<BookingStatusValue, string> = {
-  pending: 'Pendiente',
-  pending_payment: 'Pendiente de pago',
-  confirmed: 'Confirmado',
-  completed: 'Completado',
-  cancelled: 'Cancelado',
-  absent: 'Ausente',
-  expired: 'Vencido'
-}
 
 const CollectionsPage: React.FC = () => {
   const appointmentsQuery = usePaymentsAppointments()
@@ -135,9 +122,7 @@ const CollectionsPage: React.FC = () => {
                         color: colors2000s.text.secondary
                       }}
                     >
-                      {isBookingStatus(appointment.status)
-                        ? statusLabel[appointment.status]
-                        : appointment.status}
+                      {bookingStatusLabel(appointment.status)}
                     </span>
                   </div>
                   <p
