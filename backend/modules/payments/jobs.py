@@ -1057,11 +1057,8 @@ async def _lock_appointment_or_skip(db: AsyncSession, payment: Payment) -> bool:
     return tomado.scalar_one_or_none() is not None
 
 
-def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
-    cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
-    # Edad minima (F1-20, decision 20): un cobro recien creado es un cliente
-    # que sigue en el checkout; preguntarle a MP por el gasta la corrida.
-    min_age = now - timedelta(minutes=settings.RECONCILIATION_MIN_AGE_MINUTES)
+def _reconcilable_payments() -> Select[tuple[Payment]]:
+    """Cobros de MP pendientes de una tienda con MP configurado."""
     return (
         select(Payment)
         .join(
@@ -1072,10 +1069,19 @@ def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
             Payment.status == PaymentStatus.PENDING.value,
             Payment.provider == "mercadopago",
             Payment.is_active.is_(True),
-            Payment.created_at >= cutoff,
-            Payment.created_at <= min_age,
             PaymentGatewayConfig.provider == "mercadopago",
         )
+    )
+
+
+def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
+    cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
+    # Edad minima (F1-20, decision 20): un cobro recien creado es un cliente
+    # que sigue en el checkout; preguntarle a MP por el gasta la corrida.
+    min_age = now - timedelta(minutes=settings.RECONCILIATION_MIN_AGE_MINUTES)
+    return (
+        _reconcilable_payments()
+        .where(Payment.created_at >= cutoff, Payment.created_at <= min_age)
         .order_by(Payment.created_at.asc())
         .limit(limit)
     )
@@ -1097,8 +1103,32 @@ async def reconcile_pending_payments(
         return await _reconcile_pending_payments(db, limit=limit)
 
 
+async def reconcile_one_payment(db: AsyncSession, payment_id: str) -> dict[str, int]:
+    """Concilia UN cobro a pedido del poll publico (F1-21, decision 20).
+
+    "Pague y sigue pendiente": el cliente volvio de MP y el webhook no llego o
+    no se pudo aplicar. Mismas dos fases que la conciliacion general, sin su
+    edad minima (el cliente ya dijo que pago) y sin su advisory lock: con el
+    beat adentro no se saltearia, y la exclusion con el lote la dan los locks
+    de fila (turno con SKIP LOCKED, despues el pago) y que la fase B solo
+    toma el cobro si sigue pendiente. El pedido llega deduplicado por cobro
+    (``modules/payments/on_demand.py``).
+    """
+    return await _reconcile(
+        db, _reconcilable_payments().where(Payment.id == payment_id)
+    )
+
+
 async def _reconcile_pending_payments(
     db: AsyncSession, *, limit: int
+) -> dict[str, int]:
+    return await _reconcile(
+        db, _reconciliation_query(limit, datetime.now(timezone.utc))
+    )
+
+
+async def _reconcile(
+    db: AsyncSession, consulta: Select[tuple[Payment]]
 ) -> dict[str, int]:
     """Las mismas dos fases que el inbox (AUD2-B2-02, 2026-09-20).
 
@@ -1108,7 +1138,6 @@ async def _reconcile_pending_payments(
     ``lock_timeout = 5s`` en el rol de la app y MP lento, una corrida hacia
     fallar los webhooks y el boton "liberar turno" del panel.
     """
-    consulta = _reconciliation_query(limit, datetime.now(timezone.utc))
     pendientes = list((await db.execute(consulta)).scalars().all())
     # La configuracion es por tienda, no por cobro: una lectura con in_() antes
     # del for en vez de dos por cobro, una en la consulta a MP y otra en la

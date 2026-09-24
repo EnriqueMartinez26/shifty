@@ -22,6 +22,7 @@ from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
 from core.crypto import encrypt_secret
 from core.database import _apply_tenant_context, get_db, tenant_bypass
+from core.enqueue import enqueue
 from core.redis import get_redis
 from core.exceptions import (
     AppException,
@@ -38,6 +39,7 @@ from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
 from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
+from modules.payments.tasks import process_payment_webhook_inbox
 from modules.payments.model import (
     OutboxMessage,
     Payment,
@@ -752,6 +754,10 @@ async def refund_payment(
     return _payment_response(payment)
 
 
+# Reintento del inbox tras un webhook que no se pudo aplicar en linea (F1-21).
+INBOX_RETRY_COUNTDOWN_SECONDS = 15
+
+
 async def _enriquecer_sin_transaccion_abierta(
     db: AsyncSession, *, store_id: str, payload: dict[str, Any]
 ) -> tuple[dict[str, Any], GatewayConfigs]:
@@ -856,7 +862,15 @@ async def mercadopago_webhook(
             else:
                 inbox.register_failure("No se pudo resolver el pago del webhook")
         await db.commit()
-        return {"success": True, "data": {"received": True, "applied": applied}}
+    if not applied:
+        # F1-21 (R9-09): sin esto el cobro esperaba al beat del inbox (60-120 s)
+        # con el cliente mirando "pendiente". Despues del commit, para que la
+        # tarea vea la fila; por el helper, que nunca congela ni propaga.
+        await enqueue(
+            process_payment_webhook_inbox,
+            options={"countdown": INBOX_RETRY_COUNTDOWN_SECONDS},
+        )
+    return {"success": True, "data": {"received": True, "applied": applied}}
 
 
 @router.get("/outbox/stats", response_model=OutboxStatsResponse)
