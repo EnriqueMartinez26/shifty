@@ -564,3 +564,27 @@ def test_los_assets_con_hash_no_se_loguean(ruta: Path) -> None:
     assets = location(server, "^~", "/assets/")
     assert una(assets, "access_log").args == ("off",)
     assert una(assets, "proxy_pass").args == ("http://spa",)
+
+
+# --- F0-12: renovacion de certificados por webroot ----------------------------
+
+
+def test_el_desafio_acme_se_sirve_en_claro_y_el_resto_redirige() -> None:
+    http = leer(EDGE_PROD)
+    en_claro = [s for s in servidores(http) if ("80",) in [d.args for d in todas(s, "listen")]]
+    assert len(en_claro) == 1
+    server = en_claro[0]
+    # Un `return` a nivel server corre antes de elegir location: taparia el
+    # desafio y certbot no podria renovar.
+    assert not todas(server, "return")
+    acme = location(server, "^~", "/.well-known/acme-challenge/")
+    assert una(acme, "root").args == ("/var/www/acme",)
+    assert una(location(server, "/"), "return").args == (
+        "301",
+        "https://$host$request_uri",
+    )
+
+
+def test_https_conserva_hsts() -> None:
+    cabeceras = _cabeceras_agregadas(server_de_la_app(leer(EDGE_PROD)))
+    assert cabeceras["strict-transport-security"] == "max-age=31536000; includeSubDomains"
