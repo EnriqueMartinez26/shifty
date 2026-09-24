@@ -895,6 +895,7 @@ function EnterpriseDashboard({
           title={copy.operationsTitle}
           description={copy.operationsDescription}
           agenda={agenda}
+          emptyAgendaText={copy.emptyAgenda}
           cards={operationCards}
         />
 
@@ -1197,11 +1198,13 @@ function OperationPanel({
   title,
   description,
   agenda,
+  emptyAgendaText,
   cards
 }: {
   title: string
   description: string
   agenda: AgendaItem[]
+  emptyAgendaText: string
   cards: DashboardOperationCard[]
 }) {
   return (
@@ -1248,7 +1251,7 @@ function OperationPanel({
               <Clock3 size={18} color={colors2000s.orange.accent} />
             </div>
 
-            <AgendaList items={agenda} emptyText={copy.emptyAgenda} />
+            <AgendaList items={agenda} emptyText={emptyAgendaText} />
           </div>
 
           <div style={{ display: 'grid', gap: 12 }}>
