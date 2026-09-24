@@ -61,6 +61,7 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
     _scrub_mapping(extra)
     for context in (event.get("contexts") or {}).values():
         _scrub_mapping(context)
+    _mask_breadcrumb_urls(event)
     _drop_frame_vars(event)
     return event
 
@@ -82,6 +83,16 @@ def _mask_url(url: str) -> str:
         for segment in parts.path.split("/")
     ]
     return urlunsplit((parts.scheme, parts.netloc, "/".join(segments), "", ""))
+
+
+def _mask_breadcrumb_urls(event: "Event") -> None:
+    """Las migas HTTP (``data.url``) pasan por la misma mascara que la URL."""
+    breadcrumbs: Any = event.get("breadcrumbs")
+    values = breadcrumbs.get("values") if isinstance(breadcrumbs, dict) else None
+    for crumb in values or []:
+        data = crumb.get("data") if isinstance(crumb, dict) else None
+        if isinstance(data, dict) and isinstance(data.get("url"), str):
+            data["url"] = _mask_url(data["url"])
 
 
 def _drop_frame_vars(event: "Event") -> None:
@@ -149,6 +160,9 @@ def init_observability(component: str) -> bool:
         # el payload de la reserva con nombre, telefono y email).
         include_local_variables=False,
         before_send=_scrub_event,
+        # ``before_send`` no corre sobre transacciones: sin esto el 10 %
+        # muestreado salia con ``request.url``, la query y las migas crudas.
+        before_send_transaction=_scrub_event,
     )
     sentry_sdk.set_tag("component", component)
     _initialized = True

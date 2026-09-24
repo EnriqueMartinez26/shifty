@@ -102,3 +102,40 @@ def test_sentry_arranca_sin_variables_locales(monkeypatch: pytest.MonkeyPatch) -
     assert capturado["include_local_variables"] is False
     assert capturado["send_default_pii"] is False
     assert capturado["before_send"] is observability._scrub_event
+    # ``before_send`` no corre sobre transacciones, y produccion muestrea el
+    # 10 % con ``request.url`` y query (revision de PV-02, 2026-09-24).
+    assert capturado["before_send_transaction"] is observability._scrub_event
+
+
+def test_una_transaccion_muestreada_sale_sin_telefono_ni_query() -> None:
+    transaccion: dict[str, Any] = {
+        "type": "transaction",
+        "transaction": "/public/deposit/preview",
+        "request": {
+            "url": "https://x/api/public/client/01J9ZX/5491155550042/appointments"
+            "?client_phone=5491155550042",
+            "query_string": "client_phone=5491155550042",
+        },
+        "breadcrumbs": {
+            "values": [
+                {
+                    "category": "httplib",
+                    "data": {
+                        "url": "https://x/api/public/client/01J9ZX/"
+                        "+5491155550042/appointments?client_phone=5491155550042",
+                        "method": "GET",
+                    },
+                }
+            ]
+        },
+    }
+
+    limpio: Any = observability._scrub_event(transaccion, {})  # type: ignore[arg-type]
+
+    assert limpio is not None
+    assert "5491155550042" not in str(limpio)
+    assert "query_string" not in limpio["request"]
+    assert limpio["request"]["url"].endswith("/01J9ZX/[phone]/appointments")
+    miga = limpio["breadcrumbs"]["values"][0]["data"]
+    assert miga["url"].endswith("/01J9ZX/[phone]/appointments")
+    assert miga["method"] == "GET"
