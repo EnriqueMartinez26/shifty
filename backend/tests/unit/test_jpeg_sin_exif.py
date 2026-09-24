@@ -49,9 +49,11 @@ def test_respeta_marcadores_sin_longitud_y_basura(intercalado: bytes) -> None:
     assert strip_jpeg_app1(original) == jpeg(640, 480, intercalado)
 
 
-def test_despues_del_sof_no_toca_nada() -> None:
-    # Un APP1 despues del SOF no lo lee ningun visor como metadato de la
-    # foto; el recorte se detiene en el SOF y el resto va tal cual.
+def test_un_app1_pegado_despues_del_eoi_no_se_toca() -> None:
+    # jpeg() termina en EOI (FF D9): el APP1 va DESPUES del final de la
+    # imagen. El recorte se detiene en el SOF, asi que lo que sigue (datos de
+    # entropia, EOI y cualquier cola) va tal cual. Recortar la cola despues
+    # del EOI (MPF, motion photos) es otro trabajo, no este.
     original = jpeg(100, 100) + EXIF
     assert strip_jpeg_app1(original) == original
 
