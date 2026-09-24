@@ -206,3 +206,7 @@ services:
     volumes:
       - ./nginx/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+      # F0-12 (decision 4): certbot en el host escribe el desafio en
+      # ./nginx/acme (--webroot) y el borde lo sirve en
+      # /.well-known/acme-challenge/ desde /var/www/acme.
+      - ./nginx/acme:/var/www/acme:ro

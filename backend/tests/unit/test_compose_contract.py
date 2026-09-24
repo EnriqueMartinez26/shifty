@@ -1211,3 +1211,11 @@ def test_nginx_puede_abrir_suficientes_conexiones() -> None:
     nofile = ulimits.get("nofile")
     valores = list(nofile.values()) if isinstance(nofile, dict) else [nofile]
     assert all(int(str(v)) >= 65536 for v in valores), nofile
+
+
+def test_nginx_de_produccion_sirve_el_desafio_de_certbot() -> None:
+    """F0-12 (decision 4): certbot en el host con webroot. El borde sirve
+    `/.well-known/acme-challenge/` desde /var/www/acme (nginx/, lane A); sin
+    el montaje la renovacion del certificado falla a los 90 dias."""
+    montajes = [str(v) for v in _servicios_prod()["nginx"].get("volumes") or []]  # type: ignore[attr-defined]
+    assert "./nginx/acme:/var/www/acme:ro" in montajes, montajes
