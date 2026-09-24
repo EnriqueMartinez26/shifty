@@ -5,9 +5,9 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, NamedTuple, cast
 
-from sqlalchemy import ColumnElement, Select, and_, case, func, select
+from sqlalchemy import ColumnElement, Exists, Select, and_, case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import InstrumentedAttribute
+from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from core.config import settings
 from core.utils import ensure_utc_aware, local_day_start, today_local
@@ -828,54 +828,90 @@ class ReportService:
             )
         return items
 
+    def _visited_before(
+        self, client_id: Any, *, start_dt: datetime, staff_id: str | None
+    ) -> Exists:
+        """``EXISTS`` un turno del cliente en la tienda anterior al rango.
+
+        Correlacionado por ``client_id`` (``ix_appointments_client_id``): cada
+        sonda recorre los turnos de UN cliente y se detiene en el primero que
+        cumple, no la historia de la tienda. Con el mismo filtro de profesional
+        que el rango, como la cohorte de siempre.
+        """
+        previo = aliased(Appointment, name="previo")
+        condiciones = [
+            previo.client_id == client_id,
+            previo.starts_at < start_dt,
+            previo.store_id == self.store_id,
+        ]
+        if staff_id:
+            condiciones.append(previo.staff_id == staff_id)
+        return exists().where(*condiciones)
+
     async def _client_cohorts(
         self, *, start_dt: datetime, end_dt: datetime, staff_id: str | None
     ) -> ReportClientStats:
-        """Cohortes de clientes del rango, agregadas en la base (AUD2-B5-02).
+        """Cohortes de clientes del rango, con costo proporcional al rango.
 
-        Por cliente: su PRIMERA visita hasta el fin del rango y si vino dentro
-        del rango. Nuevo = vino en el rango y su primera visita cae adentro;
-        inactivo = no vino en el rango pero ya habia venido antes. Vuelve una
-        sola fila; antes se traia una por cliente y se contaba en Python.
+        F3-05 (R2-06): antes se agrupaba por cliente TODA la historia de la
+        tienda anterior al fin del rango (``starts_at < fin``, sin cota
+        inferior) para saber la primera visita de cada uno; el reporte de 7
+        dias del Dashboard se volvia mas lento cada mes. Ahora, en una
+        sentencia:
+
+        - Clientes del rango: ``DISTINCT client_id`` de los turnos del rango
+          (indice ``(store_id, starts_at)``), como CTE.
+        - Nuevos: los del rango sin un turno anterior (``NOT EXISTS``).
+        - Inactivos = vinieron antes y no en el rango. Se cuentan como los
+          clientes de la tienda con ALGUN turno anterior (``EXISTS``, que se
+          detiene en el primero) menos los recurrentes (del rango y con turno
+          anterior): la diferencia de conjuntos es exactamente la definicion,
+          y evita recorrer la historia de cada inactivo buscando un turno en
+          el rango que no tiene.
+
+        Mismo conjunto que antes: turnos de cualquier estado, con cliente
+        vinculado (join a ``users``), de la tienda y, si corresponde, del
+        profesional (``test_reportes_cohortes_acotadas.py`` lo compara contra
+        la consulta vieja).
         """
-        por_cliente = (
-            select(
-                func.min(Appointment.starts_at).label("first_seen"),
-                func.max(case((Appointment.starts_at >= start_dt, 1), else_=0)).label(
-                    "in_range"
-                ),
-            )
+        del_rango = (
+            select(Appointment.client_id.label("client_id"))
             .join(User, Appointment.client_id == User.id)
             .where(
                 Appointment.client_id.is_not(None),
+                Appointment.starts_at >= start_dt,
                 Appointment.starts_at < end_dt,
                 *self._store_scope(Appointment.store_id),
             )
-            .group_by(Appointment.client_id)
+            .distinct()
         )
         if staff_id:
-            por_cliente = por_cliente.where(Appointment.staff_id == staff_id)
-        clientes = por_cliente.subquery()
-        en_rango = clientes.c.in_range == 1
-
-        def _contar(condicion: Any) -> Any:
-            return func.coalesce(func.sum(case((condicion, 1), else_=0)), 0)
-
-        result = await self.db.execute(
-            select(
-                _contar(en_rango),
-                _contar(and_(en_rango, clientes.c.first_seen >= start_dt)),
-                _contar(
-                    and_(clientes.c.in_range == 0, clientes.c.first_seen < start_dt)
-                ),
-            )
+            del_rango = del_rango.where(Appointment.staff_id == staff_id)
+        clientes = del_rango.cte("clientes_del_rango")
+        antes: dict[str, Any] = {"start_dt": start_dt, "staff_id": staff_id}
+        total = select(func.count()).select_from(clientes).scalar_subquery()
+        nuevos = (
+            select(func.count())
+            .select_from(clientes)
+            .where(~self._visited_before(clientes.c.client_id, **antes))
+            .scalar_subquery()
         )
-        total, nuevos, inactivos = (int(valor or 0) for valor in result.one())
+        con_historia = (
+            select(func.count(User.id))
+            .where(
+                *self._store_scope(User.store_id),
+                self._visited_before(User.id, **antes),
+            )
+            .scalar_subquery()
+        )
+        result = await self.db.execute(select(total, nuevos, con_historia))
+        total_n, nuevos_n, historia_n = (int(valor or 0) for valor in result.one())
+        recurrentes = max(total_n - nuevos_n, 0)
         return ReportClientStats(
-            total_clients=total,
-            new_clients=nuevos,
-            returning_clients=max(total - nuevos, 0),
-            inactive_clients=inactivos,
+            total_clients=total_n,
+            new_clients=nuevos_n,
+            returning_clients=recurrentes,
+            inactive_clients=max(historia_n - recurrentes, 0),
         )
 
     async def get_summary(
