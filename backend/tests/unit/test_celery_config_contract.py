@@ -150,15 +150,24 @@ def test_el_worker_late_en_un_archivo(
 
 
 def test_un_latido_que_no_puede_escribir_no_tumba_al_worker(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from celery.signals import heartbeat_sent
+    """El handler se llama DIRECTO, no por `Signal.send`: el despachador de
+    signals de Celery atrapa las excepciones de los receptores, asi que por ahi
+    el test pasaba aunque el handler levantara. Un disco que no acepta la
+    escritura se ve como unhealthy en el healthcheck y queda en el log, pero el
+    consumidor no puede morir por eso."""
+    import logging
 
     import core.celery_app as modulo
 
-    # Un directorio que no existe: el healthcheck marcara unhealthy, pero el
-    # consumidor no puede morir por eso.
-    monkeypatch.setattr(
-        modulo, "WORKER_HEARTBEAT_FILE", str(tmp_path / "no-existe" / "latido")
-    )
-    heartbeat_sent.send(sender=None)
+    def touch_que_falla(*_: object, **__: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "touch", touch_que_falla)
+    with caplog.at_level(logging.WARNING, logger=modulo.logger.name):
+        modulo._touch_worker_heartbeat()
+
+    avisos = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert avisos, "el latido fallido no dejo rastro en el log"
+    assert "worker_heartbeat_touch_failed" in avisos[0].getMessage()

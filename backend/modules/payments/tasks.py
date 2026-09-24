@@ -12,7 +12,7 @@ from core.database import (
 )
 from modules.payments.jobs import (
     expire_unpaid_appointments,
-    process_outbox_batch,
+    process_outbox_tick,
     process_webhook_inbox_batch,
     reconcile_pending_payments,
 )
@@ -25,7 +25,8 @@ def process_payment_outbox(self: Task, limit: int = 100) -> dict[str, int]:
             set_tenant_context(None, True)
             try:
                 await _apply_tenant_context(db)
-                return await process_outbox_batch(db, limit=limit)
+                # Con el lock del tick: una sola corrida del outbox a la vez.
+                return await process_outbox_tick(db, limit=limit)
             finally:
                 set_tenant_context(None, False)
 

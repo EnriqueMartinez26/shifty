@@ -69,7 +69,9 @@ def _touch_worker_heartbeat(**_: object) -> None:
     try:
         Path(WORKER_HEARTBEAT_FILE).touch()
     except OSError:
-        logger.debug("worker_heartbeat_touch_failed", exc_info=True)
+        # Warning y no debug: el healthcheck lo va a marcar unhealthy y el
+        # motivo tiene que estar en el log (cada 2 s mientras dure).
+        logger.warning("worker_heartbeat_touch_failed", exc_info=True)
 
 
 def _abort_if_role_can_bypass_rls() -> None:
