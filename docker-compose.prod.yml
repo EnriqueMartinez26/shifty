@@ -5,14 +5,21 @@
 #   - No toca volumenes de codigo: el compose base ya no monta ./backend ni
 #     ./frontend y todo corre la imagen construida. Un `volumes: []` aca no
 #     quitaria nada, porque compose fusiona las listas (2026-09-24).
-#   - Despublica del host los puertos internos (db/redis/rabbitmq/backend): los
-#     servicios se hablan por la red interna. Publicar backend:8000 en loopback
-#     permitia, desde el host, saltear nginx y spoofear X-Forwarded-For para
-#     evadir el rate limiting.
+#   - Despublica del host los puertos internos (db/redis/rabbitmq/backend/
+#     frontend): los servicios se hablan por la red interna. Publicar
+#     backend:8000 en loopback permitia, desde el host, saltear nginx y
+#     spoofear X-Forwarded-For para evadir el rate limiting.
 #   - Agrega el 443 con TLS real (certs montados desde ./nginx/certs).
 #   - Define su PROPIO entorno (abajo): antes no tocaba `environment`, asi que
 #     los tres procesos heredaban el ancla de desarrollo del compose base
 #     (AUD2-C-01, 2026-09-19).
+#
+# LISTAS: compose FUSIONA las listas del override con las del base (`ports`,
+# `volumes`...). Un `ports: []` no quita nada; hasta 2026-09-24 produccion
+# seguia publicando todo en 127.0.0.1. Para quitar lo que trae el base se usa
+# `!reset []`, que exige Docker Compose >= 2.24 en el servidor (un compose
+# anterior no entiende la etiqueta y no levanta). Verificar con
+# `docker compose -f docker-compose.yml -f docker-compose.prod.yml config`.
 #
 # Entorno de PRODUCCION. Dos mitades, y las dos hacen falta:
 #
@@ -78,7 +85,7 @@ services:
     env_file:
       - .env
     environment: *app_environment_prod
-    ports: []
+    ports: !reset []
 
   celery_worker:
     env_file:
@@ -91,16 +98,16 @@ services:
     environment: *app_environment_prod
 
   frontend:
-    ports: []
+    ports: !reset []
 
   db:
-    ports: []
+    ports: !reset []
 
   redis:
-    ports: []
+    ports: !reset []
 
   rabbitmq:
-    ports: []
+    ports: !reset []
 
   nginx:
     ports:

@@ -9,6 +9,7 @@ declaraba "ready".
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -18,9 +19,72 @@ from core.config import Settings
 COMPOSE = Path(__file__).resolve().parents[3] / "docker-compose.yml"
 
 
+class _Reset:
+    """Valor de una clave marcada `!reset`: compose borra lo que traia el base."""
+
+    def __repr__(self) -> str:
+        return "!reset"
+
+
+RESET = _Reset()
+
+
+# PyYAML no trae stubs en el entorno (ignore_missing_imports): SafeLoader es Any.
+class CargadorCompose(yaml.SafeLoader):  # type: ignore[misc]
+    """SafeLoader que entiende `!reset`, la etiqueta de compose (>= 2.24).
+
+    `yaml.safe_load` rechaza una etiqueta que no conoce. Todo test que lea un
+    compose pasa por aca, para que ninguno se debilite salteando el archivo.
+    """
+
+
+def _construir_reset(_cargador: yaml.SafeLoader, _nodo: yaml.nodes.Node) -> _Reset:
+    return RESET
+
+
+CargadorCompose.add_constructor("!reset", _construir_reset)
+
+
+def cargar_compose(texto: str) -> dict[str, Any]:
+    # CargadorCompose hereda de SafeLoader: no construye objetos de Python.
+    data = yaml.load(texto, Loader=CargadorCompose)
+    assert isinstance(data, dict), "el compose no es un mapa"
+    return data
+
+
+def fusionar(base: object, override: object) -> object:
+    """Fusion de compose de `override` sobre `base`, como `docker compose config`.
+
+    Los mapas se fusionan por clave y las LISTAS SE CONCATENAN: un `ports: []`
+    o `volumes: []` en el override no quita nada. Solo `!reset` borra la clave.
+    Compose reemplaza (no concatena) algunas listas como `command`; esta vista
+    se usa para `ports` y `volumes`, que si concatena.
+    """
+    if isinstance(override, dict):
+        fusionado = dict(base) if isinstance(base, dict) else {}
+        for clave, valor in override.items():
+            if valor is RESET:
+                fusionado.pop(clave, None)
+            else:
+                fusionado[clave] = fusionar(fusionado.get(clave), valor)
+        return fusionado
+    if isinstance(override, list):
+        previa = list(base) if isinstance(base, list) else []
+        return previa + [item for item in override if item not in previa]
+    return override
+
+
+def servicios_fusionados(base: str, override: str) -> dict[str, dict[str, object]]:
+    fusion = fusionar(cargar_compose(base), cargar_compose(override))
+    assert isinstance(fusion, dict)
+    return {
+        str(nombre): dict(servicio or {})
+        for nombre, servicio in dict(fusion["services"]).items()
+    }
+
+
 def _services() -> dict[str, dict[str, object]]:
-    data = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
-    return dict(data["services"])
+    return dict(cargar_compose(COMPOSE.read_text(encoding="utf-8"))["services"])
 
 
 def _env_items(service: dict[str, object]) -> dict[str, str]:
@@ -54,7 +118,7 @@ def _nodos_de_environment(
     comparar por identidad responde la pregunta que importa: los tres servicios
     apuntan al mismo bloque, o alguien copio uno.
     """
-    raiz = yaml.compose(texto)
+    raiz = yaml.compose(texto, Loader=CargadorCompose)
     assert raiz is not None, "el compose esta vacio"
     services = _nodo_hijo(raiz, "services")
     return {
@@ -74,8 +138,7 @@ def verificar_paridad_de_entorno(texto: str, servicios: tuple[str, ...]) -> None
     la regresion que el docstring de este archivo dice cubrir. Ahora se comparan
     los VALORES y, ademas, se exige que los tres apunten al MISMO ancla.
     """
-    data = yaml.safe_load(texto)
-    services = dict(data["services"])
+    services = dict(cargar_compose(texto)["services"])
     api = _env_items(services[servicios[0]])
     assert api, f"{servicios[0]} debe declarar environment en compose"
     for nombre in servicios[1:]:
@@ -245,8 +308,7 @@ DEFAULTS_DE_DESARROLLO_PROHIBIDOS = {
 
 
 def _servicios_prod() -> dict[str, dict[str, object]]:
-    data = yaml.safe_load(COMPOSE_PROD.read_text(encoding="utf-8"))
-    return dict(data["services"])
+    return dict(cargar_compose(COMPOSE_PROD.read_text(encoding="utf-8"))["services"])
 
 
 def _env_prod(servicio: str) -> dict[str, str]:
@@ -498,16 +560,81 @@ def test_el_contrato_ve_los_montajes_de_codigo_en_cualquier_forma() -> None:
     assert len(encontrados) == 3, encontrados
 
 
-def test_produccion_no_cancela_volumenes_con_una_lista_vacia() -> None:
-    """`volumes: []` en el override no quita los del base: compose fusiona listas."""
+def test_produccion_no_cancela_listas_con_una_lista_vacia() -> None:
+    """`volumes: []` o `ports: []` en el override no quitan los del base:
+    compose fusiona listas. Lo que se quiere quitar va con `!reset []`."""
     vacias = [
-        nombre
+        f"{nombre}.{clave}"
         for nombre, servicio in _servicios_prod().items()
         if isinstance(servicio, dict)
-        and "volumes" in servicio
-        and servicio["volumes"] in ([], None)
+        for clave in ("volumes", "ports")
+        if clave in servicio and servicio[clave] in ([], None)
     ]
     assert not vacias, (
-        "estos servicios del override declaran `volumes: []`, que no cancela "
-        f"los montajes del compose base: {vacias}"
+        "estas claves del override son una lista vacia, que no cancela lo que "
+        f"declara el compose base (usar `!reset []`): {vacias}"
     )
+
+
+# --- En produccion solo nginx publica puertos (2026-09-24) --------------------
+#
+# Sintoma: el override declaraba `ports: []` en backend, frontend, db, redis y
+# rabbitmq para despublicarlos, pero compose fusiona las listas: el `config` de
+# produccion seguia publicando en 127.0.0.1 backend:8000, frontend:3000,
+# db:5432, redis:6379 y rabbitmq:5672/15672. Con backend:8000 alcanzable desde
+# el host se salteaba nginx y se podia spoofear X-Forwarded-For para evadir el
+# rate limit. Solo `ports: !reset []` (compose >= 2.24) los quita. Por eso el
+# contrato mira la vista FUSIONADA, no el override suelto.
+
+
+def _servicios_de_produccion() -> dict[str, dict[str, object]]:
+    """Base + override fusionados: lo que corre en produccion."""
+    return servicios_fusionados(
+        COMPOSE.read_text(encoding="utf-8"), COMPOSE_PROD.read_text(encoding="utf-8")
+    )
+
+
+def puertos_publicados(
+    servicios: dict[str, dict[str, object]],
+) -> dict[str, list[str]]:
+    return {
+        nombre: [str(puerto) for puerto in puertos]
+        for nombre, servicio in servicios.items()
+        if isinstance(puertos := servicio.get("ports"), list) and puertos
+    }
+
+
+def test_en_produccion_solo_nginx_publica_puertos() -> None:
+    publicados = puertos_publicados(_servicios_de_produccion())
+    assert set(publicados) == {"nginx"}, (
+        f"en produccion publican puertos servicios internos, no solo nginx: {publicados}"
+    )
+    assert {"80:80", "443:443"} <= set(publicados["nginx"]), publicados["nginx"]
+
+
+_BASE_CON_PUERTOS = """
+services:
+  backend:
+    ports:
+      - "127.0.0.1:8000:8000"
+"""
+
+_OVERRIDE_CON_LISTA_VACIA = """
+services:
+  backend:
+    ports: []
+"""
+
+_OVERRIDE_CON_RESET = """
+services:
+  backend:
+    ports: !reset []
+"""
+
+
+def test_la_vista_fusionada_distingue_la_lista_vacia_del_reset() -> None:
+    """Sin este contraejemplo, la fusion del test podria no ser la de compose."""
+    con_lista_vacia = servicios_fusionados(_BASE_CON_PUERTOS, _OVERRIDE_CON_LISTA_VACIA)
+    assert puertos_publicados(con_lista_vacia) == {"backend": ["127.0.0.1:8000:8000"]}
+    con_reset = servicios_fusionados(_BASE_CON_PUERTOS, _OVERRIDE_CON_RESET)
+    assert puertos_publicados(con_reset) == {}

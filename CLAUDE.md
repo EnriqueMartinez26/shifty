@@ -358,7 +358,10 @@ Una instrucción en lenguaje natural no es una garantía.
     imagen vieja, como root). Ningún servicio de la app monta el código del
     host sobre `/app`: corre la imagen, también en producción, donde un
     `volumes: []` del override no cancelaba el montaje porque compose fusiona
-    listas (2026-09-24, `test_compose_contract`).
+    listas (2026-09-24, `test_compose_contract`). Por lo mismo, lo que el
+    override quita del base va con `!reset []` (así se despublican los puertos
+    internos; en producción solo nginx publica) y el servidor necesita Docker
+    Compose >= 2.24.
 23. **`redirect_slashes=False`**: detrás de nginx el 307 pierde `/api` y el
     front recibe HTML. Cada `apiClient` usa la ruta exacta;
     `test_frontend_routes_contract` lo audita.
