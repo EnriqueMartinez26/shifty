@@ -24,7 +24,12 @@ export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({ checked, onToggle, l
     className="relative h-7 w-14 flex-shrink-0 rounded-full transition-all"
     style={{
       background: checked ? colors2000s.orange.light : colors2000s.bg.disabled,
-      boxShadow: colors2000s.shadows.insetDark
+      // Apagado, el riel gris claro casi no se distingue de la tarjeta blanca
+      // (1.23:1); el anillo interior le da un borde de 4.29:1 sin mover la
+      // perilla, porque una sombra no ocupa lugar como un border.
+      boxShadow: checked
+        ? colors2000s.shadows.insetDark
+        : `${colors2000s.shadows.insetDark}, inset 0 0 0 1px ${colors2000s.text.secondary}`
     }}
   >
     <span
