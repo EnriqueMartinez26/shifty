@@ -141,9 +141,9 @@ class StoreSettingsService {
     return data
   }
 
-  async uploadMedia(kind: 'logo' | 'cover', file: File): Promise<StoreMediaUploadResult> {
+  async uploadLogo(file: File): Promise<StoreMediaUploadResult> {
     const form = new FormData()
-    form.append('kind', kind)
+    form.append('kind', 'logo')
     form.append('file', file)
     // Se fuerza multipart (el cliente por defecto manda application/json) para
     // que axios/el navegador arme el boundary; el backend valida por magic bytes.

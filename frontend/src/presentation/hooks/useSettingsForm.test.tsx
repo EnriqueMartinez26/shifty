@@ -65,7 +65,7 @@ describe('setFormData en su forma de objeto', () => {
 })
 
 describe('setFormData en su forma de funcion', () => {
-  it('toma el formulario actual, como hace handleMediaUpload despues del await', () => {
+  it('toma el formulario actual, como hace handleLogoUpload despues del await', () => {
     const { result } = renderForm(store)
 
     act(() => {

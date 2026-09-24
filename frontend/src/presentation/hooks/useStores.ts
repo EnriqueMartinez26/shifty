@@ -52,10 +52,10 @@ export const useUpdateStoreFeatureFlags = () => {
   })
 }
 
-export const useUploadStoreMedia = () => {
+export const useUploadStoreLogo = () => {
   const queryClient = useQueryClient()
-  return useMutation<StoreMediaUploadResult, Error, { kind: 'logo' | 'cover'; file: File }>({
-    mutationFn: ({ kind, file }) => storeSettingsService.uploadMedia(kind, file),
+  return useMutation<StoreMediaUploadResult, Error, File>({
+    mutationFn: (file) => storeSettingsService.uploadLogo(file),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['store-settings'] })
     }

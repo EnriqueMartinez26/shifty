@@ -44,7 +44,7 @@ import {
   useStoreSettings,
   useUpdateStoreFeatureFlags,
   useUpdateStoreSettings,
-  useUploadStoreMedia
+  useUploadStoreLogo
 } from '../hooks/useStores'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
 import { planSave, type BusinessHoursPeriod } from '../lib/settingsDraft'
@@ -153,7 +153,7 @@ const SettingsPage: React.FC = () => {
   const { data: store, isLoading } = useStoreSettings()
   const featureFlagsQuery = useStoreFeatureFlags()
   const updateStore = useUpdateStoreSettings()
-  const uploadMedia = useUploadStoreMedia()
+  const uploadLogo = useUploadStoreLogo()
   const [logoError, setLogoError] = useState<string | null>(null)
   const updateFeatureFlags = useUpdateStoreFeatureFlags()
   const changePassword = useChangePassword()
@@ -175,10 +175,7 @@ const SettingsPage: React.FC = () => {
 
   const labels = getBusinessLabels(formData?.business_type)
 
-  const handleMediaUpload = async (
-    kind: 'logo' | 'cover',
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = '' // permite volver a elegir el mismo archivo
     if (!file) return
@@ -194,13 +191,8 @@ const SettingsPage: React.FC = () => {
       return
     }
     try {
-      const result = await uploadMedia.mutateAsync({ kind, file })
-      setFormData((prev) => {
-        if (!prev) return prev
-        return kind === 'logo'
-          ? { ...prev, logo_url: result.url }
-          : { ...prev, cover_url: result.url }
-      })
+      const result = await uploadLogo.mutateAsync(file)
+      setFormData((prev) => (prev ? { ...prev, logo_url: result.url } : prev))
     } catch (err) {
       setLogoError(getErrorMessage(err, 'No se pudo subir la imagen'))
     }
@@ -511,18 +503,18 @@ const SettingsPage: React.FC = () => {
                       className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
                       style={buttonStyles2000s.default}
                     >
-                      {uploadMedia.isPending ? (
+                      {uploadLogo.isPending ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
                         <Store className="w-4 h-4" />
                       )}
-                      {uploadMedia.isPending ? 'Subiendo...' : 'Subir imagen'}
+                      {uploadLogo.isPending ? 'Subiendo...' : 'Subir imagen'}
                       <input
                         type="file"
                         accept="image/png,image/jpeg,image/webp"
                         className="hidden"
-                        disabled={uploadMedia.isPending}
-                        onChange={(e) => void handleMediaUpload('logo', e)}
+                        disabled={uploadLogo.isPending}
+                        onChange={(e) => void handleLogoUpload(e)}
                       />
                     </label>
                     <p
