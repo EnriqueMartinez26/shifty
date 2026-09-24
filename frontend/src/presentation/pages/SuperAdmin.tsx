@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 
 import { AlertTriangle } from 'lucide-react'
 
@@ -78,7 +78,8 @@ const SuperAdminPage: React.FC = () => {
   const [search, setSearch] = useState('')
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('active')
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('all')
-  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null)
+  // La tienda que el usuario eligio. La efectiva se deriva en el render.
+  const [chosenStoreId, setChosenStoreId] = useState<string | null>(null)
   const [modal, setModal] = useState<SuperAdminModalKey>(null)
   const [feedback, setFeedback] = useState<FeedbackMessage | null>(null)
   const [modalError, setModalError] = useState<string | null>(null)
@@ -107,6 +108,15 @@ const SuperAdminPage: React.FC = () => {
   )
 
   const storesQuery = useSuperAdminStores(storeParams)
+  // Sin eleccion (o si la elegida ya no esta en el listado filtrado) se usa la
+  // primera. Antes un efecto escribia ese valor: un render con `null` de mas
+  // y, al crear una tienda, pisaba la recien creada con la primera porque el
+  // listado todavia no la traia (F11b-21, regla 27).
+  const selectedStore =
+    storesQuery.data?.find((store) => store.public_id === chosenStoreId) ??
+    storesQuery.data?.[0] ??
+    null
+  const selectedStoreId = selectedStore?.public_id ?? null
   const overviewQuery = useSuperAdminOverview(selectedStoreId)
   const auditQuery = useSuperAdminStoreAudit(selectedStoreId)
   const plansQuery = useSuperAdminPlans(true)
@@ -124,27 +134,6 @@ const SuperAdminPage: React.FC = () => {
   const updateCouponMutation = useUpdateSuperAdminCoupon()
   const redeemCouponMutation = useRedeemSuperAdminCoupon()
 
-  useEffect(() => {
-    const firstStore = storesQuery.data?.[0]
-    if (!firstStore) {
-      setSelectedStoreId(null)
-      return
-    }
-    const selectedExists = storesQuery.data?.some((store) => store.public_id === selectedStoreId)
-    if (!selectedExists) {
-      setSelectedStoreId(firstStore.public_id)
-    }
-  }, [selectedStoreId, storesQuery.data])
-
-  useEffect(() => {
-    setModalError(null)
-  }, [modal])
-
-  const selectedStore = useMemo(
-    () => storesQuery.data?.find((store) => store.public_id === selectedStoreId) ?? null,
-    [selectedStoreId, storesQuery.data]
-  )
-
   const overview = overviewQuery.data
   const activePlans = useMemo(
     () => (plansQuery.data ?? []).filter((plan) => plan.is_active),
@@ -157,14 +146,18 @@ const SuperAdminPage: React.FC = () => {
   const hasSelectedStoreSubscription = Boolean(overview?.subscription)
   const selectedStoreUnavailable = !selectedStore || !selectedStore.is_active
 
-  const closeModal = () => {
-    setModal(null)
+  // Abrir o cerrar un modal limpia el error del anterior en el mismo evento,
+  // no en un efecto que mira `modal`.
+  const openModal = (key: SuperAdminModalKey) => {
+    setModal(key)
     setModalError(null)
   }
 
+  const closeModal = () => openModal(null)
+
   const openCreateStoreModal = () => {
     setStoreForm(createEmptyStoreForm())
-    setModal('create-store')
+    openModal('create-store')
   }
 
   const openEditStoreFor = (store: SuperAdminStoreRow) => {
@@ -196,7 +189,7 @@ const SuperAdminPage: React.FC = () => {
           : store.send_email_reminders,
       is_active: store.is_active
     })
-    setModal('edit-store')
+    openModal('edit-store')
   }
 
   const openEditStoreModal = () => {
@@ -206,7 +199,7 @@ const SuperAdminPage: React.FC = () => {
 
   const openCreateAdminModal = () => {
     setAdminForm(createEmptyAdminForm())
-    setModal('create-admin')
+    openModal('create-admin')
   }
 
   const openEditUserModal = (targetUser: SuperAdminUser) => {
@@ -220,13 +213,13 @@ const SuperAdminPage: React.FC = () => {
       password: '',
       is_active: targetUser.is_active
     })
-    setModal('edit-user')
+    openModal('edit-user')
   }
 
   const openCreatePlanModal = () => {
     setEditingPlan(null)
     setPlanForm(createEmptyPlanForm())
-    setModal('create-plan')
+    openModal('create-plan')
   }
 
   const openEditPlanModal = (plan: SuperAdminPlan) => {
@@ -241,7 +234,7 @@ const SuperAdminPage: React.FC = () => {
       max_services: plan.max_services !== null ? String(plan.max_services) : '',
       is_active: plan.is_active
     })
-    setModal('edit-plan')
+    openModal('edit-plan')
   }
 
   const openAssignPlanModal = () => {
@@ -256,13 +249,13 @@ const SuperAdminPage: React.FC = () => {
       current_period_start: toDateTimeInput(overview?.subscription?.current_period_start || null),
       current_period_end: toDateTimeInput(overview?.subscription?.current_period_end || null)
     })
-    setModal('assign-plan')
+    openModal('assign-plan')
   }
 
   const openCreateCouponModal = () => {
     setEditingCoupon(null)
     setCouponForm(createEmptyCouponForm())
-    setModal('create-coupon')
+    openModal('create-coupon')
   }
 
   const openEditCouponModal = (coupon: SuperAdminCoupon) => {
@@ -279,14 +272,14 @@ const SuperAdminPage: React.FC = () => {
       description: coupon.description || '',
       is_active: coupon.is_active
     })
-    setModal('edit-coupon')
+    openModal('edit-coupon')
   }
 
   const openRedeemCouponModal = () => {
     setRedeemForm({
       coupon_code: activeCoupons[0]?.code || ''
     })
-    setModal('redeem-coupon')
+    openModal('redeem-coupon')
   }
 
   const handleStoreSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -307,7 +300,7 @@ const SuperAdminPage: React.FC = () => {
 
       if (modal === 'create-store') {
         const created = await createStoreMutation.mutateAsync(payload)
-        setSelectedStoreId(created.public_id)
+        setChosenStoreId(created.public_id)
         setFeedback({ tone: 'success', text: `Tienda creada: ${created.name}` })
       } else if (selectedStore) {
         const updated = await updateStoreMutation.mutateAsync({
@@ -667,7 +660,7 @@ const SuperAdminPage: React.FC = () => {
             subscriptionFilter={subscriptionFilter}
             setSubscriptionFilter={setSubscriptionFilter}
             selectedStoreId={selectedStoreId}
-            setSelectedStoreId={setSelectedStoreId}
+            setSelectedStoreId={setChosenStoreId}
             storesQuery={storesQuery}
             openEditStoreFor={openEditStoreFor}
             toggleStoreActive={toggleStoreActive}

@@ -146,17 +146,19 @@ const mockOverview: SuperAdminStoreOverview = {
   recent_redemptions: []
 }
 
+let mockStores: SuperAdminStoreRow[] = [mockStoreUno]
+const mockOverviewFor = jest.fn()
+
 jest.mock('../hooks/useSuperAdmin', () => ({
   useSuperAdminStores: () => ({
-    data: [mockStoreUno],
+    data: mockStores,
     isLoading: false,
     isFetching: false
   }),
-  useSuperAdminOverview: () => ({
-    data: mockOverview,
-    isLoading: false,
-    isFetching: false
-  }),
+  useSuperAdminOverview: (storeId: string | null) => {
+    mockOverviewFor(storeId)
+    return { data: mockOverview, isLoading: false, isFetching: false }
+  },
   useSuperAdminStoreAudit: () => ({ data: [], isLoading: false, isFetching: false }),
   useSuperAdminPlans: () => ({ data: [mockPlanOro], isLoading: false, isFetching: false }),
   useSuperAdminCoupons: () => ({ data: [mockCupon], isLoading: false, isFetching: false }),
@@ -217,6 +219,8 @@ const openModalForm = (): HTMLFormElement => {
 
 describe('SuperAdminPage', () => {
   beforeEach(() => {
+    mockStores = [mockStoreUno]
+    mockOverviewFor.mockReset()
     Object.values(mockMutations).forEach((mutation) => mutation.mockReset())
     mockMutations.createStore.mockResolvedValue({
       ...mockStoreUno,
@@ -247,6 +251,33 @@ describe('SuperAdminPage', () => {
     expect(
       sectionOf('Detalle del tenant').getAllByText('root@barberuno.com').length
     ).toBeGreaterThan(0)
+  })
+
+  it('sin eleccion toma la primera tienda desde el primer render (F11b-21)', () => {
+    render(<SuperAdminPage />)
+
+    expect(mockOverviewFor).toHaveBeenCalledWith('store-1')
+    expect(mockOverviewFor).not.toHaveBeenCalledWith(null)
+  })
+
+  // Antes un efecto reponia la primera tienda en cuanto la recien creada no
+  // estaba en el listado, y cuando el listado la traia ya se habia perdido.
+  it('la tienda recien creada queda elegida cuando el listado la trae (F11b-21)', async () => {
+    const { rerender } = render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'barber-dos' } })
+    fireEvent.submit(form)
+    expect(await screen.findByText('Tienda creada: Barber Dos')).toBeInTheDocument()
+
+    mockStores = [mockStoreUno, { ...mockStoreUno, public_id: 'store-2', name: 'Barber Dos' }]
+    mockOverviewFor.mockReset()
+    rerender(<SuperAdminPage />)
+
+    expect(mockOverviewFor).toHaveBeenLastCalledWith('store-2')
   })
 
   it('crea una tienda con el payload del formulario', async () => {
