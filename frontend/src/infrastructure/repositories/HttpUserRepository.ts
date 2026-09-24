@@ -9,6 +9,36 @@ import { IUserRepository } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
 
+type UserPayloadInput = {
+  [K in keyof UserWriteInput]?: UserWriteInput[K] | null
+} & { email?: string }
+
+const SNAKE_CASE_FIELDS: Record<keyof UserPayloadInput, string> = {
+  email: 'email',
+  password: 'password',
+  firstName: 'first_name',
+  lastName: 'last_name',
+  phone: 'phone',
+  role: 'role',
+  isActive: 'is_active'
+}
+
+/**
+ * Unico mapeo del payload de escritura de usuarios (POST y PATCH): solo viajan
+ * los campos PRESENTES, en snake_case, y `password` vacio nunca viaja (editar
+ * sin tocar la clave no la cambia; crear sin clave lo rechaza el backend).
+ */
+const toUserPayload = (input: UserPayloadInput): Record<string, unknown> => {
+  const payload: Record<string, unknown> = {}
+  for (const key of Object.keys(SNAKE_CASE_FIELDS) as (keyof UserPayloadInput)[]) {
+    const value = input[key]
+    if (value === undefined) continue
+    if (key === 'password' && !value) continue
+    payload[SNAKE_CASE_FIELDS[key]] = value
+  }
+  return payload
+}
+
 /**
  * Implementación HTTP concreta para la persistencia de usuarios.
  * Extiende de BaseRepository para beneficiarse del control de errores unificado.
@@ -76,33 +106,24 @@ export class HttpUserRepository
 
   protected async createImpl(user: User, password?: string): Promise<User> {
     const primitives = user.toPrimitives()
-    const { data } = await this.client.post<UserResponseDTO>('/users/', {
-      email: primitives.email,
-      password: password,
-      first_name: primitives.firstName,
-      last_name: primitives.lastName,
-      phone: primitives.phone,
-      role: primitives.role
-    })
+    const { data } = await this.client.post<UserResponseDTO>(
+      '/users/',
+      toUserPayload({
+        email: primitives.email,
+        password,
+        firstName: primitives.firstName,
+        lastName: primitives.lastName,
+        phone: primitives.phone,
+        role: primitives.role
+      })
+    )
     return UserMapper.toDomain(data)
   }
 
   protected async updateImpl(id: string, data: UserWriteInput): Promise<User> {
-    // Antes recibia `Partial<User>` y el formulario le mandaba snake_case por
-    // un `as unknown as`, asi que aceptaba las dos convenciones leyendo un
-    // Record crudo. Ahora el contenedor mapea a `UserWriteInput` y el
-    // compilador verifica el borde. Password solo si no viene vacio.
-    const updateData: Record<string, unknown> = {}
-    if (data.firstName !== undefined) updateData.first_name = data.firstName
-    if (data.lastName !== undefined) updateData.last_name = data.lastName
-    if (data.phone !== undefined) updateData.phone = data.phone
-    if (data.role !== undefined) updateData.role = data.role
-    if (data.isActive !== undefined) updateData.is_active = data.isActive
-    if (data.password) updateData.password = data.password
-
     const { data: responseData } = await this.client.patch<UserResponseDTO>(
       `/users/${id}`,
-      updateData
+      toUserPayload(data)
     )
     return UserMapper.toDomain(responseData)
   }
