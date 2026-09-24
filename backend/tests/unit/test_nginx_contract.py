@@ -281,3 +281,60 @@ def test_las_zonas_de_memoria_compartida_no_repiten_nombre(ruta: Path) -> None:
             zona = next(a for a in d.args if a.startswith("zone="))
             nombres.append(zona.removeprefix("zone=").split(":")[0])
     assert len(nombres) == len(set(nombres)), nombres
+
+
+# --- F0-07 / F0-08: compresion y buffers --------------------------------------
+
+TIPOS_COMPRIMIDOS = {
+    "text/css",
+    "application/javascript",
+    "text/javascript",
+    "application/json",
+    "image/svg+xml",
+}
+
+
+@EDGES
+def test_comprime_texto_y_nunca_imagenes_binarias(ruta: Path) -> None:
+    http = leer(ruta)
+    assert una(http, "gzip").args == ("on",)
+    assert una(http, "gzip_vary").args == ("on",)
+    # `any`: tambien lo que viene del backend y de la SPA (el edge es proxy).
+    assert una(http, "gzip_proxied").args == ("any",)
+    assert una(http, "gzip_comp_level").args == ("5",)
+    assert una(http, "gzip_min_length").args == ("1024",)
+    tipos = set(una(http, "gzip_types").args)
+    assert TIPOS_COMPRIMIDOS <= tipos
+    # png/jpg/webp ya vienen comprimidos: recomprimir es CPU sin ahorro.
+    assert {t for t in tipos if t.startswith("image/")} == {"image/svg+xml"}
+
+
+@EDGES
+def test_auth_no_se_comprime(ruta: Path) -> None:
+    # BREACH: una respuesta comprimida que refleja entrada del atacante junto
+    # a un secreto (tokens de /auth/) filtra el secreto por el tamanio.
+    server = server_de_la_app(leer(ruta))
+    auth = location(server, "/api/auth/")
+    assert una(auth, "gzip").args == ("off",)
+    assert una(auth, "proxy_pass").args == ("http://api",)
+    api = location(server, "/api/")
+    assert [r.args for r in todas(auth, "rewrite")] == [
+        r.args for r in todas(api, "rewrite")
+    ]
+
+
+@EDGES
+def test_los_buffers_del_proxy_no_vuelcan_a_disco_una_respuesta_mediana(
+    ruta: Path,
+) -> None:
+    # Con el default (8 x 4k) toda respuesta > 32 KB, la disponibilidad
+    # incluida, iba a un archivo temporal antes de salir.
+    http = leer(ruta)
+    for server in servidores(http):
+        for loc in locations(server):
+            if not todas(loc.bloque, "proxy_pass"):
+                continue
+            niveles = (http, server, loc.bloque)
+            assert efectivo("proxy_buffer_size", *niveles) == ("16k",), loc.args
+            assert efectivo("proxy_buffers", *niveles) == ("16", "16k"), loc.args
+            assert efectivo("proxy_busy_buffers_size", *niveles) == ("32k",)
