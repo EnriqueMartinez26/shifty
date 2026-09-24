@@ -253,6 +253,32 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"REDIS_SOCKET_TIMEOUT_SECONDS": 0},
         "REDIS_SOCKET_TIMEOUT_SECONDS debe ser >= 0.1",
     ),
+    # F1-19: una ventana de retencion en 0 seria una purga de todo.
+    (
+        "development",
+        {"RETENTION_OUTBOX_PROCESSED_DAYS": 0},
+        "RETENTION_OUTBOX_PROCESSED_DAYS debe ser >= 1",
+    ),
+    (
+        "development",
+        {"RETENTION_INBOX_PROCESSED_DAYS": 0},
+        "RETENTION_INBOX_PROCESSED_DAYS debe ser >= 1",
+    ),
+    (
+        "development",
+        {"RETENTION_OTP_EXPIRED_DAYS": 0},
+        "RETENTION_OTP_EXPIRED_DAYS debe ser >= 1",
+    ),
+    (
+        "development",
+        {"RETENTION_NOTIFICATIONS_READ_DAYS": 0},
+        "RETENTION_NOTIFICATIONS_READ_DAYS debe ser >= 1",
+    ),
+    (
+        "development",
+        {"RETENTION_BATCH_SIZE": 0},
+        "RETENTION_BATCH_SIZE debe ser >= 1",
+    ),
 ]
 
 # Filas de los chequeos sueltos: los `if` escritos uno por uno, fuera de las
@@ -268,7 +294,7 @@ N_SUELTOS = 17
 # nuevos no llegaron aca y el inventario, que solo detectaba borrados, no dijo
 # nada. Bajar este numero es borrar una proteccion; subirlo sin agregar la
 # fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 36
+FILAS_ESPERADAS = 41
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 
