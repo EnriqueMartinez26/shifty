@@ -31,8 +31,13 @@ from tests.postgres.conftest import auth_headers, register_and_login
 
 pytestmark = pytest.mark.postgres
 
+# Solo las transacciones que nacieron DESPUES del inicio de la observacion:
+# otra conexion del rol que quedo abierta de un test anterior (u otro pool del
+# proceso) no es de este flujo y no puede ensuciar la muestra.
 _ESTADOS_APP = text(
-    "SELECT state FROM pg_stat_activity "
+    "SELECT CASE WHEN xact_start IS NOT NULL AND xact_start < :desde "
+    "THEN 'ajena' ELSE state END "
+    "FROM pg_stat_activity "
     "WHERE usename = 'shifty_app' AND backend_type = 'client backend'"
 )
 
@@ -43,10 +48,18 @@ class _Observador:
     def __init__(self, owner_engine: AsyncEngine) -> None:
         self.owner_engine = owner_engine
         self.muestras: list[tuple[str, list[str]]] = []
+        self.desde: Any = None
+
+    async def empezar(self) -> None:
+        """Marca el inicio: se ignoran transacciones abiertas antes."""
+        async with self.owner_engine.connect() as conn:
+            self.desde = (await conn.execute(text("SELECT clock_timestamp()"))).scalar()
+        self.muestras.clear()
 
     async def mirar(self, donde: str) -> None:
         async with self.owner_engine.connect() as conn:
-            estados = [fila[0] or "" for fila in (await conn.execute(_ESTADOS_APP))]
+            filas = await conn.execute(_ESTADOS_APP, {"desde": self.desde})
+            estados = [fila[0] or "" for fila in filas]
         self.muestras.append((donde, estados))
 
     def en_transaccion(self) -> list[tuple[str, list[str]]]:
@@ -132,7 +145,7 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
     store, token, servicio, staff, dia = await _tienda_con_cobros(
         client, app_sessions, "pg-f105"
     )
-    obs.muestras.clear()
+    await obs.empezar()
 
     # Reserva publica con sena: link de MP + mail "reserva registrada".
     reserva = await client.post(
