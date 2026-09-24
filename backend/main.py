@@ -14,6 +14,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import assert_rls_capable_role, engine
 from core.middleware import TenantMiddleware
+from core.logging import configure_logging
 from core.observability import init_observability
 from core.responses import CanonicalJsonMiddleware, error_response
 from core.exceptions import AppException
@@ -150,8 +151,10 @@ async def _dispose_db_pool_on_shutdown() -> None:
         logger.warning("db_pool_dispose_failed_on_shutdown", exc_info=True)
 
 
-# Sentry se inicializa antes de construir la app para que sus integraciones
-# alcancen a instrumentar el ciclo de request.
+# Logs JSON (F0-22) antes que nada: lo que se loguee al arrancar ya sale con
+# el formato de produccion. Sentry se inicializa antes de construir la app
+# para que sus integraciones alcancen a instrumentar el ciclo de request.
+configure_logging()
 init_observability("api")
 
 app = FastAPI(

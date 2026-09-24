@@ -42,4 +42,6 @@ EXPOSE 8000
 # --timeout-graceful-shutdown (F0-21): ante SIGTERM uvicorn deja de aceptar y
 # espera a los requests en curso como mucho 30 s; compose le da 35 s
 # (stop_grace_period) antes del SIGKILL, para que el lifespan cierre el pool.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "30"]
+# --no-access-log (F0-22): nginx ya registra cada request; el de uvicorn
+# duplicaba cada linea y llevaba la query entera (client_phone incluido).
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "30", "--no-access-log"]

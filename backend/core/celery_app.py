@@ -6,6 +6,7 @@ from celery.schedules import crontab
 from celery.signals import beat_init, heartbeat_sent, worker_init
 from core.config import SETTINGS_BOOT_ERROR, settings
 from core.database import assert_rls_capable_role, engine
+from core.logging import configure_logging
 from core.model_registry import load_all_models
 from core.observability import init_observability
 from core.worker_loop import run_in_worker_loop
@@ -40,6 +41,7 @@ def _start_worker_process(**_: object) -> None:
     conexion a la base.
     """
     _abort_if_settings_are_fallback()
+    configure_logging()
     init_observability("worker")
     _abort_if_role_can_bypass_rls()
 

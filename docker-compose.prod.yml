@@ -41,6 +41,7 @@
 # gana al default de produccion.
 x-app-environment-prod: &app_environment_prod
   ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
   VERSION: ${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
   SENTRY_DSN: ${SENTRY_DSN:-}
   SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}

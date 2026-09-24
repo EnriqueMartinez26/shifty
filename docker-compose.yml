@@ -1,3 +1,12 @@
+# F0-22 (decision 26): todos los servicios rotan sus logs, 20 MB x 5. El driver
+# json-file por defecto no rota y un contenedor ruidoso llenaba el disco del
+# host, que es el de la base. Un solo ancla: el contrato exige que todos lo usen.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 # Entorno compartido por la API y los procesos de Celery (worker y beat).
 # Los tres construyen Settings() con las MISMAS variables: si Celery recibe
 # menos, Settings() falla, cae al respaldo y los jobs no procesan nada.
@@ -6,6 +15,8 @@ x-app-environment: &app_environment
   # F0-02: la version desplegada (tag de la imagen). Alimenta Settings.VERSION,
   # que es el release de Sentry y la version de la API.
   VERSION: ${APP_VERSION:-dev}
+  # Nivel de los logs JSON de la app (core/logging.py).
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
   SENTRY_DSN: ${SENTRY_DSN:-}
   # Sin default: un secreto de firma publicado en el repo permite forjar
   # tokens. Genera uno con: openssl rand -hex 32 (ver .env.example).
@@ -61,6 +72,7 @@ services:
     image: postgres:16.14-alpine
     container_name: shifty_db
     restart: always
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-shifty_user}
       # Sin default (AUD2-C-02): es el rol DUENO, con DDL y sin RLS.
@@ -107,6 +119,7 @@ services:
     image: redis:7.4-alpine
     container_name: shifty_redis_cache
     restart: always
+    logging: *logging
     command:
       - redis-server
       - --maxmemory
@@ -141,6 +154,7 @@ services:
     image: redis:7.4-alpine
     container_name: shifty_redis_state
     restart: always
+    logging: *logging
     command:
       - redis-server
       - --maxmemory
@@ -174,6 +188,7 @@ services:
     image: rabbitmq:3.13.7-management-alpine
     container_name: shifty_rabbitmq
     restart: always
+    logging: *logging
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shifty}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}
@@ -214,6 +229,7 @@ services:
     # la imagen una vez) y recrear backend, celery_worker y celery_beat juntos
     # (regla 22).
     restart: always
+    logging: *logging
     # F0-21: uvicorn se rinde a los 30 s (--timeout-graceful-shutdown en el
     # Dockerfile); docker espera 35 antes del SIGKILL.
     stop_grace_period: 35s
@@ -277,6 +293,7 @@ services:
       start_period: 60s
     container_name: shifty_celery
     restart: always
+    logging: *logging
     # F0-21: la tarea en curso termina (acks_late); si no llega, SIGKILL y el
     # broker la reentrega (task_reject_on_worker_lost).
     stop_grace_period: 60s
@@ -318,6 +335,7 @@ services:
       start_period: 60s
     container_name: shifty_celery_interactive
     restart: always
+    logging: *logging
     # Un mail de OTP dura segundos (timeout SMTP de 10 s).
     stop_grace_period: 30s
     environment: *app_environment
@@ -361,6 +379,7 @@ services:
       start_period: 120s
     container_name: shifty_celery_beat
     restart: always
+    logging: *logging
     environment: *app_environment
     # F0-17: el schedule sobrevive a la recreacion del contenedor (antes en
     # /tmp). Un volumen nuevo copia el dueno del directorio de la imagen
@@ -392,6 +411,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-/api}
     container_name: shifty_frontend
     restart: always
+    logging: *logging
     ports:
       - "127.0.0.1:3000:3000"
     networks:
@@ -409,6 +429,7 @@ services:
       dockerfile: Dockerfile
     container_name: shifty_nginx
     restart: always
+    logging: *logging
     ports:
       - "80:80"
       # 443 se publica desde el override de produccion, junto con los

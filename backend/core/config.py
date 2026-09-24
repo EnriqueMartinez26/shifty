@@ -3,7 +3,7 @@ import re
 import secrets
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlparse
 
 from pydantic import AliasChoices, Field, model_validator
@@ -159,6 +159,10 @@ _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Shifty"
     VERSION: str = "0.1.0"
+    # Nivel de los logs JSON de la app (core/logging.py, F0-22). Un valor
+    # fuera de la lista no valida: el proceso no arranca con un nivel que no
+    # entiende (regla 21).
+    LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     ENV: Environment = Environment.DEVELOPMENT
 
     SECRET_KEY: str

@@ -1219,3 +1219,40 @@ def test_nginx_de_produccion_sirve_el_desafio_de_certbot() -> None:
     el montaje la renovacion del certificado falla a los 90 dias."""
     montajes = [str(v) for v in _servicios_prod()["nginx"].get("volumes") or []]  # type: ignore[attr-defined]
     assert "./nginx/acme:/var/www/acme:ro" in montajes, montajes
+
+
+# --- Logs con rotacion (F0-22, plan de rendimiento; decision 26) --------------
+#
+# El driver json-file por defecto no rota: un contenedor ruidoso llenaba el
+# disco del host, que es el mismo de la base. 20 MB x 5 por contenedor. Un
+# solo ancla, igual que el entorno: un servicio nuevo que copie el bloque a
+# mano hoy coincide y manana no.
+
+LOGGING_ESPERADO = {
+    "driver": "json-file",
+    "options": {"max-size": "20m", "max-file": "5"},
+}
+
+
+def test_todos_los_servicios_rotan_sus_logs() -> None:
+    texto = COMPOSE.read_text(encoding="utf-8")
+    servicios = _services()
+    for nombre, servicio in servicios.items():
+        assert servicio.get("logging") == LOGGING_ESPERADO, (
+            f"{nombre} no rota sus logs: {servicio.get('logging')!r}"
+        )
+    raiz = yaml.compose(texto, Loader=CargadorCompose)
+    assert raiz is not None
+    nodos = {
+        nombre: _nodo_hijo(_nodo_hijo(_nodo_hijo(raiz, "services"), nombre), "logging")
+        for nombre in servicios
+    }
+    primero = next(iter(nodos.values()))
+    copiados = [nombre for nombre, nodo in nodos.items() if nodo is not primero]
+    assert not copiados, f"estos servicios no usan el ancla x-logging: {copiados}"
+
+
+def test_la_api_no_duplica_el_access_log_de_nginx() -> None:
+    # nginx ya registra cada request; el access log de uvicorn duplicaba
+    # cada linea y llevaba la query entera (client_phone incluido).
+    assert "--no-access-log" in _dockerfile_cmd()
