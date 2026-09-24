@@ -94,6 +94,21 @@ const props = (patch: Partial<Props> = {}): Props => ({
   ...patch
 })
 
+/** Duenio del estado como el wizard: lo que el paso cambia vuelve como prop. */
+const ConEstado: React.FC<{ base: Props }> = ({ base }) => {
+  const [bookingState, setBookingState] = React.useState(base.bookingState)
+  return (
+    <BookingStepConfirmation
+      {...base}
+      bookingState={bookingState}
+      onClientChange={(client) => setBookingState((prev) => ({ ...prev, client }))}
+      onPromotionCodeChange={(promotionCode) =>
+        setBookingState((prev) => ({ ...prev, promotionCode }))
+      }
+    />
+  )
+}
+
 const RESERVAR = 'Reservar y pagar por WhatsApp'
 const PAGAR_MP = 'Pagar seña con Mercado Pago'
 const aceptarTerminos = () => fireEvent.click(screen.getByRole('checkbox'))
@@ -269,6 +284,32 @@ describe('BookingStepConfirmation', () => {
 
       await waitFor(() => expect(screen.getByText('El codigo vencio')).toBeInTheDocument())
       expect(onPromotionCodeChange).toHaveBeenLastCalledWith('')
+    })
+
+    it('editar un codigo ya aplicado conserva lo que se tipea', async () => {
+      // F11a-04 (2026-09-24): un efecto copiaba el codigo del wizard al input;
+      // al tipear despues de aplicar, el wizard lo limpiaba y el efecto pisaba
+      // el campo con '' a la primera tecla.
+      mockPreviewPromotion.mockResolvedValue({
+        code: 'BIENVENIDA10',
+        title: 'Bienvenida',
+        promotion_type: 'percent',
+        base_amount: 5000,
+        discount_amount: 500,
+        final_amount: 4500
+      })
+      render(<ConEstado base={props()} />)
+      const campo = screen.getByPlaceholderText('Ej: BIENVENIDA10') as HTMLInputElement
+
+      fireEvent.change(campo, { target: { value: 'bienvenida10' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
+      await waitFor(() => expect(screen.getByText('Bienvenida')).toBeInTheDocument())
+      expect(campo.value).toBe('BIENVENIDA10')
+
+      fireEvent.change(campo, { target: { value: 'BIENVENIDA1' } })
+
+      expect(campo.value).toBe('BIENVENIDA1')
+      expect(screen.queryByText('Bienvenida')).not.toBeInTheDocument()
     })
 
     it('aplicar con el campo vacio no consulta y limpia el codigo', () => {

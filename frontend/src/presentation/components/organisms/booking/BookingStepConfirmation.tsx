@@ -1,4 +1,4 @@
-import React, { useEffect, useReducer, useRef, useState } from 'react'
+import React, { useReducer, useRef, useState } from 'react'
 
 import {
   Calendar,
@@ -119,6 +119,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const [acceptsTerms, setAcceptsTerms] = useState(false)
   const [submission, dispatchSubmission] = useReducer(submissionReducer, { phase: 'idle' })
   const [errorMessage, setErrorMessage] = useState('')
+  // Lo tipeado es del input; el codigo APLICADO es del wizard
+  // (bookingState.promotionCode). Se siembra una vez y no se resincroniza:
+  // un efecto que copiaba uno sobre otro borraba el campo al editarlo (F11a-04).
   const [promotionCode, setPromotionCode] = useState(bookingState.promotionCode || '')
   const [promotionPreview, setPromotionPreview] = useState<PromotionPreview | null>(null)
   const previewPromotion = usePreviewPublicPromotion()
@@ -169,10 +172,6 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const otpVerifiedGate = !requiresOtp || otpState.verified
   const canSubmit = acceptsTerms && clientValid && otpVerifiedGate
   const showOtpSection = requiresOtp && client.phone.trim().length >= 6
-
-  useEffect(() => {
-    setPromotionCode(bookingState.promotionCode || '')
-  }, [bookingState.promotionCode])
 
   const handleApplyPromotion = async () => {
     const normalizedCode = promotionCode.trim().toUpperCase()
