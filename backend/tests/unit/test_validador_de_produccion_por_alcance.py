@@ -279,6 +279,11 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"RETENTION_BATCH_SIZE": 0},
         "RETENTION_BATCH_SIZE debe ser >= 1",
     ),
+    (
+        "development",
+        {"RETENTION_DEAD_LETTER_DAYS": 0},
+        "RETENTION_DEAD_LETTER_DAYS debe ser >= 1",
+    ),
 ]
 
 # Filas de los chequeos sueltos: los `if` escritos uno por uno, fuera de las
@@ -294,7 +299,7 @@ N_SUELTOS = 17
 # nuevos no llegaron aca y el inventario, que solo detectaba borrados, no dijo
 # nada. Bajar este numero es borrar una proteccion; subirlo sin agregar la
 # fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 41
+FILAS_ESPERADAS = 42
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 

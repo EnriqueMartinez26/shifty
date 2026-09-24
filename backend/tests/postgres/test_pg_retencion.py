@@ -67,6 +67,23 @@ async def _sembrar(sessions: async_sessionmaker[AsyncSession]) -> None:
                         processed_at=_hace(100),
                         error=PREFERENCE_EXPIRE_CLAIM,
                     ),
+                    # Dead letters: el de 95 dias queda, el de 380 se va.
+                    OutboxMessage(
+                        store_id=tienda,
+                        event_type="x",
+                        payload={},
+                        created_at=_hace(100),
+                        processed_at=_hace(95),
+                        error="agotado",
+                    ),
+                    OutboxMessage(
+                        store_id=tienda,
+                        event_type="x",
+                        payload={},
+                        created_at=_hace(400),
+                        processed_at=_hace(380),
+                        error="agotado",
+                    ),
                     WebhookInbox(
                         store_id=tienda,
                         event_id="pg-ret-viejo",
@@ -144,13 +161,13 @@ async def test_la_purga_borra_lo_vencido_con_el_rol_de_la_app(
     )
 
     assert resultado == {
-        "outbox_messages": 1,
+        "outbox_messages": 2,
         "webhook_inbox": 1,
         "otp_verifications": 1,
         "notifications": 1,
     }
     assert await _filas(owner_engine) == {
-        "outbox_messages": 2,
+        "outbox_messages": 3,
         "webhook_inbox": 1,
         "otp_verifications": 1,
         "notifications": 1,

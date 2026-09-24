@@ -13,6 +13,10 @@ decide destruccion) y viven en settings:
   (90). Un pendiente (``processed_at`` NULL) no se toca nunca, y tampoco un
   reclamo de vencimiento de link de MP en curso, que tiene ``processed_at``
   provisorio (``PREFERENCE_EXPIRE_CLAIM``).
+- Los que quedaron en dead letter (``error`` anotado, nunca aplicados: un
+  webhook que agoto sus intentos, un mail que no salio) son evidencia de una
+  disputa y se conservan ``RETENTION_DEAD_LETTER_DAYS`` (365; decision del
+  coordinador con delegacion del dueno, 2026-09-24).
 - ``otp_verifications`` vencidos hace mas de ``RETENTION_OTP_EXPIRED_DAYS``
   (7). La verificacion vale 30 minutos (``is_client_contact_verified``).
 - ``notifications`` LEIDAS hace mas de ``RETENTION_NOTIFICATIONS_READ_DAYS``
@@ -65,23 +69,37 @@ class _Regla:
     vencido: Callable[[datetime], ColumnElement[bool]]
 
 
-def _outbox_vencido(now: datetime) -> ColumnElement[bool]:
-    limite = now - timedelta(days=settings.RETENTION_OUTBOX_PROCESSED_DAYS)
+def _procesado_vencido(modelo: Any, now: datetime, dias: int) -> ColumnElement[bool]:
+    """Procesado sin error hace mas de ``dias``, o en dead letter hace mas de
+    ``RETENTION_DEAD_LETTER_DAYS``."""
+    limite = now - timedelta(days=dias)
+    limite_dead_letter = now - timedelta(days=settings.RETENTION_DEAD_LETTER_DAYS)
     return and_(
-        OutboxMessage.processed_at.is_not(None),
-        OutboxMessage.processed_at < limite,
+        modelo.processed_at.is_not(None),
         or_(
-            OutboxMessage.error.is_(None),
-            OutboxMessage.error != PREFERENCE_EXPIRE_CLAIM,
+            and_(modelo.error.is_(None), modelo.processed_at < limite),
+            and_(
+                modelo.error.is_not(None),
+                modelo.processed_at < limite_dead_letter,
+            ),
         ),
     )
 
 
-def _inbox_vencido(now: datetime) -> ColumnElement[bool]:
-    limite = now - timedelta(days=settings.RETENTION_INBOX_PROCESSED_DAYS)
+def _outbox_vencido(now: datetime) -> ColumnElement[bool]:
     return and_(
-        WebhookInbox.processed_at.is_not(None),
-        WebhookInbox.processed_at < limite,
+        _procesado_vencido(
+            OutboxMessage, now, settings.RETENTION_OUTBOX_PROCESSED_DAYS
+        ),
+        # Un reclamo en curso tiene ``processed_at`` provisorio y ``error``
+        # con el marcador: nunca es dead letter.
+        OutboxMessage.error.is_distinct_from(PREFERENCE_EXPIRE_CLAIM),
+    )
+
+
+def _inbox_vencido(now: datetime) -> ColumnElement[bool]:
+    return _procesado_vencido(
+        WebhookInbox, now, settings.RETENTION_INBOX_PROCESSED_DAYS
     )
 
 

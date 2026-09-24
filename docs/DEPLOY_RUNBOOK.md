@@ -166,12 +166,13 @@ Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/s
 
 ## 8b. Data retention (Celery beat, not cron)
 
-`purge_expired_data` runs daily at 04:30 UTC (`core/celery_app.py`; code in `backend/modules/housekeeping/retention.py`). The owner decided the windows (plan F1-19, decision 17). Each one is a setting with a floor of 1 day, so a typo cannot turn into "delete everything":
+`purge_expired_data` runs daily at 04:30 UTC (`core/celery_app.py`; code in `backend/modules/housekeeping/retention.py`). The owner decided the windows (plan F1-19, decision 17; the dead-letter window was decided by the coordinator under the owner's delegation). Each one is a setting with a floor of 1 day, so a typo cannot turn into "delete everything":
 
 | Table | Deleted when | Setting (default) | Never deleted |
 | --- | --- | --- | --- |
-| `outbox_messages` | processed more than 90 days ago | `RETENTION_OUTBOX_PROCESSED_DAYS` (90) | pending rows (`processed_at` NULL) and in-flight Mercado Pago link-expiry claims |
-| `webhook_inbox` | processed more than 90 days ago | `RETENTION_INBOX_PROCESSED_DAYS` (90) | pending rows |
+| `outbox_messages` | processed without error more than 90 days ago | `RETENTION_OUTBOX_PROCESSED_DAYS` (90) | pending rows (`processed_at` NULL) and in-flight Mercado Pago link-expiry claims |
+| `webhook_inbox` | processed without error more than 90 days ago | `RETENTION_INBOX_PROCESSED_DAYS` (90) | pending rows |
+| `outbox_messages` / `webhook_inbox` dead letters (`error` set, never applied: attempts exhausted, mail not sent) | processed more than 365 days ago | `RETENTION_DEAD_LETTER_DAYS` (365) | same as above; kept a year as evidence for payment disputes |
 | `otp_verifications` | expired more than 7 days ago | `RETENTION_OTP_EXPIRED_DAYS` (7) | codes still valid or expired less than 7 days ago |
 | `notifications` | read more than 180 days ago | `RETENTION_NOTIFICATIONS_READ_DAYS` (180) | unread notifications |
 | `audit_logs` | never | — | everything: it is evidence, archive it outside the database |

@@ -71,10 +71,15 @@ async def _sembrar(session: AsyncSession) -> None:
                 processed_at=_hace(100),
                 error=PREFERENCE_EXPIRE_CLAIM,
             ),  # reclamo en curso: intocable
+            # Dead letter (error, nunca aplicado): 365 dias, evidencia de disputa.
+            _outbox(created_at=_hace(100), processed_at=_hace(95), error="agotado"),
+            _outbox(created_at=_hace(400), processed_at=_hace(380), error="agotado"),
             # Inbox: igual.
             _inbox("viejo", created_at=_hace(100), processed_at=_hace(95)),
             _inbox("reciente", created_at=_hace(20), processed_at=_hace(10)),
             _inbox("pendiente", created_at=_hace(200)),
+            _inbox("dl-90", created_at=_hace(100), processed_at=_hace(95), error="x"),
+            _inbox("dl-400", created_at=_hace(400), processed_at=_hace(380), error="x"),
             # OTP: vencidos hace mas de 7 dias.
             _otp(_hace(8)),
             _otp(_hace(3)),
@@ -110,13 +115,22 @@ async def test_purga_solo_lo_vencido_y_nunca_pendientes_ni_auditoria(
     resultado = await retention.purge_expired_data(test_session, now=AHORA)
 
     assert resultado == {
-        "outbox_messages": 1,
-        "webhook_inbox": 1,
+        "outbox_messages": 2,
+        "webhook_inbox": 2,
         "otp_verifications": 1,
         "notifications": 1,
     }
-    assert await _cuantos(test_session, OutboxMessage) == 3
-    assert await _cuantos(test_session, WebhookInbox) == 2
+    # Quedan: reciente, pendiente, reclamo y el dead letter de 95 dias.
+    assert await _cuantos(test_session, OutboxMessage) == 4
+    assert await _cuantos(test_session, WebhookInbox) == 3
+    con_error = (
+        await test_session.execute(
+            select(func.count())
+            .select_from(OutboxMessage)
+            .where(OutboxMessage.error == "agotado")
+        )
+    ).scalar_one()
+    assert con_error == 1
     assert await _cuantos(test_session, OtpVerification) == 2
     assert await _cuantos(test_session, Notification) == 2
     assert await _cuantos(test_session, AuditLog) == 1
@@ -139,12 +153,12 @@ async def test_el_modo_de_prueba_cuenta_sin_borrar(test_session: AsyncSession) -
     )
 
     assert resultado == {
-        "outbox_messages": 1,
-        "webhook_inbox": 1,
+        "outbox_messages": 2,
+        "webhook_inbox": 2,
         "otp_verifications": 1,
         "notifications": 1,
     }
-    assert await _cuantos(test_session, OutboxMessage) == 4
+    assert await _cuantos(test_session, OutboxMessage) == 6
     assert await _cuantos(test_session, Notification) == 3
 
 
@@ -180,6 +194,7 @@ def test_las_ventanas_son_las_que_decidio_el_dueno() -> None:
     assert settings.RETENTION_NOTIFICATIONS_READ_DAYS == 180
     assert settings.RETENTION_BATCH_SIZE == 5000
     assert settings.RETENTION_DRY_RUN is False
+    assert settings.RETENTION_DEAD_LETTER_DAYS == 365
 
 
 @pytest.mark.asyncio
@@ -208,7 +223,7 @@ async def test_una_corrida_a_la_vez(
         "otp_verifications": 0,
         "notifications": 0,
     }
-    assert await _cuantos(test_session, OutboxMessage) == 4
+    assert await _cuantos(test_session, OutboxMessage) == 6
 
 
 @pytest.mark.asyncio

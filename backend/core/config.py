@@ -124,6 +124,7 @@ _MINIMOS_OPERATIVOS: tuple[tuple[str, float, str], ...] = (
         "RETENTION_NOTIFICATIONS_READ_DAYS debe ser >= 1",
     ),
     ("RETENTION_BATCH_SIZE", 1, "RETENTION_BATCH_SIZE debe ser >= 1"),
+    ("RETENTION_DEAD_LETTER_DAYS", 1, "RETENTION_DEAD_LETTER_DAYS debe ser >= 1"),
     # Un timeout en 0 no significa "sin espera": redis-py lo toma como no
     # bloqueante y toda operacion falla.
     (
@@ -309,6 +310,9 @@ class Settings(BaseSettings):
     RETENTION_OTP_EXPIRED_DAYS: int = 7
     RETENTION_NOTIFICATIONS_READ_DAYS: int = 180
     RETENTION_BATCH_SIZE: int = 5000
+    # Outbox/inbox con error (dead letter, nunca aplicados): evidencia de
+    # disputa, se conservan un ano (revision de f2b, decision delegada).
+    RETENTION_DEAD_LETTER_DAYS: int = 365
     RETENTION_DRY_RUN: bool = False
     MERCADOPAGO_WEBHOOK_SECRET: str | None = None
 
