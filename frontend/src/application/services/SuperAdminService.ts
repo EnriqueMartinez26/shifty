@@ -254,18 +254,14 @@ export interface UpdateSuperAdminCouponPayload {
 
 class SuperAdminService {
   async listStores(params: ListStoresParams = {}): Promise<SuperAdminStoreRow[]> {
-    const searchParams = new URLSearchParams()
-    if (params.search) searchParams.set('search', params.search)
-    if (params.is_active !== undefined && params.is_active !== null) {
-      searchParams.set('is_active', String(params.is_active))
-    }
-    if (params.has_subscription !== undefined && params.has_subscription !== null) {
-      searchParams.set('has_subscription', String(params.has_subscription))
-    }
-    const query = searchParams.toString()
-    const { data } = await apiClient.get<SuperAdminStoreRow[]>(
-      `/superadmin/stores${query ? `?${query}` : ''}`
-    )
+    // axios omite los null/undefined; la busqueda vacia tampoco viaja.
+    const { data } = await apiClient.get<SuperAdminStoreRow[]>('/superadmin/stores', {
+      params: {
+        search: params.search || undefined,
+        is_active: params.is_active,
+        has_subscription: params.has_subscription
+      }
+    })
     return data
   }
 
@@ -278,7 +274,8 @@ class SuperAdminService {
 
   async getStoreAuditLogs(storePublicId: string, limit = 15): Promise<SuperAdminAuditLog[]> {
     const { data } = await apiClient.get<SuperAdminAuditLog[]>(
-      `/superadmin/stores/${storePublicId}/audit-logs?limit=${limit}`
+      `/superadmin/stores/${storePublicId}/audit-logs`,
+      { params: { limit } }
     )
     return data
   }
@@ -332,9 +329,9 @@ class SuperAdminService {
   }
 
   async listPlans(includeInactive = false): Promise<SuperAdminPlan[]> {
-    const { data } = await apiClient.get<SuperAdminPlan[]>(
-      `/superadmin/plans?include_inactive=${includeInactive}`
-    )
+    const { data } = await apiClient.get<SuperAdminPlan[]>('/superadmin/plans', {
+      params: { include_inactive: includeInactive }
+    })
     return data
   }
 
@@ -366,9 +363,9 @@ class SuperAdminService {
   }
 
   async listCoupons(includeInactive = false): Promise<SuperAdminCoupon[]> {
-    const { data } = await apiClient.get<SuperAdminCoupon[]>(
-      `/superadmin/coupons?include_inactive=${includeInactive}`
-    )
+    const { data } = await apiClient.get<SuperAdminCoupon[]>('/superadmin/coupons', {
+      params: { include_inactive: includeInactive }
+    })
     return data
   }
 
