@@ -16,7 +16,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] The VPS is logged in to GHCR (`docker login ghcr.io`, token with `read:packages`) and the release sha was published by `.github/workflows/build-images.yml`.
 - [ ] rclone is installed with a remote for the off-host bucket (created by the owner), and `BACKUP_REMOTE` is set in `/etc/shifty/ops.env`.
 - [ ] `shifty-backup.timer` is enabled (`systemctl list-timers shifty-backup.timer`) and `/var/backups/shifty/last-success` is younger than 24 h.
-- [ ] Host cron and logrotate are installed: `/etc/cron.d/shifty-guard`, `/etc/cron.d/shifty-latency`, `/etc/logrotate.d/shifty`.
+- [ ] Host cron and logrotate are installed: `/etc/cron.d/shifty-guard`, `/etc/cron.d/shifty-latency`, `/etc/cron.d/shifty-pg-top`, `/etc/logrotate.d/shifty`.
 - [ ] certbot is installed on the host with webroot `/opt/shifty/nginx/acme` (compose mounts it at `/var/www/acme` in nginx) and `--deploy-hook /opt/shifty/scripts/cert-deploy-hook.sh`, which copies the certificates into `nginx/certs` and reloads nginx with `APP_VERSION` from `.deploy/current`; `certbot renew --dry-run` passes.
 - [ ] The `db` container was recreated once after adding the `pg_backups` volume (`docker compose exec db ls -ld /backups` works).
 - [ ] `BACKUP_DIR` (`/var/backups/shifty`) exists on the host. `scripts/deploy.sh` creates it in the preflight if it can; a bind-type named volume does not create it, and without it `db` cannot be recreated.
@@ -30,6 +30,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] `https://<domain>/api/ops/health/ready` returns 200 from the production ingress path (it checks Postgres and Redis; `/api/ops/health/live` does not).
 - [ ] Error-rate, latency, worker-queue, webhook/outbox, and backup/drill alerts are active (`deploy/cron/shifty-latency`, `deploy/cron/shifty-guard`).
 - [ ] Dashboard links for API health, database, Redis, background jobs, payments, and Sentry are included in release notes.
+- [ ] The capacity acceptance test (`docs/PERF_ACCEPTANCE.md`) passed on staging with the release candidate: `scripts/perf_acceptance_check.py` printed `APROBADA` and its output, the runner used and the rate-limit setup are attached to the release notes. For the first launch it ran on the real VPS within the provider's 30-day guarantee window. Required for releases that touch availability, booking, the dashboard, reports, jobs or database configuration.
 
 ## 3. Database migrations
 
