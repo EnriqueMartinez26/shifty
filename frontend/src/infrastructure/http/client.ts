@@ -22,14 +22,17 @@ const apiClient = axios.create({
 // rehidrata con POST /auth/refresh (ver AuthContext).
 let inMemoryToken: string | null = null
 
+// Limpieza del esquema viejo, una vez por carga: si quedo un token persistido
+// en localStorage de una version anterior, se elimina. setAuthToken nunca
+// toca el almacenamiento.
+try {
+  localStorage.removeItem(LEGACY_TOKEN_KEY)
+} catch {
+  /* almacenamiento no disponible */
+}
+
 export const setAuthToken = (token: string | null) => {
   inMemoryToken = token
-  // Limpieza del esquema viejo: si quedo un token persistido, se elimina.
-  try {
-    localStorage.removeItem(LEGACY_TOKEN_KEY)
-  } catch {
-    /* almacenamiento no disponible */
-  }
 }
 
 export const getAuthToken = () => inMemoryToken

@@ -31,6 +31,39 @@ jest.mock('./runtime-env', () => ({
   })
 }))
 
+describe('token viejo en localStorage (F10-14)', () => {
+  beforeEach(() => {
+    jest.resetModules()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('se limpia una vez al cargar el modulo', async () => {
+    localStorage.setItem('shifty_token', 'persistido')
+
+    await import('./client')
+
+    expect(localStorage.getItem('shifty_token')).toBeNull()
+  })
+
+  it('setAuthToken no toca el almacenamiento: el token vive solo en memoria', async () => {
+    const clientModule = await import('./client')
+    const removeItem = jest.spyOn(Storage.prototype, 'removeItem')
+    const setItem = jest.spyOn(Storage.prototype, 'setItem')
+    const accessValue = 'valor-de-acceso'
+
+    clientModule.setAuthToken(accessValue)
+    clientModule.setAuthToken(null)
+
+    expect(removeItem).not.toHaveBeenCalled()
+    expect(setItem).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+  })
+})
+
 describe('api client module wiring', () => {
   beforeEach(() => {
     jest.resetModules()
