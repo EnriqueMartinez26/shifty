@@ -58,3 +58,22 @@ clean:
 	docker compose down -v
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type d -name ".pytest_cache" -exec rm -rf {} +
+
+# --- Operacion en el VPS (docs/DEPLOY_RUNBOOK.md) ------------------------------
+# Corren en el clon del servidor, con el usuario del deploy (grupo docker) y
+# COMPOSE_FILE fijado en el .env del servidor. `bash` explicito: el bit de
+# ejecucion no sobrevive a un checkout desde Windows.
+.PHONY: deploy rollback backup
+
+# make deploy APP_VERSION=<sha>: la imagen tiene que existir en GHCR
+# (.github/workflows/build-images.yml). Migra antes de recrear.
+deploy:
+	APP_VERSION="$(APP_VERSION)" bash scripts/deploy.sh deploy
+
+# Vuelve a .deploy/previous sin migrar (expand/contract).
+rollback:
+	bash scripts/deploy.sh rollback
+
+# Backup a mano (el diario lo dispara deploy/systemd/shifty-backup.timer).
+backup:
+	bash scripts/backup.sh
