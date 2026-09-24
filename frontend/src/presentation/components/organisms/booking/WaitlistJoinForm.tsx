@@ -80,14 +80,14 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
   const submit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError('')
-    const window = dayWindow(date)
+    const { starts, ends } = dayWindow(date)
     try {
       await join.mutateAsync({
         store_public_id: storePublicId,
         service_id: serviceId,
         staff_id: staffId,
-        window_starts_at: window.starts,
-        window_ends_at: window.ends,
+        window_starts_at: starts,
+        window_ends_at: ends,
         client_name: form.name.trim(),
         client_phone: form.phone.trim(),
         client_email: form.email.trim() || null
