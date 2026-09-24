@@ -420,7 +420,7 @@ def _reserva(
     tel: str,
     nombre: str,
     clave: str,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": service,
