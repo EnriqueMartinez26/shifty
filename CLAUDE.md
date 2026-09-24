@@ -194,7 +194,10 @@ Una instrucción en lenguaje natural no es una garantía.
    `event_id` + verificar collector y monto (`payments/router.py`,
    `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
-   (`modules/payments/model.py`). `X-Request-ID` es parte de la firma de MP
+   (`modules/payments/model.py`). Orden único de locks turno → pago: el
+   webhook busca el cobro sin lock y lockea turno y después pago, como liberar
+   desde el panel y el job de vencimiento (F1-18,
+   `test_webhook_lockea_turno_antes_que_pago.py`). `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
    (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
    `tests/unit/test_nginx_contract.py`).
