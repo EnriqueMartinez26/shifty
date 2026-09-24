@@ -35,4 +35,7 @@ EXPOSE 8000
 # Sin `uv run`: el entorno ya quedo resuelto por `uv sync --frozen --no-dev`
 # y el PATH de arriba apunta a ese venv. `uv run` reconciliaba el proyecto
 # en cada arranque contra /app, que en desarrollo era un bind-mount del host.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --timeout-graceful-shutdown (F0-21): ante SIGTERM uvicorn deja de aceptar y
+# espera a los requests en curso como mucho 30 s; compose le da 35 s
+# (stop_grace_period) antes del SIGKILL, para que el lifespan cierre el pool.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "30"]

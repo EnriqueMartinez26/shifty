@@ -718,3 +718,39 @@ def test_la_api_escala_por_replicas_de_un_proceso() -> None:
         f"la API vuelve a multiplicarse por dentro del contenedor: {cmd}"
     )
     assert "command" not in base, "backend no puede pisar el CMD de la imagen"
+
+
+# --- Apagado ordenado (F0-21, plan de rendimiento) ----------------------------
+#
+# Docker manda SIGTERM y, pasado `stop_grace_period` (10 s por default), SIGKILL.
+# uvicorn sin `--timeout-graceful-shutdown` espera a las conexiones abiertas sin
+# tope, asi que el SIGKILL cortaba requests a mitad de un cobro. El proceso
+# tiene que rendirse ANTES de que docker lo mate: el margen entre los dos es
+# lo que asegura que el cierre del pool y de Redis (lifespan) llegue a correr.
+# El worker de Celery termina la tarea en curso (acks_late): su margen cubre el
+# soft time limit tipico de un lote, no el hard limit entero.
+
+
+def _segundos(valor: object) -> float:
+    texto = str(valor).strip()
+    match = re.fullmatch(r"(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?", texto)
+    assert match and texto, f"duracion de compose no reconocida: {valor!r}"
+    return int(match.group(1) or 0) * 60 + float(match.group(2) or 0)
+
+
+def test_la_api_se_apaga_antes_de_que_docker_la_mate() -> None:
+    cmd = _dockerfile_cmd()
+    assert "--timeout-graceful-shutdown" in cmd, (
+        f"uvicorn espera conexiones abiertas sin tope al apagarse: {cmd}"
+    )
+    tope = float(cmd[cmd.index("--timeout-graceful-shutdown") + 1])
+    gracia = _segundos(_services()["backend"].get("stop_grace_period", "10s"))
+    assert tope == 30, f"el tope de apagado de uvicorn es {tope}, el plan fija 30"
+    assert gracia >= tope + 5, (
+        f"docker mata la API a los {gracia}s y uvicorn recien se rinde a los {tope}s"
+    )
+
+
+def test_el_worker_tiene_tiempo_de_terminar_la_tarea_en_curso() -> None:
+    gracia = _segundos(_services()["celery_worker"].get("stop_grace_period", "10s"))
+    assert gracia >= 60, f"el worker recibe SIGKILL a los {gracia}s"

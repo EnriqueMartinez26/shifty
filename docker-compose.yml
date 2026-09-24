@@ -126,6 +126,9 @@ services:
     # la imagen. Un cambio en backend/ exige `docker-compose build` de
     # backend, celery_worker y celery_beat juntos (regla 22).
     restart: always
+    # F0-21: uvicorn se rinde a los 30 s (--timeout-graceful-shutdown en el
+    # Dockerfile); docker espera 35 antes del SIGKILL.
+    stop_grace_period: 35s
     environment: *app_environment
     ports:
       - "127.0.0.1:8000:8000"
@@ -180,6 +183,9 @@ services:
       start_period: 60s
     container_name: shifty_celery
     restart: always
+    # F0-21: la tarea en curso termina (acks_late); si no llega, SIGKILL y el
+    # broker la reentrega (task_reject_on_worker_lost).
+    stop_grace_period: 60s
     environment: *app_environment
     depends_on:
       db:
