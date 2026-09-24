@@ -219,6 +219,35 @@ export default [
     }
   },
   {
+    // Shared is the bottom of the stack: every layer imports it, so it may not
+    // import any of them back. Relative paths are covered too, otherwise
+    // `../../infrastructure/...` walks around the alias ban (F12-03).
+    files: ['src/shared/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '@domain/**',
+                '@application/**',
+                '@infrastructure/**',
+                '@presentation/**',
+                '**/domain/**',
+                '**/application/**',
+                '**/infrastructure/**',
+                '**/presentation/**'
+              ],
+              message:
+                'Shared cannot depend on domain, application, infrastructure, or presentation.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
     // Application orchestrates; it must never reach up into the UI. Importing
     // infrastructure is still allowed on purpose: the services take the axios
     // client directly because there is no DI container, and banning it here

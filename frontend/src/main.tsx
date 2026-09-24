@@ -7,9 +7,6 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { initSentry, Sentry } from './infrastructure/observability/sentry'
-import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
-import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
-import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 import {
   ValidationErrorHandler,
   NotFoundErrorHandler,
@@ -18,7 +15,10 @@ import {
   ConflictErrorHandler,
   InternalServerErrorHandler,
   NetworkErrorHandler
-} from './shared/errors/handlers/SpecificHandlers'
+} from './infrastructure/setup/SpecificHandlers'
+import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
+import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
+import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 
 initSentry()
 
