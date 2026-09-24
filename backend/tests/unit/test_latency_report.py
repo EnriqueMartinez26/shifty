@@ -282,7 +282,7 @@ def test_el_script_compila_con_el_python_del_host() -> None:
     ast.parse(SCRIPT.read_text(encoding="utf-8"), feature_version=(3, 10))
 
 
-# --- formato real de lane A (shifty_json): s, urt y uct van entre comillas ---
+# --- formato real (log_format shifty_json): s, urt y uct van entre comillas ---
 
 
 @pytest.mark.parametrize(
@@ -357,12 +357,19 @@ def test_latency_check_alerta_cuando_el_reporte_sale_con_error(host: Host) -> No
     )
     # El interprete que corre pytest: en Windows `python3` puede ser el
     # atajo de la Store, que no ejecuta nada.
+    # Como en cron: sin APP_VERSION, que docker-compose.prod.yml exige.
+    (host.repo / ".deploy").mkdir()
+    (host.repo / ".deploy" / "current").write_text("v7\n", encoding="utf-8")
     resultado = host.correr(
-        "latency-check.sh", LATENCY_PYTHON=Path(sys.executable).as_posix()
+        "latency-check.sh",
+        LATENCY_PYTHON=Path(sys.executable).as_posix(),
+        FAKE_EXIGE_VERSION="1",
     )
 
     assert resultado.returncode != 0
     assert "ALERTA" in resultado.stderr
+    # La alerta es la del reporte, no la de "no se pudieron leer los logs".
+    assert "sobre el umbral" in resultado.stderr
     assert _hay(
         host.llamadas(), r"docker compose logs --no-log-prefix --since 5m nginx"
     )

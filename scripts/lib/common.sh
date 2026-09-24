@@ -121,6 +121,17 @@ $body}")"
   return 0
 }
 
+# docker-compose.prod.yml interpola ${APP_VERSION:?}: sin la variable falla
+# CUALQUIER comando de compose (exec, logs, ps), no solo `up`. Los scripts de
+# cron no la reciben; toman la que dejo el ultimo deploy en .deploy/current.
+# deploy.sh NO usa esto: un `make deploy` sin APP_VERSION tiene que fallar.
+usar_version_en_curso() {
+  if [ -z "${APP_VERSION:-}" ] && [ -s "$SHIFTY_DIR/.deploy/current" ]; then
+    APP_VERSION="$(head -n 1 "$SHIFTY_DIR/.deploy/current")"
+    export APP_VERSION
+  fi
+}
+
 # Hay un deploy en curso si existe su lock y es reciente (un deploy colgado o
 # matado con -9 no bloquea al guard para siempre).
 deploy_in_progress() {

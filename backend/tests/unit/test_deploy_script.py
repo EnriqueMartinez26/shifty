@@ -265,3 +265,31 @@ def test_un_deploy_en_curso_frena_otro(host: Host) -> None:
     assert resultado.returncode != 0
     assert "lock" in resultado.stderr
     assert (host.repo / ".deploy" / "lock").exists(), "borro el lock de otro deploy"
+
+
+def test_rollback_funciona_aunque_compose_exija_app_version(host: Host) -> None:
+    """docker-compose.prod.yml usa ${APP_VERSION:?}: el preflight del rollback
+    corre `compose config` y tiene que tener ya la version anterior."""
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+
+    resultado = host.correr(
+        "deploy.sh", "rollback", FAKE_EXIGE_VERSION="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_deploy_sin_app_version_no_toma_la_que_corre(host: Host) -> None:
+    """La version en curso (.deploy/current) sirve a los crons, nunca para
+    que un `make deploy` sin APP_VERSION redespliegue en silencio."""
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", FAKE_EXIGE_VERSION="1", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "APP_VERSION" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")

@@ -19,6 +19,7 @@ set -euo pipefail
 : "${LATENCY_PYTHON:=python3}"
 
 cd "$SHIFTY_DIR"
+usar_version_en_curso
 temporal="$(mktemp -d)"
 trap 'rm -rf -- "$temporal"' EXIT
 

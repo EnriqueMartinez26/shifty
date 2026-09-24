@@ -67,6 +67,7 @@ podar_local() {
 }
 
 cd "$SHIFTY_DIR"
+usar_version_en_curso
 mkdir -p "$diarios" "$semanales"
 
 a_medias="$diarios/$nombre"

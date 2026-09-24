@@ -169,3 +169,22 @@ def test_el_ejemplo_de_ops_env_no_trae_secretos_reales() -> None:
     for clave in ("BACKUP_REMOTE", "ALERT_EMAIL", "ALERT_WEBHOOK_URL", "DOMAIN"):
         assert re.search(rf"^#?\s*{clave}=", texto, re.MULTILINE), clave
     assert not re.search(r"hooks\.slack\.com/services/T", texto)
+
+
+def test_backup_usa_la_version_en_curso_para_hablar_con_compose(host: Host) -> None:
+    """Desde cron no hay APP_VERSION y docker-compose.prod.yml la exige
+    (${APP_VERSION:?}): sin tomarla de .deploy/current, `compose exec db`
+    fallaria todas las noches."""
+    (host.repo / ".deploy").mkdir()
+    (host.repo / ".deploy" / "current").write_text("v7\n", encoding="utf-8")
+
+    resultado = _correr_backup(host, FAKE_EXIGE_VERSION="1")
+
+    assert resultado.returncode == 0, resultado.stderr
+
+
+def test_backup_sin_version_en_curso_falla_con_alerta(host: Host) -> None:
+    resultado = _correr_backup(host, FAKE_EXIGE_VERSION="1")
+
+    assert resultado.returncode != 0
+    assert "ALERTA" in resultado.stderr

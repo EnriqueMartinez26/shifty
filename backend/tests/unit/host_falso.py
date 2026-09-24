@@ -51,6 +51,12 @@ _DOCKER = r"""#!/bin/sh
 echo "docker $*" >> "$FAKE_DIR/calls"
 ids_backend="$FAKE_DIR/backend_ids"
 if [ "$1" = compose ]; then
+  # docker-compose.prod.yml interpola ${APP_VERSION:?...}: sin la variable,
+  # TODO comando de compose falla, no solo `up`.
+  if [ -n "${FAKE_EXIGE_VERSION:-}" ] && [ -z "${APP_VERSION:-}" ]; then
+    echo 'required variable APP_VERSION is missing a value' >&2
+    exit 15
+  fi
   shift
   case "$1" in
     version) echo "${FAKE_COMPOSE_VERSION:-2.29.1}"; exit 0 ;;

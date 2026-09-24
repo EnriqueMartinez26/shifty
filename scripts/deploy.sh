@@ -319,6 +319,11 @@ case "${1:-deploy}" in
   deploy) cmd_deploy ;;
   rollback)
     tomar_lock
+    # El compose de produccion exige APP_VERSION hasta para `config`: el
+    # preflight ya corre con la version a la que se vuelve.
+    APP_VERSION="$(head -n 1 "$estado_dir/previous" 2>/dev/null || true)"
+    [ -n "$APP_VERSION" ] || die "rollback: no hay version anterior en $estado_dir/previous"
+    export APP_VERSION
     preflight 0
     cmd_rollback
     ;;
