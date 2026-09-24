@@ -55,3 +55,6 @@ backups/
 # Indice local de CodeGraph: 32 MB por checkout y no es reutilizable
 # entre clones ni worktrees (sus bytes dependen del arbol indexado).
 .codegraph/
+# Restos de `make makemigrations` anterior a 2026-09-24 (copiaba por un
+# directorio temporal que una corrida fallida podia dejar en el arbol).
+.makemigrations-tmp/

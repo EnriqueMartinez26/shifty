@@ -510,12 +510,16 @@ def _montaje(volumen: object) -> tuple[str, str]:
     return partes[0], partes[1]
 
 
-def montajes_de_codigo(texto: str, servicios: tuple[str, ...]) -> list[str]:
-    """Volumenes que tapan /app o que traen el codigo del host."""
-    data = yaml.safe_load(texto)
+def montajes_de_codigo(
+    servicios: dict[str, Any], nombres: tuple[str, ...]
+) -> list[str]:
+    """Volumenes que tapan /app o que traen el codigo del host.
+
+    Recibe servicios ya cargados: el compose base o la vista fusionada.
+    """
     encontrados: list[str] = []
-    for nombre in servicios:
-        for volumen in (data["services"][nombre] or {}).get("volumes") or []:
+    for nombre in nombres:
+        for volumen in (servicios[nombre] or {}).get("volumes") or []:
             origen, destino = _montaje(volumen)
             origen = origen.rstrip("/")
             tapa_app = destino == "/app" or destino.startswith("/app/")
@@ -529,13 +533,18 @@ def montajes_de_codigo(texto: str, servicios: tuple[str, ...]) -> list[str]:
 
 
 def test_los_servicios_de_la_app_no_montan_codigo_del_host() -> None:
-    encontrados = montajes_de_codigo(
-        COMPOSE.read_text(encoding="utf-8"), SERVICIOS_CON_CODIGO
-    )
-    assert not encontrados, (
-        "el codigo tiene que salir de la imagen, no de un montaje sobre /app: "
-        f"{encontrados}"
-    )
+    # Tambien la vista FUSIONADA de produccion: un override que agregue
+    # ./backend:/app no aparece mirando solo el compose base.
+    vistas = {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }
+    for vista, servicios in vistas.items():
+        encontrados = montajes_de_codigo(servicios, SERVICIOS_CON_CODIGO)
+        assert not encontrados, (
+            f"{vista}: el codigo tiene que salir de la imagen, no de un montaje "
+            f"sobre /app: {encontrados}"
+        )
 
 
 _COMPOSE_CON_MONTAJES_DE_CODIGO = """
@@ -555,9 +564,33 @@ services:
 def test_el_contrato_ve_los_montajes_de_codigo_en_cualquier_forma() -> None:
     """Sin este contraejemplo, el test de arriba podria no detectar nada."""
     encontrados = montajes_de_codigo(
-        _COMPOSE_CON_MONTAJES_DE_CODIGO, ("backend", "frontend")
+        cargar_compose(_COMPOSE_CON_MONTAJES_DE_CODIGO)["services"],
+        ("backend", "frontend"),
     )
     assert len(encontrados) == 3, encontrados
+
+
+_BASE_SIN_MONTAJES = """
+services:
+  backend:
+    image: shifty-backend
+"""
+
+_OVERRIDE_QUE_MONTA_CODIGO = """
+services:
+  backend:
+    volumes:
+      - ./backend:/app
+"""
+
+
+def test_el_contrato_ve_un_montaje_que_agrega_el_override_de_produccion() -> None:
+    """El base limpio no alcanza: lo que corre es la fusion con el override."""
+    encontrados = montajes_de_codigo(
+        servicios_fusionados(_BASE_SIN_MONTAJES, _OVERRIDE_QUE_MONTA_CODIGO),
+        ("backend",),
+    )
+    assert encontrados == ["backend: ./backend:/app"], encontrados
 
 
 def test_produccion_no_cancela_listas_con_una_lista_vacia() -> None:
