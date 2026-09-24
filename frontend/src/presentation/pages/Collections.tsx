@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
 
@@ -30,25 +30,19 @@ const CollectionsPage: React.FC = () => {
 
   const cardStyle = create2000sPanelStyle()
 
-  const appointments = useMemo(
-    () =>
-      (appointmentsQuery.data ?? [])
-        .filter((appointment) => isCollectibleStatus(appointment.status))
-        .slice(0, 20),
-    [appointmentsQuery.data]
-  )
+  const appointments = (appointmentsQuery.data ?? [])
+    .filter((appointment) => isCollectibleStatus(appointment.status))
+    .slice(0, 20)
 
-  const cards = useMemo(() => {
-    const summary = summaryQuery.data
-    return [
-      { label: 'Turnos listados', value: appointments.length },
-      { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
-      {
-        label: 'Monto pendiente',
-        value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
-      }
-    ]
-  }, [appointments.length, summaryQuery.data])
+  const summary = summaryQuery.data
+  const cards = [
+    { label: 'Turnos listados', value: appointments.length },
+    { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
+    {
+      label: 'Monto pendiente',
+      value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
+    }
+  ]
 
   const handleCreatePreference = async (appointmentId: string) => {
     try {

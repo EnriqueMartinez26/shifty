@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { mdiShieldAlert, mdiStore } from '@mdi/js'
 import { ArrowLeft, KeyRound } from 'lucide-react'
@@ -16,7 +16,7 @@ const inputStyle = create2000sInputStyle()
 const ResetPasswordPage: React.FC = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const token = useMemo(() => searchParams.get('token') || '', [searchParams])
+  const token = searchParams.get('token') || ''
 
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { subDays } from 'date-fns'
 import {
@@ -43,7 +43,7 @@ const ReportsPage: React.FC = () => {
   const [exportError, setExportError] = useState<string | null>(null)
 
   const summary = summaryQuery.data
-  const stats = useMemo(() => summary?.stats, [summary])
+  const stats = summary?.stats
   const clientStats = summary?.client_stats
   const debtSummary = summary?.debt_summary
 

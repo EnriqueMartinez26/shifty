@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { AlertTriangle } from 'lucide-react'
 
@@ -98,14 +98,12 @@ const SuperAdminPage: React.FC = () => {
   const [editingPlan, setEditingPlan] = useState<SuperAdminPlan | null>(null)
   const [editingCoupon, setEditingCoupon] = useState<SuperAdminCoupon | null>(null)
 
-  const storeParams = useMemo(
-    () => ({
-      search: search.trim() || undefined,
-      is_active: activityFilter === 'all' ? null : activityFilter === 'active',
-      has_subscription: subscriptionFilter === 'all' ? null : subscriptionFilter === 'with'
-    }),
-    [activityFilter, search, subscriptionFilter]
-  )
+  // Va a la query key, pero react-query la compara por valor: no hace falta memo.
+  const storeParams = {
+    search: search.trim() || undefined,
+    is_active: activityFilter === 'all' ? null : activityFilter === 'active',
+    has_subscription: subscriptionFilter === 'all' ? null : subscriptionFilter === 'with'
+  }
 
   const storesQuery = useSuperAdminStores(storeParams)
   // Sin eleccion (o si la elegida ya no esta en el listado filtrado) se usa la
@@ -135,14 +133,8 @@ const SuperAdminPage: React.FC = () => {
   const redeemCouponMutation = useRedeemSuperAdminCoupon()
 
   const overview = overviewQuery.data
-  const activePlans = useMemo(
-    () => (plansQuery.data ?? []).filter((plan) => plan.is_active),
-    [plansQuery.data]
-  )
-  const activeCoupons = useMemo(
-    () => (couponsQuery.data ?? []).filter((coupon) => coupon.is_active),
-    [couponsQuery.data]
-  )
+  const activePlans = (plansQuery.data ?? []).filter((plan) => plan.is_active)
+  const activeCoupons = (couponsQuery.data ?? []).filter((coupon) => coupon.is_active)
   const hasSelectedStoreSubscription = Boolean(overview?.subscription)
   const selectedStoreUnavailable = !selectedStore || !selectedStore.is_active
 
