@@ -1,4 +1,4 @@
-"""store_media: imagen de servicio (F1-28, decision 12 del plan)
+"""store_media: imagen de servicio y bytea sin comprimir (F1-28, F1-30)
 
 R10-01: la CSP del front solo permite imagenes de ``'self'`` y
 ``services.image_url`` exigia una URL externa, asi que toda imagen de
@@ -14,13 +14,20 @@ como el logo y la portada:
   ``autocommit_block``, con ``DROP ... IF EXISTS`` antes por si un intento
   cortado dejo un indice INVALID.
 
+F1-30 (R10-07): ``data SET STORAGE EXTERNAL``. Con el default (EXTENDED)
+TOAST intentaba comprimir cada imagen con pglz: PNG, JPEG y WebP ya vienen
+comprimidos, asi que era CPU al escribir y al leer sin ahorro. EXTERNAL la
+guarda fuera de linea sin comprimir. Solo cambia el catalogo (lock breve, sin
+reescribir la tabla) y aplica a las filas nuevas; las existentes quedan como
+estan hasta que se reemplazan.
+
 Si hay filas con un ``kind`` fuera de ``logo``/``cover``, la migracion no las
 corrige: se detiene con el conteo (mismo criterio que ``c3d5e7f9a1b4``).
 
-El downgrade quita el indice, los ``CHECK``, la FK y la columna. NO borra las
-imagenes de servicio ya subidas: el codigo anterior las sigue sirviendo por
-id y ``services.image_url`` las sigue apuntando; solo se pierde el vinculo
-fila -> servicio.
+El downgrade vuelve ``data`` a EXTENDED y quita el indice, los ``CHECK``, la
+FK y la columna. NO borra las imagenes de servicio ya subidas: el codigo
+anterior las sigue sirviendo por id y ``services.image_url`` las sigue
+apuntando; solo se pierde el vinculo fila -> servicio.
 
 Revision ID: e7a9c1d3f5b8
 Revises: d4e6f8a0b2c5
@@ -72,6 +79,7 @@ def upgrade() -> None:
         "store_media",
         "(kind = 'service') = (service_id IS NOT NULL)",
     )
+    op.execute("ALTER TABLE store_media ALTER COLUMN data SET STORAGE EXTERNAL")
     with op.get_context().autocommit_block():
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDICE}")
         op.execute(
@@ -83,6 +91,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.get_context().autocommit_block():
         op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {INDICE}")
+    op.execute("ALTER TABLE store_media ALTER COLUMN data SET STORAGE EXTENDED")
     op.drop_constraint("ck_store_media_service_id", "store_media", type_="check")
     op.drop_constraint("ck_store_media_kind", "store_media", type_="check")
     op.drop_constraint("fk_store_media_service_id", "store_media", type_="foreignkey")

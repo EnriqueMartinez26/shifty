@@ -16,6 +16,7 @@ from core.validation import (
     reject_payload_control_chars,
     reject_unsafe_url,
 )
+from modules.stores.media import validate_image_url
 
 # Techos de los enteros expuestos por la API.
 #
@@ -110,12 +111,17 @@ class StoreUpdate(BaseModel):
     send_email_confirmation: Optional[bool] = None
     send_email_reminders: Optional[bool] = None
 
-    @field_validator(
-        "logo_url", "cover_url", "instagram_url", "facebook_url", "website_url"
-    )
+    @field_validator("instagram_url", "facebook_url", "website_url")
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
+
+    @field_validator("logo_url", "cover_url")
+    @classmethod
+    def validate_image_url(cls, value: str | None) -> str | None:
+        # La imagen subida (/api/stores/media/{id}) o una URL http(s). Que la
+        # subida sea la de la tienda lo chequea el router (F1-30).
+        return validate_image_url(value)
 
     @field_validator("name", "description", "whatsapp_number", "deposit_policy")
     @classmethod

@@ -107,7 +107,7 @@ async def update_service(
     # B6-04: solo los campos enviados; un null explicito borra el opcional.
     changes = data.model_dump(exclude_unset=True)
     _validate_deposit_patch(service, changes)
-    ServiceImageService(db).check_image_url_change(service, changes)
+    await ServiceImageService(db).apply_image_url_change(service, changes)
     updated = await repo.update(service, changes)
     await _invalidate_store_cache(availability_cache, str(updated.store_id))
     return to_service_response(updated)

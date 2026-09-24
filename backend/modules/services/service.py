@@ -83,14 +83,24 @@ class ServiceImageService:
         await self.db.refresh(service)
         return service
 
-    def check_image_url_change(self, service: Service, changes: dict[str, Any]) -> None:
-        """Un PATCH no enlaza una imagen servida que no es la del servicio.
+    async def apply_image_url_change(
+        self, service: Service, changes: dict[str, Any]
+    ) -> None:
+        """Lo que un PATCH de ``image_url`` le hace a la imagen subida.
 
-        Devolver la URL que ya tiene es valido (el front manda el formulario
-        entero); otra URL de medios es 422: la imagen se sube.
+        Devolver la URL que ya tiene no cambia nada (el front manda el
+        formulario entero). Otra URL de medios es 422: la imagen se sube, no
+        se enlaza. Cualquier otro cambio (null u otra URL http(s)) desvincula
+        la imagen subida y su fila se borra (F1-30, decision 21); el commit
+        es el del PATCH.
         """
-        new_url = changes.get("image_url")
-        if is_media_url(new_url) and new_url != service.image_url:
+        if "image_url" not in changes:
+            return
+        new_url = changes["image_url"]
+        if new_url == service.image_url:
+            return
+        if is_media_url(new_url):
             raise ValidationException(
                 "image_url: para cambiar la imagen del servicio, subila"
             )
+        await self._delete_media_of(service)

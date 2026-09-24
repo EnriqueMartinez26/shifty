@@ -151,7 +151,7 @@ class ServiceUpdate(BaseModel):
     def validate_image_url(cls, value: str | None) -> str | None:
         # El front manda el formulario entero: la URL de la imagen ya subida
         # vuelve tal cual. Que sea LA de este servicio lo chequea
-        # ServiceImageService.check_image_url_change.
+        # ServiceImageService.apply_image_url_change.
         return validate_image_url(value)
 
 

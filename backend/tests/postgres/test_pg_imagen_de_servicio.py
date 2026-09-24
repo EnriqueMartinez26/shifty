@@ -149,3 +149,51 @@ async def test_borrar_el_servicio_de_verdad_se_lleva_su_imagen(
             await conn.execute(text("select count(*) from store_media"))
         ).scalar_one()
     assert quedan == 0
+
+
+@pytest.mark.asyncio
+async def test_el_bytea_de_las_imagenes_no_se_comprime(
+    owner_engine: AsyncEngine,
+) -> None:
+    # F1-30 (R10-07): PNG/JPEG/WebP ya vienen comprimidos; con EXTENDED, TOAST
+    # gastaba CPU en pglz sin ahorro. 'e' = EXTERNAL (fuera de linea, sin
+    # comprimir).
+    async with owner_engine.connect() as conn:
+        storage = (
+            await conn.execute(
+                text(
+                    "select attstorage::text from pg_attribute "
+                    "where attrelid = 'store_media'::regclass and attname = 'data'"
+                )
+            )
+        ).scalar_one()
+    assert storage == "e"
+
+
+@pytest.mark.asyncio
+async def test_desvincular_el_logo_borra_la_fila_bajo_rls(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    # F1-30 (decision 21): el DELETE corre como shifty_app con el contexto de
+    # la tienda; RLS lo deja borrar solo lo propio.
+    _, token = await register_and_login(
+        client, app_sessions, slug="pg-img-logo", email="pg-img-logo@example.com"
+    )
+    subida = await client.post(
+        "/stores/me/media",
+        headers=auth_headers(token),
+        data={"kind": "logo"},
+        files={"file": ("logo.png", png(64, 64), "image/png")},
+    )
+    assert subida.status_code == 200, subida.text
+    res = await client.patch(
+        "/stores/me", headers=auth_headers(token), json={"logo_url": None}
+    )
+    assert res.status_code == 200, res.text
+    async with owner_engine.connect() as conn:
+        quedan = (
+            await conn.execute(text("select count(*) from store_media"))
+        ).scalar_one()
+    assert quedan == 0

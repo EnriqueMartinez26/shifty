@@ -6,7 +6,10 @@ bytes (rechazo de SVG y de basura), el limite de tamano y el gating por rol.
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.stores.model import Store, StoreMedia
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
@@ -174,3 +177,89 @@ async def test_la_foto_de_referencia_entra_como_logo_y_portada(
     )
     status, body = await _subir(client, token, kind, jpeg(1061, 1460), "foto.jpg")
     assert status == 200, body
+
+
+# -- F1-30: desvincular borra la fila (decision 21) -------------------------------
+
+
+async def _filas(db: AsyncSession, store_public_id: str) -> list[str]:
+    result = await db.execute(
+        select(StoreMedia.id)
+        .join(Store, Store.id == StoreMedia.store_id)
+        .where(Store.public_id == store_public_id)
+    )
+    return [str(fila) for fila in result.scalars()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "campo", "nuevo"),
+    [
+        ("logo", "logo_url", None),
+        ("logo", "logo_url", ""),
+        ("logo", "logo_url", "https://cdn.example.com/logo.png"),
+        ("cover", "cover_url", None),
+        ("cover", "cover_url", "https://cdn.example.com/portada.jpg"),
+    ],
+    ids=["logo-null", "logo-vacio", "logo-externo", "portada-null", "portada-externa"],
+)
+async def test_desvincular_la_imagen_borra_su_fila(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    kind: str,
+    campo: str,
+    nuevo: str | None,
+) -> None:
+    # 2026-09-24 (R10-07): la fila quedaba huerfana en store_media al
+    # cambiar el logo por una URL o vaciarlo; solo otra subida la borraba.
+    slug = f"media-unlink-{kind}-{'null' if nuevo is None else len(nuevo)}"
+    store_public_id, token = await register_and_login(
+        client, slug=slug, email=f"{slug}@example.com"
+    )
+    status, subida = await _subir(client, token, kind, _PNG)
+    assert status == 200, subida
+    media_id = str(subida["media_id"])
+
+    res = await client.patch(
+        "/stores/me", headers=auth_headers(token), json={campo: nuevo}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()[campo] == (nuevo or None)
+    assert (await client.get(f"/stores/media/{media_id}")).status_code == 404
+    assert await _filas(test_session, store_public_id) == []
+
+
+@pytest.mark.asyncio
+async def test_devolver_la_misma_url_o_tocar_otro_campo_no_borra(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    store_public_id, token = await register_and_login(
+        client, slug="media-keep", email="media-keep@example.com"
+    )
+    _, logo = await _subir(client, token, "logo", _PNG)
+    _, portada = await _subir(client, token, "cover", _PNG)
+
+    for cuerpo in (
+        {"name": "Otro nombre"},
+        {"logo_url": logo["url"], "cover_url": portada["url"]},
+    ):
+        res = await client.patch("/stores/me", headers=auth_headers(token), json=cuerpo)
+        assert res.status_code == 200, res.text
+    assert sorted(await _filas(test_session, store_public_id)) == sorted(
+        [str(logo["media_id"]), str(portada["media_id"])]
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_se_enlaza_a_mano_una_imagen_servida_ajena(
+    client: AsyncClient,
+) -> None:
+    _, token = await register_and_login(
+        client, slug="media-ajena", email="media-ajena@example.com"
+    )
+    res = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"logo_url": "/api/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ"},
+    )
+    assert res.status_code == 422, res.text

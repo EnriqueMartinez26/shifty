@@ -222,3 +222,24 @@ def test_la_url_de_medios_se_vuelve_absoluta_para_mercado_pago() -> None:
         "https://cdn.example.com/x.jpg"
     )
     assert absolute_media_url(None, base) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nuevo", [None, "https://cdn.example.com/corte.jpg"])
+async def test_el_patch_que_desvincula_la_imagen_borra_la_fila(
+    client: AsyncClient, test_session: AsyncSession, nuevo: str | None
+) -> None:
+    # F1-30 (decision 21): la imagen subida que deja de estar enlazada no
+    # queda huerfana en store_media.
+    slug = f"img-svc-unlink-{'null' if nuevo is None else 'url'}"
+    _, token, servicio = await _tienda_con_servicio(client, slug)
+    _, subida = await _subir(client, token, servicio)
+    media_id = _media_id(subida["image_url"])
+
+    res = await client.patch(
+        f"/services/{servicio}", headers=auth_headers(token), json={"image_url": nuevo}
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["image_url"] == nuevo
+    assert (await client.get(f"/stores/media/{media_id}")).status_code == 404
+    assert await _filas_del_servicio(test_session, servicio) == 0

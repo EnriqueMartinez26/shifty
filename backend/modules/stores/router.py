@@ -20,6 +20,7 @@ from core.exceptions import (
     AppException,
     PermissionDeniedException,
     StoreNotFoundException,
+    ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
 from core.redis import get_availability_cache
@@ -27,7 +28,13 @@ from core.roles import STORE_MANAGERS, has_any_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
-from modules.stores.media import ALLOWED_KINDS, IMAGE_CAPS, validate_image
+from modules.stores.media import (
+    ALLOWED_KINDS,
+    IMAGE_CAPS,
+    is_media_url,
+    media_url,
+    validate_image,
+)
 from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.billing.service import get_active_subscription, today_local
 from modules.billing.subscription_rules import outlook
@@ -113,6 +120,32 @@ async def _invalidar_agenda(redis: Redis, store_id: str) -> None:
         )
 
 
+_CAMPOS_DE_IMAGEN = ("logo_url", "cover_url")
+
+
+def _unlinked_media_ids(store: Store, update_data: dict[str, Any]) -> list[str]:
+    """Imagenes subidas que el PATCH deja sin enlazar (F1-30, decision 21).
+
+    Vaciar el logo o cambiarlo por una URL externa dejaba la fila huerfana en
+    ``store_media`` (solo otra subida la borraba). Devolver la misma URL no
+    desvincula nada. Una URL de medios distinta de la actual es 422: la
+    imagen se sube, no se enlaza a mano (podria ser de otra tienda).
+    """
+    actuales = {"logo_url": store.logo_url, "cover_url": store.cover_url}
+    ids: list[str] = []
+    for campo in _CAMPOS_DE_IMAGEN:
+        if campo not in update_data:
+            continue
+        vieja, nueva = actuales[campo], update_data[campo]
+        if nueva == vieja:
+            continue
+        if is_media_url(nueva):
+            raise ValidationException(f"{campo}: para cambiar la imagen, subila")
+        if vieja is not None and is_media_url(vieja):
+            ids.append(vieja.rsplit("/", 1)[-1])
+    return ids
+
+
 @router.get("/me", response_model=StoreResponse)
 async def get_my_store(
     user: User = Depends(get_current_staff),
@@ -158,6 +191,8 @@ async def update_my_store(
             )
         update_data["deposit_policy"] = policy or None
 
+    unlinked_media = _unlinked_media_ids(store, update_data)
+
     raw_business_hours = update_data.pop("business_hours", None)
     business_hours = (
         raw_business_hours if isinstance(raw_business_hours, dict) else None
@@ -182,6 +217,12 @@ async def update_my_store(
         setattr(store, key, value)
 
     _replace_business_hours(store, business_hours)
+    if unlinked_media:
+        await db.execute(
+            delete(StoreMedia).where(
+                StoreMedia.store_id == store.id, StoreMedia.id.in_(unlinked_media)
+            )
+        )
     try:
         await db.commit()
     except IntegrityError:
@@ -305,7 +346,7 @@ async def upload_store_media(
     db.add(media)
     await db.flush()
 
-    url = f"/api/stores/media/{media.id}"
+    url = media_url(media.id)
     if kind == "logo":
         store.logo_url = url
     else:
