@@ -224,3 +224,40 @@ async def test_la_guarda_del_fiado_lee_solo_las_banderas_de_la_tienda(
     de_tienda = [s for s in sentencias if re.search(r"\bFROM stores\b", s)]
     assert len(de_tienda) == 1, sentencias
     assert de_tienda[0].startswith("SELECT stores.feature_flags FROM stores"), de_tienda
+
+
+@pytest.mark.asyncio
+async def test_editar_los_servicios_del_profesional_sin_nada_en_memoria(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """``_set_services`` reasigna la coleccion: exige el Staff de ``get_by_id``.
+
+    Con el identity map vacio nada viene cargado del armado: si el camino no
+    cargara ``services`` antes de reasignarla, ``lazy="raise"`` lo cortaria.
+    """
+    _, token = await register_and_login(
+        client, slug="colecciones-staff", email="colecciones-staff@example.com"
+    )
+    corte = await create_service(client, token)
+    color = await create_service(client, token)
+    staff = await create_staff(client, token, corte, email="pro-cs@example.com")
+
+    test_session.expunge_all()
+    parche = await client.patch(
+        f"/staff/{staff}/services", headers=auth_headers(token), json=[color]
+    )
+    assert parche.status_code == 200, parche.text
+
+    test_session.expunge_all()
+    perfil = await client.patch(
+        f"/staff/{staff}",
+        headers=auth_headers(token),
+        json={"service_ids": [corte, color]},
+    )
+    assert perfil.status_code == 200, perfil.text
+    assert sorted(perfil.json()["service_ids"]) == sorted([corte, color])
+
+    test_session.expunge_all()
+    ficha = await client.get(f"/staff/{staff}", headers=auth_headers(token))
+    assert ficha.status_code == 200, ficha.text
+    assert sorted(ficha.json()["service_ids"]) == sorted([corte, color])

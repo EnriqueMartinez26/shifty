@@ -1,7 +1,7 @@
 from datetime import time
 from typing import Any
 
-from sqlalchemy import delete, exists, select
+from sqlalchemy import delete, exists, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.interfaces import LoaderOption
@@ -292,7 +292,17 @@ class StaffRepository:
 
         Esto NO reabre AUD2-B6-02: ahi el problema era que una LECTURA del
         portal borraba. Aca el borrado es la lista explicita del dueno.
+
+        Precondicion: `staff` viene de `get_by_id`, que carga `services` con
+        `_active_services`. Reasignar una coleccion `lazy="raise"` sin cargar
+        necesitaria leer la vieja para el diff; se corta aca con un mensaje
+        claro en vez de dentro de SQLAlchemy.
         """
+        if "services" in inspect(staff).unloaded:
+            raise RuntimeError(
+                "_set_services necesita el Staff con `services` cargado "
+                "(StaffRepository.get_by_id)"
+            )
         staff.service_ids = [service.public_id for service in services_list]
         staff.services = services_list
         await self.db.flush()

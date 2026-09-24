@@ -3,7 +3,8 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 import ulid
-from sqlalchemy import Boolean, CheckConstraint, DateTime, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, String, inspect
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from infrastructure.persistence.models.base import Base
@@ -69,15 +70,28 @@ class StaffModel(Base):
 
     @property
     def service_ids(self) -> list[str]:
-        services = self.__dict__.get("services") or []
+        """Servicios del profesional: la coleccion cargada o la lista explicita.
+
+        `services` es `lazy="raise"` (F3-01): sin coleccion ni lista explicita,
+        un Staff que ya existe en la base falla fuerte en lugar de decir que no
+        tiene servicios. Uno nuevo (sin identidad) todavia no tiene ninguno.
+        """
+        services = self.__dict__.get("services")
         if services:
             return [
                 service.public_id
                 for service in services
                 if getattr(service, "public_id", None)
             ]
-        override = getattr(self, "_service_ids_override", None)
-        return list(override) if override is not None else []
+        override = self.__dict__.get("_service_ids_override")
+        if override is not None:
+            return list(override)
+        if services is None and inspect(self).has_identity:
+            raise InvalidRequestError(
+                "StaffModel.service_ids necesita `services` cargado: la "
+                "relacion es lazy='raise', pedila con selectinload(Staff.services)"
+            )
+        return []
 
     @service_ids.setter
     def service_ids(self, value: list[str] | None) -> None:
