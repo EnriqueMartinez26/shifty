@@ -488,10 +488,17 @@ def _declaradas_en(ruta: Path) -> set[str]:
     }
 
 
+# Exigidas con `:?` pero que NO van en el .env: las pasa el script de deploy en
+# cada corrida. APP_VERSION en el .env queda vieja despues del primer deploy y
+# un `up` a mano volveria a la version anterior (docs/DEPLOY_RUNBOOK.md).
+NO_VAN_EN_EL_ENV = {"APP_VERSION"}
+
+
 def test_el_ejemplo_de_produccion_declara_todo_lo_que_los_composes_exigen() -> None:
     exigidas = _exigidas_con_interrogacion()
     assert exigidas, "ningun compose exige variables con :?"
-    faltan = exigidas - _declaradas_en(ENV_PRODUCCION_EXAMPLE)
+    assert NO_VAN_EN_EL_ENV <= exigidas, "la excepcion nombra variables que nadie exige"
+    faltan = exigidas - NO_VAN_EN_EL_ENV - _declaradas_en(ENV_PRODUCCION_EXAMPLE)
     assert not faltan, (
         "el compose aborta en produccion si falta alguna de estas, y el "
         f"ejemplo que se copia como .env no las declara: {sorted(faltan)}"
@@ -1256,3 +1263,43 @@ def test_la_api_no_duplica_el_access_log_de_nginx() -> None:
     # nginx ya registra cada request; el access log de uvicorn duplicaba
     # cada linea y llevaba la query entera (client_phone incluido).
     assert "--no-access-log" in _dockerfile_cmd()
+
+
+def test_app_version_la_pasa_el_deploy_y_no_el_env() -> None:
+    """APP_VERSION en el .env queda vieja despues del primer deploy. El `:?`
+    sigue: un `up` a mano en produccion sin la version falla a la vista, y el
+    mensaje dice de donde sale."""
+    declaradas = _declaradas_en(ENV_PRODUCCION_EXAMPLE)
+    assert not (NO_VAN_EN_EL_ENV & declaradas), (
+        f"el ejemplo del .env declara {sorted(NO_VAN_EN_EL_ENV & declaradas)}"
+    )
+    texto = COMPOSE_PROD.read_text(encoding="utf-8")
+    mensajes = re.findall(r"\$\{APP_VERSION:\?([^}]*)\}", texto)
+    assert mensajes, "produccion no exige APP_VERSION"
+    for mensaje in mensajes:
+        assert "scripts/deploy.sh" in mensaje and "no va en .env" in mensaje, mensaje
+
+
+# --- Backups de la base (F0-20, lane de operacion) ----------------------------
+#
+# scripts/backup corre `pg_dump` dentro de `db` y escribe en /backups; ese
+# directorio es un bind al disco del host (BACKUP_DIR) para que la copia
+# sobreviva a un `down -v` y la tome la copia fuera del host.
+
+
+def test_la_base_de_produccion_escribe_los_backups_en_el_host() -> None:
+    db = _servicios_de_produccion()["db"]
+    montajes = [_montaje(v) for v in db.get("volumes") or []]  # type: ignore[attr-defined]
+    assert ("pg_backups", "/backups") in montajes, montajes
+    assert ("postgres_data", "/var/lib/postgresql/data") in montajes, montajes
+    volumen = cargar_compose(COMPOSE_PROD.read_text(encoding="utf-8"))["volumes"][
+        "pg_backups"
+    ]
+    assert volumen == {
+        "driver": "local",
+        "driver_opts": {
+            "type": "none",
+            "o": "bind",
+            "device": "${BACKUP_DIR:-/var/backups/shifty}",
+        },
+    }, volumen

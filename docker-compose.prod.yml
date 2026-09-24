@@ -42,7 +42,7 @@
 x-app-environment-prod: &app_environment_prod
   ENV: production
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  VERSION: ${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
+  VERSION: ${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
   SENTRY_DSN: ${SENTRY_DSN:-}
   SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
@@ -88,8 +88,10 @@ x-app-environment-prod: &app_environment_prod
 
 # F0-02: en produccion la imagen sale de GHCR con el tag de APP_VERSION, sin
 # default. Con `:-dev` un servidor sin APP_VERSION corria cualquier build local
-# viejo con ese tag en vez de fallar. El deploy hace `pull` y `up --no-build`.
-x-app-image-prod: &app_image_prod ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
+# viejo con ese tag en vez de fallar. APP_VERSION NO va en el .env (quedaria
+# vieja despues del primer deploy): la pasa scripts/deploy.sh en cada corrida,
+# y un `up` a mano sin ella falla a la vista.
+x-app-image-prod: &app_image_prod ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
 
 services:
   backend:
@@ -124,11 +126,16 @@ services:
     environment: *app_environment_prod
 
   frontend:
-    image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
+    image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
     ports: !reset []
 
   db:
     ports: !reset []
+    # F0-20: pg_dump escribe en /backups, un bind al disco del host
+    # (BACKUP_DIR): la copia sobrevive a un `down -v` y la toma la copia fuera
+    # del host. Compose fusiona por destino: postgres_data sigue montado.
+    volumes:
+      - pg_backups:/backups
     # F0-14: Postgres para ~4 GB de un VPS de 16 GB. Este `command` REEMPLAZA
     # al del compose base (compose no fusiona `command`), por eso repite
     # shared_preload_libraries y el slow log. log_parameter_max_length=0: el
@@ -200,7 +207,7 @@ services:
     ports: !reset []
 
   nginx:
-    image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:?Falta APP_VERSION en .env (tag de la imagen publicada en GHCR)}
+    image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
     ports:
       - "80:80"
       - "443:443"
@@ -211,3 +218,13 @@ services:
       # ./nginx/acme (--webroot) y el borde lo sirve en
       # /.well-known/acme-challenge/ desde /var/www/acme.
       - ./nginx/acme:/var/www/acme:ro
+
+volumes:
+  # F0-20: directorio del host para los backups de la base. Tiene que existir
+  # antes del `up` (un volumen local con `o: bind` no lo crea).
+  pg_backups:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BACKUP_DIR:-/var/backups/shifty}
