@@ -28,7 +28,7 @@ RIESGOS DE DESPLIEGUE
    backfillear: no hay registro de a que buzon fue el codigo.
 
 Revision ID: b8d1c4f70a25
-Revises: d1f3b5a7c9e2
+Revises: c9e1f3a5b7d9
 Create Date: 2026-09-20
 """
 

@@ -13,7 +13,7 @@ borra nada: se detiene con el conteo para que alguien decida cual fila
 conservar.
 
 Revision ID: d2f4a6b8c0e2
-Revises: c9e1f3a5b7d9
+Revises: b8d1c4f70a25
 Create Date: 2026-09-16
 """
 
