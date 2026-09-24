@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -182,8 +182,67 @@ async def _registrar_fallo(
         )
 
 
+@dataclass(frozen=True)
+class _ContextoDelLote:
+    """Lo que los mensajes del lote comparten por tienda, leido una vez (F1-23).
+
+    Antes cada aviso al dueno consultaba los admins de SU tienda y cada "sena
+    acreditada" leia su ``Store``: hasta dos SELECT por mensaje dentro de la
+    transaccion del ``FOR UPDATE SKIP LOCKED`` (R3-07, regla 12).
+    """
+
+    admins: Mapping[str, list[str]]
+    tiendas: Mapping[str, Any]
+
+
+# Eventos que no generan aviso al dueno: no necesitan sus admins.
+_EVENTOS_SIN_AVISO_AL_DUENO = frozenset(
+    {EVENT_SLOT_RELEASED, "appointment.cancelled_by_block"}
+)
+
+
+async def _contexto_del_lote(
+    db: AsyncSession, messages: list[OutboxMessage]
+) -> _ContextoDelLote:
+    """Admins y tiendas del lote con un ``in_()`` cada uno, filtrados por tienda."""
+    from modules.stores.model import Store
+
+    con_aviso = {
+        m.store_id
+        for m in messages
+        if m.store_id and m.event_type not in _EVENTOS_SIN_AVISO_AL_DUENO
+    }
+    admins: dict[str, list[str]] = {}
+    if con_aviso:
+        filas = await db.execute(
+            select(User.store_id, User.email).where(
+                User.store_id.in_(con_aviso),
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+                User.email.is_not(None),
+            )
+        )
+        for store_id, email in filas.all():
+            if store_id and email:
+                admins.setdefault(store_id, []).append(email)
+    con_confirmacion = {
+        m.store_id
+        for m in messages
+        if m.store_id and m.event_type == NotificationType.PAYMENT_APPROVED.value
+    }
+    tiendas: dict[str, Any] = {}
+    if con_confirmacion:
+        leidas = await db.execute(select(Store).where(Store.id.in_(con_confirmacion)))
+        tiendas = {tienda.id: tienda for tienda in leidas.scalars().all()}
+    return _ContextoDelLote(admins=admins, tiendas=tiendas)
+
+
 async def _plan_outbox_message(
-    db: AsyncSession, message: OutboxMessage, *, now: datetime
+    db: AsyncSession,
+    message: OutboxMessage,
+    *,
+    now: datetime,
+    contexto_del_lote: _ContextoDelLote,
 ) -> list[_MailDelLote]:
     """Aplica en la base lo que pide un evento y devuelve sus mails.
 
@@ -238,11 +297,15 @@ async def _plan_outbox_message(
     db.add(notification)
     mails = [
         _MailDelLote(message, mail, contexto)
-        for mail in await _store_owner_mails(db, notification)
+        for mail in _store_owner_mails(
+            notification, contexto_del_lote.admins.get(notification.store_id, [])
+        )
     ]
     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
         # La sena acreditada confirma el turno: el cliente tambien se entera.
-        confirmacion = await _client_confirmation_mail(db, notification.appointment_id)
+        confirmacion = await _client_confirmation_mail(
+            db, notification.appointment_id, contexto_del_lote.tiendas
+        )
         if confirmacion is not None:
             mails.append(_MailDelLote(message, confirmacion, contexto))
     return mails
@@ -301,6 +364,7 @@ async def process_outbox_batch(
         .with_for_update(skip_locked=True)
     )
     messages = list(result.scalars().all())
+    contexto_del_lote = await _contexto_del_lote(db, messages)
     now = datetime.now(timezone.utc)
     processed = 0
     failed = 0
@@ -314,7 +378,9 @@ async def process_outbox_batch(
             # sellado va ADENTRO: lo tiene que volcar el flush de ESTE
             # savepoint y no el del item siguiente, que puede revertirlo.
             async with db.begin_nested():
-                mails = await _plan_outbox_message(db, message, now=now)
+                mails = await _plan_outbox_message(
+                    db, message, now=now, contexto_del_lote=contexto_del_lote
+                )
                 message.processed_at = now
                 message.error = None
         except Exception as exc:
@@ -752,7 +818,7 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
 
 
 async def _client_confirmation_mail(
-    db: AsyncSession, appointment_id: str | None
+    db: AsyncSession, appointment_id: str | None, tiendas: Mapping[str, Any]
 ) -> PendingEmail | None:
     """Arma (no manda) el "turno confirmado" al cliente; se despacha tras el commit."""
     if not appointment_id:
@@ -769,7 +835,11 @@ async def _client_confirmation_mail(
     appointment = res.scalar_one_or_none()
     if appointment is None or appointment.status != AppointmentStatus.CONFIRMED.value:
         return None
-    store = await db.get(Store, appointment.store_id)
+    # La tienda ya la leyo el lote (F1-23); ``db.get`` queda como red por si
+    # el turno no es de la tienda del mensaje.
+    store = tiendas.get(appointment.store_id) or await db.get(
+        Store, appointment.store_id
+    )
     details = build_client_details(
         appointment, appointment.service, appointment.staff, store
     )
@@ -778,23 +848,16 @@ async def _client_confirmation_mail(
     )
 
 
-async def _store_owner_mails(
-    db: AsyncSession, notification: Notification
+def _store_owner_mails(
+    notification: Notification, admins: list[str]
 ) -> list[PendingEmail]:
     """Arma (no manda) la replica por mail de la notificacion in-app, uno por
     administrador de la tienda; se despachan tras el commit.
 
-    Es best-effort: si falla el envio no se pierde el evento, porque la
-    notificacion del panel ya quedo persistida.
+    Los admins los resolvio el lote con un ``in_()`` (F1-23). Es best-effort:
+    si falla el envio no se pierde el evento, porque la notificacion del panel
+    ya quedo persistida.
     """
-    result = await db.execute(
-        select(User.email).where(
-            User.store_id == notification.store_id,
-            User.role == UserRole.ADMIN,
-            User.is_active.is_(True),
-            User.email.is_not(None),
-        )
-    )
     return [
         partial(
             send_store_notification_email,
@@ -802,7 +865,7 @@ async def _store_owner_mails(
             title=notification.title,
             body=notification.body,
         )
-        for email in result.scalars().all()
+        for email in admins
         if email
     ]
 
