@@ -14,11 +14,20 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import shutil
 import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+from tests.unit.host_falso import (
+    REPO_ROOT,
+    Host,
+    _hay,
+    _lineas_de_cron,
+    crear_host,
+)
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = BACKEND_ROOT / "scripts" / "latency_report.py"
@@ -271,3 +280,94 @@ def test_el_script_compila_con_el_python_del_host() -> None:
     import ast
 
     ast.parse(SCRIPT.read_text(encoding="utf-8"), feature_version=(3, 10))
+
+
+# --- formato real de lane A (shifty_json): s, urt y uct van entre comillas ---
+
+
+@pytest.mark.parametrize(
+    ("urt", "esperado"),
+    [
+        ("0.040", 40.0),
+        # Reintento a otro upstream: nginx lista cada intento. Se SUMA: es el
+        # tiempo total que la request paso esperando backends.
+        ("0.010, 0.020", 30.0),
+        ("0.010 : 0.020", 30.0),
+        ("-", None),
+        ("", None),
+    ],
+    ids=["uno", "reintento", "cambio-de-grupo", "guion", "vacio"],
+)
+def test_urt_suma_los_intentos_y_tolera_sin_upstream(
+    urt: str, esperado: float | None
+) -> None:
+    linea = json.loads(_linea())
+    linea["urt"] = urt
+    muestra = _modulo().parse_line(json.dumps(linea))
+
+    assert muestra is not None
+    if esperado is None:
+        assert muestra.upstream_ms is None
+    else:
+        assert muestra.upstream_ms == pytest.approx(esperado)
+
+
+def test_status_000_no_cuenta_como_5xx() -> None:
+    """`s` = "000": el cliente corto antes de que hubiera respuesta."""
+    codigo, salida = _correr([_linea(s="000")] + [_linea() for _ in range(30)])
+
+    assert codigo == 0
+    assert _resumen(salida)["total_5xx"] == 0
+
+
+def test_el_resumen_trae_el_p95_del_upstream() -> None:
+    lineas = []
+    for _ in range(20):
+        linea = json.loads(_linea("/dashboard", rt=0.1))
+        linea["urt"] = "0.080"
+        lineas.append(json.dumps(linea))
+    sin_upstream = json.loads(_linea("/assets/app.js", rt=0.001))
+    sin_upstream["urt"] = ""
+    lineas.append(json.dumps(sin_upstream))
+
+    _, salida = _correr(lineas)
+
+    filas = _resumen(salida)["routes"]
+    assert isinstance(filas, list)
+    rutas = {r["route"]: r for r in filas}
+    assert rutas["/dashboard"]["p95_upstream_ms"] == pytest.approx(80.0)
+    assert rutas["/assets/app.js"]["p95_upstream_ms"] is None
+
+
+# --- scripts/latency-check.sh y su cron --------------------------------------
+
+
+@pytest.fixture
+def host(tmp_path: Path) -> Host:
+    return crear_host(tmp_path)
+
+
+def test_latency_check_alerta_cuando_el_reporte_sale_con_error(host: Host) -> None:
+    lineas = ['{"m":"GET","u":"/x","s":200,"rt":"0.900"}'] * 25
+    (host.fake / "nginx.log").write_text("\n".join(lineas) + "\n", encoding="utf-8")
+    (host.repo / "backend" / "scripts").mkdir(parents=True)
+    shutil.copy(
+        REPO_ROOT / "backend" / "scripts" / "latency_report.py",
+        host.repo / "backend" / "scripts" / "latency_report.py",
+    )
+    # El interprete que corre pytest: en Windows `python3` puede ser el
+    # atajo de la Store, que no ejecuta nada.
+    resultado = host.correr(
+        "latency-check.sh", LATENCY_PYTHON=Path(sys.executable).as_posix()
+    )
+
+    assert resultado.returncode != 0
+    assert "ALERTA" in resultado.stderr
+    assert _hay(
+        host.llamadas(), r"docker compose logs --no-log-prefix --since 5m nginx"
+    )
+
+
+def test_cron_de_latencia_corre_cada_cinco_minutos() -> None:
+    lineas = _lineas_de_cron("shifty-latency")
+    assert any(ll.split()[0] == "*/5" and "latency-check.sh" in ll for ll in lineas)

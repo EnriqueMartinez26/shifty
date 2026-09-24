@@ -5,14 +5,19 @@ Uso en el host (lo corre `scripts/latency-check.sh` cada 5 minutos):
     docker compose logs --no-log-prefix --since 5m nginx \\
         | python3 backend/scripts/latency_report.py --p95-ms 500
 
-Cada linea de acceso es un objeto JSON con los campos del `log_format` de
-nginx: `t,rid,m,u,s,rt,urt,uct,ip,ua,bytes` (`rt` = `$request_time`, en
-segundos). Lo que no es JSON (el error log sale por el mismo stream) se
-ignora.
+Cada linea de acceso es un objeto JSON del `log_format shifty_json` de nginx
+(nginx/nginx.prod.conf): `t,rid,m,u,s,rt,urt,uct,ip,ua,bytes`. `rt`
+(`$request_time`, segundos) y `bytes` son numeros; `s`, `urt` y `uct` van
+entre comillas. `u` es la ruta ya reescrita, sin el prefijo `/api`. `s` puede
+ser "000" (el cliente corto antes de la respuesta: no es un 5xx). `urt` puede
+ser "" o "-" (no hubo upstream: estaticos, 429 del borde) o una lista
+("0.010, 0.020") cuando nginx reintento en otra replica: se SUMA, porque es el
+tiempo total que la request espero backends. Lo que no es JSON (el error log
+sale por el mismo stream) se ignora.
 
 Agrupa por metodo y ruta normalizada (ULID -> `{id}`, UUID -> `{uuid}`,
 numeros -> `{n}`, slug de tienda publica -> `{slug}`) y calcula cantidad,
-p50/p95/p99 de `rt` en milisegundos y tasa de 5xx; ademas, cuantos 429 hubo y
+p50/p95/p99 de `rt` en milisegundos, p95 de `urt` y tasa de 5xx; ademas, cuantos 429 hubo y
 desde cuantas IPs distintas. Imprime una tabla y, en la ultima linea, el
 resumen en JSON.
 
@@ -40,6 +45,9 @@ _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE
 )
 _NUMERO = re.compile(r"^\d+$")
+# Separadores de `$upstream_response_time`: coma entre intentos del mismo
+# grupo, dos puntos cuando la request paso a otro grupo (error_page interno).
+_SEPARADORES_URT = re.compile(r"[,:]")
 # El slug de la vitrina publica es por tienda: sin esto cada tienda seria una
 # ruta distinta y ninguna llegaria al minimo de muestras. `/api` es opcional:
 # segun el log_format, `$uri` puede venir ya reescrito sin el prefijo.
@@ -86,6 +94,14 @@ class Sample:
     status: int
     rt_ms: float
     ip: str
+    upstream_ms: float | None = None
+
+
+def parse_upstream_ms(valor: object) -> float | None:
+    """`$upstream_response_time` en ms, sumando los reintentos; None sin upstream."""
+    partes = [p.strip() for p in _SEPARADORES_URT.split(str(valor or ""))]
+    segundos = [float(p) for p in partes if p and p != "-"]
+    return sum(segundos) * 1000 if segundos else None
 
 
 def parse_line(line: str) -> Sample | None:
@@ -106,6 +122,7 @@ def parse_line(line: str) -> Sample | None:
             status=int(datos["s"]),
             rt_ms=float(datos["rt"]) * 1000,
             ip=str(datos.get("ip", "")),
+            upstream_ms=parse_upstream_ms(datos.get("urt")),
         )
     except _CAMPO_INVALIDO:
         return None
@@ -116,6 +133,7 @@ class RouteStats:
     method: str
     route: str
     latencies: list[float] = field(default_factory=list)
+    upstream: list[float] = field(default_factory=list)
     errors_5xx: int = 0
 
     @property
@@ -134,6 +152,9 @@ class RouteStats:
             "p50_ms": round(percentile(self.latencies, 50), 1),
             "p95_ms": round(percentile(self.latencies, 95), 1),
             "p99_ms": round(percentile(self.latencies, 99), 1),
+            "p95_upstream_ms": (
+                round(percentile(self.upstream, 95), 1) if self.upstream else None
+            ),
             "errors_5xx": self.errors_5xx,
             "rate_5xx": round(self.rate_5xx, 5),
         }
@@ -153,6 +174,8 @@ class Report:
         if stats is None:
             stats = self.routes[clave] = RouteStats(sample.method, sample.route)
         stats.latencies.append(sample.rt_ms)
+        if sample.upstream_ms is not None:
+            stats.upstream.append(sample.upstream_ms)
         self.total += 1
         if 500 <= sample.status <= 599:
             stats.errors_5xx += 1
