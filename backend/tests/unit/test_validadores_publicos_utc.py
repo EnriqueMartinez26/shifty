@@ -57,6 +57,7 @@ def _reserva(starts_at: datetime) -> PublicBookingCreate:
             "starts_at": starts_at,
             "client_name": "Cliente",
             "client_phone": "5491155550000",
+            "accepts_terms": True,
         }
     )
 
