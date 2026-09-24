@@ -276,6 +276,18 @@ async def _borrar_servicio(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("DELETE", f"/services/{await m.servicio(t)}")
 
 
+async def _subir_imagen_servicio(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "POST",
+        f"/services/{await m.servicio(t)}/image",
+        files={"file": ("servicio.png", PNG_1X1, "image/png")},
+    )
+
+
+async def _borrar_imagen_servicio(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("DELETE", f"/services/{await m.servicio(t)}/image")
+
+
 async def _listar_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", "/staff/")
 
@@ -1029,6 +1041,22 @@ TABLA: tuple[Ruta, ...] = (
         ADMINS,
         A.RECURSO,
         _borrar_servicio,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "POST",
+        "/services/{public_id}/image",
+        ADMINS,
+        A.RECURSO,
+        _subir_imagen_servicio,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "DELETE",
+        "/services/{public_id}/image",
+        ADMINS,
+        A.RECURSO,
+        _borrar_imagen_servicio,
         idor=IDOR_POR_ID,
     ),
     # personal

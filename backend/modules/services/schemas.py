@@ -6,6 +6,7 @@ from typing import Self
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from core.validation import reject_control_chars, reject_unsafe_url
+from modules.stores.media import validate_image_url
 
 
 class ServiceBase(BaseModel):
@@ -17,13 +18,11 @@ class ServiceBase(BaseModel):
     deposit_type: str = Field(default="percent", pattern=r"^(percent|fixed|full)$")
     deposit_amount: float | None = Field(None, ge=0, le=10_000_000)
     color: str | None = Field(None, pattern=r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$")
+    # Una imagen subida (/api/stores/media/{id}, F1-28) o una URL http(s)
+    # externa. Se valida en los schemas de entrada: la respuesta hereda de
+    # esta base y una imagen subida no es http(s).
     image_url: str | None = Field(None, max_length=500)
     youtube_trailer_url: str | None = Field(None, max_length=500)
-
-    @field_validator("image_url", "youtube_trailer_url")
-    @classmethod
-    def validate_media_url(cls, value: str | None) -> str | None:
-        return reject_unsafe_url(value)
 
 
 _CENT = Decimal("0.01")
@@ -64,6 +63,13 @@ def deposit_policy_error(
 
 
 class ServiceCreate(ServiceBase):
+    @field_validator("image_url", "youtube_trailer_url")
+    @classmethod
+    def validate_media_url(cls, value: str | None) -> str | None:
+        # Al crear no hay imagen subida: la de servicio se sube despues con
+        # POST /services/{id}/image.
+        return reject_unsafe_url(value)
+
     @model_validator(mode="after")
     def validate_deposit_policy(self) -> Self:
         error = deposit_policy_error(
@@ -135,10 +141,18 @@ class ServiceUpdate(BaseModel):
                 raise ValueError(f"{field} no puede ser null")
         return self
 
-    @field_validator("image_url", "youtube_trailer_url")
+    @field_validator("youtube_trailer_url")
     @classmethod
     def validate_media_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
+
+    @field_validator("image_url")
+    @classmethod
+    def validate_image_url(cls, value: str | None) -> str | None:
+        # El front manda el formulario entero: la URL de la imagen ya subida
+        # vuelve tal cual. Que sea LA de este servicio lo chequea
+        # ServiceImageService.check_image_url_change.
+        return validate_image_url(value)
 
 
 class ServiceResponse(ServiceBase):

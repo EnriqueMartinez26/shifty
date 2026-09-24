@@ -170,8 +170,16 @@ def locations_con_proxy(http: list[Directiva]) -> list[Directiva]:
     ]
 
 
+def es_de_api(loc: Directiva) -> bool:
+    """Prefijo o exacta bajo /api/, o regex anclada en ^/api/."""
+    patron = loc.args[-1]
+    if loc.args[0] in {"~", "~*"}:
+        return patron.startswith("^/api/")
+    return patron.startswith("/api/")
+
+
 def locations_de_api(server: list[Directiva]) -> list[Directiva]:
-    return [loc for loc in locations(server) if loc.args[-1].startswith("/api/")]
+    return [loc for loc in locations(server) if es_de_api(loc)]
 
 
 def cabeceras_proxy(bloque: list[Directiva]) -> dict[str, str]:
@@ -540,7 +548,7 @@ def test_las_paginas_de_error_json_son_solo_de_api(ruta: Path) -> None:
         assert not todas(server, "error_page")
         for loc in locations(server):
             if todas(loc.bloque, "error_page"):
-                assert loc.args[-1].startswith("/api/"), loc.args
+                assert es_de_api(loc), loc.args
 
 
 @EDGES
@@ -551,11 +559,34 @@ def test_la_subida_de_medios_admite_el_tope_de_la_app_mas_el_multipart(
     # cortaba antes que ella lo que el multipart agrega, y el 413 no era el de
     # la app. El resto de /api sigue en 32k.
     server = server_de_la_app(leer(ruta))
-    media = location(server, "=", "/api/stores/me/media")
-    assert una(media, "client_max_body_size").args == ("3200k",)
+    subidas = [
+        location(server, "=", "/api/stores/me/media"),
+        # Imagen de servicio (F1-28): mismo tope, por regex exacta.
+        location(server, "~", SUBIDA_DE_SERVICIO),
+    ]
+    for subida in subidas:
+        assert una(subida, "client_max_body_size").args == ("3200k",)
     for loc in locations_de_api(server):
-        if loc.bloque is not media:
+        if not any(loc.bloque is subida for subida in subidas):
             assert efectivo("client_max_body_size", server, loc.bloque) == ("32k",)
+
+
+SUBIDA_DE_SERVICIO = "^/api/services/[A-Za-z0-9_-]+/image$"
+
+
+@pytest.mark.parametrize(
+    ("uri", "calza"),
+    [
+        ("/api/services/01JABCDEFGHJKMNPQRSTVWXYZ0/image", True),
+        ("/api/services/01JABC/image/", False),
+        ("/api/services/a/b/image", False),
+        ("/api/services/01JABC", False),
+        ("/api/services//image", False),
+    ],
+)
+def test_la_regex_de_subida_de_servicio_es_exacta(uri: str, calza: bool) -> None:
+    # PCRE y `re` coinciden en esta clase de patron (anclas, clase y `+`).
+    assert (re.fullmatch(SUBIDA_DE_SERVICIO[1:-1], uri) is not None) is calza
 
 
 # --- F0-11: log estructurado sin datos del cliente ----------------------------

@@ -13,11 +13,13 @@ pueden leer se rechaza. Sin Pillow: se leen solo los headers (dependencia
 nativa, regla 19); redimensionar es otra decision.
 """
 
+import re
 import struct
 from dataclasses import dataclass
 from typing import Callable
 
 from core.exceptions import AppException
+from core.validation import reject_unsafe_url
 
 
 @dataclass(frozen=True)
@@ -45,10 +47,9 @@ IMAGE_CAPS: dict[str, ImageCaps] = {
     "cover": ImageCaps(max_bytes=2 * _MB, max_long_side=3840, max_short_side=2160),
     "service": ImageCaps(max_bytes=1 * _MB, max_long_side=1600, max_short_side=1600),
 }
-# Tipos que se suben desde /stores/me/media.
+# Tipos que se suben desde /stores/me/media; la imagen de servicio tiene su
+# propio endpoint (POST /services/{id}/image).
 ALLOWED_KINDS = ("logo", "cover")
-# Lo que se lee de un upload antes de validar: el mayor de los topes.
-MAX_IMAGE_BYTES = max(caps.max_bytes for caps in IMAGE_CAPS.values())
 
 _SNIFFERS: dict[str, Callable[[bytes], bool]] = {
     "image/png": lambda d: d[:8] == b"\x89PNG\r\n\x1a\n",
@@ -215,3 +216,36 @@ def validate_image(data: bytes, kind: str) -> str:
             error_code="IMAGE_TOO_LARGE_DIMENSIONS",
         )
     return content_type
+
+
+# URL con la que el front pide una imagen subida (via nginx, con /api). Es
+# inmutable: cada upload crea un id nuevo.
+MEDIA_URL_PREFIX = "/api/stores/media/"
+_MEDIA_URL = re.compile(r"^/api/stores/media/[A-Za-z0-9_-]{1,64}$")
+
+
+def media_url(media_id: str) -> str:
+    return f"{MEDIA_URL_PREFIX}{media_id}"
+
+
+def is_media_url(value: str | None) -> bool:
+    return bool(value) and _MEDIA_URL.fullmatch(str(value)) is not None
+
+
+def validate_image_url(value: str | None) -> str | None:
+    """URL de imagen de entrada: una imagen servida por la app o http(s).
+
+    Solo el FORMATO: que la imagen servida sea del recurso lo chequea quien
+    la enlaza (una URL de medios se sube, no se enlaza a mano).
+    """
+    if value is not None and is_media_url(value.strip()):
+        return value.strip()
+    return reject_unsafe_url(value)
+
+
+def absolute_media_url(value: str | None, public_api_url: str) -> str | None:
+    """La URL de una imagen servida, absoluta (para quien la ve fuera del
+    sitio, como el checkout de Mercado Pago). Otra URL vuelve tal cual."""
+    if value is None or not is_media_url(value):
+        return value
+    return public_api_url.rstrip("/") + value.removeprefix("/api")

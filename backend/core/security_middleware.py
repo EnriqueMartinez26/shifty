@@ -1,4 +1,5 @@
 import json
+import re
 from collections import deque
 from typing import Iterable
 
@@ -9,11 +10,19 @@ from core.config import Environment, settings
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-# Rutas que aceptan multipart (subida de imagenes de tienda) con su propio
-# limite de tamano. El path que ve el ASGI NO trae el prefijo /api (lo reescribe
-# nginx). Van con Bearer, no cookie: no alcanzables por CSRF de formulario.
+# Rutas que aceptan multipart (subida de imagenes de tienda y de servicio) con
+# su propio limite de tamano. El path que ve el ASGI NO trae el prefijo /api
+# (lo reescribe nginx). Van con Bearer, no cookie: no alcanzables por CSRF de
+# formulario (regla 18).
 UPLOAD_PATHS = ("/stores/me/media",)
+# POST /services/{public_id}/image (F1-28), con el patron de PUBLIC_ID_PATTERN.
+_UPLOAD_PATH_PATTERN = re.compile(r"^/services/[A-Za-z0-9_-]{1,64}/image$")
 UPLOAD_CONTENT_TYPES = {"multipart/form-data"}
+
+
+def is_upload_path(path: str) -> bool:
+    return path in UPLOAD_PATHS or _UPLOAD_PATH_PATTERN.fullmatch(path) is not None
+
 
 # SEG-03: Postgres no acepta NUL (U+0000) en un parametro de texto (SQLSTATE
 # 22021) y el error subia como 500. Se rechaza aca, antes de cualquier router,
@@ -130,7 +139,7 @@ class RequestGuardMiddleware:
         }
 
     def _limits_for(self, path: str) -> tuple[int, set[str]]:
-        if path in UPLOAD_PATHS:
+        if is_upload_path(path):
             return self.max_upload_bytes, UPLOAD_CONTENT_TYPES
         return self.max_body_bytes, self.allowed_write_content_types
 
@@ -228,7 +237,7 @@ class RequestGuardMiddleware:
 
         app_receive: Receive = guarded_receive
         content_type = _media_type(headers.get("content-type"))
-        if _is_json(content_type) and path not in UPLOAD_PATHS:
+        if _is_json(content_type) and not is_upload_path(path):
             # El body JSON se lee entero ANTES del router (ya tiene tope de
             # bytes): un error levantado desde receive() dentro de FastAPI
             # se convierte en 400 "error parsing the body".

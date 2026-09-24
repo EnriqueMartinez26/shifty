@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 import structlog
-from fastapi import Depends, Path, Query, Response, status
+from fastapi import Depends, File, Path, Query, Response, UploadFile, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -25,6 +25,8 @@ from modules.services.schemas import (
     ServiceUpdate,
     deposit_policy_error,
 )
+from modules.services.service import ServiceImageService
+from modules.stores.media import IMAGE_CAPS, validate_image
 from modules.users.model import User
 
 logger = structlog.get_logger()
@@ -105,6 +107,7 @@ async def update_service(
     # B6-04: solo los campos enviados; un null explicito borra el opcional.
     changes = data.model_dump(exclude_unset=True)
     _validate_deposit_patch(service, changes)
+    ServiceImageService(db).check_image_url_change(service, changes)
     updated = await repo.update(service, changes)
     await _invalidate_store_cache(availability_cache, str(updated.store_id))
     return to_service_response(updated)
@@ -145,6 +148,39 @@ async def delete_service(
     await repo.soft_delete(service)
     await _invalidate_store_cache(availability_cache, str(service.store_id))
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{public_id}/image", response_model=ServiceResponse)
+async def upload_service_image(
+    public_id: PublicIdPath,
+    file: UploadFile = File(...),
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> ServiceResponse:
+    """Sube (o reemplaza) la imagen del servicio (F1-28).
+
+    Multipart con el campo ``file``; mismos controles que el logo con el tope
+    de servicio (1600 px por lado, 1 MB). ``image_url`` queda en la URL
+    servida ``/api/stores/media/{id}``, que cambia en cada subida.
+    """
+    # Se leen a lo sumo tope+1 bytes: "se paso" sin cargar un blob gigante.
+    data = await file.read(IMAGE_CAPS["service"].max_bytes + 1)
+    content_type = validate_image(data, "service")
+    service = await ServiceImageService(db).upload(
+        public_id, admin.store_id, data=data, content_type=content_type
+    )
+    return to_service_response(service)
+
+
+@router.delete("/{public_id}/image", response_model=ServiceResponse)
+async def delete_service_image(
+    public_id: PublicIdPath,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+) -> ServiceResponse:
+    """Quita la imagen del servicio (subida o URL externa) y borra la fila."""
+    service = await ServiceImageService(db).remove(public_id, admin.store_id)
+    return to_service_response(service)
 
 
 async def _invalidate_store_cache(redis: Redis, store_id: str) -> None:
