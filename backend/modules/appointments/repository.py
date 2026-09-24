@@ -16,6 +16,7 @@ from sqlalchemy import and_, or_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from core.database import _apply_tenant_context
 from core.utils import local_to_utc
 from infrastructure.persistence.models.appointment import MAX_APPOINTMENT_SPAN
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -581,9 +582,13 @@ class AppointmentRepository:
         commit de la sesion (``claim_reminder`` commitea por turno y etapa):
         la exclusion entre workers sigue siendo el reclamo ``UPDATE ... WHERE
         col IS NULL``; SKIP LOCKED achica el solapamiento, no lo reemplaza.
+
+        Reaplica el contexto de tienda antes de leer: el reclamo anterior del
+        lote dejo la sesion SIN transaccion (``claim_reminder``, F1-22).
         """
         if pending_column not in REMINDER_COLUMNS:
             raise ValueError(f"columna de recordatorio desconocida: {pending_column}")
+        await _apply_tenant_context(self.db)
         pendiente = getattr(Appointment, pending_column).is_(None)
         query = (
             select(Appointment, Service, Staff, User, Store)
@@ -619,7 +624,15 @@ class AppointmentRepository:
         ``UPDATE ... WHERE col IS NULL`` es atomico: con varios workers solo
         uno ve rowcount 1. Commitea por su cuenta (operacion tecnica atomica)
         para que el reclamo sea visible antes de mandar el mail.
+
+        F1-22 (R3-05, 2026-09-24): el commit es el PLANO de ``AsyncSession``,
+        no el de ``TenantSession``, que reaplica el contexto y con eso abre
+        otra transaccion en el acto: la conexion quedaba "idle in transaction"
+        durante todo el envio SMTP que viene despues (patron S-02 de
+        ``payments/jobs.py``). La sesion sale de aca sin transaccion; el
+        contexto se reaplica al entrar a la sentencia siguiente del lote.
         """
+        await _apply_tenant_context(self.db)
         col = getattr(Appointment, column)
         result = await self.db.execute(
             update(Appointment)
@@ -627,15 +640,20 @@ class AppointmentRepository:
             .values({column: sent_at})
             .execution_options(synchronize_session=False)
         )
-        await self.db.commit()
+        await AsyncSession.commit(self.db)
         return int(getattr(result, "rowcount", 0) or 0) == 1
 
     async def release_reminder(self, appointment_id: str, column: str) -> None:
-        """Deshace el reclamo cuando el envio fallo, para reintentar despues."""
+        """Deshace el reclamo cuando el envio fallo, para reintentar despues.
+
+        Mismo commit plano que ``claim_reminder`` (F1-22): entra reaplicando el
+        contexto y sale sin transaccion abierta.
+        """
+        await _apply_tenant_context(self.db)
         await self.db.execute(
             update(Appointment)
             .where(Appointment.id == appointment_id)
             .values({column: None})
             .execution_options(synchronize_session=False)
         )
-        await self.db.commit()
+        await AsyncSession.commit(self.db)

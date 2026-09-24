@@ -62,7 +62,9 @@ Una instrucción en lenguaje natural no es una garantía.
   service.
 - **`appointments` es el módulo de referencia** de "commit solo en service"
   (con una excepción propia: `claim_reminder`/`release_reminder` de su
-  repositorio commitean como operación técnica atómica). Los archivos que
+  repositorio commitean como operación técnica atómica, con el commit plano
+  de `AsyncSession` para no quedar "idle in transaction" durante el SMTP,
+  F1-22). Los archivos que
   todavía commitean en router o repositorio NO se listan acá: la lista es
   `COMMITS_DECLARADOS_FUERA_DE_SERVICE` en
   `tests/architecture/test_boundaries.py`, un techo por archivo que solo
