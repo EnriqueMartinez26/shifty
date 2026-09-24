@@ -354,7 +354,7 @@ async def test_mercadopago_oauth_start_and_callback_store_credentials(
         }
 
     monkeypatch.setattr(
-        "modules.payments.router.exchange_mercadopago_oauth_code", fake_exchange
+        "modules.payments.service.exchange_mercadopago_oauth_code", fake_exchange
     )
 
     callback = await client.get(

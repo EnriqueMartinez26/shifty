@@ -535,6 +535,50 @@ async def refresh_mercadopago_oauth_connection(
     return config
 
 
+async def exchange_mercadopago_oauth_code_without_transaction(
+    db: AsyncSession, *, code: str, code_verifier: str
+) -> dict[str, JsonValue]:
+    """Canje del codigo OAuth sin transaccion abierta (F1-05, R8-05).
+
+    Patron de AUD2-B2-08: lo que el callback leyo antes (el actor) dejaba la
+    transaccion abierta y la conexion "idle in transaction" durante el POST a
+    MP. Commit PLANO de ``AsyncSession`` (el de ``TenantSession`` reaplica el
+    contexto y la reabre en el acto), red con el presupuesto del request, y
+    el contexto (el bypass del callback) se reaplica antes de volver a la
+    base.
+    """
+    await AsyncSession.commit(db)
+    try:
+        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+            return await exchange_mercadopago_oauth_code(
+                code=code, code_verifier=code_verifier
+            )
+    finally:
+        await _apply_tenant_context(db)
+
+
+async def refresh_mercadopago_oauth_without_transaction(
+    db: AsyncSession, *, config: PaymentGatewayConfig
+) -> PaymentGatewayConfig:
+    """Refresh OAuth pedido desde el panel, sin transaccion abierta (F1-05).
+
+    Mismo patron que el canje; la config refrescada se persiste en su propia
+    transaccion corta con el contexto reaplicado (``persist_gateway_refresh``),
+    igual que el webhook y los jobs.
+    """
+    # Import diferido: jobs importa este modulo.
+    from modules.payments.jobs import persist_gateway_refresh
+
+    await AsyncSession.commit(db)
+    try:
+        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+            return await refresh_mercadopago_oauth_connection(
+                db, config=config, persist=partial(persist_gateway_refresh, db)
+            )
+    finally:
+        await _apply_tenant_context(db)
+
+
 def apply_mercadopago_oauth_payload(
     config: PaymentGatewayConfig, token_payload: dict[str, JsonValue]
 ) -> None:
