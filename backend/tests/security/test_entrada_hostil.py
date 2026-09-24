@@ -136,60 +136,8 @@ DEFECTOS_INVISIBLES: dict[tuple[str, str, str], str] = {
     ("PATCH", "/promotions/{promotion_public_id}", "title"): _PROMO_PUBLICADA,
 }
 
-_NUL_A_POSTGRES = (
-    "SEG-03 (alta): un NUL (U+0000) en este campo llega a un parametro SQL. "
-    "Postgres lo rechaza con SQLSTATE 22021 (CharacterNotInRepertoireError; "
-    "verificado con SELECT $1::text contra el Postgres local) y "
-    "main.py::dbapi_error_handler lo deja subir como 500. SQLite lo acepta, "
-    "por eso la suite de integracion no lo ve. Falta rechazar NUL en la "
-    "validacion de entrada de todos los campos de texto, no solo en los que "
-    "usan reject_control_chars."
-)
-DEFECTOS_NUL: dict[tuple[str, str, str], str] = {
-    clave: _NUL_A_POSTGRES
-    for clave in (
-        ("POST", "/appointments/", "idempotency_key"),
-        ("PATCH", "/appointments/{public_id}/reschedule", "idempotency_key"),
-        ("POST", "/public/appointments", "idempotency_key"),
-        (
-            "PATCH",
-            "/public/client/appointments/{public_id}/reschedule",
-            "idempotency_key",
-        ),
-        ("POST", "/appointment-blocks/", "staff_id"),
-        ("POST", "/appointment-blocks/batch", "staff_id"),
-        ("POST", "/appointment-blocks/preview", "staff_id"),
-        ("PATCH", "/public/client/appointments/{public_id}/cancel", "phone"),
-        ("PATCH", "/public/client/appointments/{public_id}/reschedule", "phone"),
-        ("POST", "/ledger/customers/{client_id}/movements", "notes"),
-        ("POST", "/payments/{appointment_id}/manual-confirm", "notes"),
-        ("POST", "/payments/{payment_id}/refund", "reason"),
-        ("POST", "/promotions/", "title"),
-        ("POST", "/promotions/", "description"),
-        ("PATCH", "/promotions/{promotion_public_id}", "title"),
-        ("PATCH", "/promotions/{promotion_public_id}", "description"),
-        ("POST", "/users/", "phone"),
-        ("PATCH", "/users/{public_id}", "phone"),
-        ("PUT", "/payments/gateway-config", "public_key"),
-        ("PUT", "/payments/gateway-config", "webhook_secret"),
-        ("POST", "/superadmin/stores/{store_public_id}/admins", "first_name"),
-        ("POST", "/superadmin/stores/{store_public_id}/admins", "last_name"),
-        ("POST", "/superadmin/stores/{store_public_id}/admins", "phone"),
-        ("PATCH", "/superadmin/users/{user_public_id}", "first_name"),
-        ("PATCH", "/superadmin/users/{user_public_id}", "last_name"),
-        ("PATCH", "/superadmin/users/{user_public_id}", "phone"),
-        ("POST", "/superadmin/plans", "name"),
-        ("POST", "/superadmin/plans", "description"),
-        ("POST", "/superadmin/plans", "billing_interval"),
-        ("PATCH", "/superadmin/plans/{plan_public_id}", "name"),
-        ("PATCH", "/superadmin/plans/{plan_public_id}", "description"),
-        ("PATCH", "/superadmin/plans/{plan_public_id}", "billing_interval"),
-        ("POST", "/superadmin/coupons", "code"),
-        ("POST", "/superadmin/coupons", "description"),
-        ("PATCH", "/superadmin/coupons/{coupon_public_id}", "code"),
-        ("PATCH", "/superadmin/coupons/{coupon_public_id}", "description"),
-    )
-}
+# Vacio desde SEG-03: RequestGuardMiddleware rechaza el NUL antes del router.
+DEFECTOS_NUL: dict[tuple[str, str, str], str] = {}
 
 
 @pytest.fixture(scope="module", autouse=True)
