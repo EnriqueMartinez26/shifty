@@ -213,6 +213,7 @@ async def test_cada_consulta_de_solapamiento_acota_por_tienda_y_por_los_dos_lado
                 "starts_at": slot.isoformat(),
                 "client_name": "Cotas",
                 "client_phone": "+5491155500001",
+                "accepts_terms": True,
                 "idempotency_key": "pg-cotas-publica-1",
             },
         )

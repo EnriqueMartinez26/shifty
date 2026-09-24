@@ -35,14 +35,13 @@ trigger de estados, la exclusion GiST ni locks reales (seccion 4 de
 | (g) Liberar: `payment.preference.expire` en el outbox y el job vence el link en MP | `test_g_*` | pasa |
 | (h) OAuth: 401 una vez, refresh, reintento con el token nuevo | `test_h_*` | pasa |
 | (i) Conciliacion: pago acreditado sin webhook | `test_i_*` | pasa |
-| (j) MP a 3 s: la reserva corta dentro de un presupuesto de 2 s y compensa | `test_j_*` | xfail hasta F1-04 |
+| (j) MP a 3 s: la reserva corta dentro de un presupuesto de 2 s y compensa | `test_j_*` | pasa (F1-04; el test fija el presupuesto de MP en 1,5 s) |
 | (k) Circuit breaker: se abre tras N fallas, la reserva compensa, se recupera | `test_k_*` | pasa |
-| (l) La reserva llama a MP sin transaccion abierta | `test_l_*` | xfail estricto: defecto |
+| (l) La reserva llama a MP sin transaccion abierta | `test_l_*` | pasa (F1-05) |
 
 Cada llamada que recibe el emulador anota `in_tx`: si la sesion de la app
-tenia una transaccion abierta en ese momento (regla 5). El flujo (l) falla a
-proposito porque la reserva la tiene. Cuando se arregle, el test pasa, el
-`xfail(strict=True)` lo marca como error y hay que sacarle la marca.
+tenia una transaccion abierta en ese momento (regla 5). El flujo (l) lo exige
+para la reserva publica: hasta F1-05 la tenia abierta durante el POST a MP.
 
 ## API emulada
 

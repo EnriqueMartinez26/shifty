@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 from httpx import Response
 
-import modules.payments.router as payments_router
 import modules.payments.service as payments_service
 from core.config import settings
 from tests.security.mundo import Llamada, fugas
@@ -141,7 +140,7 @@ async def _mercadopago_falso(
     raise RuntimeError("Mercado Pago no disponible en la suite de seguridad")
 
 
-async def _refresh_oauth_falso(db: Any, *, config: Any) -> Any:
+async def _refresh_oauth_falso(db: Any, *, config: Any, persist: Any = None) -> Any:
     return config
 
 
@@ -151,8 +150,10 @@ def pagos_sin_red() -> Iterator[None]:
     2xx sin salir a la red (ni al Mercado Pago real ni a un timeout)."""
     with pytest.MonkeyPatch.context() as parche:
         parche.setattr(payments_service, "_mercadopago_api_request", _mercadopago_falso)
+        # Desde F1-05 el refresh lo llama el service (sin transaccion
+        # abierta), no el router: se dobla donde se usa.
         parche.setattr(
-            payments_router,
+            payments_service,
             "refresh_mercadopago_oauth_connection",
             _refresh_oauth_falso,
         )

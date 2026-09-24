@@ -623,17 +623,16 @@ async def test_i_la_conciliacion_recupera_un_pago_sin_webhook(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "F1-04 sin mergear: la llamada a MP de la reserva solo tiene el timeout "
-        "de httpx (20 s), asi que con MP a 3 s la reserva tarda 3 s y responde "
-        "201 en vez de cortar dentro del presupuesto y compensar"
-    ),
-)
 async def test_j_con_mp_lento_la_reserva_corta_en_presupuesto_y_compensa(
-    client: httpx.AsyncClient, test_session: AsyncSession, mp: Emu
+    client: httpx.AsyncClient,
+    test_session: AsyncSession,
+    mp: Emu,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Presupuesto de MP de la reserva (F1-04) por debajo del limite local del
+    # test: el de produccion (8 s) no puede bajar de los 1-2 s que tarda una
+    # preferencia sana.
+    monkeypatch.setattr(settings, "MERCADOPAGO_REQUEST_BUDGET_SECONDS", 1.5)
     t = await _tienda(client, "e2e-latencia")
     await mp.fault(latency_ms=LATENCIA_MP_MS)
 
@@ -691,16 +690,6 @@ async def test_k_el_breaker_se_abre_la_reserva_compensa_y_despues_se_recupera(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECTO 2026-09-24: _attach_payment_link commitea el alta, pero "
-        "ensure_payment_preference y create_mercadopago_preference vuelven a "
-        "leer (cobro, gateway, tienda, cliente) antes del POST a MP: la "
-        "sesion reabre la transaccion y retiene una conexion del pool toda la "
-        "llamada (hasta 20 s), contra lo que promete _attach_provider_link"
-    ),
-)
 async def test_l_la_reserva_llama_a_mp_sin_transaccion_abierta(
     client: httpx.AsyncClient, test_session: AsyncSession, mp: Emu
 ) -> None:

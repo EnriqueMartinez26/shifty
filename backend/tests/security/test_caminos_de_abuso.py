@@ -428,6 +428,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": nombre,
         "client_phone": tel,
+        "accepts_terms": True,
         "idempotency_key": clave,
     }
 
