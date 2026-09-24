@@ -11,7 +11,8 @@ export class UserId {
     if (!value || value.trim().length === 0) {
       throw new InvalidValueError('INVALID_USER_ID', 'UserId inválido: no puede estar vacío')
     }
-    // Opcional: Validar formato UUID si aplica
+    // Id opaco a proposito: llegan ULID del backend (26 caracteres) y UUID de
+    // createUuid(). Exigir formato UUID rechazaria todos los ids del backend.
     return new UserId(value.trim())
   }
 
