@@ -80,3 +80,24 @@ def webp_vp8x(width: int, height: int) -> bytes:
 def webp_vp8(width: int, height: int) -> bytes:
     datos = b"\x10\x02\x00" + b"\x9d\x01\x2a" + struct.pack("<HH", width, height)
     return _riff(b"VP8 ", datos + b"\x00" * 16)
+
+
+def exif_con_orientacion(orientacion: int, orden: str = "MM") -> bytes:
+    """APP1 Exif con IFD0 = Orientation + puntero al IFD de GPS (con datos)."""
+    e = ">" if orden == "MM" else "<"
+    cabecera = orden.encode() + struct.pack(e + "HI", 42, 8)
+    gps_offset = 8 + 2 + 2 * 12 + 4
+    ifd0 = (
+        struct.pack(e + "H", 2)
+        + struct.pack(e + "HHIHH", 0x0112, 3, 1, orientacion, 0)
+        + struct.pack(e + "HHII", 0x8825, 4, 1, gps_offset)
+        + struct.pack(e + "I", 0)
+    )
+    gps = (
+        struct.pack(e + "H", 1)
+        + struct.pack(e + "HHI", 0x0001, 2, 2)
+        + b"S\x00\x00\x00"
+        + struct.pack(e + "I", 0)
+        + b"GPS-privado" * 2
+    )
+    return segmento_jpeg(0xE1, b"Exif\x00\x00" + cabecera + ifd0 + gps)

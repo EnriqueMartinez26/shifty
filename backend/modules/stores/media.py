@@ -233,19 +233,61 @@ def validate_image(data: bytes, kind: str) -> str:
 # ICC_PROFILE se queda: es el perfil de color, no identifica a nadie.
 _JPEG_PRIVATE_APPS = frozenset({0xE1, 0xE2, 0xED})
 _ICC_PROFILE = b"ICC_PROFILE\x00"
+_EXIF_HEADER = b"Exif\x00\x00"
+_ORIENTATION_TAG = 0x0112
+_TIFF_SHORT = 3
+# Entradas del IFD0 que se miran como mucho (una camara real trae ~10-30).
+_MAX_IFD_ENTRIES = 256
 
 
-def strip_jpeg_app1(data: bytes) -> bytes:
-    """El JPEG sin sus metadatos personales (PV-15), sin re-codificar.
+def _exif_orientation(body: bytes) -> int | None:
+    """Orientation (1-8) del IFD0 de un APP1 Exif, o None si no se lee."""
+    if not body.startswith(_EXIF_HEADER):
+        return None
+    tiff = body[len(_EXIF_HEADER) :]
+    if len(tiff) < 8 or tiff[:2] not in (b"II", b"MM"):
+        return None
+    order = "<" if tiff[:2] == b"II" else ">"
+    magic, ifd = struct.unpack(order + "HI", tiff[2:8])
+    if magic != 42 or ifd + 2 > len(tiff):
+        return None
+    (count,) = struct.unpack(order + "H", tiff[ifd : ifd + 2])
+    for k in range(min(count, _MAX_IFD_ENTRIES)):
+        entry = ifd + 2 + 12 * k
+        if entry + 12 > len(tiff):
+            return None
+        tag, kind, n = struct.unpack(order + "HHI", tiff[entry : entry + 8])
+        if tag == _ORIENTATION_TAG:
+            if kind != _TIFF_SHORT or n != 1:
+                return None
+            (value,) = struct.unpack(order + "H", tiff[entry + 8 : entry + 10])
+            return value if 1 <= value <= 8 else None
+    return None
 
-    Recorre los segmentos como ``_jpeg_dimensions`` y copia todo salvo los
-    APPn privados; se detiene en el SOF (o en lo que no pueda leer) y copia
-    el resto tal cual, asi que la imagen no cambia ni un byte. Solo JPEG:
-    PNG y WebP se guardan como llegan (sus metadatos van en chunks que hoy
-    no se tocan).
+
+def _orientation_app1(value: int) -> bytes:
+    """APP1 minimo: header TIFF big-endian y un IFD0 con UNA entrada."""
+    tiff = (
+        b"MM"
+        + struct.pack(">HI", 42, 8)
+        + struct.pack(">H", 1)
+        + struct.pack(">HHIHH", _ORIENTATION_TAG, _TIFF_SHORT, 1, value, 0)
+        + struct.pack(">I", 0)
+    )
+    body = _EXIF_HEADER + tiff
+    return b"\xff\xe1" + struct.pack(">H", len(body) + 2) + body
+
+
+def _jpeg_segments(data: bytes) -> list[tuple[int, int, int, int]]:
+    """(desde, marcador, inicio, fin) de cada segmento antes del SOF.
+
+    ``desde`` es donde termino el segmento anterior: lo que hay entre
+    ``desde`` e ``inicio`` es relleno o basura. Un marcador sin longitud
+    tiene ``fin = inicio + 2``. Se detiene en el SOF, el SOS, el EOI o lo
+    que no pueda leer.
     """
     n = len(data)
-    partes = [data[:2]]
+    segmentos: list[tuple[int, int, int, int]] = []
     i = 2
     for _ in range(_JPEG_MAX_MARKERS):
         found = _next_jpeg_marker(data, i)
@@ -253,7 +295,7 @@ def strip_jpeg_app1(data: bytes) -> bytes:
             break
         pos, marker = found
         if marker in _JPEG_STANDALONE:
-            partes.append(data[i : pos + 2])
+            segmentos.append((i, marker, pos, pos + 2))
             i = pos + 2
             continue
         if marker in _JPEG_SOF or marker in (_JPEG_SOS, _JPEG_EOI) or pos + 4 > n:
@@ -261,11 +303,48 @@ def strip_jpeg_app1(data: bytes) -> bytes:
         fin = pos + 2 + int.from_bytes(data[pos + 2 : pos + 4], "big")
         if fin <= pos + 3 or fin > n:
             break
+        segmentos.append((i, marker, pos, fin))
+        i = fin
+    return segmentos
+
+
+def jpeg_orientation(data: bytes) -> int | None:
+    """Orientation del primer APP1 Exif del JPEG, o None."""
+    for _, marker, inicio, fin in _jpeg_segments(data):
+        if marker == 0xE1:
+            value = _exif_orientation(data[inicio + 4 : fin])
+            if value is not None:
+                return value
+    return None
+
+
+def strip_jpeg_app1(data: bytes) -> bytes:
+    """El JPEG sin sus metadatos personales (PV-15), sin re-codificar.
+
+    Copia todo salvo los APPn privados; se detiene en el SOF (o en lo que no
+    pueda leer) y copia el resto tal cual, asi que la imagen no cambia ni un
+    byte. Si el Exif traia Orientation, en su lugar va un APP1 minimo con
+    ESE unico tag: sin el, una foto vertical del celular se ve acostada. Solo
+    JPEG: PNG y WebP se guardan como llegan (sus metadatos van en chunks que
+    hoy no se tocan).
+    """
+    partes = [data[:2]]
+    i = 2
+    orientacion_escrita = False
+    for desde, marker, inicio, fin in _jpeg_segments(data):
+        cuerpo = data[inicio + 4 : fin]
         privado = marker in _JPEG_PRIVATE_APPS and not (
-            marker == 0xE2 and data[pos + 4 : fin].startswith(_ICC_PROFILE)
+            marker == 0xE2 and cuerpo.startswith(_ICC_PROFILE)
         )
-        # Lo que habia antes del marcador (relleno o basura) se conserva.
-        partes.append(data[i:pos] if privado else data[i:fin])
+        if not privado:
+            partes.append(data[desde:fin])
+        else:
+            # Lo que habia antes del marcador (relleno o basura) se conserva.
+            partes.append(data[desde:inicio])
+            orientacion = _exif_orientation(cuerpo) if marker == 0xE1 else None
+            if orientacion is not None and not orientacion_escrita:
+                partes.append(_orientation_app1(orientacion))
+                orientacion_escrita = True
         i = fin
     partes.append(data[i:])
     return b"".join(partes)

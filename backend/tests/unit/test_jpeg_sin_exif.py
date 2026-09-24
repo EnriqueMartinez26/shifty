@@ -11,7 +11,12 @@ PNG y WebP se guardan como llegan.
 
 import pytest
 
-from modules.stores.media import image_dimensions, prepare_image, strip_jpeg_app1
+from modules.stores.media import (
+    image_dimensions,
+    jpeg_orientation,
+    prepare_image,
+    strip_jpeg_app1,
+)
 from tests.unit.imagenes_sinteticas import (
     APP0_JFIF,
     EXIF,
@@ -19,6 +24,7 @@ from tests.unit.imagenes_sinteticas import (
     IPTC,
     MPF,
     XMP,
+    exif_con_orientacion,
     jpeg,
     png,
     webp_vp8l,
@@ -64,3 +70,27 @@ def test_prepare_image_limpia_solo_jpeg() -> None:
     assert b"Exif" not in data
     for otra in (png(100, 100), webp_vp8l(100, 100)):
         assert prepare_image(otra, "logo")[0] == otra
+
+
+@pytest.mark.parametrize("orden", ["MM", "II"])
+def test_conserva_solo_la_orientacion(orden: str) -> None:
+    # Revision de PV-15: sin el tag Orientation (0x0112) una foto vertical
+    # del celular se ve acostada. Se reescribe un APP1 minimo con ese unico
+    # tag; el GPS y el resto del Exif se van.
+    original = jpeg(1061, 1460, exif_con_orientacion(6, orden), XMP)
+    assert jpeg_orientation(original) == 6
+    limpia = strip_jpeg_app1(original)
+    assert b"GPS-privado" not in limpia
+    assert b"\x88\x25" not in limpia and b"\x25\x88" not in limpia
+    assert b"xap/1.0" not in limpia
+    assert jpeg_orientation(limpia) == 6
+    assert image_dimensions(limpia, "image/jpeg") == (1061, 1460)
+    # El APP1 nuevo va donde estaba el original: antes del SOF.
+    assert limpia.index(b"Exif\x00\x00") < limpia.index(b"\xff\xc0")
+
+
+def test_sin_orientacion_legible_no_se_escribe_nada() -> None:
+    # EXIF (el de los otros tests) no trae un TIFF valido: se va entero.
+    limpia = strip_jpeg_app1(jpeg(100, 100, EXIF))
+    assert b"Exif" not in limpia
+    assert jpeg_orientation(limpia) is None

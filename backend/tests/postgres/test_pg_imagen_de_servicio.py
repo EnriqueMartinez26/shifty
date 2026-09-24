@@ -239,7 +239,9 @@ async def test_bajar_y_volver_a_subir_con_imagenes_de_servicio_no_se_frena(
     async with owner_engine.connect() as conn:
         filas = (
             await conn.execute(
-                text("select kind, service_id is not null as vinculada from store_media")
+                text(
+                    "select kind, service_id is not null as vinculada from store_media"
+                )
             )
         ).all()
     # El downgrade quito service_id; el re-upgrade la vuelve a vincular por el
