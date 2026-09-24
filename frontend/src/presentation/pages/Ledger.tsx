@@ -15,7 +15,11 @@ import {
   formatDateEsAr,
   formatDateTimeEsAr
 } from '../lib/formatters'
-import { create2000sListCardStyle } from '../lib/surfaceStyles'
+import {
+  create2000sInputStyle,
+  create2000sListCardStyle,
+  create2000sPanelStyle
+} from '../lib/surfaceStyles'
 
 const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund', string> = {
   charge: 'Cargo',
@@ -23,6 +27,9 @@ const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund',
   adjustment: 'Ajuste',
   refund: 'Devolucion'
 }
+
+const inputStyle = create2000sInputStyle()
+const cardStyle = create2000sPanelStyle()
 
 const LedgerPage: React.FC = () => {
   const clientsQuery = useStoreClients()
@@ -42,18 +49,6 @@ const LedgerPage: React.FC = () => {
     notes: ''
   })
   const [message, setMessage] = useState('')
-
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
-  }
-  const cardStyle = {
-    background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()

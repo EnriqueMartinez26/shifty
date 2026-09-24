@@ -9,6 +9,9 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { Icon2000s } from '../components/legacy/Icon2000s'
 import { useForgotPassword } from '../hooks/useForgotPassword'
+import { create2000sInputStyle } from '../lib/surfaceStyles'
+
+const inputStyle = create2000sInputStyle()
 
 const ForgotPasswordPage: React.FC = () => {
   const [email, setEmail] = useState('')
@@ -27,13 +30,6 @@ const ForgotPasswordPage: React.FC = () => {
     } catch (error: unknown) {
       setError(getErrorMessage(error, 'No se pudo procesar la solicitud'))
     }
-  }
-
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
   }
 
   return (
