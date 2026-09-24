@@ -7,6 +7,7 @@ type RuntimeEnv = {
   sentryDsn?: string
   sentryEnvironment?: string
   sentryTracesSampleRate?: string
+  sentryTunnel?: string
 }
 
 export const getRuntimeEnv = (): RuntimeEnv => ({
@@ -15,5 +16,6 @@ export const getRuntimeEnv = (): RuntimeEnv => ({
   mode: import.meta.env.MODE,
   sentryDsn: import.meta.env.VITE_SENTRY_DSN,
   sentryEnvironment: import.meta.env.VITE_SENTRY_ENVIRONMENT,
-  sentryTracesSampleRate: import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE
+  sentryTracesSampleRate: import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE,
+  sentryTunnel: import.meta.env.VITE_SENTRY_TUNNEL
 })

@@ -1,0 +1,2 @@
+# Scripts que corren dentro de la imagen (sh de Alpine): un CRLF los rompe.
+*.sh text eol=lf
