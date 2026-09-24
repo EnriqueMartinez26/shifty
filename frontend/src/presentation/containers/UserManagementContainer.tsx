@@ -62,7 +62,17 @@ export const UserManagementContainer: React.FC = () => {
         }
       })
     } else {
-      await createMutation.mutateAsync(formData)
+      // Mismo mapeo para el alta: `CreateUserInput` es camelCase. Mandar el
+      // formulario crudo compilaba (los nombres son opcionales) y obligaba al
+      // servicio a leer snake_case por un cast.
+      await createMutation.mutateAsync({
+        email: formData.email,
+        password: formData.password,
+        firstName: formData.first_name,
+        lastName: formData.last_name,
+        phone: formData.phone,
+        role: formData.role
+      })
     }
   }
 

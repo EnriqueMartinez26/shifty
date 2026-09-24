@@ -34,17 +34,12 @@ export class UserService extends BaseService<User> {
    */
   async createUser(input: CreateUserInput): Promise<User> {
     return await this.execute(async () => {
-      // El formulario del panel manda snake_case (first_name/last_name);
-      // CreateUserInput declara camelCase para el resto del dominio. Se
-      // aceptan las dos convenciones -mismo patron que ya usa
-      // HttpUserRepository.updateImpl para este mismo defecto- porque antes
-      // esto pisaba el nombre real con undefined en silencio cuando el
-      // caller mandaba snake_case.
-      const raw = input as unknown as Record<string, unknown>
+      // El schema valida en snake_case; el llamador (UserManagementContainer)
+      // ya mapea el formulario a CreateUserInput, sin cast en el medio.
       const validatorInput = {
         ...input,
-        first_name: input.firstName ?? (raw.first_name as string | undefined),
-        last_name: input.lastName ?? (raw.last_name as string | undefined)
+        first_name: input.firstName,
+        last_name: input.lastName
       }
 
       this.validate(validatorInput, createUserSchema)

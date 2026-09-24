@@ -23,7 +23,7 @@
     "lint": "eslint src",
     "lint:strict": "eslint src --max-warnings 0",
     "lint:fix": "eslint src --fix",
-    "dead-code": "eslint src --quiet --rule \"import/no-unused-modules: [error, { unusedExports: true, missingExports: false, ignoreExports: ['src/main.tsx', 'src/test/**', 'src/**/*.test.ts'] }]\"",
+    "dead-code": "eslint src --quiet",
     "format": "prettier --write .",
     "format:fix": "prettier --write .",
     "format:check": "prettier --check .",

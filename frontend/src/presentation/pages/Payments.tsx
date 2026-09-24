@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react'
 
 import { RefreshCcw, Settings2 } from 'lucide-react'
+import { useNavigate } from 'react-router'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -23,6 +24,9 @@ import {
 } from '../lib/surfaceStyles'
 
 const PaymentsPage: React.FC = () => {
+  // Navegacion dentro de la SPA: `window.location.assign` recargaba todo y
+  // perdia el token en memoria camino a Configuracion (F11b-20).
+  const navigate = useNavigate()
   const gatewayQuery = useGatewayConfig()
   const summaryQuery = useReconciliationSummary()
   const outboxStatsQuery = useOutboxStats()
@@ -118,7 +122,7 @@ const PaymentsPage: React.FC = () => {
           </p>
           <button
             type="button"
-            onClick={() => window.location.assign('/dashboard/settings?tab=payments')}
+            onClick={() => void navigate('/dashboard/settings?tab=payments')}
             className="w-full py-3 text-xs font-black uppercase tracking-widest"
             style={buttonStyles2000s.default}
           >

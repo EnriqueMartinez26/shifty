@@ -57,7 +57,13 @@ export class ForbiddenErrorHandler extends ErrorHandler {
     return error instanceof ForbiddenError
   }
 
-  public async handle(_error: ForbiddenError): Promise<void> {
+  public async handle(error: ForbiddenError): Promise<void> {
+    // El backend tambien responde 403 cuando la funcion esta apagada por
+    // feature flag (FeatureDisabledException): no es un problema de permisos.
+    if (error.context?.errorCode === 'FEATURE_DISABLED') {
+      showToast('Esta función no está habilitada para tu negocio.', 'info')
+      return
+    }
     showToast('No tienes permisos suficientes para realizar esta acción.', 'error')
   }
 }

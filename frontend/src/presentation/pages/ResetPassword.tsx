@@ -31,8 +31,9 @@ const ResetPasswordPage: React.FC = () => {
       return
     }
 
-    if (newPassword.length < 8) {
-      setError('La contrasena debe tener al menos 8 caracteres.')
+    // Mismo piso que `ResetPasswordRequest` en el backend (min_length=12).
+    if (newPassword.length < 12) {
+      setError('La contrasena debe tener al menos 12 caracteres.')
       return
     }
 
@@ -125,7 +126,7 @@ const ResetPasswordPage: React.FC = () => {
                   onChange={(e) => setNewPassword(e.target.value)}
                   className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
                   style={inputStyle}
-                  placeholder="Minimo 8 caracteres"
+                  placeholder="Minimo 12 caracteres"
                   required
                 />
               </div>
