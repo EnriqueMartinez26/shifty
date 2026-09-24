@@ -1161,3 +1161,53 @@ def test_el_otp_tiene_su_propio_worker() -> None:
     from core.celery_app import celery_app
 
     assert celery_app.conf.task_routes["send_otp_email"]["queue"] == "interactive"
+
+
+# --- Limites de memoria para el VPS de 16 GB (F0-19, plan de rendimiento) -----
+#
+# Sin limite, un contenedor que crece se come la memoria del host y el OOM
+# killer elige a cualquiera (la base incluida). La suma de la tabla deja
+# margen para el sistema y el cache de disco de Postgres. Sin `cpus` en la API
+# ni en la base: el throttling de CFS mete picos en el p95 (plan §8).
+
+LIMITES_EN_PRODUCCION = {
+    "db": "4G",
+    "redis_cache": "192M",
+    "redis_state": "96M",
+    "rabbitmq": "256M",
+    "backend": "512M",
+    "celery_worker": "768M",
+    "celery_worker_interactive": "256M",
+    "celery_beat": "256M",
+    "frontend": "64M",
+    "nginx": "256M",
+}
+
+
+def test_cada_servicio_tiene_su_limite_de_memoria() -> None:
+    produccion = _servicios_de_produccion()
+    assert set(produccion) == set(LIMITES_EN_PRODUCCION), sorted(produccion)
+    limites = {nombre: _limite(servicio) for nombre, servicio in produccion.items()}
+    assert limites == LIMITES_EN_PRODUCCION, limites
+    replicas = produccion["backend"]["deploy"]["replicas"]  # type: ignore[index]
+    assert replicas == 3
+
+
+def test_la_api_y_la_base_no_tienen_tope_de_cpu() -> None:
+    for vista, servicios in {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }.items():
+        for nombre in ("backend", "db"):
+            deploy = servicios[nombre].get("deploy") or {}
+            assert isinstance(deploy, dict)
+            limites = deploy.get("resources", {}).get("limits", {})
+            assert "cpus" not in limites, f"{vista}: {nombre} con tope de CPU"
+
+
+def test_nginx_puede_abrir_suficientes_conexiones() -> None:
+    ulimits = _services()["nginx"].get("ulimits")
+    assert isinstance(ulimits, dict), ulimits
+    nofile = ulimits.get("nofile")
+    valores = list(nofile.values()) if isinstance(nofile, dict) else [nofile]
+    assert all(int(str(v)) >= 65536 for v in valores), nofile

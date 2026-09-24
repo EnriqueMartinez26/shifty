@@ -399,7 +399,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          # F0-19: sirve estaticos con nginx (~7 MB medidos en uso).
+          memory: 64M
 
   nginx:
     image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:-dev}
@@ -418,10 +419,16 @@ services:
       - frontend
     networks:
       - shifty_network
+    # F0-19: el borde abre una conexion hacia el cliente y otra hacia el
+    # upstream por request; el default de 1024 descriptores corta la ventana.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 256M
 
 networks:
   shifty_network:
