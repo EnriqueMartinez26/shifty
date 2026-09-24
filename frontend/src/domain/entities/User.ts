@@ -54,10 +54,13 @@ export class User {
     createdAt: string
   }): User {
     return new User({
-      ...props,
       id: UserId.create(props.id),
       email: Email.create(props.email),
+      firstName: props.firstName,
+      lastName: props.lastName,
+      phone: props.phone,
       role: UserRole.create(props.role),
+      isActive: props.isActive,
       createdAt: new Date(props.createdAt)
     })
   }
@@ -99,10 +102,13 @@ export class User {
 
   toPrimitives() {
     return {
-      ...this.props,
       id: this.props.id.getValue(),
       email: this.props.email.getValue(),
+      firstName: this.props.firstName,
+      lastName: this.props.lastName,
+      phone: this.props.phone,
       role: this.props.role.getValue(),
+      isActive: this.props.isActive,
       createdAt: this.props.createdAt.toISOString()
     }
   }
