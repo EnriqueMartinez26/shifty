@@ -29,9 +29,7 @@ export interface AppointmentRange {
 }
 
 export interface IBookingRepository {
-  findByDate(date: string): Promise<Appointment[]>
   searchByDateRange(fromDate: string, toDate: string, pageSize?: number): Promise<AppointmentRange>
-  getAvailability(serviceId: string, date: string): Promise<Record<string, unknown>>
   create(payload: CreateBookingInput): Promise<Appointment>
   confirm(id: string): Promise<void>
   complete(id: string): Promise<void>

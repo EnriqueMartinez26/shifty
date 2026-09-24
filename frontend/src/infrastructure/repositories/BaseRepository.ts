@@ -60,21 +60,26 @@ export abstract class BaseRepository<
   protected abstract updateImpl(id: string, data: UpdateDTO): Promise<T>
   protected abstract deleteImpl(id: string): Promise<void>
 
-  /**
-   * Traduce lo que falle abajo a un ApplicationError tipado. Un DomainError (un
-   * value object que rechazo un dato) sale como ValidationError con su `code`
-   * en el contexto; el mensaje es el mismo que antes para no cambiar lo que ve
-   * el usuario. Lo demas imprevisto queda como InternalServerError.
-   */
   protected handleRepositoryError(operation: string, error: unknown): never {
-    if (error instanceof ApplicationError) {
-      throw error
-    }
-    const msg = error instanceof Error ? error.message : 'Unknown repository error'
-    const message = `Database operation '${operation}' failed: ${msg}`
-    if (error instanceof DomainError) {
-      throw new ValidationError(message, { code: error.code, operation })
-    }
-    throw new InternalServerError(message)
+    translateRepositoryError(operation, error)
   }
+}
+
+/**
+ * Traduce lo que falle abajo a un ApplicationError tipado. Un DomainError (un
+ * value object que rechazo un dato) sale como ValidationError con su `code`
+ * en el contexto; el mensaje es el mismo que antes para no cambiar lo que ve
+ * el usuario. Lo demas imprevisto queda como InternalServerError. Exportada
+ * para los repositorios que no son CRUD generico (HttpBookingRepository).
+ */
+export function translateRepositoryError(operation: string, error: unknown): never {
+  if (error instanceof ApplicationError) {
+    throw error
+  }
+  const msg = error instanceof Error ? error.message : 'Unknown repository error'
+  const message = `Database operation '${operation}' failed: ${msg}`
+  if (error instanceof DomainError) {
+    throw new ValidationError(message, { code: error.code, operation })
+  }
+  throw new InternalServerError(message)
 }

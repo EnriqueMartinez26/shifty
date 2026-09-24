@@ -1,29 +1,6 @@
 import type { AxiosInstance } from 'axios'
 
 import { HttpBookingRepository } from './HttpBookingRepository'
-import { InternalServerError } from '../../shared/errors/InternalServerError'
-
-describe('HttpBookingRepository.findAll', () => {
-  afterEach(() => {
-    jest.useRealTimers()
-  })
-
-  it('pide el rango en dias argentinos, no en el dia UTC (F10-10)', async () => {
-    // 22:30 del 15 en Argentina ya es el 16 en UTC.
-    jest.useFakeTimers().setSystemTime(new Date('2026-09-16T01:30:00Z'))
-    const get = jest.fn().mockResolvedValue({ data: { results: [] } })
-    const repository = new HttpBookingRepository({ get } as unknown as AxiosInstance)
-
-    await repository.findAll()
-
-    expect(get).toHaveBeenCalledWith(
-      '/appointments/search',
-      expect.objectContaining({
-        params: expect.objectContaining({ from_date: '2026-08-16', to_date: '2026-09-15' })
-      })
-    )
-  })
-})
 
 const appointmentDto = (index: number) => ({
   public_id: `appt-${index}`,
@@ -67,20 +44,30 @@ describe('HttpBookingRepository.searchByDateRange', () => {
   })
 })
 
-describe('HttpBookingRepository: CRUD que el backend no expone (F10-05)', () => {
-  it.each([
-    ['findById', (repository: HttpBookingRepository) => repository.findById('appt-1')],
-    ['update', (repository: HttpBookingRepository) => repository.update('appt-1', {})],
-    ['delete', (repository: HttpBookingRepository) => repository.delete('appt-1')]
-  ])('%s rechaza sin tocar la red', async (_, call) => {
-    const client = { get: jest.fn(), patch: jest.fn(), put: jest.fn(), delete: jest.fn() }
-    const repository = new HttpBookingRepository(client as unknown as AxiosInstance)
+describe('HttpBookingRepository.create', () => {
+  const payload = {
+    service_id: 'service-1',
+    starts_at: '2026-09-10T12:00:00Z',
+    client_name: 'Ana',
+    client_phone: '1155550101'
+  }
 
-    await expect(call(repository)).rejects.toBeInstanceOf(InternalServerError)
+  it('publica el turno y devuelve la entidad', async () => {
+    const post = jest.fn().mockResolvedValue({ data: appointmentDto(1) })
+    const repository = new HttpBookingRepository({ post } as unknown as AxiosInstance)
 
-    expect(client.get).not.toHaveBeenCalled()
-    expect(client.patch).not.toHaveBeenCalled()
-    expect(client.put).not.toHaveBeenCalled()
-    expect(client.delete).not.toHaveBeenCalled()
+    const created = await repository.create(payload)
+
+    expect(post).toHaveBeenCalledWith('/public/appointments', payload)
+    expect(created.id).toBe('appt-1')
+  })
+
+  it('traduce un error imprevisto a InternalServerError con la operacion', async () => {
+    const post = jest.fn().mockRejectedValue(new Error('socket hang up'))
+    const repository = new HttpBookingRepository({ post } as unknown as AxiosInstance)
+
+    await expect(repository.create(payload)).rejects.toThrow(
+      "Database operation 'create' failed: socket hang up"
+    )
   })
 })

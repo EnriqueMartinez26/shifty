@@ -17,9 +17,7 @@ describe('AppointmentService', () => {
 
   beforeEach(() => {
     mockRepository = {
-      findByDate: jest.fn(),
       searchByDateRange: jest.fn(),
-      getAvailability: jest.fn(),
       create: jest.fn(),
       confirm: jest.fn(),
       complete: jest.fn(),
