@@ -218,10 +218,21 @@ def test_un_5xx_sobre_el_umbral_sale_distinto_de_cero() -> None:
 def test_un_5xx_en_una_ruta_poco_pedida_cuenta_en_el_total() -> None:
     """La tasa global tambien se mira: una ruta rara que da 500 no se esconde
     detras del minimo de muestras por ruta."""
-    lineas = [_linea("/public/availability") for _ in range(100)]
+    lineas = [_linea("/public/availability") for _ in range(300)]
     lineas.append(_linea("/reports/export", s=500))
 
     assert _correr(lineas)[0] == 1
+
+
+def test_la_tasa_global_de_5xx_exige_un_minimo_de_muestras() -> None:
+    """De madrugada, 1 error en 50 requests es 2 %: sin un minimo, cada 502
+    suelto despertaba a alguien. Por debajo de 200 requests la tasa global no
+    alerta; la por ruta sigue con su propio minimo de 20."""
+    lineas = [_linea("/public/availability") for _ in range(50)]
+    lineas.append(_linea("/reports/export", s=500))
+
+    assert _correr(lineas)[0] == 0
+    assert _correr(lineas, "--min-global-samples", "50")[0] == 1
 
 
 def test_cuenta_ips_distintas_con_429() -> None:

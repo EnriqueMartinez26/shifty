@@ -9,6 +9,7 @@ pasadas 26 h.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
 import time
@@ -63,10 +64,17 @@ def test_backup_vuelca_con_pg_dump_directorio_y_copia_fuera_del_host(
 def test_backup_escribe_el_sha256_de_cada_archivo(host: Host) -> None:
     _correr_backup(host)
 
-    dumps = sorted((host.backups / "daily").glob("shifty-*"))
-    dumps = [d for d in dumps if d.is_dir()]
+    dumps = [d for d in (host.backups / "daily").glob("shifty-*") if d.is_dir()]
     assert len(dumps) == 1
-    assert (dumps[0] / "SHA256SUMS").exists()
+    dump = dumps[0]
+    esperado = hashlib.sha256((dump / "toc.dat").read_bytes()).hexdigest()
+    lineas = (dump / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    # Una linea por archivo del dump, con su hash real; el propio SHA256SUMS
+    # no se lista (su hash no puede estar adentro de si mismo). El separador
+    # es "  " (modo texto, Linux) o " *" (modo binario, sha256sum de Windows):
+    # `sha256sum -c` acepta los dos.
+    assert len(lineas) == 1
+    assert re.fullmatch(rf"{esperado} [ *]\./toc\.dat", lineas[0]), lineas
 
 
 def test_backup_sin_destino_remoto_no_marca_exito(host: Host) -> None:

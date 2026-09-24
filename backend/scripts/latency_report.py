@@ -22,7 +22,8 @@ desde cuantas IPs distintas. Imprime una tabla y, en la ultima linea, el
 resumen en JSON.
 
 Sale con 1 si una ruta con al menos `--min-samples` muestras pasa `--p95-ms`
-o `--max-5xx-rate`, o si la tasa global de 5xx pasa `--max-5xx-rate`. Los
+o `--max-5xx-rate`, o si la tasa global de 5xx pasa `--max-5xx-rate` con al
+menos `--min-global-samples` (200) requests en la ventana. Los
 umbrales por defecto son los de aviso del plan (p95 > 500 ms, 5xx > 0,1 %).
 
 Solo biblioteca estandar: corre con el python3 del sistema, sin el venv.
@@ -61,6 +62,8 @@ _CAMPO_INVALIDO = (KeyError, TypeError, ValueError)
 DEFAULT_P95_MS = 500.0
 DEFAULT_MAX_5XX_RATE = 0.001
 DEFAULT_MIN_SAMPLES = 20
+# Por debajo, un 502 suelto de madrugada (1 en 50 = 2 %) despertaba a alguien.
+DEFAULT_MIN_GLOBAL_SAMPLES = 200
 
 
 def normalize_path(uri: str) -> str:
@@ -195,7 +198,12 @@ def build_report(lines: Iterable[str]) -> Report:
 
 
 def find_violations(
-    report: Report, *, p95_ms: float, max_5xx_rate: float, min_samples: int
+    report: Report,
+    *,
+    p95_ms: float,
+    max_5xx_rate: float,
+    min_samples: int,
+    min_global_samples: int = DEFAULT_MIN_GLOBAL_SAMPLES,
 ) -> list[str]:
     violaciones: list[str] = []
     for stats in report.routes.values():
@@ -209,7 +217,7 @@ def find_violations(
             violaciones.append(
                 f"{nombre}: 5xx {stats.rate_5xx:.2%} > {max_5xx_rate:.2%}"
             )
-    if report.total:
+    if report.total and report.total >= min_global_samples:
         tasa = report.total_5xx / report.total
         if tasa > max_5xx_rate:
             violaciones.append(
@@ -264,6 +272,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     parser.add_argument(
+        "--min-global-samples",
+        type=int,
+        default=DEFAULT_MIN_GLOBAL_SAMPLES,
+        help="Requests minimas en la ventana para evaluar la tasa global de 5xx",
+    )
+    parser.add_argument(
         "--json-only", action="store_true", help="Imprime solo el resumen JSON"
     )
     return parser.parse_args(list(argv))
@@ -285,6 +299,7 @@ def main(
         p95_ms=args.p95_ms,
         max_5xx_rate=args.max_5xx_rate,
         min_samples=args.min_samples,
+        min_global_samples=args.min_global_samples,
     )
     resumen = summary(report, violaciones)
     if not args.json_only:
