@@ -26,7 +26,7 @@ from modules.services.schemas import (
     deposit_policy_error,
 )
 from modules.services.service import ServiceImageService
-from modules.stores.media import IMAGE_CAPS, validate_image
+from modules.stores.media import IMAGE_CAPS, prepare_image
 from modules.users.model import User
 
 logger = structlog.get_logger()
@@ -165,7 +165,8 @@ async def upload_service_image(
     """
     # Se leen a lo sumo tope+1 bytes: "se paso" sin cargar un blob gigante.
     data = await file.read(IMAGE_CAPS["service"].max_bytes + 1)
-    content_type = validate_image(data, "service")
+    # Un JPEG se guarda sin Exif/XMP (PV-15).
+    data, content_type = prepare_image(data, "service")
     service = await ServiceImageService(db).upload(
         public_id, admin.store_id, data=data, content_type=content_type
     )

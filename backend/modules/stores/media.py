@@ -218,6 +218,58 @@ def validate_image(data: bytes, kind: str) -> str:
     return content_type
 
 
+# APP1 (Exif con GPS, modelo y fecha; XMP), APP2 (FlashPix, MPF) y APP13
+# (IPTC de Photoshop: autor, ciudad, leyenda). El APP2 que empieza con
+# ICC_PROFILE se queda: es el perfil de color, no identifica a nadie.
+_JPEG_PRIVATE_APPS = frozenset({0xE1, 0xE2, 0xED})
+_ICC_PROFILE = b"ICC_PROFILE\x00"
+
+
+def strip_jpeg_app1(data: bytes) -> bytes:
+    """El JPEG sin sus metadatos personales (PV-15), sin re-codificar.
+
+    Recorre los segmentos como ``_jpeg_dimensions`` y copia todo salvo los
+    APPn privados; se detiene en el SOF (o en lo que no pueda leer) y copia
+    el resto tal cual, asi que la imagen no cambia ni un byte. Solo JPEG:
+    PNG y WebP se guardan como llegan (sus metadatos van en chunks que hoy
+    no se tocan).
+    """
+    n = len(data)
+    partes = [data[:2]]
+    i = 2
+    while (found := _next_jpeg_marker(data, i)) is not None:
+        pos, marker = found
+        if marker in _JPEG_STANDALONE:
+            partes.append(data[i : pos + 2])
+            i = pos + 2
+            continue
+        if marker in _JPEG_SOF or marker in (_JPEG_SOS, _JPEG_EOI) or pos + 4 > n:
+            break
+        fin = pos + 2 + int.from_bytes(data[pos + 2 : pos + 4], "big")
+        if fin <= pos + 3 or fin > n:
+            break
+        privado = marker in _JPEG_PRIVATE_APPS and not (
+            marker == 0xE2 and data[pos + 4 : fin].startswith(_ICC_PROFILE)
+        )
+        # Lo que habia antes del marcador (relleno o basura) se conserva.
+        partes.append(data[i:pos] if privado else data[i:fin])
+        i = fin
+    partes.append(data[i:])
+    return b"".join(partes)
+
+
+def prepare_image(data: bytes, kind: str) -> tuple[bytes, str]:
+    """(bytes a guardar, content-type) de una imagen subida de tipo ``kind``.
+
+    Valida con el tope del tipo (``validate_image``) y, si es JPEG, le quita
+    el Exif y el resto de los metadatos personales antes de guardarla.
+    """
+    content_type = validate_image(data, kind)
+    if content_type == "image/jpeg":
+        data = strip_jpeg_app1(data)
+    return data, content_type
+
+
 # URL con la que el front pide una imagen subida (via nginx, con /api). Es
 # inmutable: cada upload crea un id nuevo.
 MEDIA_URL_PREFIX = "/api/stores/media/"

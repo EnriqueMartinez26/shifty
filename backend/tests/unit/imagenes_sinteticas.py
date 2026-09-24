@@ -38,6 +38,7 @@ EXIF = segmento_jpeg(0xE1, b"Exif\x00\x00MM\x00\x2a" + b"GPS-privado" * 4)
 XMP = segmento_jpeg(0xE1, b"http://ns.adobe.com/xap/1.0/\x00<x:xmpmeta/>")
 ICC = segmento_jpeg(0xE2, b"ICC_PROFILE\x00\x01\x01" + b"perfil" * 4)
 MPF = segmento_jpeg(0xE2, b"MPF\x00" + b"\x00" * 16)
+IPTC = segmento_jpeg(0xED, b"Photoshop 3.0\x00" + b"8BIM" + b"\x00" * 12)
 DQT = segmento_jpeg(0xDB, b"\x00" + b"\x01" * 64)
 # Datos de entropia minimos despues del SOS, con un byte relleno (FF 00) y un
 # marcador de reinicio, que no llevan longitud.

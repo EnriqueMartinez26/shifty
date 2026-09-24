@@ -14,7 +14,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
 )
-from tests.unit.imagenes_sinteticas import jpeg, png, webp_vp8l
+from tests.unit.imagenes_sinteticas import EXIF, jpeg, png, webp_vp8l
 
 # PNG con IHDR legible: desde F1-26 una imagen sin dimensiones se rechaza.
 _PNG = png(64, 64)
@@ -263,3 +263,16 @@ async def test_no_se_enlaza_a_mano_una_imagen_servida_ajena(
         json={"logo_url": "/api/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ"},
     )
     assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_logo_jpeg_se_publica_sin_exif(client: AsyncClient) -> None:
+    # PV-15: el GPS y el modelo del celular salian publicados con el logo.
+    _, token = await register_and_login(
+        client, slug="media-exif", email="media-exif@example.com"
+    )
+    status, body = await _subir(client, token, "logo", jpeg(1061, 1460, EXIF))
+    assert status == 200, body
+    servida = await client.get(f"/stores/media/{body['media_id']}")
+    assert b"Exif" not in servida.content
+    assert servida.content == jpeg(1061, 1460)

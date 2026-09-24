@@ -33,7 +33,7 @@ from modules.stores.media import (
     IMAGE_CAPS,
     is_media_url,
     media_url,
-    validate_image,
+    prepare_image,
 )
 from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.billing.service import get_active_subscription, today_local
@@ -324,8 +324,9 @@ async def upload_store_media(
     # Cota de tamano antes de materializar: se leen a lo sumo tope+1 bytes para
     # distinguir "justo en el limite" de "se paso" sin cargar un blob gigante.
     # Topes por tipo, por magic bytes y fail-closed (F1-26): ver media.py.
+    # Un JPEG se guarda sin Exif/XMP (PV-15): ver media.prepare_image.
     data = await file.read(IMAGE_CAPS[kind].max_bytes + 1)
-    content_type = validate_image(data, kind)
+    data, content_type = prepare_image(data, kind)
 
     store = await _get_current_store(user, db)
 

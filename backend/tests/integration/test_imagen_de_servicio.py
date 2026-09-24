@@ -22,7 +22,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
     register_and_login,
 )
-from tests.unit.imagenes_sinteticas import jpeg, png, webp_vp8l
+from tests.unit.imagenes_sinteticas import EXIF, jpeg, png, webp_vp8l
 
 _FOTO = jpeg(1061, 1460)
 
@@ -243,3 +243,13 @@ async def test_el_patch_que_desvincula_la_imagen_borra_la_fila(
     assert res.json()["image_url"] == nuevo
     assert (await client.get(f"/stores/media/{media_id}")).status_code == 404
     assert await _filas_del_servicio(test_session, servicio) == 0
+
+
+@pytest.mark.asyncio
+async def test_la_foto_del_servicio_se_publica_sin_exif(client: AsyncClient) -> None:
+    _, token, servicio = await _tienda_con_servicio(client, "img-svc-exif")
+    status, body = await _subir(client, token, servicio, jpeg(1061, 1460, EXIF))
+    assert status == 200, body
+    servida = await client.get(f"/stores/media/{_media_id(body['image_url'])}")
+    assert b"GPS-privado" not in servida.content
+    assert servida.headers["content-length"] == str(len(jpeg(1061, 1460)))
