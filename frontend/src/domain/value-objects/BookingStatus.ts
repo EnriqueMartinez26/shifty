@@ -1,7 +1,5 @@
-export type BookingStatusValue =
-  'pending' | 'pending_payment' | 'confirmed' | 'completed' | 'cancelled' | 'absent' | 'expired'
-
-const BOOKING_STATUSES: readonly BookingStatusValue[] = [
+/** Unica lista de estados conocidos: el tipo se deriva de aca. */
+const BOOKING_STATUSES = [
   'pending',
   'pending_payment',
   'confirmed',
@@ -9,7 +7,9 @@ const BOOKING_STATUSES: readonly BookingStatusValue[] = [
   'cancelled',
   'absent',
   'expired'
-]
+] as const
+
+export type BookingStatusValue = (typeof BOOKING_STATUSES)[number]
 
 /**
  * Estados absorbentes del turno.
