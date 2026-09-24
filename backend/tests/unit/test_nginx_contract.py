@@ -364,6 +364,19 @@ def _limit_req(loc: list[Directiva]) -> tuple[str, int]:
     return zona.removeprefix("zone="), int(burst.removeprefix("burst="))
 
 
+# Mercado Pago reintenta en rafaga desde pocas IP: su webhook tiene zona propia
+# para que el edge no le devuelva 429 antes de que la app verifique el HMAC.
+WEBHOOK_MP = ("=", "/api/payments/webhooks/mercadopago")
+
+
+def _zona_esperada(loc: Directiva) -> str:
+    if loc.args == ("/api/auth/",):
+        return "auth"
+    if loc.args == WEBHOOK_MP:
+        return "webhooks"
+    return "api"
+
+
 def _conexiones_por_ip(http: list[Directiva], server: list[Directiva]) -> int:
     limite = efectivo("limit_conn", http, server)
     assert limite is not None and limite[0] == "perip", limite
@@ -375,6 +388,7 @@ def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
     http = leer(ruta)
     _tasa_por_segundo(http, "api")
     _tasa_por_segundo(http, "auth")
+    _tasa_por_segundo(http, "webhooks")
     assert una(http, "limit_conn_zone").args == (
         "$binary_remote_addr",
         "zone=perip:10m",
@@ -382,14 +396,16 @@ def test_el_edge_corta_inundaciones_por_ip(ruta: Path) -> None:
     # 429 y no el 503 por defecto: el front y el backoff lo leen como limite.
     assert una(http, "limit_req_status").args == ("429",)
     assert una(http, "limit_conn_status").args == ("429",)
+    # Cada rechazo es una linea del error log (con la query): warn, no error.
+    assert una(http, "limit_req_log_level").args == ("warn",)
+    assert una(http, "limit_conn_log_level").args == ("warn",)
     server = server_de_la_app(http)
     assert _conexiones_por_ip(http, server) > 0
     apis = locations_de_api(server)
     assert apis
     for loc in apis:
         zona, _burst = _limit_req(loc.bloque)
-        esperada = "auth" if loc.args == ("/api/auth/",) else "api"
-        assert zona == esperada, loc.args
+        assert zona == _zona_esperada(loc), loc.args
 
 
 def test_produccion_limita_muy_por_encima_de_la_app() -> None:
@@ -402,6 +418,8 @@ def test_produccion_limita_muy_por_encima_de_la_app() -> None:
     server = server_de_la_app(http)
     assert _limit_req(location(server, "/api/")) == ("api", 40)
     assert _limit_req(location(server, "/api/auth/")) == ("auth", 6)
+    assert _tasa_por_segundo(http, "webhooks") == 10
+    assert _limit_req(location(server, *WEBHOOK_MP)) == ("webhooks", 60)
     assert _conexiones_por_ip(http, server) == 40
 
 
@@ -409,7 +427,7 @@ def test_desarrollo_no_limita_mas_que_produccion() -> None:
     # Las simulaciones locales salen todas de una IP: dev puede ser mas laxo,
     # nunca mas estricto (un 429 del edge falsearia la medicion).
     dev, prod = leer(EDGE_DEV), leer(EDGE_PROD)
-    for zona in ("api", "auth"):
+    for zona in ("api", "auth", "webhooks"):
         assert _tasa_por_segundo(dev, zona) >= _tasa_por_segundo(prod, zona)
     assert _conexiones_por_ip(dev, server_de_la_app(dev)) >= _conexiones_por_ip(
         prod, server_de_la_app(prod)
@@ -496,6 +514,36 @@ def test_la_respuesta_de_error_del_edge_es_el_sobre_de_la_app(
 
 
 @EDGES
+def test_el_webhook_de_mp_se_proxea_igual_que_el_resto_de_api(ruta: Path) -> None:
+    server = server_de_la_app(leer(ruta))
+    webhook, api = location(server, *WEBHOOK_MP), location(server, "/api/")
+    for nombre in (
+        "rewrite",
+        "proxy_pass",
+        "proxy_http_version",
+        "proxy_set_header",
+        "error_page",
+        "client_max_body_size",
+        "proxy_connect_timeout",
+        "proxy_read_timeout",
+    ):
+        assert [d.args for d in todas(webhook, nombre)] == [
+            d.args for d in todas(api, nombre)
+        ], nombre
+
+
+@EDGES
+def test_las_paginas_de_error_json_son_solo_de_api(ruta: Path) -> None:
+    # Un error_page JSON en `/` o `/assets/` (o a nivel server, que se hereda)
+    # le devolveria JSON al navegador en vez de la SPA.
+    for server in servidores(leer(ruta)):
+        assert not todas(server, "error_page")
+        for loc in locations(server):
+            if todas(loc.bloque, "error_page"):
+                assert loc.args[-1].startswith("/api/"), loc.args
+
+
+@EDGES
 def test_la_subida_de_medios_admite_el_tope_de_la_app_mas_el_multipart(
     ruta: Path,
 ) -> None:
@@ -532,8 +580,20 @@ def test_el_log_es_json_con_tiempos_y_sin_query(ruta: Path) -> None:
     plantilla = "".join(formato.args[2:])
     assert "$uri" in plantilla
     assert not VARIABLES_CON_QUERY.search(plantilla), plantilla
-    # Con cualquier valor en las variables, cada linea es JSON valido.
-    linea = json.loads(re.sub(r"\$\w+", "0", plantilla))
+    # Estas variables no siempre son numeros: $status vale 000 si el cliente
+    # corta antes de la respuesta (JSON no admite ceros a la izquierda) y los
+    # tiempos del upstream valen "-" sin upstream o "0.010, 0.020" si hubo
+    # reintento. Van entre comillas o la linea deja de ser JSON.
+    for variable in ("status", "upstream_response_time", "upstream_connect_time"):
+        assert f'":"${variable}"' in plantilla, variable
+    peores = {
+        "status": "000",
+        "upstream_response_time": "0.010, 0.020",
+        "upstream_connect_time": "-",
+    }
+    linea = json.loads(
+        re.sub(r"\$(\w+)", lambda m: peores.get(m.group(1), "0"), plantilla)
+    )
     for clave in ("rid", "s", "rt", "urt", "uct", "u", "ip"):
         assert clave in linea, clave
 
@@ -641,6 +701,13 @@ def test_solo_los_assets_con_hash_son_inmutables() -> None:
     assert _cache_control(estaticos) == ["public, max-age=3600"]
     # El shell del SPA revalida siempre (manifiesto de chunks tras un deploy).
     assert _cache_control(location(server, "/")) == ["no-cache"]
+
+
+def test_toda_ruta_desconocida_de_la_spa_cae_en_index_html() -> None:
+    # Rutas del router del front (/panel, /reservar/...): sin el fallback un
+    # refresh o un link directo devuelve 404.
+    raiz = location(_server_spa(), "/")
+    assert una(raiz, "try_files").args == ("$uri", "$uri/", "/index.html")
 
 
 def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() -> None:
