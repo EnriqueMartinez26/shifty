@@ -41,6 +41,7 @@ from modules.ops.router import router as ops_router
 from modules.notifications.router import router as notifications_router
 from modules.payments.router import router as payments_router
 from modules.promotions.router import router as promotions_router
+from modules.stores.router import media_router as stores_media_router
 from modules.stores.router import router as stores_router
 from modules.superadmin.router import router as superadmin_router
 from modules.billing.dependencies import block_writes_when_suspended
@@ -524,6 +525,9 @@ app.include_router(dashboard_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(users_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(reports_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(stores_router, dependencies=_SUSPENSION_GUARD)
+# Exento: servir una imagen (GET/HEAD, publico). La guarda no mira lecturas
+# y abria una sesion por hit; el 304 no toca la base (F1-27).
+app.include_router(stores_media_router)
 app.include_router(appointment_blocks_router, dependencies=_SUSPENSION_GUARD)
 # Pagos lleva la guarda: sus escrituras de panel (cobrar turnos ya tomados,
 # operar la pasarela) estan permitidas una por una en SUSPENSION_ALLOWED_WRITES

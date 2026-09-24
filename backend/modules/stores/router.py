@@ -1,8 +1,11 @@
-from datetime import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import datetime, time, timezone
+from email.utils import format_datetime
 from typing import Annotated, Any
 
 import structlog
-from fastapi import Depends, File, Form, Path, UploadFile
+from fastapi import Depends, File, Form, Path, Request, UploadFile
 from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
@@ -315,30 +318,83 @@ async def upload_store_media(
     return StoreMediaUploadResponse(url=url, media_id=media.id, kind=kind)
 
 
-@router.get("/media/{media_id}")
+# Router aparte y SIN la guarda de suspension (main.py): servir una imagen es
+# lectura pura, y la guarda depende de ``get_db``, asi que abria una sesion
+# (y una ida a la base) en cada hit, 304 incluido (F1-27). Solo GET y HEAD:
+# tests/integration/test_media_cache_http.py falla si aparece otro verbo.
+media_router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
+
+# La URL es inmutable: cada upload crea un id nuevo. Una imagen reemplazada
+# sigue cacheada bajo su id viejo, que la tienda ya no referencia.
+MEDIA_CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """Comparacion debil de ``If-None-Match`` (RFC 9110 13.1.2, para GET)."""
+    if not if_none_match:
+        return False
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip().removeprefix("W/")
+        if candidate == etag:
+            return True
+    return False
+
+
+def _http_date(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return format_datetime(value.astimezone(timezone.utc), usegmt=True)
+
+
+@asynccontextmanager
+async def _open_db(request: Request) -> AsyncIterator[AsyncSession]:
+    """Sesion abierta a demanda, despues de decidir que hace falta.
+
+    ``Depends(get_db)`` abre la sesion (y aplica el contexto de tenant, una
+    ida a la base) antes de entrar al handler. Respeta
+    ``dependency_overrides`` para que los tests usen su base.
+    """
+    provider = request.app.dependency_overrides.get(get_db, get_db)
+    async with asynccontextmanager(provider)() as db:
+        yield db
+
+
+@media_router.api_route("/media/{media_id}", methods=["GET", "HEAD"])
 async def serve_store_media(
     # Validado como el resto de los path params (B3-17): la ruta es publica y
     # consulta bajo bypass de RLS; un id fuera del patron no llega a la base.
     media_id: PublicIdPath,
-    db: AsyncSession = Depends(get_db),
+    request: Request,
 ) -> Response:
+    etag = f'"{media_id}"'
+    cache_headers = {"Cache-Control": MEDIA_CACHE_CONTROL, "ETag": etag}
+    # El validador ES el id: un navegador o el edge que ya tiene la imagen
+    # la revalida sin que el backend toque la base.
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=cache_headers)
+
+    is_head = request.method == "HEAD"
+    columns = [StoreMedia.content_type, StoreMedia.byte_size, StoreMedia.created_at]
+    if not is_head:
+        columns.append(StoreMedia.data)
     # Publico: el portal de reservas muestra el logo sin login. Se lee por id
     # bajando el filtro RLS por tienda (como el resto de las lecturas publicas);
     # el id es un ULID no adivinable y la imagen es publica por naturaleza.
-    async with tenant_bypass(db):
-        result = await db.execute(select(StoreMedia).where(StoreMedia.id == media_id))
-        media = result.scalar_one_or_none()
+    async with _open_db(request) as db, tenant_bypass(db):
+        result = await db.execute(select(*columns).where(StoreMedia.id == media_id))
+        row = result.one_or_none()
 
-    if media is None:
+    if row is None:
         raise AppException(
             "Imagen no encontrada", http_status=404, error_code="MEDIA_NOT_FOUND"
         )
 
-    return Response(
-        content=media.data,
-        media_type=media.content_type,
-        headers={
-            "Cache-Control": "public, max-age=86400",
-            "Content-Disposition": "inline",
-        },
-    )
+    headers = {
+        **cache_headers,
+        "Last-Modified": _http_date(row.created_at),
+        "Content-Disposition": "inline",
+    }
+    if is_head:
+        headers["Content-Length"] = str(row.byte_size)
+        return Response(media_type=row.content_type, headers=headers)
+    return Response(content=row.data, media_type=row.content_type, headers=headers)

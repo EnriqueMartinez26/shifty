@@ -498,6 +498,10 @@ async def _ver_imagen(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/stores/media/{await m.media(t)}")
 
 
+async def _ver_imagen_head(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("HEAD", f"/stores/media/{await m.media(t)}")
+
+
 # -- bloqueos -----------------------------------------------------------------
 
 
@@ -1216,6 +1220,7 @@ TABLA: tuple[Ruta, ...] = (
     # La imagen es publica por diseno: el portal muestra el logo sin login y
     # el id es un ULID que solo se conoce por la vitrina.
     R("GET", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen),
+    R("HEAD", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen_head),
     # bloqueos
     R(
         "GET",

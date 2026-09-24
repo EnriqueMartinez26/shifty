@@ -307,7 +307,13 @@ class SecurityHeadersMiddleware:
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
+                # Una ruta que fijo su propio Cache-Control (la imagen
+                # inmutable, el catalogo publico) no lleva `pragma: no-cache`:
+                # un cache HTTP/1.0 lo leeria como "revalidar siempre" (F1-27).
+                route_cache = any(k.lower() == b"cache-control" for k, _ in headers)
                 for key, value in self._security_headers(path):
+                    if route_cache and key == b"pragma":
+                        continue
                     self._append_if_missing(headers, key, value)
                 message["headers"] = headers
             await send(message)
