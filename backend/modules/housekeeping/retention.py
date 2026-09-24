@@ -76,6 +76,9 @@ def _procesado_vencido(modelo: Any, now: datetime, dias: int) -> ColumnElement[b
     limite_dead_letter = now - timedelta(days=settings.RETENTION_DEAD_LETTER_DAYS)
     return and_(
         modelo.processed_at.is_not(None),
+        # Cota comun (la mas reciente de las dos): es la Index Cond del
+        # parcial de historico; el OR de abajo decide fila por fila.
+        modelo.processed_at < max(limite, limite_dead_letter),
         or_(
             and_(modelo.error.is_(None), modelo.processed_at < limite),
             and_(

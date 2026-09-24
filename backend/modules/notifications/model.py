@@ -41,6 +41,13 @@ class Notification(BaseEntity):
             postgresql_where=text("read_at IS NULL"),
             sqlite_where=text("read_at IS NULL"),
         ),
+        # Leidas: las que purga la retencion (F1-19, migracion e5f7a9b1c3d6).
+        Index(
+            "ix_notifications_read_history",
+            "read_at",
+            postgresql_where=text("read_at IS NOT NULL"),
+            sqlite_where=text("read_at IS NOT NULL"),
+        ),
     )
 
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
