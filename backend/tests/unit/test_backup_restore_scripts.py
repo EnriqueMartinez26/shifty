@@ -32,7 +32,9 @@ def test_backup_command_uses_pg_dump_without_exposing_password(tmp_path: Path) -
     )
 
     assert command[:3] == ["pg_dump", "--format=custom", "--no-owner"]
-    assert "--no-privileges" in command
+    # Drill 2026-09-24: con --no-privileges el dump no traia los GRANT a
+    # shifty_app y la base restaurada le negaba todo a la app.
+    assert "--no-privileges" not in command
     assert command[command.index("--host") + 1] == "db.example.com"
     assert command[command.index("--port") + 1] == "6543"
     assert command[command.index("--username") + 1] == "app_user"
@@ -57,7 +59,9 @@ def test_restore_command_uses_pg_restore_without_exposing_password(
     # fallen objetos; un dump truncado "restauraba" con evidencia ok.
     assert "--exit-on-error" in command
     assert "--no-owner" in command
-    assert "--no-privileges" in command
+    # Drill 2026-09-24: --no-privileges descartaba los GRANT y los default ACL
+    # de shifty_app al restaurar; la app recibia "permission denied".
+    assert "--no-privileges" not in command
     assert command[command.index("--host") + 1] == "localhost"
     assert command[command.index("--port") + 1] == "5432"
     assert command[command.index("--username") + 1] == "restore_user"
@@ -276,9 +280,20 @@ def test_el_drill_lanza_sus_subprocesos_con_el_interprete_y_rutas_absolutas(
 VERIFICACION_OK = "d2f4a6b8c0e2|3|12|5"
 
 
+# Lo que devuelve la consulta de permisos del rol de la app cuando la base
+# restaurada es usable por la app: sin superusuario ni BYPASSRLS, los tres
+# timeouts de c2e4f6a8b0d1, USAGE en public, 42 tablas y ninguna tabla ni
+# secuencia sin permisos.
+TIMEOUTS_OK = (
+    "statement_timeout=30s,lock_timeout=5s,idle_in_transaction_session_timeout=60s"
+)
+ROL_APP_OK = f"f|f|{TIMEOUTS_OK}|t|42||"
+
+
 def _drill_con_subprocess_falso(
     monkeypatch: MonkeyPatch,
     verificacion: tuple[int, str, str] = (0, VERIFICACION_OK, ""),
+    verificacion_app: tuple[int, str, str] = (0, ROL_APP_OK, ""),
 ) -> tuple[ModuleType, list[list[str]]]:
     drill = load_script("backup_restore_drill")
     lanzados: list[list[str]] = []
@@ -286,7 +301,8 @@ def _drill_con_subprocess_falso(
     def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
         lanzados.append(list(command))
         if command and command[0] == "psql":
-            code, out, err = verificacion
+            es_de_permisos = "has_table_privilege" in command[-1]
+            code, out, err = verificacion_app if es_de_permisos else verificacion
             return SimpleNamespace(returncode=code, stdout=out, stderr=err)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -667,3 +683,348 @@ def test_el_drill_tampoco_toma_database_url(monkeypatch: MonkeyPatch) -> None:
     drill = load_script("backup_restore_drill")
 
     assert drill._parse_args().database_url == URL_DUENO
+
+
+# --- Drill 2026-09-24: permisos de shifty_app en la base restaurada -----------
+#
+# Sintoma: backup_db.py volcaba y restore_backup.py restauraba con
+# --no-privileges. La base restaurada quedaba con 0 GRANT y 0 default ACL para
+# shifty_app: la app recibia "permission denied" en todas las tablas. El drill
+# verificaba con el rol DUENO y daba "ok" sobre una base que la app no podia
+# leer. Ademas, pg_restore --exit-on-error aborta en
+# `GRANT USAGE ON SCHEMA public TO shifty_app` si el rol no existe en el
+# destino, y los timeouts del rol (c2e4f6a8b0d1) no viajan en el dump.
+
+
+def test_el_drill_verifica_los_permisos_del_rol_de_la_app(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    monkeypatch.delenv("APP_DB_USER", raising=False)
+    drill, lanzados = _drill_con_subprocess_falso(monkeypatch)
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 0
+
+    consulta = next(
+        c for c in lanzados if c[0] == "psql" and "has_table_privilege" in c[-1]
+    )
+    sql = consulta[-1]
+    assert "drill.example.com" in consulta
+    assert "has_schema_privilege('shifty_app', 'public', 'USAGE')" in sql
+    # has_table_privilege con varios privilegios separados por coma da true si
+    # tiene CUALQUIERA: cada uno se pregunta por separado.
+    for privilegio in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+        assert f"'{privilegio}')" in sql
+    assert "rolbypassrls" in sql
+    assert "rolconfig" in sql
+
+    evidencia = _evidencia(tmp_path)
+    assert evidencia["status"] == "ok"
+    pasos = evidencia["steps"]
+    assert isinstance(pasos, list)
+    paso = next(p for p in pasos if p["name"] == "verify-app-role")
+    assert paso["ok"] is True
+    assert "shifty_app" in paso["stdout"]
+
+
+def test_el_drill_usa_el_rol_de_app_db_user(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    monkeypatch.setenv("APP_DB_USER", "otra_app")
+    drill, lanzados = _drill_con_subprocess_falso(monkeypatch)
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 0
+
+    sql = next(c for c in lanzados if "has_table_privilege" in c[-1])[-1]
+    assert "'otra_app'" in sql
+    assert "shifty_app" not in sql
+
+
+@pytest.mark.parametrize(
+    ("salida", "motivo"),
+    [
+        (f"f|t|{TIMEOUTS_OK}|t|42||", "BYPASSRLS"),
+        (f"t|f|{TIMEOUTS_OK}|t|42||", "superusuario"),
+        ("f|f||t|42||", "statement_timeout"),
+        (
+            "f|f|statement_timeout=30s,lock_timeout=5s|t|42||",
+            "idle_in_transaction_session_timeout",
+        ),
+        (f"f|f|{TIMEOUTS_OK}|f|42||", "USAGE"),
+        (f"f|f|{TIMEOUTS_OK}|t|42|appointments,payments|", "appointments,payments"),
+        (f"f|f|{TIMEOUTS_OK}|t|42||appointments_seq", "appointments_seq"),
+        (f"f|f|{TIMEOUTS_OK}|t|0||", "tablas"),
+    ],
+    ids=[
+        "bypassrls",
+        "superusuario",
+        "sin-timeouts",
+        "falta-un-timeout",
+        "sin-usage-en-public",
+        "tablas-sin-permisos",
+        "secuencias-sin-permisos",
+        "sin-tablas",
+    ],
+)
+def test_una_base_que_la_app_no_puede_usar_no_da_evidencia_ok(
+    tmp_path: Path, monkeypatch: MonkeyPatch, salida: str, motivo: str
+) -> None:
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, _ = _drill_con_subprocess_falso(
+        monkeypatch, verificacion_app=(0, salida, "")
+    )
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 1
+
+    evidencia = _evidencia(tmp_path)
+    assert evidencia["status"] == "failed"
+    pasos = evidencia["steps"]
+    assert isinstance(pasos, list)
+    paso = next(p for p in pasos if p["name"] == "verify-app-role")
+    assert paso["ok"] is False
+    assert motivo in paso["stderr"]
+
+
+def test_un_restore_sin_el_rol_de_la_app_no_da_evidencia_ok(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, _ = _drill_con_subprocess_falso(
+        monkeypatch,
+        verificacion_app=(1, "", 'ERROR:  role "shifty_app" does not exist'),
+    )
+    monkeypatch.setattr("sys.argv", _argv_de_restore(tmp_path, backup_dir))
+
+    assert drill.main() == 1
+
+    evidencia = _evidencia(tmp_path)
+    pasos = evidencia["steps"]
+    assert isinstance(pasos, list)
+    paso = next(p for p in pasos if p["name"] == "verify-app-role")
+    assert paso["ok"] is False
+    assert "does not exist" in paso["stderr"]
+
+
+def test_el_drill_pasa_create_app_role_al_restore(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    backup_dir = tmp_path / "backups"
+    _backup_en(backup_dir)
+    drill, lanzados = _drill_con_subprocess_falso(monkeypatch)
+    argv = [*_argv_de_restore(tmp_path, backup_dir), "--create-app-role"]
+    monkeypatch.setattr("sys.argv", argv)
+
+    assert drill.main() == 0
+
+    restore = next(c for c in lanzados if "restore_backup.py" in " ".join(c))
+    assert "--create-app-role" in restore
+
+
+# --- restore_backup.py: el rol de la app existe ANTES de pg_restore ----------
+
+URL_DESTINO = "postgresql://dueno:dueno_secret@drill.example.com:5432/shifty_drill"
+# Valor de prueba con comilla, dos puntos y barra invertida: ejercita el escape
+# del literal SQL.
+CLAVE_APP = "clave-de-prueba-'con:rarezas\\x"
+
+
+def _restore_con_subprocess_falso(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Path,
+    *,
+    rol_existe: bool,
+    extra: list[str] | None = None,
+) -> tuple[ModuleType, list[dict[str, object]]]:
+    restore_backup = load_script("restore_backup")
+    lanzados: list[dict[str, object]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        lanzados.append({"command": list(command), "input": kwargs.get("input")})
+        if command[0] == "psql" and "pg_roles" in " ".join(command):
+            return SimpleNamespace(
+                returncode=0, stdout="1\n" if rol_existe else "", stderr=""
+            )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(restore_backup.subprocess, "run", fake_run)
+    dump = tmp_path / "shifty.dump"
+    dump.write_bytes(b"fake custom dump")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "restore_backup.py",
+            "--backup-file",
+            str(dump),
+            "--database-url",
+            URL_DESTINO,
+            *(extra or []),
+        ],
+    )
+    return restore_backup, lanzados
+
+
+def _comandos(lanzados: list[dict[str, object]]) -> list[list[str]]:
+    comandos: list[list[str]] = []
+    for lanzado in lanzados:
+        command = lanzado["command"]
+        assert isinstance(command, list)
+        comandos.append(command)
+    return comandos
+
+
+def test_restore_se_niega_si_el_rol_de_la_app_no_existe(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APP_DB_USER", raising=False)
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=False
+    )
+
+    with pytest.raises(SystemExit) as salida:
+        restore_backup.main()
+
+    mensaje = str(salida.value)
+    assert "shifty_app" in mensaje
+    assert "--create-app-role" in mensaje
+    comandos = _comandos(lanzados)
+    assert not any(c[0] == "pg_restore" for c in comandos), (
+        "lanzo pg_restore sin el rol: aborta a mitad y deja la base a medias"
+    )
+    consulta = next(c for c in comandos if c[0] == "psql")
+    assert "rolname = 'shifty_app'" in consulta[-1]
+    assert "drill.example.com" in consulta
+    assert "dueno_secret" not in mensaje
+
+
+def test_restore_con_el_rol_existente_restaura(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("APP_DB_USER", "otra_app")
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=True
+    )
+
+    assert restore_backup.main() == 0
+
+    comandos = _comandos(lanzados)
+    assert [c[0] for c in comandos] == ["psql", "pg_restore"]
+    assert "rolname = 'otra_app'" in comandos[0][-1]
+
+
+def test_restore_rechaza_un_nombre_de_rol_que_no_es_identificador(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setenv("APP_DB_USER", "app'; drop table stores; --")
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=True
+    )
+
+    with pytest.raises(SystemExit) as salida:
+        restore_backup.main()
+
+    assert "APP_DB_USER" in str(salida.value)
+    assert lanzados == []
+
+
+def test_restore_create_app_role_crea_el_rol_con_sus_timeouts(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("APP_DB_USER", raising=False)
+    monkeypatch.setenv("APP_DB_PASSWORD", CLAVE_APP)
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=False, extra=["--create-app-role"]
+    )
+
+    assert restore_backup.main() == 0
+
+    comandos = _comandos(lanzados)
+    assert [c[0] for c in comandos] == ["psql", "psql", "pg_restore"]
+    sql = lanzados[1]["input"]
+    assert isinstance(sql, str)
+    assert 'CREATE ROLE "shifty_app" LOGIN' in sql
+    assert "NOSUPERUSER" in sql and "NOBYPASSRLS" in sql
+    assert "ALTER ROLE \"shifty_app\" SET statement_timeout = '30s'" in sql
+    assert "ALTER ROLE \"shifty_app\" SET lock_timeout = '5s'" in sql
+    assert (
+        "ALTER ROLE \"shifty_app\" SET idle_in_transaction_session_timeout = '60s'"
+        in sql
+    )
+    # Literal escapado (comilla duplicada, barra invertida en E'') por stdin:
+    # nunca en argv (visible en `ps`) ni en la salida.
+    assert "E'clave-de-prueba-''con:rarezas\\\\x'" in sql
+    assert not any("clave-de-prueba" in parte for parte in comandos[1])
+    salida = capsys.readouterr()
+    assert "clave-de-prueba" not in salida.out + salida.err
+
+
+def test_restore_create_app_role_con_el_rol_existente_no_toca_la_clave(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APP_DB_USER", raising=False)
+    monkeypatch.delenv("APP_DB_PASSWORD", raising=False)
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=True, extra=["--create-app-role"]
+    )
+
+    assert restore_backup.main() == 0
+
+    sql = lanzados[1]["input"]
+    assert isinstance(sql, str)
+    assert "CREATE ROLE" not in sql
+    assert "PASSWORD" not in sql
+    assert 'ALTER ROLE "shifty_app" NOSUPERUSER NOBYPASSRLS' in sql
+    assert "statement_timeout = '30s'" in sql
+
+
+def test_restore_create_app_role_sin_app_db_password_no_crea_nada(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.delenv("APP_DB_PASSWORD", raising=False)
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=False, extra=["--create-app-role"]
+    )
+
+    with pytest.raises(SystemExit) as salida:
+        restore_backup.main()
+
+    assert "APP_DB_PASSWORD" in str(salida.value)
+    assert [c[0] for c in _comandos(lanzados)] == ["psql"]
+
+
+def test_restore_no_filtra_la_clave_si_psql_falla_al_crear_el_rol(
+    tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("APP_DB_PASSWORD", CLAVE_APP)
+    restore_backup, lanzados = _restore_con_subprocess_falso(
+        monkeypatch, tmp_path, rol_existe=False, extra=["--create-app-role"]
+    )
+    original = restore_backup.subprocess.run
+
+    def falla_al_crear(command: list[str], **kwargs: object) -> SimpleNamespace:
+        resultado: SimpleNamespace = original(command, **kwargs)
+        entrada = kwargs.get("input")
+        if entrada:
+            # psql repite la linea que fallo en el error (LINE 1: ...).
+            return SimpleNamespace(
+                returncode=3, stdout="", stderr=f"ERROR:  boom\nLINE 1: {entrada}"
+            )
+        return resultado
+
+    monkeypatch.setattr(restore_backup.subprocess, "run", falla_al_crear)
+
+    with pytest.raises(SystemExit) as salida:
+        restore_backup.main()
+
+    capturado = capsys.readouterr()
+    todo = str(salida.value) + capturado.out + capturado.err
+    assert "boom" in todo
+    assert "clave-de-prueba" not in todo
+    assert not any(c[0] == "pg_restore" for c in _comandos(lanzados))

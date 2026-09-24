@@ -46,6 +46,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] A fresh backup exists before migration or any irreversible data operation.
 - [ ] Backup artifact and checksum are stored outside the application host.
 - [ ] Current restore drill evidence is available and not older than 31 days.
+- [ ] The drill verifies as the app role: its evidence has a `verify-app-role` step with `ok: true` (grants, no `BYPASSRLS`, timeouts of `shifty_app`), not only the owner's `verify-restore`.
 - [ ] RPO target is `<= 24h`; latest restorable backup age is within that target.
 - [ ] RTO target is `<= 4h`; most recent drill duration is within that target or has an approved exception.
 - [ ] Restore owner and escalation path are listed in the release notes.
