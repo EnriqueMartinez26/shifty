@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { MemoryRouter, useNavigate } from 'react-router'
 
 import Sidebar from './Sidebar'
 
@@ -87,5 +87,75 @@ describe('Sidebar', () => {
       'href',
       '/dashboard/ledger'
     )
+  })
+})
+
+describe('Sidebar: grupos que siguen a la ruta (F11a-11)', () => {
+  const GoTo = ({ path }: { path: string }) => {
+    const navigate = useNavigate()
+    return (
+      <button type="button" onClick={() => void navigate(path)}>
+        {`ir a ${path}`}
+      </button>
+    )
+  }
+
+  const renderAt = (initial: string, targets: string[]) =>
+    render(
+      <MemoryRouter initialEntries={[initial]}>
+        <Sidebar />
+        {targets.map((path) => (
+          <GoTo key={path} path={path} />
+        ))}
+      </MemoryRouter>
+    )
+
+  beforeEach(() => {
+    mockUser = {
+      first_name: 'Lara',
+      email: 'lara@example.com',
+      role: 'receptionist',
+      is_global_admin: true
+    }
+  })
+
+  it('navegar a una pagina de un grupo cerrado lo abre', () => {
+    renderAt('/dashboard', ['/dashboard/ledger'])
+    expect(screen.queryByRole('link', { name: 'Cuentas pendientes' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'ir a /dashboard/ledger' }))
+
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toBeInTheDocument()
+  })
+
+  it('un grupo cerrado a mano se reabre al navegar a una de sus paginas', () => {
+    renderAt('/dashboard', ['/dashboard/ledger'])
+    fireEvent.click(screen.getByRole('button', { name: /Ventas/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Ventas/ }))
+    expect(screen.queryByRole('link', { name: 'Cuentas pendientes' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'ir a /dashboard/ledger' }))
+
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toBeInTheDocument()
+  })
+
+  it('cerrar el grupo de la pagina actual lo deja cerrado', () => {
+    renderAt('/dashboard/ledger', [])
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Ventas/ }))
+
+    expect(screen.queryByRole('link', { name: 'Cuentas pendientes' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Ventas/ })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('un grupo abierto a mano sigue abierto al navegar fuera de el', () => {
+    renderAt('/dashboard', ['/dashboard/calendar'])
+    fireEvent.click(screen.getByRole('button', { name: /Mi Negocio/ }))
+    expect(screen.getByRole('link', { name: 'Usuarios' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'ir a /dashboard/calendar' }))
+
+    expect(screen.getByRole('link', { name: 'Usuarios' })).toBeInTheDocument()
   })
 })
