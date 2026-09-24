@@ -11,7 +11,7 @@ import { NotFoundError } from '../../shared/errors/NotFoundError'
  * Mantiene un almacenamiento local Map ideal para pruebas rápidas y robustas.
  */
 export class InMemoryUserRepository
-  extends BaseRepository<User, User, UserWriteInput>
+  extends BaseRepository<User, User, UserWriteInput, string>
   implements IUserRepository
 {
   private store: Map<string, User> = new Map()

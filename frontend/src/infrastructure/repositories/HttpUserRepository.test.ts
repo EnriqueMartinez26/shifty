@@ -92,4 +92,11 @@ describe('HttpUserRepository.create (F10-06)', () => {
 
     expect(post.mock.calls[0][1]).not.toHaveProperty('password')
   })
+
+  it('el segundo argumento es la clave inicial tipada, no unknown (F10-15)', async () => {
+    const { repository } = createRepository()
+
+    // @ts-expect-error: antes `extra` era unknown y un numero compilaba
+    await repository.create(nuevo, 42)
+  })
 })

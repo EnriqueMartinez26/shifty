@@ -11,8 +11,9 @@ import { ValidationError } from '../../shared/errors/ValidationError'
 export abstract class BaseRepository<
   T,
   CreateDTO = T,
-  UpdateDTO = Partial<T>
-> implements IRepository<T, CreateDTO, UpdateDTO> {
+  UpdateDTO = Partial<T>,
+  CreateExtra = never
+> implements IRepository<T, CreateDTO, UpdateDTO, CreateExtra> {
   public async findAll(options?: QueryOptions | boolean): Promise<T[]> {
     try {
       return await this.findAllImpl(options)
@@ -29,7 +30,7 @@ export abstract class BaseRepository<
     }
   }
 
-  public async create(data: CreateDTO, extra?: unknown): Promise<T> {
+  public async create(data: CreateDTO, extra?: CreateExtra): Promise<T> {
     try {
       return await this.createImpl(data, extra)
     } catch (error) {
@@ -56,7 +57,7 @@ export abstract class BaseRepository<
   // --- Abstract hooks implementados por subclases concretas ---
   protected abstract findAllImpl(options?: QueryOptions | boolean): Promise<T[]>
   protected abstract findByIdImpl(id: string): Promise<T | null>
-  protected abstract createImpl(data: CreateDTO, extra?: unknown): Promise<T>
+  protected abstract createImpl(data: CreateDTO, extra?: CreateExtra): Promise<T>
   protected abstract updateImpl(id: string, data: UpdateDTO): Promise<T>
   protected abstract deleteImpl(id: string): Promise<void>
 

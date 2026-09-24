@@ -14,7 +14,7 @@ class TestRepository extends BaseRepository<unknown, unknown, unknown> {
   protected async findByIdImpl(_id: string): Promise<unknown> {
     return null
   }
-  protected async createImpl(_data: unknown, _extra?: unknown): Promise<unknown> {
+  protected async createImpl(_data: unknown): Promise<unknown> {
     return null
   }
   protected async updateImpl(_id: string, _data: unknown): Promise<unknown> {

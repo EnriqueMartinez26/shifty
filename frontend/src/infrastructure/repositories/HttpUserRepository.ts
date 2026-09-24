@@ -44,7 +44,7 @@ const toUserPayload = (input: UserPayloadInput): Record<string, unknown> => {
  * Extiende de BaseRepository para beneficiarse del control de errores unificado.
  */
 export class HttpUserRepository
-  extends BaseRepository<User, User, UserWriteInput>
+  extends BaseRepository<User, User, UserWriteInput, string>
   implements IUserRepository
 {
   private client: AxiosInstance
