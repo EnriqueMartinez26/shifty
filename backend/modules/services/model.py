@@ -51,4 +51,9 @@ class Service(BaseEntity):
             "OR deposit_amount <= 100",
             name="ck_services_deposit_percent_max",
         ),
+        # El tope del producto es 480 minutos (schemas.py); la base garantiza
+        # un dia, que es lo que sostiene la cota inferior del solapamiento
+        # (F1-13, ck_appointments_max_span; migraciones c3d5e7f9a1b4 +
+        # d4e6f8a0b2c5).
+        CheckConstraint("duration_minutes <= 1440", name="ck_services_duration_max"),
     )
