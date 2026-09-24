@@ -57,7 +57,7 @@ def _evento() -> dict[str, Any]:
 
 
 def test_el_evento_sale_sin_telefono_codigo_ni_argumentos_de_la_tarea() -> None:
-    limpio = observability._scrub_event(_evento(), {})  # type: ignore[arg-type]
+    limpio: Any = observability._scrub_event(_evento(), {})  # type: ignore[arg-type]
 
     assert limpio is not None
     texto = str(limpio)
@@ -82,7 +82,7 @@ def test_un_id_publico_no_se_confunde_con_un_telefono() -> None:
         "request": {"url": "https://x/api/appointments/01J9ZXABCDEF0123456789ABCD"}
     }
 
-    limpio = observability._scrub_event(evento, {})  # type: ignore[arg-type]
+    limpio: Any = observability._scrub_event(evento, {})  # type: ignore[arg-type]
 
     assert limpio is not None
     assert limpio["request"]["url"].endswith("/01J9ZXABCDEF0123456789ABCD")

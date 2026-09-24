@@ -10,6 +10,7 @@ clave del SMTP que viaja en el LOGIN.
 
 from __future__ import annotations
 
+import smtplib
 import ssl
 from typing import Any
 
@@ -37,7 +38,7 @@ class _SmtpEspia:
 
 def test_starttls_usa_un_contexto_que_verifica(monkeypatch: pytest.MonkeyPatch) -> None:
     _SmtpEspia.instancias = []
-    monkeypatch.setattr(tasks.smtplib, "SMTP", _SmtpEspia)
+    monkeypatch.setattr(smtplib, "SMTP", _SmtpEspia)
 
     tasks.SmtpSession()._connect()
 

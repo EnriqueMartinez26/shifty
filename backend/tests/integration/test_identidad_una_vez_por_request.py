@@ -30,6 +30,7 @@ from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 import modules.auth.dependencies as auth_dependencies
+from core.database import _apply_tenant_context
 from core.security import create_access_token, decode_token
 from modules.auth.session_model import AuthSession
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -60,7 +61,7 @@ async def test_un_get_del_panel_resuelve_la_identidad_una_sola_vez(
 
     sentencias: list[str] = []
     aplicaciones_de_contexto = 0
-    original = auth_dependencies._apply_tenant_context
+    original = _apply_tenant_context
 
     async def contar_contexto(session: AsyncSession) -> None:
         nonlocal aplicaciones_de_contexto

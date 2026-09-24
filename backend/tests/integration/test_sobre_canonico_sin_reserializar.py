@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastapi.encoders import jsonable_encoder
 from httpx import AsyncClient
 
 import core.responses as responses
@@ -30,7 +31,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 class _Espia:
     def __init__(self) -> None:
         self.llamadas = 0
-        self._original = responses.jsonable_encoder
+        self._original = jsonable_encoder
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.llamadas += 1

@@ -10,6 +10,7 @@ limpia al terminar: un request no hereda el id del anterior.
 
 from __future__ import annotations
 
+from collections.abc import MutableMapping
 from typing import Any
 
 import pytest
@@ -23,7 +24,7 @@ logger = structlog.get_logger()
 
 async def _pasar(
     headers: list[tuple[bytes, bytes]],
-) -> tuple[list[Any], dict[str, Any]]:
+) -> tuple[list[Any], MutableMapping[str, Any]]:
     async def app(_scope: Any, _receive: Any, send: Any) -> None:
         logger.info("dentro_del_request")
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -83,4 +84,5 @@ def test_la_app_lo_registra_como_capa_mas_externa() -> None:
     """Mas afuera que todo: los logs del rate limit y del 500 tambien lo llevan."""
     from main import app
 
-    assert app.user_middleware[0].cls is RequestIdMiddleware
+    capa: Any = app.user_middleware[0].cls
+    assert capa is RequestIdMiddleware

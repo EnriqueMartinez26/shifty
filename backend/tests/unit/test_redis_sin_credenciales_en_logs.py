@@ -11,6 +11,7 @@ el mismo texto: el detalle completo sigue yendo a Sentry.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -53,7 +54,7 @@ class _RedisCaido:
         raise _error()
 
 
-def _sin_secreto(eventos: list[dict[str, Any]]) -> None:
+def _sin_secreto(eventos: Sequence[Mapping[str, Any]]) -> None:
     assert eventos, "no se registro el fallo"
     for evento in eventos:
         assert _SECRETO not in str(evento), evento
