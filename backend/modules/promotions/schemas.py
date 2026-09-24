@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from core.validation import reject_control_chars
+
 # Techos de los enteros expuestos por la API.
 #
 # Las columnas son INTEGER de PostgreSQL: cualquier valor por encima de 2^31-1
@@ -70,6 +72,14 @@ class PromotionBase(BaseModel):
     def normalize_code(cls, value: str) -> str:
         return _normalize_code(value)
 
+    @field_validator("title")
+    @classmethod
+    def reject_control_chars_in_title(cls, value: str) -> str:
+        # Regla 19 (SEG-02): el titulo sale al portal en
+        # /public/promotions/preview. La descripcion solo la ve el panel.
+        reject_control_chars(value)
+        return value
+
     @field_validator("valid_from", "valid_until")
     @classmethod
     def require_aware_window(cls, value: datetime | None) -> datetime | None:
@@ -112,6 +122,11 @@ class PromotionUpdate(BaseModel):
         if value is None:
             return None
         return _normalize_code(value)
+
+    @field_validator("title")
+    @classmethod
+    def reject_control_chars_in_title(cls, value: str | None) -> str | None:
+        return reject_control_chars(value)
 
     @field_validator("valid_from", "valid_until")
     @classmethod

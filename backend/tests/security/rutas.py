@@ -1697,18 +1697,7 @@ POR_CLAVE: dict[tuple[str, str], Ruta] = {ruta.clave: ruta for ruta in TABLA}
 # falla y la fila se borra de aca. (verbo, ruta, rol) -> motivo.
 DEFECTOS_MATRIZ: dict[tuple[str, str, str], str] = {}
 # (verbo, ruta, rol del actor) -> motivo, para la pasada entre tiendas.
-_FIADO_AJENO = (
-    "SEG-01 (baja): GET /ledger/customers/{client_id} con un cliente de OTRA "
-    "tienda responde 200 con saldo 0 y sin movimientos, en vez de 404. No "
-    "filtra datos (los movimientos se acotan por store_id), pero no valida "
-    "que el cliente sea de la tienda, a diferencia del alta de movimientos "
-    "(B2-11, test_fiado_cliente_de_otra_tienda.py). Causa: "
-    "modules/ledger/router.py::get_customer_ledger no resuelve al cliente."
-)
-DEFECTOS_IDOR: dict[tuple[str, str, str], str] = {
-    ("GET", "/ledger/customers/{client_id}", ADMIN_TIENDA): _FIADO_AJENO,
-    ("GET", "/ledger/customers/{client_id}", SUPERADMIN): _FIADO_AJENO,
-}
+DEFECTOS_IDOR: dict[tuple[str, str, str], str] = {}
 
 
 # -- introspeccion de la tabla de rutas de FastAPI ------------------------------

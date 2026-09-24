@@ -6,7 +6,7 @@ comprobar que el turno fuera de la tienda; ``add_movement`` lo persistia tal
 cual. La FK a ``appointments.id`` no pasa por RLS (Postgres verifica las
 restricciones por fuera de las politicas), asi que una fila de fiado podia
 quedar apuntando al turno de OTRA tienda. B2-11 cerro la mitad del hueco
-(``client_id`` via ``_ensure_store_client``) y dejo esta. CLAUDE.md §2 pide el
+(``client_id`` via ``ensure_store_client``) y dejo esta. CLAUDE.md §2 pide el
 filtro ``store_id`` como defensa en profundidad junto a la RLS, no en su lugar.
 
 Sintoma: el alta respondia 200 con un ``appointment_id`` de otra tienda (o

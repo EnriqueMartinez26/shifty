@@ -21,7 +21,6 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from modules.services.repository import ServiceRepository
 from tests.security.mundo import ADMIN_TIENDA, Mundo, fugas
 from tests.security.verificacion import (
-    Defecto,
     exigir,
     pagos_sin_red,
     problemas_del_error,
@@ -188,19 +187,6 @@ async def test_una_excepcion_interna_no_llega_al_cliente(
         exigir(interno not in res.text, f"{caso} filtro {interno!r}: {res.text[:300]}")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=Defecto,
-    reason=(
-        "SEG-04 (baja): pedir el link de pago de un turno con la cuenta de "
-        "Mercado Pago desconectada responde 502 PAYMENT_LINK_CREATION_FAILED "
-        "y el mensaje arrastra el texto de la excepcion interna "
-        "(modules/payments/router.py::create_payment_preference, f'...: {exc}'). "
-        "Es una precondicion de la tienda, no una falla del proveedor: deberia "
-        "ser un 409/422 con mensaje fijo. Un 5xx esperable ensucia las alertas "
-        "y el texto crudo del RuntimeError puede traer el detalle de MP."
-    ),
-)
 async def test_cobrar_sin_pasarela_conectada_es_un_error_de_la_tienda(
     mundo: Mundo,
 ) -> None:
@@ -222,3 +208,6 @@ async def test_cobrar_sin_pasarela_conectada_es_un_error_de_la_tienda(
         res.status_code in {409, 422},
         f"sin pasarela respondio {res.status_code}: {res.text[:300]}",
     )
+    # SEG-04: codigo propio y mensaje fijo, sin el texto de la excepcion.
+    assert res.json()["error_code"] == "PAYMENT_GATEWAY_NOT_CONNECTED", res.text
+    assert "RuntimeError" not in res.text and ": La tienda" not in res.text

@@ -72,16 +72,6 @@ async def test_rafaga_sobre_un_turno_no_le_cuenta_al_perdedor_quien_gano(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    raises=Defecto,
-    reason=(
-        "SEG-03 (alta): un NUL en idempotency_key de la reserva publica "
-        "(anonima) llega a Postgres, que lo rechaza con SQLSTATE 22021 "
-        "(CharacterNotInRepertoireError); main.py::dbapi_error_handler lo deja "
-        "subir como 500. Falta rechazar NUL en la validacion de entrada."
-    ),
-)
 async def test_un_nul_en_la_reserva_publica_no_es_un_500(
     client: AsyncClient, app_sessions: async_sessionmaker[AsyncSession]
 ) -> None:

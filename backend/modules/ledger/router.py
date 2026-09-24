@@ -23,7 +23,12 @@ from modules.ledger.schemas import (
     LedgerSummaryClientItem,
     LedgerSummaryResponse,
 )
-from modules.ledger.service import add_movement, current_balance, reverse_movement
+from modules.ledger.service import (
+    add_movement,
+    current_balance,
+    ensure_store_client,
+    reverse_movement,
+)
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -177,6 +182,9 @@ async def get_customer_ledger(
 ) -> CustomerLedgerResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
+    # SEG-01: un cliente de otra tienda (o inexistente) es 404, como en el
+    # alta (B2-11), no un historial vacio con saldo 0.
+    await ensure_store_client(db, store_id=user.store_id, client_id=client_id)
     del_cliente = (
         CustomerLedger.store_id == user.store_id,
         CustomerLedger.client_id == client_id,

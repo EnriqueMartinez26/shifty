@@ -57,7 +57,7 @@ async def current_balance(db: AsyncSession, store_id: str, client_id: str) -> De
     return previous.balance_after if previous else Decimal("0.00")
 
 
-async def _ensure_store_client(
+async def ensure_store_client(
     db: AsyncSession, *, store_id: str, client_id: str
 ) -> None:
     """El movimiento se carga contra un usuario de ESTA tienda, o no se carga.
@@ -68,6 +68,10 @@ async def _ensure_store_client(
     tapa, pero la suite corre en SQLite (CLAUDE.md §4) y §2 exige el filtro
     `store_id` como defensa en profundidad junto a la RLS, no en su lugar. Un
     id inexistente pasa de 409 generico (por FK) a 404 explicito.
+
+    2026-09-24, SEG-01: el historial (``GET /ledger/customers/{client_id}``)
+    usa el mismo chequeo; antes devolvia 200 con saldo 0 para un cliente
+    ajeno.
     """
     cliente = await UserRepository(db).get_by_public_id(client_id, store_id)
     if cliente is None:
@@ -83,7 +87,7 @@ async def _ensure_store_appointment(
     cliente) y dejo el ``appointment_id`` sin comprobar. La FK a
     ``appointments.id`` no pasa por RLS (Postgres verifica restricciones por
     fuera de las politicas), asi que una fila de fiado podia quedar apuntando
-    al turno de otra tienda. Mismo criterio que ``_ensure_store_client``:
+    al turno de otra tienda. Mismo criterio que ``ensure_store_client``:
     filtro ``store_id`` como defensa en profundidad (CLAUDE.md §2), y un id
     inexistente pasa de 409 generico (por FK) a 404 explicito.
     """
@@ -108,7 +112,7 @@ async def add_movement(
     notes: str | None = None,
 ) -> CustomerLedger:
     """Carga un movimiento y devuelve el saldo resultante, ya commiteado."""
-    await _ensure_store_client(db, store_id=store_id, client_id=client_id)
+    await ensure_store_client(db, store_id=store_id, client_id=client_id)
     if appointment_id is not None:
         await _ensure_store_appointment(
             db, store_id=store_id, appointment_id=appointment_id
