@@ -28,7 +28,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
-from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_mails_al_cliente import Buzon, usar_cola_de_reservas
 from tests.integration.test_otp_por_email import Cola
 from tests.integration.test_sena_por_antelacion_e_historial import (
     _preview,
@@ -139,6 +139,7 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
 ) -> None:
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
     store, _token, service, staff, slot = await _tienda(client, "secuestro-reserva")
 
     primera = await client.post(
@@ -175,7 +176,9 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
     assert await _email_del_cliente(test_session, "5491155550999") == tecnico
 
     # El mail de ESA reserva si va al email que dejaron (es su propia reserva),
-    # pero no queda pegado al cliente para las notificaciones futuras.
+    # pero no queda pegado al cliente para las notificaciones futuras. Desde
+    # F2-01 lo manda el worker, que relee el turno.
+    await cola.entregar()
     assert any(destino == "atacante@evil.com" for destino, _a, _c in buzon.enviados)
 
 

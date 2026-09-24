@@ -189,8 +189,13 @@ celery_app.conf.update(
     task_ignore_result=True,
     # El OTP va a su propia cola, que atiende un worker aparte
     # (celery_worker_interactive, --concurrency=1): su latencia no depende de
-    # que termine un lote del outbox (decision 7). Lo demas va a `celery`.
-    task_routes={"send_otp_email": {"queue": "interactive"}},
+    # que termine un lote del outbox (decision 7). El mail de la reserva
+    # publica (F2-01) va a la misma cola: quien acaba de reservar tampoco
+    # espera a los lotes. Lo demas va a `celery`.
+    task_routes={
+        "send_otp_email": {"queue": "interactive"},
+        "send_booking_email": {"queue": "interactive"},
+    },
     beat_schedule_filename=BEAT_SCHEDULE_FILE,
     worker_prefetch_multiplier=settings.CELERY_WORKER_PREFETCH_MULTIPLIER,
     task_acks_late=settings.CELERY_TASK_ACKS_LATE,

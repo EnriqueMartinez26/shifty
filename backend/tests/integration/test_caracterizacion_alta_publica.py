@@ -39,7 +39,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
-from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_mails_al_cliente import Buzon, usar_cola_de_reservas
 
 
 class _Tienda:
@@ -191,6 +191,7 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
 ) -> None:
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
     t = await _tienda(client, "carac-manual")
     redis = await _redis()
     orden = _espiar_orden(test_session, redis, monkeypatch)
@@ -233,6 +234,7 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
             select(Appointment).where(Appointment.id == cuerpo["public_id"])
         )
     ).scalar_one()
+    tienda_del_turno = turno.store_id
     assert turno.status == "pending"
     assert ensure_utc_aware(turno.expires_at) == t.slot  # type: ignore[arg-type]
     assert turno.price_amount == Decimal("10000.00")
@@ -249,6 +251,10 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
             },
         )
     ]
+    # F2-01: el request encola (ids, sin datos personales) y manda el worker.
+    assert buzon.enviados == []
+    assert cola.encolados == [("registration", tienda_del_turno, cuerpo["public_id"])]
+    await cola.entregar()
     assert [m[0] for m in buzon.enviados] == ["caracterizado@example.com"]
 
     # Replay con la misma clave: mismo cuerpo, ninguna fila ni mail nuevo.
@@ -259,6 +265,7 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
     assert replay.status_code == 201, replay.text
     assert replay.json() == cuerpo
     assert await _contar(test_session, Appointment) == 1
+    assert cola.encolados == []
     assert len(buzon.enviados) == 1
 
 
@@ -371,8 +378,7 @@ async def test_mp_falla_despues_del_commit_y_se_compensa(
 async def test_slot_ocupado_409_libera_la_clave_y_no_escribe(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
     t = await _tienda(client, "carac-choque")
     primera = await client.post("/public/appointments", json=_reserva(t, "carac-ch-1"))
     assert primera.status_code == 201, primera.text
@@ -400,7 +406,8 @@ async def test_slot_ocupado_409_libera_la_clave_y_no_escribe(
         .all()
     )
     assert "5491155558002" not in telefonos
-    assert len(buzon.enviados) == 1
+    # Solo la primera reserva encolo su mail.
+    assert len(cola.encolados) == 1
 
 
 async def _suspender(session: AsyncSession, store_public_id: str) -> None:

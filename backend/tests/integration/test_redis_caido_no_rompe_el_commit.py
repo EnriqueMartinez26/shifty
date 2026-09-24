@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 import core.availability_cache as availability_cache
@@ -35,7 +36,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
-from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_mails_al_cliente import Buzon, usar_cola_de_reservas
 
 
 class RedisQueFallaAlInvalidar(MockRedis):
@@ -95,10 +96,10 @@ def _reserva(store: str, service: str, staff: str, slot: datetime) -> dict[str, 
 
 @pytest.mark.asyncio
 async def test_alta_publica_con_redis_caido_devuelve_201_y_manda_el_mail(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
     store, _token, service, staff, slot = await _tienda_reservable(client, "redis-201")
     _usar_redis(RedisQueFallaAlInvalidar())
 
@@ -108,8 +109,9 @@ async def test_alta_publica_con_redis_caido_devuelve_201_y_manda_el_mail(
 
     assert res.status_code == 201, res.text
     assert res.json()["public_id"]
-    # El mail sale DESPUES de la invalidacion: si esta levanta, nunca se manda.
-    assert buzon.enviados, "la reserva quedo sin el mail 'reserva registrada'"
+    # El mail se encola DESPUES de la invalidacion (F2-01): si esta levanta,
+    # nunca se encola.
+    assert cola.encolados, "la reserva quedo sin el mail 'reserva registrada'"
 
 
 @pytest.mark.asyncio
