@@ -210,7 +210,10 @@ Una instrucción en lenguaje natural no es una garantía.
    El OTP va a la cola `interactive` (`core/celery_app.py::task_routes`),
    que atiende un worker aparte, `celery_worker_interactive`
    (`--concurrency=1`): su latencia no depende de los lotes de la cola
-   `celery`. Los mails de reserva irán ahí también (Fase 2).
+   `celery`. Los mails de la reserva pública también van ahí
+   (`send_booking_email`, F2-01, 2026-09-24): al broker viajan solo ids, el
+   worker relee el turno bajo bypass con `store_id` y cierra la sesión antes
+   del SMTP.
 9. **Todo parámetro numérico de la API lleva `ge` Y `le`.** Un solo lado
    deja un 500 alcanzable (desborde de bigint con `offset`, 2026-09-04).
 
@@ -382,21 +385,26 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Lista de espera, suscripción y avisos (Fases 4-7, 2026-09-11)
 
 - **Ningún consumidor del outbox manda mail dentro de su transacción.** El
-  lote toma las filas con `FOR UPDATE SKIP LOCKED` y commitea una sola vez:
-  un envío adentro deja el estado a merced del time limit de Celery y
-  reenvía lo ya enviado. El trabajo devuelve el mail pendiente y el llamador
-  lo despacha después del commit (`OfferResult.pending_email` en la lista de
-  espera; `process_outbox_batch` en `payments/jobs.py` acumula así también
-  los avisos al dueño, la confirmación al cliente y la cancelación por
-  bloqueo). (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`)
-  En el outbox cada mail es su propia fila `email.send`, escrita en la
-  transacción del evento que lo genera (F2-03, 2026-09-24). El despacho la
-  reclama (`processed_at` + commit, `SKIP LOCKED`) antes de mandar, de a una;
-  lo que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el
-  tick siguiente: ningún mail se pierde por presupuesto y `processed_at` no
-  se reabre nunca. Un envío fallido no se reintenta (el DATA pudo haber
-  llegado): queda con `attempts` y `error` en su fila.
-  (`test_outbox_mails_diferidos.py`)
+  lote toma las filas con `FOR UPDATE SKIP LOCKED`: un envío adentro deja el
+  estado a merced del time limit de Celery y reenvía lo ya enviado. En la
+  lista de espera el trabajo devuelve el mail pendiente y el llamador lo
+  despacha después del commit (`OfferResult.pending_email`). En el outbox
+  (`process_outbox_batch`, `payments/jobs.py`) cada mail (aviso al dueño,
+  confirmación al cliente, cancelación por bloqueo y los eventos del panel
+  `appointment.booked_by_panel/confirmed/completed/rescheduled`, F2-02) es su
+  propia fila `email.send`, escrita en la transacción del evento que lo
+  genera (F2-03, 2026-09-24). El despacho la reclama de a una
+  (`processed_at` + commit plano, `SKIP LOCKED`) y recién después manda; lo
+  que excede `OUTBOX_EMAIL_BUDGET_SECONDS` queda pendiente y sale en el tick
+  siguiente (cada 20 s): ningún mail se pierde por presupuesto y
+  `processed_at` no se reabre nunca. La entrega es **a lo sumo una vez**: un
+  proceso que muere entre el reclamo y el DATA pierde ese mail, y un envío
+  fallido no se reintenta (el DATA pudo haber llegado): queda con `attempts`
+  y `error` en su fila. El estado del turno se relee al planificar el mail,
+  no al mandarlo: un mail diferido por presupuesto puede salir después de
+  una cancelación ocurrida entre medio.
+  (`test_lista_de_espera_concurrencia.py`, `test_pg_outbox_mails.py`,
+  `test_outbox_mails_diferidos.py`)
 - **Un teléfono sin OTP no es de nadie.** No adopta el contacto de un cliente
   existente (`get_or_create_client(adopt_contact=...)`) ni trae su historial
   para la seña (`UNKNOWN_HISTORY`, que NO es "cliente nuevo"). Sin esa
