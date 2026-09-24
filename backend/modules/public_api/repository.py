@@ -155,13 +155,15 @@ class PublicRepository:
         # Sigue siendo una sola query extra, como el batch que reemplaza, y
         # conserva el filtro por `store_id` como defensa en profundidad.
         #
-        # CUIDADO: la garantia depende de que nadie cargue el mismo `Staff`
-        # antes en el MISMO request. `Staff.services` es `lazy="selectin"`, asi
-        # que un `select(Staff)` sin esta opcion trae la coleccion COMPLETA, y
-        # la sesion no refresca una coleccion ya cargada salvo con
-        # `populate_existing()`: el objeto del identity map se quedaria con los
+        # CUIDADO: la garantia depende de que nadie cargue la coleccion SIN
+        # este filtro en el MISMO request. Con F3-01 `Staff.services` es
+        # `lazy="raise"`, asi que el riesgo queda en un solo lugar: un
+        # `selectinload(Staff.services)` explicito y sin `.and_()` sobre el
+        # mismo `Staff`. El objeto del identity map se quedaria con los
         # servicios inactivos adentro y la proxima escritura de la request
-        # volveria a marcarlos para DELETE.
+        # volveria a marcarlos para DELETE. La disponibilidad ya no carga
+        # entidades `Staff` (F3-02,
+        # tests/integration/test_disponibilidad_no_carga_servicios_del_staff.py).
         result = await self.db.execute(
             select(Staff)
             .options(
