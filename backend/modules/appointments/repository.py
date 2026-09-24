@@ -28,6 +28,9 @@ from modules.stores.model import Store
 from modules.users.model import User
 
 AppointmentAgendaRow: TypeAlias = tuple[Appointment, Service, Staff, User]
+# Fila de la busqueda: del profesional solo ``id`` y ``display_name`` (F3-06),
+# para no disparar las relaciones de ``Staff`` en cada pagina.
+AppointmentSearchRow: TypeAlias = tuple[Appointment, Service, str, str, User]
 AppointmentReminderRow: TypeAlias = tuple[Appointment, Service, Staff, User, Store]
 
 
@@ -473,78 +476,118 @@ class AppointmentRepository:
     # Búsqueda avanzada con filtros dinámicos
     # ------------------------------------------------------------------
 
-    async def search_appointments(
-        self,
-        filters: AppointmentFilterParams,
-        store_id: str,
-    ) -> tuple[int, list[AppointmentAgendaRow]]:
-        """
-        Búsqueda avanzada con filtros dinámicos y paginación.
-        Solo construye la query; no interpreta resultados.
-
-        ``store_id`` es obligatorio: sin el, la busqueda devolvia turnos de
-        todas las tiendas de la instalacion.
-        """
-        base = (
-            select(Appointment, Service, Staff, User)
-            .join(Service, Appointment.service_id == Service.id)
-            .join(Staff, Appointment.staff_id == Staff.id)
-            .join(User, Appointment.client_id == User.id)
-        )
-
-        conditions = [Appointment.store_id == store_id]
-
-        if filters.client_name:
-            term = f"%{filters.client_name.strip()}%"
-            conditions.append(
-                or_(
-                    User.first_name.ilike(term),
-                    User.last_name.ilike(term),
-                    User.email.ilike(term),
-                )
-            )
-
+    @staticmethod
+    def _search_conditions(
+        filters: AppointmentFilterParams, store_id: str
+    ) -> list[ColumnElement[bool]]:
+        """Filtros de la busqueda que leen solo columnas de ``appointments``."""
+        conditions: list[ColumnElement[bool]] = [Appointment.store_id == store_id]
         if filters.staff_id:
-            conditions.append(Staff.id == filters.staff_id)
-
-        if filters.service_id:
-            conditions.append(Service.public_id == filters.service_id)
-
+            # ``Staff.id`` es la FK del turno: no hace falta el join.
+            conditions.append(Appointment.staff_id == filters.staff_id)
         if filters.statuses:
             conditions.append(Appointment.status.in_(filters.statuses))
-
         # Rango de fechas en dias calendario argentinos (regla 24), como la
         # agenda diaria; antes cortaba en UTC y ademas con datetimes naive.
         if filters.from_date:
             conditions.append(
                 Appointment.starts_at >= local_to_utc(filters.from_date, time.min)
             )
-
         if filters.to_date:
             conditions.append(
                 Appointment.starts_at
                 < local_to_utc(filters.to_date + timedelta(days=1), time.min)
             )
+        return conditions
 
-        if conditions:
-            base = base.where(and_(*conditions))
-
-        # COUNT total
-        count_result = await self.db.execute(
-            select(func.count()).select_from(base.subquery())
+    @staticmethod
+    def _client_name_condition(
+        filters: AppointmentFilterParams,
+    ) -> ColumnElement[bool] | None:
+        if not filters.client_name:
+            return None
+        term = f"%{filters.client_name.strip()}%"
+        return or_(
+            User.first_name.ilike(term),
+            User.last_name.ilike(term),
+            User.email.ilike(term),
         )
-        total = count_result.scalar_one()
 
-        # Paginación
+    async def _count_search(
+        self,
+        conditions: list[ColumnElement[bool]],
+        by_client: ColumnElement[bool] | None,
+        service_public_id: str | None,
+    ) -> int:
+        """Total de la busqueda: ``count(appointments.id)`` con el mismo WHERE.
+
+        F3-06 (R2-05): antes era ``count(*)`` sobre la consulta de la pagina
+        entera, con sus cuatro entidades. Los joins entran solo si filtran:
+        ``services`` para ``service_id`` (se filtra por su ``public_id``) y
+        ``users`` para ``client_name``. Sin el join a ``users`` se exige
+        ``client_id IS NOT NULL``, porque la pagina hace inner join a
+        ``users`` y el total tiene que contar las mismas filas.
+        """
+        query = select(func.count(Appointment.id)).select_from(Appointment)
+        if service_public_id:
+            query = query.join(Service, Appointment.service_id == Service.id).where(
+                Service.public_id == service_public_id
+            )
+        if by_client is not None:
+            query = query.join(User, Appointment.client_id == User.id).where(by_client)
+        else:
+            query = query.where(Appointment.client_id.is_not(None))
+        result = await self.db.execute(query.where(*conditions))
+        return int(result.scalar_one())
+
+    async def search_appointments(
+        self,
+        filters: AppointmentFilterParams,
+        store_id: str,
+        *,
+        include_total: bool = True,
+    ) -> tuple[int | None, list[AppointmentSearchRow]]:
+        """
+        Búsqueda avanzada con filtros dinámicos y paginación.
+        Solo construye la query; no interpreta resultados.
+
+        ``store_id`` es obligatorio: sin el, la busqueda devolvia turnos de
+        todas las tiendas de la instalacion.
+
+        ``include_total=False`` no cuenta (devuelve ``None``): el panel lo
+        pide en las paginas siguientes a la primera (F3-06). El orden es
+        ``(starts_at, id)`` descendente: el ``id`` desempata turnos a la misma
+        hora para que las paginas no repitan ni salteen filas.
+        """
+        conditions = self._search_conditions(filters, store_id)
+        by_client = self._client_name_condition(filters)
+        total = (
+            await self._count_search(conditions, by_client, filters.service_id)
+            if include_total
+            else None
+        )
+
+        page = (
+            select(Appointment, Service, Staff.id, Staff.display_name, User)
+            .join(Service, Appointment.service_id == Service.id)
+            .join(Staff, Appointment.staff_id == Staff.id)
+            .join(User, Appointment.client_id == User.id)
+            .where(*conditions)
+        )
+        if by_client is not None:
+            page = page.where(by_client)
+        if filters.service_id:
+            page = page.where(Service.public_id == filters.service_id)
         offset = (filters.page - 1) * filters.page_size
-        data_query = (
-            base.order_by(Appointment.starts_at.desc())
+        result = await self.db.execute(
+            page.order_by(Appointment.starts_at.desc(), Appointment.id.desc())
             .offset(offset)
             .limit(filters.page_size)
         )
-
-        result = await self.db.execute(data_query)
-        rows = [(row[0], row[1], row[2], row[3]) for row in result.all()]
+        rows: list[AppointmentSearchRow] = [
+            (appointment, service, staff_id, staff_name, client)
+            for appointment, service, staff_id, staff_name, client in result.all()
+        ]
         return total, rows
 
     # ------------------------------------------------------------------

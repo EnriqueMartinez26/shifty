@@ -42,7 +42,12 @@ async def test_report_summary_uses_safe_client_name_fallback() -> None:
     client_model = SimpleNamespace(full_name="", email="")
 
     async def fake_fetch_rows(
-        *, from_date: Any, to_date: Any, staff_id: Any = None, page: Any = None
+        *,
+        from_date: Any,
+        to_date: Any,
+        staff_id: Any = None,
+        page: Any = None,
+        order: Any = "asc",
     ) -> list[tuple[Any, ...]]:
         return [(appointment, service_model, "Pro Demo", client_model)]
 

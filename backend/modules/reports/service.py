@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any, NamedTuple, cast
+from typing import Any, Literal, NamedTuple, cast
 
 from sqlalchemy import ColumnElement, Exists, Select, and_, case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +37,8 @@ from modules.staff.model import Schedule, Staff, StaffBlock
 from modules.users.model import User
 
 MetricBucket = dict[str, Any]
+# Orden del detalle de ``/reports/summary`` por ``(starts_at, id)`` (F3-06).
+DetailOrder = Literal["asc", "desc"]
 
 # Tope de turnos de un export (F1-07, decision 19 del dueno). El archivo se
 # arma entero en memoria del proceso de la API; por encima de esto se pide
@@ -549,6 +551,7 @@ class ReportService:
         to_date: date,
         staff_id: str | None = None,
         page: slice | None = None,
+        order: DetailOrder = "asc",
     ) -> list[tuple[Appointment, Service, str, User]]:
         """Turnos del rango para el detalle. ``page`` acota EN SQL.
 
@@ -558,8 +561,18 @@ class ReportService:
 
         Del profesional viaja solo ``display_name`` (F3-04): cargar ``Staff``
         como entidad disparaba sus relaciones (dos sentencias mas por pagina).
+
+        ``order="desc"`` (F3-06, R6-03) invierte el orden estable: con ``limit``
+        el panel pide los N mas recientes en vez de traer el rango entero.
         """
         start_dt, end_dt = self._range_bounds(from_date, to_date)
+        # Desempate por id: el orden tiene que ser estable para que las paginas
+        # del detalle (B5-15) no repitan ni salteen turnos a la misma hora.
+        orden = (
+            (Appointment.starts_at.desc(), Appointment.id.desc())
+            if order == "desc"
+            else (Appointment.starts_at.asc(), Appointment.id.asc())
+        )
         query = self._select_in_range(
             Appointment,
             Service,
@@ -568,9 +581,7 @@ class ReportService:
             start_dt=start_dt,
             end_dt=end_dt,
             staff_id=staff_id,
-            # Desempate por id: el orden tiene que ser estable para que las paginas
-            # del detalle (B5-15) no repitan ni salteen turnos a la misma hora.
-        ).order_by(Appointment.starts_at.asc(), Appointment.id.asc())
+        ).order_by(*orden)
         if page is not None:
             offset = page.start or 0
             query = query.offset(offset).limit(page.stop - offset)
@@ -921,8 +932,10 @@ class ReportService:
         *,
         staff_id: str | None = None,
         page: slice | None = None,
+        order: DetailOrder = "asc",
     ) -> ReportSummaryResponse:
-        """``page`` acota el detalle ``appointments`` EN SQL (AUD2-B5-02).
+        """``page`` acota el detalle ``appointments`` EN SQL (AUD2-B5-02) y
+        ``order`` decide si el detalle va del mas viejo o del mas nuevo.
 
         Los totales, las cohortes y los top-5 son siempre del rango completo y
         se agregan en la base (regla 11): ninguna consulta trae una fila por
@@ -953,6 +966,7 @@ class ReportService:
             to_date=resolved_to,
             staff_id=staff_id,
             page=page,
+            order=order,
         )
         items = [
             _appointment_item(

@@ -21,7 +21,7 @@ from core.roles import STORE_MANAGERS, has_any_role, require_roles
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.appointments.repository import AppointmentAgendaRow
+from modules.appointments.repository import AppointmentSearchRow
 from modules.appointments.schemas import (
     AppointmentCreate,
     AppointmentFilterParams,
@@ -405,6 +405,11 @@ async def search_appointments(
     # de la base en el OFFSET y salia 500 (B1-03).
     page: int = Query(default=1, ge=1, le=10_000),
     page_size: int = Query(default=20, ge=1, le=100),
+    # F3-06 (aditivo): el total es el mismo en todas las paginas; el panel lo
+    # pide en la primera y lo saltea en las demas (``total`` vuelve null).
+    include_total: bool = Query(
+        default=True, description="false: no cuenta el total (total = null)"
+    ),
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> AppointmentSearchResponse:
@@ -426,7 +431,9 @@ async def search_appointments(
     )
 
     repo = AppointmentRepository(db)
-    total, rows = await repo.search_appointments(filters, user.store_id)
+    total, rows = await repo.search_appointments(
+        filters, user.store_id, include_total=include_total
+    )
     # El telefono del cliente solo lo ve un administrador (dato personal).
     show_phone = has_any_role(user, STORE_MANAGERS)
     results = [_to_search_result(row, show_phone=show_phone) for row in rows]
@@ -440,9 +447,9 @@ async def search_appointments(
 
 
 def _to_search_result(
-    row: AppointmentAgendaRow, *, show_phone: bool
+    row: AppointmentSearchRow, *, show_phone: bool
 ) -> AppointmentSearchResult:
-    appointment, service, staff, client = row
+    appointment, service, staff_id, staff_name, client = row
     return AppointmentSearchResult(
         public_id=appointment.public_id,
         starts_at=appointment.starts_at,
@@ -455,8 +462,8 @@ def _to_search_result(
         completed_at=appointment.completed_at,
         service_name=service.name,
         service_id=service.public_id,
-        staff_name=staff.display_name,
-        staff_id=staff.public_id,
+        staff_name=staff_name,
+        staff_id=staff_id,
         client_name=client.full_name or client.email,
         client_id=client.public_id,
         client_phone=client.phone if show_phone else None,

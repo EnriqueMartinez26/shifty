@@ -134,7 +134,8 @@ Una interfaz optimizada para móviles donde los clientes finales:
 | `GET` | `/appointments/availability` | Consulta slots libres para un servicio/fecha. |
 | `PATCH` | `/appointments/{id}/confirm` | Cambia estado a confirmado. |
 | `PATCH` | `/appointments/{id}/reschedule` | Reprograma un turno (cancela el anterior y crea uno nuevo atómicamente). |
-| `GET` | `/appointments/search` | Búsqueda con filtros dinámicos y paginación. |
+| `GET` | `/appointments/search` | Búsqueda con filtros dinámicos y paginación (`page`/`page_size`). `include_total=false` no cuenta el total y devuelve `total: null` (para las paginas 2 en adelante; F3-06). |
+| `GET` | `/reports/summary` | Resumen del rango con detalle paginado (`limit`/`offset`). `order=desc` devuelve el detalle del mas reciente al mas viejo; con `limit=6`, los 6 mas recientes (F3-06). |
 
 ---
 

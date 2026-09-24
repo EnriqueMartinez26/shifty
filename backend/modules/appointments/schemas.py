@@ -159,7 +159,8 @@ class AppointmentSearchResult(BaseModel):
 
 
 class AppointmentSearchResponse(BaseModel):
-    total: int
+    # ``None`` solo si el llamador pidio ``include_total=false`` (F3-06).
+    total: Optional[int]
     page: int
     page_size: int
     results: List[AppointmentSearchResult]

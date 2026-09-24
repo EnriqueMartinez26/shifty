@@ -28,7 +28,11 @@ from modules.reports.schemas import (
     ReportSummaryResponse,
     ReportTrendResponse,
 )
-from modules.reports.service import ExportTooLargeError, ReportService
+from modules.reports.service import (
+    DetailOrder,
+    ExportTooLargeError,
+    ReportService,
+)
 from modules.users.model import User
 from core.validation import PUBLIC_ID_PATTERN
 
@@ -64,6 +68,9 @@ async def get_report_summary(
     # la respuesta de hoy no cambia para rangos normales. Ambas cotas (regla 9).
     limit: int = Query(default=SUMMARY_DETAIL_DEFAULT_LIMIT, ge=1, le=5000),
     offset: int = Query(default=0, ge=0, le=100_000),
+    # F3-06 (aditivo): "desc" con `limit` trae los N turnos mas recientes del
+    # rango; antes el detalle iba siempre del mas viejo al mas nuevo.
+    order: DetailOrder = Query(default="asc"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ReportSummaryResponse:
@@ -75,6 +82,7 @@ async def get_report_summary(
             to_date,
             staff_id=staff_scope,
             page=slice(offset, offset + limit),
+            order=order,
         )
     except ValueError as exc:
         raise AppException(message=str(exc), http_status=400)
