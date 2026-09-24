@@ -115,7 +115,10 @@ async def tenant_bypass(session: AsyncSession) -> AsyncIterator[None]:
 
 # El pool solo se dimensiona para PostgreSQL. SQLite (tests) usa StaticPool,
 # que no acepta pool_size ni max_overflow.
-_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+# hide_parameters (PV-08): sin esto el texto de todo DBAPIError terminaba en
+# "[parameters: (...)]" con emails y telefonos, y de ahi al log db_error y a
+# Sentry.
+_engine_kwargs: dict[str, object] = {"pool_pre_ping": True, "hide_parameters": True}
 if settings.DATABASE_URL.startswith("postgresql"):
     _engine_kwargs.update(
         pool_size=settings.DB_POOL_SIZE,
