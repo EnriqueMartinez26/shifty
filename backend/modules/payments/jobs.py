@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -9,11 +9,13 @@ from functools import partial
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import Select, or_, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
+from core.config import settings
 from core.database import _apply_tenant_context
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware
@@ -63,6 +65,36 @@ from modules.payments.service import (
 # Ventana hacia atras que revisa la conciliacion. Mas alla de esto un pago
 # pendiente ya se considera abandonado.
 RECONCILIATION_LOOKBACK_DAYS = 30
+
+
+# Inbox y conciliacion (F1-20, R9-08): lote de 25 y presupuesto de 60 s para
+# la fase A. Antes eran 100 filas x hasta 20 s por consulta a MP sin tope: con
+# MP lento el hard time limit de Celery (150 s) mataba la tarea antes de la
+# fase B, no se aplicaba nada y la corrida siguiente retomaba las mismas 100.
+# El presupuesto se mira ANTES de cada consulta, asi que el peor caso es el
+# presupuesto mas una consulta, por debajo del soft time limit (120 s). Lo que
+# no entra no gasta un intento: lo toma la corrida siguiente.
+MP_BATCH_LIMIT = 25
+MP_PHASE_A_BUDGET_SECONDS = 60.0
+
+
+def _reloj() -> float:
+    """Reloj de los presupuestos de la fase A; los tests lo reemplazan."""
+    return time.monotonic()
+
+
+def _presupuesto_agotado(limite: float, *, job: str, sin_consultar: int) -> bool:
+    """True (y lo deja en el log) si la fase A ya no puede consultar a MP."""
+    if _reloj() < limite:
+        return False
+    logger.warning(
+        "mp_phase_a_budget_exhausted",
+        job=job,
+        sin_consultar=sin_consultar,
+        budget_seconds=MP_PHASE_A_BUDGET_SECONDS,
+    )
+    return True
+
 
 logger = structlog.get_logger()
 
@@ -244,7 +276,15 @@ async def _registrar_fallo(
     este ``attempts``. Con savepoint propio, el intento queda firme apenas se
     libera. Si ni siquiera eso se puede escribir, se registra y se sigue: el
     lote no se pierde por no poder anotar un fallo.
+
+    El soft time limit de Celery NO es un fallo del item (revision de f2b,
+    2026-09-24): ``SoftTimeLimitExceeded`` es una ``Exception`` y anotarlo
+    gastaba un ``attempts`` (regla 7) y dejaba seguir al lote hasta el hard
+    limit. Todo ``except Exception`` de este modulo lo deja pasar antes
+    (``tests/architecture/test_corte_de_tiempo_no_se_traga.py``).
     """
+    if isinstance(exc, SoftTimeLimitExceeded):
+        raise exc
     try:
         # Revertir el savepoint deja la fila EXPIRADA: ``register_failure``
         # lee ``attempts`` y ese acceso perezoso, fuera de un await, revienta
@@ -252,6 +292,8 @@ async def _registrar_fallo(
         await db.refresh(fila)
         async with db.begin_nested():
             fila.register_failure(str(exc))
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         logger.warning(
             "batch_register_failure_skipped",
@@ -260,8 +302,99 @@ async def _registrar_fallo(
         )
 
 
+@dataclass(frozen=True)
+class _ContextoDelLote:
+    """Lo que los mensajes del lote comparten por tienda, leido una vez (F1-23).
+
+    Antes cada aviso al dueno consultaba los admins de SU tienda y cada "sena
+    acreditada" leia su ``Store``: hasta dos SELECT por mensaje dentro de la
+    transaccion del ``FOR UPDATE SKIP LOCKED`` (R3-07, regla 12).
+    """
+
+    admins: Mapping[str, list[str]]
+    tiendas: Mapping[str, Any]
+    # appointment_id -> turno (None si no existe) de los mensajes que mandan
+    # un mail al cliente: la sena acreditada y los eventos del panel (F2-02).
+    turnos: Mapping[str, Appointment | None]
+
+
+# Eventos que no generan aviso al dueno: no necesitan sus admins. Los del
+# panel (F2-02) solo le escriben al cliente.
+_EVENTOS_SIN_AVISO_AL_DUENO = frozenset(
+    {EVENT_SLOT_RELEASED, "appointment.cancelled_by_block", *_MAILS_DEL_PANEL}
+)
+# Eventos con mail al cliente: necesitan su turno y su tienda.
+_EVENTOS_CON_MAIL_AL_CLIENTE = frozenset(
+    {NotificationType.PAYMENT_APPROVED.value, *_MAILS_DEL_PANEL}
+)
+
+
+def _turnos_con_detalle(ids: list[str]) -> Select[tuple[Appointment]]:
+    from sqlalchemy.orm import joinedload
+
+    return (
+        select(Appointment)
+        .options(joinedload(Appointment.service), joinedload(Appointment.staff))
+        .where(Appointment.id.in_(ids))
+    )
+
+
+async def _contexto_del_lote(
+    db: AsyncSession, messages: list[OutboxMessage]
+) -> _ContextoDelLote:
+    """Admins y tiendas del lote con un ``in_()`` cada uno, filtrados por tienda."""
+    from modules.stores.model import Store
+
+    con_aviso = {
+        m.store_id
+        for m in messages
+        if m.store_id and m.event_type not in _EVENTOS_SIN_AVISO_AL_DUENO
+    }
+    admins: dict[str, list[str]] = {}
+    if con_aviso:
+        filas = await db.execute(
+            select(User.store_id, User.email).where(
+                User.store_id.in_(con_aviso),
+                User.role == UserRole.ADMIN,
+                User.is_active.is_(True),
+                User.email.is_not(None),
+            )
+        )
+        for store_id, email in filas.all():
+            if store_id and email:
+                admins.setdefault(store_id, []).append(email)
+    con_mail = [
+        m
+        for m in messages
+        if m.store_id and m.event_type in _EVENTOS_CON_MAIL_AL_CLIENTE
+    ]
+    tiendas: dict[str, Any] = {}
+    turnos: dict[str, Appointment | None] = {}
+    if con_mail:
+        leidas = await db.execute(
+            select(Store).where(Store.id.in_({m.store_id for m in con_mail}))
+        )
+        tiendas = {tienda.id: tienda for tienda in leidas.scalars().all()}
+        ids = sorted(
+            {
+                str(m.payload.get("appointment_id"))
+                for m in con_mail
+                if isinstance(m.payload, dict) and m.payload.get("appointment_id")
+            }
+        )
+        turnos = {turno_id: None for turno_id in ids}
+        if ids:
+            for turno in (await db.execute(_turnos_con_detalle(ids))).scalars():
+                turnos[turno.id] = turno
+    return _ContextoDelLote(admins=admins, tiendas=tiendas, turnos=turnos)
+
+
 async def _plan_outbox_message(
-    db: AsyncSession, message: OutboxMessage, *, now: datetime
+    db: AsyncSession,
+    message: OutboxMessage,
+    *,
+    now: datetime,
+    contexto_del_lote: _ContextoDelLote,
 ) -> list[_Mail]:
     """Aplica en la base lo que pide un evento y devuelve sus mails.
 
@@ -304,7 +437,7 @@ async def _plan_outbox_message(
         ]
 
     if message.event_type in _MAILS_DEL_PANEL:
-        return await _panel_client_mail(db, message)
+        return await _panel_client_mail(db, message, contexto_del_lote)
 
     notification = _build_store_notification(message)
     if notification is None:
@@ -312,10 +445,14 @@ async def _plan_outbox_message(
     # La notificacion in-app es la fuente durable; el mail es un efecto
     # secundario que sale despues del commit.
     db.add(notification)
-    mails = await _store_owner_mails(db, notification)
+    mails = _store_owner_mails(
+        notification, contexto_del_lote.admins.get(notification.store_id, [])
+    )
     if message.event_type == NotificationType.PAYMENT_APPROVED.value:
         # La sena acreditada confirma el turno: el cliente tambien se entera.
-        confirmacion = await _client_confirmation_mail(db, notification.appointment_id)
+        confirmacion = await _client_confirmation_mail(
+            db, notification.appointment_id, contexto_del_lote
+        )
         if confirmacion is not None:
             mails.append(confirmacion)
     return mails
@@ -376,27 +513,7 @@ async def process_outbox_batch(
         .with_for_update(skip_locked=True)
     )
     messages = list(result.scalars().all())
-    now = datetime.now(timezone.utc)
-    processed = 0
-    failed = 0
-    # Ningun mail sale dentro del lote: el for solo persiste (los mails como
-    # filas email.send) y se despachan despues del commit (B2-01, F2-03).
-    for message in messages:
-        try:
-            # Savepoint por item (AUD2-B2-11, ver _registrar_fallo). El
-            # sellado va ADENTRO: lo tiene que volcar el flush de ESTE
-            # savepoint y no el del item siguiente, que puede revertirlo.
-            async with db.begin_nested():
-                mails = await _plan_outbox_message(db, message, now=now)
-                _persistir_mails(db, message, mails)
-                message.processed_at = now
-                message.error = None
-        except Exception as exc:
-            failed += 1
-            await _registrar_fallo(db, message, exc)
-        else:
-            processed += 1
-
+    processed, failed = await _plan_lote(db, messages)
     # Commit plano de AsyncSession, no el de TenantSession (ver docstring).
     await AsyncSession.commit(db)
     # Recien ahora, con la transaccion cerrada y processed_at persistido, se
@@ -419,6 +536,41 @@ async def process_outbox_batch(
         "failed": failed + vencimientos["failed"],
         "inspected": len(messages) + vencimientos["inspected"],
     }
+
+
+async def _plan_lote(
+    db: AsyncSession, messages: list[OutboxMessage]
+) -> tuple[int, int]:
+    """Planea cada mensaje del lote en su savepoint: (procesados, fallidos).
+
+    Extraida de ``process_outbox_batch`` al integrar F1-23 con F2-03 (regla
+    29). Ningun mail sale aca: el for solo persiste (los mails como filas
+    ``email.send``) y se despachan despues del commit (B2-01, F2-03).
+    """
+    contexto_del_lote = await _contexto_del_lote(db, messages)
+    now = datetime.now(timezone.utc)
+    processed = 0
+    failed = 0
+    for message in messages:
+        try:
+            # Savepoint por item (AUD2-B2-11, ver _registrar_fallo). El
+            # sellado va ADENTRO: lo tiene que volcar el flush de ESTE
+            # savepoint y no el del item siguiente, que puede revertirlo.
+            async with db.begin_nested():
+                mails = await _plan_outbox_message(
+                    db, message, now=now, contexto_del_lote=contexto_del_lote
+                )
+                _persistir_mails(db, message, mails)
+                message.processed_at = now
+                message.error = None
+        except SoftTimeLimitExceeded:
+            raise
+        except Exception as exc:
+            failed += 1
+            await _registrar_fallo(db, message, exc)
+        else:
+            processed += 1
+    return processed, failed
 
 
 async def _dispatch_pending_emails(
@@ -513,6 +665,8 @@ async def _send_one_pending_email(fila: OutboxMessage, smtp: Any) -> str | None:
         return "unknown_mail"
     try:
         resultado = await enviar(smtp=smtp, **argumentos)
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         logger.warning(
             "outbox_email_skipped",
@@ -670,6 +824,8 @@ async def _expire_claimed_preferences(
                 persist_refresh=partial(persist_gateway_refresh, db),
             )
             errores[reclamo.message_id] = (reclamo, None)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             logger.warning(
                 "preference_expire_failed",
@@ -858,26 +1014,32 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
 
 
 async def _load_client_mail(
-    db: AsyncSession, appointment_id: str | None, store_id: str | None = None
+    db: AsyncSession,
+    appointment_id: str | None,
+    contexto_del_lote: _ContextoDelLote,
+    store_id: str | None = None,
 ) -> tuple[Appointment, Any, dict[str, Any]] | None:
-    """(turno, tienda, detalles de plantilla) para un mail al cliente."""
+    """(turno, tienda, detalles de plantilla) para un mail al cliente.
+
+    Turno y tienda ya los leyo el lote con un ``in_()`` (F1-23, regla 12);
+    antes eran dos SELECT por mensaje. La consulta suelta queda solo para un
+    turno que el lote no pidio.
+    """
     if not appointment_id:
         return None
-    from sqlalchemy.orm import joinedload
-
     from modules.stores.model import Store
 
-    consulta = (
-        select(Appointment)
-        .options(joinedload(Appointment.service), joinedload(Appointment.staff))
-        .where(Appointment.id == appointment_id)
-    )
-    if store_id:
-        consulta = consulta.where(Appointment.store_id == store_id)
-    appointment = (await db.execute(consulta)).scalar_one_or_none()
-    if appointment is None:
+    if appointment_id in contexto_del_lote.turnos:
+        appointment = contexto_del_lote.turnos[appointment_id]
+    else:
+        appointment = (
+            await db.execute(_turnos_con_detalle([appointment_id]))
+        ).scalar_one_or_none()
+    if appointment is None or (store_id and appointment.store_id != store_id):
         return None
-    store = await db.get(Store, appointment.store_id)
+    store = contexto_del_lote.tiendas.get(appointment.store_id) or await db.get(
+        Store, appointment.store_id
+    )
     details = build_client_details(
         appointment, appointment.service, appointment.staff, store
     )
@@ -885,10 +1047,10 @@ async def _load_client_mail(
 
 
 async def _client_confirmation_mail(
-    db: AsyncSession, appointment_id: str | None
+    db: AsyncSession, appointment_id: str | None, contexto_del_lote: _ContextoDelLote
 ) -> _Mail | None:
     """Describe (no manda) el "turno confirmado" al cliente."""
-    cargado = await _load_client_mail(db, appointment_id)
+    cargado = await _load_client_mail(db, appointment_id, contexto_del_lote)
     if cargado is None:
         return None
     appointment, _store, details = cargado
@@ -899,7 +1061,9 @@ async def _client_confirmation_mail(
     )
 
 
-async def _panel_client_mail(db: AsyncSession, message: OutboxMessage) -> list[_Mail]:
+async def _panel_client_mail(
+    db: AsyncSession, message: OutboxMessage, contexto_del_lote: _ContextoDelLote
+) -> list[_Mail]:
     """Describe el mail al cliente de un evento del panel (F2-02).
 
     El turno se relee: si ya no esta en un estado que haga cierto el aviso (un
@@ -912,7 +1076,10 @@ async def _panel_client_mail(db: AsyncSession, message: OutboxMessage) -> list[_
     kind, estados = _MAILS_DEL_PANEL[message.event_type]
     payload = message.payload if isinstance(message.payload, dict) else {}
     cargado = await _load_client_mail(
-        db, str(payload.get("appointment_id") or ""), message.store_id
+        db,
+        str(payload.get("appointment_id") or ""),
+        contexto_del_lote,
+        message.store_id,
     )
     if cargado is None:
         return []
@@ -925,29 +1092,20 @@ async def _panel_client_mail(db: AsyncSession, message: OutboxMessage) -> list[_
     return [_Mail(kind, {"email": email, "details": details})]
 
 
-async def _store_owner_mails(
-    db: AsyncSession, notification: Notification
-) -> list[_Mail]:
+def _store_owner_mails(notification: Notification, admins: list[str]) -> list[_Mail]:
     """Describe (no manda) la replica por mail de la notificacion in-app, uno
     por administrador de la tienda.
 
-    Es best-effort: si falla el envio no se pierde el evento, porque la
-    notificacion del panel ya quedo persistida.
+    Los admins los resolvio el lote con un ``in_()`` (F1-23). Es best-effort:
+    si falla el envio no se pierde el evento, porque la notificacion del panel
+    ya quedo persistida.
     """
-    result = await db.execute(
-        select(User.email).where(
-            User.store_id == notification.store_id,
-            User.role == UserRole.ADMIN,
-            User.is_active.is_(True),
-            User.email.is_not(None),
-        )
-    )
     return [
         _Mail(
             "store_notification",
             {"email": email, "title": notification.title, "body": notification.body},
         )
-        for email in result.scalars().all()
+        for email in admins
         if email
     ]
 
@@ -972,7 +1130,7 @@ def _inbox_batch_query(
 async def process_webhook_inbox_batch(
     db: AsyncSession,
     *,
-    limit: int = 100,
+    limit: int = MP_BATCH_LIMIT,
     store_id: str | None = None,
 ) -> dict[str, int]:
     async with _exclusive_job(db, INBOX_JOB_LOCK) as tomado:
@@ -1010,19 +1168,11 @@ async def _process_webhook_inbox_batch(
     enriquecidos = await _enrich_inbox_payloads(db, pendientes, configs)
     await _apply_tenant_context(db)
 
-    result = await db.execute(
-        consulta.with_for_update(skip_locked=True).execution_options(
-            populate_existing=True
-        )
-    )
+    filas = await _inbox_fase_b(db, list(enriquecidos))
     processed = 0
     failed = 0
     inspected = 0
-    for inbox in result.scalars().all():
-        if inbox.id not in enriquecidos:
-            # Llego despues de la fase A: sin detalle de MP no se resuelve, y
-            # gastarle un intento seria mentir. Lo toma la corrida siguiente.
-            continue
+    for inbox in filas:
         inspected += 1
         try:
             # Savepoint por item (AUD2-B2-11): ver el comentario del lote del
@@ -1040,6 +1190,8 @@ async def _process_webhook_inbox_batch(
                     )
                 if applied:
                     inbox.mark_processed()
+        except SoftTimeLimitExceeded:
+            raise
         except Exception as exc:
             failed += 1
             await _registrar_fallo(db, inbox, exc)
@@ -1056,6 +1208,28 @@ async def _process_webhook_inbox_batch(
     return {"processed": processed, "failed": failed, "inspected": inspected}
 
 
+async def _inbox_fase_b(db: AsyncSession, ids: list[str]) -> list[WebhookInbox]:
+    """Filas de la fase B, CON lock: SOLO las que la fase A consulto (F1-20).
+
+    Lo que llego despues o no entro en el presupuesto no tiene detalle de MP,
+    y gastarle un intento seria mentir: lo toma la corrida siguiente.
+    """
+    if not ids:
+        return []
+    result = await db.execute(
+        select(WebhookInbox)
+        .where(
+            WebhookInbox.id.in_(ids),
+            WebhookInbox.processed_at.is_(None),
+            WebhookInbox.is_active.is_(True),
+        )
+        .order_by(WebhookInbox.created_at.asc())
+        .with_for_update(skip_locked=True)
+        .execution_options(populate_existing=True)
+    )
+    return list(result.scalars().all())
+
+
 async def _enrich_inbox_payloads(
     db: AsyncSession, pendientes: list[WebhookInbox], configs: GatewayConfigs
 ) -> dict[str, dict[str, JsonValue]]:
@@ -1063,13 +1237,20 @@ async def _enrich_inbox_payloads(
 
     Un evento que no se puede enriquecer conserva su payload crudo: ``enrich``
     ya devuelve el original ante cualquier fallo, y la fase B decide con eso.
+    Con el presupuesto agotado deja de consultar: lo que falta no figura en el
+    resultado y la fase B no lo toca (F1-20).
     """
     persistir = partial(persist_gateway_refresh, db)
     enriquecidos: dict[str, dict[str, JsonValue]] = {}
-    for inbox in pendientes:
+    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    for indice, inbox in enumerate(pendientes):
         if inbox.provider != "mercadopago" or not inbox.store_id:
             enriquecidos[inbox.id] = inbox.payload
             continue
+        if _presupuesto_agotado(
+            limite, job="inbox", sin_consultar=len(pendientes) - indice
+        ):
+            break
         enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
             db,
             store_id=inbox.store_id,
@@ -1093,8 +1274,8 @@ async def _lock_appointment_or_skip(db: AsyncSession, payment: Payment) -> bool:
     return tomado.scalar_one_or_none() is not None
 
 
-def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
-    cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
+def _reconcilable_payments() -> Select[tuple[Payment]]:
+    """Cobros de MP pendientes de una tienda con MP configurado."""
     return (
         select(Payment)
         .join(
@@ -1105,16 +1286,26 @@ def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
             Payment.status == PaymentStatus.PENDING.value,
             Payment.provider == "mercadopago",
             Payment.is_active.is_(True),
-            Payment.created_at >= cutoff,
             PaymentGatewayConfig.provider == "mercadopago",
         )
+    )
+
+
+def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
+    cutoff = now - timedelta(days=RECONCILIATION_LOOKBACK_DAYS)
+    # Edad minima (F1-20, decision 20): un cobro recien creado es un cliente
+    # que sigue en el checkout; preguntarle a MP por el gasta la corrida.
+    min_age = now - timedelta(minutes=settings.RECONCILIATION_MIN_AGE_MINUTES)
+    return (
+        _reconcilable_payments()
+        .where(Payment.created_at >= cutoff, Payment.created_at <= min_age)
         .order_by(Payment.created_at.asc())
         .limit(limit)
     )
 
 
 async def reconcile_pending_payments(
-    db: AsyncSession, *, limit: int = 100
+    db: AsyncSession, *, limit: int = MP_BATCH_LIMIT
 ) -> dict[str, int]:
     """Consulta a Mercado Pago los cobros que siguen pendientes en Shifty.
 
@@ -1129,8 +1320,32 @@ async def reconcile_pending_payments(
         return await _reconcile_pending_payments(db, limit=limit)
 
 
+async def reconcile_one_payment(db: AsyncSession, payment_id: str) -> dict[str, int]:
+    """Concilia UN cobro a pedido del poll publico (F1-21, decision 20).
+
+    "Pague y sigue pendiente": el cliente volvio de MP y el webhook no llego o
+    no se pudo aplicar. Mismas dos fases que la conciliacion general, sin su
+    edad minima (el cliente ya dijo que pago) y sin su advisory lock: con el
+    beat adentro no se saltearia, y la exclusion con el lote la dan los locks
+    de fila (turno con SKIP LOCKED, despues el pago) y que la fase B solo
+    toma el cobro si sigue pendiente. El pedido llega deduplicado por cobro
+    (``modules/payments/on_demand.py``).
+    """
+    return await _reconcile(
+        db, _reconcilable_payments().where(Payment.id == payment_id)
+    )
+
+
 async def _reconcile_pending_payments(
     db: AsyncSession, *, limit: int
+) -> dict[str, int]:
+    return await _reconcile(
+        db, _reconciliation_query(limit, datetime.now(timezone.utc))
+    )
+
+
+async def _reconcile(
+    db: AsyncSession, consulta: Select[tuple[Payment]]
 ) -> dict[str, int]:
     """Las mismas dos fases que el inbox (AUD2-B2-02, 2026-09-20).
 
@@ -1140,14 +1355,13 @@ async def _reconcile_pending_payments(
     ``lock_timeout = 5s`` en el rol de la app y MP lento, una corrida hacia
     fallar los webhooks y el boton "liberar turno" del panel.
     """
-    consulta = _reconciliation_query(limit, datetime.now(timezone.utc))
     pendientes = list((await db.execute(consulta)).scalars().all())
     # La configuracion es por tienda, no por cobro: una lectura con in_() antes
     # del for en vez de dos por cobro, una en la consulta a MP y otra en la
     # validacion de integridad (regla 12; 2026-09-20, AUD2-B2-06).
     configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
     await AsyncSession.commit(db)
-    remotos, fallidos = await _remote_payments_for_reconciliation(
+    remotos, fallidos, consultados = await _remote_payments_for_reconciliation(
         db, pendientes, configs
     )
     await _apply_tenant_context(db)
@@ -1158,15 +1372,20 @@ async def _reconcile_pending_payments(
     # exclusion entre corridas ya la da el advisory lock (``_exclusive_job``);
     # la exclusion con un webhook o un "liberar" la dan los locks de fila que
     # se toman abajo, cobro por cobro y en orden.
-    result = await db.execute(consulta.execution_options(populate_existing=True))
+    # Solo lo que la fase A consulto: un cobro que aparecio despues o que no
+    # entro en el presupuesto no tiene respuesta de MP y lo toma la corrida
+    # siguiente en vez de contarse como inspeccionado (F1-20).
+    filas: list[Payment] = []
+    if consultados:
+        result = await db.execute(
+            consulta.where(Payment.id.in_(consultados)).execution_options(
+                populate_existing=True
+            )
+        )
+        filas = list(result.scalars().all())
     reconciled = 0
     inspected = 0
-    # Un cobro que aparecio despues de la fase A no tiene respuesta de MP: lo
-    # toma la corrida siguiente en vez de contarse como inspeccionado.
-    vistos = {p.id for p in pendientes}
-    for payment in result.scalars().all():
-        if payment.id not in vistos:
-            continue
+    for payment in filas:
         remote = remotos.get(payment.id)
         if not remote:
             # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
@@ -1193,6 +1412,8 @@ async def _reconcile_pending_payments(
                     payload={"data": remote, "status": remote.get("status")},
                     configs=configs,
                 )
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             fallidos += 1
         else:
@@ -1205,23 +1426,33 @@ async def _reconcile_pending_payments(
 
 async def _remote_payments_for_reconciliation(
     db: AsyncSession, pendientes: list[Payment], configs: GatewayConfigs
-) -> tuple[dict[str, dict[str, Any]], int]:
-    """{payment.id: pago remoto} y cuantos no se pudieron consultar.
+) -> tuple[dict[str, dict[str, Any]], int, list[str]]:
+    """{payment.id: pago remoto}, cuantos fallaron y cuales se consultaron.
 
-    Corre en la fase A: sin lock y con la transaccion cerrada.
+    Corre en la fase A: sin lock y con la transaccion cerrada, y con el
+    presupuesto de F1-20: lo que no entra no se consulta ni se cuenta.
     """
     persistir = partial(persist_gateway_refresh, db)
     remotos: dict[str, dict[str, Any]] = {}
     fallidos = 0
-    for payment in pendientes:
+    consultados: list[str] = []
+    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    for indice, payment in enumerate(pendientes):
+        if _presupuesto_agotado(
+            limite, job="reconciliation", sin_consultar=len(pendientes) - indice
+        ):
+            break
+        consultados.append(payment.id)
         try:
             remote = await _fetch_remote_payment(db, payment, configs, persistir)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             fallidos += 1
             continue
         if remote:
             remotos[payment.id] = remote
-    return remotos, fallidos
+    return remotos, fallidos, consultados
 
 
 async def _fetch_remote_payment(
@@ -1308,6 +1539,11 @@ async def _release_job_lock(conn: AsyncConnection, params: dict[str, object]) ->
         await conn.execute(
             text("SELECT pg_advisory_unlock(:namespace, hashtext(:clave))"), params
         )
+    except SoftTimeLimitExceeded:
+        # Cortado a mitad del unlock: la conexion no puede volver al pool con
+        # el lock de sesion tomado.
+        await conn.invalidate()
+        raise
     except Exception as exc:
         logger.warning(
             "job_lock_unlock_failed",
@@ -1350,6 +1586,11 @@ async def _exclusive_job(db: AsyncSession, name: str) -> AsyncIterator[bool]:
         finally:
             if tomado:
                 await _release_job_lock(conn, params)
+
+
+# Nombre publico para los jobs de otros modulos (retencion, F1-19): mismo
+# lock de sesion y mismo namespace. Los de este modulo usan ``_exclusive_job``.
+exclusive_job = _exclusive_job
 
 
 async def expire_unpaid_appointments(
@@ -1499,6 +1740,8 @@ async def _fetch_remote_payments(
             continue
         try:
             remote = await _fetch_remote_payment(db, payment, configs, persist_refresh)
+        except SoftTimeLimitExceeded:
+            raise
         except Exception:
             continue
         if remote:

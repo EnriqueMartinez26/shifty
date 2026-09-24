@@ -190,6 +190,15 @@ class Payment(BaseEntity):
 
 class WebhookInbox(BaseEntity):
     __tablename__ = "webhook_inbox"
+    # Historico que lee la purga de retencion (F1-19, migracion e5f7a9b1c3d6).
+    __table_args__ = (
+        Index(
+            "ix_webhook_inbox_processed_history",
+            "processed_at",
+            postgresql_where=text("processed_at IS NOT NULL"),
+            sqlite_where=text("processed_at IS NOT NULL"),
+        ),
+    )
 
     store_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)
     provider: Mapped[str] = mapped_column(String(50), default="mercadopago")
@@ -232,6 +241,13 @@ class OutboxMessage(BaseEntity):
             "processed_at",
             postgresql_where=text("error = 'claimed:payment.preference.expire'"),
             sqlite_where=text("error = 'claimed:payment.preference.expire'"),
+        ),
+        # Historico que lee la purga de retencion (F1-19, migracion e5f7a9b1c3d6).
+        Index(
+            "ix_outbox_processed_history",
+            "processed_at",
+            postgresql_where=text("processed_at IS NOT NULL"),
+            sqlite_where=text("processed_at IS NOT NULL"),
         ),
     )
 

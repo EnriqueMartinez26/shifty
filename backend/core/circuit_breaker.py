@@ -5,6 +5,8 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded
+
 
 class CircuitBreakerOpenError(RuntimeError):
     def __init__(self, name: str, retry_after_seconds: float) -> None:
@@ -53,6 +55,12 @@ class AsyncCircuitBreaker:
 
         try:
             result = await operation()
+        except SoftTimeLimitExceeded:
+            # El corte de Celery no es una falla del proveedor ni un exito
+            # (revision de f2b, 2026-09-24): no abre ni cierra el circuito,
+            # solo suelta la sonda si esta llamada lo era.
+            self._release_probe(probe_call)
+            raise
         except Exception as exc:
             record_failure = (
                 should_record_failure(exc) if should_record_failure else True
@@ -94,6 +102,10 @@ class AsyncCircuitBreaker:
                 return True
 
             return False
+
+    def _release_probe(self, probe_call: bool) -> None:
+        if probe_call:
+            self._probe_in_flight = False
 
     async def _mark_success(self, probe_call: bool) -> None:
         async with self._lock:

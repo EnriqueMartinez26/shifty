@@ -27,6 +27,7 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from core.config import settings
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from core.database import _apply_tenant_context, set_tenant_context
@@ -204,6 +205,8 @@ async def test_dos_corridas_de_conciliacion_no_consultan_dos_veces_el_mismo_cobr
     app_sessions: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     llamadas: list[str] = []
     _mercadopago_lento(monkeypatch, llamadas)

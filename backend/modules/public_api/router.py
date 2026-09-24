@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Annotated
 
 import structlog
-from fastapi import Depends, Path, Query, Request, status
+from fastapi import BackgroundTasks, Depends, Path, Query, Request, status
 from core.router import CanonicalAPIRouter
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -41,6 +41,10 @@ from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
 )
 from modules.payments.model import Payment
+from modules.payments.on_demand import (
+    request_on_demand_reconciliation,
+    wants_on_demand_reconciliation,
+)
 from modules.promotions.service import quote_promotion
 from modules.public_api.repository import PublicRepository
 from modules.public_api.service import (
@@ -514,7 +518,9 @@ async def get_public_payment_status(
     payment_public_id: PublicIdPath,
     request: Request,
     store_public_id: PublicIdQuery,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> PublicPaymentStatusResponse:
     await enforce_rate_limit(
         request,
@@ -537,6 +543,12 @@ async def get_public_payment_status(
         if not row:
             raise AppointmentNotFoundException(public_id=payment_public_id)
         payment, appointment = row
+        if wants_on_demand_reconciliation(payment):
+            # F1-21: "pague y sigue pendiente". Despues de la respuesta: el
+            # poll no espera ni a Redis ni al broker.
+            background_tasks.add_task(
+                request_on_demand_reconciliation, redis, payment.id
+            )
         return PublicPaymentStatusResponse(
             payment_public_id=payment.id,
             appointment_public_id=appointment.public_id,

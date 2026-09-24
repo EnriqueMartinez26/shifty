@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.payments.jobs import (
@@ -162,6 +163,8 @@ async def test_reconciliation_recovers_a_payment_whose_webhook_never_arrived(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Si la notificacion nunca llego, el cobro se recupera preguntandole a Mercado Pago."""
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
         client, slug="tienda-concilia-job", email="concilia-job@test.com"
