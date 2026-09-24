@@ -24,10 +24,15 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+from core.config import settings
 import modules.payments.on_demand as on_demand
-import modules.payments.router as payments_router
 from modules.payments.jobs import reconcile_one_payment
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import (
+    WEBHOOK_INBOX_MAX_ATTEMPTS,
+    Payment,
+    PaymentStatus,
+    WebhookInbox,
+)
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
     create_service,
@@ -59,28 +64,67 @@ async def test_un_webhook_que_no_se_aplico_reintenta_el_inbox_a_los_15_s(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cola = _Cola()
-    monkeypatch.setattr(payments_router, "enqueue", cola)
+    monkeypatch.setattr(on_demand, "enqueue", cola)
     store_public_id, token = await register_and_login(
         client, slug="f121-webhook", email="f121-webhook@test.com"
     )
     await _enable_payments(client, token)
     await _configure_gateway(client, token)
 
-    respuesta = await client.post(
+    for clave in ("a", "b"):
+        respuesta = await _webhook(client, store_public_id, clave)
+        assert respuesta.status_code == 200, respuesta.text
+        cuerpo = respuesta.json()
+        assert cuerpo.get("data", cuerpo)["applied"] is False
+
+    # Revision de f2b: una rafaga de webhooks fallidos de la misma tienda
+    # encola UN reintento cada 30 s (SET NX EX 30 por tienda).
+    assert cola.encolados == [("process_payment_webhook_inbox", (), {"countdown": 15})]
+
+
+async def _webhook(client: AsyncClient, store_public_id: str, clave: str) -> Any:
+    return await client.post(
         f"/payments/webhooks/mercadopago?store_id={store_public_id}",
-        json={"id": "evt-f121", "type": "payment", "data": {"id": "pay-f121"}},
+        json={"id": f"evt-f121-{clave}", "type": "payment", "data": {"id": clave}},
         headers=webhook_signature_headers(
             secret="secret-demo",
-            data_id="pay-f121",
-            request_id="req-f121",
+            data_id=clave,
+            request_id=f"req-f121-{clave}",
             ts="1710000000",
         ),
     )
 
+
+@pytest.mark.asyncio
+async def test_un_webhook_con_los_intentos_agotados_no_encola_reintento(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cola = _Cola()
+    monkeypatch.setattr(on_demand, "enqueue", cola)
+    store_public_id, token = await register_and_login(
+        client, slug="f121-agotado", email="f121-agotado@test.com"
+    )
+    await _enable_payments(client, token)
+    await _configure_gateway(client, token)
+    await _webhook(client, store_public_id, "x")
+    await test_session.execute(
+        update(WebhookInbox).values(attempts=WEBHOOK_INBOX_MAX_ATTEMPTS - 1)
+    )
+    await test_session.commit()
+    cola.encolados.clear()
+    # Sin deduplicacion: lo unico que puede frenar el reintento es el techo.
+    import tests.conftest as raiz
+
+    monkeypatch.setattr(raiz.MockRedis, "set", _set_sin_dedup)
+
+    respuesta = await _webhook(client, store_public_id, "x")
+
     assert respuesta.status_code == 200, respuesta.text
-    cuerpo = respuesta.json()
-    assert cuerpo.get("data", cuerpo)["applied"] is False
-    assert cola.encolados == [("process_payment_webhook_inbox", (), {"countdown": 15})]
+    assert cola.encolados == []
+
+
+async def _set_sin_dedup(self: Any, key: str, value: object, **_: Any) -> bool:
+    return True
 
 
 async def _cobro_pendiente(
@@ -158,8 +202,22 @@ async def test_el_poll_pide_conciliar_un_cobro_pendiente_una_vez_cada_15_s(
     for _ in range(3):
         assert await _estado(client, store_public_id, cobro) == "pending"
 
-    # Tres polls en la misma ventana de 15 s: una sola conciliacion.
-    assert cola.encolados == [("reconcile_payment_on_demand", (cobro,), {})]
+    # Tres polls en la misma ventana de 15 s: una sola conciliacion, que vence
+    # en la cola a los 15 s (el poll la vuelve a pedir si hace falta).
+    assert cola.encolados == [
+        ("reconcile_payment_on_demand", (cobro,), {"expires": 15})
+    ]
+
+    # Pasada la edad minima de la conciliacion general, el lote lo cubre.
+    cola.encolados.clear()
+    await _envejecer(
+        test_session, cobro, settings.RECONCILIATION_MIN_AGE_MINUTES * 60 + 5
+    )
+    import tests.conftest as raiz
+
+    monkeypatch.setattr(raiz.MockRedis, "set", _set_sin_dedup)
+    assert await _estado(client, store_public_id, cobro) == "pending"
+    assert cola.encolados == []
 
 
 @pytest.mark.asyncio
