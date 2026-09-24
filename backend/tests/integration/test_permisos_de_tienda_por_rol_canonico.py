@@ -22,8 +22,10 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
 )
+from tests.unit.imagenes_sinteticas import png
 
-_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 128
+# Con IHDR: desde F1-26 una imagen sin dimensiones legibles se rechaza.
+_PNG = png(64, 64)
 
 
 async def _escrituras(client: AsyncClient, token: str) -> dict[str, int]:

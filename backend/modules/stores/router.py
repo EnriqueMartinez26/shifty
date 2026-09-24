@@ -24,12 +24,7 @@ from core.roles import STORE_MANAGERS, has_any_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
-from modules.stores.media import (
-    ALLOWED_KINDS,
-    MAX_IMAGE_BYTES,
-    detect_image_type,
-    exceeds_pixel_budget,
-)
+from modules.stores.media import ALLOWED_KINDS, IMAGE_CAPS, validate_image
 from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.billing.service import get_active_subscription, today_local
 from modules.billing.subscription_rules import outlook
@@ -282,36 +277,11 @@ async def upload_store_media(
             error_code="INVALID_MEDIA_KIND",
         )
 
-    # Cota de tamano antes de materializar: se leen a lo sumo MAX+1 bytes para
+    # Cota de tamano antes de materializar: se leen a lo sumo tope+1 bytes para
     # distinguir "justo en el limite" de "se paso" sin cargar un blob gigante.
-    data = await file.read(MAX_IMAGE_BYTES + 1)
-    if len(data) > MAX_IMAGE_BYTES:
-        raise AppException(
-            "La imagen supera el maximo de 2 MB",
-            http_status=413,
-            error_code="MEDIA_TOO_LARGE",
-        )
-    if not data:
-        raise AppException("Archivo vacio", http_status=422, error_code="EMPTY_MEDIA")
-
-    # Validacion por MAGIC BYTES, no por el Content-Type declarado (falsificable).
-    # SVG queda excluido: puede ejecutar JS y volverse XSS al servirse inline.
-    content_type = detect_image_type(data)
-    if content_type is None:
-        raise AppException(
-            "Formato no permitido. Solo PNG, JPEG o WebP.",
-            http_status=422,
-            error_code="UNSUPPORTED_MEDIA_TYPE",
-        )
-
-    # Dentro de 2MB entra una imagen que declara dimensiones enormes (bomba de
-    # pixeles): rechaza el navegador del visitante al decodificarla.
-    if exceeds_pixel_budget(data, content_type):
-        raise AppException(
-            "La imagen tiene demasiados pixeles (maximo 25 megapixeles).",
-            http_status=422,
-            error_code="IMAGE_TOO_LARGE_DIMENSIONS",
-        )
+    # Topes por tipo, por magic bytes y fail-closed (F1-26): ver media.py.
+    data = await file.read(IMAGE_CAPS[kind].max_bytes + 1)
+    content_type = validate_image(data, kind)
 
     store = await _get_current_store(user, db)
 

@@ -11,11 +11,23 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
 )
+from tests.unit.imagenes_sinteticas import jpeg, png, webp_vp8l
 
-# PNG minimo valido: firma + relleno.
-_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 128
-_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 128
+# PNG con IHDR legible: desde F1-26 una imagen sin dimensiones se rechaza.
+_PNG = png(64, 64)
 _SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+
+
+async def _subir(
+    client: AsyncClient, token: str, kind: str, data: bytes, nombre: str = "img"
+) -> tuple[int, dict[str, object]]:
+    res = await client.post(
+        "/stores/me/media",
+        headers=auth_headers(token),
+        data={"kind": kind},
+        files={"file": (nombre, data, "application/octet-stream")},
+    )
+    return res.status_code, res.json()
 
 
 @pytest.mark.asyncio
@@ -95,3 +107,70 @@ async def test_serve_missing_media_is_404(client: AsyncClient) -> None:
     res = await client.get("/stores/media/01JZZZZZZZZZZZZZZZZZZZZZZZ")
     assert res.status_code == 404
     assert res.json()["error_code"] == "MEDIA_NOT_FOUND"
+
+
+# -- F1-26: topes por tipo, fail-closed ------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "cover"])
+async def test_webp_lossless_gigante_es_422(client: AsyncClient, kind: str) -> None:
+    # 2026-09-24 (R10-05): un VP8L no se parseaba y 16384 x 16384 (268 MP)
+    # entraba en 2 MB como si no tuviera dimensiones.
+    _, token = await register_and_login(
+        client, slug=f"media-vp8l-{kind}", email=f"media-vp8l-{kind}@example.com"
+    )
+    status, body = await _subir(client, token, kind, webp_vp8l(16384, 16384))
+    assert status == 422, body
+    assert body["error_code"] == "IMAGE_TOO_LARGE_DIMENSIONS"
+
+
+@pytest.mark.asyncio
+async def test_imagen_sin_dimensiones_legibles_es_422(client: AsyncClient) -> None:
+    _, token = await register_and_login(
+        client, slug="media-sin-ihdr", email="media-sin-ihdr@example.com"
+    )
+    sin_ihdr = b"\x89PNG\r\n\x1a\n" + b"\x00" * 128
+    status, body = await _subir(client, token, "logo", sin_ihdr)
+    assert status == 422, body
+    assert body["error_code"] == "INVALID_IMAGE"
+
+
+@pytest.mark.asyncio
+async def test_el_logo_tiene_tope_de_1_mb_y_la_portada_de_2(
+    client: AsyncClient,
+) -> None:
+    _, token = await register_and_login(
+        client, slug="media-bytes", email="media-bytes@example.com"
+    )
+    base = png(100, 100)
+    un_mb_y_algo = base + b"\x00" * (1024 * 1024 + 1 - len(base))
+    status, body = await _subir(client, token, "logo", un_mb_y_algo)
+    assert status == 413, body
+    assert body["error_code"] == "MEDIA_TOO_LARGE"
+    status, body = await _subir(client, token, "cover", un_mb_y_algo)
+    assert status == 200, body
+
+
+@pytest.mark.asyncio
+async def test_el_logo_tiene_tope_de_2048_por_lado(client: AsyncClient) -> None:
+    _, token = await register_and_login(
+        client, slug="media-lado", email="media-lado@example.com"
+    )
+    status, body = await _subir(client, token, "logo", png(2049, 100))
+    assert status == 422, body
+    assert body["error_code"] == "IMAGE_TOO_LARGE_DIMENSIONS"
+    status, body = await _subir(client, token, "cover", png(2049, 100))
+    assert status == 200, body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "cover"])
+async def test_la_foto_de_referencia_entra_como_logo_y_portada(
+    client: AsyncClient, kind: str
+) -> None:
+    _, token = await register_and_login(
+        client, slug=f"media-ref-{kind}", email=f"media-ref-{kind}@example.com"
+    )
+    status, body = await _subir(client, token, kind, jpeg(1061, 1460), "foto.jpg")
+    assert status == 200, body

@@ -1,19 +1,54 @@
-"""Validacion y limites de las imagenes subidas por la tienda (logo/portada).
+"""Validacion y topes de las imagenes subidas por la tienda (regla 19).
 
 La validacion es por MAGIC BYTES, no por el Content-Type que declara el cliente
 (que es falsificable). SVG queda EXCLUIDO a proposito: puede embeber JavaScript y
 convertirse en XSS almacenado cuando se sirve inline.
+
+Topes por tipo y FAIL-CLOSED (F1-26, decision 13 del plan de rendimiento,
+2026-09-24). El tope unico de 25 MP era "best effort": si no se podian leer
+las dimensiones, la imagen pasaba, y un WebP lossless (``VP8L``) nunca se
+leia. 16384 x 16384 (268 MP, ~1 GB al decodificar en el navegador de quien
+visita el portal) entraba en 2 MB. Ahora una imagen cuyas dimensiones no se
+pueden leer se rechaza. Sin Pillow: se leen solo los headers (dependencia
+nativa, regla 19); redimensionar es otra decision.
 """
 
 import struct
+from dataclasses import dataclass
 from typing import Callable
 
-MAX_IMAGE_BYTES = 2 * 1024 * 1024  # 2 MB
-# Tope de pixeles: dentro de 2MB entra un PNG/WebP declarando 30000x30000
-# (~3.6GB al decodificar) = bomba de pixeles para el navegador del visitante.
-# 25 MP (~5000x5000) es holgado para un logo/portada real.
-MAX_IMAGE_PIXELS = 25_000_000
+from core.exceptions import AppException
+
+
+@dataclass(frozen=True)
+class ImageCaps:
+    """Tope de un tipo de imagen. El lado largo y el corto se miden sin
+    importar la orientacion: una portada vertical de 2160 x 3840 entra."""
+
+    max_bytes: int
+    max_long_side: int
+    max_short_side: int
+
+    @property
+    def max_pixels(self) -> int:
+        # 4 MP / 8 MP / 2,6 MP del plan son estos productos: un tope de
+        # pixeles menor haria inalcanzable la dimension que el plan permite.
+        return self.max_long_side * self.max_short_side
+
+
+_MB = 1024 * 1024
+
+# Se muestran a 40-200 px (logo), <= 1920 px de ancho (portada) y 48-400 px
+# (servicio): los topes dejan margen para pantallas de alta densidad.
+IMAGE_CAPS: dict[str, ImageCaps] = {
+    "logo": ImageCaps(max_bytes=1 * _MB, max_long_side=2048, max_short_side=2048),
+    "cover": ImageCaps(max_bytes=2 * _MB, max_long_side=3840, max_short_side=2160),
+    "service": ImageCaps(max_bytes=1 * _MB, max_long_side=1600, max_short_side=1600),
+}
+# Tipos que se suben desde /stores/me/media.
 ALLOWED_KINDS = ("logo", "cover")
+# Lo que se lee de un upload antes de validar: el mayor de los topes.
+MAX_IMAGE_BYTES = max(caps.max_bytes for caps in IMAGE_CAPS.values())
 
 _SNIFFERS: dict[str, Callable[[bytes], bool]] = {
     "image/png": lambda d: d[:8] == b"\x89PNG\r\n\x1a\n",
@@ -32,60 +67,151 @@ def detect_image_type(data: bytes) -> str | None:
 
 
 def _png_dimensions(data: bytes) -> tuple[int, int] | None:
-    # IHDR va inmediatamente despues de la firma de 8 bytes: width/height son
-    # uint32 big-endian en los offsets 16 y 20.
-    if len(data) >= 24 and data[12:16] == b"IHDR":
-        return struct.unpack(">II", data[16:24])
-    return None
+    # El primer chunk tiene que ser IHDR, pegado a la firma: tipo en el
+    # offset 12, ancho y alto uint32 big-endian en 16 y 20.
+    if len(data) < 24 or data[12:16] != b"IHDR":
+        return None
+    width, height = struct.unpack(">II", data[16:24])
+    return (width, height)
 
 
 def _webp_dimensions(data: bytes) -> tuple[int, int] | None:
-    if len(data) < 30:
-        return None
+    # RIFF(4) + tamano(4) + WEBP(4) + fourcc del primer chunk(4) + tamano(4):
+    # los datos del chunk empiezan en el offset 20.
     fourcc = data[12:16]
     if fourcc == b"VP8X" and len(data) >= 30:
-        w = int.from_bytes(data[24:27], "little") + 1
-        h = int.from_bytes(data[27:30], "little") + 1
-        return (w, h)
+        # Lienzo extendido: ancho-1 y alto-1 en 24 bits little-endian.
+        width = int.from_bytes(data[24:27], "little") + 1
+        height = int.from_bytes(data[27:30], "little") + 1
+        return (width, height)
     if fourcc == b"VP8 " and len(data) >= 30 and data[23:26] == b"\x9d\x01\x2a":
-        w = int.from_bytes(data[26:28], "little") & 0x3FFF
-        h = int.from_bytes(data[28:30], "little") & 0x3FFF
-        return (w, h)
+        # Lossy: frame tag de 3 bytes, codigo de inicio y 14 bits por lado.
+        width = int.from_bytes(data[26:28], "little") & 0x3FFF
+        height = int.from_bytes(data[28:30], "little") & 0x3FFF
+        return (width, height)
+    if fourcc == b"VP8L" and len(data) >= 25 and data[20] == 0x2F:
+        # Lossless: firma 0x2F y despues ancho-1 y alto-1 en 14 bits cada uno.
+        bits = int.from_bytes(data[21:25], "little")
+        return ((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+    # Otro chunk (o uno cortado): no se sabe cuanto mide. Fail-closed.
     return None
 
 
-def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
-    # Se recorren los marcadores hasta el SOF (Start Of Frame), que trae alto y
-    # ancho. Se evitan APPn/DQT/etc. saltando por su longitud.
-    i = 2
+# SOF0..SOF15 salvo DHT (C4), JPG (C8) y DAC (CC), que comparten el rango.
+_JPEG_SOF = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+# Marcadores sin longitud: TEM, RST0..RST7 y SOI.
+_JPEG_STANDALONE = frozenset({0x01, *range(0xD0, 0xD9)})
+_JPEG_SOS = 0xDA
+_JPEG_EOI = 0xD9
+
+
+def _next_jpeg_marker(data: bytes, i: int) -> tuple[int, int] | None:
+    """(posicion, marcador) del proximo marcador desde ``i``, o None.
+
+    Busca el 0xFF con ``bytes.find`` (a velocidad de C; antes era byte a
+    byte en Python, 0,2 a 0,5 s con 2 MB) y saltea el relleno (0xFF 0xFF) y
+    el byte escapado (0xFF 0x00), como el decodificador.
+    """
     n = len(data)
-    while i + 9 < n:
-        if data[i] != 0xFF:
+    while True:
+        i = data.find(b"\xff", i)
+        if i < 0 or i + 1 >= n:
+            return None
+        marker = data[i + 1]
+        if marker == 0xFF:
             i += 1
             continue
-        marker = data[i + 1]
-        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+        if marker == 0x00:
+            i += 2
+            continue
+        return (i, marker)
+
+
+def _jpeg_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Recorre los segmentos hasta el SOF, como el decodificador.
+
+    Cada segmento se saltea por su longitud (un SOF escondido dentro de un
+    APPn no cuenta); los marcadores sin longitud (RSTn, TEM, SOI) se saltean
+    solos. La basura entre segmentos tambien la saltea el decodificador hasta
+    el proximo marcador, asi que los dos ven el mismo SOF. Un SOS o un EOI
+    antes del SOF, o un segmento cortado, es una imagen sin dimensiones.
+    """
+    n = len(data)
+    i = 2
+    while (found := _next_jpeg_marker(data, i)) is not None:
+        i, marker = found
+        if marker in _JPEG_STANDALONE:
+            i += 2
+            continue
+        if marker in (_JPEG_SOS, _JPEG_EOI) or i + 4 > n:
+            return None
+        seg_len = int.from_bytes(data[i + 2 : i + 4], "big")
+        if seg_len < 2:
+            return None
+        if marker in _JPEG_SOF:
+            if seg_len < 7 or i + 9 > n:
+                return None
             height = int.from_bytes(data[i + 5 : i + 7], "big")
             width = int.from_bytes(data[i + 7 : i + 9], "big")
             return (width, height)
-        seg_len = int.from_bytes(data[i + 2 : i + 4], "big")
-        if seg_len <= 0:
-            return None
         i += 2 + seg_len
     return None
 
 
-def exceeds_pixel_budget(data: bytes, content_type: str) -> bool:
-    """True si las dimensiones declaradas superan MAX_IMAGE_PIXELS. Best-effort:
-    si no se pueden determinar, no bloquea (el tope de 2MB ya acota el resto)."""
-    dims: tuple[int, int] | None = None
-    if content_type == "image/png":
-        dims = _png_dimensions(data)
-    elif content_type == "image/webp":
-        dims = _webp_dimensions(data)
-    elif content_type == "image/jpeg":
-        dims = _jpeg_dimensions(data)
-    if dims is None:
-        return False
-    width, height = dims
-    return width * height > MAX_IMAGE_PIXELS
+_DIMENSION_READERS: dict[str, Callable[[bytes], tuple[int, int] | None]] = {
+    "image/png": _png_dimensions,
+    "image/webp": _webp_dimensions,
+    "image/jpeg": _jpeg_dimensions,
+}
+
+
+def image_dimensions(data: bytes, content_type: str) -> tuple[int, int] | None:
+    """(ancho, alto) declarados en el header, o None si no se pueden leer."""
+    reader = _DIMENSION_READERS.get(content_type)
+    return reader(data) if reader else None
+
+
+def validate_image(data: bytes, kind: str) -> str:
+    """Content-type de una imagen que respeta el tope de ``kind``.
+
+    Levanta ``AppException``: 413 por bytes; 422 por formato, por dimensiones
+    ilegibles o por dimensiones de mas. Nunca deja pasar una imagen de la que
+    no sabe cuanto mide.
+    """
+    caps = IMAGE_CAPS[kind]
+    if not data:
+        raise AppException("Archivo vacio", http_status=422, error_code="EMPTY_MEDIA")
+    if len(data) > caps.max_bytes:
+        raise AppException(
+            f"La imagen supera el maximo de {caps.max_bytes // _MB} MB",
+            http_status=413,
+            error_code="MEDIA_TOO_LARGE",
+        )
+    content_type = detect_image_type(data)
+    if content_type is None:
+        raise AppException(
+            "Formato no permitido. Solo PNG, JPEG o WebP.",
+            http_status=422,
+            error_code="UNSUPPORTED_MEDIA_TYPE",
+        )
+    dims = image_dimensions(data, content_type)
+    if dims is None or min(dims) < 1:
+        raise AppException(
+            "No pudimos leer la imagen. Proba exportarla de nuevo como PNG, "
+            "JPEG o WebP.",
+            http_status=422,
+            error_code="INVALID_IMAGE",
+        )
+    long_side, short_side = max(dims), min(dims)
+    if (
+        long_side > caps.max_long_side
+        or short_side > caps.max_short_side
+        or long_side * short_side > caps.max_pixels
+    ):
+        raise AppException(
+            "La imagen es demasiado grande: hasta "
+            f"{caps.max_long_side} x {caps.max_short_side} pixeles.",
+            http_status=422,
+            error_code="IMAGE_TOO_LARGE_DIMENSIONS",
+        )
+    return content_type
