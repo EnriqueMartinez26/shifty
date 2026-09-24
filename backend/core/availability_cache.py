@@ -25,6 +25,7 @@ local del turno y, por si acaso, el dia UTC cuando difiere.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from collections.abc import Awaitable, Iterable
 from typing import Any, Protocol, runtime_checkable
@@ -38,6 +39,8 @@ from core.utils import ARGENTINA_TZ
 logger = structlog.get_logger()
 
 SLOTS_TTL_SECONDS = 300
+# La agenda cruda del dia (nivel 2, F3-02) vence igual que los slots.
+DAY_AGENDA_TTL_SECONDS = SLOTS_TTL_SECONDS
 
 # Vencimiento de la clave de version. `INCR` sobre una clave que no existe la
 # crea SIN TTL, asi que sin esto quedaba una clave por tienda y por dia tocado
@@ -66,6 +69,8 @@ class AvailabilityCachePipeline(Protocol):
     def incr(self, key: str, /) -> Any: ...
 
     def expire(self, key: str, seconds: int, /) -> Any: ...
+
+    def setex(self, key: str, seconds: int, value: str, /) -> Any: ...
 
     def execute(self) -> Awaitable[list[Any]]: ...
 
@@ -196,6 +201,59 @@ def slots_key(
     )
 
 
+def day_agenda_key(store_id: str, day: date, version: str, *, generation: str) -> str:
+    """Clave de la "agenda cruda" de un dia de la tienda (F3-02, nivel 2).
+
+    Turnos ocupados, bloqueos, horarios y reglas de la tienda de ese dia
+    local, de los que se derivan los slots de CUALQUIER servicio. Lleva la
+    misma generacion y la misma version que ``slots_key``: toda invalidacion
+    que existe (``invalidate_availability``, ``invalidate_availability_range``,
+    ``invalidate_store_availability``) la cubre por construccion, sin una
+    llamada nueva en ningun camino. Otro prefijo (``agenda``) para que nunca
+    choque con una clave de slots.
+    """
+    return f"availability:agenda:{store_id}:{day.isoformat()}:g{generation}:v{version}"
+
+
+@dataclass(frozen=True)
+class AvailabilityKeys:
+    """Claves vigentes de los dos niveles, leidas en una sola ida y vuelta."""
+
+    slots: str
+    day_agenda: str
+
+
+async def resolve_availability_keys(
+    client: AvailabilityCacheClient,
+    store_id: str,
+    day: date,
+    service_public_id: str,
+    *,
+    force_all: bool,
+    hide_private_reasons: bool,
+) -> AvailabilityKeys:
+    """Generacion + version (un pipeline) y las dos claves que dependen de ellas.
+
+    Como todo lo que se escribe bajo estas claves se escribe despues de esta
+    lectura (que estira el TTL de la version y de la generacion), vale para la
+    agenda lo mismo que para los slots: la version sobrevive a todo lo escrito
+    bajo ella (``VERSION_TTL_SECONDS``).
+    """
+    generation, version = await current_generation_and_version(client, store_id, day)
+    return AvailabilityKeys(
+        slots=slots_key(
+            store_id,
+            day,
+            version,
+            service_public_id,
+            force_all=force_all,
+            hide_private_reasons=hide_private_reasons,
+            generation=generation,
+        ),
+        day_agenda=day_agenda_key(store_id, day, version, generation=generation),
+    )
+
+
 async def resolve_slots_key(
     client: AvailabilityCacheClient,
     store_id: str,
@@ -206,16 +264,15 @@ async def resolve_slots_key(
     hide_private_reasons: bool,
 ) -> str:
     """Lee generacion de la tienda y version del dia y arma la clave vigente."""
-    generation, version = await current_generation_and_version(client, store_id, day)
-    return slots_key(
+    keys = await resolve_availability_keys(
+        client,
         store_id,
         day,
-        version,
         service_public_id,
         force_all=force_all,
         hide_private_reasons=hide_private_reasons,
-        generation=generation,
     )
+    return keys.slots
 
 
 def local_days_touched(*instants: datetime) -> set[date]:

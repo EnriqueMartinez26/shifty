@@ -10,23 +10,28 @@ un slot es libre solo si:
 
 import json
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import TypedDict, cast
 
-from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, select
-from sqlalchemy.orm import selectinload
 
 import structlog
 
-from core.availability_cache import SLOTS_TTL_SECONDS, resolve_slots_key
+import core.utils as core_utils
+from core.availability_cache import (
+    DAY_AGENDA_TTL_SECONDS,
+    SLOTS_TTL_SECONDS,
+    AvailabilityCacheClient,
+    AvailabilityKeys,
+    resolve_availability_keys,
+)
 from core.redis import REDIS_UNAVAILABLE_ERRORS
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
-from modules.staff.model import Staff, Schedule, StaffBlock
+from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
 
 
@@ -130,20 +135,112 @@ def leaves_unsellable_gap(
     return not (entra_antes and entra_despues)
 
 
+@dataclass(frozen=True)
+class StoreRules:
+    """Reglas de la tienda que entran en la grilla (antelacion y buffer).
+
+    El router publico ya las leyo en columnas al resolver la tienda (F3-02):
+    se pasan para no volver a leer la tienda. Sin ellas (panel) se leen aca.
+    """
+
+    notice_hours: int
+    buffer_minutes: int
+
+
+@dataclass(frozen=True)
+class _StaffRef:
+    """Lo unico del profesional que usa la grilla (sin la entidad ORM)."""
+
+    id: str
+    display_name: str
+
+    @property
+    def public_id(self) -> str:
+        # Mismo valor que ``Staff.public_id`` (el id).
+        return self.id
+
+
+@dataclass(frozen=True)
+class _Block:
+    starts_at: datetime
+    ends_at: datetime
+    note: str
+
+    def overlaps_with(self, starts_at: datetime, ends_at: datetime) -> bool:
+        return self.starts_at < ends_at and self.ends_at > starts_at
+
+
 @dataclass
 class _DayAgenda:
-    """Todo lo que la grilla de un dia necesita, leido en lote (sin N+1)."""
+    """La agenda cruda de un dia de la tienda: todo lo que la grilla necesita.
+
+    Es lo que guarda el nivel 2 del cache (F3-02) y sirve para CUALQUIER
+    servicio: los slots de un servicio se derivan en memoria con su duracion
+    y sus profesionales. ``min_bookable_time`` NO se guarda: depende de
+    "ahora" y se calcula al derivar.
+    """
 
     notice_hours: int
     buffer: timedelta
-    min_bookable_time: datetime
-    schedules: dict[str, list[Schedule]]
+    schedules: dict[str, list[tuple[time, time]]]
     booked: dict[str, list[Range]]
-    blocks: dict[str, list[StaffBlock]]
+    blocks: dict[str, list[_Block]]
+    min_bookable_time: datetime = datetime.min.replace(tzinfo=timezone.utc)
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "notice_hours": self.notice_hours,
+                "buffer_minutes": int(self.buffer.total_seconds() // 60),
+                "schedules": {
+                    staff_id: [[a.isoformat(), b.isoformat()] for a, b in franjas]
+                    for staff_id, franjas in self.schedules.items()
+                },
+                "booked": {
+                    staff_id: [[a.isoformat(), b.isoformat()] for a, b in rangos]
+                    for staff_id, rangos in self.booked.items()
+                },
+                "blocks": {
+                    staff_id: [
+                        [b.starts_at.isoformat(), b.ends_at.isoformat(), b.note]
+                        for b in bloqueos
+                    ]
+                    for staff_id, bloqueos in self.blocks.items()
+                },
+            }
+        )
+
+    @classmethod
+    def from_json(cls, raw: str | bytes) -> "_DayAgenda":
+        data = json.loads(raw)
+        return cls(
+            notice_hours=int(data["notice_hours"]),
+            buffer=timedelta(minutes=int(data["buffer_minutes"])),
+            schedules={
+                staff_id: [
+                    (time.fromisoformat(a), time.fromisoformat(b)) for a, b in franjas
+                ]
+                for staff_id, franjas in data["schedules"].items()
+            },
+            booked={
+                staff_id: [
+                    (datetime.fromisoformat(a), datetime.fromisoformat(b))
+                    for a, b in rangos
+                ]
+                for staff_id, rangos in data["booked"].items()
+            },
+            blocks={
+                staff_id: [
+                    _Block(datetime.fromisoformat(a), datetime.fromisoformat(b), note)
+                    for a, b, note in bloqueos
+                ]
+                for staff_id, bloqueos in data["blocks"].items()
+            },
+        )
 
 
 class AvailabilityService:
-    def __init__(self, db: AsyncSession, redis: Redis) -> None:
+    def __init__(self, db: AsyncSession, redis: AvailabilityCacheClient) -> None:
         self.db = db
         self.redis = redis
 
@@ -154,21 +251,24 @@ class AvailabilityService:
         search_date: date,
         force_all: bool = False,
         hide_private_reasons: bool = False,
+        store_rules: StoreRules | None = None,
     ) -> list[AvailabilitySlot]:
         """
         Calcula los slots disponibles para un servicio en una fecha dada,
         respetando horarios, turnos ocupados y bloqueos de agenda.
 
-        Partida en pasos (B1-12, antes 250 lineas); el orden de las consultas
-        y la salida son los mismos de siempre
+        Dos niveles de cache bajo la misma generacion + version (F3-02): los
+        slots del servicio y, debajo, la agenda cruda del dia de la tienda.
+        La salida es la de siempre
         (``tests/integration/test_caracterizacion_disponibilidad.py``).
         """
-        # 1. Caché: generacion de la tienda (B6-08) + version del dia (B7-09).
-        # Un Redis caido o lleno es un MISS (F1-10): se calcula desde la base
-        # y no se escribe el cache (``cache_key`` queda en None).
-        cache_key: str | None
+        # 1. Claves vigentes: generacion de la tienda (B6-08) + version del
+        # dia (B7-09), en un pipeline (F3-09). Un Redis caido o lleno es un
+        # MISS (F1-10): se calcula desde la base y no se escribe el cache
+        # (``keys`` queda en None).
+        keys: AvailabilityKeys | None
         try:
-            cache_key = await resolve_slots_key(
+            keys = await resolve_availability_keys(
                 self.redis,
                 store_id,
                 search_date,
@@ -176,45 +276,39 @@ class AvailabilityService:
                 force_all=force_all,
                 hide_private_reasons=hide_private_reasons,
             )
-            cached = await self.redis.get(cache_key)
+            cached = await self.redis.get(keys.slots)
         except REDIS_UNAVAILABLE_ERRORS as exc:
             _log_cache_unavailable("read", exc)
-            cache_key, cached = None, None
+            keys, cached = None, None
         if cached:
             return cast(list[AvailabilitySlot], json.loads(cached))
 
-        # 2. Servicio activo de la tienda (sin servicio no se cachea nada).
-        svc_res = await self.db.execute(
-            select(Service).where(
-                Service.public_id == service_public_id,
-                Service.store_id == store_id,
-                Service.is_active.is_(True),
-            )
-        )
-        service = svc_res.scalar_one_or_none()
-        if not service:
+        # 2. Servicio activo de la tienda y sus profesionales, una consulta
+        # (sin servicio no se cachea nada).
+        found = await self._service_and_staff(store_id, service_public_id)
+        if found is None:
             return []
-
-        # 3. Staff que realiza el servicio.
-        staff_members = await self._staff_for_service(store_id, service_public_id)
+        duration, staff_members = found
         if not staff_members:
-            await self._write_cache(cache_key, "[]")
+            await self._write_cache(keys, slots="[]")
             return []
 
-        # 4 a 6. Reglas de la tienda, horarios, turnos y bloqueos del dia.
-        agenda = await self._load_day(
-            store_id, [member.id for member in staff_members], search_date
+        # 3. Agenda cruda del dia: del nivel 2 o de la base.
+        agenda, agenda_json = await self._day_agenda(
+            keys, store_id, search_date, store_rules
         )
-        duration = timedelta(minutes=service.duration_minutes)
+        agenda.min_bookable_time = core_utils.now_utc() + timedelta(
+            hours=agenda.notice_hours
+        )
 
-        # 7. Grilla por profesional y por franja horaria.
+        # 4. Grilla por profesional y por franja horaria.
         all_slots: list[AvailabilitySlot] = []
         for staff in staff_members:
-            for sched in agenda.schedules.get(staff.id, []):
+            for franja in agenda.schedules.get(staff.id, []):
                 all_slots.extend(
                     _schedule_slots(
                         staff,
-                        sched,
+                        franja,
                         search_date,
                         duration,
                         agenda,
@@ -223,81 +317,166 @@ class AvailabilityService:
                     )
                 )
 
-        # 8. Caché por 5 minutos
-        await self._write_cache(cache_key, json.dumps(all_slots))
+        # 5. Cache por 5 minutos (y la agenda, si se leyo de la base).
+        await self._write_cache(keys, slots=json.dumps(all_slots), agenda=agenda_json)
         return all_slots
 
-    async def _write_cache(self, cache_key: str | None, payload: str) -> None:
-        """Escribe los slots; sin clave (lectura caida) o con Redis caido, no."""
-        if cache_key is None:
+    async def _write_cache(
+        self,
+        keys: AvailabilityKeys | None,
+        *,
+        slots: str,
+        agenda: str | None = None,
+    ) -> None:
+        """Escribe los slots (y la agenda) en una ida y vuelta.
+
+        Sin claves (lectura caida) o con Redis caido, no: un solo warning.
+        """
+        if keys is None:
             return
         try:
-            await self.redis.setex(cache_key, SLOTS_TTL_SECONDS, payload)
+            pipe = self.redis.pipeline(transaction=False)
+            if agenda is not None:
+                pipe.setex(keys.day_agenda, DAY_AGENDA_TTL_SECONDS, agenda)
+            pipe.setex(keys.slots, SLOTS_TTL_SECONDS, slots)
+            await pipe.execute()
         except REDIS_UNAVAILABLE_ERRORS as exc:
             _log_cache_unavailable("write", exc)
 
-    async def _staff_for_service(
+    async def _service_and_staff(
         self, store_id: str, service_public_id: str
-    ) -> list[Staff]:
-        staff_res = await self.db.execute(
-            select(Staff)
-            .options(selectinload(Staff.services))
-            .where(
-                Staff.store_id == store_id,
-                Staff.is_active.is_(True),
-            )
-        )
-        return [
-            member
-            for member in staff_res.scalars().all()
-            if service_public_id in (member.service_ids or [])
-        ]
+    ) -> tuple[timedelta, list[_StaffRef]] | None:
+        """Duracion del servicio y sus profesionales activos, en UNA consulta.
 
-    async def _load_day(
-        self, store_id: str, staff_ids: list[str], search_date: date
+        ``None`` si el servicio no existe, es de otra tienda o esta inactivo.
+        LEFT JOIN sobre ``staff_services`` filtrado por el servicio y la
+        tienda: un servicio sin profesionales da una fila con el profesional
+        en NULL. Columnas, no entidades: antes era ``select(Staff)`` de toda
+        la tienda con sus ``services`` y ``schedules`` en cascada, filtrado
+        en memoria (y un ``Staff`` cargado con la coleccion es justo lo que
+        advierte AUD2-B6-02).
+        """
+        rows = (
+            await self.db.execute(
+                select(Service.duration_minutes, Staff.id, Staff.display_name)
+                .select_from(Service)
+                .outerjoin(
+                    StaffServiceModel, StaffServiceModel.service_id == Service.id
+                )
+                .outerjoin(
+                    Staff,
+                    and_(
+                        Staff.id == StaffServiceModel.staff_id,
+                        Staff.store_id == store_id,
+                        Staff.is_active.is_(True),
+                    ),
+                )
+                .where(
+                    Service.public_id == service_public_id,
+                    Service.store_id == store_id,
+                    Service.is_active.is_(True),
+                )
+                .order_by(Staff.id)
+            )
+        ).all()
+        if not rows:
+            return None
+        duration = timedelta(minutes=rows[0].duration_minutes)
+        staff = [
+            _StaffRef(id=row.id, display_name=row.display_name)
+            for row in rows
+            if row.id is not None
+        ]
+        return duration, staff
+
+    async def _day_agenda(
+        self,
+        keys: AvailabilityKeys | None,
+        store_id: str,
+        search_date: date,
+        store_rules: StoreRules | None,
+    ) -> tuple[_DayAgenda, str | None]:
+        """Agenda del dia del nivel 2; si no esta, de la base.
+
+        Devuelve tambien el JSON a escribir cuando salio de la base (``None``
+        si salio del cache o si no hay claves).
+        """
+        if keys is not None:
+            try:
+                raw = await self.redis.get(keys.day_agenda)
+            except REDIS_UNAVAILABLE_ERRORS as exc:
+                _log_cache_unavailable("read", exc)
+                raw = None
+                keys = None
+            if raw:
+                return _DayAgenda.from_json(raw), None
+        agenda = await self.load_day_agenda(store_id, search_date, store_rules)
+        return agenda, (agenda.to_json() if keys is not None else None)
+
+    async def load_day_agenda(
+        self, store_id: str, search_date: date, store_rules: StoreRules | None = None
     ) -> _DayAgenda:
-        """Reglas de la tienda y agenda del dia de todos los profesionales.
+        """Reglas de la tienda y agenda del dia de TODOS sus profesionales.
 
         La fecha que pide el cliente es un dia calendario argentino, no una
         ventana UTC: se traduce a sus limites reales en UTC. Una consulta por
-        tabla con ``in_()`` (regla 12).
+        tabla, en columnas (regla 12); sin horarios ese dia no hay nada que
+        ocupar y no se leen turnos ni bloqueos.
         """
-        day_start = local_to_utc(search_date, time.min)
-        day_end = local_to_utc(search_date, time.max)
-
-        store_res = await self.db.execute(select(Store).where(Store.id == store_id))
-        store = store_res.scalar_one_or_none()
-        notice_hours = getattr(store, "min_booking_notice_hours", 2)
+        if store_rules is None:
+            store_rules = await self._store_rules(store_id)
         # Hueco obligatorio entre turnos: un slot no se ofrece si queda a menos
         # de 'buffer' de un turno vecino. Debe coincidir con la regla que aplica
         # el alta (get_conflicting_appointment), o el cliente veria horarios que
         # despues se rechazan.
-        buffer = timedelta(minutes=getattr(store, "buffer_minutes", 0) or 0)
-
-        from core.utils import now_utc
-
-        min_bookable_time = now_utc() + timedelta(hours=notice_hours)
+        buffer = timedelta(minutes=store_rules.buffer_minutes)
 
         schedules_res = await self.db.execute(
-            select(Schedule).where(
-                Schedule.staff_id.in_(staff_ids),
+            select(Schedule.staff_id, Schedule.start_time, Schedule.end_time)
+            .join(Staff, Staff.id == Schedule.staff_id)
+            .where(
+                Staff.store_id == store_id,
+                Staff.is_active.is_(True),
                 Schedule.day_of_week == search_date.weekday(),
             )
+            .order_by(Schedule.staff_id, Schedule.start_time, Schedule.id)
         )
-        schedules: dict[str, list[Schedule]] = {}
-        for schedule in schedules_res.scalars().all():
-            schedules.setdefault(schedule.staff_id, []).append(schedule)
+        schedules: dict[str, list[tuple[time, time]]] = {}
+        for staff_id, start_time, end_time in schedules_res.all():
+            schedules.setdefault(staff_id, []).append((start_time, end_time))
 
-        booked, blocks = await self._load_occupancy(
-            store_id, staff_ids, day_start, day_end, buffer=buffer
-        )
+        booked: dict[str, list[Range]] = {}
+        blocks: dict[str, list[_Block]] = {}
+        if schedules:
+            booked, blocks = await self._load_occupancy(
+                store_id,
+                list(schedules),
+                local_to_utc(search_date, time.min),
+                local_to_utc(search_date, time.max),
+                buffer=buffer,
+            )
         return _DayAgenda(
-            notice_hours=notice_hours,
+            notice_hours=store_rules.notice_hours,
             buffer=buffer,
-            min_bookable_time=min_bookable_time,
             schedules=schedules,
             booked=booked,
             blocks=blocks,
+        )
+
+    async def _store_rules(self, store_id: str) -> StoreRules:
+        """Antelacion y buffer de la tienda, en columnas (sin sus horarios)."""
+        row = (
+            await self.db.execute(
+                select(Store.min_booking_notice_hours, Store.buffer_minutes).where(
+                    Store.id == store_id
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return StoreRules(notice_hours=2, buffer_minutes=0)
+        return StoreRules(
+            notice_hours=row.min_booking_notice_hours,
+            buffer_minutes=row.buffer_minutes or 0,
         )
 
     async def _load_occupancy(
@@ -308,8 +487,8 @@ class AvailabilityService:
         day_end: datetime,
         *,
         buffer: timedelta,
-    ) -> tuple[dict[str, list[Range]], dict[str, list[StaffBlock]]]:
-        """Turnos activos y bloqueos del dia, una consulta cada uno.
+    ) -> tuple[dict[str, list[Range]], dict[str, list[_Block]]]:
+        """Turnos activos y bloqueos del dia, una consulta cada uno, en columnas.
 
         Los turnos se traen por SOLAPAMIENTO, igual que los bloqueos
         (AUD2-B1-13): antes se filtraban por ``starts_at`` dentro de la
@@ -322,18 +501,16 @@ class AvailabilityService:
         Las dos consultas llevan la tienda y las dos cotas de
         ``appointment_overlap`` / ``active_block_overlap`` (F1-13): antes
         recorrian toda la historia de los profesionales en cada consulta de
-        disponibilidad sin cache.
+        disponibilidad sin cache. Solo las columnas que usa la grilla (F3-02):
+        antes el turno venia con su servicio en JOIN, que nadie leia.
         """
-        from sqlalchemy.orm import joinedload
-
         from modules.appointments.repository import (
             active_block_overlap,
             appointment_overlap,
         )
 
         appt_res = await self.db.execute(
-            select(Appointment)
-            .options(joinedload(Appointment.service))
+            select(Appointment.staff_id, Appointment.starts_at, Appointment.ends_at)
             .where(
                 and_(
                     Appointment.staff_id.in_(staff_ids),
@@ -341,36 +518,43 @@ class AvailabilityService:
                     appointment_overlap(store_id, day_start - buffer, day_end + buffer),
                 )
             )
+            .order_by(Appointment.starts_at, Appointment.id)
         )
         # Rangos ocupados normalizados a UTC aware: SQLite devuelve naive y la
         # comparacion con los slots (aware) explotaba.
         booked: dict[str, list[Range]] = {}
-        for appointment in appt_res.scalars().all():
-            booked.setdefault(appointment.staff_id, []).append(
-                (
-                    ensure_utc_aware(appointment.starts_at),
-                    ensure_utc_aware(appointment.ends_at),
-                )
+        for staff_id, starts_at, ends_at in appt_res.all():
+            booked.setdefault(staff_id, []).append(
+                (ensure_utc_aware(starts_at), ensure_utc_aware(ends_at))
             )
 
         block_res = await self.db.execute(
-            select(StaffBlock).where(
+            select(
+                StaffBlock.staff_id,
+                StaffBlock.start_time,
+                StaffBlock.end_time,
+                StaffBlock.reason,
+            )
+            .where(
                 and_(
                     StaffBlock.staff_id.in_(staff_ids),
                     active_block_overlap(store_id, day_start, day_end),
                 )
             )
+            .order_by(StaffBlock.start_time, StaffBlock.id)
         )
-        blocks: dict[str, list[StaffBlock]] = {}
-        for block in block_res.scalars().all():
-            blocks.setdefault(block.staff_id, []).append(block)
+        blocks: dict[str, list[_Block]] = {}
+        for staff_id, starts_at, ends_at, reason in block_res.all():
+            blocks.setdefault(staff_id, []).append(
+                _Block(ensure_utc_aware(starts_at), ensure_utc_aware(ends_at), reason)
+            )
 
         return booked, blocks
 
 
 def _schedule_slots(
-    staff: Staff,
-    sched: Schedule,
+    staff: _StaffRef,
+    franja: tuple[time, time],
     search_date: date,
     duration: timedelta,
     agenda: _DayAgenda,
@@ -385,11 +569,11 @@ def _schedule_slots(
     obstacles: list[Range] = [
         (appt_start - agenda.buffer, appt_end + agenda.buffer)
         for appt_start, appt_end in booked
-    ] + [(ensure_utc_aware(b.starts_at), ensure_utc_aware(b.ends_at)) for b in blocks]
+    ] + [(b.starts_at, b.ends_at) for b in blocks]
 
     # El horario del staff esta cargado en hora local argentina.
-    current = local_to_utc(search_date, sched.start_time)
-    end = local_to_utc(search_date, sched.end_time)
+    current = local_to_utc(search_date, franja[0])
+    end = local_to_utc(search_date, franja[1])
     grid_origin = current
     # Lo anterior a la antelacion minima tampoco se puede vender.
     sched_obstacles = obstacles + (
@@ -438,7 +622,7 @@ def _slot_status(
     current: datetime,
     slot_end: datetime,
     booked: list[Range],
-    blocks: list[StaffBlock],
+    blocks: list[_Block],
     agenda: _DayAgenda,
     *,
     hide_private_reasons: bool,
@@ -464,7 +648,11 @@ def _slot_status(
 
 
 def _slot(
-    staff: Staff, current: datetime, slot_end: datetime, status: str, reason: str | None
+    staff: _StaffRef,
+    current: datetime,
+    slot_end: datetime,
+    status: str,
+    reason: str | None,
 ) -> AvailabilitySlot:
     return {
         "staff_id": staff.public_id,

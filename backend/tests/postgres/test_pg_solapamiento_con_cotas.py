@@ -236,8 +236,8 @@ async def test_cada_consulta_de_solapamiento_acota_por_tienda_y_por_los_dos_lado
             try:
                 await _apply_tenant_context(session)
                 # Agenda del dia (disponibilidad), sin pasar por el cache.
-                await AvailabilityService(session, None)._load_day(  # type: ignore[arg-type]
-                    store, [uno, dos], slot.date()
+                await AvailabilityService(session, None).load_day_agenda(  # type: ignore[arg-type]
+                    store, slot.date()
                 )
                 # Cupo liberado de la lista de espera (corre con bypass).
                 await slot_still_free(

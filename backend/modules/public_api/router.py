@@ -32,7 +32,7 @@ from core.rate_limit import enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
 from core.utils import today_local
 from core.validation import PUBLIC_ID_PATTERN
-from modules.appointments.availability import AvailabilityService
+from modules.appointments.availability import AvailabilityService, StoreRules
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.service import store_is_suspended
 from modules.notifications.tasks import enqueue_otp_email
@@ -303,8 +303,10 @@ async def get_public_availability(
     search_date = _public_availability_date(date)
 
     async with tenant_bypass(db):
-        repo = PublicRepository(db)
-        store = await repo.get_store_by_public_id(store_public_id)
+        # F3-02 (R1-01): la tienda en columnas, una sentencia. Con el cache
+        # caliente es lo unico que toca la base; con el frio, sus reglas
+        # (antelacion y buffer) viajan a la grilla y no se vuelven a leer.
+        store = await PublicRepository(db).get_store_ref(store_public_id)
         if not store:
             raise StoreNotFoundException(identifier=store_public_id)
         return list(
@@ -314,6 +316,10 @@ async def get_public_availability(
                 search_date,
                 force_all=force_all,
                 hide_private_reasons=True,
+                store_rules=StoreRules(
+                    notice_hours=store.min_booking_notice_hours,
+                    buffer_minutes=store.buffer_minutes or 0,
+                ),
             )
         )
 
