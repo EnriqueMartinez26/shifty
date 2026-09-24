@@ -588,3 +588,50 @@ def test_el_desafio_acme_se_sirve_en_claro_y_el_resto_redirige() -> None:
 def test_https_conserva_hsts() -> None:
     cabeceras = _cabeceras_agregadas(server_de_la_app(leer(EDGE_PROD)))
     assert cabeceras["strict-transport-security"] == "max-age=31536000; includeSubDomains"
+
+
+# --- F0-13: cache de la SPA ----------------------------------------------------
+
+
+def _server_spa() -> list[Directiva]:
+    (server,) = servidores(leer(SPA))
+    return server
+
+
+def _cache_control(bloque: list[Directiva]) -> list[str]:
+    return [
+        d.args[1] for d in todas(bloque, "add_header") if d.args[0].lower() == "cache-control"
+    ]
+
+
+def test_la_spa_emite_un_solo_cache_control() -> None:
+    # `expires` + `add_header Cache-Control` mandaba DOS Cache-Control.
+    server = _server_spa()
+    assert not todas(server, "expires")
+    for loc in locations(server):
+        assert not todas(loc.bloque, "expires"), loc.args
+        assert len(_cache_control(loc.bloque)) <= 1, loc.args
+
+
+def test_solo_los_assets_con_hash_son_inmutables() -> None:
+    # Vite pone hash en el nombre solo bajo /assets/. favicon.svg o icons.svg
+    # (de public/) no cambian de nombre: con immutable, un cambio no llegaba
+    # nunca a quien ya los tenia.
+    server = _server_spa()
+    assets = location(server, "^~", "/assets/")
+    assert _cache_control(assets) == ["public, max-age=31536000, immutable"]
+    assert una(assets, "access_log").args == ("off",)
+    for loc in locations(server):
+        if loc.bloque is not assets:
+            assert not any("immutable" in v for v in _cache_control(loc.bloque)), loc.args
+    (estaticos,) = [loc.bloque for loc in locations(server) if loc.args[0] == "~*"]
+    assert _cache_control(estaticos) == ["public, max-age=3600"]
+    # El shell del SPA revalida siempre (manifiesto de chunks tras un deploy).
+    assert _cache_control(location(server, "/")) == ["no-cache"]
+
+
+def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() -> None:
+    for loc in locations(_server_spa()):
+        if todas(loc.bloque, "add_header"):
+            incluidos = [d.args for d in todas(loc.bloque, "include")]
+            assert ("/etc/nginx/security-headers.conf",) in incluidos, loc.args
