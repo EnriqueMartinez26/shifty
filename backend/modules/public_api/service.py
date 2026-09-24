@@ -67,7 +67,11 @@ from modules.payments.deposit_rules import (
     decide_deposit,
 )
 from modules.payments.model import JsonValue, OutboxMessage, Payment, PaymentStatus
-from modules.payments.service import ensure_payment_preference
+from modules.payments.service import (
+    MercadoPagoAPIError,
+    ensure_payment_preference,
+    mercadopago_budget,
+)
 from modules.promotions.model import PromotionRedemption
 from modules.promotions.service import PromotionQuote, quote_promotion, redeem_promotion
 from modules.public_api.repository import PublicRepository, RangeRejection
@@ -696,22 +700,30 @@ class PublicBookingService:
         if not request.payment_required or payment is None:
             return
         try:
-            await ensure_payment_preference(
-                self.db,
-                appointment=booking.appointment,
-                service=booking.service,
-                store_id=request.store_id,
-                amount_override=payment.amount,
-                original_amount=payment.original_amount,
-                discount_amount=payment.discount_amount,
-                promotion_code=payment.promotion_code,
-                create_provider_link=True,
-            )
+            # Presupuesto total de la cadena de MP (F1-04): agotarlo es
+            # MercadoPagoAPIError(transient=True) y se compensa como cualquier
+            # fallo del proveedor, antes de que nginx corte con un 504 y el
+            # cliente reintente contra una reserva ya commiteada.
+            with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+                await ensure_payment_preference(
+                    self.db,
+                    appointment=booking.appointment,
+                    service=booking.service,
+                    store_id=request.store_id,
+                    amount_override=payment.amount,
+                    original_amount=payment.original_amount,
+                    discount_amount=payment.discount_amount,
+                    promotion_code=payment.promotion_code,
+                    create_provider_link=True,
+                )
             await self.db.commit()
         except CircuitBreakerOpenError as exc:
             await revert_failed_booking(self.db, self.cache, booking.appointment)
             raise _payment_provider_unavailable(exc)
-        except RuntimeError as exc:
+        except (MercadoPagoAPIError, RuntimeError, TimeoutError) as exc:
+            # MercadoPagoAPIError es RuntimeError; se nombra porque es EL caso.
+            # TimeoutError por si un tope ajeno al presupuesto corta la red:
+            # antes no era RuntimeError y el turno quedaba retenido sin link.
             await revert_failed_booking(self.db, self.cache, booking.appointment)
             raise _payment_link_failed(exc)
 

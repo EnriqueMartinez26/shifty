@@ -10,7 +10,13 @@ from core.exceptions import IdempotencyInProgressException
 from core.redis import REDIS_UNAVAILABLE_ERRORS
 
 PROCESSING_VALUE = "PROCESSING"
-PROCESSING_TTL_MS = 30_000
+# La marca PROCESSING tiene que durar mas que el peor caso del request que la
+# toma: si vence antes, un reintento la gana y choca 409 contra la reserva que
+# sigue en curso (R8-01). Peor caso de la reserva publica: presupuesto de MP
+# (MERCADOPAGO_REQUEST_BUDGET_SECONDS, < 25 s) + el mail en linea (SMTP con
+# timeout de 10 s por operacion) + la base. 60 s lo cubre; el costo es que un
+# proceso que muere a mitad deja la clave tomada hasta un minuto (F1-04).
+PROCESSING_TTL_MS = 60_000
 RESULT_TTL_SECONDS = 86_400
 MAX_WAIT_SECONDS = 10
 logger = structlog.get_logger()

@@ -209,6 +209,11 @@ class Settings(BaseSettings):
     MERCADOPAGO_OAUTH_AUTH_URL: str = "https://auth.mercadopago.com/authorization"
     MERCADOPAGO_OAUTH_STATE_TTL_SECONDS: int = 900
     MERCADOPAGO_WEBHOOK_MAX_AGE_SECONDS: int = 300
+    # Presupuesto TOTAL de un request para hablar con Mercado Pago (preferencia
+    # + refresh OAuth + reintento), no por llamada. Tiene que quedar debajo de
+    # los 30 s de nginx con margen para la base y la compensacion: por encima
+    # el cliente ve 504 con la reserva ya commiteada (F1-04, R8-01, R11-08).
+    MERCADOPAGO_REQUEST_BUDGET_SECONDS: float = Field(default=20.0, gt=0, lt=25)
     # Minutos que un turno queda reservado esperando el pago de la seña. Al
     # vencer, el slot vuelve a estar disponible para otro cliente.
     PAYMENT_HOLD_MINUTES: int = 30

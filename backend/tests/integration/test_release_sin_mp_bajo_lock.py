@@ -454,14 +454,26 @@ def test_el_peor_caso_de_una_corrida_entra_en_el_lease() -> None:
 
 
 def test_el_timeout_supuesto_es_el_de_los_clientes_http_de_mp() -> None:
-    """Si alguien sube el timeout de httpx, la cuenta del lease queda vieja."""
+    """Si alguien sube el tope de una request a MP, la cuenta del lease queda vieja.
+
+    Desde F1-04 (2026-09-24) el cliente httpx es uno compartido con timeouts
+    por fase y cada request tiene un tope duro de
+    ``MERCADOPAGO_REQUEST_DEADLINE_SECONDS`` (fases sumadas): ese es el peor
+    caso por request que asume ``MP_REQUEST_TIMEOUT``.
+    """
     import inspect
 
     fuente = inspect.getsource(payments_service)
-    segundos = MP_REQUEST_TIMEOUT.total_seconds()
-    assert fuente.count("timeout=") == fuente.count(f"timeout={segundos}"), (
-        "un cliente HTTP de MP usa otro timeout que MP_REQUEST_TIMEOUT"
+    assert (
+        payments_service.MERCADOPAGO_REQUEST_DEADLINE_SECONDS
+        <= MP_REQUEST_TIMEOUT.total_seconds()
     )
+    assert fuente.count("httpx.AsyncClient(") == 1, (
+        "hay un cliente HTTP de MP fuera del compartido (y de su tope)"
+    )
+    assert fuente.count("timeout=") == fuente.count(
+        "timeout=MERCADOPAGO_HTTP_TIMEOUT"
+    ), "un cliente HTTP de MP usa otro timeout que el compartido"
 
 
 @pytest.mark.asyncio

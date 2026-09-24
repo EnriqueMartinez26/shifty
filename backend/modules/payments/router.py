@@ -61,6 +61,7 @@ from modules.payments.service import (
     create_panel_payment_preference,
     load_gateway_configs,
     exchange_mercadopago_oauth_code,
+    mercadopago_budget,
     mercadopago_oauth_is_configured,
     refresh_mercadopago_oauth_connection,
 )
@@ -537,9 +538,10 @@ async def mercadopago_oauth_callback(
             return _oauth_frontend_redirect("forbidden")
 
         try:
-            token_payload = await exchange_mercadopago_oauth_code(
-                code=code, code_verifier=code_verifier
-            )
+            with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+                token_payload = await exchange_mercadopago_oauth_code(
+                    code=code, code_verifier=code_verifier
+                )
         except RuntimeError:
             return _oauth_frontend_redirect("exchange_failed")
 
@@ -587,7 +589,8 @@ async def refresh_mercadopago_oauth(
         )
 
     try:
-        config = await refresh_mercadopago_oauth_connection(db, config=config)
+        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+            config = await refresh_mercadopago_oauth_connection(db, config=config)
     except RuntimeError as exc:
         raise AppException(
             message=str(exc),
