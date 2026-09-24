@@ -6,6 +6,8 @@ import hmac
 import re
 from typing import Annotated, Any, AsyncGenerator
 
+import structlog
+
 from core.router import CanonicalAPIRouter
 from fastapi import Depends, Path, Query, Request, status
 from fastapi.responses import RedirectResponse
@@ -47,6 +49,7 @@ from modules.payments.processing import (
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
+from modules.payments.service import PaymentGatewayNotConnectedError
 from modules.payments.oauth_state import (
     InvalidOAuthStateError,
     create_mercadopago_oauth_state,
@@ -81,6 +84,7 @@ from modules.services.model import Service
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
+logger = structlog.get_logger()
 router = CanonicalAPIRouter(prefix="/payments", tags=["Payments"])
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
@@ -653,15 +657,28 @@ async def create_payment_preference(
             store_id=user.store_id,
             amount_override=_payment_amount_for_service(service),
         )
-    except CircuitBreakerOpenError as exc:
+    # SEG-04: mensajes fijos; el texto de la excepcion puede traer el detalle
+    # de Mercado Pago y no sale al cliente. Al log va solo el tipo.
+    except PaymentGatewayNotConnectedError as exc:
+        logger.info("payment_link_gateway_not_connected", error_type=type(exc).__name__)
         raise AppException(
-            message=f"Proveedor de pagos temporalmente no disponible: {exc}",
+            message="La tienda debe conectar su cuenta de Mercado Pago antes de cobrar",
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="PAYMENT_GATEWAY_NOT_CONNECTED",
+        )
+    except CircuitBreakerOpenError as exc:
+        logger.warning(
+            "payment_link_provider_unavailable", error_type=type(exc).__name__
+        )
+        raise AppException(
+            message="Proveedor de pagos temporalmente no disponible",
             http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             error_code="PAYMENT_PROVIDER_UNAVAILABLE",
         )
     except RuntimeError as exc:
+        logger.warning("payment_link_creation_failed", error_type=type(exc).__name__)
         raise AppException(
-            message=f"No se pudo crear el link de pago: {exc}",
+            message="No se pudo crear el link de pago",
             http_status=status.HTTP_502_BAD_GATEWAY,
             error_code="PAYMENT_LINK_CREATION_FAILED",
         )

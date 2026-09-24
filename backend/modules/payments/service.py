@@ -52,6 +52,14 @@ class MercadoPagoAPIError(RuntimeError):
         super().__init__(message)
 
 
+class PaymentGatewayNotConnectedError(RuntimeError):
+    """La tienda no tiene una cuenta de Mercado Pago activa para cobrar.
+
+    Es una precondicion de la tienda, no una falla del proveedor (SEG-04).
+    Hereda de RuntimeError para que la compensacion existente la siga viendo.
+    """
+
+
 def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -796,7 +804,7 @@ async def _attach_provider_link(
         amount=amount,
     )
     if not preference_payload:
-        raise RuntimeError(
+        raise PaymentGatewayNotConnectedError(
             "La tienda debe conectar su cuenta de Mercado Pago antes de cobrar"
         )
     preference_id = str(preference_payload.get("id") or "").strip()
