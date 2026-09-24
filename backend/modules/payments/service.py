@@ -45,6 +45,8 @@ MERCADOPAGO_API_BASE_URL = "https://api.mercadopago.com"
 def _mercadopago_base_url() -> str:
     """Base de la API: el setting si existe (emulador de tests/e2e), si no la real."""
     return str(getattr(settings, "MERCADOPAGO_API_BASE_URL", MERCADOPAGO_API_BASE_URL))
+
+
 # Timeouts por fase de httpx (F1-04, R8-01). Antes era un 20 s plano por
 # fase: una request lenta podia sumar mucho mas que eso.
 MERCADOPAGO_HTTP_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=3.0)

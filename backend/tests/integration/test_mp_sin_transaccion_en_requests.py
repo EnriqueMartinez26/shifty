@@ -96,12 +96,12 @@ def _token_oauth_que_registra(
             "scope": "offline_access",
         }
 
-    monkeypatch.setattr(payments_service, "_mercadopago_oauth_token_request", fake_token)
+    monkeypatch.setattr(
+        payments_service, "_mercadopago_oauth_token_request", fake_token
+    )
 
 
-async def _con_escucha(
-    engine: AsyncEngine, linea: list[str], pedido: Any
-) -> Any:
+async def _con_escucha(engine: AsyncEngine, linea: list[str], pedido: Any) -> Any:
     linea.clear()
     sql, commit = _escuchar(engine, linea)
     try:
@@ -140,7 +140,9 @@ async def test_la_reserva_publica_pide_el_link_sin_transaccion_abierta(
         f"la reserva hablaba con MP con la transaccion abierta: {linea}"
     )
     cobro = (
-        await test_session.execute(select(Payment).where(Payment.appointment_id == turno))
+        await test_session.execute(
+            select(Payment).where(Payment.appointment_id == turno)
+        )
     ).scalar_one()
     await test_session.refresh(cobro)
     assert cobro.preference_id.startswith("pref-f105-")
@@ -216,9 +218,7 @@ async def test_el_callback_de_oauth_canjea_el_codigo_sin_transaccion_abierta(
     assert _sql_entre_el_commit_y_el_ultimo_http(linea) == [], (
         f"el callback canjeaba el codigo con la transaccion abierta: {linea}"
     )
-    config = (
-        await test_session.execute(select(PaymentGatewayConfig))
-    ).scalar_one()
+    config = (await test_session.execute(select(PaymentGatewayConfig))).scalar_one()
     await test_session.refresh(config)
     assert decrypt_secret(config.encrypted_access_token) == "APP_USR-callback"
 
@@ -254,11 +254,15 @@ async def test_el_refresh_de_oauth_llama_a_mp_sin_transaccion_abierta(
         f"el refresh llamaba a MP con la transaccion abierta: {linea}"
     )
     store = (
-        await test_session.execute(select(Store).where(Store.public_id == store_public_id))
+        await test_session.execute(
+            select(Store).where(Store.public_id == store_public_id)
+        )
     ).scalar_one()
     config = (
         await test_session.execute(
-            select(PaymentGatewayConfig).where(PaymentGatewayConfig.store_id == store.id)
+            select(PaymentGatewayConfig).where(
+                PaymentGatewayConfig.store_id == store.id
+            )
         )
     ).scalar_one()
     await test_session.refresh(config)

@@ -108,7 +108,11 @@ async def _tienda_con_cobros(
         res = await client.request(metodo, ruta, headers=headers, json=cuerpo)
         assert res.status_code == 200, res.text
     servicio = await create_service(
-        client, token, deposit_mode="required", deposit_type="percent", deposit_amount=30
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="percent",
+        deposit_amount=30,
     )
     staff = await create_staff(client, token, servicio, email=f"pro-{slug}@demo.com")
     dia = datetime.now(timezone.utc) + timedelta(days=6)
@@ -137,7 +141,9 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
             "store_public_id": store,
             "service_id": servicio,
             "staff_id": staff,
-            "starts_at": dia.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": dia.replace(
+                hour=10, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "client_name": "Cliente PG",
             "client_email": "cliente-pg@demo.com",
             "client_phone": "+5491155577001",
@@ -154,7 +160,9 @@ async def test_ninguna_llamada_externa_corre_con_la_conexion_en_transaccion(
         json={
             "service_id": servicio,
             "staff_id": staff,
-            "starts_at": dia.replace(hour=11, minute=0, second=0, microsecond=0).isoformat(),
+            "starts_at": dia.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
             "idempotency_key": "pg-f105-panel-turno",
         },
     )

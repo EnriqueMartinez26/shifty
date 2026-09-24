@@ -590,9 +590,7 @@ async def refresh_mercadopago_oauth(
     # Sin transaccion abierta durante el POST a MP (F1-05, R8-05); la config
     # refrescada se persiste en su propia transaccion corta.
     try:
-        config = await refresh_mercadopago_oauth_without_transaction(
-            db, config=config
-        )
+        config = await refresh_mercadopago_oauth_without_transaction(db, config=config)
     except RuntimeError as exc:
         raise AppException(
             message=str(exc),

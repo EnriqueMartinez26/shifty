@@ -43,7 +43,11 @@ def _registrar_mails_e_invalidaciones(
         linea.append("mail")
         return True
 
-    for nombre in ("send_confirmation_email", "send_rebook_email", "send_reschedule_email"):
+    for nombre in (
+        "send_confirmation_email",
+        "send_rebook_email",
+        "send_reschedule_email",
+    ):
         monkeypatch.setattr(appointments_service, nombre, mail)
 
     invalidar_original = appointments_service.invalidate_availability
@@ -64,9 +68,7 @@ def _tramo_del_mail(linea: list[str]) -> list[str]:
     return linea[commits[-1] + 1 : mail]
 
 
-async def _pedir(
-    engine: AsyncEngine, linea: list[str], pedido: Any
-) -> Any:
+async def _pedir(engine: AsyncEngine, linea: list[str], pedido: Any) -> Any:
     linea.clear()
     sql, commit = _escuchar(engine, linea)
     try:
@@ -99,7 +101,9 @@ async def test_reservar_desde_el_panel_invalida_antes_del_mail_y_sin_sql_en_el_m
             json={
                 "service_id": servicio,
                 "staff_id": staff,
-                "starts_at": dia.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+                "starts_at": dia.replace(
+                    hour=10, minute=0, second=0, microsecond=0
+                ).isoformat(),
                 "idempotency_key": "f105-book-turno",
             },
         )
@@ -125,7 +129,9 @@ async def test_confirmar_completar_y_reprogramar_mandan_el_mail_sin_sql_despues_
             json={
                 "service_id": servicio,
                 "staff_id": staff,
-                "starts_at": dia.replace(hour=hora, minute=0, second=0, microsecond=0).isoformat(),
+                "starts_at": dia.replace(
+                    hour=hora, minute=0, second=0, microsecond=0
+                ).isoformat(),
                 "idempotency_key": f"f105-estados-{hora}",
             },
         )
@@ -141,7 +147,9 @@ async def test_confirmar_completar_y_reprogramar_mandan_el_mail_sin_sql_despues_
     assert _tramo_del_mail(linea) == [], f"confirmar: {linea}"
 
     async def completar() -> Any:
-        return await client.patch(f"/appointments/{turnos[0]}/complete", headers=headers)
+        return await client.patch(
+            f"/appointments/{turnos[0]}/complete", headers=headers
+        )
 
     res = await _pedir(test_engine, linea, completar)
     assert res.status_code == 200, res.text
@@ -152,7 +160,9 @@ async def test_confirmar_completar_y_reprogramar_mandan_el_mail_sin_sql_despues_
             f"/appointments/{turnos[1]}/reschedule",
             headers=headers,
             json={
-                "new_starts_at": dia.replace(hour=12, minute=0, second=0, microsecond=0).isoformat(),
+                "new_starts_at": dia.replace(
+                    hour=12, minute=0, second=0, microsecond=0
+                ).isoformat(),
                 "idempotency_key": "f105-estados-reprog",
             },
         )

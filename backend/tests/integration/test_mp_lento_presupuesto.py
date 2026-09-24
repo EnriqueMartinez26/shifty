@@ -106,7 +106,9 @@ async def _reserva(client: AsyncClient, slug: str) -> dict[str, Any]:
         "store_public_id": store,
         "service_id": servicio,
         "staff_id": staff,
-        "starts_at": dia.replace(hour=10, minute=0, second=0, microsecond=0).isoformat(),
+        "starts_at": dia.replace(
+            hour=10, minute=0, second=0, microsecond=0
+        ).isoformat(),
         "client_name": "Cliente Lento",
         "client_phone": "+5491155500001",
         "payment_method": "mercadopago",
