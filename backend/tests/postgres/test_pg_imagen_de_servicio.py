@@ -9,6 +9,8 @@ el servido y el borrado funcionan como ``shifty_app`` bajo RLS.
 from __future__ import annotations
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -17,12 +19,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
 )
-from tests.postgres.conftest import auth_headers, register_and_login
+from tests.postgres.conftest import (
+    BACKEND_ROOT,
+    alembic,
+    auth_headers,
+    register_and_login,
+)
 from tests.unit.imagenes_sinteticas import jpeg, png
 
 pytestmark = pytest.mark.postgres
 
 _FOTO = jpeg(1061, 1460)
+MIGRACION = "e7a9c1d3f5b8"
 
 
 async def _ids(owner_engine: AsyncEngine, servicio: str) -> tuple[str, str]:
@@ -199,3 +207,37 @@ async def test_desvincular_el_logo_borra_la_fila_bajo_rls(
             await conn.execute(text("select count(*) from store_media"))
         ).scalar_one()
     assert quedan == 0
+
+
+@pytest.mark.asyncio
+async def test_bajar_y_volver_a_subir_con_imagenes_de_servicio_no_se_frena(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    # Revision de F1-28: la guarda de datos contaba kind NOT IN (logo, cover),
+    # asi que tras un downgrade con imagenes de servicio ya subidas el
+    # re-upgrade se frenaba. 'service' es un kind valido de esta migracion.
+    _, token = await register_and_login(
+        client, app_sessions, slug="pg-img-reup", email="pg-img-reup@example.com"
+    )
+    servicio = await create_service(client, token)
+    res = await client.post(
+        f"/services/{servicio}/image",
+        headers=auth_headers(token),
+        files={"file": ("foto.jpg", _FOTO, "image/jpeg")},
+    )
+    assert res.status_code == 200, res.text
+
+    script = ScriptDirectory.from_config(Config(str(BACKEND_ROOT / "alembic.ini")))
+    anterior = script.get_revision(MIGRACION).down_revision
+    assert isinstance(anterior, str)
+    bajada = alembic("downgrade", anterior)
+    assert bajada.returncode == 0, bajada.stderr[-2000:]
+    subida = alembic("upgrade", "head")
+    assert subida.returncode == 0, subida.stderr[-2000:]
+    async with owner_engine.connect() as conn:
+        kinds = (
+            (await conn.execute(text("select kind from store_media"))).scalars().all()
+        )
+    assert kinds == ["service"]

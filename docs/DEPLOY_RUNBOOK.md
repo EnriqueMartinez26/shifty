@@ -95,6 +95,14 @@ nginx is recreated only by `scripts/deploy.sh edge`, and only when something cha
 
 Rollback is safe only because of the migration rule below: the previous release must work against the schema the new one migrated to.
 
+Rolling back **below** the release that ships `e7a9c1d3f5b8` (service images uploaded to `store_media`, plan F1-28): the images keep being served by id and `services.image_url` stores an absolute `https` URL, which the previous release accepts. Only if that release cannot serve them (the media route changed) clear the links first, with the migration role:
+
+```sql
+UPDATE services SET image_url = NULL WHERE image_url LIKE '%/stores/media/%';
+```
+
+The rows stay in `store_media` (the downgrade never deletes images). A later upgrade links each one back to the service whose `image_url` still ends in `/stores/media/{id}`; if the links were cleared with the `UPDATE` above, those images have no service left and the upgrade stops with their count. Deleting them is a human decision: `DELETE FROM store_media WHERE kind = 'service' AND id NOT IN (SELECT substring(image_url FROM '/stores/media/([A-Za-z0-9_-]+)$') FROM services WHERE image_url IS NOT NULL);`
+
 ## 5. Migrations: expand/contract
 
 - A release only **adds** (expand): new nullable columns, new tables, new indexes. Code that stops using a column ships first; the migration that drops it (contract) ships in a **later** release.
@@ -124,8 +132,8 @@ WHERE b.store_id <> s.store_id;
 SELECT count(*) FROM appointments a JOIN staff s ON s.id = a.staff_id
 WHERE a.store_id <> s.store_id;
 
--- e7a9c1d3f5b8: uploaded images whose kind is not logo/cover (ck_store_media_kind).
-SELECT count(*) FROM store_media WHERE kind NOT IN ('logo', 'cover');
+-- e7a9c1d3f5b8: uploaded images with an unknown kind (ck_store_media_kind).
+SELECT count(*) FROM store_media WHERE kind NOT IN ('logo', 'cover', 'service');
 ```
 
 Run them as the migration role (or any role that bypasses RLS): as `shifty_app` without a tenant context, RLS hides every row and the counts are a false 0.
