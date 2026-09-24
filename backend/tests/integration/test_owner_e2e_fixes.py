@@ -89,6 +89,7 @@ async def test_listado_del_dia_indica_el_profesional_de_una_reserva_de_cliente(
             "starts_at": slot.isoformat(),
             "client_name": "Carla Ruiz",
             "client_phone": "+5491155550001",
+            "accepts_terms": True,
             "idempotency_key": "agenda-pro-cliente-1",
         },
     )

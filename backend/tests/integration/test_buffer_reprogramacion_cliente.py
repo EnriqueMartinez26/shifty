@@ -54,6 +54,7 @@ async def test_reprogramar_pegado_al_turno_vecino_respeta_el_buffer(
             # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
             "client_email": f"buffer-{phone.lstrip('+')}@example.com",
             "client_phone": phone,
+            "accepts_terms": True,
             "idempotency_key": key,
         }
 

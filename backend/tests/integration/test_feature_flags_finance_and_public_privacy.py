@@ -488,6 +488,7 @@ async def _cliente_de_la_tienda(client: AsyncClient, token: str, store: str) -> 
             ).isoformat(),
             "client_name": "Cliente Fiado",
             "client_phone": "+5491100022233",
+            "accepts_terms": True,
             "idempotency_key": "ledger-cliente-real",
         },
     )
@@ -651,6 +652,7 @@ async def test_public_booking_requires_otp_when_feature_enabled(
         ).isoformat(),
         "client_name": "Cliente OTP",
         "client_phone": "+5491123456789",
+        "accepts_terms": True,
         "client_email": "cliente-otp@example.com",
         "idempotency_key": "otp-booking-test-001",
     }
@@ -717,6 +719,7 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
             ).isoformat(),
             "client_name": "Cliente Autogestion",
             "client_phone": phone,
+            "accepts_terms": True,
             # La autogestion exige que el OTP se haya verificado contra el email
             # ENTREGABLE de la ficha; sin email propio la ficha queda con el
             # tecnico `.noreply` y no hay contra que comparar. 2026-09-20.
@@ -803,6 +806,7 @@ async def test_public_booking_allows_missing_email_and_any_professional(
             ).isoformat(),
             "client_name": "Cliente Any",
             "client_phone": "+5491166667777",
+            "accepts_terms": True,
             "idempotency_key": "any-professional-booking-001",
         },
     )
@@ -883,6 +887,7 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
             ).isoformat(),
             "client_name": "Cliente Pago Real",
             "client_phone": "+5491155511111",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "real-link-booking-001",
         },
@@ -980,6 +985,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
             ).isoformat(),
             "client_name": "Cliente Webhook Fetch",
             "client_phone": "+5491144499999",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "webhook-fetch-booking-001",
         },
@@ -1082,6 +1088,7 @@ async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amoun
             ).isoformat(),
             "client_name": "Cliente Promo",
             "client_phone": "+5491166600000",
+            "accepts_terms": True,
             "promotion_code": "BIENVENIDA20",
             "idempotency_key": "promotion-booking-001",
         },
@@ -1152,6 +1159,7 @@ async def test_public_booking_persists_configured_custom_fields(
             ).isoformat(),
             "client_name": "Cliente Intake",
             "client_phone": "+5491170010020",
+            "accepts_terms": True,
             "custom_fields": {
                 "motivo_consulta": "Control anual",
                 "tipo_visita": "control",
@@ -1205,6 +1213,7 @@ async def test_manual_refund_and_reconciliation_summary(
             ).isoformat(),
             "client_name": "Cliente Refund",
             "client_phone": "+5491188877766",
+            "accepts_terms": True,
             "idempotency_key": "refund-booking-001",
         },
     )
@@ -1273,6 +1282,7 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
             ).isoformat(),
             "client_name": "Cliente Manual",
             "client_phone": "+5491133344455",
+            "accepts_terms": True,
             "idempotency_key": "manual-confirm-booking-001",
         },
     )
@@ -1367,6 +1377,7 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
             ).isoformat(),
             "client_name": "Cliente Webhook",
             "client_phone": "+5491122200011",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "webhook-booking-001",
         },
@@ -1506,6 +1517,7 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
         ).isoformat(),
         "client_name": "Cliente Retry",
         "client_phone": "+5491122299988",
+        "accepts_terms": True,
         "payment_method": "mercadopago",
         "idempotency_key": "provider-failure-booking-001",
     }
@@ -1574,6 +1586,7 @@ async def test_professional_can_access_own_reports_only(
             ).isoformat(),
             "client_name": "Cliente Reportes",
             "client_phone": "+5491199988877",
+            "accepts_terms": True,
             "idempotency_key": "professional-reports-booking-001",
         },
     )
@@ -1629,6 +1642,7 @@ async def test_report_summary_includes_client_service_and_debt_metrics(
             ).isoformat(),
             "client_name": "Cliente Reporte Full",
             "client_phone": "+5491199980011",
+            "accepts_terms": True,
             "idempotency_key": "report-full-booking-001",
         },
     )
@@ -1701,6 +1715,7 @@ async def test_pending_whatsapp_booking_expires_when_hold_deadline_passes(
             ).isoformat(),
             "client_name": "Cliente WhatsApp",
             "client_phone": "+5491112345678",
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "whatsapp-expiry-booking-001",
         },
@@ -1794,6 +1809,7 @@ async def test_store_owner_can_release_pending_mercadopago_booking(
             ).isoformat(),
             "client_name": "Cliente Release",
             "client_phone": "+5491188877766",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "owner-release-booking-001",
         },

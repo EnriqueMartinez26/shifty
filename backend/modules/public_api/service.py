@@ -619,8 +619,10 @@ class PublicBookingService:
             appointment.expires_at = payment_hold_deadline(appointment.starts_at)
         else:
             appointment.expires_at = appointment.starts_at
-        if data.accepts_terms:
-            appointment.terms_accepted_at = datetime.now(timezone.utc)
+        # El schema ya exige accepts_terms (PV-09): todo turno publico nace con
+        # el instante del consentimiento. No hay columna de version de
+        # terminos; si hace falta, la agrega una migracion.
+        appointment.terms_accepted_at = datetime.now(timezone.utc)
         promotion_quote = None
         if data.promotion_code:
             try:

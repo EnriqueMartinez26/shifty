@@ -69,6 +69,7 @@ async def _turnos_de_manana(
                 "client_name": f"Cliente {hora}",
                 "client_email": f"skip-{hora}@demo.com",
                 "client_phone": f"+54911555{indice:05d}",
+                "accepts_terms": True,
                 "idempotency_key": f"recordatorio-skip-{indice:06d}",
             },
         )

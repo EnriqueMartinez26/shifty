@@ -152,6 +152,7 @@ def _reserva(
         "starts_at": slot,
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
+        "accepts_terms": True,
         "idempotency_key": key,
     }
 

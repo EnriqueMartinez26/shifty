@@ -211,6 +211,7 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
             "starts_at": t.slot.isoformat(),
             "client_name": "Cliente Panel",
             "client_phone": "+5491155559001",
+            "accepts_terms": True,
             "client_email": "cliente-panel@example.com",
             "notes": "Traer estudios",
             "idempotency_key": "carac-panel-repro-alta",

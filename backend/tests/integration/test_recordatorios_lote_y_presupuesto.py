@@ -166,6 +166,7 @@ async def test_la_query_de_recordatorios_respeta_el_limit_en_sql(
                 "client_name": f"Cliente {indice}",
                 "client_email": f"lote-{indice}@demo.com",
                 "client_phone": f"+549115555{indice:04d}",
+                "accepts_terms": True,
                 "idempotency_key": f"lote-recordatorios-{indice:06d}",
             },
         )

@@ -61,6 +61,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": "Carla Ruiz",
         "client_phone": "+5491155550031",
+        "accepts_terms": True,
         "idempotency_key": "mail-cliente-000001",
     }
     cuerpo.update(extra)

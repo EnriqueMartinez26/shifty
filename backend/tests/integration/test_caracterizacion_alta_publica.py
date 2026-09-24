@@ -94,6 +94,7 @@ def _reserva(t: _Tienda, clave: str, **extra: Any) -> dict[str, Any]:
         "starts_at": t.slot.isoformat(),
         "client_name": "Cliente Caracterizado",
         "client_phone": "+5491155558001",
+        "accepts_terms": True,
         "client_email": "caracterizado@example.com",
         "notes": "Primera vez",
         "idempotency_key": clave,

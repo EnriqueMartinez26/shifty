@@ -57,6 +57,7 @@ async def _tienda_con_turno(
             # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
             "client_email": f"agenda-{telefono.lstrip('+')}@example.com",
             "client_phone": telefono,
+            "accepts_terms": True,
             "idempotency_key": clave,
         }
 

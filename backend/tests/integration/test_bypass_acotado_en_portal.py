@@ -105,6 +105,7 @@ async def test_los_endpoints_del_portal_bajan_el_bypass_en_la_conexion(
                 "starts_at": slot.isoformat(),
                 "client_name": "Bypass",
                 "client_phone": "+5491155551002",
+                "accepts_terms": True,
                 "idempotency_key": "bypass-portal-0001",
             },
         ),

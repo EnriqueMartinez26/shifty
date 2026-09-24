@@ -55,6 +55,7 @@ def _reserva(
         "starts_at": slot.isoformat(),
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
+        "accepts_terms": True,
         "idempotency_key": key,
     }
 
@@ -263,6 +264,7 @@ async def _originales(
                     # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
                     "client_email": "reprogramador@example.com",
                     "client_phone": TELEFONO_CLIENTE,
+                    "accepts_terms": True,
                     "idempotency_key": f"pg-orig-{via}-{i:03d}",
                 },
             )

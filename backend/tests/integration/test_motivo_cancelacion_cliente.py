@@ -75,6 +75,7 @@ async def test_el_motivo_llega_al_duenio_en_una_linea_y_el_asunto_no_cambia(
             # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
             "client_email": "motivo@example.com",
             "client_phone": TELEFONO,
+            "accepts_terms": True,
             "idempotency_key": "motivo-cancel-0001",
         },
     )

@@ -87,6 +87,8 @@ class PublicBookingCreate(BaseModel):
         default="manual", pattern=r"^(auto|manual|mercadopago)$"
     )
     # Aceptacion de los terminos de Shifty y de la politica de seña de la tienda.
+    # Obligatoria en el servidor (PV-09): antes solo la exigia el checkbox del
+    # front y un POST directo reservaba sin consentimiento registrado.
     accepts_terms: bool = False
 
     @field_validator("client_phone")
@@ -111,6 +113,14 @@ class PublicBookingCreate(BaseModel):
         if value <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado")
         return value
+
+    @model_validator(mode="after")
+    def require_terms(self) -> "PublicBookingCreate":
+        if self.accepts_terms is not True:
+            raise ValueError(
+                "Para reservar hay que aceptar los terminos y la politica de sena"
+            )
+        return self
 
     @model_validator(mode="after")
     def reject_control_chars_in_text(self) -> "PublicBookingCreate":

@@ -54,6 +54,7 @@ async def test_cancelar_desde_el_portal_lee_el_servicio_una_vez(
             # OTP (2026-09-20): sin email la ficha queda con el tecnico `.noreply`.
             "client_email": "cancela@example.com",
             "client_phone": TELEFONO,
+            "accepts_terms": True,
             "idempotency_key": "cancel-servicio-0001",
         },
     )

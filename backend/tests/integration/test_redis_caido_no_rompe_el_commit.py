@@ -85,6 +85,7 @@ def _reserva(store: str, service: str, staff: str, slot: datetime) -> dict[str, 
         "starts_at": slot.isoformat(),
         "client_name": "Carla Ruiz",
         "client_phone": "+5491155550091",
+        "accepts_terms": True,
         # Con email real: sin el, el alta inventa uno tecnico .noreply que por
         # contrato no recibe nada, y el test no podria ver el mail.
         "client_email": "carla@example.com",

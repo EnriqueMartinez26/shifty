@@ -68,6 +68,7 @@ async def test_la_reserva_publica_guarda_el_email_en_minusculas(
             "starts_at": slot.isoformat(),
             "client_name": "Juan",
             "client_phone": TELEFONO,
+            "accepts_terms": True,
             "client_email": "Juan@Gmail.COM",
             "idempotency_key": "email-normalizado-1",
         },

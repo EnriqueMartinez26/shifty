@@ -376,6 +376,7 @@ async def test_required_deposit_blocks_manual_when_store_disallows_coordination(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente Evasor",
             "client_phone": "+5491155522222",
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "blocked-manual-booking-001",
         },

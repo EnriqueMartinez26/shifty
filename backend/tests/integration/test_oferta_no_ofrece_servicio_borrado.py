@@ -67,6 +67,7 @@ async def test_un_servicio_borrado_no_genera_ofertas(
             "starts_at": slot.isoformat(),
             "client_name": "Lucia Espera",
             "client_phone": "+5491155550101",
+            "accepts_terms": True,
             "client_email": "lucia@example.com",
             "idempotency_key": "baja-reserva-0001",
         },

@@ -70,6 +70,7 @@ async def test_reservar_y_cancelar_se_ven_al_instante(client: AsyncClient) -> No
             "starts_at": slot.isoformat(),
             "client_name": "Cache",
             "client_phone": "+5491155550055",
+            "accepts_terms": True,
             "idempotency_key": "cache-reserva-0001",
         },
     )
@@ -184,6 +185,7 @@ async def test_reserva_revertida_por_falla_de_mp_libera_el_slot_al_instante(
             "starts_at": slot.isoformat(),
             "client_name": "Cache MP",
             "client_phone": "+5491155550066",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "cache-mp-falla-0001",
         },
@@ -278,6 +280,7 @@ async def test_redis_caido_en_la_compensacion_no_convierte_el_502_en_500(
         "starts_at": slot.isoformat(),
         "client_name": "Redis Caido",
         "client_phone": "+5491155550077",
+        "accepts_terms": True,
         "payment_method": "mercadopago",
         "idempotency_key": "cache-mp-redis-0001",
     }
