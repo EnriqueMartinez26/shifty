@@ -433,12 +433,15 @@ async def test_slo_no_cambia(
         "degraded",
     )
     assert store.id not in res.text
-    assert cuerpo["metrics"] == {
+    # F1-25 sumo metricas de atraso (test_ops_slo_atraso.py); las de siempre
+    # no cambian. Todo lo pendiente se creo recien: sin atraso ni alertas nuevas.
+    originales = ("pending_webhooks", "failed_webhooks", "pending_outbox")
+    assert {k: cuerpo["metrics"][k] for k in originales} == {
         "pending_webhooks": 3,
         "failed_webhooks": 1,
         "pending_outbox": 2,
     }
-    assert cuerpo["thresholds"] == {
+    assert {k: cuerpo["thresholds"][k] for k in originales} == {
         "pending_webhooks": 2,
         "failed_webhooks": 5,
         "pending_outbox": 1,
