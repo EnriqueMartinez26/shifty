@@ -10,10 +10,10 @@ de una semana, turnos de hoy, notificaciones), cuantas sentencias manda la app e
 request caliente y falla si alguna pasa su techo.
 
 Como se usa la tabla:
-- Los numeros son un TECHO "<= hoy", medido en integration/aud2 @ 04bc98f.
-  Bajarlos (Fase 3) es cambiar una linea; subirlos exige explicar en el PR que
-  sentencia nueva hace falta y por que no se puede resolver con ``in_()``,
-  join o cache (reglas 11 y 12).
+- Los numeros son un TECHO "<= hoy": medidos en integration/aud2 @ 04bc98f y
+  bajados tras la Fase 3 (ver la tabla). Bajarlos es cambiar una linea;
+  subirlos exige explicar en el PR que sentencia nueva hace falta y por que
+  no se puede resolver con ``in_()``, join o cache (reglas 11 y 12).
 - ``consultas`` son las sentencias de negocio; ``set_config`` se cuenta
   aparte porque es el costo fijo del contexto de tienda (RLS) y tiene su
   propio test (``test_identidad_una_vez_por_request``).
@@ -60,18 +60,23 @@ class Presupuesto:
 
 
 # Techo por request. Clave: "METODO /plantilla" (+ " [caso]" si la misma ruta
-# se mide en dos estados). Medido el 2026-09-24 en integration/aud2 @ 04bc98f.
+# se mide en dos estados). Medido primero el 2026-09-24 en integration/aud2 @
+# 04bc98f y bajado tras la Fase 3 (F3-01..F3-09) al valor medido en perf/f3a
+# sobre integration/aud2 @ 6e0cf76; entre parentesis, el techo anterior.
+# En el panel la primera consulta es la identidad (sesion + usuario, F1-01).
 PRESUPUESTOS: dict[str, Presupuesto] = {
-    "GET /public/stores/{slug}": Presupuesto(consultas=3, set_config=3),
-    "GET /public/services": Presupuesto(consultas=3, set_config=3),
-    "GET /public/staff": Presupuesto(consultas=5, set_config=3),
-    "GET /public/availability [miss]": Presupuesto(consultas=11, set_config=3),
-    "GET /public/availability [hit]": Presupuesto(consultas=2, set_config=3),
-    "POST /public/appointments": Presupuesto(consultas=22, set_config=5),
-    "GET /appointments/": Presupuesto(consultas=4, set_config=3),
-    "GET /dashboard/summary": Presupuesto(consultas=12, set_config=3),
-    "GET /reports/summary": Presupuesto(consultas=11, set_config=3),
-    "GET /notifications": Presupuesto(consultas=3, set_config=3),
+    "GET /public/stores/{slug}": Presupuesto(consultas=2, set_config=3),  # (3)
+    "GET /public/services": Presupuesto(consultas=2, set_config=3),  # (3)
+    "GET /public/staff": Presupuesto(consultas=3, set_config=3),  # (5)
+    "GET /public/availability [miss]": Presupuesto(consultas=5, set_config=3),  # (11)
+    "GET /public/availability [hit]": Presupuesto(consultas=1, set_config=3),  # (2)
+    "POST /public/appointments": Presupuesto(consultas=17, set_config=5),  # (22)
+    "GET /appointments/": Presupuesto(consultas=2, set_config=3),  # (4)
+    # Identidad + total + pagina (F3-06); antes sin techo.
+    "GET /appointments/search": Presupuesto(consultas=3, set_config=3),
+    "GET /dashboard/summary": Presupuesto(consultas=5, set_config=3),  # (12)
+    "GET /reports/summary": Presupuesto(consultas=7, set_config=3),  # (11)
+    "GET /notifications": Presupuesto(consultas=3, set_config=3),  # (3)
 }
 
 # Prefijos de las rutas calientes: el portal publico y las lecturas del panel
@@ -89,7 +94,6 @@ PREFIJOS_CALIENTES = (
 # decir por que no se mide.
 SIN_PRESUPUESTO: dict[str, str] = {
     "GET /appointments/availability": "misma logica que la publica, ya medida",
-    "GET /appointments/search": "busqueda con filtros; pendiente de Fase 3",
     "POST /appointments/": "alta desde el panel; la rafaga la cubre test_pg_reserva",
     "PATCH /appointments/{public_id}/absent": "transicion unitaria, fuera del camino caliente",
     "PATCH /appointments/{public_id}/cancel": "transicion unitaria, fuera del camino caliente",
@@ -421,6 +425,18 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
             "GET",
             "/appointments/",
             {"date": dia},
+            None,
+            panel,
+            200,
+        ),
+        (
+            "GET /appointments/search",
+            "GET",
+            "/appointments/search",
+            {
+                "from_date": (today_local() - timedelta(days=6)).isoformat(),
+                "to_date": dia,
+            },
             None,
             panel,
             200,
