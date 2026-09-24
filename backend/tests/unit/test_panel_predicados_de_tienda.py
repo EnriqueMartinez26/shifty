@@ -2,7 +2,8 @@
 
 2026-09-20, hallazgo AUD2-B5-16: el docstring de ``DashboardRepository`` afirma
 que "cada consulta lleva el predicado ``store_id`` de la tienda del request
-aunque RLS ya filtre", pero ``accredited_revenue_between`` llevaba solo
+aunque RLS ya filtre", pero ``accredited_revenue_between`` (hoy
+``week_totals``, F3-04) llevaba solo
 ``Appointment.store_id`` (por el join) y no ``Payment.store_id``. El
 aislamiento se sostenia igual —el join pasa por un ``appointments`` ya
 acotado—, pero era la unica capa de defensa en profundidad que faltaba, y

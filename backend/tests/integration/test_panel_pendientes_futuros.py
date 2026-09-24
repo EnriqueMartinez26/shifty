@@ -1,6 +1,7 @@
 """``pending_confirmations`` cuenta lo que el dueno todavia puede confirmar.
 
-2026-09-20, hallazgo AUD2-B5-11: ``count_pending()`` contaba TODOS los turnos
+2026-09-20, hallazgo AUD2-B5-11: ``count_pending()`` (hoy el contador de
+pendientes de ``DashboardRepository.day_counters``, F3-04) contaba TODOS los turnos
 ``pending`` de la tienda, sin ninguna cota de fecha, mientras el resto de los
 contadores del panel si acotan. Un turno pendiente cuya fecha ya paso no cambia
 de estado solo —el grafo lo lleva a ``absent``/``completed`` por accion del

@@ -884,6 +884,15 @@ class ReportService:
         vinculado (join a ``users``), de la tienda y, si corresponde, del
         profesional (``test_reportes_cohortes_acotadas.py`` lo compara contra
         la consulta vieja).
+
+        Supuesto de los inactivos: el usuario cliente de un turno es de la
+        MISMA tienda que el turno (``users.store_id`` igual al del turno).
+        Los inactivos se cuentan desde los usuarios de la tienda, asi que un
+        cliente de otra tienda (dato corrupto) no entraria; bajo RLS la
+        consulta vieja tampoco lo veia, porque su join a ``users`` ya estaba
+        acotado a la tienda. Costo del lado de ``users``: una sonda por
+        ``ix_appointments_client_id`` por cada usuario de la tienda, no por
+        cada turno de la historia; no depende del rango.
         """
         del_rango = (
             select(Appointment.client_id.label("client_id"))

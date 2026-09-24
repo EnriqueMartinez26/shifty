@@ -16,7 +16,9 @@ cerrado daba distinto segun cuando se lo mirara.
 ``Service.duration_minutes`` con un join a ``services``, cuando el turno tiene
 su propia columna ``duration_minutes`` congelada al reservar, igual que
 ``price_amount``. El precio ya habia aprendido esta leccion en
-``accredited_revenue_between``; la duracion quedo atras.
+``accredited_revenue_between``; la duracion quedo atras. (Desde F3-04 esas
+tres consultas viven en ``DashboardRepository.day_counters`` y
+``week_totals``, que suman y promedian el snapshot del turno.)
 
 No hace falta ``coalesce`` contra el catalogo: ``appointments.duration_minutes``
 nace NOT NULL (con ``server_default='30'``) en la migracion

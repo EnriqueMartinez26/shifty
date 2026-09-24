@@ -1,10 +1,12 @@
 """El panel mide la duracion del turno con el snapshot del turno, no con el
 servicio de hoy.
 
-2026-09-20, hallazgo AUD2-B5-10: ``ReportService._professional_item`` usa
-``appointment.duration_minutes`` (el snapshot congelado al reservar), pero
+2026-09-20, hallazgo AUD2-B5-10: el reporte por profesional usa
+``appointment.duration_minutes`` (el snapshot congelado al reservar; desde
+F3-04 sumado en SQL por ``ReportService._staff_totals``), pero
 ``DashboardRepository.booked_minutes_between`` y ``average_duration_between``
-hacian ``SUM/AVG(Service.duration_minutes)``, la duracion de lista de HOY.
+(hoy ``day_counters`` y ``week_totals``, F3-04) hacian
+``SUM/AVG(Service.duration_minutes)``, la duracion de lista de HOY.
 Sintoma: el dueno cambia un servicio de 30 a 45 minutos y la ocupacion de hoy
 en el panel se recalcula hacia atras, deja de coincidir con el reporte por
 profesional del mismo dia y muestra dos numeros para el mismo hecho, sin que
