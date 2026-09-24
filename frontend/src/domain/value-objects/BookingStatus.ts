@@ -15,10 +15,14 @@ const BOOKING_STATUSES: readonly BookingStatusValue[] = [
  * Estados absorbentes del turno.
  *
  * Replica el conjunto derivado de ALLOWED_STATUS_TRANSITIONS en el backend
- * (infrastructure/persistence/models/appointment.py). La equivalencia esta
- * congelada por test_el_conjunto_de_estados_terminales_es_el_documentado:
- * si el backend agrega un estado terminal, su CI falla indicando que hay que
- * actualizar esta lista.
+ * (infrastructure/persistence/models/appointment.py). La equivalencia es un
+ * contrato manual, ningun test lee los dos lados:
+ * - test_el_conjunto_de_estados_terminales_es_el_documentado (backend) compara
+ *   el grafo contra una constante Python propia; si el backend cambia sus
+ *   terminales, su CI falla y el mensaje pide actualizar esta lista.
+ * - BookingStatus.test.ts (columna "cobrable") congela esta lista del lado
+ *   del front; si alguien la edita, falla ese test.
+ * Cambiar un lado exige cambiar el otro a mano.
  */
 const TERMINAL_STATUSES: readonly BookingStatusValue[] = [
   'completed',
