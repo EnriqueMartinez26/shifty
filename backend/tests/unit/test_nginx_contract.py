@@ -409,3 +409,97 @@ def test_desarrollo_no_limita_mas_que_produccion() -> None:
     assert _conexiones_por_ip(dev, server_de_la_app(dev)) >= _conexiones_por_ip(
         prod, server_de_la_app(prod)
     )
+
+
+# --- F0-10: errores del edge en JSON canonico ---------------------------------
+
+# (codigos, named location, status, error_code, Retry-After)
+ERRORES_DEL_EDGE = [
+    (("502", "503", "504"), "@api_down", "503", "UPSTREAM_UNAVAILABLE", "5"),
+    # Mismo error_code que el tope de cuerpo de la app (security_middleware):
+    # el front lee un solo codigo para el mismo evento.
+    (("413",), "@request_too_large", "413", "REQUEST_TOO_LARGE", None),
+    (("429",), "@rate_limited", "429", "RATE_LIMITED", "1"),
+]
+
+
+def _cabeceras_agregadas(bloque: list[Directiva]) -> dict[str, str]:
+    return {d.args[0].lower(): d.args[1] for d in todas(bloque, "add_header")}
+
+
+@EDGES
+def test_server_tokens_apagado_para_todo_el_edge(ruta: Path) -> None:
+    http = leer(ruta)
+    assert una(http, "server_tokens").args == ("off",)
+    for server in servidores(http):
+        assert efectivo("server_tokens", http, server) == ("off",)
+
+
+@EDGES
+def test_toda_location_con_add_header_repite_los_del_server(ruta: Path) -> None:
+    # Un add_header en un location DESCARTA los del server: sin repetirlos, la
+    # respuesta de error sale sin nosniff, sin DENY y (prod) sin HSTS.
+    for server in servidores(leer(ruta)):
+        del_server = set(_cabeceras_agregadas(server))
+        for loc in locations(server):
+            propias = set(_cabeceras_agregadas(loc.bloque))
+            if propias:
+                assert del_server <= propias, (loc.args, del_server - propias)
+
+
+@EDGES
+def test_los_errores_de_api_del_edge_salen_en_json_canonico(ruta: Path) -> None:
+    # Regla 23: un 502/504 de nginx llegaba al front como HTML y rompia el
+    # parseo igual que el redirect sin /api.
+    server = server_de_la_app(leer(ruta))
+    for loc in locations_de_api(server):
+        paginas = {d.args[:-2]: d.args[-2:] for d in todas(loc.bloque, "error_page")}
+        for codigos, destino, *_ in ERRORES_DEL_EDGE:
+            assert paginas.get(codigos) == ("=", destino), (loc.args, codigos)
+        # Los errores que genera la APP (503 de readiness, 413 propio) pasan
+        # tal cual: solo se reemplazan los que genera nginx.
+        assert efectivo("proxy_intercept_errors", server, loc.bloque) in {
+            None,
+            ("off",),
+        }
+
+
+@EDGES
+@pytest.mark.parametrize(
+    ("destino", "status", "error_code", "retry_after"),
+    [fila[1:] for fila in ERRORES_DEL_EDGE],
+)
+def test_la_respuesta_de_error_del_edge_es_el_sobre_de_la_app(
+    ruta: Path, destino: str, status: str, error_code: str, retry_after: str | None
+) -> None:
+    loc = location(server_de_la_app(leer(ruta)), destino)
+    # `types {}` vacio: el Content-Type no sale de la extension de la URI
+    # (un /api/x.csv caido no puede responder text/csv).
+    assert bloque_con(loc, "types") == []
+    assert una(loc, "default_type").args == ("application/json; charset=utf-8",)
+    codigo, cuerpo = una(loc, "return").args
+    assert codigo == status
+    payload = json.loads(cuerpo)
+    assert payload["success"] is False
+    assert payload["error_code"] == error_code
+    assert payload["message"]
+    cabeceras = _cabeceras_agregadas(loc)
+    assert cabeceras.get("retry-after") == retry_after
+    assert cabeceras.get("cache-control") == "no-store"
+    for d in todas(loc, "add_header"):
+        assert d.args[-1] == "always", d.args
+
+
+@EDGES
+def test_la_subida_de_medios_admite_el_tope_de_la_app_mas_el_multipart(
+    ruta: Path,
+) -> None:
+    # La app acepta 3 MiB de cuerpo (MAX_UPLOAD_BODY_BYTES); con 3m el edge
+    # cortaba antes que ella lo que el multipart agrega, y el 413 no era el de
+    # la app. El resto de /api sigue en 32k.
+    server = server_de_la_app(leer(ruta))
+    media = location(server, "=", "/api/stores/me/media")
+    assert una(media, "client_max_body_size").args == ("3200k",)
+    for loc in locations_de_api(server):
+        if loc.bloque is not media:
+            assert efectivo("client_max_body_size", server, loc.bloque) == ("32k",)
