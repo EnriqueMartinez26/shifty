@@ -169,6 +169,8 @@ services:
           memory: 96M
 
   rabbitmq:
+    # Desarrollo conserva la consola de management (127.0.0.1:15672);
+    # produccion corre la imagen sin el plugin (docker-compose.prod.yml).
     image: rabbitmq:3.13.7-management-alpine
     container_name: shifty_rabbitmq
     restart: always
@@ -180,6 +182,10 @@ services:
       - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      # F0-16: alarma de memoria absoluta (180 MiB, debajo del limite de 256M)
+      # y piso de disco libre. Ver deploy/rabbitmq/rabbitmq.conf.
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/10-shifty.conf:ro
+    # check_running es del CLI base: no depende del plugin de management.
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 10s

@@ -1016,3 +1016,54 @@ def test_cada_uso_de_redis_apunta_a_su_instancia() -> None:
             ("produccion", _env_prod("backend")[clave]),
         ):
             assert valor == "0.5" or valor.endswith(":-0.5}"), (vista, clave, valor)
+
+
+# --- RabbitMQ acotado (F0-16, plan de rendimiento; decision 6) ----------------
+#
+# Sin configuracion, RabbitMQ calcula su alarma de memoria como el 40% de la
+# RAM que VE, que en un contenedor es la del host (16 GB): el limite de 256 MB
+# del cgroup lo mataba por OOM mucho antes de que la alarma frenara a los
+# publicadores. Con el umbral absoluto por debajo del limite, la alarma llega
+# primero. Produccion corre la imagen sin management (el 15672 ya no se
+# publica y el plugin cuesta memoria).
+
+RABBITMQ_CONF = COMPOSE.parent / "deploy" / "rabbitmq" / "rabbitmq.conf"
+RABBITMQ_CONF_EN_EL_CONTENEDOR = "/etc/rabbitmq/conf.d/10-shifty.conf"
+
+
+def _conf_de_rabbitmq() -> dict[str, str]:
+    return {
+        clave.strip(): valor.strip()
+        for linea in RABBITMQ_CONF.read_text(encoding="utf-8").splitlines()
+        if linea.strip() and not linea.lstrip().startswith("#")
+        for clave, _, valor in [linea.partition("=")]
+    }
+
+
+def test_rabbitmq_frena_a_los_publicadores_antes_del_oom() -> None:
+    conf = _conf_de_rabbitmq()
+    assert conf.get("vm_memory_high_watermark.absolute") == "180MiB", conf
+    assert conf.get("disk_free_limit.absolute") == "1GB", conf
+
+    for vista, servicios in {
+        "compose base": _services(),
+        "produccion (base + override)": _servicios_de_produccion(),
+    }.items():
+        rabbit = servicios["rabbitmq"]
+        montajes = [str(v) for v in rabbit.get("volumes") or []]  # type: ignore[attr-defined]
+        esperado = f"./deploy/rabbitmq/rabbitmq.conf:{RABBITMQ_CONF_EN_EL_CONTENEDOR}:ro"
+        assert esperado in montajes, (vista, montajes)
+        assert _megas(_limite(rabbit)) == 256, (vista, _limite(rabbit))
+        # 180 MiB de alarma dentro de 256 MB de limite: margen para Erlang.
+        assert 180 < _megas(_limite(rabbit))
+        # El healthcheck no puede depender del plugin de management.
+        prueba = str(rabbit["healthcheck"]["test"])  # type: ignore[index]
+        assert "check_running" in prueba and "15672" not in prueba, prueba
+
+
+def test_produccion_corre_rabbitmq_sin_management() -> None:
+    imagen = str(_servicios_de_produccion()["rabbitmq"]["image"])
+    assert imagen == "rabbitmq:3.13.7-alpine", imagen
+    assert "management" in str(_services()["rabbitmq"]["image"]), (
+        "desarrollo conserva la consola de management"
+    )
