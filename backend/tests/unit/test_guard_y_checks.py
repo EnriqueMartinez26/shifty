@@ -203,3 +203,43 @@ def test_logrotate_cubre_los_logs_de_los_scripts() -> None:
     texto = (DEPLOY / "logrotate" / "shifty").read_text(encoding="utf-8")
     assert "/var/log/shifty/*.log" in texto
     assert "rotate" in texto and "copytruncate" in texto
+
+
+# --- scripts/cert-deploy-hook.sh: renovacion de certbot ------------------------
+
+
+def test_el_hook_de_certbot_copia_los_certificados_y_recarga_el_borde(
+    host: Host,
+) -> None:
+    """Se COPIAN (no symlink): ./nginx/certs se monta en el contenedor y un
+    symlink a /etc/letsencrypt/live apuntaria a una ruta que adentro no
+    existe. La recarga necesita APP_VERSION: el compose de prod la exige."""
+    linaje = host.raiz / "letsencrypt" / "live" / "shifty.example.com"
+    linaje.mkdir(parents=True)
+    (linaje / "fullchain.pem").write_text("CADENA\n", encoding="utf-8")
+    (linaje / "privkey.pem").write_text("CLAVE\n", encoding="utf-8")
+    (host.repo / "nginx" / "certs").mkdir(parents=True)
+    (host.repo / ".deploy").mkdir()
+    (host.repo / ".deploy" / "current").write_text("v7\n", encoding="utf-8")
+
+    resultado = host.correr(
+        "cert-deploy-hook.sh",
+        RENEWED_LINEAGE=linaje.as_posix(),
+        FAKE_EXIGE_VERSION="1",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    certs = host.repo / "nginx" / "certs"
+    assert not (certs / "fullchain.pem").is_symlink()
+    assert (certs / "fullchain.pem").read_text(encoding="utf-8") == "CADENA\n"
+    assert (certs / "privkey.pem").read_text(encoding="utf-8") == "CLAVE\n"
+    llamadas = host.llamadas()
+    assert _hay(llamadas, r"compose exec -T nginx nginx -t")
+    assert _hay(llamadas, r"compose exec -T nginx nginx -s reload")
+
+
+def test_el_hook_de_certbot_sin_linaje_falla(host: Host) -> None:
+    resultado = host.correr("cert-deploy-hook.sh")
+
+    assert resultado.returncode != 0
+    assert "RENEWED_LINEAGE" in resultado.stderr
