@@ -1,0 +1,150 @@
+# Deploy Runbook (Shifty)
+
+How a release reaches the VPS, how it is rolled back, and what has to be true on the server before the first deploy. Plan items F0-02, F0-03, F0-20, F0-21 (`plan-correccion-rendimiento.md`).
+
+The short version:
+
+```bash
+# CI already published ghcr.io/enriquemartinez26/shifty-{backend,frontend,nginx}:<sha>
+cd /opt/shifty && git pull
+make deploy APP_VERSION=<sha>      # migrate, roll the backend, gate, auto-rollback
+make rollback                      # back to .deploy/previous, never migrates
+make deploy-edge                   # only when nginx's image or nginx/nginx.prod.conf changed
+```
+
+## 1. One-time server setup
+
+| Prerequisite | How to check |
+| --- | --- |
+| Docker Compose >= 2.24 (`ports: !reset []` in `docker-compose.prod.yml`) | `docker compose version` |
+| Server `.env` sets `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` and `COMPOSE_PROJECT_NAME=shifty` | `docker compose config --services` lists the prod services without `-f` |
+| Server `.env` does **not** set `APP_VERSION`. `docker-compose.prod.yml` requires it for every compose command (`${APP_VERSION:?}`); the deploy passes it and records it in `.deploy/current`, and the host scripts (backup, latency) read it from there. A value pinned in `.env` goes stale after the first deploy, and a bare `docker compose up -d` would bring that old version back | `grep -c APP_VERSION .env` is 0 |
+| The deploy user is in the `docker` group (the scripts never use `sudo`) | `docker ps` as that user |
+| `docker login ghcr.io` with a token that has `read:packages` (the packages are private) | `docker pull ghcr.io/enriquemartinez26/shifty-backend:latest` |
+| `/etc/shifty/ops.env` from `deploy/ops.env.example` (`DOMAIN`, `BACKUP_REMOTE`, alerts) | `sudo cat /etc/shifty/ops.env` |
+| Daily backup timer enabled, rclone remote and bucket (`docs/BACKUP_RESTORE_RUNBOOK.md`) | `systemctl list-timers shifty-backup.timer`, `cat /var/backups/shifty/last-success` |
+| Host cron installed: `deploy/cron/shifty-guard`, `deploy/cron/shifty-latency`, `deploy/logrotate/shifty` | `ls /etc/cron.d/shifty-*` |
+| certbot on the host with webroot `/opt/shifty/nginx/acme` (compose mounts `./nginx/acme` at `/var/www/acme` in nginx) and `scripts/cert-deploy-hook.sh` as deploy hook | `certbot renew --dry-run` |
+| After adding the `pg_backups` volume to `docker-compose.prod.yml`, the `db` container was recreated once so the volume attaches (see below) | `docker compose exec db ls /backups` |
+| python3 on the host (the latency report is stdlib only) | `python3 --version` |
+
+certbot:
+
+```bash
+install -d /opt/shifty/nginx/acme /opt/shifty/nginx/certs
+certbot certonly --webroot -w /opt/shifty/nginx/acme -d <domain> \
+  --deploy-hook /opt/shifty/scripts/cert-deploy-hook.sh
+```
+
+The webroot is the HOST path of the bind mount: compose mounts `./nginx/acme` read-only at `/var/www/acme`, where `nginx/nginx.prod.conf` serves `/.well-known/acme-challenge/`. The certificates are **copied**, not symlinked, into `nginx/certs` (mounted at `/etc/nginx/certs`): a symlink to `/etc/letsencrypt/live/...` would point, inside the container, to a path that does not exist. `scripts/cert-deploy-hook.sh` does the copy (`$RENEWED_LINEAGE`) and then runs, in effect, `cd /opt/shifty && APP_VERSION=$(cat .deploy/current) docker compose exec -T nginx nginx -t && ... nginx -s reload` (the prod compose file needs `APP_VERSION` for every command). The first time, run the hook by hand with `RENEWED_LINEAGE=/etc/letsencrypt/live/<domain>` so `nginx/certs` exists before nginx starts with TLS. No OCSP stapling: Let's Encrypt turned it off.
+
+`pg_backups` volume, once: the `db` service only gets the new `/backups` mount when its container is recreated, and `make deploy` never recreates `db`. In a maintenance window (Postgres restarts, a few seconds of 503):
+
+```bash
+cd /opt/shifty
+APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build db
+APP_VERSION=$(cat .deploy/current) docker compose exec db ls -ld /backups
+```
+
+Before the first deploy with this script there is no `.deploy/current`; use the sha that is about to be deployed.
+
+The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; edit those paths if it lives elsewhere. `SHIFTY_DIR` defaults to the clone the script belongs to, so do not set it in a shared `ops.env`.
+
+## 2. Images (CI)
+
+`.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: every `up` and `run` in `scripts/deploy.sh` carries `--no-build` (and every `up` `--remove-orphans`, so a renamed service does not leave its old container behind), and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
+
+`docker-compose.prod.yml` references `ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` for backend (API, workers and beat) and frontend. The production edge runs the base image `nginx:1.27.5-alpine` with `nginx/nginx.prod.conf` bind-mounted, so its image does not change per release; the `shifty-nginx` image CI publishes is not what production runs.
+
+## 3. Deploy sequence (`scripts/deploy.sh deploy`)
+
+1. **Lock** `.deploy/lock` (a second deploy stops; the guard does not restart containers while it exists).
+2. **Preflight**, before touching anything:
+   - `COMPOSE_FILE` (from the environment or the clone's `.env`) includes `docker-compose.prod.yml`. The script `cd`s into the clone first, so it can be called from anywhere.
+   - `BACKUP_DIR` exists (created with mode 0700 if missing: the `pg_backups` volume is a bind and does not create it).
+   - Compose >= 2.24 and `docker compose config -q` passes.
+   - Every service in `DEPLOY_SERVICES` exists (default: `backend celery_worker celery_worker_interactive celery_beat frontend`; nginx is not in the list).
+   - The `db` service is running (the deploy uses `--no-deps` and never starts or recreates db, redis or rabbitmq).
+   - Disk under 80 %.
+   - `/var/backups/shifty/last-success` is younger than 24 h (`DEPLOY_SKIP_BACKUP_CHECK=1` only on staging).
+3. Save the running version to `.deploy/previous` (from `.deploy/current`, or the tag of the running backend image on the first run).
+4. `docker compose pull` of the app services, then `docker image inspect` of every expected `image:tag`. A failed pull or a missing image stops the deploy here, before migrating.
+5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps --no-build -T backend alembic upgrade head`. If it fails, nothing was recreated.
+6. **Backend, gradually**: `up -d --no-deps --no-build --remove-orphans --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
+7. The rest of the app: `up -d --no-deps --no-build --remove-orphans celery_worker celery_worker_interactive celery_beat frontend`. Compose only recreates what changed. The frontend container is recreated when its image changes (every release): the SPA answers 502 for a moment while it restarts. Accepted: the API keeps serving and the browser retries.
+8. `nginx -t && nginx -s reload`. On a normal deploy the edge is only **reloaded**, never recreated or restarted; it re-resolves `backend` by itself.
+9. Write `.deploy/current`.
+10. **Gate** (60 s: 12 checks, 5 s apart):
+    - `https://$DOMAIN/api/ops/health/ready` and `https://$DOMAIN/` answer 2xx; one failed check in total is tolerated.
+    - No container of the project is `unhealthy`.
+    - `rabbitmq-diagnostics alarms` is empty (with a memory or disk alarm RabbitMQ blocks publishers: OTP and jobs stall while `/ready` still answers).
+    - 5xx rate in the last 2 minutes of the nginx access log (`"s":"5..."`) under 0.5 %, counted only when there are at least 3 errors (one stray 502 on low traffic does not trigger a rollback).
+11. Gate failed: **automatic rollback** (`DEPLOY_AUTO_ROLLBACK=1`), then exit 1. If the rollback's own gate also fails, the script alerts and exits 2: a person has to look.
+
+Every step logs to stderr with a UTC timestamp. Failures send an alert through `ALERT_EMAIL`/`ALERT_WEBHOOK_URL`.
+
+## 4. Rollback (`scripts/deploy.sh rollback`)
+
+`APP_VERSION=$(cat .deploy/previous)`, then steps 4 and 6-10 **without migrating**. It does not rewrite `.deploy/previous`, so running it twice does not bounce between versions. Preflight skips the disk and backup checks: it is the emergency path.
+
+If the pull fails (GHCR down, token expired), the rollback continues with the local images, but only if every previous `image:tag` is still on the host. If one is missing it alerts and exits 2 without touching anything: there is nothing to roll back to, and a person decides.
+
+## 4b. The edge (`make deploy-edge`)
+
+nginx is recreated only by `scripts/deploy.sh edge`, and only when something changed: the id of its image (after `pull nginx`) differs from the running container's, or the sha256 of `nginx/nginx.prod.conf` differs from the one recorded in `.deploy/edge-conf.sha256` on the last run. A conf change needs a recreate, not just a reload: the conf is a single-file bind mount, and when `git pull` replaces the file the container keeps seeing the old inode. Recreating the edge drops every connection for a moment; do it outside peak hours. With nothing changed it only runs `nginx -t && nginx -s reload`.
+
+Rollback is safe only because of the migration rule below: the previous release must work against the schema the new one migrated to.
+
+## 5. Migrations: expand/contract
+
+- A release only **adds** (expand): new nullable columns, new tables, new indexes. Code that stops using a column ships first; the migration that drops it (contract) ships in a **later** release.
+- Indexes on live tables: `CREATE INDEX CONCURRENTLY` inside `op.get_context().autocommit_block()`, preceded by `DROP INDEX CONCURRENTLY IF EXISTS` (a failed concurrent build leaves an invalid index behind).
+- Constraints: `NOT VALID` first, `VALIDATE CONSTRAINT` in a separate step.
+- Backfills in batches, never one `UPDATE` over the whole table; no `ALTER TYPE` that rewrites a table.
+- `lock_timeout` for the migration role (`alembic/env.py`, plan F0-06): a migration that waits for a lock fails fast instead of queueing every request behind it.
+
+## 6. Staging: a second compose project on the same VPS
+
+Until launch (plan §7, decision 29) staging is another clone, for example `/opt/shifty-staging`, with its own `.env`:
+
+- `COMPOSE_PROJECT_NAME=shifty-staging`: containers, networks and volumes (the database included) are separate from production. Container names are `${COMPOSE_PROJECT_NAME:-shifty}_<service>` in the compose files, so the two projects do not collide (a fixed `container_name` would stop the second project from starting). The guard watches only its own project (`COMPOSE_PROJECT_NAME`).
+- Its own secrets, `DOMAIN` and `BACKUP_DIR=/var/backups/shifty-staging` with `BACKUP_ALLOW_LOCAL_ONLY=1`, in its own ops file; point its scripts at it with `SHIFTY_OPS_ENV=/etc/shifty/ops-staging.env`.
+- Production nginx publishes 80 and 443, so staging nginx needs other host ports (for example `127.0.0.1:8443:443`) through an extra override listed in its `COMPOSE_FILE`. That override does not exist yet.
+- Deploy it with the same script: `APP_VERSION=<sha> DEPLOY_SKIP_BACKUP_CHECK=1 bash scripts/deploy.sh deploy` from its clone.
+- It shares 16 GB with production: bring it up for a test and take it down afterwards (`docker compose down`, the volumes stay).
+
+The monthly backup drill can restore into staging (`docs/BACKUP_RESTORE_RUNBOOK.md`).
+
+### Acceptance test against staging
+
+Run Locust from **another machine** (plan §9). The edge limits requests per client IP: `/api/` 20 r/s (burst 40), `/api/auth/` 3 r/s (burst 6), 40 connections per IP, all answered as `429 RATE_LIMITED`. A single load generator hits those limits long before the app does, so use several source IPs or raise the limits temporarily in the staging nginx config, and write down which one was used next to the results.
+
+## 7. What the edge answers by itself
+
+nginx returns canonical JSON for its own errors under `/api`: `502/503/504` as `UPSTREAM_UNAVAILABLE` with `Retry-After: 5`, `413` as `REQUEST_TOO_LARGE`, and `429` as `RATE_LIMITED`. During a plain (non-gradual) backend recreate, clients see `UPSTREAM_UNAVAILABLE` and retry.
+
+`X-Request-ID` belongs to Mercado Pago's webhook signature and is never overwritten; the edge's own id goes to the backend as `X-Edge-Request-Id` and appears as `rid` in the access log.
+
+## 8. Host operations that run on their own
+
+| What | When | Script | Alerts when |
+| --- | --- | --- | --- |
+| Restart `unhealthy` containers | every minute (cron) | `scripts/guard.sh` | every restart. Never restarts `db` or `rabbitmq` (alert only), one-off containers (`compose run`) or anything while `db` or `redis_state` is unhealthy (the rest fails because of them). Caps: 3 restarts per container and 6 in total per hour |
+| NTP, TLS certificate, disk, per-container memory, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit |
+| Backup freshness | hourly (cron) | `scripts/backup-check.sh` | last successful backup > 26 h (critical > 48 h) |
+| Latency and 5xx per route | every 5 min (cron) | `scripts/latency-check.sh` + `backend/scripts/latency_report.py` | a route with >= 20 requests over p95 500 ms or 5xx 0.1 %, or global 5xx over 0.1 % with >= 200 requests in the window |
+| Daily backup | 03:00 ART (systemd timer) | `scripts/backup.sh` | any failure, or no `BACKUP_REMOTE` |
+| Certificate renewal | certbot's own timer | `scripts/cert-deploy-hook.sh` | nginx did not reload after a renewal |
+
+Repeated alerts are silenced for a while (30 minutes to 6 hours depending on the check) so a condition that lasts does not send a mail every minute. The guard does nothing while `.deploy/lock` exists.
+
+Logs: the scripts write to `/var/log/shifty/*.log` (14 days, `deploy/logrotate/shifty`). The nginx error log still prints the full request line, query string included (it can carry `client_phone`), on 429 and upstream errors: keep it only in the container's json-file log with the size cap of the compose logging settings (plan F0-22: json-file 20 MB x 5) and do not copy it anywhere else. `latency-check.sh` reads the access log into a temporary file and deletes it.
+
+## 9. Troubleshooting
+
+- **"hay otro deploy en curso"**: another deploy is running, or one was killed. If none is running, `rmdir .deploy/lock`.
+- **"COMPOSE_FILE ... no incluye docker-compose.prod.yml"**: the server `.env` lacks `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml`.
+- **"faltan imagenes locales"**: the sha was not published (check the `Build images` run for that commit) or `docker login ghcr.io` expired.
+- **Manual compose commands** need the version (the prod compose file refuses to interpolate without it): `APP_VERSION=$(cat .deploy/current) docker compose ps`.
+- **First deploy with this script**: `.deploy/previous` comes from the tag of the running backend image. If that is `latest` or a local build, there is nothing to roll back to; say so in the release notes.
+- **The gate failed but the release is fine** (for example the domain's DNS or certificate): fix the cause and deploy the same sha again; migrations are idempotent at head.

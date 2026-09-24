@@ -17,7 +17,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from scripts.backup_db import _sha256_file  # noqa: E402
+from scripts.backup_db import _default_database_url, _sha256_file  # noqa: E402
 from scripts.restore_backup import _build_psql_command  # noqa: E402
 
 
@@ -61,7 +61,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--evidence-dir", default="backups/evidence", help="Directorio de evidencias"
     )
-    parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
+    # Rol DUENO, nunca DATABASE_URL (rol de la app, con RLS): F0-20.
+    parser.add_argument(
+        "--database-url",
+        default=_default_database_url(os.environ),
+        help="URL del rol dueno (BACKUP_DATABASE_URL o MIGRATION_DATABASE_URL)",
+    )
     parser.add_argument(
         "--restore-database-url",
         default=os.environ.get("DRILL_DATABASE_URL", ""),
@@ -103,7 +108,15 @@ def _paso_backup(
     args: argparse.Namespace, backup_dir: Path, evidence: dict[str, Any]
 ) -> None:
     if not args.database_url:
-        _add_step(evidence, "backup", False, stderr="DATABASE_URL no configurado")
+        _add_step(
+            evidence,
+            "backup",
+            False,
+            stderr=(
+                "BACKUP_DATABASE_URL (o MIGRATION_DATABASE_URL) no configurado: "
+                "el backup va con el rol dueno, no con DATABASE_URL"
+            ),
+        )
         return
     code, out, err = _run(
         [

@@ -129,10 +129,11 @@ def test_makemigrations_no_pisa_una_migracion_del_host() -> None:
 
 def test_todo_objetivo_del_makefile_es_phony() -> None:
     texto = MAKEFILE.read_text(encoding="utf-8")
-    phony = re.search(r"^\.PHONY:(.*)$", texto, re.MULTILINE)
+    # Puede haber mas de una linea .PHONY (cada bloque declara los suyos).
+    phony = re.findall(r"^\.PHONY:(.*)$", texto, re.MULTILINE)
     assert phony, "el Makefile no declara .PHONY"
     objetivos = set(re.findall(r"^([a-z][\w-]*):(?!=)", texto, re.MULTILINE))
-    faltan = objetivos - set(phony.group(1).split())
+    faltan = objetivos - {o for linea in phony for o in linea.split()}
     assert not faltan, f"objetivos sin .PHONY (un archivo homonimo los apaga): {faltan}"
 
 
@@ -255,3 +256,22 @@ def test_make_dev_quita_los_contenedores_de_servicios_que_ya_no_existen() -> Non
     receta = _receta("dev")
     assert receta, "El Makefile no define el objetivo dev"
     assert any("up" in c and "--remove-orphans" in c for c in receta), receta
+
+
+# --- deploy, rollback y backup (F0-03, F0-20; 2026-09-24) ----------------------
+
+
+def test_los_atajos_de_operacion_llaman_a_los_scripts_del_host() -> None:
+    """`make deploy` pasa APP_VERSION al script (que la exige) y ninguno corre
+    en un contenedor: son del host, con el CLI de docker."""
+    esperado = {
+        "deploy": "scripts/deploy.sh deploy",
+        "rollback": "scripts/deploy.sh rollback",
+        "deploy-edge": "scripts/deploy.sh edge",
+        "backup": "scripts/backup.sh",
+    }
+    for objetivo, script in esperado.items():
+        receta = " ".join(_receta(objetivo))
+        assert f"bash {script}" in receta, (objetivo, receta)
+        assert not corre_en_un_contenedor(receta), (objetivo, receta)
+    assert 'APP_VERSION="$(APP_VERSION)"' in " ".join(_receta("deploy"))

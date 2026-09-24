@@ -93,13 +93,29 @@ Una instrucción en lenguaje natural no es una garantía.
   en las consultas.** Las dos capas conviven a propósito: RLS es la
   garantía (rol `shifty_app` sin BYPASSRLS, `main.py` aborta si el rol
   puede saltarla) y los filtros `store_id` de repositorios, reportes y panel
-  son defensa en profundidad (`test_aislamiento_multitenant.py`,
+  son defensa en profundidad y, bajo RLS, el camino al índice (§3, Base de
+  datos) (`test_aislamiento_multitenant.py`,
   `test_reportes_aislamiento_por_tienda.py`; la cuenta de filtros no es un
   control, cambia con cada consulta). No se quita ninguno de los dos. Los
   jobs de Celery fijan bypass explícito (`set_tenant_context(None, True)` +
   `_apply_tenant_context`).
 - **Outbox/Inbox** para efectos secundarios y webhooks (`OutboxMessage`,
   `WebhookInbox`), procesados por Celery beat cada minuto.
+- **Dos Redis con papeles distintos** (plan §7, decisión 5). El caché de
+  disponibilidad va a `redis_cache` por `core/redis.py::get_availability_cache`
+  (`REDIS_CACHE_URL`; `allkeys-lru`, sin persistencia: perderlo solo cuesta
+  recalcular). Rate limit, idempotencia, OTP, lockout, OAuth y los resultados
+  de Celery van a `redis_state` por `REDIS_URL` (`noeviction`): un desalojo
+  nunca puede aflojar una protección. Nada de estado nuevo en el Redis de
+  caché, ni caché nuevo en el de estado.
+- **Publicar a Celery desde un request pasa por un helper único** con
+  `asyncio.to_thread` y tope de 2 s que nunca propaga; ninguna llamada
+  síncrona de red dentro de un `async def` (R8-02: con el broker caído,
+  publicar en línea congelaba la API hasta 33 s). El helper es F1-03 del
+  plan de rendimiento y todavía no existe: hoy el único `enqueue_*` es
+  `notifications/tasks.py::enqueue_otp_email`, que atrapa todo y se despacha
+  con `BackgroundTasks`. Un `enqueue_*` nuevo usa el helper (o lo crea, con
+  su test), no copia ese patrón.
 - **Circuit breaker** (`core/circuit_breaker.py`) envuelve Mercado Pago. No
   se llama al SDK del proveedor desde un camino nuevo. El **rate limit**
   (`core/rate_limit.py`) es un middleware por IP con política propia solo
@@ -170,19 +186,26 @@ Una instrucción en lenguaje natural no es una garantía.
    LOCKED` y commit, llamada sin lock, resultado en otra transacción;
    `payments/jobs.py::_claim_and_expire_preferences`, B1-04,
    `test_pg_vencimiento_preferencia.py`).
-6. **Idempotencia de mutaciones por `core/idempotency.py`** (Redis;
-   fail-open documentado si Redis cae: `RedisError` → sigue sin
-   protección). `idempotency_key` único en el turno. No se inventan claves
+6. **Idempotencia de mutaciones por `core/idempotency.py`** (Redis de
+   ESTADO, `redis_state` por `REDIS_URL`, `noeviction`; fail-open
+   documentado si Redis cae: `RedisError` → sigue sin protección). `idempotency_key` único en el turno. No se inventan claves
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
    `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
-   (`modules/payments/model.py`).
+   (`modules/payments/model.py`). `X-Request-ID` es parte de la firma de MP
+   y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
+   (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
+   `tests/unit/test_nginx_contract.py`).
 8. **Jobs de Celery**: un loop por proceso (`core/worker_loop`), nunca
    `asyncio.run` por tarea; `SKIP LOCKED` en los batches, recordatorios
    incluidos. (2026-09-08: el pool quedaba atado a un loop cerrado.)
    (`test_pg_lotes_skip_locked.py`, `test_pg_recordatorios_skip_locked.py`)
+   El OTP va a la cola `interactive` (`core/celery_app.py::task_routes`),
+   que atiende un worker aparte, `celery_worker_interactive`
+   (`--concurrency=1`): su latencia no depende de los lotes de la cola
+   `celery`. Los mails de reserva irán ahí también (Fase 2).
 9. **Todo parámetro numérico de la API lleva `ge` Y `le`.** Un solo lado
    deja un 500 alcanzable (desborde de bigint con `offset`, 2026-09-04).
 
@@ -209,7 +232,29 @@ Una instrucción en lenguaje natural no es una garantía.
     `NotImplementedError` y se vuelve desde backup. Head único:
     `tests/architecture/test_migrations.py` en el job
     `contract-and-migrations` (`alembic heads` solo lista). Los timeouts del
-    rol de la app viven en la migración `app_role_timeouts`.
+    rol de la app viven en la migración `app_role_timeouts`; los de las
+    migraciones, en `alembic/env.py` (`SET lock_timeout = '3s'` y
+    `transaction_per_migration=True`: una revisión que espera un lock aborta
+    y no arrastra a las demás).
+
+- **Migraciones sin corte (expand/contract).** El deploy migra ANTES de
+  recrear, con el código viejo sirviendo, y el rollback vuelve al código
+  anterior SIN migrar (`scripts/deploy.sh`, `docs/DEPLOY_RUNBOOK.md`): cada
+  release solo agrega, y lo que quita (columna, tabla, restricción) va un
+  release después. Índices sobre tablas vivas con `CREATE INDEX
+  CONCURRENTLY` dentro de `autocommit_block()` y `DROP INDEX CONCURRENTLY IF
+  EXISTS` antes; restricciones con `NOT VALID` y `VALIDATE` aparte; backfills
+  por lotes; sin `ALTER TYPE` que reescriba la tabla. `alembic/env.py` fija
+  `lock_timeout = '3s'` y una transacción por revisión (F0-06): una migración
+  que espera un lock falla en vez de encolar todas las requests detrás.
+- **Bajo RLS solo los predicados leakproof usan índices.** Postgres no
+  aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
+  que el filtro `store_id` explícito es el camino al índice, no solo defensa.
+  Nada de `lower()`, `&&`, `timezone()` ni `ILIKE` en consultas calientes
+  (R7-01: el login recorre `users` entera; R7-02: el solapamiento recorre
+  toda la historia del profesional, incluso bajo `FOR UPDATE`). Hoy
+  el login todavía compara `lower(User.email)` (F1-12 lo cambia) y marcar
+  funciones `LEAKPROOF` está descartado: Postgres no lo verifica.
 
 ### Seguridad
 
@@ -269,7 +314,9 @@ Una instrucción en lenguaje natural no es una garantía.
   cambia todos los días (editar o borrar un servicio) usa
   `invalidate_store_availability`. Las claves de versión y generación tienen
   TTL y se leen con `GETEX`, que lo estira; nunca `delete` a mano ni
-  comodines. (`test_cache_disponibilidad.py`,
+  comodines. La invalidación recibe el cliente del Redis de caché
+  (`core/redis.py::get_availability_cache`), nunca el de estado.
+  (`test_cache_disponibilidad.py`,
   `test_generacion_de_cache_por_tienda.py`, `test_version_de_cache_expira.py`)
 - **La hora que ve el cliente es hora argentina.** `start_time`/`end_time` de
   la disponibilidad y todos los mails se formatean con `ARGENTINA_TZ`;
@@ -351,11 +398,22 @@ Una instrucción en lenguaje natural no es una garantía.
     (`main.py::BootErrorMiddleware`; con settings de respaldo el lifespan no
     toca la base, `test_boot_error_lifespan.py`); Celery aborta en
     `worker_init`/`beat_init`. (2026-09-08: worker y beat corrían "ready"
-    con base inválida.)
-22. **Un solo bloque `x-app-environment` en compose** para API, worker y
-    beat; `test_compose_contract` exige paridad. Las imágenes se
-    reconstruyen juntas (reconstruir solo `backend` dejó a Celery con la
-    imagen vieja, como root). Ningún servicio de la app monta el código del
+    con base inválida.) El healthcheck de los dos workers es un archivo de
+    latido: `core/celery_app.py` lo toca en cada `heartbeat_sent`
+    (`/var/lib/shifty/worker-heartbeat`) y más de 120 s sin tocarlo es
+    `unhealthy`. El latido lo emite el consumidor sobre su conexión al broker:
+    solo late mientras esa conexión vive, así que sigue detectando un worker
+    vivo que dejó de consumir (AUD2-C-09) sin levantar un Python por chequeo
+    como `inspect ping`.
+22. **Un solo bloque `x-app-environment` en compose** para `backend`,
+    `celery_worker`, `celery_worker_interactive` y `celery_beat`;
+    `test_compose_contract` exige paridad. Los cuatro corren UNA imagen,
+    `ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION}`, que solo
+    `backend` construye; después se recrean los cuatro juntos (recrear solo
+    `backend` dejó a Celery con la imagen vieja, como root). Producción nunca
+    construye (`build: !reset null` en `docker-compose.prod.yml`: la imagen
+    sale de GHCR) y su borde es `nginx:1.27.5-alpine` con la config montada,
+    no una imagen propia. Ningún servicio de la app monta el código del
     host sobre `/app`: corre la imagen, también en producción, donde un
     `volumes: []` del override no cancelaba el montaje porque compose fusiona
     listas (2026-09-24, `test_compose_contract`). Por lo mismo, lo que el
@@ -364,7 +422,42 @@ Una instrucción en lenguaje natural no es una garantía.
     Compose >= 2.24.
 23. **`redirect_slashes=False`**: detrás de nginx el 307 pierde `/api` y el
     front recibe HTML. Cada `apiClient` usa la ruta exacta;
-    `test_frontend_routes_contract` lo audita.
+    `test_frontend_routes_contract` lo audita. Los errores propios del borde
+    bajo `/api` tampoco son HTML: nginx responde JSON canónico
+    (`UPSTREAM_UNAVAILABLE` para 502/503/504 con `Retry-After`,
+    `REQUEST_TOO_LARGE` para 413, `RATE_LIMITED` para 429;
+    `tests/unit/test_nginx_contract.py`).
+
+- **Imágenes con versión y deploy por script.** CI construye y publica
+  `ghcr.io/enriquemartinez26/shifty-{backend,frontend,nginx}:<sha>`
+  (`.github/workflows/build-images.yml`); el VPS no construye, hace `pull`
+  del sha (todo `up` y `run` lleva `--no-build`). `make deploy
+  APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
+  `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
+  24 h), imágenes verificadas con `docker image inspect`, migración con el
+  código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps
+  --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
+  compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
+  borde (nginx) solo se RECARGA (`nginx -t && nginx -s reload`); se recrea
+  únicamente con `make deploy-edge`, cuando cambió su imagen o
+  `nginx/nginx.prod.conf`. `docker-compose.prod.yml` exige `APP_VERSION` en todo comando
+  de compose; no se fija en el `.env` del servidor (queda en
+  `.deploy/current`).
+- **Toda llamada externa dentro de un request tiene un presupuesto total
+  menor que el `proxy_read_timeout` de nginx (30 s)**, y la conexión de la
+  base se libera con commit plano antes de salir a la red (patrón B2-08).
+  Hoy la reserva con seña puede pasarlo: el cliente ve 504 y la reserva se
+  crea igual (R8-01); F1-04 y F1-05 lo cierran. Es regla para todo camino
+  nuevo desde ya.
+- **El host se opera con scripts versionados, no a mano**
+  (`docs/DEPLOY_RUNBOOK.md` §8): backup diario con copia fuera del host
+  (timer de systemd, `scripts/backup.sh`), guard que reinicia contenedores
+  `unhealthy` con tope de 3 por contenedor y 6 en total por hora, sin tocar
+  db ni rabbitmq ni reiniciar nada con db o redis_state caídos (sin
+  `autoheal` ni `docker.sock`),
+  chequeos horarios de NTP, certificado, disco y memoria, y latencia por
+  ruta cada 5 minutos. Se prueban con binarios falsos
+  (`tests/unit/host_falso.py`).
 
 ### Tiempo
 
@@ -455,6 +548,11 @@ Una instrucción en lenguaje natural no es una garantía.
   conjunto (2026-09-16: 24.16.0) el hook bloquea todos los commits y `npm ci`
   necesita `--engine-strict=false`: el toolchain se alinea antes de
   activarlo.
+- Nombres de contenedor: las réplicas del backend son
+  `<proyecto>-backend-N` (sin `container_name`, F0-04); el resto,
+  `${COMPOSE_PROJECT_NAME:-shifty}_<servicio>`. Scripts, docs y comandos usan
+  `docker compose exec backend ...`, nunca `shifty_backend`: ese nombre ya no
+  existe y con un segundo proyecto (staging) apuntaría al equivocado.
 - El E2E con Playwright (`frontend/e2e/`, `npm run e2e`, workflow manual
   `e2e.yml`) corrió por primera vez el 2026-09-16 contra el stack local
   detrás de nginx (`E2E_BASE_URL=http://localhost`,
@@ -467,6 +565,16 @@ Una instrucción en lenguaje natural no es una garantía.
   GiST, triggers y migraciones desde base vacía, en `tests/postgres/`);
   SAST con CodeQL + escaneo de secretos con gitleaks (`.gitleaks.toml`);
   prueba de carga/abuso versionada (`backend/scripts/load_test_booking.py`).
+- Ya cubierto EN EL REPO (2026-09-24, Fase 0 del plan de rendimiento):
+  backup diario con copia fuera del host y alerta de frescura, deploy con
+  migración previa, backend gradual y rollback, guard de `unhealthy`,
+  chequeos del host, latencia por ruta, imágenes por sha en GHCR
+  (`docs/DEPLOY_RUNBOOK.md`); el contrato del borde vive en
+  `tests/unit/test_nginx_contract.py`. En el VPS nada de eso corre hasta que
+  el dueño hace la preparación de `docs/DEPLOY_RUNBOOK.md` §1: crear el
+  bucket, instalar rclone y certbot, `docker login ghcr.io`, copiar
+  `/etc/shifty/ops.env` y habilitar el timer y los cron. Hasta entonces el
+  RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
   las 8 funciones de más de 80 líneas que quedan en el backend (regla 29);
@@ -477,8 +585,12 @@ Una instrucción en lenguaje natural no es una garantía.
   la cobertura del backend en CI (`fail_under = 80` en `pyproject.toml`,
   pero CI corre `pytest` sin `--cov`); probar la cadena completa de
   downgrades (regla 13); pasar CodeQL a bloqueante cuando el ruido inicial
-  esté limpio. Cerrado el 2026-09-16: N+1 en `get_available_slots`
-  (auditado, no había), teléfono único por tienda y primera corrida del E2E.
+  esté limpio; correr por primera vez el drill mensual de backup (secretos
+  `BACKUP_DATABASE_URL`/`DRILL_DATABASE_URL` y un runner propio o staging:
+  con `ports: !reset []` la base no se alcanza desde GitHub) y confirmar ahí
+  el restore del rol `shifty_app` en un cluster vacío. Cerrado el
+  2026-09-16: N+1 en `get_available_slots` (auditado, no había), teléfono
+  único por tienda y primera corrida del E2E.
   Cerrado el 2026-09-19: descomposición de `create_public_booking` y
   `client_reschedule_appointment` y migración de `public_api` al service
   (B1-12). Cerrado el 2026-09-22: el pre-commit hook quedó activado en el
@@ -494,6 +606,10 @@ Una instrucción en lenguaje natural no es una garantía.
   integración, `backend-postgres` y los dos jobs de front; `dead-code`
   espera solo a `standards` y `secret-scan` (gitleaks) corre suelto. El
   front corre con cobertura; el backend no la mide (ver §5).
+  `build-images.yml` publica las imágenes en cada push a `main`; no gatea
+  PRs.
 - `docs/RELEASE_CHECKLIST.md` y `docs/BACKUP_RESTORE_RUNBOOK.md` (RPO ≤24h,
   RTO ≤4h) gatean releases: un ítem sin marcar necesita excepción explícita
-  del dueño, no un salto silencioso.
+  del dueño, no un salto silencioso. El deploy a producción es
+  `make deploy APP_VERSION=<sha>` (`docs/DEPLOY_RUNBOOK.md`), que además se
+  niega a migrar sin un backup de menos de 24 h.
