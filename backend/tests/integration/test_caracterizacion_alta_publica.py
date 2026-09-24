@@ -501,3 +501,121 @@ async def test_la_reserva_cierra_la_entrada_de_la_lista_de_espera(
         )
     ).scalar_one()
     assert entrada.status == "booked"
+
+
+# ---------------------------------------------------------------------------
+# F3-03 (plan de rendimiento, R1-05, 2026-09-24): cuanto le cuesta a la base
+# ---------------------------------------------------------------------------
+
+TELEFONO_CONOCIDO = "+5491155558001"
+
+
+async def _cliente_conocido_verificado(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, t: _Tienda
+) -> None:
+    """Cliente con ficha y email, OTP verificado y la tienda exigiendo OTP.
+
+    Es el camino mas caro del alta: el gate de OTP, el contacto verificado y
+    el historial del cliente para la regla de sena.
+    """
+    from core.config import settings
+
+    primera = await client.post(
+        "/public/appointments",
+        json=_reserva(
+            t,
+            "carac-sql-0001",
+            payment_method="mercadopago",
+            starts_at=(t.slot + timedelta(hours=2)).isoformat(),
+        ),
+    )
+    assert primera.status_code == 201, primera.text
+    flags = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(t.token),
+        json={"payments": True, "otp_booking": True},
+    )
+    assert flags.status_code == 200, flags.text
+    monkeypatch.setattr(settings, "OTP_PROVIDER", "console")
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", True)
+    pedido = await client.post(
+        "/public/otp/request",
+        json={
+            "store_public_id": t.store,
+            "phone": TELEFONO_CONOCIDO,
+            "channel": "whatsapp",
+        },
+    )
+    assert pedido.status_code == 200, pedido.text
+    verificado = await client.post(
+        "/public/otp/verify",
+        json={
+            "store_public_id": t.store,
+            "phone": TELEFONO_CONOCIDO,
+            "code": pedido.json()["debug_code"],
+        },
+    )
+    assert verificado.status_code == 200, verificado.text
+
+
+@pytest.mark.asyncio
+async def test_sentencias_del_alta_con_otp_historial_y_cobro(
+    client: AsyncClient,
+    test_engine: Any,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Antes 33 sentencias con repetidas: el servicio dos veces, el predicado
+    de OTP (ficha + verificacion) resuelto de nuevo en cada llamada (la ficha
+    tres veces), los profesionales con sus horarios y servicios en cascada y
+    los horarios releidos al elegirlo, y un UPDATE del turno recien insertado
+    para la retencion y el consentimiento."""
+    from sqlalchemy import event
+
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    usar_cola_de_reservas(monkeypatch, test_session)
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", _MercadoPago())
+    t = await _tienda(client, "carac-sql", pagos=True)
+    await _cliente_conocido_verificado(client, monkeypatch, t)
+    test_session.expunge_all()
+
+    sentencias: list[str] = []
+
+    def registrar(
+        _conn: Any,
+        _cursor: Any,
+        statement: str,
+        _parameters: Any,
+        _context: Any,
+        _executemany: bool,
+    ) -> None:
+        sentencias.append(" ".join(statement.split()).lower())
+
+    event.listen(test_engine.sync_engine, "before_cursor_execute", registrar)
+    try:
+        res = await client.post(
+            "/public/appointments",
+            json=_reserva(t, "carac-sql-0002", payment_method="mercadopago"),
+        )
+    finally:
+        event.remove(test_engine.sync_engine, "before_cursor_execute", registrar)
+
+    assert res.status_code == 201, res.text
+    assert res.json()["payment_link"] == (
+        "https://sandbox.mercadopago.com/x?pref=carac"
+    )
+    ficha_otp = [s for s in sentencias if s.startswith("select users.email from users")]
+    assert len(ficha_otp) == 1, "la ficha del telefono se busca una sola vez"
+    servicios = [s for s in sentencias if s.startswith("select services.")]
+    assert len(servicios) == 1, "el servicio se resuelve una sola vez"
+    horarios = [s for s in sentencias if "from schedules" in s]
+    assert len(horarios) <= 1, "los horarios del profesional se leen una vez"
+    assert not [s for s in sentencias if "staff_1" in s], "profesionales sin cascada"
+    assert not [s for s in sentencias if s.startswith("update appointments")], (
+        "retencion y consentimiento van en el INSERT del turno"
+    )
+    # 33 -> 26 en SQLite (sin los set_config de Postgres). Quedan fuera de
+    # este carril: las dos cargas en cascada de store_schedules (F3-01 las
+    # saca con lazy="raise": 24) y las lecturas de payments/service (el
+    # Payment releido tras el commit, la tienda y la configuracion de MP).
+    assert len(sentencias) <= 26, "\n".join(sentencias)

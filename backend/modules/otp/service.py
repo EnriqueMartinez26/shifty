@@ -226,8 +226,25 @@ def _debug_code(code: str, *, decoy: bool) -> str:
 
 
 class OtpService:
+    """Se instancia por request.
+
+    F3-03 (R1-05, 2026-09-24): la instancia recuerda la ficha del telefono y
+    el veredicto de ``client_contact_verification_reason``. La reserva
+    publica pregunta lo mismo dos veces (``may_book_with_otp`` e
+    ``is_client_contact_verified``) y antes cada pregunta volvia a la base: la
+    ficha se leia tres veces por reserva. Toda escritura de la instancia
+    (``_store_code``, ``verify_code``) olvida el memo: nunca sirve un "no
+    verificado" viejo despues de verificar.
+    """
+
     def __init__(self, db: AsyncSession):
         self.db = db
+        self._contact_memo: dict[tuple[str, str], str | None] = {}
+        self._reason_memo: dict[tuple[str, str, int], str] = {}
+
+    def _forget_verification(self) -> None:
+        self._contact_memo.clear()
+        self._reason_memo.clear()
 
     async def _registered_client_email(
         self, store_id: str, normalized_phone: str
@@ -242,6 +259,9 @@ class OtpService:
         encontrarla mandaba el codigo al email tipeado (secuestro) y trababa
         con 403 al cliente legitimo.
         """
+        memo_key = (store_id, normalized_phone)
+        if memo_key in self._contact_memo:
+            return self._contact_memo[memo_key]
         result = await self.db.execute(
             select(User.email)
             .where(
@@ -253,9 +273,11 @@ class OtpService:
             .limit(1)
         )
         registered = result.scalar_one_or_none()
-        return (
+        contact = (
             _normalize_email(registered) if is_deliverable_email(registered) else None
         )
+        self._contact_memo[memo_key] = contact
+        return contact
 
     async def _resolve_destination(
         self, store_id: str, normalized_phone: str, typed: str | None
@@ -298,6 +320,7 @@ class OtpService:
     ) -> OtpVerification:
         """Invalida los codigos vivos de ese telefono y guarda el nuevo, con el
         buzon al que se despacho (``otp_verifications.email``)."""
+        self._forget_verification()
         now = datetime.now(timezone.utc)
         await self.db.execute(
             update(OtpVerification)
@@ -399,6 +422,7 @@ class OtpService:
         self, *, store_id: str, phone: str, code: str
     ) -> dict[str, object]:
         normalized_phone = normalize_phone(phone)
+        self._forget_verification()
 
         await _consume_budget(
             "verify",
@@ -446,8 +470,23 @@ class OtpService:
     async def client_contact_verification_reason(
         self, *, store_id: str, phone: str, window_minutes: int = 30
     ) -> str:
-        """Motivo (para el log) del veredicto de `is_client_contact_verified`."""
+        """Motivo (para el log) del veredicto de `is_client_contact_verified`.
+
+        Se resuelve una vez por instancia (F3-03): ver la clase.
+        """
         normalized_phone = normalize_phone(phone)
+        memo_key = (store_id, normalized_phone, window_minutes)
+        if memo_key not in self._reason_memo:
+            self._reason_memo[memo_key] = await self._contact_verification_reason(
+                store_id=store_id,
+                normalized_phone=normalized_phone,
+                window_minutes=window_minutes,
+            )
+        return self._reason_memo[memo_key]
+
+    async def _contact_verification_reason(
+        self, *, store_id: str, normalized_phone: str, window_minutes: int
+    ) -> str:
         contact = await self._registered_client_email(store_id, normalized_phone)
         if not contact:
             return OTP_GATE_NO_DELIVERABLE_CONTACT

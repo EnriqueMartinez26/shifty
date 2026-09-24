@@ -466,6 +466,8 @@ class PublicBookingService:
         # esta en el despacho: si el telefono tiene ficha con email entregable,
         # el codigo va a ESE buzon. La ramificacion vive en el servicio.
         # 2026-09-20.
+        # Una instancia para el request: recuerda la ficha y el veredicto, y
+        # el gate y el contacto verificado no vuelven a preguntar (F3-03).
         otp_service = OtpService(self.db)
         if is_store_feature_enabled(store.feature_flags, "otp_booking"):
             await self._require_booking_otp(otp_service, store.id, data.client_phone)
@@ -618,10 +620,13 @@ class PublicBookingService:
             email=data.client_email,
         )
         # Toma el FOR UPDATE del profesional antes de leer disponibilidad
-        # (regla 4) y aplica el buffer de la tienda.
+        # (regla 4) y aplica el buffer de la tienda. El servicio ya resuelto
+        # viaja (F3-03), y la retencion del slot y el consentimiento van en el
+        # INSERT del turno.
         appointment, service, staff = await self.repo.create_appointment(
             store_id=store_id,
             service_public_id=data.service_id,
+            service=request.service,
             staff_public_id=data.staff_id,
             starts_at=data.starts_at,
             client=client,
@@ -636,19 +641,20 @@ class PublicBookingService:
             buffer_minutes=request.store.buffer_minutes or 0,
             price_amount=request.discounted_price,
             client_email=str(data.client_email) if data.client_email else None,
+            # Un turno esperando la seña retiene el slot solo por una ventana
+            # corta: si no se paga, vuelve a estar disponible enseguida en vez
+            # de bloquear la agenda hasta la hora del turno. La coordinacion
+            # manual si retiene hasta el horario, porque la confirma la tienda.
+            expires_at=(
+                payment_hold_deadline(request.starts_at_utc)
+                if request.payment_required
+                else request.starts_at_utc
+            ),
+            # El schema ya exige accepts_terms (PV-09): todo turno publico nace
+            # con el instante del consentimiento. No hay columna de version de
+            # terminos; si hace falta, la agrega una migracion.
+            terms_accepted_at=datetime.now(timezone.utc),
         )
-        # Un turno esperando la seña retiene el slot solo por una ventana
-        # corta: si no se paga, vuelve a estar disponible enseguida en vez
-        # de bloquear la agenda hasta la hora del turno. La coordinacion
-        # manual si retiene hasta el horario, porque la confirma la tienda.
-        if request.payment_required:
-            appointment.expires_at = payment_hold_deadline(appointment.starts_at)
-        else:
-            appointment.expires_at = appointment.starts_at
-        # El schema ya exige accepts_terms (PV-09): todo turno publico nace con
-        # el instante del consentimiento. No hay columna de version de
-        # terminos; si hace falta, la agrega una migracion.
-        appointment.terms_accepted_at = datetime.now(timezone.utc)
         promotion_quote = None
         if data.promotion_code:
             try:

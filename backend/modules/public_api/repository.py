@@ -29,7 +29,7 @@ from modules.appointments.repository import (
 )
 from modules.payments.deposit_rules import ClientHistory
 from modules.services.model import Service
-from modules.staff.model import Schedule, Staff, StaffBlock
+from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -452,16 +452,32 @@ class PublicRepository:
         return None
 
     async def _candidates(
-        self, store_id: str, service_public_id: str, staff_public_id: str | None
+        self, store_id: str, service: Service, staff_public_id: str | None
     ) -> list[Staff]:
         """Profesionales que pueden tomar el turno, en el orden de desempate.
 
         Con profesional elegido, solo ese (si hace el servicio); con "cualquier
         profesional", todos los que lo hacen por display_name y public_id.
+
+        Una consulta (F3-03): JOIN sobre ``staff_services`` por el servicio ya
+        resuelto (activo y de la tienda) y sin cargar colecciones. Antes era
+        ``get_staff``: todos los profesionales de la tienda con sus servicios
+        y, en cascada, sus horarios, que ``_pick_staff_for_slot`` volvia a leer
+        para el dia del turno. ``raiseload``: nada de esta request escribe ni
+        lee esas colecciones (AUD2-B6-02), y un acceso levanta en vez de
+        consultar.
         """
-        qualified_staff = await self.get_staff(
-            store_id, service_public_id=service_public_id
+        result = await self.db.execute(
+            select(Staff)
+            .join(StaffServiceModel, StaffServiceModel.staff_id == Staff.id)
+            .where(
+                StaffServiceModel.service_id == service.id,
+                Staff.store_id == store_id,
+                Staff.is_active == True,
+            )
+            .options(raiseload(Staff.services), raiseload(Staff.schedules))
         )
+        qualified_staff = list(result.scalars().all())
         if staff_public_id:
             candidates = [
                 member
@@ -493,22 +509,21 @@ class PublicRepository:
         buffer_minutes: int = 0,
         price_amount: Decimal | None = None,
         client_email: str | None = None,
+        *,
+        service: Service | None = None,
+        expires_at: datetime | None = None,
+        terms_accepted_at: datetime | None = None,
     ) -> tuple[Appointment, Service, Staff]:
-        svc_res = await self.db.execute(
-            select(Service).where(
-                Service.public_id == service_public_id,
-                Service.store_id == store_id,
-                Service.is_active == True,
-            )
-        )
-        service = svc_res.scalar_one_or_none()
-        if not service:
-            raise ValueError("Servicio no encontrado")
+        """Alta del turno: lock del profesional, relectura bajo lock e INSERT.
 
+        ``service``: el servicio que el llamador ya resolvio (F3-03, la reserva
+        publica lo leia dos veces). Se valida contra la tienda, el public_id y
+        que siga activo; sin el, se lee aca. ``expires_at`` y
+        ``terms_accepted_at`` van en el INSERT (antes un UPDATE aparte).
+        """
+        service = await self._service_for_booking(store_id, service_public_id, service)
         ends_at = starts_at + timedelta(minutes=service.duration_minutes)
-        candidates = await self._candidates(
-            store_id, service_public_id, staff_public_id
-        )
+        candidates = await self._candidates(store_id, service, staff_public_id)
         selected_staff = await self._pick_staff_for_slot(
             store_id, candidates, starts_at, ends_at, buffer_minutes
         )
@@ -542,12 +557,37 @@ class PublicRepository:
                 if price_amount is not None
                 else Decimal(str(service.price or 0))
             ),
+            expires_at=expires_at,
+            terms_accepted_at=terms_accepted_at,
         )
         self.db.add(new_appointment)
         await self.db.flush()
         await self.db.refresh(new_appointment)
 
         return new_appointment, service, selected_staff
+
+    async def _service_for_booking(
+        self, store_id: str, service_public_id: str, service: Service | None
+    ) -> Service:
+        if service is not None:
+            if (
+                service.store_id != store_id
+                or service.public_id != service_public_id
+                or not service.is_active
+            ):
+                raise ValueError("Servicio no encontrado")
+            return service
+        svc_res = await self.db.execute(
+            select(Service).where(
+                Service.public_id == service_public_id,
+                Service.store_id == store_id,
+                Service.is_active == True,
+            )
+        )
+        found = svc_res.scalar_one_or_none()
+        if not found:
+            raise ValueError("Servicio no encontrado")
+        return found
 
     async def get_client_history(self, store_id: str, phone: str) -> ClientHistory:
         """Resumen del cliente en la tienda en UNA consulta agregada, antes del
