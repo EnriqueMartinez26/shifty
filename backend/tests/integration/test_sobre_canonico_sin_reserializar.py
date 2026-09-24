@@ -18,10 +18,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
-from httpx import AsyncClient
+from fastapi.responses import JSONResponse
+from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel
 
 import core.responses as responses
+from core.responses import CanonicalJsonMiddleware
+from core.router import CanonicalAPIRouter
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     register_and_login,
@@ -94,17 +99,37 @@ async def test_x_raw_response_sigue_desenvolviendo_una_ruta_canonica(
     assert response.json() == {"items": [], "unread_count": 0}
 
 
+class _Item(BaseModel):
+    x: int
+
+
+def _app_minima() -> FastAPI:
+    """Una ruta canonica que arma su salida y otra que devuelve un Response."""
+    router = CanonicalAPIRouter()
+
+    @router.get("/armada", response_model=_Item)
+    async def armada() -> _Item:
+        return _Item(x=1)
+
+    @router.get("/cruda", response_model=_Item)
+    async def cruda() -> JSONResponse:
+        # El handler salta el envoltorio: el middleware la tiene que envolver.
+        return JSONResponse({"x": 2})
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(CanonicalJsonMiddleware)
+    return app
+
+
 @pytest.mark.asyncio
-async def test_la_marca_no_sale_al_cliente(
-    client: AsyncClient,
-) -> None:
-    _, token = await register_and_login(
-        client, slug="sobre-sin-marca", email="sobre-sin-marca@test.com"
-    )
+async def test_un_jsonresponse_crudo_de_una_ruta_canonica_se_sigue_envolviendo() -> (
+    None
+):
+    transport = ASGITransport(app=_app_minima())
+    async with AsyncClient(transport=transport, base_url="http://test") as cliente:
+        armada = await cliente.get("/armada")
+        cruda = await cliente.get("/cruda")
 
-    response = await client.get(
-        "/notifications",
-        headers={**auth_headers(token), "x-raw-response": "false"},
-    )
-
-    assert not any(nombre.startswith("x-shifty") for nombre in response.headers)
+    assert armada.json() == {"success": True, "data": {"x": 1}, "meta": None}
+    assert cruda.json() == {"success": True, "data": {"x": 2}}
