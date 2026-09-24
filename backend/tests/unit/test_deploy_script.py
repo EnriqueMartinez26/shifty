@@ -135,7 +135,7 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     # El borde NO se recrea en un deploy normal (solo `make deploy-edge`).
     resto = _indice(
         llamadas,
-        r"compose up -d --no-deps --no-build "
+        r"compose up -d --no-deps --no-build --remove-orphans "
         r"celery_worker celery_worker_interactive celery_beat frontend$",
     )
     reload = _ultimo_indice(llamadas, r"compose exec -T nginx nginx -s reload")
@@ -378,6 +378,10 @@ def test_ningun_up_ni_run_construye_imagenes(host: Host) -> None:
     assert llamadas
     for llamada in llamadas:
         assert "--no-build" in llamada, llamada
+        # `redis` paso a `redis_cache`/`redis_state`: sin esto el contenedor
+        # viejo sigue vivo y retiene el 6379.
+        if " up " in llamada:
+            assert "--remove-orphans" in llamada, llamada
 
 
 def test_pull_fallido_frena_el_deploy_antes_de_migrar(host: Host) -> None:
@@ -474,7 +478,7 @@ def test_deploy_edge_recrea_si_cambio_la_config(host: Host) -> None:
     assert resultado.returncode == 0, resultado.stderr
     assert _hay(
         host.llamadas(),
-        r"compose up -d --no-deps --no-build --force-recreate .*nginx$",
+        r"compose up -d --no-deps --no-build --remove-orphans --force-recreate .*nginx$",
     )
 
 
@@ -491,3 +495,44 @@ def test_deploy_edge_recrea_si_cambio_la_imagen(host: Host) -> None:
     llamadas = host.llamadas()
     assert _hay(llamadas, r"compose pull nginx")
     assert _hay(llamadas, r"--force-recreate .*nginx$")
+
+
+# --- ronda final: BACKUP_DIR, huerfanos y alarmas de RabbitMQ -----------------
+
+
+def test_el_preflight_crea_backup_dir_si_falta(host: Host) -> None:
+    """El volumen pg_backups es un bind: si el directorio del host no existe,
+    `db` no arranca. El preflight lo crea (0700) antes de tocar nada."""
+    _preparar_deploy(host, actual="v1")
+    faltante = host.raiz / "no-existe" / "backups"
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        BACKUP_DIR=faltante.as_posix(),
+        DEPLOY_SKIP_BACKUP_CHECK="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert faltante.is_dir()
+
+
+def test_una_alarma_de_rabbitmq_hace_fallar_la_compuerta(host: Host) -> None:
+    """Con la alarma de memoria activa RabbitMQ BLOQUEA a los publicadores:
+    un deploy que la dispara no es sano aunque /ready conteste."""
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_RABBIT_ALARMS='[{"type":"resource_alarm","resource":"memory"}]',
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "alarm" in resultado.stderr
+    assert _hay(host.llamadas(), r"compose exec -T rabbitmq rabbitmq-diagnostics")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"

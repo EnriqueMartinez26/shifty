@@ -107,6 +107,11 @@ if [ "$1" = compose ]; then
         echo toc > "$destino/toc.dat"
         exit "${FAKE_PG_DUMP_EXIT:-0}"
       fi
+      if [ "$3" = rabbitmq ]; then
+        printf '%s
+' "${FAKE_RABBIT_ALARMS:-[]}"
+        exit "${FAKE_RABBIT_EXIT:-0}"
+      fi
       exit "${FAKE_NGINX_EXIT:-0}" ;;
     logs) cat "$FAKE_DIR/nginx.log" 2>/dev/null; exit 0 ;;
     *) exit 0 ;;

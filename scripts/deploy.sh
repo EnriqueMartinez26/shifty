@@ -14,7 +14,9 @@
 #   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
 #      .github/workflows/build-images.yml). El VPS NUNCA construye: todo `up`
-#      y `run` lleva --no-build.
+#      y `run` lleva --no-build, y todo `up` --remove-orphans (un servicio
+#      renombrado, como `redis` -> `redis_cache`/`redis_state`, dejaba vivo el
+#      contenedor viejo con su puerto).
 #   4. MIGRA ANTES DE RECREAR, con el codigo viejo sirviendo:
 #      `compose run --rm --no-deps backend alembic upgrade head`. Por eso las
 #      migraciones son expand/contract (CLAUDE.md §3): el codigo viejo tiene
@@ -31,8 +33,9 @@
 #      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
 #      cuando cambio su imagen o su config.
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
-#      contenedor unhealthy, 5xx < 0,5 % en el log de nginx de los ultimos
-#      2 minutos. Si falla: rollback automatico (sin migrar).
+#      contenedor unhealthy, `rabbitmq-diagnostics alarms` vacio, 5xx < 0,5 %
+#      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
+#      automatico (sin migrar).
 #
 # Rollback: APP_VERSION = .deploy/previous; pull, pasos 5 a 8, NUNCA migra.
 # Si el pull falla sigue con las imagenes locales, pero solo si estan todas:
@@ -127,6 +130,17 @@ compose_file_efectivo() {
 preflight() {
   local completo="$1"
 
+  # El volumen pg_backups es un bind (docker-compose.prod.yml): si el
+  # directorio del host no existe, `db` no puede recrearse.
+  # mkdir + chmod aparte: si el chmod no se puede (otro dueno), el directorio
+  # igual sirve y se avisa, en vez de frenar el deploy.
+  if [ ! -d "$BACKUP_DIR" ]; then
+    mkdir -p "$BACKUP_DIR" ||
+      die "preflight: no se pudo crear $BACKUP_DIR (crearlo como root: install -d -m 0700 $BACKUP_DIR)"
+    chmod 0700 "$BACKUP_DIR" 2>/dev/null || log "preflight: no pude dejar $BACKUP_DIR en 0700"
+    log "preflight: cree $BACKUP_DIR"
+  fi
+
   local archivos
   archivos="$(compose_file_efectivo)"
   case ":$archivos:" in
@@ -197,7 +211,7 @@ backend_gradual() {
   local servicio="$DEPLOY_BACKEND_SERVICE"
   if [ "$DEPLOY_ROLLING" != 1 ]; then
     log "backend: recreacion directa (DEPLOY_ROLLING=0): 5-10 s de 502"
-    docker compose up -d --no-deps --no-build --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" || return 1
+    docker compose up -d --no-deps --no-build --remove-orphans --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" || return 1
     return 0
   fi
 
@@ -207,7 +221,7 @@ backend_gradual() {
   log "backend: ${#viejas[@]} replicas viejas, levanto $DEPLOY_BACKEND_REPLICAS nuevas"
 
   local fallo=0
-  docker compose up -d --no-deps --no-build --no-recreate --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" \
+  docker compose up -d --no-deps --no-build --remove-orphans --no-recreate --wait --wait-timeout "$DEPLOY_WAIT_TIMEOUT" \
     --scale "$servicio=$total" "$servicio" || fallo=1
 
   mapfile -t todas < <(docker compose ps -q "$servicio")
@@ -242,7 +256,7 @@ resto_de_la_app() {
     [ "$s" = "$DEPLOY_BACKEND_SERVICE" ] || resto+=("$s")
   done
   [ "${#resto[@]}" -gt 0 ] || return 0
-  docker compose up -d --no-deps --no-build "${resto[@]}" || return 1
+  docker compose up -d --no-deps --no-build --remove-orphans "${resto[@]}" || return 1
 }
 
 # Cada `imagen:tag` que va a correr tiene que estar local: sin esto, un pull
@@ -287,6 +301,19 @@ compuerta() {
       log "compuerta: contenedores unhealthy: $enfermos"
       return 1
     fi
+  fi
+
+  # Con la alarma de memoria o de disco activa, RabbitMQ bloquea a los
+  # publicadores: el OTP y los jobs se quedan esperando aunque /ready conteste.
+  local alarmas
+  if ! alarmas="$(docker compose exec -T rabbitmq rabbitmq-diagnostics -q alarms --formatter json 2>&1)"; then
+    log "compuerta: no se pudo consultar las alarmas de rabbitmq: $alarmas"
+    return 1
+  fi
+  alarmas="$(printf '%s' "$alarmas" | tr -d '[:space:]')"
+  if [ -n "$alarmas" ] && [ "$alarmas" != "[]" ]; then
+    log "compuerta: rabbitmq tiene alarmas activas: $alarmas"
+    return 1
   fi
 
   local lineas total errores
@@ -394,7 +421,7 @@ cmd_edge() {
 
   if [ "$deseada" != "$corriendo" ] || [ "$huella" != "$anterior" ]; then
     log "edge: recreo $servicio (imagen ${corriendo:-ninguna} -> $deseada, config ${anterior:-sin registro} -> $huella)"
-    docker compose up -d --no-deps --no-build --force-recreate --wait \
+    docker compose up -d --no-deps --no-build --remove-orphans --force-recreate --wait \
       --wait-timeout "$DEPLOY_WAIT_TIMEOUT" "$servicio" ||
       die "edge: $servicio no quedo sano despues de recrearlo"
   else
