@@ -187,3 +187,25 @@ def test_compose_usa_readiness_como_healthcheck_del_backend() -> None:
     assert "/ops/health/ready" in comando
     # curl -f: un 503 tiene que hacer fallar el chequeo.
     assert "curl" in comando and "-f" in comando
+
+
+@pytest.mark.asyncio
+async def test_503_si_el_redis_de_cache_rechaza_la_conexion(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F0-15: son dos Redis. Con el de cache caido la disponibilidad publica
+    falla, asi que la instancia no esta lista aunque el de estado conteste."""
+    _usar_redis(monkeypatch, _RedisSano())
+    puerto = _puerto_cerrado()
+    cache = Redis.from_url(f"redis://127.0.0.1:{puerto}/0")
+
+    async def dar_cache() -> object:
+        return cache
+
+    monkeypatch.setattr(core.redis, "get_availability_cache", dar_cache)
+    try:
+        res, demora = await _ready(client)
+    finally:
+        await cache.aclose()
+    _es_503_neutro(res, str(puerto), "ConnectionError")
+    assert demora < TOPE_SEGUNDOS
