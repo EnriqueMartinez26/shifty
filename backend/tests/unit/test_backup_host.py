@@ -72,9 +72,51 @@ def test_backup_escribe_el_sha256_de_cada_archivo(host: Host) -> None:
     # Una linea por archivo del dump, con su hash real; el propio SHA256SUMS
     # no se lista (su hash no puede estar adentro de si mismo). El separador
     # es "  " (modo texto, Linux) o " *" (modo binario, sha256sum de Windows):
-    # `sha256sum -c` acepta los dos.
-    assert len(lineas) == 1
-    assert re.fullmatch(rf"{esperado} [ *]\./toc\.dat", lineas[0]), lineas
+    # `sha256sum -c` acepta los dos. globals.sql tambien entra.
+    assert len(lineas) == 2
+    assert any(re.fullmatch(rf"{esperado} [ *]\./toc\.dat", linea) for linea in lineas)
+    globales = hashlib.sha256((dump / "globals.sql").read_bytes()).hexdigest()
+    assert any(
+        re.fullmatch(rf"{globales} [ *]\./globals\.sql", linea) for linea in lineas
+    ), lineas
+
+
+def test_backup_guarda_los_globales_sin_contrasenas_junto_al_dump(
+    host: Host,
+) -> None:
+    """Drill 2026-09-24: el dump de una base no trae los roles, que son del
+    cluster. En un cluster nuevo `pg_restore --exit-on-error` abortaba en
+    `GRANT USAGE ON SCHEMA public TO shifty_app`, y los timeouts del rol
+    (`ALTER ROLE shifty_app SET statement_timeout ...`, c2e4f6a8b0d1) se
+    perdian. pg_dumpall --globals-only los guarda; --no-role-passwords deja
+    los hashes de las contrasenas fuera del backup."""
+    resultado = _correr_backup(host)
+
+    assert resultado.returncode == 0, resultado.stderr
+    llamadas = host.llamadas()
+    dump = _indice(llamadas, r"docker compose exec -T db sh -c .*pg_dump ")
+    globales = _indice(
+        llamadas,
+        r"docker compose exec -T db sh -c .*pg_dumpall .*--globals-only"
+        r" .*--no-role-passwords",
+    )
+    copia = _indice(llamadas, r"rclone copy .* r2:shifty-backups/prod/daily/shifty-")
+    assert dump < globales < copia
+    assert "$POSTGRES_USER" in llamadas[globales]
+    # Dentro del directorio del dump: viaja con el en el mismo rclone copy.
+    (directorio,) = list((host.backups / "daily").glob("shifty-*"))
+    texto = (directorio / "globals.sql").read_text(encoding="utf-8")
+    assert "CREATE ROLE shifty_app" in texto
+
+
+def test_backup_con_pg_dumpall_fallido_no_copia_ni_marca_exito(host: Host) -> None:
+    resultado = _correr_backup(host, FAKE_PG_DUMPALL_EXIT="1")
+
+    assert resultado.returncode != 0
+    assert "ALERTA" in resultado.stderr
+    assert not _hay(host.llamadas(), r"rclone")
+    assert not (host.backups / "last-success").exists()
+    assert not list((host.backups / "daily").glob("shifty-*"))
 
 
 def test_backup_sin_destino_remoto_no_marca_exito(host: Host) -> None:

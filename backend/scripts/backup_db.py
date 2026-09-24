@@ -61,11 +61,13 @@ def _build_pg_dump_command(
     # contrasena decodificada (`%40` es `@`).
     partes = parse_db_url(database_url, label="BACKUP_DATABASE_URL")
 
+    # Sin --no-privileges (drill 2026-09-24): el dump tiene que traer los GRANT
+    # y los ALTER DEFAULT PRIVILEGES de shifty_app; sin ellos la base
+    # restaurada le niega todo a la app.
     command = [
         "pg_dump",
         "--format=custom",
         "--no-owner",
-        "--no-privileges",
         "--host",
         str(partes["host"]),
         "--port",
