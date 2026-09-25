@@ -4,7 +4,7 @@ import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.utils import now_utc
+from core.utils import now_utc, within_booking_horizon
 from core.validation import (
     PUBLIC_ID_PATTERN,
     normalize_client_phone,
@@ -119,6 +119,10 @@ class PublicBookingCreate(BaseModel):
             value = value.replace(tzinfo=timezone.utc)
         if value <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado")
+        # El horizonte de la disponibilidad publica: nadie podia elegir un
+        # slot mas alla, y 9999-12-31 desbordaba ``starts_at + duracion`` (500).
+        if not within_booking_horizon(value):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return value
 
     @model_validator(mode="after")

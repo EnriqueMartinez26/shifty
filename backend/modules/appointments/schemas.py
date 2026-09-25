@@ -90,19 +90,13 @@ class AppointmentCreate(BaseModel):
         return self
 
     def _within_horizon(self, val: datetime) -> bool:
-        """Para un cliente, el horizonte del portal en dias locales
-        (``BOOKING_HORIZON_DAYS``); para el auto-turno, dos anios. Una fecha
-        que ni se puede llevar a hora local (anio 9999 con offset) queda afuera
-        en vez de levantar ``OverflowError`` (500)."""
-        from core.utils import ARGENTINA_TZ, BOOKING_HORIZON_DAYS, now_utc, today_local
+        """Para un cliente, el horizonte del portal (``within_booking_horizon``);
+        para el auto-turno, dos anios."""
+        from core.utils import within_booking_horizon, within_max_ahead
 
-        try:
-            if self.for_client:
-                ultimo_dia = today_local() + timedelta(days=BOOKING_HORIZON_DAYS)
-                return val.astimezone(ARGENTINA_TZ).date() <= ultimo_dia
-            return val <= now_utc() + PANEL_SELF_BOOKING_MAX_AHEAD
-        except OverflowError:
-            return False
+        if self.for_client:
+            return within_booking_horizon(val)
+        return within_max_ahead(val, PANEL_SELF_BOOKING_MAX_AHEAD)
 
     @model_validator(mode="after")
     def reject_control_chars_in_notes(self) -> "AppointmentCreate":
