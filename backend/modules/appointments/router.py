@@ -209,8 +209,9 @@ async def book_appointment(
     if data.for_client:
         return await _book_for_client(data, user, svc, redis)
 
-    # Idempotencia
-    cached_res = await idempotency_guard(data.idempotency_key, redis)
+    # Idempotencia, por tienda (ver ``_panel_cache_key``).
+    cache_key = _panel_cache_key("panel", user.store_id, data.idempotency_key)
+    cached_res = await idempotency_guard(cache_key, redis)
     if cached_res:
         return AppointmentResponse.model_validate(cached_res)
 
@@ -221,7 +222,7 @@ async def book_appointment(
             actor=user,
         )
     except Exception:
-        await idempotency_release(data.idempotency_key, redis)
+        await idempotency_release(cache_key, redis)
         raise
 
     payload = AppointmentResponse(
@@ -235,8 +236,20 @@ async def book_appointment(
         notes_staff=appointment.notes_staff,
         intake_answers=appointment.intake_answers or {},
     )
-    await idempotency_save(data.idempotency_key, payload.model_dump(mode="json"), redis)
+    await idempotency_save(cache_key, payload.model_dump(mode="json"), redis)
     return payload
+
+
+def _panel_cache_key(kind: str, store_id: str, key: str) -> str:
+    """Clave de Redis de una mutacion del panel: SIEMPRE con la tienda.
+
+    La cadena del llamador sola era una clave global (``idempotency:{key}``):
+    la misma mandada desde otra tienda devolvia la respuesta cacheada ajena
+    (turno, horario, notas). Mismo criterio que AUD2-B1-06 en el portal. El
+    turno guarda la clave original: el unico de ``appointments.idempotency_key``
+    sigue siendo la ultima defensa (revision de perf/f4-back, 2026-09-24).
+    """
+    return f"{kind}:{store_id}:{key}"
 
 
 def _panel_booking_staff(user: User, data: AppointmentCreate) -> str | None:
@@ -270,7 +283,7 @@ async def _book_for_client(
     namespaceada por tienda (patron de AUD2-B1-06): la misma cadena mandada
     desde otra tienda no devuelve este turno."""
     staff_id = _panel_booking_staff(user, data)
-    cache_key = f"panel-client:{user.store_id}:{data.idempotency_key}"
+    cache_key = _panel_cache_key("panel-client", user.store_id, data.idempotency_key)
     cached = await idempotency_guard(cache_key, redis)
     if cached:
         return AppointmentResponse.model_validate(cached)
@@ -408,7 +421,10 @@ async def reschedule_appointment(
     - Crea uno nuevo con los mismos servicio/staff/cliente.
     - Ambas operaciones quedan registradas en audit_logs.
     """
-    cached = await idempotency_guard(data.idempotency_key, redis)
+    cache_key = _panel_cache_key(
+        "panel-reschedule", user.store_id, data.idempotency_key
+    )
+    cached = await idempotency_guard(cache_key, redis)
     if cached:
         return AppointmentResponse.model_validate(cached)
 
@@ -420,7 +436,7 @@ async def reschedule_appointment(
             actor=user,
         )
     except Exception:
-        await idempotency_release(data.idempotency_key, redis)
+        await idempotency_release(cache_key, redis)
         raise
     payload = AppointmentResponse(
         public_id=new_appointment.public_id,
@@ -433,7 +449,7 @@ async def reschedule_appointment(
         notes_staff=new_appointment.notes_staff,
         intake_answers=new_appointment.intake_answers or {},
     )
-    await idempotency_save(data.idempotency_key, payload.model_dump(mode="json"), redis)
+    await idempotency_save(cache_key, payload.model_dump(mode="json"), redis)
     return payload
 
 
