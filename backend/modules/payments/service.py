@@ -1600,6 +1600,37 @@ async def _unsealed_expire_failed(
         await db.rollback()
 
 
+async def _discard_orphan_payment_or_log(
+    db: AsyncSession, ids: tuple[str, str, str]
+) -> None:
+    """``_discard_orphan_payment`` sin tapar el error del proveedor.
+
+    Revision de e5579b6..3b977a9 (#6): si el borrado falla (base caida, o el
+    ``IntegrityError`` de la carrera con el historial de links: otra request
+    anoto un link retirado de este cobro), queda en el log y en Sentry y el
+    llamador sigue con SU error, como ``_drop_unsealed_link_or_log``. El
+    cobro queda con su placeholder y lo retoma un reintento.
+    """
+    store_id, payment_id, appointment_id = ids
+    try:
+        await _discard_orphan_payment(
+            db,
+            store_id=store_id,
+            payment_id=payment_id,
+            appointment_id=appointment_id,
+        )
+    except Exception as exc:
+        contexto = {
+            "store_id": store_id,
+            "payment_id": payment_id,
+            "appointment_id": appointment_id,
+        }
+        logger.exception("panel_link_orphan_discard_failed", **contexto)
+        report_exception(exc, **contexto)
+        with suppress(Exception):
+            await db.rollback()
+
+
 async def _panel_link_phase_one(
     db: AsyncSession,
     *,
@@ -1761,12 +1792,7 @@ async def _panel_link_phase_two(
         # crear la preferencia (respuesta sin init_point), se vence.
         await db.rollback()
         if creado:
-            await _discard_orphan_payment(
-                db,
-                store_id=store_id,
-                payment_id=payment_id,
-                appointment_id=appointment_id,
-            )
+            await _discard_orphan_payment_or_log(db, ids)
         if isinstance(exc, ProviderPreferenceWithoutLinkError):
             await _drop_unsealed_link_or_log(db, exc.preference_id, previa, ids)
         raise

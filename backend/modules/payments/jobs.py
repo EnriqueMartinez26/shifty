@@ -898,9 +898,12 @@ def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
     appointment_id = payload.get("appointment_id")
     if payload.get("duplicado"):
         titulo = "Pago duplicado"
+        # "Duplicado" incluye un cobro devuelto o con contracargo: no se dice
+        # "ya estaba pagado" (revision de e5579b6..3b977a9, #6).
         cuerpo = (
             f"Entro un pago{amount_label} por un link viejo de un turno que ya "
-            "estaba pagado: no se aplico. Devolvelo desde Mercado Pago."
+            "tenia un pago registrado: no se aplico. Revisalo en Mercado Pago y "
+            "devolvelo."
         )
     else:
         titulo = "Se recibio un pago sobre un link reemplazado"
