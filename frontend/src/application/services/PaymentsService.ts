@@ -17,13 +17,6 @@ export interface MercadoPagoOAuthStart {
   expires_at: string
 }
 
-export interface GatewayConfigUpsertPayload {
-  provider: 'mercadopago' | 'stripe'
-  access_token?: string
-  public_key?: string
-  webhook_secret?: string
-}
-
 export interface PaymentPreference {
   payment_public_id: string
   appointment_id: string
@@ -117,11 +110,6 @@ export interface PromotionPayload {
 class PaymentsService {
   async getGatewayConfig(): Promise<GatewayConfig> {
     const { data } = await apiClient.get<GatewayConfig>('/payments/gateway-config')
-    return data
-  }
-
-  async upsertGatewayConfig(payload: GatewayConfigUpsertPayload): Promise<GatewayConfig> {
-    const { data } = await apiClient.put<GatewayConfig>('/payments/gateway-config', payload)
     return data
   }
 

@@ -4,6 +4,19 @@ import { UserId } from '../value-objects/UserId'
 
 type StaffKind = 'person' | 'resource'
 
+/**
+ * Lo que se puede cambiar de un staff ya creado. Todo opcional: el backend
+ * (`StaffUpdate`) aplica solo lo que llega, asi que editar no necesita leer el
+ * registro entero para reenviarlo. `kind` no esta: no cambia despues del alta.
+ */
+export interface StaffWriteInput {
+  firstName?: string
+  lastName?: string
+  email?: string
+  displayName?: string
+  serviceIds?: string[]
+}
+
 interface StaffProps {
   id: UserId
   /** 'person' = profesional con login; 'resource' = cancha, sala, box (sin email ni usuario). */

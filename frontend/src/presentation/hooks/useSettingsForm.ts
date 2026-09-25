@@ -35,7 +35,7 @@ export const useSettingsForm = (
     setDraft((previous) => {
       const next = typeof update === 'function' ? update(mergeDraft(base, previous)) : update
       // `null` es "no cambies nada", NO "vacia el formulario": es lo que
-      // devuelve el guard `if (!prev) return prev` de `handleMediaUpload`
+      // devuelve el guard `if (!prev) return prev` de `handleLogoUpload`
       // cuando todavia no hay formulario. No es un bug ni hay que "arreglarlo".
       if (!next) return previous
       return narrowDraft(base, next)

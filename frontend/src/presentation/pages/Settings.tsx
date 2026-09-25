@@ -29,6 +29,7 @@ import type { BusinessType } from '@shared/types/business'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
@@ -44,7 +45,7 @@ import {
   useStoreSettings,
   useUpdateStoreFeatureFlags,
   useUpdateStoreSettings,
-  useUploadStoreMedia
+  useUploadStoreLogo
 } from '../hooks/useStores'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
 import { planSave, type BusinessHoursPeriod } from '../lib/settingsDraft'
@@ -150,10 +151,10 @@ type SaveHalf = {
 const SettingsPage: React.FC = () => {
   const [searchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'identity')
-  const { data: store, isLoading } = useStoreSettings()
+  const { data: store, isLoading, error: storeError } = useStoreSettings()
   const featureFlagsQuery = useStoreFeatureFlags()
   const updateStore = useUpdateStoreSettings()
-  const uploadMedia = useUploadStoreMedia()
+  const uploadLogo = useUploadStoreLogo()
   const [logoError, setLogoError] = useState<string | null>(null)
   const updateFeatureFlags = useUpdateStoreFeatureFlags()
   const changePassword = useChangePassword()
@@ -175,10 +176,7 @@ const SettingsPage: React.FC = () => {
 
   const labels = getBusinessLabels(formData?.business_type)
 
-  const handleMediaUpload = async (
-    kind: 'logo' | 'cover',
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = '' // permite volver a elegir el mismo archivo
     if (!file) return
@@ -194,13 +192,8 @@ const SettingsPage: React.FC = () => {
       return
     }
     try {
-      const result = await uploadMedia.mutateAsync({ kind, file })
-      setFormData((prev) => {
-        if (!prev) return prev
-        return kind === 'logo'
-          ? { ...prev, logo_url: result.url }
-          : { ...prev, cover_url: result.url }
-      })
+      const result = await uploadLogo.mutateAsync(file)
+      setFormData((prev) => (prev ? { ...prev, logo_url: result.url } : prev))
     } catch (err) {
       setLogoError(getErrorMessage(err, 'No se pudo subir la imagen'))
     }
@@ -208,14 +201,6 @@ const SettingsPage: React.FC = () => {
 
   const handleSave = async () => {
     if (!formData || !base) return
-    // Sin nada editado se muestra "Guardado" sin llamar a ningun endpoint: el
-    // boton es uno solo para las siete pestanas, asi que apretarlo sin cambios
-    // es lo normal, y dejarlo mudo se lee como que la pagina se colgo.
-    if (!hasChanges) {
-      setSaveStatus('success')
-      setTimeout(() => setSaveStatus('idle'), 3000)
-      return
-    }
     const plan = planSave(base, draft)
     setSaveStatus('saving')
     setErrorMessage('')
@@ -313,6 +298,14 @@ const SettingsPage: React.FC = () => {
     }
   }
 
+  if (storeError) {
+    return (
+      <div className="max-w-4xl mx-auto">
+        <QueryErrorNotice error={storeError} message="No se pudo cargar la configuración." />
+      </div>
+    )
+  }
+
   if (isLoading || !formData) {
     return (
       <div
@@ -329,6 +322,10 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      <QueryErrorNotice
+        error={featureFlagsQuery.error ?? gatewayQuery.error}
+        message="No se pudo cargar parte de la configuración."
+      />
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h1
           className="text-3xl font-black uppercase tracking-tight"
@@ -338,10 +335,13 @@ const SettingsPage: React.FC = () => {
         </h1>
         {!['security', 'payments'].includes(activeTab) && (
           <button
+            type="button"
             onClick={() => {
               void handleSave()
             }}
-            disabled={saveStatus === 'saving'}
+            // Sin nada editado no hay nada que guardar: el boton se apaga en
+            // vez de decir "Guardado" sin haber llamado a ningun endpoint.
+            disabled={!hasChanges || saveStatus === 'saving'}
             className="flex items-center gap-2 px-6 py-3 font-black uppercase tracking-widest text-xs rounded-xl transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.selected}
           >
@@ -372,6 +372,7 @@ const SettingsPage: React.FC = () => {
       >
         {TABS.map((tab) => (
           <button
+            type="button"
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap"
@@ -511,18 +512,18 @@ const SettingsPage: React.FC = () => {
                       className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
                       style={buttonStyles2000s.default}
                     >
-                      {uploadMedia.isPending ? (
+                      {uploadLogo.isPending ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
                         <Store className="w-4 h-4" />
                       )}
-                      {uploadMedia.isPending ? 'Subiendo...' : 'Subir imagen'}
+                      {uploadLogo.isPending ? 'Subiendo...' : 'Subir imagen'}
                       <input
                         type="file"
                         accept="image/png,image/jpeg,image/webp"
                         className="hidden"
-                        disabled={uploadMedia.isPending}
-                        onChange={(e) => void handleMediaUpload('logo', e)}
+                        disabled={uploadLogo.isPending}
+                        onChange={(e) => void handleLogoUpload(e)}
                       />
                     </label>
                     <p
@@ -1005,6 +1006,7 @@ const SettingsPage: React.FC = () => {
                               style={createSettingsInputStyle()}
                             />
                             <button
+                              type="button"
                               onClick={() => {
                                 const newHours = { ...formData.business_hours }
                                 newHours[day.id] = (newHours[day.id] ?? []).filter(
@@ -1023,6 +1025,7 @@ const SettingsPage: React.FC = () => {
                     </div>
 
                     <button
+                      type="button"
                       onClick={() => {
                         const newHours = { ...formData.business_hours }
                         newHours[day.id] = [
@@ -1462,8 +1465,8 @@ const SettingsPage: React.FC = () => {
                 onClick={() => {
                   void handleSave()
                 }}
-                disabled={saveStatus === 'saving'}
-                className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                disabled={!hasChanges || saveStatus === 'saving'}
+                className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
                   border: `1px solid ${colors2000s.orange.accent}`,

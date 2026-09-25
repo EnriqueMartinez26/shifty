@@ -50,8 +50,7 @@ export class ServiceService extends BaseService<Service> {
         deposit_amount: data.depositAmount
       }
 
-      this.validate(validatorInput, createServiceSchema)
-      const validated = createServiceSchema.parse(validatorInput)
+      const validated = this.validate(validatorInput, createServiceSchema)
 
       const service = Service.create({
         name: validated.name,

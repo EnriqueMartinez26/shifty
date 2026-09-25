@@ -5,8 +5,10 @@ import { Plus, Search, Loader2, User as UserIcon } from 'lucide-react'
 import { User } from '@domain/entities/User'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { UserCard } from '../components/molecules/UserCard'
 import { UserFormModal } from '../components/organisms/UserFormModal'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedDomainUser,
   useDeleteManagedDomainUser,
@@ -16,11 +18,12 @@ import {
 import type { UserFormValues } from '../types/forms'
 
 export const UserManagementContainer: React.FC = () => {
+  const { confirm, confirmDialog } = useConfirm()
   const [searchTerm, setSearchTerm] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
 
-  const { data: users, isLoading } = useManagedDomainUsers()
+  const { data: users, isLoading, error } = useManagedDomainUsers()
   const createMutation = useCreateManagedDomainUser()
   const updateMutation = useUpdateManagedDomainUser()
   const deleteMutation = useDeleteManagedDomainUser()
@@ -31,8 +34,8 @@ export const UserManagementContainer: React.FC = () => {
       user.email.getValue().toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const handleDelete = (id: string) => {
-    if (window.confirm('¿Estás seguro de eliminar este usuario?')) {
+  const handleDelete = async (id: string) => {
+    if (await confirm('¿Estás seguro de eliminar este usuario?')) {
       deleteMutation.mutate(id)
     }
   }
@@ -78,6 +81,7 @@ export const UserManagementContainer: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {/* Unified Skeuomorphic Header Card matching Reports.tsx */}
       <div
         className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-lg"
@@ -129,6 +133,8 @@ export const UserManagementContainer: React.FC = () => {
           onChange={(e) => setSearchTerm(e.target.value)}
         />
       </div>
+
+      <QueryErrorNotice error={error} message="No se pudieron cargar los usuarios." />
 
       {isLoading ? (
         <div
@@ -182,7 +188,12 @@ export const UserManagementContainer: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredUsers?.map((user) => (
-            <UserCard key={user.id} user={user} onEdit={handleEdit} onDelete={handleDelete} />
+            <UserCard
+              key={user.id}
+              user={user}
+              onEdit={handleEdit}
+              onDelete={(id) => void handleDelete(id)}
+            />
           ))}
         </div>
       )}

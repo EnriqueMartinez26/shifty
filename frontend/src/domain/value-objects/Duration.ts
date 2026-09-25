@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export class Duration {
   private readonly minutes: number
 
@@ -7,11 +9,11 @@ export class Duration {
 
   static create(minutes: number): Duration {
     if (minutes <= 0) {
-      throw new Error('La duración debe ser mayor a 0 minutos')
+      throw new InvalidValueError('INVALID_DURATION', 'La duración debe ser mayor a 0 minutos')
     }
     if (minutes > 480) {
       // 8 horas máximo por servicio
-      throw new Error('La duración no puede exceder las 8 horas')
+      throw new InvalidValueError('INVALID_DURATION', 'La duración no puede exceder las 8 horas')
     }
     return new Duration(minutes)
   }

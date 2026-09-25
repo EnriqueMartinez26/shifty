@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 
 import { CalendarClock, Loader2, XCircle } from 'lucide-react'
 
+import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/BookingStatus'
+
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
@@ -22,7 +24,7 @@ import {
 } from '../hooks/usePublic'
 import { createBookingSurfaceStyle } from '../lib/surfaceStyles'
 
-const ESTADO: Record<string, { label: string; color: string }> = {
+const ESTADO: Record<BookingStatusValue, { label: string; color: string }> = {
   pending: { label: 'A confirmar', color: '#d97706' },
   pending_payment: { label: 'Esperando la seña', color: '#d97706' },
   confirmed: { label: 'Confirmado', color: '#15803d' },
@@ -131,7 +133,9 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       )}
 
       {items.map((item) => {
-        const estado = ESTADO[item.status] ?? { label: item.status, color: '#6b7280' }
+        const estado = isBookingStatus(item.status)
+          ? ESTADO[item.status]
+          : { label: item.status, color: '#6b7280' }
         const editando = rescheduling?.id === item.public_id
         return (
           <article

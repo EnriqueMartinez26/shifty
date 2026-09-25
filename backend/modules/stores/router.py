@@ -423,7 +423,10 @@ async def _open_db(request: Request) -> AsyncIterator[AsyncSession]:
         yield db
 
 
-@media_router.api_route("/media/{media_id}", methods=["GET", "HEAD"])
+# GET y HEAD registrados por separado: un api_route con los dos metodos le da
+# el mismo operationId a las dos operaciones del contrato (docs/API_CONTRACT.md).
+@media_router.get("/media/{media_id}", operation_id="serve_store_media")
+@media_router.head("/media/{media_id}", operation_id="head_store_media")
 async def serve_store_media(
     # Validado como el resto de los path params (B3-17): la ruta es publica y
     # consulta bajo bypass de RLS; un id fuera del patron no llega a la base.

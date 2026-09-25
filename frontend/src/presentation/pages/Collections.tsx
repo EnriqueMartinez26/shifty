@@ -1,12 +1,15 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
+
+import { isCollectibleStatus } from '@domain/value-objects/BookingStatus'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import {
   useCreatePaymentPreference,
@@ -14,20 +17,9 @@ import {
   usePaymentsAppointments,
   useReconciliationSummary
 } from '../hooks/usePayments'
+import { bookingStatusLabel } from '../lib/bookingStatusLabel'
 import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
-
-const statusLabel: Record<string, string> = {
-  pending: 'Pendiente',
-  pending_payment: 'Pendiente de pago',
-  confirmed: 'Confirmado',
-  completed: 'Completado',
-  cancelled: 'Cancelado',
-  absent: 'Ausente',
-  expired: 'Vencido'
-}
-
-const collectibleStatuses = new Set(['pending', 'pending_payment', 'confirmed'])
 
 const CollectionsPage: React.FC = () => {
   const appointmentsQuery = usePaymentsAppointments()
@@ -38,25 +30,19 @@ const CollectionsPage: React.FC = () => {
 
   const cardStyle = create2000sPanelStyle()
 
-  const appointments = useMemo(
-    () =>
-      (appointmentsQuery.data ?? [])
-        .filter((appointment) => collectibleStatuses.has(appointment.status))
-        .slice(0, 20),
-    [appointmentsQuery.data]
-  )
+  const appointments = (appointmentsQuery.data ?? [])
+    .filter((appointment) => isCollectibleStatus(appointment.status))
+    .slice(0, 20)
 
-  const cards = useMemo(() => {
-    const summary = summaryQuery.data
-    return [
-      { label: 'Turnos listados', value: appointments.length },
-      { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
-      {
-        label: 'Monto pendiente',
-        value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
-      }
-    ]
-  }, [appointments.length, summaryQuery.data])
+  const summary = summaryQuery.data
+  const cards = [
+    { label: 'Turnos listados', value: appointments.length },
+    { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
+    {
+      label: 'Monto pendiente',
+      value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
+    }
+  ]
 
   const handleCreatePreference = async (appointmentId: string) => {
     try {
@@ -83,6 +69,11 @@ const CollectionsPage: React.FC = () => {
         description="Turnos operables para generar links y confirmar pagos manuales sin mezclarlo con configuración."
         isLoading={appointmentsQuery.isLoading}
         loadingText="Cargando cobros..."
+      />
+
+      <QueryErrorNotice
+        error={appointmentsQuery.error ?? summaryQuery.error}
+        message="No se pudieron cargar los cobros."
       />
 
       <MessageBanner message={message} />
@@ -125,7 +116,7 @@ const CollectionsPage: React.FC = () => {
                         color: colors2000s.text.secondary
                       }}
                     >
-                      {statusLabel[appointment.status] ?? appointment.status}
+                      {bookingStatusLabel(appointment.status)}
                     </span>
                   </div>
                   <p

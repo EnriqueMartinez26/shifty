@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export class ServiceColor {
   private readonly value: string
 
@@ -11,7 +13,7 @@ export class ServiceColor {
     // listado de servicios apenas uno tuviera un color de 3 dígitos.
     const hexRegex = /^#([0-9A-F]{6}|[0-9A-F]{3})$/i
     if (!hexRegex.test(value)) {
-      throw new Error(`Color hexadecimal inválido: ${value}`)
+      throw new InvalidValueError('INVALID_COLOR', `Color hexadecimal inválido: ${value}`)
     }
     return new ServiceColor(value)
   }

@@ -1,6 +1,5 @@
 import { setAuthToken } from '@infrastructure/http/client'
 
-import { ErrorHandler } from '../ErrorHandler'
 import {
   ValidationError,
   NotFoundError,
@@ -9,7 +8,8 @@ import {
   ConflictError,
   InternalServerError,
   NetworkError
-} from '../index'
+} from '@shared/errors'
+import { ErrorHandler } from '@shared/errors/ErrorHandler'
 
 // Helper simulado para Toasts/Notificaciones en UI
 const showToast = (message: string, type: 'error' | 'warning' | 'info') => {

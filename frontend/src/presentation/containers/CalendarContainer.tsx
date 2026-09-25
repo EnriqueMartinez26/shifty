@@ -20,6 +20,8 @@ import {
   ShieldBan
 } from 'lucide-react'
 
+import { isBookingStatus } from '@domain/value-objects/BookingStatus'
+
 import type { BlockPreviewResult } from '@application/services/AppointmentBlocksService'
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
@@ -37,6 +39,7 @@ import {
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { useAuth } from '../context/AuthContext'
@@ -57,6 +60,7 @@ import {
   useMarkAbsentAppointment,
   useReleaseAppointment
 } from '../hooks/useCalendarAgenda'
+import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
 import {
@@ -67,6 +71,7 @@ import {
   parseHhMm,
   rangeFromInstants
 } from '../lib/calendarGrid'
+import { reportUnknownStatus } from '../lib/reportUnreadableInstant'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
@@ -181,6 +186,7 @@ const statusStyle = (status: string) => {
 }
 
 export const CalendarContainer: React.FC = () => {
+  const { confirm, confirmDialog } = useConfirm()
   const { user } = useAuth()
   const canReleaseAppointments = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
   // Confirmar, completar y ausente: admin o personal (mismo criterio que la API).
@@ -192,7 +198,9 @@ export const CalendarContainer: React.FC = () => {
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
   const [blockForm, setBlockForm] = useState({
     staff_id: '',
-    date: toDateInput(new Date()),
+    // null = el bloqueo nuevo sigue al dia que muestra el calendario. Una fecha
+    // la fija quien edita un bloqueo o la tipea (F11c-05).
+    date: null as string | null,
     starts_at: '10:00',
     ends_at: '11:00',
     reason: 'No atender',
@@ -217,11 +225,22 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
+  // Antes un efecto copiaba dateStr a blockForm.date en cada navegacion, tambien
+  // mientras se editaba un bloqueo: "Editar" el del 20, flecha ">" y "Actualizar
+  // bloqueo" lo movia al 21 sin que nadie tocara la fecha.
+  const blockDate = blockForm.date ?? dateStr
 
-  const { data: staffMembers, isLoading: loadingStaff } = useManagedStaff()
+  const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
   const { data: storeSettings } = useStoreSettings()
   const agendaQuery = useCalendarAgenda(rangeKeyFrom, rangeKeyTo)
+  // La agenda trae hasta un tope de paginas; si el servidor tiene mas turnos
+  // en el rango, se avisa en vez de mostrar la lista como completa (F10-12).
+  const agendaRange = agendaQuery.data
+  const truncatedAgenda =
+    agendaRange && agendaRange.total > agendaRange.appointments.length
+      ? { shown: agendaRange.appointments.length, total: agendaRange.total }
+      : null
   const blocksQuery = useAppointmentBlocks()
   const templatesQuery = useBlockTemplates()
   const createBlock = useCreateAppointmentBlock()
@@ -256,10 +275,6 @@ export const CalendarContainer: React.FC = () => {
     }
   }, [blockForm.staff_id, staffMembers])
 
-  useEffect(() => {
-    setBlockForm((prev) => ({ ...prev, date: dateStr }))
-  }, [dateStr])
-
   const blocksInRange = useMemo(() => {
     return (blocksQuery.data || []).filter((block) => {
       const startsAt = new Date(block.starts_at)
@@ -274,26 +289,33 @@ export const CalendarContainer: React.FC = () => {
   }, [blocksInRange, dateStr])
 
   const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
-    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data || []).map(
-      (appointment) => ({
-        id: appointment.id,
-        type: appointment.status === 'absent' ? 'absence' : 'appointment',
-        staffId: appointment.staffId,
-        // Primero el nombre autoritativo que manda el backend (del join, vale
-        // aunque el profesional este dado de baja o el listado de staff no
-        // haya cargado); el cruce por id queda como respaldo.
-        staffName:
-          appointment.staffName ||
-          staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
-          'Profesional',
-        title: appointment.clientName,
-        subtitle: appointment.serviceName,
-        startsAt: appointment.timeSpan.getStartsAt(),
-        endsAt: appointment.timeSpan.getEndsAt(),
-        status: appointment.status,
-        clientPhone: appointment.clientPhone,
-        serviceId: appointment.serviceId
-      })
+    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data?.appointments ?? []).map(
+      (appointment) => {
+        // Un estado nuevo del backend se muestra crudo y sin acciones; esto
+        // deja la senal en vez de pasar inadvertido (F8-03).
+        if (!isBookingStatus(appointment.status)) {
+          reportUnknownStatus('agenda', appointment.status)
+        }
+        return {
+          id: appointment.id,
+          type: appointment.status === 'absent' ? 'absence' : 'appointment',
+          staffId: appointment.staffId,
+          // Primero el nombre autoritativo que manda el backend (del join, vale
+          // aunque el profesional este dado de baja o el listado de staff no
+          // haya cargado); el cruce por id queda como respaldo.
+          staffName:
+            appointment.staffName ||
+            staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
+            'Profesional',
+          title: appointment.clientName,
+          subtitle: appointment.serviceName,
+          startsAt: appointment.timeSpan.getStartsAt(),
+          endsAt: appointment.timeSpan.getEndsAt(),
+          status: appointment.status,
+          clientPhone: appointment.clientPhone,
+          serviceId: appointment.serviceId
+        }
+      }
     )
 
     const blockEvents: UnifiedCalendarEvent[] = blocksInRange.map((block) => {
@@ -407,7 +429,7 @@ export const CalendarContainer: React.FC = () => {
     setEditingBlockId(null)
     setBlockForm((prev) => ({
       ...prev,
-      date: dateStr,
+      date: null,
       starts_at: '10:00',
       ends_at: '11:00',
       reason: 'No atender',
@@ -420,8 +442,8 @@ export const CalendarContainer: React.FC = () => {
   const blockPayloadFromForm = () => {
     // La hora tipeada es hora argentina; antes se mandaba como si fuera UTC
     // (el bloqueo quedaba corrido 3 horas respecto de lo que el dueno veia).
-    const startsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.starts_at)
-    const endsAt = argentinaLocalToUtcIso(blockForm.date, blockForm.ends_at)
+    const startsAt = argentinaLocalToUtcIso(blockDate, blockForm.starts_at)
+    const endsAt = argentinaLocalToUtcIso(blockDate, blockForm.ends_at)
     const recurrenceUntil =
       blockForm.recurrence === 'none'
         ? undefined
@@ -507,7 +529,7 @@ export const CalendarContainer: React.FC = () => {
 
   const handleReleaseAppointment = async (event: UnifiedCalendarEvent) => {
     if (event.type === 'block') return
-    const confirmed = window.confirm(
+    const confirmed = await confirm(
       `¿Liberar el turno de ${event.title}? El enlace de pago pendiente también será vencido.`
     )
     if (!confirmed) return
@@ -543,7 +565,7 @@ export const CalendarContainer: React.FC = () => {
       absent: ['¿Marcar como ausente a', 'Turno marcado como ausente', 'No se pudo marcar el turno']
     }
     const [pregunta, exito, fallo] = textos[action]
-    if (!window.confirm(`${pregunta} ${event.title}?`)) return
+    if (!(await confirm(`${pregunta} ${event.title}?`))) return
     const mutation =
       action === 'confirm'
         ? confirmAppointment
@@ -914,6 +936,7 @@ export const CalendarContainer: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
+      {confirmDialog}
       <div
         className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
         style={panelStyle}
@@ -949,6 +972,7 @@ export const CalendarContainer: React.FC = () => {
           style={fieldStyle}
         >
           <button
+            type="button"
             onClick={() =>
               setSelectedDate((prev) =>
                 subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
@@ -974,6 +998,7 @@ export const CalendarContainer: React.FC = () => {
             </p>
           </div>
           <button
+            type="button"
             onClick={() =>
               setSelectedDate((prev) =>
                 addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
@@ -1008,6 +1033,21 @@ export const CalendarContainer: React.FC = () => {
           </button>
         </div>
       </div>
+
+      <QueryErrorNotice
+        error={agendaQuery.error ?? staffError ?? blocksQuery.error}
+        message="No se pudo cargar la agenda."
+      />
+
+      {truncatedAgenda && (
+        <div
+          role="status"
+          className="p-4 rounded-[6px] text-sm font-bold"
+          style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}
+        >
+          {`Se muestran ${truncatedAgenda.shown} de ${truncatedAgenda.total} turnos de este rango. Pasá a la vista de día o de semana para verlos todos.`}
+        </div>
+      )}
 
       {message && (
         <div
@@ -1090,7 +1130,7 @@ export const CalendarContainer: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <input
               type="date"
-              value={blockForm.date}
+              value={blockDate}
               onChange={(e) => setBlockForm((prev) => ({ ...prev, date: e.target.value }))}
               className="rounded-[6px] px-4 py-3 font-bold outline-none"
               style={fieldStyle}

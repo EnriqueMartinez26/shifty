@@ -1,6 +1,8 @@
 const mockRequestUse = jest.fn()
 const mockResponseUse = jest.fn()
+const mockApiRequest = jest.fn()
 const mockAxiosCreate = jest.fn(() => ({
+  request: mockApiRequest,
   interceptors: {
     request: {
       use: mockRequestUse
@@ -10,11 +12,10 @@ const mockAxiosCreate = jest.fn(() => ({
     }
   }
 }))
-const mockAxiosRetry = jest.fn()
 // El interceptor de 401 intenta una rehidratacion via POST /auth/refresh; en
 // estos tests no hay sesion, asi que el refresh "falla" y el flujo debe caer
 // al error normalizado original.
-const mockAxiosPost = jest.fn(() => Promise.reject(new Error('sin sesion')))
+const mockAxiosPost = jest.fn((): Promise<unknown> => Promise.reject(new Error('sin sesion')))
 
 jest.mock('axios', () => ({
   __esModule: true,
@@ -22,11 +23,6 @@ jest.mock('axios', () => ({
     create: mockAxiosCreate,
     post: mockAxiosPost
   }
-}))
-
-jest.mock('axios-retry', () => ({
-  __esModule: true,
-  default: mockAxiosRetry
 }))
 
 jest.mock('./runtime-env', () => ({
@@ -37,6 +33,39 @@ jest.mock('./runtime-env', () => ({
   })
 }))
 
+describe('token viejo en localStorage (F10-14)', () => {
+  beforeEach(() => {
+    jest.resetModules()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('se limpia una vez al cargar el modulo', async () => {
+    localStorage.setItem('shifty_token', 'persistido')
+
+    await import('./client')
+
+    expect(localStorage.getItem('shifty_token')).toBeNull()
+  })
+
+  it('setAuthToken no toca el almacenamiento: el token vive solo en memoria', async () => {
+    const clientModule = await import('./client')
+    const removeItem = jest.spyOn(Storage.prototype, 'removeItem')
+    const setItem = jest.spyOn(Storage.prototype, 'setItem')
+    const accessValue = 'valor-de-acceso'
+
+    clientModule.setAuthToken(accessValue)
+    clientModule.setAuthToken(null)
+
+    expect(removeItem).not.toHaveBeenCalled()
+    expect(setItem).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+  })
+})
+
 describe('api client module wiring', () => {
   beforeEach(() => {
     jest.resetModules()
@@ -44,7 +73,6 @@ describe('api client module wiring', () => {
     mockRequestUse.mockClear()
     mockResponseUse.mockClear()
     mockAxiosCreate.mockClear()
-    mockAxiosRetry.mockClear()
     mockAxiosPost.mockClear()
   })
 
@@ -60,7 +88,6 @@ describe('api client module wiring', () => {
         }
       })
     )
-    expect(mockAxiosRetry).toHaveBeenCalledTimes(1)
     expect(mockRequestUse).toHaveBeenCalledTimes(1)
     expect(mockResponseUse).toHaveBeenCalledTimes(1)
 
@@ -158,23 +185,178 @@ describe('api client module wiring', () => {
       window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
     }
   })
+})
 
-  it('no reintenta un 409 en un POST, pero sí en métodos idempotentes', async () => {
+type ErrorHandler = (error: unknown) => Promise<unknown>
+
+describe('rehidratacion ante un 401', () => {
+  const respuesta401 = {
+    status: 401,
+    data: { success: false, error_code: 'AUTH_REQUIRED', message: 'Sesion vencida' }
+  }
+
+  const cargarCliente = async () => {
     const clientModule = await import('./client')
-    const { shouldRetryRequest } = clientModule
+    const errorHandler = mockResponseUse.mock.calls[0][1] as ErrorHandler
+    return { clientModule, errorHandler }
+  }
 
-    // Un 409 al crear un turno es un conflicto de negocio real (el slot ya no
-    // está libre), no algo transitorio: reintentarlo no lo resuelve y puede
-    // terminar reservando después de que la UI ya mostró el conflicto.
-    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'post' } })).toBe(
-      false
+  beforeEach(() => {
+    jest.resetModules()
+    mockResponseUse.mockClear()
+    mockAxiosPost.mockReset()
+    mockApiRequest.mockReset()
+  })
+
+  it('refresca una vez y reintenta el request original con el token nuevo', async () => {
+    const nuevoAcceso = 'acceso-rehidratado'
+    mockAxiosPost.mockResolvedValue({ data: { access_token: nuevoAcceso } })
+    mockApiRequest.mockResolvedValue({ data: { ok: true } })
+    const { clientModule, errorHandler } = await cargarCliente()
+
+    const resultado = await errorHandler({
+      config: { url: '/appointments' },
+      response: respuesta401,
+      message: 'HTTP 401'
+    })
+
+    expect(resultado).toEqual({ data: { ok: true } })
+    expect(mockAxiosPost).toHaveBeenCalledWith('http://test-api/auth/refresh', undefined, {
+      withCredentials: true
+    })
+    expect(mockApiRequest).toHaveBeenCalledWith({
+      url: '/appointments',
+      __shiftyRetried: true,
+      headers: { Authorization: `Bearer ${nuevoAcceso}` }
+    })
+    expect(clientModule.getAuthToken()).toBe(nuevoAcceso)
+  })
+
+  it('acepta el token dentro del envelope data de la respuesta de refresh', async () => {
+    const nuevoAcceso = 'acceso-en-envelope'
+    mockAxiosPost.mockResolvedValue({ data: { data: { access_token: nuevoAcceso } } })
+    mockApiRequest.mockResolvedValue({ data: {} })
+    const { clientModule, errorHandler } = await cargarCliente()
+
+    await errorHandler({
+      config: { url: '/services', headers: { 'X-Otro': '1' } },
+      response: respuesta401,
+      message: 'HTTP 401'
+    })
+
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: { 'X-Otro': '1', Authorization: `Bearer ${nuevoAcceso}` }
+      })
     )
-    expect(shouldRetryRequest({ code: 'ECONNABORTED', config: { method: 'post' } })).toBe(true)
-    expect(shouldRetryRequest({ response: { status: 409 }, config: { method: 'patch' } })).toBe(
-      true
+    expect(clientModule.getAuthToken()).toBe(nuevoAcceso)
+  })
+
+  it('varios 401 a la vez comparten un solo refresh (single-flight)', async () => {
+    let resolverRefresh: (value: unknown) => void = () => undefined
+    mockAxiosPost.mockReturnValue(
+      new Promise((resolve) => {
+        resolverRefresh = resolve
+      })
     )
-    expect(shouldRetryRequest({ code: 'ERR_CONNECTION_REFUSED', config: { method: 'get' } })).toBe(
-      false
-    )
+    mockApiRequest.mockResolvedValue({ data: {} })
+    const { errorHandler } = await cargarCliente()
+
+    const primero = errorHandler({ config: { url: '/a' }, response: respuesta401 })
+    const segundo = errorHandler({ config: { url: '/b' }, response: respuesta401 })
+    resolverRefresh({ data: { access_token: 'compartido' } })
+    await Promise.all([primero, segundo])
+
+    expect(mockAxiosPost).toHaveBeenCalledTimes(1)
+    expect(mockApiRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('un refresh sin token no reintenta y avisa sesion expirada', async () => {
+    mockAxiosPost.mockResolvedValue({ data: {} })
+    const { clientModule, errorHandler } = await cargarCliente()
+    clientModule.setAuthToken('acceso-viejo')
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+
+    try {
+      await expect(
+        errorHandler({ config: { url: '/appointments' }, response: respuesta401 })
+      ).rejects.toBeTruthy()
+
+      expect(mockApiRequest).not.toHaveBeenCalled()
+      expect(avisos).toHaveLength(1)
+      expect(clientModule.getAuthToken()).toBeNull()
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
+  })
+
+  it('un refresh que falla limpia el token y un 401 crudo tambien avisa', async () => {
+    mockAxiosPost.mockRejectedValue(new Error('cookie vencida'))
+    const { clientModule, errorHandler } = await cargarCliente()
+    clientModule.setAuthToken('acceso-viejo')
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+
+    try {
+      await expect(
+        errorHandler({
+          config: { url: '/appointments' },
+          response: { status: 401, data: 'Unauthorized' },
+          message: 'HTTP 401'
+        })
+      ).rejects.toBeTruthy()
+
+      expect(mockApiRequest).not.toHaveBeenCalled()
+      expect(avisos).toHaveLength(1)
+      expect(clientModule.getAuthToken()).toBeNull()
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
+  })
+
+  it('el 401 del propio refresh no dispara otro refresh', async () => {
+    const { errorHandler } = await cargarCliente()
+
+    await expect(
+      errorHandler({ config: { url: 'http://test-api/auth/refresh' }, response: respuesta401 })
+    ).rejects.toBeTruthy()
+
+    expect(mockAxiosPost).not.toHaveBeenCalled()
+  })
+
+  it('un error que no es 401 se rechaza sin refrescar ni avisar', async () => {
+    const { clientModule, errorHandler } = await cargarCliente()
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+
+    try {
+      await expect(
+        errorHandler({
+          config: { url: '/appointments' },
+          response: {
+            status: 409,
+            data: { success: false, error_code: 'APPOINTMENT_CONFLICT', message: 'Ocupado' }
+          }
+        })
+      ).rejects.toBeTruthy()
+
+      expect(mockAxiosPost).not.toHaveBeenCalled()
+      expect(avisos).toHaveLength(0)
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
+  })
+
+  it('sin token en memoria el request sale sin Authorization', async () => {
+    await import('./client')
+    const requestInterceptor = mockRequestUse.mock.calls[
+      mockRequestUse.mock.calls.length - 1
+    ][0] as (config: { headers?: Record<string, string> }) => { headers?: Record<string, string> }
+
+    expect(requestInterceptor({}).headers).toBeUndefined()
   })
 })

@@ -1,7 +1,5 @@
 import axios from 'axios'
 
-import axiosRetry from 'axios-retry'
-
 import { resolveApiBaseUrl } from './api-base-url'
 import { normalizeApiError, isApiEnvelope, unwrapApiEnvelope } from './api-contract'
 import { getRuntimeEnv } from './runtime-env'
@@ -24,14 +22,17 @@ const apiClient = axios.create({
 // rehidrata con POST /auth/refresh (ver AuthContext).
 let inMemoryToken: string | null = null
 
+// Limpieza del esquema viejo, una vez por carga: si quedo un token persistido
+// en localStorage de una version anterior, se elimina. setAuthToken nunca
+// toca el almacenamiento.
+try {
+  localStorage.removeItem(LEGACY_TOKEN_KEY)
+} catch {
+  /* almacenamiento no disponible */
+}
+
 export const setAuthToken = (token: string | null) => {
   inMemoryToken = token
-  // Limpieza del esquema viejo: si quedo un token persistido, se elimina.
-  try {
-    localStorage.removeItem(LEGACY_TOKEN_KEY)
-  } catch {
-    /* almacenamiento no disponible */
-  }
 }
 
 export const getAuthToken = () => inMemoryToken
@@ -60,39 +61,13 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
-// Configuración de Retry Inteligente
-export const shouldRetryRequest = (error: {
-  code?: string
-  response?: { status?: number }
-  config?: { method?: string }
-}): boolean => {
-  // NO reintentar si el servidor rechazó la conexión (ERR_CONNECTION_REFUSED)
-  // eso significa que el backend directamente no está corriendo.
-  if (error.code === 'ERR_NETWORK' || error.code === 'ERR_CONNECTION_REFUSED') {
-    return false
-  }
-  // Un 409 en un POST (crear un turno, unirse a la lista de espera, etc.) es
-  // un conflicto de negocio real -el slot ya no está libre-, no algo
-  // transitorio: reintentarlo no lo resuelve, y si el estado cambia entre
-  // reintentos puede terminar reservando después de que la UI ya mostró el
-  // conflicto al usuario. Los métodos idempotentes sí se benefician del retry.
-  if (error.config?.method?.toLowerCase() === 'post') {
-    return error.code === 'ECONNABORTED'
-  }
-  // Reintentar solo en timeouts o errores de concurrencia (409 Conflict)
-  return error.code === 'ECONNABORTED' || error.response?.status === 409
-}
-
-axiosRetry(apiClient, {
-  retries: 3,
-  retryDelay: (retryCount) => {
-    // Backoff exponencial con Jitter: 1s, 2s, 4s (+ random offset)
-    const delay = Math.pow(2, retryCount) * 1000
-    const jitter = Math.random() * 1000
-    return delay + jitter
-  },
-  retryCondition: shouldRetryRequest
-})
+// Sin reintentos automaticos: todo 409 del backend es determinista (choque
+// de integridad, estado viejo, conflicto de agenda), asi que reintentarlo no
+// lo resuelve y solo demora el error; y un reintento de reprogramacion podia
+// aplicarse en silencio porque el backend libera la clave de idempotencia. Un
+// POST tampoco se reenvia: el servidor pudo haberlo aplicado. No hay `timeout`
+// a proposito: el proxy (nginx, 30s) ya acota y uno mas corto dejaria POST
+// fantasma aplicados en el servidor pero dados por fallidos aca.
 
 // Refresh single-flight: muchos requests pueden caer en 401 a la vez cuando el
 // access token (15 min) vence; todos esperan el MISMO refresh en vez de

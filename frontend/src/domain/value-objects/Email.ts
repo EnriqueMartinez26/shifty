@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export class Email {
   private readonly value: string
 
@@ -9,7 +11,7 @@ export class Email {
     const normalized = email.toLowerCase().trim()
     const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
     if (!regex.test(normalized)) {
-      throw new Error(`Email inválido: ${normalized}`)
+      throw new InvalidValueError('INVALID_EMAIL', `Email inválido: ${normalized}`)
     }
     return new Email(normalized)
   }

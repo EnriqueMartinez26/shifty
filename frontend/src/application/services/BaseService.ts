@@ -1,5 +1,6 @@
 import { z, type ZodTypeAny } from 'zod'
 
+import { ApplicationError } from '@shared/errors/ApplicationError'
 import { isProduction } from '@shared/utils/env'
 
 /**
@@ -33,7 +34,7 @@ export abstract class BaseService<T> {
    *
    * This method never retries: the operation runs exactly once. Retrying non-idempotent calls
    * (e.g. a booking POST that timed out but was processed by the server) replays the mutation
-   * and surfaces a spurious conflict. HTTP-level retries live in the axios client (idempotent methods only).
+   * and surfaces a spurious conflict. The axios client does not retry either.
    *
    * @template R The return type of the operation.
    * @param operation The callback performing the core database/API action.
@@ -63,37 +64,42 @@ export abstract class BaseService<T> {
   }
 
   /**
-   * Validates target data against a Zod schema. If invalid, throws a validation error that is intercepted by handleError.
+   * Validates target data against a Zod schema and returns the parsed value, so callers
+   * parse exactly once (F9-09). If invalid, the error is translated by handleError.
    *
    * @param data The payload to validate.
    * @param schema The zod schema.
-   * @throws {z.ZodError} If data doesn't match the schema rules.
+   * @returns The value parsed by the schema.
+   * @throws A sanitized validation Error if data doesn't match the schema rules.
    */
-  protected validate(data: unknown, schema?: ZodTypeAny): void {
-    if (!schema) {
-      return
-    }
-
-    if (typeof schema.parse === 'function') {
-      try {
-        schema.parse(data)
-      } catch (error) {
-        this.handleError(error)
-      }
-    } else {
-      this.log('WARNING', 'Validation schema is not a valid Zod schema.')
+  protected validate<S extends ZodTypeAny>(data: unknown, schema: S): z.output<S> {
+    try {
+      return schema.parse(data) as z.output<S>
+    } catch (error) {
+      this.handleError(error)
     }
   }
 
   /**
    * Centralized error handling. Evaluates internal exceptions (TypeErrors, ValidationErrors, NetworkErrors)
    * and translates them into uniform, sanitized user-friendly exceptions without exposing technical details.
+   * Typed ApplicationErrors are rethrown unchanged so callers can still discriminate them by class.
    *
    * @param error The raw error to analyze.
    * @returns Never returns, always throws a sanitized exception.
    */
   protected handleError(error: unknown): never {
     const serviceName = this.constructor.name
+
+    // Un ApplicationError ya es la traduccion tipada del repositorio
+    // (ConflictError, NotFoundError...): re-envolverlo en un Error plano
+    // dejaba inertes el `instanceof` del GlobalErrorHandler y de la UI (F9-03).
+    // Su mensaje ya es el que veia el usuario, asi que viaja tal cual.
+    if (error instanceof ApplicationError) {
+      this.log('ERROR', `${serviceName} - ${error.name}: ${error.message}`)
+      throw error
+    }
+
     let userMessage = 'Ocurrió un error inesperado en la operación.'
     let errorStack = ''
     let details: unknown = null

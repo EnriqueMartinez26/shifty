@@ -154,6 +154,8 @@ const bottomEntries: MenuLink[] = [
   })
 ]
 
+type GroupOverride = { open: boolean; atKey: string }
+
 interface SidebarProps {
   // Off-canvas en mobile: por defecto abierto para no romper los tests que
   // montan <Sidebar /> sin props y esperan los links presentes en el DOM.
@@ -174,20 +176,25 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = fa
   const groupContainsPath = (group: MenuGroup) =>
     group.items.some((item) => item.path === location.pathname)
 
-  // Un grupo arranca abierto si la ruta activa esta adentro; el resto arranca
-  // cerrado. Despues el usuario controla el estado con el click.
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {}
-    menuEntries.forEach((entry) => {
-      if (entry.type === 'group') {
-        initial[entry.label] = groupContainsPath(entry)
-      }
-    })
-    return initial
-  })
+  // Solo se recuerdan los grupos que el usuario toco, junto con la navegacion
+  // en la que lo hizo. El resto se deriva de la ruta en cada render: un grupo
+  // esta abierto si contiene la ruta activa. Antes se decidia una sola vez al
+  // montar y navegar a una pagina de un grupo cerrado lo dejaba cerrado
+  // (F11a-11). Un grupo cerrado a mano se reabre si despues se navega a una
+  // de sus paginas; si se cierra estando en ella, queda cerrado.
+  const [overrides, setOverrides] = useState<Record<string, GroupOverride>>({})
 
-  const toggleGroup = (label: string) => {
-    setExpandedGroups((prev) => ({ ...prev, [label]: !prev[label] }))
+  const isGroupExpanded = (group: MenuGroup) => {
+    const active = groupContainsPath(group)
+    const override = overrides[group.label]
+    if (!override) return active
+    if (active && !override.open && override.atKey !== location.key) return true
+    return override.open
+  }
+
+  const toggleGroup = (group: MenuGroup) => {
+    const next = !isGroupExpanded(group)
+    setOverrides((prev) => ({ ...prev, [group.label]: { open: next, atKey: location.key } }))
   }
 
   const renderLink = (item: MenuLink, indent = false) => {
@@ -243,14 +250,14 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen = true, onNavigate, inert = fa
     if (visibleGroupItems.length === 0) {
       return null
     }
-    const isExpanded = expandedGroups[group.label]
+    const isExpanded = isGroupExpanded(group)
 
     return (
       <div key={group.label}>
         <button
           type="button"
           aria-expanded={isExpanded}
-          onClick={() => toggleGroup(group.label)}
+          onClick={() => toggleGroup(group)}
           className="w-full flex items-center justify-between px-4 py-3 transition-all"
           style={{
             ...buttonStyles2000s.default,

@@ -154,6 +154,39 @@ describe('BookingStepDateTime', () => {
     expect(screen.queryByText(/profesional/i)).not.toBeInTheDocument()
   })
 
+  it('"Ver todos" es un interruptor alcanzable y operable por teclado', () => {
+    // F11a-09 (2026-09-24): era un div con onClick dentro de un label sin
+    // control: Tab no llegaba y Enter/Espacio no hacian nada. Un <button> nativo
+    // recibe foco y el navegador lo activa con Enter/Espacio (jsdom no simula
+    // esa activacion, asi que se verifica el elemento y su efecto).
+    mockAvailability.mockReturnValue({ isLoading: false, data: [] })
+
+    render(
+      <BookingStepDateTime
+        storePublicId="store-1"
+        serviceId="svc-1"
+        staffId={null}
+        selectedDate="2026-09-25"
+        selectedTime={null}
+        onSelect={() => undefined}
+        onBack={() => undefined}
+      />
+    )
+
+    const interruptor = screen.getByRole('switch', { name: /ver todos/i })
+    expect(interruptor.tagName).toBe('BUTTON')
+    expect(interruptor).toHaveAttribute('type', 'button')
+    expect(interruptor).toHaveAttribute('aria-checked', 'false')
+
+    interruptor.focus()
+    expect(interruptor).toHaveFocus()
+
+    fireEvent.click(interruptor)
+
+    expect(interruptor).toHaveAttribute('aria-checked', 'true')
+    expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'svc-1', '2026-09-25', true)
+  })
+
   it('una fecha lejana que vino por deep-link aparece en la tira y carga sus horarios', () => {
     // La tira muestra 14 dias: el ?date= de un link de reoferta a 45 dias
     // cargaba sus horarios pero el dia no se veia seleccionado en ningun lado.

@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export class BookingTimeSpan {
   private readonly startsAt: Date
   private readonly endsAt: Date
@@ -12,11 +14,14 @@ export class BookingTimeSpan {
     const end = new Date(endsAt)
 
     if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-      throw new Error('Fechas de inicio o fin inválidas')
+      throw new InvalidValueError('INVALID_TIME_SPAN', 'Fechas de inicio o fin inválidas')
     }
 
     if (start >= end) {
-      throw new Error('La fecha de inicio debe ser anterior a la fecha de fin')
+      throw new InvalidValueError(
+        'INVALID_TIME_SPAN',
+        'La fecha de inicio debe ser anterior a la fecha de fin'
+      )
     }
 
     return new BookingTimeSpan(start, end)
@@ -32,17 +37,5 @@ export class BookingTimeSpan {
 
   getDurationMinutes(): number {
     return Math.round((this.endsAt.getTime() - this.startsAt.getTime()) / 60000)
-  }
-
-  isInPast(): boolean {
-    return this.startsAt < new Date()
-  }
-
-  formatDate(): string {
-    return this.startsAt.toISOString().slice(0, 10)
-  }
-
-  formatStartTime(): string {
-    return this.startsAt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
   }
 }

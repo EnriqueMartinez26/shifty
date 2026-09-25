@@ -1,0 +1,26 @@
+{
+  // Codigo que corre en Node y no en el navegador: E2E de Playwright, scripts
+  // y configs de herramientas. Tiene su propio tsconfig porque necesita los
+  // tipos de Node y no los de jest/vite-client de `src` (F12-04).
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "esnext",
+    // DOM: los callbacks de page.evaluate() corren en el navegador.
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["e2e", "scripts", "vite.config.ts", "playwright.config.ts"]
+}

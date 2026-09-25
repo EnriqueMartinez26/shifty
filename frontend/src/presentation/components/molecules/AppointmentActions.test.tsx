@@ -1,31 +1,37 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 
-import { AppointmentActions, availableActions } from './AppointmentActions'
+import { AppointmentActions } from './AppointmentActions'
 
 describe('AppointmentActions', () => {
-  it('un turno pendiente ofrece confirmar y, al admin, liberar', () => {
-    const acciones = availableActions('pending', false, true, true).map((a) => a.action)
-    expect(acciones).toEqual(['confirm', 'release'])
+  it('un estado desconocido no muestra ninguna accion (F8-03)', () => {
+    const { container } = render(
+      <AppointmentActions
+        status="on_hold"
+        hasStarted
+        canRelease
+        canManage
+        busy={false}
+        onAction={() => undefined}
+      />
+    )
+    expect(container.innerHTML).toBe('')
   })
 
-  it('un turno confirmado que ya empezo ofrece completar y ausente', () => {
-    const acciones = availableActions('confirmed', true, true, true).map((a) => a.action)
-    expect(acciones).toEqual(['complete', 'absent'])
-  })
-
-  it('un turno confirmado que todavia no empezo no ofrece cerrar', () => {
-    expect(availableActions('confirmed', false, true, true)).toEqual([])
-  })
-
-  it('los estados terminales no ofrecen nada', () => {
-    for (const status of ['completed', 'cancelled', 'absent', 'expired']) {
-      expect(availableActions(status, true, true, true)).toEqual([])
-    }
-  })
-
-  it('el personal puede confirmar pero no liberar', () => {
-    const acciones = availableActions('pending', false, false, true).map((a) => a.action)
-    expect(acciones).toEqual(['confirm'])
+  it('pinta las acciones que decide el dominio, en su orden', () => {
+    render(
+      <AppointmentActions
+        status="pending"
+        hasStarted={false}
+        canRelease
+        canManage
+        busy={false}
+        onAction={() => undefined}
+      />
+    )
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Confirmar turno',
+      'Liberar turno pendiente'
+    ])
   })
 
   it('dispara la accion sin propagar el click a la tarjeta', () => {

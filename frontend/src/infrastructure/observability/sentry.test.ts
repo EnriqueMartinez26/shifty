@@ -87,6 +87,79 @@ describe('initSentry', () => {
   })
 })
 
+describe('initSentry: sin secretos de la URL ni datos de usuario (F3)', () => {
+  const init = async (env: Record<string, unknown> = {}) => {
+    mockGetRuntimeEnv.mockReturnValue({
+      dev: false,
+      mode: 'production',
+      sentryDsn: 'https://dsn.example/1',
+      ...env
+    })
+    const { initSentry } = await import('./sentry')
+    initSentry()
+    return mockInit.mock.calls[0][0]
+  }
+
+  beforeEach(() => {
+    mockInit.mockClear()
+    mockGetRuntimeEnv.mockReset()
+  })
+
+  it('usa el tunel del mismo origen solo si esta configurado', async () => {
+    expect(await init({ sentryTunnel: '/sentry-tunnel' })).toMatchObject({
+      tunnel: '/sentry-tunnel',
+      maxBreadcrumbs: 30
+    })
+    mockInit.mockClear()
+    expect((await init()).tunnel).toBeUndefined()
+  })
+
+  it('el token de /reset-password no llega en request.url ni query_string, y sin user', async () => {
+    const { beforeSend } = await init()
+    const cleaned = beforeSend({
+      request: {
+        url: 'https://app.example/reset-password?token=secreto#x',
+        query_string: 'token=secreto'
+      },
+      user: { email: 'ana@example.com', ip_address: '1.2.3.4' }
+    })
+
+    expect(cleaned.request.url).toBe('https://app.example/reset-password')
+    expect(cleaned.request.query_string).toBeUndefined()
+    expect(cleaned.user).toBeUndefined()
+  })
+
+  it('los breadcrumbs de navegacion y fetch pierden la query', async () => {
+    const { beforeBreadcrumb } = await init()
+
+    expect(
+      beforeBreadcrumb({
+        category: 'navigation',
+        data: { from: '/login', to: '/reset-password?token=secreto' }
+      }).data
+    ).toEqual({ from: '/login', to: '/reset-password' })
+    expect(
+      beforeBreadcrumb({
+        category: 'fetch',
+        data: { url: '/api/auth/reset?token=secreto', method: 'POST' }
+      }).data
+    ).toEqual({ url: '/api/auth/reset', method: 'POST' })
+    expect(beforeBreadcrumb({ category: 'console', message: 'x' })).toBeNull()
+  })
+})
+
+describe('stripQuery', () => {
+  it.each([
+    ['/reset-password?token=x', '/reset-password'],
+    ['/a#frag', '/a'],
+    ['/sin-query', '/sin-query'],
+    ['', '']
+  ])('%s -> %s', async (url, expected) => {
+    const { stripQuery } = await import('./sentry')
+    expect(stripQuery(url)).toBe(expected)
+  })
+})
+
 describe('parseSampleRate', () => {
   it('clampea el valor entre 0 y 1', async () => {
     const { parseSampleRate } = await import('./sentry')

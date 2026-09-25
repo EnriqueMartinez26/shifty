@@ -134,7 +134,7 @@ Una instrucción en lenguaje natural no es una garantía.
 - Capas `domain/ → application/ → infrastructure/ → presentation/`, más
   `shared/` y `theme/`; alias `@domain`, `@application`, etc.
 - `domain/` es puro: entidades, value objects con factory + validación
-  (`Email.create()`), casos de uso, interfaces de repositorio, eventos. Sin
+  (`Email.create()`), casos de uso, interfaces de repositorio. Sin
   React, axios ni react-query.
 - `infrastructure/repositories/` implementa las interfaces vía
   `BaseRepository` (método plantilla: las subclases implementan `*Impl`, la
@@ -381,8 +381,8 @@ Una instrucción en lenguaje natural no es una garantía.
   (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`)
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
-- **Un turno en el pasado lo agenda solo la tienda** (decisión del dueño,
-  2026-09-25). El panel (`POST /appointments/` con datos de cliente y
+- **Un turno en el pasado lo agenda solo la tienda** (propuesta por Mateo,
+  adoptada por el dueño el 2026-09-25). El panel (`POST /appointments/` con datos de cliente y
   `PATCH /appointments/{id}/reschedule`) y `POST /waitlist/{id}/book` aceptan un
   inicio ya pasado para registrar a quien llegó sin turno o corregirlo: pasa por
   lock, bloqueos, choques y GiST igual que cualquier alta, pero no publica mail
@@ -550,8 +550,10 @@ Una instrucción en lenguaje natural no es una garantía.
     fallo de CI. Antes de escribir un efecto: ¿se calcula en el render?
     ¿sincroniza con algo externo? Si no, no va. Sin `useCallback`/`useMemo`
     defensivos.
-28. Cobertura mínima 70% (`jest.config.js`); `npm audit --omit=dev
-    --audit-level=low` limpio. Token de acceso en memoria, nunca
+28. Cobertura con trinquete por capa (`jest.config.js`): se mide todo
+    `src/` y cada carpeta (`domain`, `application`, `infrastructure`,
+    `shared`, `presentation`) tiene su piso en lo medido; se sube, no se
+    baja. `npm audit --omit=dev --audit-level=low` limpio. Token de acceso en memoria, nunca
     `localStorage`. `import.meta` solo en `runtime-env` /
     `shared/utils/env` (ts-jest no lo compila).
 
@@ -596,16 +598,15 @@ Una instrucción en lenguaje natural no es una garantía.
 
 ## 5. Huecos conocidos: no asumir que están aplicados
 
-- `frontend/scripts/verify-clean-architecture.ts` **no está cableado** en
-  `package.json` ni en CI: es código muerto. La única protección viva de
-  capas es ESLint. El `IMPORT_RULES.md` que menciona solo existe archivado
-  en `docs/archive/refactoring/02-IMPORT_RULES.md`.
-- `docs/DOCUMENTACION_TURNERO.md` y `docs/SETUP_GUIDE.md` declaran deriva
-  contra el código (`docs/AUDIT_MATRIX_SHARED.md`), en particular los
-  permisos de `/reports/professionals` y `/reports/summary|export`.
-  `docs/ROLE_MATRIX.md` se re-verificó el 2026-09-19 y separa lo que hace el
-  código del objetivo de producto. Para un cambio de permisos se verifica en
-  código, no en la doc.
+- La única protección viva de capas del front es ESLint.
+  `frontend/scripts/verify-clean-architecture.ts` era código muerto (sin
+  cablear y sin pasar `tsc`) y se borró el 2026-09-24 al poner `scripts/`,
+  `e2e/` y las configs bajo `tsc` y ESLint (`tsconfig.node.json`, F12-04).
+- `docs/ROLE_MATRIX.md`, `docs/DOCUMENTACION_TURNERO.md` y
+  `docs/SETUP_GUIDE.md` declaran deriva contra el código
+  (`docs/AUDIT_MATRIX_SHARED.md`), en particular los permisos de
+  `/reports/professionals` y `/reports/summary|export`. Para un cambio de
+  permisos se verifica en código, no en la doc.
 - El pre-commit hook (`.githooks/pre-commit`) **solo corre si cada clon hace
   `git config core.hooksPath .githooks`** (activado en el clon de Enrique el
   2026-09-22; en el clon del backend no lo estaba). Corre `verify-toolchain`
@@ -678,6 +679,20 @@ Una instrucción en lenguaje natural no es una garantía.
   front corre con cobertura; el backend no la mide (ver §5).
   `build-images.yml` publica las imágenes en cada push a `main`; no gatea
   PRs.
+- **Todo cambio de endpoint regenera `docs/API_CONTRACT.md` en el mismo
+  commit.** El contrato sale de `app.openapi()` con
+  `backend/scripts/gen_api_contract.py`, nunca a mano;
+  `tests/architecture/test_api_contract_doc.py` falla si el cuerpo commiteado
+  difiere (ignora el pie con fecha y commit; en CI no se saltea) y si dos
+  operaciones comparten `operationId`. Se genera desde el código del working
+  tree, nunca con `docker compose exec`: los contenedores corren la imagen del
+  último build, sin bind mount (§3, regla 22). Con uv, desde `backend/`:
+  `uv run python scripts/gen_api_contract.py`. Sin uv, desde la raíz:
+  `MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps -v ./backend:/src -w
+  /src backend /app/.venv/bin/python scripts/gen_api_contract.py --stdout
+  --commit $(git rev-parse --short HEAD) > docs/API_CONTRACT.md`. El código se
+  monta en `/src` y no en `/app` porque montarlo sobre `/app` tapa el `.venv`
+  de la imagen (`/app/.venv`) y falla con `No module named 'fastapi'`.
 - `docs/RELEASE_CHECKLIST.md` y `docs/BACKUP_RESTORE_RUNBOOK.md` (RPO ≤24h,
   RTO ≤4h) gatean releases: un ítem sin marcar necesita excepción explícita
   del dueño, no un salto silencioso. El deploy a producción es

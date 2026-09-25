@@ -1,5 +1,6 @@
+import { ForbiddenError } from '@shared/errors/ForbiddenError'
+
 import { ForbiddenErrorHandler } from './SpecificHandlers'
-import { ForbiddenError } from '../ForbiddenError'
 
 // Solo lo usa el handler de 401; el cliente real arrastra `import.meta`.
 jest.mock('@infrastructure/http/client', () => ({ setAuthToken: jest.fn() }))

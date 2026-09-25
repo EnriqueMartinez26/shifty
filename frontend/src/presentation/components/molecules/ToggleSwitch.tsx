@@ -24,12 +24,13 @@ export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({ checked, onToggle, l
     className="relative h-7 w-14 flex-shrink-0 rounded-full transition-all"
     style={{
       background: checked ? colors2000s.orange.light : colors2000s.bg.disabled,
-      // Apagado, el riel gris claro casi no se distingue de la tarjeta blanca
-      // (1.23:1); el anillo interior le da un borde de 4.29:1 sin mover la
-      // perilla, porque una sombra no ocupa lugar como un border.
-      boxShadow: checked
-        ? colors2000s.shadows.insetDark
-        : `${colors2000s.shadows.insetDark}, inset 0 0 0 1px ${colors2000s.text.secondary}`
+      // El riel solo no se distingue de la tarjeta blanca: apagado, gris claro
+      // (1.23:1); prendido, el naranja de marca (2.31:1). Un anillo interior le
+      // da borde sin mover la perilla (una sombra no ocupa lugar como un
+      // border): gris 4.29:1 apagado, naranja acento 4.26:1 prendido.
+      boxShadow: `${colors2000s.shadows.insetDark}, inset 0 0 0 1px ${
+        checked ? colors2000s.orange.accent : colors2000s.text.secondary
+      }`
     }}
   >
     <span

@@ -7,10 +7,6 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { initSentry, Sentry } from './infrastructure/observability/sentry'
-import { setupEventHandlers } from './infrastructure/setup/setupEventHandlers'
-import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
-import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
-import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 import {
   ValidationErrorHandler,
   NotFoundErrorHandler,
@@ -19,8 +15,10 @@ import {
   ConflictErrorHandler,
   InternalServerErrorHandler,
   NetworkErrorHandler
-} from './shared/errors/handlers/SpecificHandlers'
-import { eventBus } from './shared/events/EventBus'
+} from './infrastructure/setup/SpecificHandlers'
+import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
+import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
+import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 
 initSentry()
 
@@ -28,10 +26,7 @@ initSentry()
 // esto evita que ademas se pierda la senal de que llego un dato corrupto.
 setUnreadableInstantReporter((message) => Sentry.captureMessage(message, 'warning'))
 
-// 1. Wire Event Handlers
-setupEventHandlers(eventBus, {})
-
-// 2. Initialize and Configure Global Error Handler Strategy
+// 1. Initialize and Configure Global Error Handler Strategy
 const globalErrorHandler = new GlobalErrorHandler()
 globalErrorHandler.registerHandler(new ValidationErrorHandler())
 globalErrorHandler.registerHandler(new NotFoundErrorHandler())
@@ -51,7 +46,7 @@ window.addEventListener('unhandledrejection', (event) => {
   void globalErrorHandler.handle(event.reason)
 })
 
-// 3. Configure React Query with Global Error Handling
+// 2. Configure React Query with Global Error Handling
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error: unknown) => {

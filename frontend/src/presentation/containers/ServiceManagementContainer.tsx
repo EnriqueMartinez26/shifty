@@ -5,8 +5,10 @@ import { Plus, Search, Loader2 } from 'lucide-react'
 import { Service } from '@domain/entities/Service'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { ServiceCard } from '../components/molecules/ServiceCard'
 import { ServiceFormModal } from '../components/organisms/ServiceFormModal'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedService,
   useDeleteManagedService,
@@ -16,11 +18,12 @@ import {
 import type { ServiceFormValues } from '../types/forms'
 
 export const ServiceManagementContainer: React.FC = () => {
+  const { confirm, confirmDialog } = useConfirm()
   const [searchTerm, setSearchTerm] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
 
-  const { data: services, isLoading } = useManagedServices()
+  const { data: services, isLoading, error } = useManagedServices()
   const createMutation = useCreateManagedService()
   const updateMutation = useUpdateManagedService()
   const deleteMutation = useDeleteManagedService()
@@ -29,9 +32,9 @@ export const ServiceManagementContainer: React.FC = () => {
     service.name.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (
-      window.confirm('¿Estás seguro de eliminar este servicio? Esto no afectará turnos ya creados.')
+      await confirm('¿Estás seguro de eliminar este servicio? Esto no afectará turnos ya creados.')
     ) {
       deleteMutation.mutate(id)
     }
@@ -61,6 +64,7 @@ export const ServiceManagementContainer: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       {/* Unified Skeuomorphic Header Card matching Reports.tsx */}
       <div
         className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-lg"
@@ -114,6 +118,8 @@ export const ServiceManagementContainer: React.FC = () => {
         />
       </div>
 
+      <QueryErrorNotice error={error} message="No se pudieron cargar los servicios." />
+
       {isLoading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-4">
           <Loader2 className="animate-spin text-orange-500" size={40} />
@@ -128,7 +134,7 @@ export const ServiceManagementContainer: React.FC = () => {
               key={service.id}
               service={service}
               onEdit={handleEdit}
-              onDelete={handleDelete}
+              onDelete={(id) => void handleDelete(id)}
             />
           ))}
         </div>

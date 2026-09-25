@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { ConflictError } from '@shared/errors'
 import { argentinaLocalToUtcIso } from '@shared/utils/argentinaTime'
 
 import { NewAppointmentModal } from './NewAppointmentModal'
@@ -172,6 +173,38 @@ describe('NewAppointmentModal', () => {
     // paralelo se pasaba de los 5 s por defecto de jest. Se sube solo este
     // caso; subir el global esconderia lentitud real en otros tests.
   }, 20000)
+
+  it('un 409 al crear muestra que el horario esta ocupado, no el mensaje crudo (F9-03)', async () => {
+    // El servicio propaga el ConflictError tipado. Antes el modal lo buscaba
+    // en `originalError` del envoltorio y, sin envoltorio, caia al mensaje crudo.
+    conOtp(false)
+    mockCrearTurno.mockRejectedValue(new ConflictError('Conflict'))
+    const onClose = jest.fn()
+    const { container } = render(<NewAppointmentModal isOpen onClose={onClose} />)
+
+    completarFormulario(container)
+    fireEvent.click(botonCrear())
+
+    expect(
+      await screen.findByText('Ese horario ya está ocupado para ese profesional.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Conflict')).not.toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('un error que no es de conflicto muestra su mensaje', async () => {
+    conOtp(false)
+    mockCrearTurno.mockRejectedValue(new Error('El servicio no esta disponible'))
+    const { container } = render(<NewAppointmentModal isOpen onClose={jest.fn()} />)
+
+    completarFormulario(container)
+    fireEvent.click(botonCrear())
+
+    expect(await screen.findByText('El servicio no esta disponible')).toBeInTheDocument()
+    expect(
+      screen.queryByText('Ese horario ya está ocupado para ese profesional.')
+    ).not.toBeInTheDocument()
+  })
 
   it('sin OTP exigido el mismo formulario si habilita el turno', () => {
     // Contraprueba del test anterior: demuestra que lo que frena el submit es

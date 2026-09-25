@@ -7,6 +7,7 @@ const mockServices = jest.fn()
 const mockStaff = jest.fn()
 const mockAvailability = jest.fn()
 const mockRequestOtp = jest.fn()
+const mockVerifyOtp = jest.fn()
 
 jest.mock('../../../hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args),
@@ -17,7 +18,7 @@ jest.mock('../../../hooks/usePublic', () => ({
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCreatePublicBooking: () => ({ mutateAsync: jest.fn(), isPending: false }),
   useRequestPublicOtp: () => ({ mutateAsync: mockRequestOtp, isPending: false }),
-  useVerifyPublicOtp: () => ({ mutateAsync: jest.fn(), isPending: false })
+  useVerifyPublicOtp: () => ({ mutateAsync: mockVerifyOtp, isPending: false })
 }))
 
 const servicio = (public_id: string) => ({
@@ -68,6 +69,7 @@ describe('BookingWizardContainer', () => {
     mockStaff.mockReset()
     mockAvailability.mockReset()
     mockRequestOtp.mockReset()
+    mockVerifyOtp.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
     mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
     window.sessionStorage.clear()
@@ -151,5 +153,53 @@ describe('BookingWizardContainer', () => {
 
     expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
     expect(mockRequestOtp).not.toHaveBeenCalled()
+  })
+
+  it('sin sessionStorage, editar otro dato no des-verifica el telefono', async () => {
+    // F11a-08 (2026-09-24): se comparaba el telefono tipeado contra el
+    // normalizado que devuelve el backend (+54...): nunca coincidian y solo
+    // sessionStorage salvaba la verificacion. Sin storage, escribir en
+    // "Notas" borraba "Telefono validado" y obligaba a pedir otro codigo.
+    const getItem = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('storage bloqueado')
+    })
+    const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage bloqueado')
+    })
+    try {
+      mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
+      mockVerifyOtp.mockResolvedValue({
+        phone: '+5491155550101',
+        verified_at: new Date().toISOString()
+      })
+      render(<BookingWizardContainer store={tienda(true)} />)
+
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '54 9 11 5555-0101' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('Codigo que te llego por email'), {
+        target: { value: '123456' }
+      })
+      fireEvent.click(screen.getByText('Verificar codigo'))
+      await waitFor(() =>
+        expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+      )
+
+      fireEvent.change(screen.getByPlaceholderText('Algo que debamos saber?'), {
+        target: { value: 'Llego 5 minutos tarde' }
+      })
+
+      expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '54 9 11 5555-0102' }
+      })
+      expect(screen.queryByText('Telefono validado correctamente')).not.toBeInTheDocument()
+    } finally {
+      getItem.mockRestore()
+      setItem.mockRestore()
+    }
   })
 })

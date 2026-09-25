@@ -18,10 +18,18 @@ export interface CreateBookingInput {
   idempotency_key?: string
 }
 
+/**
+ * Turnos de un rango. `total` es lo que el servidor dice que hay; si supera
+ * `appointments.length`, la lista vino recortada por el tope de paginas y el
+ * llamador tiene que avisarlo en vez de mostrarla como completa.
+ */
+export interface AppointmentRange {
+  appointments: Appointment[]
+  total: number
+}
+
 export interface IBookingRepository {
-  findByDate(date: string): Promise<Appointment[]>
-  searchByDateRange(fromDate: string, toDate: string, pageSize?: number): Promise<Appointment[]>
-  getAvailability(serviceId: string, date: string): Promise<Record<string, unknown>>
+  searchByDateRange(fromDate: string, toDate: string, pageSize?: number): Promise<AppointmentRange>
   create(payload: CreateBookingInput): Promise<Appointment>
   confirm(id: string): Promise<void>
   complete(id: string): Promise<void>

@@ -22,7 +22,6 @@ const commonLanguageOptions = {
     }
   },
   globals: {
-    confirm: 'readonly',
     console: 'readonly',
     crypto: 'readonly',
     document: 'readonly',
@@ -42,9 +41,98 @@ const commonPlugins = {
   'react-hooks': reactHooksPlugin
 }
 
+// Reglas de calidad que valen para todo TypeScript del repo: `src` y tambien
+// E2E, scripts y configs (F12-04). Las de React y dead-code son solo de `src`.
+const sharedRules = {
+  ...js.configs.recommended.rules,
+
+  'import/order': [
+    'warn',
+    {
+      groups: [['builtin', 'external'], 'internal', ['parent', 'sibling', 'index']],
+      pathGroups: [
+        { pattern: 'react', group: 'external', position: 'before' },
+        { pattern: 'react-dom', group: 'external', position: 'before' },
+        { pattern: '@tanstack/**', group: 'external', position: 'before' },
+        { pattern: 'axios', group: 'external', position: 'before' },
+        { pattern: '@domain/**', group: 'internal', position: 'after' },
+        { pattern: '@application/**', group: 'internal', position: 'after' },
+        { pattern: '@infrastructure/**', group: 'internal', position: 'after' },
+        { pattern: '@presentation/**', group: 'internal', position: 'after' },
+        { pattern: '@shared/**', group: 'internal', position: 'after' }
+      ],
+      pathGroupsExcludedImportTypes: ['react'],
+      'newlines-between': 'always',
+      alphabetize: {
+        order: 'asc',
+        caseInsensitive: true
+      }
+    }
+  ],
+  '@typescript-eslint/await-thenable': 'error',
+  '@typescript-eslint/explicit-function-return-type': 'off',
+  '@typescript-eslint/explicit-module-boundary-types': 'off',
+  '@typescript-eslint/no-explicit-any': [
+    'error',
+    {
+      fixToUnknown: false,
+      ignoreRestArgs: false
+    }
+  ],
+  '@typescript-eslint/no-floating-promises': 'warn',
+  '@typescript-eslint/no-misused-promises': 'warn',
+  '@typescript-eslint/no-unused-expressions': [
+    'error',
+    {
+      allowShortCircuit: true,
+      allowTernary: true,
+      allowTaggedTemplates: true
+    }
+  ],
+  '@typescript-eslint/no-unused-vars': [
+    'error',
+    {
+      argsIgnorePattern: '^_',
+      caughtErrorsIgnorePattern: '^_'
+    }
+  ],
+
+  curly: ['error', 'multi-line'],
+  eqeqeq: ['error', 'always'],
+  'no-console': ['warn', { allow: ['warn', 'error'] }],
+  'no-else-return': 'warn',
+  'no-implicit-coercion': 'warn',
+  'no-nested-ternary': 'off',
+  'no-unneeded-ternary': 'warn',
+  'no-unused-vars': 'off',
+  'no-var': 'error',
+  'prefer-arrow-callback': 'warn',
+  'prefer-const': 'error'
+}
+
+// Globales de Node para lo que corre fuera del navegador (E2E, scripts,
+// configs). Se listan a mano, igual que los de `src`.
+const nodeGlobals = {
+  __dirname: 'readonly',
+  __filename: 'readonly',
+  console: 'readonly',
+  module: 'writable',
+  process: 'readonly',
+  require: 'readonly',
+  URL: 'readonly'
+}
+
 export default [
   {
-    ignores: ['node_modules', 'dist', 'build', '.vite']
+    ignores: [
+      'node_modules',
+      'dist',
+      'build',
+      '.vite',
+      'coverage',
+      'playwright-report',
+      'test-results'
+    ]
   },
   {
     files: ['src/**/*.{ts,tsx}'],
@@ -69,7 +157,7 @@ export default [
       }
     },
     rules: {
-      ...js.configs.recommended.rules,
+      ...sharedRules,
 
       'import/no-cycle': ['error', { maxDepth: 2 }],
       'import/no-default-export': 'off',
@@ -81,70 +169,7 @@ export default [
           ignoreExports: ['src/main.tsx', 'src/test/**', 'src/**/*.test.ts']
         }
       ],
-      'import/order': [
-        'warn',
-        {
-          groups: [['builtin', 'external'], 'internal', ['parent', 'sibling', 'index']],
-          pathGroups: [
-            { pattern: 'react', group: 'external', position: 'before' },
-            { pattern: 'react-dom', group: 'external', position: 'before' },
-            { pattern: '@tanstack/**', group: 'external', position: 'before' },
-            { pattern: 'axios', group: 'external', position: 'before' },
-            { pattern: '@domain/**', group: 'internal', position: 'after' },
-            { pattern: '@application/**', group: 'internal', position: 'after' },
-            { pattern: '@infrastructure/**', group: 'internal', position: 'after' },
-            { pattern: '@presentation/**', group: 'internal', position: 'after' },
-            { pattern: '@shared/**', group: 'internal', position: 'after' }
-          ],
-          pathGroupsExcludedImportTypes: ['react'],
-          'newlines-between': 'always',
-          alphabetize: {
-            order: 'asc',
-            caseInsensitive: true
-          }
-        }
-      ],
       'import/prefer-default-export': 'off',
-
-      '@typescript-eslint/await-thenable': 'error',
-      '@typescript-eslint/explicit-function-return-type': 'off',
-      '@typescript-eslint/explicit-module-boundary-types': 'off',
-      '@typescript-eslint/no-explicit-any': [
-        'error',
-        {
-          fixToUnknown: false,
-          ignoreRestArgs: false
-        }
-      ],
-      '@typescript-eslint/no-floating-promises': 'warn',
-      '@typescript-eslint/no-misused-promises': 'warn',
-      '@typescript-eslint/no-unused-expressions': [
-        'error',
-        {
-          allowShortCircuit: true,
-          allowTernary: true,
-          allowTaggedTemplates: true
-        }
-      ],
-      '@typescript-eslint/no-unused-vars': [
-        'error',
-        {
-          argsIgnorePattern: '^_',
-          caughtErrorsIgnorePattern: '^_'
-        }
-      ],
-
-      curly: ['error', 'multi-line'],
-      eqeqeq: ['error', 'always'],
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
-      'no-else-return': 'warn',
-      'no-implicit-coercion': 'warn',
-      'no-nested-ternary': 'off',
-      'no-unneeded-ternary': 'warn',
-      'no-unused-vars': 'off',
-      'no-var': 'error',
-      'prefer-arrow-callback': 'warn',
-      'prefer-const': 'error',
 
       'react/display-name': 'warn',
       'react/jsx-key': 'error',
@@ -173,6 +198,57 @@ export default [
     }
   },
   {
+    // F12-04: E2E, scripts y configs TS quedaban fuera de ESLint y de tsc.
+    // Mismas reglas de calidad que `src`, con el tsconfig de Node.
+    files: ['e2e/**/*.ts', 'scripts/**/*.ts', '*.config.ts'],
+    languageOptions: {
+      parser: tsParser,
+      parserOptions: {
+        ecmaVersion: 2023,
+        sourceType: 'module',
+        project: './tsconfig.node.json',
+        tsconfigRootDir: __dirname
+      },
+      // `document` solo aparece dentro de page.evaluate(), que corre en el navegador.
+      globals: { ...nodeGlobals, document: 'readonly' }
+    },
+    plugins: {
+      '@typescript-eslint': typescriptPlugin,
+      import: importPlugin
+    },
+    settings: {
+      'import/extensions': ['.ts'],
+      'import/parsers': { '@typescript-eslint/parser': ['.ts'] },
+      'import/resolver': {
+        typescript: {
+          project: './tsconfig.node.json'
+        },
+        node: true
+      }
+    },
+    rules: sharedRules
+  },
+  {
+    // Configs en JS (este archivo, jest): sin tipos, solo las reglas base.
+    files: ['*.{js,mjs,cjs}'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: nodeGlobals
+    },
+    rules: {
+      ...js.configs.recommended.rules,
+      curly: ['error', 'multi-line'],
+      eqeqeq: ['error', 'always'],
+      'no-var': 'error',
+      'prefer-const': 'error'
+    }
+  },
+  {
+    files: ['*.cjs'],
+    languageOptions: { sourceType: 'commonjs' }
+  },
+  {
     files: ['src/domain/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [
@@ -180,7 +256,14 @@ export default [
         {
           patterns: [
             {
-              group: ['@application/**', '@infrastructure/**', '@presentation/**'],
+              group: [
+                '@application/**',
+                '@infrastructure/**',
+                '@presentation/**',
+                '**/application/**',
+                '**/infrastructure/**',
+                '**/presentation/**'
+              ],
               message: 'Domain cannot depend on application, infrastructure, or presentation.'
             }
           ],
@@ -210,7 +293,7 @@ export default [
         {
           patterns: [
             {
-              group: ['@presentation/**'],
+              group: ['@presentation/**', '**/presentation/**'],
               message: 'Infrastructure cannot depend on presentation.'
             }
           ]
@@ -219,10 +302,41 @@ export default [
     }
   },
   {
+    // Shared is the bottom of the stack: every layer imports it, so it may not
+    // import any of them back. Relative paths are covered too, otherwise
+    // `../../infrastructure/...` walks around the alias ban (F12-03).
+    files: ['src/shared/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '@domain/**',
+                '@application/**',
+                '@infrastructure/**',
+                '@presentation/**',
+                '**/domain/**',
+                '**/application/**',
+                '**/infrastructure/**',
+                '**/presentation/**'
+              ],
+              message:
+                'Shared cannot depend on domain, application, infrastructure, or presentation.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
     // Application orchestrates; it must never reach up into the UI. Importing
-    // infrastructure is still allowed on purpose: the services take the axios
-    // client directly because there is no DI container, and banning it here
-    // would be a refactor, not a guard.
+    // infrastructure is still allowed on purpose (CLAUDE.md section 2: no DI
+    // container, services are module singletons that take the axios client
+    // directly), so banning it here would be a refactor, not a guard. Every
+    // layer block also bans the relative form (`**/presentation/**`): with only
+    // the alias banned, `../../presentation/...` walked around the rule.
     files: ['src/application/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [
@@ -230,7 +344,7 @@ export default [
         {
           patterns: [
             {
-              group: ['@presentation/**'],
+              group: ['@presentation/**', '**/presentation/**'],
               message: 'Application cannot depend on presentation.'
             }
           ],

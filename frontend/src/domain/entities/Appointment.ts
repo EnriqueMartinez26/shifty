@@ -1,4 +1,3 @@
-import { BookingStatus } from '../value-objects/BookingStatus'
 import { BookingTimeSpan } from '../value-objects/BookingTimeSpan'
 import { UserId } from '../value-objects/UserId'
 
@@ -11,7 +10,12 @@ interface AppointmentProps {
   clientName: string
   clientPhone: string | null
   timeSpan: BookingTimeSpan
-  status: BookingStatus
+  /**
+   * Crudo a proposito: un estado que el front todavia no conoce no puede
+   * tumbar la agenda entera. Las reglas viven en BookingStatus.ts
+   * (isBookingStatus, bookingActionsFor) y un desconocido no ofrece acciones.
+   */
+  status: string
   notes: string | null
 }
 
@@ -44,7 +48,7 @@ export class Appointment {
       clientName: props.client_name,
       clientPhone: props.client_phone ?? null,
       timeSpan: BookingTimeSpan.create(props.starts_at, props.ends_at),
-      status: BookingStatus.create(props.status),
+      status: props.status,
       notes: props.notes
     })
   }
@@ -74,15 +78,11 @@ export class Appointment {
   get timeSpan() {
     return this.props.timeSpan
   }
-  get status() {
-    return this.props.status.getValue()
+  get status(): string {
+    return this.props.status
   }
   get notes() {
     return this.props.notes
-  }
-
-  canBeCancelled(): boolean {
-    return !this.props.status.isFinalized() && !this.props.timeSpan.isInPast()
   }
 
   // Los mutadores confirm() / markAbsent() / complete() / reschedule() se
@@ -104,7 +104,7 @@ export class Appointment {
       client_phone: this.props.clientPhone,
       starts_at: this.props.timeSpan.getStartsAt().toISOString(),
       ends_at: this.props.timeSpan.getEndsAt().toISOString(),
-      status: this.props.status.getValue(),
+      status: this.props.status,
       notes: this.props.notes
     }
   }

@@ -112,21 +112,23 @@ export interface ReportTrend {
 
 class ReportsService {
   async getSummary(fromDate: string, toDate: string): Promise<ReportSummary> {
-    const { data } = await apiClient.get<ReportSummary>(
-      `/reports/summary?from_date=${fromDate}&to_date=${toDate}`
-    )
+    const { data } = await apiClient.get<ReportSummary>('/reports/summary', {
+      params: { from_date: fromDate, to_date: toDate }
+    })
     return data
   }
 
   async getProfessionalReports(fromDate: string, toDate: string): Promise<ProfessionalReports> {
-    const { data } = await apiClient.get<ProfessionalReports>(
-      `/reports/professionals?from_date=${fromDate}&to_date=${toDate}`
-    )
+    const { data } = await apiClient.get<ProfessionalReports>('/reports/professionals', {
+      params: { from_date: fromDate, to_date: toDate }
+    })
     return data
   }
 
   async getTrend(months: number): Promise<ReportTrend> {
-    const { data } = await apiClient.get<ReportTrend>(`/reports/trend?months=${months}`)
+    const { data } = await apiClient.get<ReportTrend>('/reports/trend', {
+      params: { months }
+    })
     return data
   }
 

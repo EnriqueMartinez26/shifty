@@ -10,6 +10,9 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { Icon2000s } from '../components/legacy/Icon2000s'
 import { getDefaultAppRoute } from '../context/roles'
 import { useLogin } from '../hooks/useLogin'
+import { create2000sInputStyle } from '../lib/surfaceStyles'
+
+const inputStyle = create2000sInputStyle()
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('')
@@ -34,13 +37,6 @@ const LoginPage: React.FC = () => {
     } catch (error: unknown) {
       setError(getErrorMessage(error, 'Error al iniciar sesión'))
     }
-  }
-
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
   }
 
   return (

@@ -1,6 +1,8 @@
+import { DomainError } from '../../domain/errors/DomainError'
 import { IRepository, QueryOptions } from '../../domain/repositories/IRepository'
 import { ApplicationError } from '../../shared/errors/ApplicationError'
 import { InternalServerError } from '../../shared/errors/InternalServerError'
+import { ValidationError } from '../../shared/errors/ValidationError'
 
 /**
  * Clase base abstracta para repositorios que implementa el Template Method Pattern.
@@ -9,8 +11,9 @@ import { InternalServerError } from '../../shared/errors/InternalServerError'
 export abstract class BaseRepository<
   T,
   CreateDTO = T,
-  UpdateDTO = Partial<T>
-> implements IRepository<T, CreateDTO, UpdateDTO> {
+  UpdateDTO = Partial<T>,
+  CreateExtra = never
+> implements IRepository<T, CreateDTO, UpdateDTO, CreateExtra> {
   public async findAll(options?: QueryOptions | boolean): Promise<T[]> {
     try {
       return await this.findAllImpl(options)
@@ -27,7 +30,7 @@ export abstract class BaseRepository<
     }
   }
 
-  public async create(data: CreateDTO, extra?: unknown): Promise<T> {
+  public async create(data: CreateDTO, extra?: CreateExtra): Promise<T> {
     try {
       return await this.createImpl(data, extra)
     } catch (error) {
@@ -54,18 +57,30 @@ export abstract class BaseRepository<
   // --- Abstract hooks implementados por subclases concretas ---
   protected abstract findAllImpl(options?: QueryOptions | boolean): Promise<T[]>
   protected abstract findByIdImpl(id: string): Promise<T | null>
-  protected abstract createImpl(data: CreateDTO, extra?: unknown): Promise<T>
+  protected abstract createImpl(data: CreateDTO, extra?: CreateExtra): Promise<T>
   protected abstract updateImpl(id: string, data: UpdateDTO): Promise<T>
   protected abstract deleteImpl(id: string): Promise<void>
 
-  /**
-   * Estandariza errores imprevistos a nivel de base de datos a InternalServerError.
-   */
   protected handleRepositoryError(operation: string, error: unknown): never {
-    if (error instanceof ApplicationError) {
-      throw error
-    }
-    const msg = error instanceof Error ? error.message : 'Unknown repository error'
-    throw new InternalServerError(`Database operation '${operation}' failed: ${msg}`)
+    translateRepositoryError(operation, error)
   }
+}
+
+/**
+ * Traduce lo que falle abajo a un ApplicationError tipado. Un DomainError (un
+ * value object que rechazo un dato) sale como ValidationError con su `code`
+ * en el contexto; el mensaje es el mismo que antes para no cambiar lo que ve
+ * el usuario. Lo demas imprevisto queda como InternalServerError. Exportada
+ * para los repositorios que no son CRUD generico (HttpBookingRepository).
+ */
+export function translateRepositoryError(operation: string, error: unknown): never {
+  if (error instanceof ApplicationError) {
+    throw error
+  }
+  const msg = error instanceof Error ? error.message : 'Unknown repository error'
+  const message = `Database operation '${operation}' failed: ${msg}`
+  if (error instanceof DomainError) {
+    throw new ValidationError(message, { code: error.code, operation })
+  }
+  throw new InternalServerError(message)
 }

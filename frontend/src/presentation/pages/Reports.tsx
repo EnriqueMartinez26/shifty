@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { subDays } from 'date-fns'
 import {
@@ -22,6 +22,7 @@ import {
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
+import { bookingStatusLabel } from '../lib/bookingStatusLabel'
 import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
 import {
   create2000sInputStyle,
@@ -42,7 +43,7 @@ const ReportsPage: React.FC = () => {
   const [exportError, setExportError] = useState<string | null>(null)
 
   const summary = summaryQuery.data
-  const stats = useMemo(() => summary?.stats, [summary])
+  const stats = summary?.stats
   const clientStats = summary?.client_stats
   const debtSummary = summary?.debt_summary
 
@@ -267,6 +268,7 @@ const ReportsPage: React.FC = () => {
 
       <div className="flex flex-wrap gap-3">
         <button
+          type="button"
           onClick={() => {
             void downloadFile('csv')
           }}
@@ -277,6 +279,7 @@ const ReportsPage: React.FC = () => {
           <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
         </button>
         <button
+          type="button"
           onClick={() => {
             void downloadFile('excel')
           }}
@@ -291,6 +294,7 @@ const ReportsPage: React.FC = () => {
           <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
         </button>
         <button
+          type="button"
           onClick={() => {
             void downloadFile('pdf')
           }}
@@ -515,7 +519,7 @@ const ReportsPage: React.FC = () => {
                         color: colors2000s.text.secondary
                       }}
                     >
-                      {item.status}
+                      {bookingStatusLabel(item.status)}
                     </span>
                   </td>
                   <td className="px-6 py-4 font-black" style={{ color: colors2000s.orange.accent }}>

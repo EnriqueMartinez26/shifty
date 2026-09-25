@@ -1,3 +1,5 @@
+import { InvalidValueError } from '../errors/DomainError'
+
 export class UserId {
   private readonly value: string
 
@@ -7,9 +9,10 @@ export class UserId {
 
   static create(value: string): UserId {
     if (!value || value.trim().length === 0) {
-      throw new Error(`UserId inválido: no puede estar vacío`)
+      throw new InvalidValueError('INVALID_USER_ID', 'UserId inválido: no puede estar vacío')
     }
-    // Opcional: Validar formato UUID si aplica
+    // Id opaco a proposito: llegan ULID del backend (26 caracteres) y UUID de
+    // createUuid(). Exigir formato UUID rechazaria todos los ids del backend.
     return new UserId(value.trim())
   }
 

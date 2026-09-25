@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Check } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
@@ -123,7 +123,11 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     // acepta y asi no se agota el presupuesto de pedidos por hora).
     setOtpState((prev) => {
       const email = prev.email === emailAnterior || !prev.email ? client.email : prev.email
-      if (client.phone === prev.verifiedPhone) return { ...prev, email }
+      // Mismo telefono = mismos digitos: el backend devuelve el verificado
+      // normalizado (+54...) y la persona lo tipea con espacios o guiones.
+      // Comparar las cadenas crudas des-verificaba ante cualquier edicion
+      // cuando no habia sessionStorage que lo rescatara (F11a-08).
+      if (phoneDigits(client.phone) === phoneDigits(prev.verifiedPhone)) return { ...prev, email }
       if (client.phone.trim() && isOtpStillValid(store.slug, client.phone)) {
         return { ...prev, email, verified: true, verifiedPhone: client.phone, error: '' }
       }

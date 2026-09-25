@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { ConflictError, NotFoundError } from '@shared/errors'
+
 import { BaseService } from './BaseService'
 
 // Concrete subclass of BaseService to test the abstract class logic
@@ -37,6 +39,10 @@ class TestService extends BaseService<unknown> {
     }, 'runValidationOperation')
   }
 
+  async runParsingOperation<S extends z.ZodTypeAny>(data: unknown, schema: S) {
+    return await this.execute(async () => this.validate(data, schema), 'runParsingOperation')
+  }
+
   public triggerLog(level: string, message: string, data?: unknown): void {
     this.log(level, message, data)
   }
@@ -72,11 +78,11 @@ describe('BaseService', () => {
     })
 
     it.each(['timeout', 'Network Error', 'fetch failed', 'rate limit exceeded', 'ECONNREFUSED'])(
-      'should invoke the operation exactly once when it fails with "%s" (HTTP layer owns retries)',
+      'should invoke the operation exactly once when it fails with "%s" (no automatic retries)',
       async (message) => {
         // Regression: a POST that timed out client-side but was processed by the server
         // was replayed here and hit the GiST overlap exclusion, so the user saw a conflict
-        // on their own booking. Retries belong to axios-retry (idempotent methods only).
+        // on their own booking. There are no automatic retries at any layer.
         const operation = jest.fn<Promise<string>, []>().mockRejectedValue(new Error(message))
 
         await expect(service.runCountedFailingOperation(operation)).rejects.toThrow(message)
@@ -101,6 +107,14 @@ describe('BaseService', () => {
       await expect(service.runValidationOperation(validData, testSchema)).resolves.not.toThrow()
     })
 
+    it('devuelve el valor parseado para que el llamador no parsee dos veces (F9-09)', async () => {
+      const trimmed = z.object({ name: z.string().trim() })
+
+      await expect(service.runParsingOperation({ name: '  Ana  ' }, trimmed)).resolves.toEqual({
+        name: 'Ana'
+      })
+    })
+
     it('should throw Error and log ERROR level on validation failures', async () => {
       const invalidData = { name: 'Al', age: -5 } // name too short, age negative
 
@@ -122,6 +136,23 @@ describe('BaseService', () => {
 
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining('[ERROR] TestService - Exception: Custom domain exception')
+      )
+    })
+
+    it.each([
+      ['ConflictError', new ConflictError('El horario ya esta ocupado')],
+      ['NotFoundError', new NotFoundError('Staff no encontrado')]
+    ])('deja pasar el %s tipado sin re-envolverlo (F9-03)', async (_name, typed) => {
+      // Re-envolverlo en un Error plano dejaba inerte el `instanceof` del
+      // GlobalErrorHandler y de la UI: el 409 llegaba como error generico.
+      const error: unknown = await service
+        .runCountedFailingOperation(() => Promise.reject(typed))
+        .catch((reason: unknown) => reason)
+
+      expect(error).toBe(typed)
+      expect(error).toBeInstanceOf(typed.constructor)
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`[ERROR] TestService - ${typed.name}: ${typed.message}`)
       )
     })
 

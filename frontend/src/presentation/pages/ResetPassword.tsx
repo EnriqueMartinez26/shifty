@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { mdiShieldAlert, mdiStore } from '@mdi/js'
 import { ArrowLeft, KeyRound } from 'lucide-react'
@@ -9,11 +9,14 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { Icon2000s } from '../components/legacy/Icon2000s'
 import { useResetPassword } from '../hooks/useResetPassword'
+import { create2000sInputStyle } from '../lib/surfaceStyles'
+
+const inputStyle = create2000sInputStyle()
 
 const ResetPasswordPage: React.FC = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const token = useMemo(() => searchParams.get('token') || '', [searchParams])
+  const token = searchParams.get('token') || ''
 
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -52,13 +55,6 @@ const ResetPasswordPage: React.FC = () => {
     } catch (error: unknown) {
       setError(getErrorMessage(error, 'No se pudo restablecer la contrasena'))
     }
-  }
-
-  const inputStyle = {
-    background: 'white',
-    border: `1px solid ${colors2000s.border.default}`,
-    boxShadow: colors2000s.shadows.insetDark,
-    color: colors2000s.text.primary
   }
 
   return (

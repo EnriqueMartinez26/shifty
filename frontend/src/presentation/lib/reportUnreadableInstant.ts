@@ -31,13 +31,24 @@ const MAX_RAW_LENGTH = 64
  */
 const alreadyReported = new Set<string>()
 
-export const reportUnreadableInstant = (field: string, raw: unknown): void => {
+const report = (what: string, field: string, raw: unknown): void => {
   const value = typeof raw === 'string' ? raw.slice(0, MAX_RAW_LENGTH) : typeof raw
-  const key = `${field}:${value}`
-  if (alreadyReported.has(key)) return
-  alreadyReported.add(key)
-  reporter?.(`Instante ilegible en ${field}: ${value}`)
+  const message = `${what} en ${field}: ${value}`
+  if (alreadyReported.has(message)) return
+  alreadyReported.add(message)
+  reporter?.(message)
 }
+
+export const reportUnreadableInstant = (field: string, raw: unknown): void =>
+  report('Instante ilegible', field, raw)
+
+/**
+ * Mismo destino y deduplicacion para un estado de turno que el front no
+ * conoce: se muestra crudo y sin acciones (F8-03), y esto deja la senal de
+ * que el backend sumo un estado antes que el front.
+ */
+export const reportUnknownStatus = (field: string, raw: string): void =>
+  report('Estado desconocido', field, raw)
 
 /** Solo para los tests: el registro de deduplicacion vive a nivel de modulo. */
 export const resetUnreadableInstantReports = (): void => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { AlertTriangle } from 'lucide-react'
 
@@ -13,9 +13,11 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../theme/colors'
+import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SuperAdminAuditTimeline } from '../components/organisms/SuperAdminAuditTimeline'
 import { SuperAdminHealthPanel } from '../components/organisms/SuperAdminHealthPanel'
 import { useAuth } from '../context/AuthContext'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useAssignSuperAdminSubscription,
   useCreateSuperAdminCoupon,
@@ -71,11 +73,13 @@ import { UserModals } from './superadmin/UserModals'
 
 const SuperAdminPage: React.FC = () => {
   const { user } = useAuth()
+  const { confirm, confirmDialog } = useConfirm()
 
   const [search, setSearch] = useState('')
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('active')
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('all')
-  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null)
+  // La tienda que el usuario eligio. La efectiva se deriva en el render.
+  const [chosenStoreId, setChosenStoreId] = useState<string | null>(null)
   const [modal, setModal] = useState<SuperAdminModalKey>(null)
   const [feedback, setFeedback] = useState<FeedbackMessage | null>(null)
   const [modalError, setModalError] = useState<string | null>(null)
@@ -94,16 +98,23 @@ const SuperAdminPage: React.FC = () => {
   const [editingPlan, setEditingPlan] = useState<SuperAdminPlan | null>(null)
   const [editingCoupon, setEditingCoupon] = useState<SuperAdminCoupon | null>(null)
 
-  const storeParams = useMemo(
-    () => ({
-      search: search.trim() || undefined,
-      is_active: activityFilter === 'all' ? null : activityFilter === 'active',
-      has_subscription: subscriptionFilter === 'all' ? null : subscriptionFilter === 'with'
-    }),
-    [activityFilter, search, subscriptionFilter]
-  )
+  // Va a la query key, pero react-query la compara por valor: no hace falta memo.
+  const storeParams = {
+    search: search.trim() || undefined,
+    is_active: activityFilter === 'all' ? null : activityFilter === 'active',
+    has_subscription: subscriptionFilter === 'all' ? null : subscriptionFilter === 'with'
+  }
 
   const storesQuery = useSuperAdminStores(storeParams)
+  // Sin eleccion (o si la elegida ya no esta en el listado filtrado) se usa la
+  // primera. Antes un efecto escribia ese valor: un render con `null` de mas
+  // y, al crear una tienda, pisaba la recien creada con la primera porque el
+  // listado todavia no la traia (F11b-21, regla 27).
+  const selectedStore =
+    storesQuery.data?.find((store) => store.public_id === chosenStoreId) ??
+    storesQuery.data?.[0] ??
+    null
+  const selectedStoreId = selectedStore?.public_id ?? null
   const overviewQuery = useSuperAdminOverview(selectedStoreId)
   const auditQuery = useSuperAdminStoreAudit(selectedStoreId)
   const plansQuery = useSuperAdminPlans(true)
@@ -121,47 +132,24 @@ const SuperAdminPage: React.FC = () => {
   const updateCouponMutation = useUpdateSuperAdminCoupon()
   const redeemCouponMutation = useRedeemSuperAdminCoupon()
 
-  useEffect(() => {
-    const firstStore = storesQuery.data?.[0]
-    if (!firstStore) {
-      setSelectedStoreId(null)
-      return
-    }
-    const selectedExists = storesQuery.data?.some((store) => store.public_id === selectedStoreId)
-    if (!selectedExists) {
-      setSelectedStoreId(firstStore.public_id)
-    }
-  }, [selectedStoreId, storesQuery.data])
-
-  useEffect(() => {
-    setModalError(null)
-  }, [modal])
-
-  const selectedStore = useMemo(
-    () => storesQuery.data?.find((store) => store.public_id === selectedStoreId) ?? null,
-    [selectedStoreId, storesQuery.data]
-  )
-
   const overview = overviewQuery.data
-  const activePlans = useMemo(
-    () => (plansQuery.data ?? []).filter((plan) => plan.is_active),
-    [plansQuery.data]
-  )
-  const activeCoupons = useMemo(
-    () => (couponsQuery.data ?? []).filter((coupon) => coupon.is_active),
-    [couponsQuery.data]
-  )
+  const activePlans = (plansQuery.data ?? []).filter((plan) => plan.is_active)
+  const activeCoupons = (couponsQuery.data ?? []).filter((coupon) => coupon.is_active)
   const hasSelectedStoreSubscription = Boolean(overview?.subscription)
   const selectedStoreUnavailable = !selectedStore || !selectedStore.is_active
 
-  const closeModal = () => {
-    setModal(null)
+  // Abrir o cerrar un modal limpia el error del anterior en el mismo evento,
+  // no en un efecto que mira `modal`.
+  const openModal = (key: SuperAdminModalKey) => {
+    setModal(key)
     setModalError(null)
   }
 
+  const closeModal = () => openModal(null)
+
   const openCreateStoreModal = () => {
     setStoreForm(createEmptyStoreForm())
-    setModal('create-store')
+    openModal('create-store')
   }
 
   const openEditStoreFor = (store: SuperAdminStoreRow) => {
@@ -193,7 +181,7 @@ const SuperAdminPage: React.FC = () => {
           : store.send_email_reminders,
       is_active: store.is_active
     })
-    setModal('edit-store')
+    openModal('edit-store')
   }
 
   const openEditStoreModal = () => {
@@ -203,7 +191,7 @@ const SuperAdminPage: React.FC = () => {
 
   const openCreateAdminModal = () => {
     setAdminForm(createEmptyAdminForm())
-    setModal('create-admin')
+    openModal('create-admin')
   }
 
   const openEditUserModal = (targetUser: SuperAdminUser) => {
@@ -217,13 +205,13 @@ const SuperAdminPage: React.FC = () => {
       password: '',
       is_active: targetUser.is_active
     })
-    setModal('edit-user')
+    openModal('edit-user')
   }
 
   const openCreatePlanModal = () => {
     setEditingPlan(null)
     setPlanForm(createEmptyPlanForm())
-    setModal('create-plan')
+    openModal('create-plan')
   }
 
   const openEditPlanModal = (plan: SuperAdminPlan) => {
@@ -238,7 +226,7 @@ const SuperAdminPage: React.FC = () => {
       max_services: plan.max_services !== null ? String(plan.max_services) : '',
       is_active: plan.is_active
     })
-    setModal('edit-plan')
+    openModal('edit-plan')
   }
 
   const openAssignPlanModal = () => {
@@ -253,13 +241,13 @@ const SuperAdminPage: React.FC = () => {
       current_period_start: toDateTimeInput(overview?.subscription?.current_period_start || null),
       current_period_end: toDateTimeInput(overview?.subscription?.current_period_end || null)
     })
-    setModal('assign-plan')
+    openModal('assign-plan')
   }
 
   const openCreateCouponModal = () => {
     setEditingCoupon(null)
     setCouponForm(createEmptyCouponForm())
-    setModal('create-coupon')
+    openModal('create-coupon')
   }
 
   const openEditCouponModal = (coupon: SuperAdminCoupon) => {
@@ -276,14 +264,14 @@ const SuperAdminPage: React.FC = () => {
       description: coupon.description || '',
       is_active: coupon.is_active
     })
-    setModal('edit-coupon')
+    openModal('edit-coupon')
   }
 
   const openRedeemCouponModal = () => {
     setRedeemForm({
       coupon_code: activeCoupons[0]?.code || ''
     })
-    setModal('redeem-coupon')
+    openModal('redeem-coupon')
   }
 
   const handleStoreSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -304,7 +292,7 @@ const SuperAdminPage: React.FC = () => {
 
       if (modal === 'create-store') {
         const created = await createStoreMutation.mutateAsync(payload)
-        setSelectedStoreId(created.public_id)
+        setChosenStoreId(created.public_id)
         setFeedback({ tone: 'success', text: `Tienda creada: ${created.name}` })
       } else if (selectedStore) {
         const updated = await updateStoreMutation.mutateAsync({
@@ -487,8 +475,8 @@ const SuperAdminPage: React.FC = () => {
   }
 
   // Confirmar -> mutar -> avisar: el cuerpo que repetian los cinco toggles.
-  // `window.confirm` queda tal cual; cambiarlo por un modal es decision de
-  // producto. Activar avisa en verde, desactivar o revocar en naranja.
+  // La pregunta va por el ConfirmDialog propio (useConfirm). Activar avisa en
+  // verde, desactivar o revocar en naranja.
   const confirmAndToggle = async ({
     nextState,
     question,
@@ -502,7 +490,7 @@ const SuperAdminPage: React.FC = () => {
     doneText: string
     failText: string
   }) => {
-    if (!window.confirm(question)) return
+    if (!(await confirm(question))) return
 
     try {
       await run()
@@ -611,6 +599,17 @@ const SuperAdminPage: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
+      <QueryErrorNotice
+        error={
+          storesQuery.error ??
+          overviewQuery.error ??
+          auditQuery.error ??
+          plansQuery.error ??
+          couponsQuery.error
+        }
+        message="No se pudieron cargar los datos del panel."
+      />
       {feedback ? (
         <div
           className="flex items-start gap-3 rounded-[1.5rem] px-5 py-4 text-sm font-bold"
@@ -653,7 +652,7 @@ const SuperAdminPage: React.FC = () => {
             subscriptionFilter={subscriptionFilter}
             setSubscriptionFilter={setSubscriptionFilter}
             selectedStoreId={selectedStoreId}
-            setSelectedStoreId={setSelectedStoreId}
+            setSelectedStoreId={setChosenStoreId}
             storesQuery={storesQuery}
             openEditStoreFor={openEditStoreFor}
             toggleStoreActive={toggleStoreActive}

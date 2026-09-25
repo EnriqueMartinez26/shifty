@@ -17,20 +17,26 @@ export default {
     '^@shared/(.*)$': '<rootDir>/src/shared/$1'
   },
   setupFilesAfterEnv: ['<rootDir>/src/test/setup.ts'],
+  // Todo src, no una lista a mano: antes el 70% global media solo cinco
+  // archivos (F9-08, F12-02). runtime-env y
+  // shared/utils/env leen import.meta y ts-jest no los puede instrumentar.
   collectCoverageFrom: [
-    'src/infrastructure/http/api-contract.ts',
-    'src/presentation/components/navigation/Sidebar.tsx',
-    'src/presentation/pages/ForgotPassword.tsx',
-    'src/presentation/lib/settingsDraft.ts',
-    'src/presentation/hooks/useSettingsForm.ts'
+    'src/**/*.{ts,tsx}',
+    '!src/**/*.test.{ts,tsx}',
+    '!src/**/*.d.ts',
+    '!src/test/**',
+    '!src/main.tsx',
+    '!src/infrastructure/http/runtime-env.ts',
+    '!src/shared/utils/env.ts'
   ],
+  // Trinquete por capa: el piso es lo medido el 2026-09-24 (redondeado hacia
+  // abajo). Solo se sube; bajarlo exige justificarlo en el PR.
   coverageThreshold: {
-    global: {
-      branches: 70,
-      functions: 70,
-      lines: 70,
-      statements: 70
-    }
+    './src/domain/': { statements: 88, branches: 77, functions: 79, lines: 88 },
+    './src/application/': { statements: 49, branches: 57, functions: 39, lines: 48 },
+    './src/infrastructure/': { statements: 71, branches: 68, functions: 59, lines: 69 },
+    './src/shared/': { statements: 89, branches: 67, functions: 84, lines: 90 },
+    './src/presentation/': { statements: 45, branches: 41, functions: 30, lines: 45 }
   },
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'mjs', 'json'],
   transform: {
