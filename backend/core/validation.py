@@ -60,6 +60,26 @@ def reject_control_chars(value: str | None) -> str | None:
     return value
 
 
+_PHONE_SEPARATORS = re.compile(r"[\s\-\(\)\+]")
+
+
+def normalize_client_phone(value: str) -> str:
+    """Telefono del cliente como lo guarda ``users.phone``: solo digitos.
+
+    Es la identidad del cliente en la tienda (``uq_users_client_phone_per_store``):
+    el portal y el alta del panel (FF-04) normalizan igual o el mismo cliente
+    quedaria con dos fichas.
+    """
+    cleaned = _PHONE_SEPARATORS.sub("", value)
+    if not cleaned.isdigit():
+        raise ValueError(
+            "El telefono solo puede contener digitos, espacios o los caracteres: + - ( )"
+        )
+    if len(cleaned) < 6:
+        raise ValueError("El telefono debe tener al menos 6 digitos")
+    return cleaned
+
+
 def reject_payload_control_chars(value: Any) -> Any:
     if value is None:
         return None

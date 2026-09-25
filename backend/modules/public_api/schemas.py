@@ -7,6 +7,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 from core.utils import now_utc
 from core.validation import (
     PUBLIC_ID_PATTERN,
+    normalize_client_phone,
     reject_control_chars,
     reject_payload_control_chars,
 )
@@ -94,14 +95,7 @@ class PublicBookingCreate(BaseModel):
     @field_validator("client_phone")
     @classmethod
     def phone_must_be_numeric(cls, value: str) -> str:
-        cleaned = re.sub(r"[\s\-\(\)\+]", "", value)
-        if not cleaned.isdigit():
-            raise ValueError(
-                "El telefono solo puede contener digitos, espacios o los caracteres: + - ( )"
-            )
-        if len(cleaned) < 6:
-            raise ValueError("El telefono debe tener al menos 6 digitos")
-        return cleaned
+        return normalize_client_phone(value)
 
     @field_validator("starts_at")
     @classmethod

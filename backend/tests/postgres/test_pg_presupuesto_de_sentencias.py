@@ -77,6 +77,8 @@ PRESUPUESTOS: dict[str, Presupuesto] = {
     "GET /dashboard/summary": Presupuesto(consultas=5, set_config=3),  # (12)
     "GET /reports/summary": Presupuesto(consultas=7, set_config=3),  # (11)
     "GET /notifications": Presupuesto(consultas=3, set_config=3),  # (3)
+    # Alta del panel para un cliente (FF-04, 2026-09-24): medida al nacer.
+    "POST /appointments/ [cliente]": Presupuesto(consultas=14, set_config=4),
 }
 
 # Prefijos de las rutas calientes: el portal publico y las lecturas del panel
@@ -94,7 +96,6 @@ PREFIJOS_CALIENTES = (
 # decir por que no se mide.
 SIN_PRESUPUESTO: dict[str, str] = {
     "GET /appointments/availability": "misma logica que la publica, ya medida",
-    "POST /appointments/": "alta desde el panel; la rafaga la cubre test_pg_reserva",
     "PATCH /appointments/{public_id}/absent": "transicion unitaria, fuera del camino caliente",
     "PATCH /appointments/{public_id}/cancel": "transicion unitaria, fuera del camino caliente",
     "PATCH /appointments/{public_id}/complete": "transicion unitaria, fuera del camino caliente",
@@ -471,6 +472,23 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
                 "idempotency_key": "presupuesto-reserva-1",
             },
             {},
+            201,
+        ),
+        (
+            "POST /appointments/ [cliente]",
+            "POST",
+            "/appointments/",
+            {},
+            {
+                "service_id": tienda.service_ids[0],
+                "staff_id": tienda.staff_ids[2],
+                "starts_at": tienda.slot_libre.isoformat(),
+                "client_name": "Cliente Panel",
+                "client_phone": "+5491166600002",
+                "client_email": "cliente-panel@demo.com",
+                "idempotency_key": "presupuesto-panel-1",
+            },
+            panel,
             201,
         ),
     ]

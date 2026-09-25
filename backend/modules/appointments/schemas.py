@@ -1,9 +1,13 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    normalize_client_phone,
+    reject_payload_control_chars,
+)
 from modules.appointments.model import AppointmentStatus
 
 
@@ -12,12 +16,58 @@ from modules.appointments.model import AppointmentStatus
 # ---------------------------------------------------------------------------
 
 
+# Un turno cargado desde el panel para un cliente puede empezar hasta 5
+# minutos antes del request: el dueno carga a quien acaba de sentarse (FF-04).
+PANEL_BOOKING_PAST_GRACE = timedelta(minutes=5)
+
+
 class AppointmentCreate(BaseModel):
+    """Alta desde el panel. Dos formas, segun venga o no el cliente:
+
+    - Sin ``client_phone`` (la de siempre): auto-turno a nombre de quien
+      llama; ``staff_id`` obligatorio y ``starts_at`` en el futuro.
+    - Con ``client_name`` + ``client_phone`` (FF-04, 2026-09-24, aditivo): turno
+      para ese cliente de la tienda. ``staff_id`` opcional (se elige uno que
+      atienda), ``starts_at`` hasta ``PANEL_BOOKING_PAST_GRACE`` en el pasado,
+      ``allow_outside_schedule`` solo para el admin.
+    """
+
     service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
-    staff_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    staff_id: Optional[str] = Field(
+        None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     starts_at: datetime
     notes: Optional[str] = Field(None, max_length=1000)
     idempotency_key: str = Field(..., min_length=10, max_length=128)
+    client_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    client_phone: Optional[str] = Field(None, min_length=6, max_length=30)
+    client_email: Optional[EmailStr] = Field(None, max_length=255)
+    allow_outside_schedule: bool = False
+
+    @property
+    def for_client(self) -> bool:
+        return self.client_phone is not None
+
+    @field_validator("client_phone")
+    @classmethod
+    def phone_must_be_numeric(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else normalize_client_phone(value)
+
+    @model_validator(mode="after")
+    def client_fields_go_together(self) -> "AppointmentCreate":
+        if self.for_client:
+            if self.client_name is None:
+                raise ValueError("Falta el nombre del cliente.")
+            return self
+        if (
+            self.client_name is not None
+            or self.client_email is not None
+            or self.allow_outside_schedule
+        ):
+            raise ValueError("Falta el telefono del cliente.")
+        if self.staff_id is None:
+            raise ValueError("Falta el profesional.")
+        return self
 
     @model_validator(mode="after")
     def starts_at_must_be_future(self) -> "AppointmentCreate":
@@ -26,13 +76,17 @@ class AppointmentCreate(BaseModel):
         val = self.starts_at
         if val.tzinfo is None:
             val = val.replace(tzinfo=timezone.utc)
-        if val <= now_utc():
+        limite = now_utc()
+        if self.for_client:
+            limite -= PANEL_BOOKING_PAST_GRACE
+        if val <= limite:
             raise ValueError("No se puede agendar un turno en el pasado.")
         return self
 
     @model_validator(mode="after")
     def reject_control_chars_in_notes(self) -> "AppointmentCreate":
         self.notes = reject_payload_control_chars(self.notes)
+        self.client_name = reject_payload_control_chars(self.client_name)
         return self
 
 

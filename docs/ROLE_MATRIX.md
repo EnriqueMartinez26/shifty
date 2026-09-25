@@ -44,6 +44,7 @@ comparan el rol persistido (`user.role` en `admin`/`staff`): en esos
 
 - Agenda interna (`/appointments/*`):
   - listar, buscar y crear: `super_admin`, `store_admin`, `professional`, `receptionist`.
+  - crear un turno para un cliente (`POST /appointments/` con `client_name` + `client_phone`, FF-04): los mismos cuatro; el `professional` solo en su propia agenda (`staff_id` igual a su usuario, o ninguno). Cargarlo fuera de la jornada del profesional (`allow_outside_schedule`): `super_admin`, `store_admin`.
   - cancelar y reprogramar: cualquier usuario autenticado de la tienda (el `client` no inicia sesion; cancela por el portal publico).
   - confirmar, completar, ausente y notas internas: rol persistido `admin` o `staff` (`store_admin`, `professional`).
   - liberar un turno pendiente: `super_admin`, `store_admin`.

@@ -130,7 +130,7 @@ Una interfaz optimizada para móviles donde los clientes finales:
 | Método | Path | Descripción |
 | :--- | :--- | :--- |
 | `GET` | `/appointments/` | Agenda del día (lista turnos por fecha). |
-| `POST` | `/appointments/` | Crear una reserva (requiere `idempotency_key`). |
+| `POST` | `/appointments/` | Crear una reserva (requiere `idempotency_key` en el cuerpo). Sin `client_phone`: auto-turno a nombre de quien llama (`staff_id` obligatorio, `starts_at` futuro). Con `client_name` + `client_phone` (+ `client_email` opcional): turno del panel PARA ESE CLIENTE (FF-04): `staff_id` opcional (sin el, el primer profesional libre que hace el servicio; el profesional solo reserva en su agenda, 403 si no), `starts_at` UTC tal cual el slot y hasta 5 minutos en el pasado, sin antelacion minima, OTP, campos extra, `accepts_terms` ni sena: nace `confirmed`, sin cobro y con `terms_accepted_at` nulo; precio de lista congelado; buffer, bloqueos y choques siempre. Fuera de la jornada del profesional: 409 `OUT_OF_SCHEDULE`, salvo `allow_outside_schedule: true` (solo admin; si no, 403). Reutiliza la ficha del cliente de la tienda por telefono sin pisarla. Errores: 404 `RESOURCE_NOT_FOUND` (servicio), 422 (profesional que no hace el servicio, pasado, datos incompletos, caracteres de control), 409 `SCHEDULE_BLOCKED` / `APPOINTMENT_CONFLICT` / `NO_STAFF_AVAILABLE` / `IDEMPOTENCY_IN_PROGRESS`, 402 `SUBSCRIPTION_SUSPENDED`. Respuesta: `AppointmentResponse` (201). |
 | `GET` | `/appointments/availability` | Consulta slots libres para un servicio/fecha. |
 | `PATCH` | `/appointments/{id}/confirm` | Cambia estado a confirmado. |
 | `PATCH` | `/appointments/{id}/reschedule` | Reprograma un turno (cancela el anterior y crea uno nuevo atómicamente). |
