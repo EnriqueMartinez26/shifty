@@ -2,7 +2,8 @@
 
 - ``GET /public/legal/versions``: anonimo, sin datos de ninguna tienda; lo
   lee el portal antes de mostrar la casilla de aceptacion.
-- ``GET /public/unsubscribe`` (``token`` en la query): baja del mail promocional por el link
+- ``GET /public/unsubscribe`` (``token`` en la query) y
+  ``POST /public/unsubscribe`` (``{token}``, para la pagina del front): baja del mail promocional por el link
   firmado del mail; anonimo, rate limit ``public-read``.
 - ``POST /stores/me/terms-acceptance``: el admin de la tienda acepta la
   version vigente de los terminos B2B. Solo el admin de la tienda: el soporte
@@ -33,6 +34,7 @@ from modules.legal.schemas import (
     LegalVersionsResponse,
     StoreTermsAcceptanceResponse,
     StoreTermsStatusResponse,
+    UnsubscribeRequest,
     UnsubscribeResponse,
 )
 from modules.legal.service import MarketingOptOutService, StoreTermsService
@@ -65,6 +67,25 @@ async def unsubscribe_from_marketing(
     )
     async with tenant_bypass(db):
         await MarketingOptOutService(db).opt_out(token)
+    return UnsubscribeResponse(status="unsubscribed")
+
+
+@public_router.post("/unsubscribe", response_model=UnsubscribeResponse)
+async def unsubscribe_from_marketing_post(
+    request: Request,
+    data: UnsubscribeRequest,
+    db: AsyncSession = Depends(get_db),
+) -> UnsubscribeResponse:
+    """Misma baja que el GET, con el token en el cuerpo. La usa la pagina de
+    confirmacion del front: los escaneres de correo abren los links GET del
+    mail y darian de baja sin que la persona lo pidiera (revision de
+    fix/legal-datos, 2026-09-25). El GET sigue mientras el link del mail
+    apunte a la API."""
+    await enforce_rate_limit(
+        request, "public:unsubscribe", settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE
+    )
+    async with tenant_bypass(db):
+        await MarketingOptOutService(db).opt_out(data.token)
     return UnsubscribeResponse(status="unsubscribed")
 
 

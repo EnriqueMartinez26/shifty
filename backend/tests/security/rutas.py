@@ -708,6 +708,14 @@ async def _baja_de_promociones(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _baja_de_promociones_post(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "POST",
+        "/public/unsubscribe",
+        json={"token": make_unsubscribe_token(t.id, t.cliente)},
+    )
+
+
 async def _alta_de_tienda(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada(
         "POST",
@@ -1682,6 +1690,7 @@ TABLA: tuple[Ruta, ...] = (
     # Baja del mail promocional: el link firmado es la credencial; publica
     # por diseno y la respuesta es neutra (no dice de quien ni de que tienda).
     R("GET", "/public/unsubscribe", TODOS, A.PUBLICA, _baja_de_promociones),
+    R("POST", "/public/unsubscribe", TODOS, A.PUBLICA, _baja_de_promociones_post),
     # FF-16: sigue resolviendo con la tienda suspendida ("Mis turnos").
     R("GET", "/public/stores/{slug}/ref", TODOS, A.PUBLICA, _referencia_de_tienda),
     R("GET", "/public/services", TODOS, A.PUBLICA_TIENDA, _servicios_publicos),

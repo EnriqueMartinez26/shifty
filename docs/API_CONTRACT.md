@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 116 — Operaciones: 144
+- Paths: 116 — Operaciones: 145
 
 ## /
 
@@ -1197,6 +1197,20 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | query | `token` | yes | string | minLength=1, maxLength=256 |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_UnsubscribeResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### POST /public/unsubscribe
+
+- Summary: Unsubscribe From Marketing Post
+- operationId: `unsubscribe_from_marketing_post_public_unsubscribe_post`
+
+Request body (required):
+
+- `application/json`: `UnsubscribeRequest`
 
 Responses:
 
@@ -4511,6 +4525,12 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `access_token` | string | yes |  |
 | `token_type` | string | no | default="bearer" |
 
+### UnsubscribeRequest
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `token` | string | yes | minLength=1, maxLength=256 |
+
 ### UnsubscribeResponse
 
 | field | type | required | constraints |
@@ -4659,4 +4679,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit 023f9dc
+Generado desde app.openapi() el 2026-09-25, commit 7448c6f

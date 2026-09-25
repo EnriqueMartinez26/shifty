@@ -212,3 +212,31 @@ def test_el_contexto_del_lote_no_tiene_bajas_por_defecto() -> None:
 
     with pytest.raises(TypeError):
         _ContextoDelLote(admins={}, tiendas={}, turnos={})  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_la_baja_por_post_tiene_la_misma_semantica(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de fix/legal-datos (2026-09-25): los escaneres de correo
+    abren los links GET del mail. La pagina de confirmacion del front hace
+    ``POST /public/unsubscribe`` con ``{token}``; el GET sigue por ahora."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _token, _pid, turno = await _turno(client, test_session, "baja-post")
+    tienda, cliente = turno.store_id, str(turno.client_id)
+    link = make_unsubscribe_token(tienda, cliente)
+
+    primera = await client.post("/public/unsubscribe", json={"token": link})
+    segunda = await client.post("/public/unsubscribe", json={"token": link})
+    mala = await client.post("/public/unsubscribe", json={"token": link[:-3] + "xyz"})
+    rara = await client.post("/public/unsubscribe", json={"token": "a.b.1.é"})
+    vacia = await client.post("/public/unsubscribe", json={"token": ""})
+
+    assert primera.status_code == 200, primera.text
+    assert primera.json() == segunda.json() == {"status": "unsubscribed"}
+    for res in (mala, rara):
+        assert res.status_code == 400, res.text
+        assert res.json()["error_code"] == "UNSUBSCRIBE_LINK_INVALID"
+    assert vacia.status_code == 422, vacia.text
+    [baja] = await _bajas(test_session)
+    assert baja.client_id == cliente and baja.store_id == tienda
