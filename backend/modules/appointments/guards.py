@@ -5,8 +5,11 @@ lo necesita (``sync_appointment_with_payment``). Lo que no puede pasar es que
 un actor humano suelte un turno con cobro vivo sin vencer antes el cobro y la
 preferencia remota de Mercado Pago.
 
-Desde 2026-09-25 el panel ya no se frena: cancelar y reprogramar vencen el
-cobro en la misma transaccion (``payments.service.expire_live_charge``, D2).
+Desde 2026-09-25 el panel ya no se frena al cancelar: cancelar (y
+reprogramar un turno con un link del panel) vence el cobro en la misma
+transaccion (``payments.service.expire_live_charge``, D2). Reprogramar un
+``pending_payment`` si se frena: ``reject_reschedule_with_pending_deposit``
+(decision del dueno 2026-09-25: opcion A).
 La guarda que frenaba al panel (``reject_cancellation_while_awaiting_payment``)
 se borro con su ultimo llamador; lo que protegia (que el link quedara vivo
 sobre un turno cancelado) lo sostiene ``expire_live_charge`` y lo prueban
@@ -79,9 +82,28 @@ def reject_inactive(appointment: Appointment) -> None:
         )
 
 
+def reject_reschedule_with_pending_deposit(appointment: Appointment) -> None:
+    """Un turno con sena REQUERIDA pendiente no se reprograma desde el panel.
+
+    Decision del dueno 2026-09-25: opcion A. Moverlo como ``pending`` sin
+    cobro (lo que se hizo mientras se decidia) perdia la sena requerida. El
+    personal cobra la sena y despues lo mueve, o lo cancela (D2 vence el
+    cobro). Solo ``pending_payment``: el link del panel de un turno
+    confirmado no es una sena requerida y ese turno se sigue reprogramando
+    (vence el link). Se llama con el turno ya lockeado, antes de tocar nada.
+    """
+    if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
+        raise AppException(
+            message="Cobra la sena o cancela el turno antes de moverlo",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="DEPOSIT_PENDING_RESCHEDULE_DENIED",
+        )
+
+
 __all__ = [
     "awaits_payment",
     "is_active",
     "reject_already_cancelled",
+    "reject_reschedule_with_pending_deposit",
     "reject_inactive",
 ]

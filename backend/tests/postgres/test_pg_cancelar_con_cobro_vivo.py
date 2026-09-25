@@ -1226,3 +1226,102 @@ async def test_pago_del_link_retirado_contra_pago_del_link_vigente(
             else viejas[turno]
         )
         assert otra in vencidas, (turno, otra, vencidas)
+
+
+# ---------------------------------------------------------------------------
+# Reprogramar un turno con sena pendiente (decision del dueno 2026-09-25:
+# opcion A)
+# ---------------------------------------------------------------------------
+
+REPROGRAMACIONES = 4
+
+
+@pytest.mark.asyncio
+async def test_rafaga_de_reprogramaciones_de_un_pendiente_de_pago_no_toca_nada(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N reprogramaciones a la vez de cada turno en ``pending_payment``, a
+    horarios distintos: todas 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``, cero
+    5xx, y la base igual que antes (turnos, cobros, links y outbox). El
+    chequeo corre bajo el lock del turno, antes de toda mutacion."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    mp = _MercadoPago()
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    slug = "sena-reprograma-pg"
+    store, admin = await register_and_login(
+        client, app_sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(admin),
+        json={"deposit_policy": "La sena se descuenta del total."},
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, admin)
+    await _configure_gateway(client, admin)
+    service = await create_service(
+        client,
+        admin,
+        deposit_mode="required",
+        deposit_type="fixed",
+        deposit_amount=2500,
+    )
+    staff = await create_staff(client, admin, service, email=f"staff-{slug}@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+    turnos: list[str] = []
+    for i in range(TURNOS):
+        reserva = await client.post(
+            "/public/appointments",
+            json={
+                "store_public_id": store,
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": dia.replace(
+                    hour=10 + i, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "client_name": f"Cliente Sena {i}",
+                "client_phone": f"+54911558{i:05d}",
+                "accepts_terms": True,
+                "payment_method": "mercadopago",
+                "idempotency_key": f"{slug}-reserva-{i:04d}",
+            },
+        )
+        assert reserva.status_code == 201, reserva.text
+        assert reserva.json()["status"] == "pending_payment"
+        turnos.append(str(reserva.json()["public_id"]))
+    antes = await _cobros(owner_engine)
+    eventos_antes = await _eventos(owner_engine)
+
+    llamadas = [
+        client.patch(
+            f"/appointments/{turno}/reschedule",
+            headers=auth_headers(admin),
+            json={
+                "new_starts_at": dia.replace(
+                    hour=14 + j % 3, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "idempotency_key": f"{slug}-mueve-{i}-{j}",
+            },
+        )
+        for i, turno in enumerate(turnos)
+        for j in range(REPROGRAMACIONES)
+    ]
+    respuestas: list[Response] = await asyncio.gather(*llamadas)
+
+    assert all(r.status_code < 500 for r in respuestas), [
+        (r.status_code, r.text[:200]) for r in respuestas if r.status_code >= 500
+    ]
+    assert {(r.status_code, r.json()["error_code"]) for r in respuestas} == {
+        (409, "DEPOSIT_PENDING_RESCHEDULE_DENIED")
+    }, [r.text[:200] for r in respuestas]
+    assert await _cobros(owner_engine) == antes
+    assert await _eventos(owner_engine) == eventos_antes
+    async with owner_engine.connect() as conn:
+        total = (
+            await conn.execute(text("select count(*) from appointments"))
+        ).scalar_one()
+    assert total == TURNOS

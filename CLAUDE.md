@@ -183,9 +183,13 @@ Una instrucción en lenguaje natural no es una garantía.
    - cancelar desde el panel (`AppointmentService.cancel`, cualquier
      personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
      cancelar no toca un pago acreditado);
-   - reprogramar desde el panel (`reschedule`: el turno nuevo nace sin
-     cobro; un `pending_payment` queda `pending` sin seña y con `expires_at`
-     = nuevo inicio, no conserva la retención: pendiente del dueño);
+   - reprogramar desde el panel (`reschedule`) un turno con link del panel:
+     vence el link y el turno nuevo nace sin cobro. Un `pending_payment`
+     (seña REQUERIDA pendiente) no se reprograma: 409
+     `DEPOSIT_PENDING_RESCHEDULE_DENIED` bajo el lock del turno y antes de
+     tocar nada, la seña nunca se pierde; se cobra y después se mueve, o se
+     cancela (decisión del dueño 2026-09-25: opción A;
+     `guards.reject_reschedule_with_pending_deposit`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);

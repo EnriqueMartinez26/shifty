@@ -32,7 +32,11 @@ from core.exceptions import (
 from http import HTTPStatus
 
 from modules.appointments.domain_service import SchedulingDomainService
-from modules.appointments.guards import reject_already_cancelled, reject_inactive
+from modules.appointments.guards import (
+    reject_already_cancelled,
+    reject_inactive,
+    reject_reschedule_with_pending_deposit,
+)
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.auth.service import normalize_email
@@ -666,10 +670,13 @@ class AppointmentService:
              invalidación después.
 
         Cobro vivo (decision del dueno 2026-09-25, misma regla que D2 para
-        cancelar): reprogramar lo vence en esta transaccion con
-        ``expire_live_charge`` (el link de MP lo vence el outbox, sin lock) en
-        vez de dejarlo apuntando a un turno cancelado o de responder 409 a un
-        ``pending_payment``. El turno nuevo nace sin cobro.
+        cancelar): el link del panel de un turno confirmado se vence en esta
+        transaccion con ``expire_live_charge`` (el link de MP lo vence el
+        outbox, sin lock) en vez de dejarlo apuntando a un turno cancelado; el
+        turno nuevo nace sin cobro. Un ``pending_payment`` (sena REQUERIDA
+        pendiente) no se reprograma: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
+        bajo el lock del turno y antes de tocar nada (decision del dueno
+        2026-09-25: opcion A).
 
         El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
         el schema AppointmentReschedule.
@@ -724,6 +731,9 @@ class AppointmentService:
         if not original:
             raise AppointmentNotFoundException(public_id)
         reject_inactive(original)
+        # Antes de lockear el cobro y de cualquier mutacion, evento o
+        # invalidacion (decision del dueno 2026-09-25: opcion A).
+        reject_reschedule_with_pending_deposit(original)
         payment = await self.uow.payments.get_by_appointment_locked(
             original.id, actor.store_id
         )
@@ -1070,14 +1080,15 @@ def _rescheduled_copy(
     # AUD2-B1-14; al panel en AUD2-POST-05, 2026-09-23): el turno movido
     # conserva el estado del original. Antes nacia con el default de la
     # columna y un confirmado volvia a "pendiente de confirmar" sin aviso. A
-    # esta altura el cobro vivo del original ya se vencio (``_swap_for_new_slot``)
-    # y el nuevo nace sin cobro: un ``confirmed`` sigue confirmado sin
-    # retencion y cualquier otro (``pending`` o ``pending_payment``) queda
-    # ``pending`` SIN cobro ni sena requerida. Si el original tenia retencion,
-    # el nuevo NO la conserva: nace con ``expires_at = new_starts_at`` (vence
-    # al inicio si nadie lo confirma); el alta del panel no retiene y moverlo
-    # tampoco. Para un ``pending_payment`` eso pierde la sena requerida:
-    # decision pendiente del dueno (revision de perf/f4-pay, 2026-09-25).
+    # esta altura el cobro vivo del original (un link del panel) ya se vencio
+    # (``_swap_for_new_slot``) y el nuevo nace sin cobro: un ``confirmed``
+    # sigue confirmado sin retencion y un ``pending`` sigue ``pending``. Un
+    # ``pending_payment`` no llega aca: su sena requerida no se pierde, se
+    # rechaza antes con 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
+    # (``reject_reschedule_with_pending_deposit``, decision del dueno
+    # 2026-09-25: opcion A). Si el original tenia retencion, el nuevo NO la
+    # conserva: nace con ``expires_at = new_starts_at`` (vence al inicio si
+    # nadie lo confirma); el alta del panel no retiene y moverlo tampoco.
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
     retenido = not confirmado and original.expires_at is not None
     return Appointment(
