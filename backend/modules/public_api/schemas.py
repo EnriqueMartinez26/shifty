@@ -4,12 +4,7 @@ import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.utils import (
-    MAX_BOOKING_AHEAD,
-    now_utc,
-    within_booking_horizon,
-    within_max_ahead,
-)
+from core.utils import MAX_BOOKING_AHEAD, now_utc, within_max_ahead
 from core.validation import (
     PUBLIC_ID_PATTERN,
     normalize_client_phone,
@@ -260,7 +255,9 @@ class ClientRescheduleRequest(BaseModel):
             value = value.replace(tzinfo=timezone.utc)
         if value <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro")
-        if not within_booking_horizon(value):
+        # Mismo tope ancho: "Mis turnos" reprograma con fecha libre y un turno
+        # que ya esta mas alla de +120 dias se tiene que poder mover.
+        if not within_max_ahead(value, MAX_BOOKING_AHEAD):
             raise ValueError("La fecha esta fuera del rango de reservas")
         return value
 

@@ -22,11 +22,16 @@ cortan lo absurdo:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.appointments.model import Appointment
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _tienda
+from tests.integration.test_caracterizacion_autogestion import TELEFONO, _con_turno
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
 )
@@ -88,3 +93,61 @@ async def test_reprogramar_desde_el_panel_mas_alla_de_dos_anios_422(
             json={"new_starts_at": cuando, "idempotency_key": f"horiz-panel-rs-{i}"},
         )
         assert res.status_code == 422, (cuando, res.text)
+
+
+@pytest.mark.asyncio
+async def test_reprogramar_desde_el_portal_mas_alla_de_dos_anios_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t, turno = await _con_turno(client, monkeypatch, "horiz-cliente")
+
+    for i, cuando in enumerate((LEJANO, (t.slot + MAS_DE_DOS_ANIOS).isoformat())):
+        res = await client.patch(
+            f"/public/client/appointments/{turno}/reschedule",
+            json={
+                "phone": TELEFONO,
+                "new_starts_at": cuando,
+                "idempotency_key": f"horiz-cliente-rs-{i}",
+            },
+        )
+        assert res.status_code == 422, (cuando, res.text)
+
+
+@pytest.mark.asyncio
+async def test_un_turno_despues_de_los_120_dias_se_puede_mover(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un turno que ya esta mas alla de +120 dias (lo cargo el panel) se
+    puede cambiar de hora desde "Mis turnos"."""
+    t, base_id = await _con_turno(client, monkeypatch, "horiz-cliente-lejos")
+    base = (
+        await test_session.execute(select(Appointment).where(Appointment.id == base_id))
+    ).scalar_one()
+    inicio = t.slot + timedelta(weeks=21)  # 147 dias, mismo dia de la semana
+    lejano = Appointment(
+        store_id=base.store_id,
+        staff_id=base.staff_id,
+        service_id=base.service_id,
+        client_id=base.client_id,
+        client_name=base.client_name,
+        client_email=base.client_email,
+        client_phone=base.client_phone,
+        starts_at=inicio,
+        ends_at=inicio + timedelta(minutes=30),
+        duration_minutes=30,
+        price_amount=Decimal("10000"),
+        status="confirmed",
+    )
+    test_session.add(lejano)
+    await test_session.commit()
+
+    res = await client.patch(
+        f"/public/client/appointments/{lejano.id}/reschedule",
+        json={
+            "phone": TELEFONO,
+            "new_starts_at": (inicio + timedelta(hours=1)).isoformat(),
+            "idempotency_key": "horiz-cliente-lejos-1",
+        },
+    )
+
+    assert res.status_code == 200, res.text
