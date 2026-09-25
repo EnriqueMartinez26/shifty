@@ -4,7 +4,7 @@
 llamaba a ``_fetch_remote_payment`` y a ``apply_mercadopago_webhook_payload``
 SIN ``configs``, asi que cada cobro del lote disparaba dos SELECT sobre
 ``payment_gateway_configs`` (uno en ``_mercadopago_api_request_for_store`` y
-otro en ``_validate_payment_integrity``). Con ``limit=100`` son hasta 200
+otro en ``_validate_payment_identity``). Con ``limit=100`` son hasta 200
 consultas por corrida para, casi siempre, la misma fila. B2-13 (2026-09-17)
 cerro esto en el lote del inbox y dejo afuera la conciliacion, que ademas ya
 hace ``JOIN`` con esa tabla: la config esta a mano y se descartaba.

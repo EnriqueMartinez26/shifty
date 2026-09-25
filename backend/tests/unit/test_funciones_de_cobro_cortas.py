@@ -20,7 +20,8 @@ FUNCIONES = {
     "modules/payments/processing.py": [
         "apply_mercadopago_webhook_payload",
         "find_payment_for_webhook",
-        "_validate_payment_integrity",
+        "_validate_payment_identity",
+        "_validate_payment_link",
         "_avisar_al_dueno",
         "_sync_appointment",
     ],

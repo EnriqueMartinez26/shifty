@@ -200,7 +200,7 @@ async def find_payment_for_webhook(
     return None
 
 
-async def _validate_payment_integrity(
+async def _validate_payment_identity(
     db: AsyncSession,
     *,
     store_id: str,
@@ -208,6 +208,14 @@ async def _validate_payment_integrity(
     payload: dict[str, Any],
     configs: GatewayConfigs | None = None,
 ) -> None:
+    """El pago es de ESTE cobro: metadata, turno de la referencia, moneda y
+    cuenta de MP.
+
+    Corre ANTES de clasificar el link del pago (revision de perf/f4-pay,
+    2026-09-25): un payload que no es de este cobro se rechaza por integridad
+    y nunca dispara Sentry ni un aviso al dueno como "pago sobre un link
+    reemplazado".
+    """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     raw_metadata = data.get("metadata")
@@ -223,13 +231,42 @@ async def _validate_payment_integrity(
         if received and received != str(expected):
             raise RuntimeError(f"Mercado Pago devolvio metadata inconsistente: {key}")
 
-    external_reference = str(
+    external_reference = _referencia_del_pago(payload)
+    if external_reference and (
+        appointment_id_from_reference(external_reference) != payment.appointment_id
+    ):
+        raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
+
+    currency = str(data.get("currency_id") or "").strip()
+    if currency and currency != payment.currency:
+        raise RuntimeError("La moneda acreditada no coincide con la esperada")
+
+    config = await resolve_gateway_config(db, store_id, configs)
+    collector_id = str(data.get("collector_id") or "").strip()
+    if config and config.oauth_user_id and collector_id:
+        if collector_id != config.oauth_user_id:
+            raise RuntimeError("El cobro pertenece a otra cuenta de Mercado Pago")
+
+
+def _referencia_del_pago(payload: dict[str, Any]) -> str:
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    return str(
         data.get("external_reference") or payload.get("external_reference") or ""
     ).strip()
-    # La referencia del link VIGENTE (``<turno>:<link_ref>``; el turno solo si
-    # el link es de antes de la columna): un pago de un link reemplazado no se
-    # aplica aunque MP no mande ``preference_id``, que el pago no trae
-    # (revision de perf/f4-pay, 2026-09-25).
+
+
+def _validate_payment_link(payment: Payment, payload: dict[str, Any]) -> None:
+    """El pago es del link VIGENTE y por el importe esperado.
+
+    La referencia del link vigente es ``<turno>:<link_ref>`` (el turno solo si
+    el link es de antes de la columna): un pago de un link reemplazado no se
+    aplica aunque MP no mande ``preference_id``, que el pago no trae
+    (revision de perf/f4-pay, 2026-09-25).
+    """
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    external_reference = _referencia_del_pago(payload)
     if external_reference and external_reference != payment.current_external_reference:
         raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
 
@@ -239,10 +276,6 @@ async def _validate_payment_integrity(
     ) != Decimal(str(payment.amount)).quantize(Decimal("0.01")):
         raise RuntimeError("El importe acreditado no coincide con la seña esperada")
 
-    currency = str(data.get("currency_id") or "").strip()
-    if currency and currency != payment.currency:
-        raise RuntimeError("La moneda acreditada no coincide con la esperada")
-
     preference_id = str(data.get("preference_id") or "").strip()
     if (
         preference_id
@@ -250,12 +283,6 @@ async def _validate_payment_integrity(
         and preference_id != payment.preference_id
     ):
         raise RuntimeError("La preferencia acreditada no coincide con la esperada")
-
-    config = await resolve_gateway_config(db, store_id, configs)
-    collector_id = str(data.get("collector_id") or "").strip()
-    if config and config.oauth_user_id and collector_id:
-        if collector_id != config.oauth_user_id:
-            raise RuntimeError("El cobro pertenece a otra cuenta de Mercado Pago")
 
 
 # Estados de un turno cuyo horario ya se solto: un pago que llega despues no
@@ -587,6 +614,10 @@ async def apply_mercadopago_webhook_payload(
     appointment, payment = await _lock_turno_y_pago(db, store_id, encontrado)
     if payment is None:
         return False
+    # Identidad primero: lo que no es de este cobro no llega a clasificarse.
+    await _validate_payment_identity(
+        db, store_id=store_id, payment=payment, payload=payload, configs=configs
+    )
     if _de_un_link_reemplazado(payment, payload):
         await _pago_en_link_reemplazado(
             db,
@@ -597,9 +628,7 @@ async def apply_mercadopago_webhook_payload(
         )
         return False
 
-    await _validate_payment_integrity(
-        db, store_id=store_id, payment=payment, payload=payload, configs=configs
-    )
+    _validate_payment_link(payment, payload)
 
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}

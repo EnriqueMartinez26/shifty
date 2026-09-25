@@ -25,7 +25,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
 
@@ -37,6 +37,7 @@ from modules.payments.jobs import process_outbox_batch
 from modules.payments.model import (
     WEBHOOK_INBOX_MAX_ATTEMPTS,
     OutboxMessage,
+    PaymentGatewayConfig,
     PaymentStatus,
     WebhookInbox,
 )
@@ -182,3 +183,57 @@ async def test_los_dead_letters_del_inbox_se_ven_en_el_slo(
     assert cuerpo["metrics"]["dead_letter_webhooks_24h"] == 1
     assert "dead_letter_webhooks_24h" in cuerpo["thresholds"]
     assert "dead_letter_webhooks" in {a["code"] for a in cuerpo["alerts"]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "falla",
+    ["metadata_store", "metadata_pago", "moneda", "turno_ajeno", "cuenta"],
+)
+async def test_sin_identidad_no_hay_alerta_ni_aviso(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    falla: str,
+) -> None:
+    """Revision de 7abb9b4..e5579b6 (#2): la identidad (metadata de tienda y
+    cobro, moneda, cuenta de MP, turno de la referencia) se valida ANTES de
+    clasificar el link. Un payload que no es de este cobro nunca dispara
+    Sentry ni un aviso al dueno: se rechaza por integridad."""
+    reportes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        processing,
+        "report_exception",
+        lambda exc, **contexto: reportes.append(contexto),
+    )
+    turno, mp, vieja, _nueva = await _regenerado(
+        client, test_session, monkeypatch, f"identidad-{falla}"
+    )
+    cobro = await _cobro(test_session, turno)
+    payload = _pago_de_mp(cobro, referencia=mp.referencias[vieja], externo="mp-ajeno")
+    datos = payload["data"]
+    if falla == "metadata_store":
+        datos["metadata"]["store_id"] = "OTRA-TIENDA"
+    elif falla == "metadata_pago":
+        datos["metadata"]["payment_id"] = "OTRO-COBRO"
+    elif falla == "moneda":
+        datos["currency_id"] = "USD"
+    elif falla == "cuenta":
+        await test_session.execute(
+            update(PaymentGatewayConfig)
+            .where(PaymentGatewayConfig.store_id == cobro.store_id)
+            .values(oauth_user_id="COLLECTOR-TIENDA")
+        )
+        await test_session.commit()
+        datos["collector_id"] = "OTRA-CUENTA"
+    else:
+        datos["external_reference"] = "OTROTURNO:" + mp.referencias[vieja].split(":")[1]
+        datos["metadata"].pop("appointment_id")
+
+    with capture_logs() as logs:
+        aplicado = await _aplicar(test_session, cobro, payload)
+
+    assert aplicado is False
+    assert reportes == []
+    assert await _avisos(test_session) == []
+    assert not [e for e in logs if e["event"] == "payment_on_replaced_link"]

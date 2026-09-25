@@ -3,7 +3,7 @@
 2026-09-17, hallazgo B2-13 (regla 12, N+1): ``process_webhook_inbox_batch``
 recorria hasta 100 webhooks y, por cada uno, ``enrich_...`` volvia a leer
 ``payment_gateway_configs`` (via ``_mercadopago_api_request_for_store``) y
-``_validate_payment_integrity`` la leia otra vez: hasta 200 consultas por
+``_validate_payment_identity`` la leia otra vez: hasta 200 consultas por
 corrida para, casi siempre, la misma fila de la misma tienda.
 
 Sintoma medible: con N webhooks de una tienda, N (o 2N) SELECT sobre
