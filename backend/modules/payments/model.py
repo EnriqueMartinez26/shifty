@@ -177,6 +177,12 @@ class Payment(BaseEntity):
     # del webhook lo exige (revision de perf/f4-pay, 2026-09-25). NULL = link
     # creado antes de la columna (referencia = id del turno).
     link_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Ultima vez que la conciliacion le pregunto a MP por este cobro: ordena
+    # la cola (NULLS FIRST) para que los que siguen ``pending`` en MP no
+    # ocupen siempre el frente (revision de 3b977a9..6c84d46, #4).
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     external_payment_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )

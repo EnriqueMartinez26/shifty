@@ -15,24 +15,32 @@ Revision de e5579b6..3b977a9 (2026-09-25, #4):
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import modules.notifications.tasks as tasks
 import modules.payments.jobs as jobs
 from core.config import settings
 from modules.payments.links import RETIRED_LINK_SEARCH_MAX, retired_link_references
 from modules.payments.model import Payment, PaymentLinkHistory, PaymentStatus
 from tests.integration.test_cancelar_desde_el_panel_vence_el_cobro import _cobro
+from tests.integration.test_conciliacion_links_retirados_acotada import (
+    _tres_retenciones_vencidas,
+)
+from tests.integration.test_expiracion_mp_fuera_del_lock import (
+    _mercadopago_que_registra,
+)
 from tests.integration.test_link_regenerado_referencia_propia import (
     _pago_de_mp,
     _regenerado,
 )
+from tests.integration.test_mails_al_cliente import Buzon
 
 
 @pytest.mark.asyncio
@@ -183,3 +191,60 @@ async def test_un_pago_remoto_sin_cambio_de_estado_no_cuenta_como_conciliado(
     assert resultado["inspected"] == 1, resultado
     assert resultado["reconciled"] == 0, resultado
     assert (await _cobro(test_session, turno)).status == PaymentStatus.PENDING.value
+
+
+@pytest.mark.asyncio
+async def test_la_conciliacion_no_se_queda_con_los_mismos_pendientes_del_frente(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 3b977a9..6c84d46 (#4). La conciliacion ordenaba por
+    ``created_at`` con ``limit``: los cobros que siguen ``pending`` en MP
+    ocupaban siempre el frente y, con MP lento, la cola nunca se consultaba.
+    Ahora cada cobro consultado anota ``reconciled_at`` y el orden es
+    ``reconciled_at NULLS FIRST, created_at``: la corrida siguiente toma la
+    cola."""
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago_que_registra(monkeypatch, [], remoto=None)
+    turnos = await _tres_retenciones_vencidas(client, test_session)
+    cobros = [
+        (
+            await test_session.execute(
+                select(Payment.id).where(Payment.appointment_id == turno)
+            )
+        ).scalar_one()
+        for turno in turnos
+    ]
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    for n, cobro_id in enumerate(cobros):
+        await test_session.execute(
+            update(Payment)
+            .where(Payment.id == cobro_id)
+            .values(created_at=base + timedelta(minutes=n))
+        )
+    await test_session.commit()
+    consultados: list[str] = []
+
+    async def mp_que_sigue_pendiente(
+        _db: Any, payment: Payment, *_args: Any, **_kwargs: Any
+    ) -> None:
+        consultados.append(payment.id)
+        return None
+
+    monkeypatch.setattr(jobs, "_fetch_remote_payment", mp_que_sigue_pendiente)
+
+    await jobs.reconcile_pending_payments(test_session, limit=2)
+    primera = list(consultados)
+    consultados.clear()
+    await jobs.reconcile_pending_payments(test_session, limit=2)
+
+    assert primera == cobros[:2]
+    # La cola (el tercero) entra en la corrida siguiente, primero.
+    assert consultados[0] == cobros[2], consultados
+    test_session.expire_all()
+    marcas = (
+        await test_session.execute(
+            select(Payment.id, Payment.reconciled_at).where(Payment.id.in_(cobros))
+        )
+    ).all()
+    assert all(marca is not None for _id, marca in marcas), marcas

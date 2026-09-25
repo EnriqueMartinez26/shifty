@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import Row, Select, or_, select, text
+from sqlalchemy import Row, Select, or_, select, text, update
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
@@ -1356,10 +1356,14 @@ def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
     # Edad minima (F1-20, decision 20): un cobro recien creado es un cliente
     # que sigue en el checkout; preguntarle a MP por el gasta la corrida.
     min_age = now - timedelta(minutes=settings.RECONCILIATION_MIN_AGE_MINUTES)
+    # Primero los nunca consultados, despues los consultados hace mas tiempo
+    # (revision de 3b977a9..6c84d46, #4): por ``created_at`` solo, los que
+    # siguen ``pending`` en MP ocupaban siempre el frente y la cola no se
+    # consultaba nunca con MP lento.
     return (
         _reconcilable_payments()
         .where(Payment.created_at >= cutoff, Payment.created_at <= min_age)
-        .order_by(Payment.created_at.asc())
+        .order_by(Payment.reconciled_at.asc().nulls_first(), Payment.created_at.asc())
         .limit(limit)
     )
 
@@ -1452,7 +1456,39 @@ async def _reconcile(
             conteo[clave] += 1
 
     await db.commit()
+    await _marcar_conciliados(db, consultados)
     return conteo
+
+
+async def _marcar_conciliados(db: AsyncSession, consultados: list[str]) -> None:
+    """Anota ``reconciled_at`` en los cobros que la fase A consulto.
+
+    Despues del commit de la fase B y en su propia transaccion corta: un
+    fallo (``lock_timeout`` contra un webhook que tiene el pago) no se lleva
+    lo ya conciliado; se loguea y el orden de la cola se corrige en la
+    corrida siguiente. UPDATE por lote (sin la version del ORM: no es una
+    escritura de negocio y no puede chocar con la de un webhook). Revision
+    de 3b977a9..6c84d46, #4.
+    """
+    if not consultados:
+        return
+    try:
+        await db.execute(
+            update(Payment)
+            .where(Payment.id.in_(consultados))
+            .values(reconciled_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        await db.rollback()
+        logger.warning(
+            "reconciliation_mark_failed",
+            payments=len(consultados),
+            error_type=type(exc).__name__,
+        )
 
 
 async def _conciliar_un_cobro(
