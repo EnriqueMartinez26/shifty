@@ -1436,6 +1436,9 @@ async def _reconcile(
     reconciled = 0
     inspected = 0
     for payment in filas:
+        # ``reconciled`` cuenta cambios de estado reales, no no-ops (un pago
+        # remoto que sigue pendiente; revision de e5579b6..3b977a9, #4 f).
+        estado_previo = payment.status
         remote = remotos.get(payment.id)
         if not remote:
             # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
@@ -1467,7 +1470,7 @@ async def _reconcile(
         except Exception:
             fallidos += 1
         else:
-            if applied:
+            if applied and payment.status != estado_previo:
                 reconciled += 1
 
     await db.commit()
@@ -1551,25 +1554,28 @@ async def _fetch_remote_payment(
     ``retiradas``, que viene del mas reciente al mas viejo) y el presupuesto
     ``limite`` se mira antes de CADA consulta: levanta ``_PresupuestoAgotado``
     aunque sea a mitad del cobro (revision de e5579b6..3b977a9, #1).
+
+    Con id de MP, si ese pago no esta aprobado tambien se buscan los links
+    retirados (revision #4 d): un rechazo sobre el link vigente no puede
+    tapar un pago aprobado de un link viejo cuyo webhook se perdio.
     """
-    _consultar_si_alcanza(limite)
+    primero: dict[str, Any] | None = None
+    referencias: tuple[str, ...] = tuple(retiradas[:RETIRED_LINK_SEARCH_MAX])
     if payment.external_payment_id:
-        return await fetch_mercadopago_payment(
+        _consultar_si_alcanza(limite)
+        primero = await fetch_mercadopago_payment(
             db,
             store_id=payment.store_id,
             payment_id=payment.external_payment_id,
             configs=configs,
             persist_refresh=persist_refresh,
         )
-
-    primero: dict[str, Any] | None = None
-    referencias = (
-        payment.current_external_reference,
-        *retiradas[:RETIRED_LINK_SEARCH_MAX],
-    )
-    for numero, referencia in enumerate(referencias):
-        if numero:
-            _consultar_si_alcanza(limite)
+        if primero is None or _es_aprobado(primero):
+            return primero
+    else:
+        referencias = (payment.current_external_reference, *referencias)
+    for referencia in referencias:
+        _consultar_si_alcanza(limite)
         candidates = await search_mercadopago_payments(
             db,
             store_id=payment.store_id,
@@ -1577,13 +1583,18 @@ async def _fetch_remote_payment(
             configs=configs,
             persist_refresh=persist_refresh,
         )
-        # Un cobro acreditado gana; si no hay, el mas reciente del vigente.
+        # Un cobro acreditado gana; si no hay, el del id o el mas reciente
+        # del vigente.
         for candidate in candidates:
-            if str(candidate.get("status") or "").lower() == "approved":
+            if _es_aprobado(candidate):
                 return candidate
         if primero is None and candidates:
             primero = candidates[0]
     return primero
+
+
+def _es_aprobado(remoto: Mapping[str, Any]) -> bool:
+    return str(remoto.get("status") or "").lower() == "approved"
 
 
 def _expired_holds_query(

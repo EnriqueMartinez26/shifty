@@ -194,8 +194,14 @@ def adopt_retired_link(
 async def retired_link_references(
     db: AsyncSession, payments: Iterable[Payment], *, ahora: datetime | None = None
 ) -> dict[str, list[str]]:
-    """{payment.id: referencias de sus links retirados en la ventana}. Una
-    consulta para todo el lote (regla 12); sin la del link vigente."""
+    """{payment.id: referencias de sus links retirados en la ventana}, del
+    mas reciente al mas viejo y como mucho ``RETIRED_LINK_SEARCH_MAX`` por
+    cobro. Una consulta para todo el lote (regla 12); sin la del link vigente.
+
+    Filtra por ``store_id`` (revision de e5579b6..3b977a9, #4 e): bajo RLS el
+    filtro explicito es la defensa en profundidad y el camino al indice; una
+    fila de otra tienda nunca aporta una referencia a este cobro.
+    """
     por_id = {payment.id: payment for payment in payments}
     if not por_id:
         return {}
@@ -203,19 +209,30 @@ async def retired_link_references(
         days=RETIRED_LINK_SEARCH_DAYS
     )
     filas = await db.execute(
-        select(PaymentLinkHistory.payment_id, PaymentLinkHistory.link_ref)
+        select(
+            PaymentLinkHistory.payment_id,
+            PaymentLinkHistory.store_id,
+            PaymentLinkHistory.link_ref,
+        )
         .where(
+            PaymentLinkHistory.store_id.in_({p.store_id for p in por_id.values()}),
             PaymentLinkHistory.payment_id.in_(list(por_id)),
             PaymentLinkHistory.retired_at >= desde,
         )
         .order_by(PaymentLinkHistory.retired_at.desc())
     )
     referencias: dict[str, list[str]] = {}
-    for payment_id, link_ref in filas.all():
+    for payment_id, store_id, link_ref in filas.all():
         payment = por_id[str(payment_id)]
+        if str(store_id) != payment.store_id:
+            continue
         referencia = external_reference_for(payment.appointment_id, link_ref)
         lista = referencias.setdefault(payment.id, [])
-        if referencia != payment.current_external_reference and referencia not in lista:
+        if (
+            len(lista) < RETIRED_LINK_SEARCH_MAX
+            and referencia != payment.current_external_reference
+            and referencia not in lista
+        ):
             lista.append(referencia)
     return referencias
 

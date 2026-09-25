@@ -28,7 +28,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.payments.jobs as jobs
 from core.config import settings
-from modules.payments.model import Payment, PaymentGatewayConfig, WebhookInbox
+from modules.payments.model import (
+    Payment,
+    PaymentGatewayConfig,
+    PaymentStatus,
+    WebhookInbox,
+)
 
 PENDIENTES = 60
 DEMORA_DE_MP = 3.0
@@ -195,8 +200,12 @@ async def test_la_conciliacion_tiene_presupuesto_y_edad_minima(
         consultados.append(payment.id)
         return {"id": f"mp-{payment.id}", "status": "approved"}
 
-    async def aplicar(*_args: Any, **_kwargs: Any) -> bool:
-        return True
+    async def aplicar(db: Any, *, payload: dict[str, Any], **_kwargs: Any) -> bool:
+        # Un cambio de estado real: ``reconciled`` no cuenta los no-ops
+        # (revision de e5579b6..3b977a9, #4 f).
+        pago = await db.get(Payment, str(payload["data"]["id"]).removeprefix("mp-"))
+        assert pago is not None
+        return bool(pago.apply_status(PaymentStatus.APPROVED.value))
 
     async def turno_libre(*_args: Any, **_kwargs: Any) -> bool:
         return True
