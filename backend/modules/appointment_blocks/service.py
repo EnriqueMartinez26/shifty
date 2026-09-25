@@ -48,7 +48,8 @@ from modules.appointment_blocks.schemas import block_instants_error, block_range
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import build_client_details, is_deliverable_email
-from modules.payments.model import Payment
+from modules.payments.model import JsonValue, Payment
+from modules.payments.service import expire_live_charge
 from modules.staff.model import Staff, StaffBlock
 from modules.stores.model import Store
 from modules.users.model import User
@@ -137,6 +138,8 @@ def expand_ranges(
 class AffectedAppointment:
     appointment: Appointment
     reason: str | None  # None = cancelable; si no, por que requiere decision humana
+    # Su cobro (a lo sumo uno), para vencerlo si es un cobro vivo al cancelar.
+    payment: Payment | None = None
 
     @property
     def cancellable(self) -> bool:
@@ -176,26 +179,33 @@ class AppointmentBlockService:
         return members
 
     async def _payments_by_appointment(
-        self, appointment_ids: list[str]
+        self, appointment_ids: list[str], *, lock: bool = False
     ) -> dict[str, Payment]:
         """Pago de cada turno en UNA consulta (regla 12, B1-14).
 
         Antes era un ``get_by_appointment`` por turno afectado, con los locks
         de los profesionales tomados. Hay a lo sumo un pago por turno
         (``uq_payments_store_appointment``), asi que el dict es exacto.
+
+        ``lock``: al escribir, los pagos se lockean DESPUES de los turnos
+        (profesional -> turnos -> pagos; regla 7, turno -> pago) para poder
+        vencer el cobro vivo de los que se cancelan (revision de perf/f4-pay).
         """
         if not appointment_ids:
             return {}
-        result = await self.uow.session.execute(
-            select(Payment).where(
-                Payment.appointment_id.in_(appointment_ids),
-                Payment.store_id == self.actor.store_id,
-            )
+        consulta = select(Payment).where(
+            Payment.appointment_id.in_(appointment_ids),
+            Payment.store_id == self.actor.store_id,
         )
+        if lock:
+            consulta = consulta.with_for_update().execution_options(
+                populate_existing=True
+            )
+        result = await self.uow.session.execute(consulta)
         return {payment.appointment_id: payment for payment in result.scalars()}
 
     async def _classify(
-        self, appointments: list[Appointment]
+        self, appointments: list[Appointment], *, lock: bool = False
     ) -> list[AffectedAppointment]:
         affected: list[AffectedAppointment] = []
         payments = await self._payments_by_appointment(
@@ -203,7 +213,8 @@ class AppointmentBlockService:
                 appointment.id
                 for appointment in appointments
                 if appointment.status != AppointmentStatus.PENDING_PAYMENT.value
-            ]
+            ],
+            lock=lock,
         )
         for appointment in appointments:
             if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
@@ -213,7 +224,7 @@ class AppointmentBlockService:
             if payment is not None and payment.is_accredited:
                 affected.append(AffectedAppointment(appointment, "has_deposit"))
                 continue
-            affected.append(AffectedAppointment(appointment, None))
+            affected.append(AffectedAppointment(appointment, None, payment))
         return affected
 
     async def preview(
@@ -304,7 +315,7 @@ class AppointmentBlockService:
         appointments = await self.uow.appointments.list_active_overlapping(
             self.actor.store_id, staff_ids, ranges, lock=True
         )
-        affected = await self._classify(appointments)
+        affected = await self._classify(appointments, lock=True)
         if affected and not cancel_affected:
             raise AppException(
                 message=(
@@ -327,15 +338,37 @@ class AppointmentBlockService:
                 if not item.cancellable:
                     skipped.append((item.appointment.public_id, item.reason or ""))
                     continue
-                await self._cancel_for_block(item.appointment, reason, store)
+                await self._cancel_for_block(item, reason, store)
                 cancelled.append(item.appointment.public_id)
         return cancelled, skipped
 
     async def _cancel_for_block(
-        self, appointment: Appointment, block_reason: str, store: Store | None
+        self, item: AffectedAppointment, block_reason: str, store: Store | None
     ) -> None:
+        """Cancela un turno cubierto por el bloqueo y vence su cobro vivo.
+
+        Regla del dueno (D2, revision de perf/f4-pay 2026-09-25): lo que hace
+        el personal vence el cobro. Antes el turno se cancelaba con un link
+        del panel en ``pending``/``rejected`` vivo en Mercado Pago. Mismo
+        camino que cancelar desde la agenda (``expire_live_charge``), en esta
+        transaccion; el turno y despues su pago ya estan lockeados.
+        """
+        appointment = item.appointment
         payload_before = {"status": appointment.status}
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        payload_after: dict[str, JsonValue] = {
+            "status": appointment.status,
+            "reason": "blocked",
+            "block_reason": block_reason,
+        }
+        vencido = expire_live_charge(
+            self.uow.session,
+            item.payment,
+            reason="block_cancel",
+            released_by=self.actor.public_id,
+        )
+        if vencido is not None:
+            payload_after["expired_payment_id"] = vencido.id
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
@@ -343,11 +376,7 @@ class AppointmentBlockService:
             store_id=appointment.store_id,
             actor=self.actor,
             payload_before=payload_before,
-            payload_after={
-                "status": appointment.status,
-                "reason": "blocked",
-                "block_reason": block_reason,
-            },
+            payload_after=payload_after,
         )
         # El aviso al cliente sale por el outbox (fuera del request y con
         # reintento), nunca inline: un bloqueo de vacaciones puede cancelar

@@ -504,3 +504,159 @@ async def test_link_del_panel_contra_cancelar_nunca_deja_un_link_vivo_cancelado(
         else:
             assert cancelacion.status_code == 200, cancelacion.text
             assert turno_estado == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Bloqueo contra el pago (RECHAZO de la revision de perf/f4-pay, 2026-09-25)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bloqueo_sobre_turnos_con_link_contra_el_pago_aprobado(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Un bloqueo con ``cancel_affected`` que cubre turnos confirmados con link
+    del panel, a la vez que el webhook aprueba esos links.
+
+    Orden de locks: el bloqueo toma profesional -> turnos -> pagos; el webhook
+    turno -> pago. Se serializan sobre la fila del turno, sin deadlock. Lo que
+    se fija, sea cual sea el orden, por turno:
+    - gano el bloqueo: turno ``cancelled``, el cobro se vencio (hay un
+      ``payment.preference.expire`` de su link) y el pago que llega despues
+      queda ``approved`` con el aviso de plata sobre un turno liberado;
+    - gano el webhook: pago ``approved``, turno ``confirmed``; el bloqueo lo
+      saltea (``has_deposit``) y no hay vencimiento; aviso ``payment.approved``.
+    Nunca un turno cancelado con un cobro vivo, cero 5xx, un solo aviso.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    mp = _MercadoPago()
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    store, admin = await register_and_login(
+        client, app_sessions, slug="bloq-pg-rafaga", email="bloq-pg-rafaga@demo.com"
+    )
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(admin),
+        json={"deposit_policy": "La sena se descuenta del total."},
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, admin)
+    await _configure_gateway(client, admin)
+    service = await create_service(client, admin)
+    staff = await create_staff(client, admin, service, email="staff-bloq-pg@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+
+    turnos: list[str] = []
+    for i in range(TURNOS):
+        alta = await client.post(
+            "/appointments/",
+            headers=auth_headers(admin),
+            json={
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": dia.replace(
+                    hour=10 + i, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "client_name": f"Cliente Bloqueo {i}",
+                "client_phone": f"+54911559{i:05d}",
+                "idempotency_key": f"bloq-pg-alta-{i:04d}",
+            },
+        )
+        assert alta.status_code == 201, alta.text
+        turno = str(alta.json()["public_id"])
+        link = await client.post(
+            f"/payments/preferences/{turno}", headers=auth_headers(admin)
+        )
+        assert link.status_code == 200, link.text
+        turnos.append(turno)
+
+    antes = await _cobros(owner_engine)
+    for i, turno in enumerate(turnos):
+        cobro = antes[turno]
+        assert (cobro["turno"], cobro["pago"]) == ("confirmed", "pending"), cobro
+        mp.remotos[f"mp-bloq-{i}"] = {
+            "id": f"mp-bloq-{i}",
+            "status": "approved",
+            "external_reference": turno,
+            "preference_id": cobro["preferencia"],
+            "transaction_amount": cobro["importe"],
+            "currency_id": "ARS",
+        }
+
+    bloqueo = client.post(
+        "/appointment-blocks/",
+        headers=auth_headers(admin),
+        json={
+            "staff_id": staff,
+            "starts_at": dia.replace(
+                hour=9, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "ends_at": dia.replace(
+                hour=10 + TURNOS, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "reason": "Tramite",
+            "cancel_affected": True,
+        },
+    )
+    webhooks = [
+        client.post(
+            f"/payments/webhooks/mercadopago?store_id={store}",
+            json={
+                "id": f"evt-bloq-{i}",
+                "type": "payment",
+                "data": {"id": f"mp-bloq-{i}"},
+            },
+            headers=webhook_signature_headers(
+                secret="secret-demo",
+                data_id=f"mp-bloq-{i}",
+                request_id=f"req-bloq-{i}",
+                ts="0",
+            ),
+        )
+        for i in range(TURNOS)
+    ]
+    respuestas: list[Response] = await asyncio.gather(bloqueo, *webhooks)
+
+    assert all(r.status_code < 500 for r in respuestas), [
+        (r.status_code, r.text[:200]) for r in respuestas if r.status_code >= 500
+    ]
+    assert respuestas[0].status_code == 201, respuestas[0].text
+    for res in respuestas[1:]:
+        assert res.status_code == 200, res.text
+        cuerpo = res.json()
+        assert cuerpo.get("data", cuerpo)["applied"] is True, cuerpo
+
+    despues = await _cobros(owner_engine)
+    eventos = await _eventos(owner_engine)
+    for turno in turnos:
+        final = despues[turno]
+        assert final["pago"] == "approved", final
+        vencimientos = [
+            p
+            for e, p in eventos
+            if e == EVENT_PREFERENCE_EXPIRE and p.get("appointment_id") == turno
+        ]
+        avisos = [
+            e
+            for e, p in eventos
+            if p.get("payment_id") == final["pago_id"]
+            and e
+            in {
+                NotificationType.PAYMENT_APPROVED.value,
+                NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value,
+            }
+        ]
+        assert len(avisos) == 1, (turno, avisos)
+        if final["turno"] == "cancelled":
+            assert [v["preference_id"] for v in vencimientos] == [
+                final["preferencia"]
+            ], vencimientos
+            assert avisos == [NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value]
+        else:
+            assert final["turno"] == "confirmed", final
+            assert vencimientos == [], vencimientos
+            assert avisos == [NotificationType.PAYMENT_APPROVED.value]

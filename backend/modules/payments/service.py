@@ -971,6 +971,52 @@ def _expire_replaced_preference(
     )
 
 
+def expire_live_charge(
+    db: AsyncSession,
+    payment: Payment | None,
+    *,
+    reason: str,
+    released_by: str | None = None,
+) -> Payment | None:
+    """Vence el cobro vivo de un turno que se suelta; devuelve el cobro si lo vencio.
+
+    UNICO camino que suelta un cobro vivo (``LIVE_CHARGE_PAYMENT_STATUSES``:
+    ``pending`` o ``rejected``) cuando su turno deja de poder cobrarse
+    (revision de perf/f4-pay, 2026-09-25). Lo usan cancelar, reprogramar y
+    liberar desde el panel (``AppointmentService``), la cancelacion por
+    bloqueo (``AppointmentBlockService``), el webhook que saca al turno de los
+    estados cobrables (``processing.apply_mercadopago_webhook_payload``) y el
+    job de vencimiento de retenciones.
+
+    Precondicion del llamador: el TURNO ya esta lockeado y ``payment`` se leyo
+    despues (orden turno -> pago, regla 7). El estado lo cambia la entidad
+    (``apply_status``: ``pending``/``rejected`` -> ``expired`` estan en el
+    grafo) y el link de MP no se toca aca: se publica
+    ``payment.preference.expire`` en la misma transaccion y el outbox lo vence
+    despues del commit, sin lock (B1-04, regla 5). Un placeholder no existe en
+    MP: no se publica nada.
+    """
+    if payment is None or not payment.is_live_charge:
+        return None
+    if not _is_placeholder_preference(payment.preference_id):
+        db.add(
+            OutboxMessage(
+                store_id=payment.store_id,
+                event_type=EVENT_PREFERENCE_EXPIRE,
+                payload={
+                    "appointment_id": payment.appointment_id,
+                    "payment_id": payment.id,
+                    "preference_id": payment.preference_id,
+                },
+            )
+        )
+    payment.apply_status(
+        PaymentStatus.EXPIRED.value,
+        payload={"reason": reason, "released_by": released_by},
+    )
+    return payment
+
+
 async def _attach_provider_link(
     db: AsyncSession,
     *,

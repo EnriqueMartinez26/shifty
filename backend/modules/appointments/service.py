@@ -43,10 +43,7 @@ from modules.notifications.tasks import (
     is_deliverable_email,
 )
 from modules.payments.model import JsonValue, Payment, PaymentStatus
-from modules.payments.service import (
-    EVENT_PREFERENCE_EXPIRE,
-    _is_placeholder_preference,
-)
+from modules.payments.service import expire_live_charge
 from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
@@ -401,8 +398,11 @@ class AppointmentService:
         payment = await self.uow.payments.get_by_appointment_locked(
             appointment.id, actor.store_id
         )
-        vencido = self._expire_live_charge(
-            appointment, payment, actor, reason="staff_cancel"
+        vencido = expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="staff_cancel",
+            released_by=actor.public_id,
         )
         if vencido is not None:
             payload_after["expired_payment_id"] = vencido.id
@@ -616,46 +616,11 @@ class AppointmentService:
                 http_status=HTTPStatus.CONFLICT,
                 error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
             )
-        self._expire_live_charge(
-            appointment, payment, actor, reason="manual_store_release"
-        )
-        return payment
-
-    def _expire_live_charge(
-        self,
-        appointment: Appointment,
-        payment: Payment | None,
-        actor: User,
-        *,
-        reason: str,
-    ) -> Payment | None:
-        """Vence el cobro vivo del turno; devuelve el cobro si lo vencio.
-
-        Unico lugar que suelta un cobro vivo desde el panel: lo comparten
-        ``release_pending`` (el admin libera) y ``cancel`` (cualquier personal
-        cancela, D2 2026-09-25). ``payment`` ya viene lockeado DESPUES del
-        turno (regla 7). El estado lo cambia la entidad (``apply_status``) y
-        el link de MP no se toca aca: se publica ``payment.preference.expire``
-        en esta misma transaccion y el outbox lo vence despues del commit, sin
-        lock ni transaccion abierta (B1-04, regla 5).
-        """
-        if payment is None or not payment.is_live_charge:
-            return None
-        # Un placeholder no existe en Mercado Pago: no hay link que vencer
-        # (mismo criterio que ``_expire_live_checkout``/``_discard_unsealed_link``).
-        if not _is_placeholder_preference(payment.preference_id):
-            self.uow.outbox.publish(
-                store_id=actor.store_id,
-                event_type=EVENT_PREFERENCE_EXPIRE,
-                payload={
-                    "appointment_id": appointment.id,
-                    "payment_id": payment.id,
-                    "preference_id": payment.preference_id,
-                },
-            )
-        payment.apply_status(
-            PaymentStatus.EXPIRED.value,
-            payload={"reason": reason, "released_by": actor.public_id},
+        expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="manual_store_release",
+            released_by=actor.public_id,
         )
         return payment
 
@@ -710,7 +675,7 @@ class AppointmentService:
 
         Cobro vivo (decision del dueno 2026-09-25, misma regla que D2 para
         cancelar): reprogramar lo vence en esta transaccion con
-        ``_expire_live_charge`` (el link de MP lo vence el outbox, sin lock) en
+        ``expire_live_charge`` (el link de MP lo vence el outbox, sin lock) en
         vez de dejarlo apuntando a un turno cancelado o de responder 409 a un
         ``pending_payment``. El turno nuevo nace sin cobro.
 
@@ -794,8 +759,11 @@ class AppointmentService:
             original, service, new_starts_at, ends_at, idempotency_key, estado_previo
         )
         original.apply_status_transition(AppointmentStatus.CANCELLED)
-        vencido = self._expire_live_charge(
-            original, payment, actor, reason="staff_reschedule"
+        vencido = expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="staff_reschedule",
+            released_by=actor.public_id,
         )
         self._publish_slot_released(original, reason="rescheduled")
         await self.uow.audit.log(

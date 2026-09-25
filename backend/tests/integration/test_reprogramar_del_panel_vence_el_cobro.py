@@ -8,7 +8,7 @@ nacia sin cobro. Un ``pending_payment`` respondia 409 y exigia la
 liberacion del admin.
 
 Ahora la reprogramacion vence el cobro vivo del original en la MISMA
-transaccion (``_expire_live_charge``: pago ``expired`` por la entidad,
+transaccion (``expire_live_charge``: pago ``expired`` por la entidad,
 ``payment.preference.expire`` al outbox, sin llamada a MP) antes de
 cancelarlo. El turno nuevo nace sin cobro: un confirmado sigue confirmado y
 un ``pending_payment`` pasa a ``pending`` (el grafo permite
