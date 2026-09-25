@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any
 
 import structlog
 from sqlalchemy import select
@@ -26,7 +26,7 @@ from modules.payments.model import (
     PaymentLinkHistory,
     PaymentStatus,
 )
-from modules.payments.model import JsonValue
+from modules.payments.minimization import minimize_payment_payload
 from modules.services.model import Service
 from modules.payments.service import (
     RELEASED_APPOINTMENT_STATUSES,
@@ -692,8 +692,10 @@ def _stamp_payment(
     igual: es la unica trazabilidad que hay.
     """
     external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    # Se persiste la lista blanca, no el recurso de MP (L3-01): la
+    # conciliacion trae email, identificacion y tarjeta del pagador.
     aplicada = stamp_payment_from_status(
-        payment, payment_status, payload=cast(dict[str, JsonValue], payload)
+        payment, payment_status, payload=minimize_payment_payload(payload)
     )
     if external_payment_id and (aplicada or not payment.external_payment_id):
         payment.external_payment_id = external_payment_id

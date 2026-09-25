@@ -37,6 +37,7 @@ from modules.payments.model import (
 )
 from modules.services.model import Service
 from modules.payments.links import ImportesDelLink, record_retired_link
+from modules.payments.minimization import minimize_preference_payload
 from modules.payments.model import (  # reexportado: lo importan jobs y tests
     EVENT_PREFERENCE_EXPIRE as EVENT_PREFERENCE_EXPIRE,
 )
@@ -1160,7 +1161,9 @@ async def _attach_provider_link(
     payment.preference_id = preference_id
     payment.payment_link = payment_link
     payment.link_ref = link_ref
-    payment.raw_payload = preference_payload
+    # Solo el id y los links (PV-14, L3-01): la respuesta repite ``payer`` e
+    # ``items`` (nombre y email del pagador, nombre del servicio).
+    payment.raw_payload = minimize_preference_payload(preference_payload)
 
 
 def _nuevo_cobro_pendiente(
