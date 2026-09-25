@@ -347,7 +347,7 @@ class AppointmentBlockService:
     ) -> None:
         """Cancela un turno cubierto por el bloqueo y vence su cobro vivo.
 
-        Regla del dueno (D2, revision de perf/f4-pay 2026-09-25): lo que hace
+        Regla de Mateo adoptada por el dueno (D2, revision de perf/f4-pay 2026-09-25): lo que hace
         el personal vence el cobro. Antes el turno se cancelaba con un link
         del panel en ``pending``/``rejected`` vivo en Mercado Pago. Mismo
         camino que cancelar desde la agenda (``expire_live_charge``), en esta

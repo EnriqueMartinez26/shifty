@@ -7,7 +7,7 @@ marcaba procesados sin efecto --: ``payment.refunded``,
 crecia con filas que solo inflaban ``outbox_stats``, y ``manual_confirm``
 republicaba en cada doble clic.
 
-Decision (sugerencia del brief, OK del dueno): ``payment.refunded`` gana
+Decision (sugerencia del brief, OK de Mateo): ``payment.refunded`` gana
 consumidor -- aviso "Reembolso registrado" en el panel del dueno --; los
 otros dos dejan de publicarse porque nadie los lee (verificado con git grep
 en backend, front y tests).

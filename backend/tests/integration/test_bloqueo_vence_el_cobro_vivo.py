@@ -7,7 +7,7 @@ PENDIENTE con un link del panel en ``pending``/``rejected`` sin vencerlo: el
 link de Mercado Pago quedaba vivo sobre un turno cancelado. Pasaba al crear un
 bloqueo, al cerrar la tienda (``staff_id=None``) y al editar un bloqueo.
 
-Regla del dueno (D2: lo que hace el personal vence el cobro): la cancelacion
+Regla de Mateo adoptada por el dueno (D2: lo que hace el personal vence el cobro): la cancelacion
 por bloqueo vence el cobro vivo con el mismo camino compartido
 (``payments.service.expire_live_charge``), en la misma transaccion, con el
 turno lockeado antes que el pago.
