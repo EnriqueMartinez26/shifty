@@ -193,7 +193,9 @@ async def test_el_buscador_de_fiado_le_enmascara_el_contacto_al_profesional(
     admin, como en la agenda, la busqueda y la lista de espera."""
     alfa = mundo.alfa
     digitos = alfa.tel_verificado.lstrip("+")
-    llamada = Llamada("GET", "/ledger/clients", params={"q": digitos[-8:]})
+    # El profesional busca por nombre (decision de Mateo, 2026-09-25); el
+    # admin, tambien por telefono.
+    llamada = Llamada("GET", "/ledger/clients", params={"q": alfa.nombre_verificado})
 
     profesional = await mundo.actor(PROFESIONAL, alfa)
     res = await mundo.llamar(profesional, llamada)
@@ -203,8 +205,16 @@ async def test_el_buscador_de_fiado_le_enmascara_el_contacto_al_profesional(
     assert fila["email"] is None
     assert digitos not in res.text and alfa.email_verificado not in res.text
 
+    por_digitos = await mundo.llamar(
+        profesional, Llamada("GET", "/ledger/clients", params={"q": digitos[-8:]})
+    )
+    assert por_digitos.status_code == 200, por_digitos.text
+    assert por_digitos.json() == []
+
     admin = await mundo.actor(ADMIN_TIENDA, alfa)
-    res = await mundo.llamar(admin, llamada)
+    res = await mundo.llamar(
+        admin, Llamada("GET", "/ledger/clients", params={"q": digitos[-8:]})
+    )
     assert res.status_code == 200, res.text
     [fila] = [f for f in res.json() if f["public_id"] == alfa.cliente]
     assert str(fila["phone"]).lstrip("+") == digitos

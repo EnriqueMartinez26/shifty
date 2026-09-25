@@ -152,7 +152,10 @@ async def test_el_profesional_busca_solo_clientes_de_su_tienda(
     # buscador no los devuelve.
     assert [c["public_id"] for c in por_nombre.json()] == [t.cliente]
     assert [c["public_id"] for c in con_rol.json()] == [t.cliente]
-    assert [c["public_id"] for c in por_telefono.json()] == [t.otro_cliente]
+    # Decision de Mateo (revision de fix/legal-datos, 2026-09-25): el
+    # profesional busca SOLO por nombre. Con digitos del telefono, ampliando
+    # q de a uno, reconstruia el numero que la respuesta enmascara.
+    assert por_telefono.json() == []
     ana = por_nombre.json()[0]
     assert ana["name"] == "Ana Fiadora"
     # L3-03 (2026-09-25): el profesional ve el telefono enmascarado (ultimos 3
@@ -200,14 +203,13 @@ async def test_sin_nombre_el_profesional_no_ve_el_email_como_nombre(
     )
     assert carga.status_code == 200, carga.text
 
-    buscador = await client.get(
-        "/ledger/clients", headers=t.profesional, params={"q": "4444 0001"}
-    )
+    buscador = await client.get("/ledger/clients", headers=t.profesional)
     resumen = await client.get("/ledger/summary", headers=t.profesional)
     del_admin = await client.get("/ledger/summary", headers=auth_headers(t.admin))
 
     assert buscador.status_code == 200, buscador.text
-    assert buscador.json()[0]["name"] == "***001"
+    [sin_nombre] = [c for c in buscador.json() if c["public_id"] == t.cliente]
+    assert sin_nombre["name"] == "***001"
     assert resumen.status_code == 200, resumen.text
     assert resumen.json()["top_debtors"][0]["client_name"] == "***001"
     for res in (buscador, resumen):
@@ -338,3 +340,27 @@ async def test_un_movimiento_viejo_sobre_el_personal_se_puede_revertir(
 
     assert res.status_code == 200, res.text
     assert res.json()["balance_after"] == "0.00"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("q", ["44", "444", "4444", "44440001", "+54 9 11 4444"])
+async def test_el_profesional_no_reconstruye_el_telefono_buscando_por_digitos(
+    client: AsyncClient, q: str
+) -> None:
+    """Decision de Mateo (revision de fix/legal-datos, 2026-09-25): ampliar
+    ``q`` de a un digito y mirar si el cliente sigue apareciendo reconstruia
+    el numero enmascarado. Para el profesional ``q`` busca solo por nombre;
+    el admin sigue buscando por telefono."""
+    t = await _tienda(client, f"fiado-oraculo-{len(q)}-{q[:2]}")
+
+    profesional = await client.get(
+        "/ledger/clients", headers=t.profesional, params={"q": q}
+    )
+    admin = await client.get(
+        "/ledger/clients", headers=auth_headers(t.admin), params={"q": q}
+    )
+
+    assert profesional.status_code == 200, profesional.text
+    assert profesional.json() == []
+    assert admin.status_code == 200, admin.text
+    assert t.cliente in {c["public_id"] for c in admin.json()}

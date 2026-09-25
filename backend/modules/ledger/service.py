@@ -85,7 +85,12 @@ async def ensure_store_client(
 
 
 async def search_store_clients(
-    db: AsyncSession, *, store_id: str, q: str | None, limit: int
+    db: AsyncSession,
+    *,
+    store_id: str,
+    q: str | None,
+    limit: int,
+    by_phone: bool = True,
 ) -> list[User]:
     """Clientes activos de ESTA tienda para el buscador del fiado (D3).
 
@@ -93,13 +98,15 @@ async def search_store_clients(
     fiado pero no ``/users/`` (regla 16), asi que ninguna cuenta del personal,
     de un admin ni del soporte global sale por aca, pida lo que pida el
     query. Misma busqueda que ``GET /users/?q=`` (``user_search_condition``,
-    acotada por ``ix_users_store_id``).
+    acotada por ``ix_users_store_id``). ``by_phone=False`` busca solo por
+    nombre (el profesional; decision de Mateo, 2026-09-25).
     """
     return await UserRepository(db).get_all(
         store_id,
         only_active=True,
         role=UserRole.CLIENT.value,
         q=q,
+        q_by_phone=by_phone,
         limit=limit,
         include_global_admins=False,
     )

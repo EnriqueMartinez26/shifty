@@ -93,8 +93,9 @@ def _ledger_key(after: str | None, offset: int) -> tuple[datetime, str] | None:
 
 # L3-03 (2026-09-25): el profesional ve el telefono del cliente enmascarado
 # y no ve su email, como en la agenda, la busqueda y la lista de espera
-# (``show_phone``). Buscar por digitos sigue funcionando: se filtra en SQL con
-# el numero completo y solo la respuesta sale enmascarada.
+# (``show_phone``). El profesional busca solo por nombre: ampliando ``q`` de a
+# un digito reconstruia el numero enmascarado (decision de Mateo, revision de
+# fix/legal-datos, 2026-09-25). El admin sigue buscando por telefono.
 VISIBLE_PHONE_DIGITS = 3
 
 
@@ -237,9 +238,10 @@ def _top_debtor_items(
     description=(
         "Clientes activos de la tienda para elegir a quien cargar fiado. Solo "
         "cuentas con rol cliente: el rol lo fija el servidor. `q` (2..80): "
-        "nombre que contiene q o digitos del telefono, como `GET /users/?q=`. "
-        "El admin recibe email y telefono completos; el profesional, el "
-        "telefono enmascarado (`***` y los ultimos 3 digitos) y `email` null."
+        "nombre que contiene q o digitos del telefono, como `GET /users/?q=`; "
+        "para el profesional, solo nombre. El admin recibe email y telefono "
+        "completos; el profesional, el telefono enmascarado (`***` y los "
+        "ultimos 3 digitos) y `email` null."
     ),
 )
 async def search_ledger_clients(
@@ -257,8 +259,11 @@ async def search_ledger_clients(
     except ValueError as exc:
         raise ValidationException(str(exc)) from None
     await _ensure_ledger_feature_enabled(db, user)
-    clientes = await search_store_clients(db, store_id=user.store_id, q=q, limit=limit)
     full_contact = _shows_contact(user)
+    # Solo el admin busca por digitos del telefono (ver VISIBLE_PHONE_DIGITS).
+    clientes = await search_store_clients(
+        db, store_id=user.store_id, q=q, limit=limit, by_phone=full_contact
+    )
     return [
         LedgerClientItem(
             public_id=cliente.public_id,

@@ -36,7 +36,7 @@ def _like_contains(texto: str) -> str:
     return f"%{escapado}%"
 
 
-def user_search_condition(q: str) -> ColumnElement[bool]:
+def user_search_condition(q: str, *, by_phone: bool = True) -> ColumnElement[bool]:
     """Nombre que contiene ``q`` (sin distinguir mayusculas) o, si ``q`` es un
     telefono (digitos y separadores, 2 o mas digitos), telefono que contiene
     esos digitos (FF-20, F4-03).
@@ -45,6 +45,10 @@ def user_search_condition(q: str) -> ColumnElement[bool]:
     consulta queda acotada por ``users.store_id`` (igualdad leakproof sobre
     ``ix_users_store_id``) y el filtro recorre solo las filas de la tienda;
     lo fija ``tests/postgres/test_pg_busqueda_de_clientes.py``.
+
+    ``by_phone=False``: solo por nombre. Lo usa el buscador del fiado para
+    el profesional, que ve el telefono enmascarado (decision de Mateo,
+    2026-09-25): con digitos reconstruia el numero de a uno.
     """
     patron = _like_contains(q)
     nombre_completo = (
@@ -56,7 +60,7 @@ def user_search_condition(q: str) -> ColumnElement[bool]:
         nombre_completo.ilike(patron, escape=_LIKE_ESCAPE),
     ]
     digitos = _PHONE_SEPARATORS.sub("", q)
-    if len(digitos) >= 2 and digitos.isdigit():
+    if by_phone and len(digitos) >= 2 and digitos.isdigit():
         condiciones.append(User.phone.like(f"%{digitos}%"))
     return or_(*condiciones)
 
@@ -102,6 +106,7 @@ class UserRepository:
         offset: int = 0,
         include_global_admins: bool = False,
         q: str | None = None,
+        q_by_phone: bool = True,
     ) -> list[User]:
         query = select(User).where(
             User.store_id == store_id,
@@ -117,7 +122,7 @@ class UserRepository:
         if role:
             query = query.where(User.role == role)
         if q:
-            query = query.where(user_search_condition(q))
+            query = query.where(user_search_condition(q, by_phone=q_by_phone))
 
         # Cota: la tabla crece con cada reserva publica (un User CLIENT por
         # cliente nuevo), asi que un listado sin techo escalaba mal. El default
