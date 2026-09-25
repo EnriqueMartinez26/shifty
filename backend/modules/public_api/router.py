@@ -683,16 +683,11 @@ async def get_client_appointments(
                 error_code="CLIENT_APPOINTMENTS_NOT_FOUND",
             )
 
-        appointments = await repo.get_client_appointments(
-            client.id, store.id, limit=limit
-        )
-        # Pagos acreditados de la pagina, en una consulta (regla 12).
-        pagados = await repo.accredited_appointment_ids(
-            [appt.id for appt in appointments]
-        )
+        # Con el pago acreditado de cada turno en el mismo SELECT.
+        filas = await repo.get_client_appointments(client.id, store.id, limit=limit)
         items = [
-            _client_item(appt, store.cancellation_hours, paid=appt.id in pagados)
-            for appt in appointments
+            _client_item(appt, store.cancellation_hours, paid=paid)
+            for appt, paid in filas
         ]
 
         return ClientAppointmentsResponse(

@@ -13,7 +13,7 @@ from enum import Enum
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, raiseload, selectinload
 
@@ -683,8 +683,8 @@ class PublicRepository:
 
         Acreditado es ``Payment.is_accredited`` (aprobado o confirmado a mano):
         un turno asi no se reprograma desde el cliente
-        (``client_reschedule_denial``). La usan la accion (un turno) y el
-        historial (la pagina entera, con ``in_()``: regla 12).
+        (``client_reschedule_denial``). La usa la accion; el historial lo
+        resuelve en su propio SELECT (``get_client_appointments``).
         """
         if not appointment_ids:
             return set()
@@ -713,8 +713,14 @@ class PublicRepository:
 
     async def get_client_appointments(
         self, client_id: str, store_id: str, *, limit: int
-    ) -> list[Appointment]:
-        """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional.
+    ) -> list[tuple[Appointment, bool]]:
+        """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional,
+        y si cada uno tiene un pago acreditado (para ``can_reschedule``).
+
+        El pago acreditado va en el MISMO SELECT como ``EXISTS`` correlacionado
+        por ``uq_payments_store_appointment`` (store_id, appointment_id): una
+        consulta aparte sumaba una sentencia al historial (techo de
+        ``test_historial_del_cliente_con_limite``).
 
         Un solo SELECT con JOIN (F3-09, R1-09): antes eran ``selectinload`` de
         servicio y profesional, y el profesional arrastraba en cascada sus
@@ -723,8 +729,17 @@ class PublicRepository:
         pueda tomar por una coleccion modificada (AUD2-B6-02), y un acceso
         accidental levanta en vez de volver a consultar.
         """
+        pagado = (
+            exists()
+            .where(
+                Payment.store_id == Appointment.store_id,
+                Payment.appointment_id == Appointment.id,
+                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+            )
+            .label("paid")
+        )
         result = await self.db.execute(
-            select(Appointment)
+            select(Appointment, pagado)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
             .options(
                 joinedload(Appointment.service),
@@ -735,4 +750,4 @@ class PublicRepository:
             .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
             .limit(limit)
         )
-        return list(result.scalars().all())
+        return [(appointment, bool(paid)) for appointment, paid in result.all()]
