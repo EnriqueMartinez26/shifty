@@ -23,6 +23,7 @@ from core.keyset import (
     encode_cursor,
 )
 from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
+from core.roles import STORE_MANAGERS, has_any_role
 from modules.auth.dependencies import get_current_user
 from modules.ledger.model import CustomerLedger
 from modules.ledger.schemas import (
@@ -40,6 +41,7 @@ from modules.ledger.service import (
     reverse_movement,
     search_store_clients,
 )
+from modules.otp.service import mask_phone
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -88,15 +90,36 @@ def _ledger_key(after: str | None, offset: int) -> tuple[datetime, str] | None:
         raise ValidationException("Cursor de paginacion invalido") from None
 
 
-def _client_display_name(user: User | None, *, fallback_id: str) -> str:
+# L3-03 (2026-09-25): el profesional ve el telefono del cliente enmascarado
+# y no ve su email, como en la agenda, la busqueda y la lista de espera
+# (``show_phone``). Buscar por digitos sigue funcionando: se filtra en SQL con
+# el numero completo y solo la respuesta sale enmascarada.
+VISIBLE_PHONE_DIGITS = 3
+
+
+def _shows_contact(user: User) -> bool:
+    return has_any_role(user, STORE_MANAGERS)
+
+
+def _client_phone(client: User, *, full_contact: bool) -> str | None:
+    if not client.phone or full_contact:
+        return client.phone
+    return mask_phone(client.phone, visible=VISIBLE_PHONE_DIGITS)
+
+
+def _client_display_name(
+    user: User | None, *, fallback_id: str, full_contact: bool
+) -> str:
+    """Nombre del cliente; sin nombre cae al email o al telefono completos
+    solo para un admin. Para el resto, al telefono enmascarado o al id."""
     if user:
         full_name = f"{user.first_name or ''} {user.last_name or ''}".strip()
         if full_name:
             return full_name
-        if user.email:
+        if full_contact and user.email:
             return user.email
         if user.phone:
-            return user.phone
+            return _client_phone(user, full_contact=full_contact) or fallback_id
     return fallback_id
 
 
@@ -107,6 +130,7 @@ async def get_ledger_summary(
 ) -> LedgerSummaryResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
+    full_contact = _shows_contact(user)
     # La deuda vigente de un cliente es su ULTIMO movimiento (balance_after es
     # un saldo incremental). La DB se queda con uno por cliente (row_number
     # sobre la particion por client_id) y agrega ahi mismo: total, cantidad y
@@ -185,7 +209,9 @@ async def get_ledger_summary(
         top_debtors=[
             LedgerSummaryClientItem(
                 client_id=client_id,
-                client_name=_client_display_name(customer, fallback_id=client_id),
+                client_name=_client_display_name(
+                    customer, fallback_id=client_id, full_contact=full_contact
+                ),
                 balance=Decimal(str(balance_after)).quantize(Decimal("0.01")),
                 last_movement_at=created_at,
             )
@@ -201,7 +227,9 @@ async def get_ledger_summary(
     description=(
         "Clientes activos de la tienda para elegir a quien cargar fiado. Solo "
         "cuentas con rol cliente: el rol lo fija el servidor. `q` (2..80): "
-        "nombre que contiene q o digitos del telefono, como `GET /users/?q=`."
+        "nombre que contiene q o digitos del telefono, como `GET /users/?q=`. "
+        "El admin recibe email y telefono completos; el profesional, el "
+        "telefono enmascarado (`***` y los ultimos 3 digitos) y `email` null."
     ),
 )
 async def search_ledger_clients(
@@ -220,12 +248,15 @@ async def search_ledger_clients(
         raise ValidationException(str(exc)) from None
     await _ensure_ledger_feature_enabled(db, user)
     clientes = await search_store_clients(db, store_id=user.store_id, q=q, limit=limit)
+    full_contact = _shows_contact(user)
     return [
         LedgerClientItem(
             public_id=cliente.public_id,
-            name=_client_display_name(cliente, fallback_id=cliente.public_id),
-            email=cliente.email,
-            phone=cliente.phone,
+            name=_client_display_name(
+                cliente, fallback_id=cliente.public_id, full_contact=full_contact
+            ),
+            email=cliente.email if full_contact else None,
+            phone=_client_phone(cliente, full_contact=full_contact),
         )
         for cliente in clientes
     ]

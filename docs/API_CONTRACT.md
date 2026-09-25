@@ -4398,4 +4398,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `client_email` | string \| null | no | maxLength=255, format="email" |
 | `notes` | string \| null | no | maxLength=300 |
 
-Generado desde app.openapi() el 2026-09-25, commit e6c32d4
+Generado desde app.openapi() el 2026-09-25, commit 4ba0fd2

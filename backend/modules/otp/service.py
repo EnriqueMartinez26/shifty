@@ -40,14 +40,15 @@ OTP_GATE_EMAIL_MISMATCH = "verified_against_other_email"
 OTP_GATE_NO_DELIVERABLE_CONTACT = "client_without_deliverable_email"
 
 
-def mask_phone(phone: str | None) -> str:
-    """Ultimos 4 digitos. Alcanza para cruzar con un ticket y no deja el
-    numero completo en los logs; mismo criterio que `_mask_email` en
-    `modules/notifications/tasks.py`."""
+def mask_phone(phone: str | None, *, visible: int = 4) -> str:
+    """Ultimos ``visible`` digitos (4 por defecto). Alcanza para cruzar con un
+    ticket y no deja el numero completo en los logs; mismo criterio que
+    `_mask_email` en `modules/notifications/tasks.py`. El buscador del fiado
+    lo usa con 3 para el personal que no es admin (L3-03)."""
     digits = re.sub(r"\D", "", phone or "")
     if not digits:
         return "***"
-    return f"***{digits[-4:]}"
+    return f"***{digits[-visible:]}"
 
 
 def normalize_phone(raw_phone: str) -> str:

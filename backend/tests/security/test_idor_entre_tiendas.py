@@ -182,3 +182,30 @@ async def test_el_profesional_de_alfa_no_alcanza_el_fiado_ni_los_clientes_de_bet
             actor.user_id,
         }
         assert not ids & personal, "trae cuentas del personal"
+
+
+@en_el_loop_del_mundo
+async def test_el_buscador_de_fiado_le_enmascara_el_contacto_al_profesional(
+    mundo: Mundo,
+) -> None:
+    """L3-03 (2026-09-25): el profesional elige al cliente por nombre y los
+    ultimos 3 digitos del telefono; el email y el telefono completos son del
+    admin, como en la agenda, la busqueda y la lista de espera."""
+    alfa = mundo.alfa
+    digitos = alfa.tel_verificado.lstrip("+")
+    llamada = Llamada("GET", "/ledger/clients", params={"q": digitos[-8:]})
+
+    profesional = await mundo.actor(PROFESIONAL, alfa)
+    res = await mundo.llamar(profesional, llamada)
+    assert res.status_code == 200, res.text
+    [fila] = [f for f in res.json() if f["public_id"] == alfa.cliente]
+    assert fila["phone"] == f"***{digitos[-3:]}"
+    assert fila["email"] is None
+    assert digitos not in res.text and alfa.email_verificado not in res.text
+
+    admin = await mundo.actor(ADMIN_TIENDA, alfa)
+    res = await mundo.llamar(admin, llamada)
+    assert res.status_code == 200, res.text
+    [fila] = [f for f in res.json() if f["public_id"] == alfa.cliente]
+    assert str(fila["phone"]).lstrip("+") == digitos
+    assert fila["email"] == alfa.email_verificado

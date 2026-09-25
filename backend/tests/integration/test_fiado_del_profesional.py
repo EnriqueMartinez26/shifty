@@ -155,8 +155,66 @@ async def test_el_profesional_busca_solo_clientes_de_su_tienda(
     assert [c["public_id"] for c in por_telefono.json()] == [t.otro_cliente]
     ana = por_nombre.json()[0]
     assert ana["name"] == "Ana Fiadora"
-    assert ana["phone"] == "+5491144440001"
+    # L3-03 (2026-09-25): el profesional ve el telefono enmascarado (ultimos 3
+    # digitos) y no ve el email; buscar por digitos sigue funcionando.
+    assert ana["phone"] == "***001"
+    assert ana["email"] is None
     assert set(ana) == {"public_id", "name", "email", "phone"}
+    for res in (todos, por_nombre, por_telefono, con_rol):
+        assert "4444000" not in res.text and "@example.com" not in res.text
+
+
+@pytest.mark.asyncio
+async def test_el_admin_ve_el_contacto_completo_en_el_buscador(
+    client: AsyncClient,
+) -> None:
+    t = await _tienda(client, "fiado-admin-contacto")
+
+    res = await client.get(
+        "/ledger/clients", headers=auth_headers(t.admin), params={"q": "4444 0001"}
+    )
+
+    assert res.status_code == 200, res.text
+    [ana] = res.json()
+    assert ana["phone"] == "+5491144440001"
+    assert ana["email"] == "ana-fiado-admin-contacto@example.com"
+
+
+@pytest.mark.asyncio
+async def test_sin_nombre_el_profesional_no_ve_el_email_como_nombre(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """El nombre caia al email o al telefono completos si faltaba: para el
+    profesional cae al telefono enmascarado, en el buscador y en el resumen."""
+    t = await _tienda(client, "fiado-sin-nombre")
+    cliente = (
+        await test_session.execute(select(User).where(User.id == t.cliente))
+    ).scalar_one()
+    cliente.first_name = None
+    cliente.last_name = None
+    await test_session.commit()
+    carga = await client.post(
+        f"/ledger/customers/{t.cliente}/movements",
+        headers=t.profesional,
+        json={"movement_type": "charge", "amount": "100.00"},
+    )
+    assert carga.status_code == 200, carga.text
+
+    buscador = await client.get(
+        "/ledger/clients", headers=t.profesional, params={"q": "4444 0001"}
+    )
+    resumen = await client.get("/ledger/summary", headers=t.profesional)
+    del_admin = await client.get("/ledger/summary", headers=auth_headers(t.admin))
+
+    assert buscador.status_code == 200, buscador.text
+    assert buscador.json()[0]["name"] == "***001"
+    assert resumen.status_code == 200, resumen.text
+    assert resumen.json()["top_debtors"][0]["client_name"] == "***001"
+    for res in (buscador, resumen):
+        assert "@example.com" not in res.text and "4444000" not in res.text
+    assert del_admin.json()["top_debtors"][0]["client_name"] == (
+        "ana-fiado-sin-nombre@example.com"
+    )
 
 
 @pytest.mark.asyncio
