@@ -1536,15 +1536,64 @@ async def _drop_unsealed_link_or_log(
         await _drop_unsealed_link(db, nueva, previa, ids)
     except Exception as exc:
         store_id, payment_id, _ = ids
-        contexto = {
-            "store_id": store_id,
-            "payment_id": payment_id,
-            "preference_id": nueva,
-        }
-        logger.exception("panel_link_unsealed_drop_failed", **contexto)
-        report_exception(exc, **contexto)
-        with suppress(Exception):
-            await db.rollback()
+        await _unsealed_expire_failed(
+            db, exc, store_id=store_id, payment_id=payment_id, preference_id=nueva
+        )
+
+
+async def expire_unsealed_preference(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    appointment_id: str,
+    payment_id: str,
+    preference_id: str,
+) -> None:
+    """Manda a vencer una preferencia que MP creo y nadie va a registrar.
+
+    Para quien ya compenso (rollback o reserva revertida): publica
+    ``payment.preference.expire`` en su propia transaccion y NUNCA levanta;
+    un fallo queda en el log y en Sentry y el llamador sigue con su error.
+    Lo usa la reserva publica cuando MP devuelve una preferencia sin link de
+    checkout (seguimiento del #7 de la revision de 7abb9b4..e5579b6).
+    """
+    try:
+        await _discard_unsealed_link(
+            db,
+            store_id=store_id,
+            appointment_id=appointment_id,
+            payment_id=payment_id,
+            preference_id=preference_id,
+        )
+    except Exception as exc:
+        await _unsealed_expire_failed(
+            db,
+            exc,
+            store_id=store_id,
+            payment_id=payment_id,
+            preference_id=preference_id,
+        )
+
+
+async def _unsealed_expire_failed(
+    db: AsyncSession,
+    exc: Exception,
+    *,
+    store_id: str,
+    payment_id: str,
+    preference_id: str | None,
+) -> None:
+    """Log y Sentry con la preferencia (para vencerla a mano) y rollback
+    best-effort: la sesion puede haber quedado con un commit fallido."""
+    contexto = {
+        "store_id": store_id,
+        "payment_id": payment_id,
+        "preference_id": preference_id,
+    }
+    logger.exception("unsealed_preference_expire_failed", **contexto)
+    report_exception(exc, **contexto)
+    with suppress(Exception):
+        await db.rollback()
 
 
 async def _panel_link_phase_one(

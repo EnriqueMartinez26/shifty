@@ -78,7 +78,9 @@ from modules.payments.repository import PaymentRepository
 from modules.payments.service import (
     MercadoPagoAPIError,
     PaymentGatewayNotConnectedError,
+    ProviderPreferenceWithoutLinkError,
     ensure_payment_preference,
+    expire_unsealed_preference,
     mercadopago_budget,
 )
 from modules.promotions.model import PromotionRedemption
@@ -861,11 +863,15 @@ class PublicBookingService:
         """Link real de MP, ya fuera de la transaccion y sin el lock (regla 5).
 
         Si MP falla se compensa: turno, pago y canje se borran y se invalida
-        la disponibilidad (B1-10); el llamador libera la idempotencia.
+        la disponibilidad (B1-10); el llamador libera la idempotencia. Si MP
+        llego a crear la preferencia (respuesta sin link de checkout), se
+        manda a vencer despues de la compensacion, como en el panel.
         """
         payment = booking.payment
         if not request.payment_required or payment is None:
             return
+        # Leidos antes: la compensacion borra el turno y el cobro.
+        payment_id, appointment_id = payment.id, booking.appointment.id
         try:
             # Presupuesto total de la cadena de MP (F1-04): agotarlo es
             # MercadoPagoAPIError(transient=True) y se compensa como cualquier
@@ -892,6 +898,14 @@ class PublicBookingService:
             # TimeoutError por si un tope ajeno al presupuesto corta la red:
             # antes no era RuntimeError y el turno quedaba retenido sin link.
             await revert_failed_booking(self.db, self.cache, booking.appointment)
+            if isinstance(exc, ProviderPreferenceWithoutLinkError):
+                await expire_unsealed_preference(
+                    self.db,
+                    store_id=request.store_id,
+                    appointment_id=appointment_id,
+                    payment_id=payment_id,
+                    preference_id=exc.preference_id,
+                )
             raise _payment_link_failed(exc)
 
     async def _notify_client(self, request: _BookingRequest, booking: _Booking) -> None:

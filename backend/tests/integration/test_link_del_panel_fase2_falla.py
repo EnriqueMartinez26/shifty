@@ -152,7 +152,7 @@ async def test_si_vencer_el_link_sin_sellar_falla_sale_el_error_original(
     # El choque de version (409), no el fallo de la compensacion.
     assert res.status_code == 409, res.text
     assert res.json()["error_code"] == "CONCURRENT_MODIFICATION", res.text
-    fallos = [e for e in logs if e["event"] == "panel_link_unsealed_drop_failed"]
+    fallos = [e for e in logs if e["event"] == "unsealed_preference_expire_failed"]
     assert len(fallos) == 1, logs
     assert fallos[0]["preference_id"] == "pref-fase2-sin-vencer"
 
