@@ -79,6 +79,29 @@ ALLOWED_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+# Separador de la ``external_reference`` de un link: ``<turno>:<link_ref>``.
+# Los ids de turno son ULID (sin ``:``), asi que el turno es lo de antes.
+EXTERNAL_REFERENCE_SEPARATOR = ":"
+
+
+def external_reference_for(appointment_id: str, link_ref: str | None) -> str:
+    """``external_reference`` de un link de pago (revision de perf/f4-pay).
+
+    Cada link lleva un nonce propio (``Payment.link_ref``): el pago de MP no
+    trae ``preference_id``, asi que es la senal que controla Shifty para
+    saber de QUE link es un pago. Sin nonce (links creados antes del deploy)
+    es el id del turno, como siempre: esos links siguen matcheando.
+    """
+    if not link_ref:
+        return appointment_id
+    return f"{appointment_id}{EXTERNAL_REFERENCE_SEPARATOR}{link_ref}"
+
+
+def appointment_id_from_reference(reference: str) -> str:
+    """El turno de una ``external_reference``, con o sin nonce de link."""
+    return reference.split(EXTERNAL_REFERENCE_SEPARATOR, 1)[0]
+
+
 def is_placeholder_preference_id(preference_id: str | None) -> bool:
     """Un link placeholder (``pref_<turno>``): no existe en Mercado Pago."""
     return not preference_id or preference_id.startswith("pref_")
@@ -143,6 +166,10 @@ class Payment(BaseEntity):
         String(255), nullable=True, index=True
     )
     payment_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nonce del link VIGENTE: va en su ``external_reference`` y la integridad
+    # del webhook lo exige (revision de perf/f4-pay, 2026-09-25). NULL = link
+    # creado antes de la columna (referencia = id del turno).
+    link_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
     external_payment_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
@@ -188,6 +215,11 @@ class Payment(BaseEntity):
     def is_accredited(self) -> bool:
         """La plata efectivamente entro (aprobada o confirmada manual)."""
         return self.status in ACCREDITED_PAYMENT_STATUSES
+
+    @property
+    def current_external_reference(self) -> str:
+        """La ``external_reference`` del link vigente de este cobro."""
+        return external_reference_for(self.appointment_id, self.link_ref)
 
     @property
     def is_live_charge(self) -> bool:
@@ -333,6 +365,8 @@ __all__ = [
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
     "is_placeholder_preference_id",
+    "external_reference_for",
+    "appointment_id_from_reference",
     "JsonPrimitive",
     "JsonValue",
     "OutboxMessage",

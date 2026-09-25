@@ -110,6 +110,7 @@ The rows stay in `store_media` (the downgrade never deletes images). A later upg
 - Constraints: `NOT VALID` first, `VALIDATE CONSTRAINT` in a separate step.
 - Backfills in batches, never one `UPDATE` over the whole table; no `ALTER TYPE` that rewrites a table.
 - `lock_timeout` for the migration role (`alembic/env.py`, plan F0-06): a migration that waits for a lock fails fast instead of queueing every request behind it.
+- Data formats sent to third parties follow the same rule. `MERCADOPAGO_LINK_REF_ENABLED` (default `false`) makes every new payment link carry `<appointment>:<link_ref>` as its Mercado Pago `external_reference` (migration `f1b3d5e7a9c2` adds `payments.link_ref`). The release that ships it understands both formats but still generates the old one. Turn the flag on in a LATER deploy, once rolling back to a release older than `f1b3d5e7a9c2` is no longer an option: older code rejects payments whose reference carries a nonce. Turning it off again is safe (links with a nonce keep matching).
 
 ## 5b. Pre-deploy data checks
 

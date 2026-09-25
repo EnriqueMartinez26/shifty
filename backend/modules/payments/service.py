@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -30,6 +31,7 @@ from modules.payments.model import (
     PaymentGatewayConfig,
     PaymentStatus,
     is_placeholder_preference_id,
+    external_reference_for,
 )
 from modules.services.model import Service
 from modules.stores.media import absolute_media_url
@@ -188,6 +190,11 @@ def _placeholder_link(appointment_id: str) -> tuple[str, str]:
         f"pref_{appointment_id}",
         f"https://payments.shifty.local/pay/{appointment_id}",
     )
+
+
+def new_link_ref() -> str:
+    """Nonce de un link de pago: corto, unico y sin ``:``."""
+    return secrets.token_hex(8)
 
 
 def _is_placeholder_preference(preference_id: str | None) -> bool:
@@ -705,8 +712,14 @@ async def prepare_mercadopago_preference(
     service: Service,
     store_id: str,
     amount: Decimal,
+    link_ref: str | None,
 ) -> PreparedPreference | None:
-    """Lecturas de la preferencia (gateway, tienda, pagador). None: sin token."""
+    """Lecturas de la preferencia (gateway, tienda, pagador). None: sin token.
+
+    ``link_ref``: nonce del link que se pide; va en la ``external_reference``
+    (``external_reference_for``) para que el webhook sepa de que link es cada
+    pago sin depender de ``preference_id``, que el pago de MP no trae.
+    """
     config = await _get_gateway_config(db, store_id)
     if config is None or not _resolve_access_token(config):
         return None
@@ -740,7 +753,7 @@ async def prepare_mercadopago_preference(
                     "name": payer_name,
                     "email": _normalize_payer_email(payer_email),
                 },
-                "external_reference": appointment.id,
+                "external_reference": external_reference_for(appointment.id, link_ref),
                 "notification_url": _notification_url(store),
                 "back_urls": {
                     "success": _booking_return_url(store, payment),
@@ -918,6 +931,23 @@ def _reprice_existing_payment(
     return cambio
 
 
+def _retire_link(payment: Payment) -> None:
+    """El cobro deja de usar su link: queda un placeholder hasta el nuevo.
+
+    Con ``MERCADOPAGO_LINK_REF_ENABLED`` tambien rota ``link_ref`` a un nonce
+    que ningun link lleva: desde este momento un pago del link retirado no
+    pasa la integridad, aunque llegue antes de que se selle el nuevo (entre la
+    fase 1 y la 2 del link del panel). Sin esto el pago viejo se aplicaba en
+    esa ventana y la fase 2 chocaba con la version del cobro (revision de
+    perf/f4-pay, 2026-09-25).
+    """
+    payment.preference_id, payment.payment_link = _placeholder_link(
+        payment.appointment_id
+    )
+    if settings.MERCADOPAGO_LINK_REF_ENABLED:
+        payment.link_ref = new_link_ref()
+
+
 def _needs_provider_link(
     payment: Payment, *, importe_cambio: bool, create_provider_link: bool
 ) -> bool:
@@ -930,9 +960,7 @@ def _needs_provider_link(
     (misma clase que el bug del 2026-09-11).
     """
     if importe_cambio and not create_provider_link:
-        payment.preference_id, payment.payment_link = _placeholder_link(
-            payment.appointment_id
-        )
+        _retire_link(payment)
     return (
         importe_cambio
         or _is_placeholder_preference(payment.preference_id)
@@ -1047,6 +1075,9 @@ async def _attach_provider_link(
     # Import diferido: jobs importa este modulo.
     from modules.payments.jobs import persist_gateway_refresh
 
+    # Nonce propio de ESTE link (revision de perf/f4-pay): se sella con el
+    # link; un pago de un link anterior ya no pasa la integridad.
+    link_ref = new_link_ref() if settings.MERCADOPAGO_LINK_REF_ENABLED else None
     prepared = await prepare_mercadopago_preference(
         db,
         payment=payment,
@@ -1054,6 +1085,7 @@ async def _attach_provider_link(
         service=service,
         store_id=store_id,
         amount=amount,
+        link_ref=link_ref,
     )
     preference_payload = None
     if prepared is not None:
@@ -1074,6 +1106,7 @@ async def _attach_provider_link(
         raise RuntimeError("Mercado Pago no devolvio una preferencia valida")
     payment.preference_id = preference_id
     payment.payment_link = payment_link
+    payment.link_ref = link_ref
     payment.raw_payload = preference_payload
 
 
@@ -1166,9 +1199,7 @@ def _refresh_existing_payment(
     if deposit_rule is not None:
         payment.deposit_rule = deposit_rule
     if renew_expired_link and payment.status == PaymentStatus.EXPIRED.value:
-        payment.preference_id, payment.payment_link = _placeholder_link(
-            payment.appointment_id
-        )
+        _retire_link(payment)
     # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
     # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
     payment.apply_status(PaymentStatus.PENDING.value)

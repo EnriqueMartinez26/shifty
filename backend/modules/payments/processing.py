@@ -11,6 +11,7 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
 from modules.payments.model import (
     OutboxMessage,
+    appointment_id_from_reference,
     Payment,
     PaymentStatus,
 )
@@ -144,11 +145,12 @@ async def find_payment_for_webhook(
     raw_metadata = data.get("metadata")
     metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
 
+    referencia = payload.get("external_reference") or data.get("external_reference")
     appointment_id = (
         metadata.get("appointment_id")
         or payload.get("appointment_id")
-        or payload.get("external_reference")
-        or data.get("external_reference")
+        # ``<turno>:<link_ref>`` desde perf/f4-pay; el turno solo, antes.
+        or (appointment_id_from_reference(str(referencia)) if referencia else None)
     )
     preference_id = data.get("preference_id") or payload.get("preference_id")
     external_payment_id = (
@@ -215,7 +217,11 @@ async def _validate_payment_integrity(
     external_reference = str(
         data.get("external_reference") or payload.get("external_reference") or ""
     ).strip()
-    if external_reference and external_reference != payment.appointment_id:
+    # La referencia del link VIGENTE (``<turno>:<link_ref>``; el turno solo si
+    # el link es de antes de la columna): un pago de un link reemplazado no se
+    # aplica aunque MP no mande ``preference_id``, que el pago no trae
+    # (revision de perf/f4-pay, 2026-09-25).
+    if external_reference and external_reference != payment.current_external_reference:
         raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
 
     received_amount = data.get("transaction_amount")

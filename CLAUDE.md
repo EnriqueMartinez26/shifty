@@ -236,7 +236,9 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
+   `processing.py`); la integridad exige la `external_reference` del link
+   VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`; el pago
+   de MP no trae `preference_id`). `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
    webhook busca el cobro sin lock y lockea turno y después pago, como

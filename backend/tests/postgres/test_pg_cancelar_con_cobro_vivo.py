@@ -70,6 +70,8 @@ class _MercadoPago:
     def __init__(self) -> None:
         self._n = itertools.count(1)
         self.remotos: dict[str, dict[str, Any]] = {}
+        # (preferencia, external_reference) de cada link creado.
+        self.creadas: list[tuple[str, str]] = []
 
     async def __call__(
         self,
@@ -81,6 +83,10 @@ class _MercadoPago:
     ) -> dict[str, Any]:
         if method == "POST" and path == "/checkout/preferences":
             n = next(self._n)
+            assert json_body is not None
+            self.creadas.append(
+                (f"pref-d2-pg-{n}", str(json_body["external_reference"]))
+            )
             return {
                 "id": f"pref-d2-pg-{n}",
                 "init_point": f"https://www.mercadopago.com/checkout?pref=d2-{n}",
@@ -893,10 +899,16 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
     cero 5xx; nunca un cobro vivo sobre un turno cancelado; nunca un cobro
     ``pending`` con la preferencia vieja (``in_process`` no reabre, el grafo
     general no tiene ``expired -> pending``); un ``approved`` de la vieja solo
-    se registra si llego ANTES de la regeneracion (despues, la preferencia no
-    coincide y la integridad lo rechaza: ``applied`` false), y entonces con un
-    solo aviso al dueno.
+    se registra si llego ANTES de la regeneracion (despues, la referencia del
+    link no coincide y la integridad lo rechaza: ``applied`` false), y
+    entonces con un solo aviso al dueno; y a lo sumo UN link vivo por turno
+    (el del cobro): todo otro link creado tiene su vencimiento publicado.
+
+    Revision de perf/f4-pay (hallazgo sobre 5d41644): el pago tardio viene
+    como lo manda MP, SIN ``preference_id``; lo que distingue al link viejo es
+    su ``external_reference`` (``<turno>:<link_ref>``).
     """
+    monkeypatch.setattr(settings, "MERCADOPAGO_LINK_REF_ENABLED", True)
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     mp = _MercadoPago()
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
@@ -946,14 +958,25 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
         await conn.execute(
             text("update payments set status = 'expired', version = version + 1")
         )
-    viejas = {t: c["preferencia"] for t, c in (await _cobros(owner_engine)).items()}
+    cobros_viejos = await _cobros(owner_engine)
+    viejas = {t: c["preferencia"] for t, c in cobros_viejos.items()}
+    referencias = dict(mp.creadas)
+    async with owner_engine.connect() as conn:
+        filas = await conn.execute(text("select id, store_id from payments"))
+        tiendas: dict[str, str] = {str(f[0]): str(f[1]) for f in filas.all()}
     for i, turno in enumerate(turnos):
+        cobro = cobros_viejos[turno]
         mp.remotos[f"mp-tarde-{i}"] = {
             "id": f"mp-tarde-{i}",
             "status": estado_tardio,
-            "external_reference": turno,
-            "preference_id": viejas[turno],
-            "transaction_amount": (await _cobros(owner_engine))[turno]["importe"],
+            # Como MP: sin preference_id; la referencia es la del link VIEJO.
+            "external_reference": referencias[viejas[turno]],
+            "metadata": {
+                "appointment_id": turno,
+                "payment_id": cobro["pago_id"],
+                "store_id": tiendas[cobro["pago_id"]],
+            },
+            "transaction_amount": cobro["importe"],
             "currency_id": "ARS",
         }
 
@@ -1032,3 +1055,12 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
             assert len(avisos) == 1, avisos
         else:
             assert avisos == [], avisos
+        vencidas = {
+            p["preference_id"] for e, p in eventos if e == EVENT_PREFERENCE_EXPIRE
+        }
+        vivos = {
+            pref
+            for pref, ref in mp.creadas
+            if ref.split(":")[0] == turno and pref not in vencidas
+        }
+        assert vivos <= {final["preferencia"]}, (turno, vivos, final)

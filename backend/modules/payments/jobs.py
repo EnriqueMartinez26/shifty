@@ -1474,7 +1474,9 @@ async def _fetch_remote_payment(
     candidates = await search_mercadopago_payments(
         db,
         store_id=payment.store_id,
-        external_reference=payment.appointment_id,
+        # La del link vigente: con nonce desde perf/f4-pay (un link reemplazado
+        # tiene otra referencia y no se concilia contra este cobro).
+        external_reference=payment.current_external_reference,
         configs=configs,
         persist_refresh=persist_refresh,
     )
