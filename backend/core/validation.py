@@ -76,6 +76,19 @@ def _has_next_day(value: date) -> date:
 LocalDay = Annotated[date, AfterValidator(_has_next_day)]
 
 
+def _has_both_neighbors(value: date) -> date:
+    """La grilla de disponibilidad mira tambien el dia anterior y el
+    siguiente (turnos que cruzan la medianoche): el primer y el ultimo dia
+    representables desbordaban (500)."""
+    if value <= date.min or value >= date.max:
+        raise ValueError("La fecha esta fuera de rango")
+    return value
+
+
+# Dia de la grilla de disponibilidad del panel.
+GridDay = Annotated[date, AfterValidator(_has_both_neighbors)]
+
+
 _PHONE_SEPARATORS = re.compile(r"[\s\-\(\)\+]")
 
 

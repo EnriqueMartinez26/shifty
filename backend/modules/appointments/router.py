@@ -5,7 +5,7 @@ Responsabilidad única: recibir requests HTTP, delegar al AppointmentService
 y serializar la respuesta. Sin lógica de negocio.
 """
 
-from datetime import date as date_type, datetime
+from datetime import datetime
 from typing import Annotated, AsyncGenerator, List, Optional, cast
 
 from fastapi import Depends, Path, Query, status
@@ -31,7 +31,7 @@ from core.roles import (
     has_any_role,
     require_roles,
 )
-from core.validation import PUBLIC_ID_PATTERN, LocalDay
+from core.validation import PUBLIC_ID_PATTERN, GridDay, LocalDay
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.appointments.repository import AppointmentSearchRow
@@ -152,7 +152,7 @@ async def list_appointments_by_date(
 @router.get("/availability")
 async def get_availability(
     service_id: PublicIdQuery,
-    date: date_type,
+    date: GridDay,
     user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_db),
     availability_cache: Redis = Depends(get_availability_cache),

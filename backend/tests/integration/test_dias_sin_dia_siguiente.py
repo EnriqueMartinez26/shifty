@@ -14,6 +14,8 @@ from httpx import AsyncClient
 
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
+    create_service,
+    create_staff,
     register_and_login,
 )
 
@@ -57,3 +59,44 @@ async def test_el_ultimo_dia_representable_es_422_y_el_resto_sigue(
     ):
         res = await client.get(url, params=params, headers=headers)
         assert res.status_code == 200, (url, res.text)
+
+
+@pytest.mark.asyncio
+async def test_disponibilidad_del_panel_en_los_dias_extremos_422(
+    client: AsyncClient,
+) -> None:
+    """``GET /appointments/availability`` arma la grilla con el dia anterior
+    y el siguiente (turnos que cruzan la medianoche): con un profesional que
+    atiende ese dia, 9999-12-31 y 0001-01-01 desbordaban (500), con token y
+    sin el. El resto de los dias no cambia."""
+    _store, token = await register_and_login(
+        client, slug="dia-grilla", email="dia-grilla@t.com"
+    )
+    headers = auth_headers(token)
+    servicio = await create_service(client, token)
+    staff = await create_staff(client, token, servicio, email="pro-dia-grilla@t.com")
+    for dia_semana in range(7):
+        horario = await client.post(
+            f"/staff/{staff}/schedules",
+            headers=headers,
+            json={
+                "day_of_week": dia_semana,
+                "start_time": "00:00:00",
+                "end_time": "23:59:00",
+            },
+        )
+        assert horario.status_code == 200, horario.text
+
+    for auth in (headers, {}):
+        for dia, esperado in (
+            (ULTIMO, 422),
+            (PRIMERO, 422),
+            ("9999-12-30", 200),
+            ("0001-01-02", 200),
+        ):
+            res = await client.get(
+                "/appointments/availability",
+                params={"service_id": servicio, "date": dia},
+                headers=auth,
+            )
+            assert res.status_code == esperado, (dia, bool(auth), res.text[:200])
