@@ -1,6 +1,6 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, Path, Query, status
+from fastapi import Depends, Path, Query, Response, status
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,8 +86,11 @@ def _user_response(user: User) -> UserGlobalResponse:
 
 @router.get("/stores", response_model=list[StoreTableResponse])
 async def list_stores(
+    response: Response,
     search: str | None = Query(None, max_length=100),
-    is_active: bool | None = Query(True),
+    # FF-24 (aditivo): "all" no filtra por estado ("Todas" en el panel). Sin
+    # el parametro, solo activas, como siempre.
+    is_active: bool | Literal["all"] = Query(True),
     has_subscription: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     # Tope superior (regla 9: ge Y le): sin el, un offset por encima del bigint
@@ -98,9 +101,14 @@ async def list_stores(
     db: AsyncSession = Depends(get_db),
 ) -> list[StoreTableResponse]:
     repo = SuperAdminRepository(db)
+    estado = None if is_active == "all" else bool(is_active)
     stores = await repo.stores.list_stores(
-        search, is_active, has_subscription, limit, offset
+        search, estado, has_subscription, limit, offset
     )
+    # FF-24: el total viaja en un header para no cambiar la forma (lista) de
+    # la respuesta; mismos filtros, sin paginar.
+    total = await repo.stores.count_stores(search, estado, has_subscription)
+    response.headers["X-Total-Count"] = str(total)
     return [StoreTableResponse.model_validate(store) for store in stores]
 
 
