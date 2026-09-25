@@ -24,6 +24,9 @@ import pytest
 from httpx import AsyncClient
 
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _tienda
+from tests.integration.test_feature_flags_finance_and_public_privacy import (
+    auth_headers,
+)
 
 LEJANO = "9999-12-31T23:59:00+00:00"
 
@@ -40,5 +43,31 @@ async def test_reserva_publica_mas_alla_del_horizonte_422(client: AsyncClient) -
         res = await client.post(
             "/public/appointments",
             json=_reserva(t, f"horiz-publica-{i:04d}", starts_at=cuando),
+        )
+        assert res.status_code == 422, (cuando, res.text)
+
+
+@pytest.mark.asyncio
+async def test_reprogramar_desde_el_panel_mas_alla_de_dos_anios_422(
+    client: AsyncClient,
+) -> None:
+    t = await _tienda(client, "horiz-panel")
+    alta = await client.post(
+        "/appointments/",
+        headers=auth_headers(t.token),
+        json={
+            "service_id": t.service,
+            "staff_id": t.staff,
+            "starts_at": t.slot.isoformat(),
+            "idempotency_key": "horiz-panel-alta",
+        },
+    )
+    assert alta.status_code == 201, alta.text
+
+    for i, cuando in enumerate((LEJANO, _en(731))):
+        res = await client.patch(
+            f"/appointments/{alta.json()['public_id']}/reschedule",
+            headers=auth_headers(t.token),
+            json={"new_starts_at": cuando, "idempotency_key": f"horiz-panel-rs-{i}"},
         )
         assert res.status_code == 422, (cuando, res.text)

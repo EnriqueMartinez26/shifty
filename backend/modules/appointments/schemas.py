@@ -183,6 +183,12 @@ class AppointmentReschedule(BaseModel):
             val = val.replace(tzinfo=timezone.utc)
         if val <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro.")
+        # Mismo tope que el auto-turno: sin el, 9999-12-31 desbordaba
+        # ``new_starts_at + duracion`` (500; revision de perf/f4-back).
+        from core.utils import within_max_ahead
+
+        if not within_max_ahead(val, PANEL_SELF_BOOKING_MAX_AHEAD):
+            raise ValueError("La fecha esta fuera del rango de reservas.")
         return self
 
 
