@@ -361,7 +361,17 @@ class AppointmentService:
     # ------------------------------------------------------------------
 
     async def cancel(self, *, public_id: str, actor: User) -> Appointment:
-        """Cancela un turno verificando la transición de estado."""
+        """Cancela un turno verificando la transición de estado.
+
+        Decision del dueno (2026-09-25, D2): el personal que puede cancelar
+        (admin, recepcion, profesional) cancela tambien un turno con cobro
+        vivo, sin depender de la liberacion del admin. La cancelacion hace lo
+        mismo que ``release_pending`` con el cobro, en ESTA transaccion: lo
+        vence por la entidad y publica ``payment.preference.expire`` (el link
+        de MP lo vence el outbox despues, sin lock: regla 5). Orden de locks
+        turno -> pago (regla 7). Un pago ya acreditado no se toca: el turno se
+        cancela como siempre y la devolucion la decide la tienda.
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -370,13 +380,21 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
-        # El panel sigue mirando solo el estado del turno (D1 es del cliente).
-        reject_cancellation_while_awaiting_payment(appointment, live_payment=False)
 
         payload_before = {"status": appointment.status}
 
-        # El modelo valida internamente la transición (lanza excepción si inválida)
+        # El modelo valida internamente la transición (lanza excepción si
+        # inválida) ANTES de tocar el cobro: un turno terminal no vence nada.
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        payload_after: dict[str, JsonValue] = {"status": appointment.status}
+        payment = await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+        vencido = self._expire_live_charge(
+            appointment, payment, actor, reason="staff_cancel"
+        )
+        if vencido is not None:
+            payload_after["expired_payment_id"] = vencido.id
 
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
@@ -385,7 +403,7 @@ class AppointmentService:
             store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
-            payload_after={"status": appointment.status},
+            payload_after=payload_after,
         )
         self._publish_slot_released(appointment, reason="cancelled")
 
@@ -587,25 +605,45 @@ class AppointmentService:
                 http_status=HTTPStatus.CONFLICT,
                 error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
             )
-        if payment and payment.status == PaymentStatus.PENDING.value:
-            if payment.preference_id:
-                # Se vence despues del commit, desde el outbox (B1-04).
-                self.uow.outbox.publish(
-                    store_id=actor.store_id,
-                    event_type=EVENT_PREFERENCE_EXPIRE,
-                    payload={
-                        "appointment_id": appointment.id,
-                        "payment_id": payment.id,
-                        "preference_id": payment.preference_id,
-                    },
-                )
-            payment.apply_status(
-                PaymentStatus.EXPIRED.value,
+        self._expire_live_charge(
+            appointment, payment, actor, reason="manual_store_release"
+        )
+        return payment
+
+    def _expire_live_charge(
+        self,
+        appointment: Appointment,
+        payment: Payment | None,
+        actor: User,
+        *,
+        reason: str,
+    ) -> Payment | None:
+        """Vence el cobro vivo del turno; devuelve el cobro si lo vencio.
+
+        Unico lugar que suelta un cobro vivo desde el panel: lo comparten
+        ``release_pending`` (el admin libera) y ``cancel`` (cualquier personal
+        cancela, D2 2026-09-25). ``payment`` ya viene lockeado DESPUES del
+        turno (regla 7). El estado lo cambia la entidad (``apply_status``) y
+        el link de MP no se toca aca: se publica ``payment.preference.expire``
+        en esta misma transaccion y el outbox lo vence despues del commit, sin
+        lock ni transaccion abierta (B1-04, regla 5).
+        """
+        if payment is None or not payment.is_live_charge:
+            return None
+        if payment.preference_id:
+            self.uow.outbox.publish(
+                store_id=actor.store_id,
+                event_type=EVENT_PREFERENCE_EXPIRE,
                 payload={
-                    "reason": "manual_store_release",
-                    "released_by": actor.public_id,
+                    "appointment_id": appointment.id,
+                    "payment_id": payment.id,
+                    "preference_id": payment.preference_id,
                 },
             )
+        payment.apply_status(
+            PaymentStatus.EXPIRED.value,
+            payload={"reason": reason, "released_by": actor.public_id},
+        )
         return payment
 
     async def update_staff_notes(

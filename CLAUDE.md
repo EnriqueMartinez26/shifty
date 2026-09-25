@@ -167,12 +167,23 @@ Una instrucción en lenguaje natural no es una garantía.
    (hoy `b2c3d4e5f6a7_statechart_hardening.py`).
    `test_statechart_invariants.py` cubre el grafo en Python (terminales
    absorbentes, una sola fuente por región).
-3. **Un turno con pago pendiente no se cancela directo.** Pasa por
-   `AppointmentService.release_pending` (`modules/appointments/service.py`),
-   que vence el pago y publica `payment.preference.expire` en la misma
-   transacción; el link de MP lo anula después el outbox; la guarda es
-   `reject_cancellation_while_awaiting_payment` en
-   `modules/appointments/guards.py`.
+3. **Un turno con cobro vivo no se suelta sin vencer el cobro.** Cobro vivo
+   es `pending_payment` o un `Payment` en `pending`, p. ej. el link que el
+   panel genera sobre un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
+   `modules/payments/model.py`; en SQL, `live_charge_of` en
+   `modules/payments/repository.py`). El cliente no lo cancela ni lo
+   reprograma (`client_cancel_denial`/`client_reschedule_denial`, 409
+   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`). El personal que puede cancelar
+   (admin, recepción, profesional) sí, sin pasar por el admin (decisión del
+   dueño, 2026-09-25): `AppointmentService.cancel` y `release_pending` (solo
+   admin) comparten `_expire_live_charge`, que vence el pago por la entidad y
+   publica `payment.preference.expire` en la misma transacción, con locks
+   turno → pago; el link de MP lo anula después el outbox. Cancelar no toca
+   un pago acreditado. La reprogramación del panel sigue frenando solo
+   `pending_payment` (`reject_cancellation_while_awaiting_payment` en
+   `modules/appointments/guards.py`). (`test_link_del_panel_es_cobro_vivo.py`,
+   `test_cancelar_desde_el_panel_vence_el_cobro.py`,
+   `test_pg_cancelar_con_cobro_vivo.py`)
 4. **Lock pesimista antes de cualquier transición o reserva.**
    `lock_staff_row` / `lock_by_public_id` (`SELECT ... FOR UPDATE`) antes
    de leer disponibilidad. Prohibido "verificar y luego actuar" sin lock.

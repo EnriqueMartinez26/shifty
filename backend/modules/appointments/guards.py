@@ -1,9 +1,11 @@
-"""Guardas de transicion compartidas por todos los caminos que cancelan turnos.
+"""Guardas de transicion compartidas por los caminos que cancelan turnos.
 
 El grafo permite ``pending_payment -> cancelled`` porque un reembolso legitimo
 lo necesita (``sync_appointment_with_payment``). Lo que no puede pasar es que
-esa transicion la dispare *un actor humano* por una via que no venza antes la
-preferencia remota de Mercado Pago.
+esa transicion la dispare *un actor humano* por una via que no venza antes el
+cobro y la preferencia remota de Mercado Pago. Desde D2 (2026-09-25) la
+cancelacion del panel si los vence (``AppointmentService.cancel``); los caminos
+que no, se frenan con estas guardas.
 
 La guarda pertenece al evento, no al endpoint: por eso vive aca y no duplicada
 en cada router.
@@ -33,18 +35,18 @@ def awaits_payment(appointment: Appointment, *, live_payment: bool) -> bool:
 def reject_cancellation_while_awaiting_payment(
     appointment: Appointment, *, live_payment: bool
 ) -> None:
-    """Bloquea la cancelacion iniciada por una persona sobre un turno con cobro vivo.
+    """Bloquea la reprogramacion del panel sobre un turno con cobro vivo.
 
-    Liberar uno de estos turnos exige pasar por ``release()``, que vence la
-    preferencia en Mercado Pago antes de soltar el horario. Cancelarlo por otra
-    via dejaria el link de pago activo y el cliente podria pagar un turno que ya
-    no existe.
+    Reprogramar cancela el original sin vencer su cobro: el link de pago
+    quedaria activo y el cliente podria pagar un turno que ya no existe. Para
+    soltarlo estan ``cancel()`` (cualquier personal, vence el cobro: D2) y
+    ``release_pending()`` (admin). Desde D2 ``cancel()`` ya no la usa.
     """
     if awaits_payment(appointment, live_payment=live_payment):
         raise AppException(
             message=(
-                "Los turnos con un pago pendiente deben liberarse desde "
-                "la accion protegida para administradores"
+                "Un turno con un pago pendiente no se reprograma: cancelalo "
+                "(se vence el link de pago) y cargá uno nuevo"
             ),
             http_status=409,
             error_code="PAYMENT_APPOINTMENT_REQUIRES_RELEASE",
