@@ -6,7 +6,7 @@ Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 
 import hashlib
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Annotated
 
@@ -30,7 +30,6 @@ from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
-from core.utils import BOOKING_HORIZON_DAYS, today_local
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService, StoreRules
 from modules.appointments.model import Appointment
@@ -50,6 +49,7 @@ from modules.public_api.repository import PublicRepository
 from modules.public_api.service import (
     PublicBookingService,
     client_cancel_denial,
+    require_public_availability_day,
     client_may_leave,
     client_reschedule_denial,
     decide,
@@ -291,25 +291,12 @@ async def get_public_staff(
         ]
 
 
-# Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
-PUBLIC_AVAILABILITY_PAST_DAYS = 1
-PUBLIC_AVAILABILITY_FUTURE_DAYS = BOOKING_HORIZON_DAYS
-
-
 def _public_availability_date(raw: str) -> date:
     try:
         search_date = date.fromisoformat(raw)
     except ValueError:
         raise ValidationException("Fecha inválida")
-    today = today_local()
-    earliest = today - timedelta(days=PUBLIC_AVAILABILITY_PAST_DAYS)
-    latest = today + timedelta(days=PUBLIC_AVAILABILITY_FUTURE_DAYS)
-    if not earliest <= search_date <= latest:
-        raise ValidationException(
-            "La fecha esta fuera del rango de reservas: elegi una entre ayer "
-            f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
-        )
-    return search_date
+    return require_public_availability_day(search_date)
 
 
 @router.get("/availability")

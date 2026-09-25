@@ -23,7 +23,7 @@ en el router) vive tambien aca; la fijan los tests de
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
@@ -50,6 +50,7 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
+from core.utils import BOOKING_HORIZON_DAYS, today_local
 from infrastructure.persistence.models.appointment import ALLOWED_STATUS_TRANSITIONS
 from modules.appointments.guards import awaits_payment
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -205,6 +206,31 @@ def resolve_payment_requirement(
             )
         return False
     return viable  # "auto"
+
+
+# Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
+PUBLIC_AVAILABILITY_PAST_DAYS = 1
+PUBLIC_AVAILABILITY_FUTURE_DAYS = BOOKING_HORIZON_DAYS
+
+
+def require_public_availability_day(day: date) -> date:
+    """El dia de una consulta ANONIMA de disponibilidad, o 422.
+
+    Entre ayer y hoy + 120 dias locales (F1-11): cada fecha es una clave de
+    cache y la fecha libre dejaba su cardinalidad sin tope. La aplican
+    ``/public/availability`` y la rama sin token de
+    ``/appointments/availability`` (revision de perf/f4-back), que comparten
+    claves.
+    """
+    today = today_local()
+    earliest = today - timedelta(days=PUBLIC_AVAILABILITY_PAST_DAYS)
+    latest = today + timedelta(days=PUBLIC_AVAILABILITY_FUTURE_DAYS)
+    if not earliest <= day <= latest:
+        raise ValidationException(
+            "La fecha esta fuera del rango de reservas: elegi una entre ayer "
+            f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
+        )
+    return day
 
 
 # ---------------------------------------------------------------------------

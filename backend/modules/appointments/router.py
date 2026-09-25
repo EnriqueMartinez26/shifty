@@ -54,6 +54,7 @@ from modules.auth.dependencies import (
 
 # NOTA: use public_api as the stable runtime import path for public booking data access.
 from modules.public_api.repository import PublicRepository
+from modules.public_api.service import require_public_availability_day
 from modules.users.model import User, UserRole
 
 router = CanonicalAPIRouter(prefix="/appointments", tags=["Appointments"])
@@ -164,6 +165,9 @@ async def get_availability(
     """
     svc = AvailabilityService(db, availability_cache)
     if user is None:
+        # Anonima = disponibilidad publica por otra puerta (mismas claves de
+        # cache que /public/availability): el mismo horizonte de F1-11.
+        require_public_availability_day(date)
         async with tenant_bypass(db):
             repo = PublicRepository(db)
             service = await repo.get_service_by_public_id(service_id)

@@ -68,7 +68,7 @@ async def test_disponibilidad_del_panel_en_los_dias_extremos_422(
     """``GET /appointments/availability`` arma la grilla con el dia anterior
     y el siguiente (turnos que cruzan la medianoche): con un profesional que
     atiende ese dia, 9999-12-31 y 0001-01-01 desbordaban (500), con token y
-    sin el. El resto de los dias no cambia."""
+    sin el. Con token el resto de los dias no cambia."""
     _store, token = await register_and_login(
         client, slug="dia-grilla", email="dia-grilla@t.com"
     )
@@ -87,12 +87,14 @@ async def test_disponibilidad_del_panel_en_los_dias_extremos_422(
         )
         assert horario.status_code == 200, horario.text
 
-    for auth in (headers, {}):
+    # Sin token rige ademas el horizonte publico (F1-11): toda fecha lejana
+    # es 422 (test_horizonte_anonimo_y_lista_de_espera.py).
+    for auth, cercanas in ((headers, 200), ({}, 422)):
         for dia, esperado in (
             (ULTIMO, 422),
             (PRIMERO, 422),
-            ("9999-12-30", 200),
-            ("0001-01-02", 200),
+            ("9999-12-30", cercanas),
+            ("0001-01-02", cercanas),
         ):
             res = await client.get(
                 "/appointments/availability",
