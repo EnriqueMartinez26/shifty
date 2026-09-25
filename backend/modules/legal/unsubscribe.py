@@ -21,6 +21,8 @@ from core.config import settings
 from core.security import derive_key
 
 UNSUBSCRIBE_TOKEN_TTL_DAYS = 90
+# Dos ULID, un epoch y una firma de 43 caracteres entran holgados.
+MAX_TOKEN_LENGTH = 256
 _PURPOSE = "marketing-unsubscribe"
 
 
@@ -43,12 +45,21 @@ def make_unsubscribe_token(
 def read_unsubscribe_token(
     token: str, *, now: datetime | None = None
 ) -> tuple[str, str] | None:
-    """``(store_id, client_id)`` si la firma es valida y no vencio; si no, None."""
+    """``(store_id, client_id)`` si la firma es valida y no vencio; si no, None.
+
+    Un token no ASCII o mas largo que ``MAX_TOKEN_LENGTH`` se descarta antes
+    de comparar, y la firma se compara en bytes: ``hmac.compare_digest`` sobre
+    ``str`` levanta ``TypeError`` con caracteres no ASCII, y eso era un 500
+    anonimo (revision de fix/legal-datos, 2026-09-25).
+    """
+    if not token or len(token) > MAX_TOKEN_LENGTH or not token.isascii():
+        return None
     partes = token.split(".")
     if len(partes) != 4 or not all(partes):
         return None
     store_id, client_id, vence, firma = partes
-    if not hmac.compare_digest(firma, _sign(f"{store_id}.{client_id}.{vence}")):
+    esperada = _sign(f"{store_id}.{client_id}.{vence}")
+    if not hmac.compare_digest(firma.encode("ascii"), esperada.encode("ascii")):
         return None
     try:
         vence_en = int(vence)

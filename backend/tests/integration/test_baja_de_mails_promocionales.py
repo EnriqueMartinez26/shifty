@@ -182,3 +182,23 @@ async def test_el_mail_de_volver_trae_el_link_de_baja_que_funciona(
     )
     assert res.status_code == 200, res.text
     assert len(await _bajas(test_session)) == 1
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["a.b.1.é", "é.b.1.firma", "a.b.1.", "", "a" * 300, "a.b.c.d." * 40],
+)
+def test_un_token_no_ascii_vacio_o_enorme_no_vale(token: str) -> None:
+    """Revision de fix/legal-datos (2026-09-25): ``hmac.compare_digest`` sobre
+    ``str`` levanta ``TypeError`` con una firma no ASCII (500 anonimo)."""
+    assert read_unsubscribe_token(token, now=AHORA) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["a.b.1.é", "éé.b.1.x", "x" * 256])
+async def test_la_api_responde_400_y_no_500_con_un_token_raro(
+    client: AsyncClient, token: str
+) -> None:
+    res = await client.get("/public/unsubscribe", params={"token": token})
+    assert res.status_code == 400, res.text
+    assert res.json()["error_code"] == "UNSUBSCRIBE_LINK_INVALID"
