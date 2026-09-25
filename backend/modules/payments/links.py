@@ -53,6 +53,13 @@ from modules.payments.model import (
 # ventana: reconoce un link retirado del historial a cualquier edad.
 RETIRED_LINK_SEARCH_DAYS = 7
 
+# Cuantos links retirados por cobro busca la conciliacion en MP, los mas
+# recientes (revision de e5579b6..3b977a9, #1). Sin tope, un cobro regenerado
+# muchas veces hacia 1 + N busquedas y se comia el presupuesto de la fase A y
+# los limites de Celery: con 2, a lo sumo 3 busquedas por cobro. Un pago de un
+# link mas viejo lo sigue reconociendo el webhook (que no usa este tope).
+RETIRED_LINK_SEARCH_MAX = 2
+
 TipoDeLink = Literal["vigente", "retirado", "desconocido"]
 
 
@@ -215,6 +222,7 @@ async def retired_link_references(
 
 __all__ = [
     "RETIRED_LINK_SEARCH_DAYS",
+    "RETIRED_LINK_SEARCH_MAX",
     "LinkDelPago",
     "adopt_retired_link",
     "classify_payment_link",

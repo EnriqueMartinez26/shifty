@@ -617,15 +617,15 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Tamaño y forma
 
 29. **Función de más de 80 líneas necesita justificación en el PR.** En el
-    backend quedan 12 al 2026-09-25 (AST, `end_lineno - lineno + 1 > 80`,
-    sin `tests/` ni `alembic/`): `_build_store_notification`,
-    `_claim_and_expire_preferences` y `_expire_unpaid_appointments`
-    (`payments/jobs.py`), `book_for_client` y `_find_suggestion`
+    backend quedan 11 al 2026-09-25 (AST, `end_lineno - lineno + 1 > 80`,
+    sin `tests/` ni `alembic/`): `_build_store_notification` y
+    `_claim_and_expire_preferences` (`payments/jobs.py`), `book_for_client` y `_find_suggestion`
     (`appointments/service.py`), `availability.get_available_slots`,
     `ledger/router.py::get_ledger_summary`,
     `stores/router.py::update_my_store`,
     `core/security_middleware.py::__call__` y tres en `scripts/`.
-    `process_outbox_batch` y `OtpService.request_code` ya bajaron del tope.
+    `process_outbox_batch`, `OtpService.request_code` y
+    `_expire_unpaid_appointments` ya bajaron del tope.
     Son deuda, no permiso. `create_public_booking` y `client_reschedule_appointment`
     se descompusieron (B1-12). El front no está medido acá. Ante una
     validación nueva se extrae, no se apila.
@@ -710,7 +710,7 @@ Una instrucción en lenguaje natural no es una garantía.
   RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
-  las 12 funciones de más de 80 líneas que quedan en el backend (regla 29);
+  las 11 funciones de más de 80 líneas que quedan en el backend (regla 29);
   zona horaria por tienda; unicidad de email de clientes POR tienda (hoy es
   global, así que un mismo email no puede ser cliente en dos tiendas);
   migrar los commits de routers/repos que quedan en
