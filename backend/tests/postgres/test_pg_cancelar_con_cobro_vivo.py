@@ -10,11 +10,10 @@ busca el cobro sin lock y despues lockea turno y pago, F1-18), asi que se
 serializan sobre la fila del turno y no hay deadlock. Lo que el codigo
 garantiza, sea cual sea el orden, y lo que se fija aca:
 
-- cero 5xx; el webhook se aplica (200) y TODAS las cancelaciones responden
-  200: cancelar un turno ya cancelado es un no-op de
-  ``Appointment.apply_status_transition`` (mismo estado, sin error), como
-  antes de D2. Lo que no se repite es el vencimiento: la segunda cancelacion
-  encuentra el cobro ya vencido (o acreditado) y no publica otro.
+- cero 5xx; el webhook se aplica (200); UNA cancelacion responde 200 y las
+  demas 409 ``APPOINTMENT_ALREADY_CANCELLED`` (CLAUDE.md §4, "1 exito, N-1
+  conflictos"; revision de perf/f4-pay): no republican el cupo ni vencen
+  otra vez.
 - estado final: turno ``cancelled`` y pago ``approved``. La plata que entro
   queda registrada para poder devolverla: el grafo del pago permite
   ``expired -> approved`` a proposito (un pago real que llega tarde no se
@@ -272,8 +271,14 @@ async def test_cancelar_con_cobro_vivo_contra_el_pago_aprobado_queda_consistente
         (webhook_res,) = [
             r for r, tipo in zip(propias, tipos, strict=True) if tipo == "webhook"
         ]
-        # Cancelar lo ya cancelado es un no-op (mismo estado): todas 200.
-        assert cancelaciones == [200] * CANCELACIONES, cancelaciones
+        # Una gana; las demas encuentran el turno ya cancelado bajo el lock.
+        assert cancelaciones == [200] + [409] * (CANCELACIONES - 1), cancelaciones
+        codigos = {
+            r.json()["error_code"]
+            for r, tipo in zip(propias, tipos, strict=True)
+            if tipo == "cancelar" and r.status_code == 409
+        }
+        assert codigos == {"APPOINTMENT_ALREADY_CANCELLED"}, codigos
         assert webhook_res.status_code == 200, webhook_res.text
         cuerpo = webhook_res.json()
         assert cuerpo.get("data", cuerpo)["applied"] is True, cuerpo

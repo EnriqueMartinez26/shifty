@@ -377,6 +377,17 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
+        # Ya cancelado: conflicto, no un no-op (CLAUDE.md §4, "1 exito, N-1
+        # conflictos"). ``apply_status_transition`` deja pasar el mismo estado
+        # y antes se republicaban el cupo liberado y la auditoria (revision de
+        # perf/f4-pay, 2026-09-25). Bajo el lock: dos cancelaciones a la vez
+        # no pueden pasar las dos.
+        if appointment.status == AppointmentStatus.CANCELLED.value:
+            raise AppException(
+                message="El turno ya estaba cancelado",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="APPOINTMENT_ALREADY_CANCELLED",
+            )
 
         payload_before = {"status": appointment.status}
 
