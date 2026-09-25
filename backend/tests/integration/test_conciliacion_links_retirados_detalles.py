@@ -80,8 +80,9 @@ async def test_un_cobro_con_id_de_mp_no_aprobado_tambien_busca_sus_links_retirad
     )
 
     assert remoto == aprobado
-    # La vigente ya se consulto por id: solo los retirados, dentro del tope.
-    assert busquedas == ["turno-d:retirado-0"]
+    # Tope de 3 consultas: el id, la referencia vigente y un retirado
+    # (revision de 3b977a9..6c84d46, #5).
+    assert busquedas == ["turno-d:vigente", "turno-d:retirado-0"]
 
 
 @pytest.mark.asyncio
@@ -120,7 +121,51 @@ async def test_sin_aprobado_en_los_retirados_gana_el_pago_del_id(
     )
 
     assert remoto == {"id": "mp-rechazado", "status": "rejected"}
+    # El id, la vigente y UN retirado: la misma cota de 3 que sin id.
+    assert busquedas == ["turno-d2:vigente", "turno-d2:retirado-0"]
     assert len(busquedas) == RETIRED_LINK_SEARCH_MAX
+
+
+@pytest.mark.asyncio
+async def test_un_rechazo_reintentado_y_aprobado_en_el_link_vigente_se_encuentra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision de 3b977a9..6c84d46 (#5). El cliente pago con una tarjeta
+    rechazada (``external_payment_id`` = ese rechazo) y reintento en el MISMO
+    link con otra que se aprobo; el webhook del aprobado se perdio. Consultar
+    solo por el id devolvia el rechazo: el cobro aprobado no se conciliaba.
+    Ahora la rama del id tambien busca la referencia del link vigente."""
+    cobro = Payment(
+        id="cobro-d3",
+        store_id="tienda-d",
+        appointment_id="turno-d3",
+        amount=Decimal("100"),
+        link_ref="vigente",
+        provider="mercadopago",
+        external_payment_id="mp-rechazado",
+    )
+    aprobado = {"id": "mp-reintento", "status": "approved"}
+
+    async def por_id(_db: Any, *, payment_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return {"id": payment_id, "status": "rejected"}
+
+    async def buscar(
+        _db: Any, *, external_reference: str, **_kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return [aprobado] if external_reference == "turno-d3:vigente" else []
+
+    monkeypatch.setattr(jobs, "fetch_mercadopago_payment", por_id)
+    monkeypatch.setattr(jobs, "search_mercadopago_payments", buscar)
+
+    remoto = await jobs._fetch_remote_payment(
+        None,  # type: ignore[arg-type]
+        cobro,
+        {},
+        None,
+        (),
+    )
+
+    assert remoto == aprobado
 
 
 @pytest.mark.asyncio

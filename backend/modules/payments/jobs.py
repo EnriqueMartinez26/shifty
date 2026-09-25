@@ -1616,12 +1616,14 @@ async def _fetch_remote_payment(
     ``limite`` se mira antes de CADA consulta: levanta ``_PresupuestoAgotado``
     aunque sea a mitad del cobro (revision de e5579b6..3b977a9, #1).
 
-    Con id de MP, si ese pago no esta aprobado tambien se buscan los links
-    retirados (revision #4 d): un rechazo sobre el link vigente no puede
-    tapar un pago aprobado de un link viejo cuyo webhook se perdio.
+    Con id de MP, si ese pago no esta aprobado tambien se buscan la referencia
+    vigente y UN link retirado, con la misma cota de 3 consultas (revision
+    #4 d y revision de 3b977a9..6c84d46, #5): un rechazo no puede tapar un
+    reintento aprobado en el mismo link ni un pago aprobado de un link viejo
+    cuyo webhook se perdio.
     """
     primero: dict[str, Any] | None = None
-    referencias: tuple[str, ...] = tuple(retiradas[:RETIRED_LINK_SEARCH_MAX])
+    retirados_en_tope = RETIRED_LINK_SEARCH_MAX
     if payment.external_payment_id:
         _consultar_si_alcanza(limite)
         with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
@@ -1634,8 +1636,12 @@ async def _fetch_remote_payment(
             )
         if primero is None or _es_aprobado(primero):
             return primero
-    else:
-        referencias = (payment.current_external_reference, *referencias)
+        # La consulta por id ocupa uno de los lugares del tope.
+        retirados_en_tope -= 1
+    referencias = (
+        payment.current_external_reference,
+        *retiradas[:retirados_en_tope],
+    )
     for referencia in referencias:
         _consultar_si_alcanza(limite)
         # Tope por consulta, refresh OAuth y reintento incluidos (#3).
