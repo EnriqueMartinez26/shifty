@@ -32,6 +32,8 @@ import modules.notifications.tasks as tasks
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditLog
 from modules.ledger.model import CustomerLedger
+from modules.legal.unsubscribe import make_unsubscribe_token
+from modules.notifications.model import Notification
 from modules.payments.model import Payment
 from modules.users.model import User
 from modules.waitlist.model import WaitlistEntry
@@ -118,6 +120,16 @@ async def _caso(
     )
     assert carga.status_code == 200, carga.text
     return c
+
+
+async def _saldar(client: AsyncClient, c: _Caso) -> None:
+    res = await client.post(
+        f"/ledger/customers/{c.cliente}/movements",
+        headers=auth_headers(c.token),
+        json={"movement_type": "payment", "amount": "1500.00"},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["balance_after"] == "0.00"
 
 
 async def _cancelar(client: AsyncClient, c: _Caso) -> None:
@@ -223,9 +235,29 @@ async def test_anonimizar_borra_los_datos_y_conserva_importes_fechas_y_estados(
 ) -> None:
     c = await _caso(client, test_session, monkeypatch, "titular-anonimiza")
     await _cancelar(client, c)
+    await _saldar(client, c)
     antes = await test_session.get(Appointment, c.turno)
     assert antes is not None
     inicio, precio = antes.starts_at, antes.price_amount
+    # Avisos del panel: uno de un turno del cliente (con su nombre) y uno sin
+    # turno, que no se toca.
+    test_session.add_all(
+        [
+            Notification(
+                store_id=antes.store_id,
+                type="appointment.cancelled",
+                title="Un cliente cancelo su turno",
+                body=f"{NOMBRE} cancelo su turno de Corte.",
+                appointment_id=antes.id,
+            ),
+            Notification(
+                store_id=antes.store_id,
+                type="subscription.expiring",
+                title="Tu suscripcion vence pronto",
+                body="Quedan 3 dias.",
+            ),
+        ]
+    )
     test_session.add(
         WaitlistEntry(
             store_id=antes.store_id,
@@ -262,12 +294,19 @@ async def test_anonimizar_borra_los_datos_y_conserva_importes_fechas_y_estados(
     assert NOMBRE not in turno.client_name
     assert turno.status == "cancelled"
     assert turno.starts_at == inicio and turno.price_amount == precio
-    movimiento = (
-        await test_session.execute(
-            select(CustomerLedger).where(CustomerLedger.client_id == c.cliente)
+    movimientos = (
+        (
+            await test_session.execute(
+                select(CustomerLedger)
+                .where(CustomerLedger.client_id == c.cliente)
+                .order_by(CustomerLedger.created_at)
+            )
         )
-    ).scalar_one()
-    assert movimiento.notes is None and movimiento.amount == Decimal("1500.00")
+        .scalars()
+        .all()
+    )
+    assert [m.amount for m in movimientos] == [Decimal("1500.00")] * 2
+    assert all(m.notes is None for m in movimientos)
     espera = (
         await test_session.execute(
             select(WaitlistEntry).where(WaitlistEntry.client_id == c.cliente)
@@ -295,6 +334,78 @@ async def test_anonimizar_borra_los_datos_y_conserva_importes_fechas_y_estados(
     )
     assert sorted(a.action for a in auditoria) == ["anonymize", "export"]
     _sin_datos_personales(auditoria, c.email)
+    avisos = {
+        n.type: n
+        for n in (
+            await test_session.execute(
+                select(Notification).where(Notification.store_id == antes.store_id)
+            )
+        ).scalars()
+    }
+    del_turno = avisos["appointment.cancelled"]
+    assert del_turno.body is not None and NOMBRE not in del_turno.body
+    assert "Rosa" not in del_turno.title
+    assert avisos["subscription.expiring"].body == "Quedan 3 dias."
+
+
+@pytest.mark.asyncio
+async def test_con_deuda_en_el_fiado_no_se_anonimiza(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c = await _caso(client, test_session, monkeypatch, "titular-deuda")
+    await _cancelar(client, c)
+
+    res = await client.post(
+        f"/users/{c.cliente}/anonymize", headers=auth_headers(c.token)
+    )
+
+    assert res.status_code == 409, res.text
+    assert res.json()["error_code"] == "CLIENT_HAS_DEBT"
+    test_session.expire_all()
+    cliente = await test_session.get(User, c.cliente)
+    assert cliente is not None and cliente.email == c.email
+
+
+@pytest.mark.asyncio
+async def test_la_exportacion_trae_el_consentimiento_de_la_espera_y_la_baja(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c = await _caso(client, test_session, monkeypatch, "titular-consent")
+    turno = await test_session.get(Appointment, c.turno)
+    assert turno is not None
+    test_session.add(
+        WaitlistEntry(
+            store_id=turno.store_id,
+            client_id=c.cliente,
+            client_name=NOMBRE,
+            client_phone=TELEFONO.lstrip("+"),
+            service_id=turno.service_id,
+            window_starts_at=turno.starts_at,
+            window_ends_at=turno.starts_at + timedelta(hours=2),
+            terms_accepted_at=turno.starts_at,
+            terms_version="2026-09-25",
+            privacy_version="2026-09-25",
+        )
+    )
+    await test_session.commit()
+
+    antes = await client.get(
+        f"/users/{c.cliente}/export", headers=auth_headers(c.token)
+    )
+    baja = await client.get(
+        "/public/unsubscribe",
+        params={"token": make_unsubscribe_token(turno.store_id, c.cliente)},
+    )
+    despues = await client.get(
+        f"/users/{c.cliente}/export", headers=auth_headers(c.token)
+    )
+
+    assert baja.status_code == 200, baja.text
+    [espera] = antes.json()["waitlist"]
+    assert espera["terms_version"] == "2026-09-25"
+    assert espera["privacy_version"] == "2026-09-25"
+    assert antes.json()["marketing_opted_out_at"] is None
+    assert despues.json()["marketing_opted_out_at"] is not None
 
 
 @pytest.mark.asyncio

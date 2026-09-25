@@ -7,6 +7,7 @@ junto a la RLS, CLAUDE.md §2). Sin reglas de negocio: las decide el service.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import exists, select, update
@@ -14,6 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment
 from modules.ledger.model import CustomerLedger
+from modules.ledger.service import current_balance
+from modules.legal.model import MarketingOptOut
+from modules.notifications.model import Notification
 from modules.payments.model import LIVE_CHARGE_PAYMENT_STATUSES, Payment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.users.model import User, UserRole
@@ -145,6 +149,41 @@ class DataSubjectRepository:
                     )
                 )
             )
+        )
+
+    async def ledger_balance(self, store_id: str, client_id: str) -> Decimal:
+        """Saldo vigente del fiado: el ultimo ``balance_after``, en SQL
+        (regla 11), la misma consulta que usa el fiado."""
+        return await current_balance(self.db, store_id, client_id)
+
+    async def marketing_opted_out_at(
+        self, store_id: str, client_id: str
+    ) -> datetime | None:
+        fila = await self.db.execute(
+            select(MarketingOptOut.opted_out_at).where(
+                MarketingOptOut.store_id == store_id,
+                MarketingOptOut.client_id == client_id,
+            )
+        )
+        return fila.scalar_one_or_none()
+
+    async def scrub_notifications(
+        self, store_id: str, client_id: str, body: str
+    ) -> None:
+        """Avisos del panel ligados a turnos del cliente (``appointment_id``):
+        el cuerpo nombra al cliente. Los titulos son textos fijos."""
+        turnos = select(Appointment.id).where(
+            Appointment.store_id == store_id,
+            Appointment.client_id == client_id,
+        )
+        await self.db.execute(
+            update(Notification)
+            .where(
+                Notification.store_id == store_id,
+                Notification.appointment_id.in_(turnos),
+            )
+            .values(body=body)
+            .execution_options(synchronize_session=False)
         )
 
     async def scrub_appointments(

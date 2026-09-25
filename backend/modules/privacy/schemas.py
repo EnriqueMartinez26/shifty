@@ -73,12 +73,18 @@ class ExportedWaitlistEntry(BaseModel):
     client_email: str | None = None
     notes: str | None = None
     terms_accepted_at: datetime | None = None
+    terms_version: str | None = None
+    privacy_version: str | None = None
     created_at: datetime | None = None
 
 
 class ClientDataExport(BaseModel):
-    """Todo lo que la tienda guarda del cliente, en JSON. No incluye lo que
-    se purga solo (OTP, avisos, cola de mails) ni la auditoria."""
+    """Lo que la tienda guarda del cliente, en JSON: ficha, turnos, cobros,
+    fiado, lista de espera y la baja de los mails promocionales. No incluye
+    los codigos de verificacion (se purgan a los 7 dias de vencer), la cola
+    de mails y eventos (se purga a los 90 dias), los avisos del panel (los
+    leidos se purgan a los 180 dias; los no leidos se conservan) ni la
+    auditoria."""
 
     exported_at: datetime
     store_id: str
@@ -87,6 +93,8 @@ class ClientDataExport(BaseModel):
     payments: list[ExportedPayment]
     ledger: list[ExportedLedgerMovement]
     waitlist: list[ExportedWaitlistEntry]
+    # Baja del mail "volve a reservar" (art. 27); None si no se dio de baja.
+    marketing_opted_out_at: datetime | None = None
 
 
 class AnonymizeResponse(BaseModel):

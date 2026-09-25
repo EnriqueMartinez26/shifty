@@ -3223,6 +3223,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `payments` | array<ExportedPayment> | yes |  |
 | `ledger` | array<ExportedLedgerMovement> | yes |  |
 | `waitlist` | array<ExportedWaitlistEntry> | yes |  |
+| `marketing_opted_out_at` | string \| null | no | format="date-time" |
 
 ### ClientRescheduleRequest
 
@@ -3408,6 +3409,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `client_email` | string \| null | no |  |
 | `notes` | string \| null | no |  |
 | `terms_accepted_at` | string \| null | no | format="date-time" |
+| `terms_version` | string \| null | no |  |
+| `privacy_version` | string \| null | no |  |
 | `created_at` | string \| null | no | format="date-time" |
 
 ### ForgotPasswordRequest
@@ -4656,4 +4659,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit aa95cfc
+Generado desde app.openapi() el 2026-09-25, commit 023f9dc

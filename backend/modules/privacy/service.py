@@ -10,7 +10,9 @@ Dueno de la transaccion (commit solo aca, CLAUDE.md §2).
   y notas por valores neutros y deja al cliente inactivo. Conserva importes,
   fechas y estados (contabilidad). No revoca nada mas: un cliente no tiene
   sesiones del panel. Se rechaza (409) con un cobro vivo o un turno activo a
-  futuro: primero se cierra eso (cobrar o cancelar), despues se anonimiza.
+  futuro o saldo en el fiado: primero se cierra eso (cobrar, cancelar o
+  saldar), despues se anonimiza. Tambien neutraliza el cuerpo de los avisos
+  del panel ligados a sus turnos.
 
 Cada pedido deja una fila de auditoria con el hecho (quien, cuando, sobre que
 id), nunca con los datos. Solo cuentas con rol cliente de la tienda del
@@ -76,6 +78,21 @@ class ClientHasActiveAppointmentsException(AppException):
         )
 
 
+class ClientHasDebtException(AppException):
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "El cliente tiene saldo en el fiado. Saldalo antes de anonimizarlo."
+            ),
+            http_status=HTTPStatus.CONFLICT,
+            error_code="CLIENT_HAS_DEBT",
+        )
+
+
+# Cuerpo neutro de los avisos del panel de sus turnos (el titulo es fijo).
+ANONYMIZED_NOTIFICATION_BODY = "Aviso sobre un cliente anonimizado."
+
+
 class DataSubjectService:
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
@@ -102,6 +119,9 @@ class DataSubjectService:
             waitlist=[
                 _waitlist(w) for w in await self.repo.waitlist(store_id, client.id)
             ],
+            marketing_opted_out_at=await self.repo.marketing_opted_out_at(
+                store_id, client.id
+            ),
         )
         await self._audit(AuditAction.EXPORT, client.id, store_id, actor)
         await self.db.commit()
@@ -118,6 +138,8 @@ class DataSubjectService:
             store_id, client.id, datetime.now(timezone.utc)
         ):
             raise ClientHasActiveAppointmentsException()
+        if await self.repo.ledger_balance(store_id, client.id) != 0:
+            raise ClientHasDebtException()
 
         client.first_name = ANONYMIZED_NAME
         client.last_name = None
@@ -137,6 +159,9 @@ class DataSubjectService:
             },
         )
         await self.repo.scrub_ledger(store_id, client.id)
+        await self.repo.scrub_notifications(
+            store_id, client.id, ANONYMIZED_NOTIFICATION_BODY
+        )
         await self.repo.scrub_waitlist(
             store_id,
             client.id,
@@ -237,5 +262,7 @@ def _waitlist(w: Any) -> ExportedWaitlistEntry:
         client_email=w.client_email,
         notes=w.notes,
         terms_accepted_at=w.terms_accepted_at,
+        terms_version=w.terms_version,
+        privacy_version=w.privacy_version,
         created_at=w.created_at,
     )

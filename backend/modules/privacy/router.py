@@ -50,8 +50,9 @@ async def anonymize_client(
 ) -> AnonymizeResponse:
     """Supresion: reemplaza los datos personales del cliente por valores
     neutros y lo deja inactivo; conserva importes, fechas y estados. 409
-    ``CLIENT_HAS_LIVE_CHARGE`` / ``CLIENT_HAS_ACTIVE_APPOINTMENTS`` si tiene
-    un cobro abierto o turnos activos a futuro; 404 si no es un cliente de la
-    tienda. No se puede deshacer."""
+    ``CLIENT_HAS_LIVE_CHARGE`` / ``CLIENT_HAS_ACTIVE_APPOINTMENTS`` /
+    ``CLIENT_HAS_DEBT`` si tiene un cobro abierto, turnos activos a futuro o
+    saldo en el fiado; 404 si no es un cliente de la tienda. No se puede
+    deshacer."""
     await DataSubjectService(db).anonymize(client_id=client_id, actor=admin)
     return AnonymizeResponse(status="anonymized")
