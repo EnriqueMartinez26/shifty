@@ -472,3 +472,18 @@ Todos aditivos; ninguna ruta cambia; `test_frontend_routes_contract.py` intacto.
 | Disponibilidad | recalculada por request | HIT sin tocar la base; agenda del día cacheada (300 s, invalidada por los mismos caminos que antes); tras editar tienda/servicio/bloqueo o reservar, la grilla cambia en el mismo request siguiente. | No. |
 | Panel | 31 sentencias al abrir | 15; mismos números en pantalla (tests de equivalencia sobre fixtures con historial). | No. |
 
+
+## Contratos nuevos para destrabar el front (`perf/f4-back`, 2026-09-25, `integration/aud2` @ 612b0fc)
+
+Detalle completo (parámetros, respuestas y códigos) en `docs/DOCUMENTACION_TURNERO.md` §7. Todo es aditivo salvo donde se indica.
+
+| Hallazgo | Contrato | ¿El front tiene que hacer algo? |
+|---|---|---|
+| FF-04 | `POST /appointments/` con `client_name` + `client_phone` (opcional `client_email`, `staff_id`, `notes`, `allow_outside_schedule` solo admin, `idempotency_key`): alta del panel sin antelación, OTP, campos extra, `accepts_terms` ni seña; nace `confirmed`. Acepta un inicio pasado (la tienda puede registrar a quien llegó sin turno) hasta 2 años atrás. | **Sí, urgente**: hoy el modal "Nuevo turno" usa `/public/appointments` y responde 422 por `accepts_terms`. Migrar el modal a este endpoint. |
+| FF-16 | `GET /public/stores/{slug}/ref` → `{store_public_id, name, accepts_new_bookings}`; 200 también con la tienda suspendida. | Sí: "Mis turnos" resuelve la tienda por acá. |
+| FF-24 | `GET /superadmin/stores?is_active=true\|false\|all`; total en el header `X-Total-Count`. | Sí: "Todas" y paginar. |
+| FF-12 / F4-07 | `GET /appointment-blocks/?from_date&to_date&include_inactive` (días locales, ≤ 400). Sin parámetros responde igual que antes. | Sí: pedir solo el rango visible. |
+| FF-14 | Recepción puede leer `GET /appointment-blocks/`. | Mostrar bloqueos en su agenda. |
+| FF-20 / F4-03 | `GET /users/?q=` (2..80 caracteres, nombre o teléfono), solo admin. La parte del profesional (fiado) sigue pendiente. | Autocompletado en Fiado y Usuarios. |
+| — | `can_cancel`/`can_reschedule` del historial del cliente reflejan las reglas reales (pago pendiente o acreditado ya no ofrece "Cambiar"). | Usar los flags. |
+| Topes | Reservar y reprogramar: ±2 años (solo anti-desborde). El cliente sigue limitado a 120 días por la grilla. La tienda puede agendar y reprogramar en el pasado; el cliente nunca. | Saber que un 422 "fuera de rango" solo aparece fuera de ±2 años. |
