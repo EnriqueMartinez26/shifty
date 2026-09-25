@@ -128,6 +128,8 @@ SIN_PRESUPUESTO: dict[str, str] = {
     "POST /public/waitlist": "anonimo con topes (test_lista_de_espera_acaparamiento)",
     "POST /public/waitlist/mine": "autogestion, requiere OTP",
     "POST /public/waitlist/{entry_id}/leave": "autogestion, requiere OTP",
+    "GET /public/legal/versions": "no toca la base: lee settings",
+    "GET /public/unsubscribe": "una vez por mail promocional, desde su link firmado",
 }
 
 MEDIR = os.getenv("PRESUPUESTO_MEDIR") == "1"
