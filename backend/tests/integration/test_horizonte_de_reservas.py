@@ -24,6 +24,7 @@ import pytest
 from httpx import AsyncClient
 
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _tienda
+from tests.integration.test_caracterizacion_autogestion import TELEFONO, _con_turno
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
 )
@@ -69,5 +70,23 @@ async def test_reprogramar_desde_el_panel_mas_alla_de_dos_anios_422(
             f"/appointments/{alta.json()['public_id']}/reschedule",
             headers=auth_headers(t.token),
             json={"new_starts_at": cuando, "idempotency_key": f"horiz-panel-rs-{i}"},
+        )
+        assert res.status_code == 422, (cuando, res.text)
+
+
+@pytest.mark.asyncio
+async def test_reprogramar_desde_el_portal_mas_alla_del_horizonte_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _t, turno = await _con_turno(client, monkeypatch, "horiz-cliente")
+
+    for i, cuando in enumerate((LEJANO, _en(122))):
+        res = await client.patch(
+            f"/public/client/appointments/{turno}/reschedule",
+            json={
+                "phone": TELEFONO,
+                "new_starts_at": cuando,
+                "idempotency_key": f"horiz-cliente-rs-{i}",
+            },
         )
         assert res.status_code == 422, (cuando, res.text)

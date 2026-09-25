@@ -254,6 +254,8 @@ class ClientRescheduleRequest(BaseModel):
             value = value.replace(tzinfo=timezone.utc)
         if value <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro")
+        if not within_booking_horizon(value):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return value
 
 
