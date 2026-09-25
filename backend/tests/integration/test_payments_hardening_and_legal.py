@@ -151,7 +151,7 @@ def _approved_remote_payment(payment: Payment) -> dict[str, Any]:
     return {
         "id": "mp-remote-1",
         "status": "approved",
-        "external_reference": payment.appointment_id,
+        "external_reference": payment.current_external_reference,
         "preference_id": payment.preference_id,
         "transaction_amount": float(payment.amount),
         "currency_id": payment.currency,

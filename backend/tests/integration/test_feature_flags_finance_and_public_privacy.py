@@ -906,6 +906,10 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     import modules.payments.processing as payments_processing
     import modules.payments.service as payments_service
 
+    # Como MP: el pago lleva la external_reference de su preferencia (con el
+    # nonce del link desde perf/f4-pay).
+    referencias: list[str] = []
+
     async def fake_create_preference(
         access_token: str,
         *,
@@ -913,6 +917,8 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
         path: str,
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        assert json_body is not None
+        referencias.append(str(json_body["external_reference"]))
         return {
             "id": "pref-webhook-fetch",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=fetch",
@@ -934,7 +940,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
         return {
             "id": payment_id,
             "status": "approved",
-            "external_reference": booking_public_id,
+            "external_reference": referencias[-1],
             "metadata": {"appointment_id": booking_public_id},
             "date_approved": datetime.now(timezone.utc).isoformat(),
         }

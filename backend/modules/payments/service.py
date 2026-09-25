@@ -1206,6 +1206,10 @@ def _refresh_existing_payment(
     if deposit_rule is not None:
         payment.deposit_rule = deposit_rule
     if renew_expired_link and payment.status == PaymentStatus.EXPIRED.value:
+        # Sin nonce por link no se reabre: ver
+        # ``PaymentLinkRegenerationUnavailableError``.
+        if not settings.MERCADOPAGO_LINK_REF_ENABLED:
+            raise PaymentLinkRegenerationUnavailableError()
         _retire_link(payment)
     # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
     # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
@@ -1339,6 +1343,23 @@ RELEASED_APPOINTMENT_STATUSES: frozenset[str] = frozenset(
 )
 
 
+class PaymentLinkRegenerationUnavailableError(AppException):
+    """409 neutro: regenerar el link de un cobro vencido no esta disponible.
+
+    Sin ``MERCADOPAGO_LINK_REF_ENABLED`` el link nuevo tendria la misma
+    ``external_reference`` que el viejo y un pago tardio del viejo se
+    aplicaria al cobro reabierto con el nuevo vivo: pago doble. Asi esta rama
+    nunca abre esa ventana, aunque operaciones apague el flag.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Por ahora no se puede generar un link nuevo para este cobro",
+            http_status=409,
+            error_code="PAYMENT_LINK_REGENERATION_UNAVAILABLE",
+        )
+
+
 class AppointmentNotPayableError(AppException):
     """409 neutro: el turno ya no admite un cobro."""
 
@@ -1454,20 +1475,24 @@ async def _panel_link_phase_one(
     ):
         await db.rollback()
         raise AppointmentNotPayableError()
-    return await _upsert_payment_preference(
-        db,
-        appointment=appointment,
-        service=service,
-        store_id=store_id,
-        amount_override=amount_override,
-        original_amount=None,
-        discount_amount=None,
-        promotion_code=None,
-        create_provider_link=False,
-        deposit_rule=None,
-        keep_existing_amount=True,
-        renew_expired_link=True,
-    )
+    try:
+        return await _upsert_payment_preference(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            amount_override=amount_override,
+            original_amount=None,
+            discount_amount=None,
+            promotion_code=None,
+            create_provider_link=False,
+            deposit_rule=None,
+            keep_existing_amount=True,
+            renew_expired_link=True,
+        )
+    except PaymentLinkRegenerationUnavailableError:
+        await db.rollback()  # suelta el lock del turno sin escribir nada
+        raise
 
 
 async def _panel_link_from_provider(

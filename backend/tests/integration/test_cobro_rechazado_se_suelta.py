@@ -59,6 +59,7 @@ async def test_el_webhook_que_rechaza_un_pending_payment_vence_el_cobro(
     _token, turno = await _turno_con_cobro(client, monkeypatch, mp, "rechazo-webhook")
     pago = await _pago(test_session, turno)
     store_id, importe = pago.store_id, float(pago.amount)
+    referencia = pago.current_external_reference
 
     aplicado = await apply_mercadopago_webhook_payload(
         test_session,
@@ -68,7 +69,7 @@ async def test_el_webhook_que_rechaza_un_pending_payment_vence_el_cobro(
             "data": {
                 "id": "mp-rechazo-1",
                 "status": "rejected",
-                "external_reference": turno,
+                "external_reference": referencia,
                 "preference_id": "pref-release-b104",
                 "transaction_amount": importe,
                 "currency_id": "ARS",

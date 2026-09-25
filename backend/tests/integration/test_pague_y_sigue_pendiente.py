@@ -236,7 +236,7 @@ async def test_la_conciliacion_a_demanda_aplica_el_cobro_sin_edad_minima(
         remote_payment={
             "id": "mp-f121",
             "status": "approved",
-            "external_reference": cobro.appointment_id,
+            "external_reference": cobro.current_external_reference,
             "preference_id": cobro.preference_id,
             "transaction_amount": float(cobro.amount),
             "currency_id": cobro.currency,

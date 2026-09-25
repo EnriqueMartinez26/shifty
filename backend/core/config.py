@@ -247,13 +247,13 @@ class Settings(BaseSettings):
     # Nonce propio en la ``external_reference`` de cada link NUEVO
     # (``<turno>:<link_ref>``; revision de perf/f4-pay, 2026-09-25): un pago de
     # un link reemplazado deja de pasar la integridad aunque MP no mande
-    # ``preference_id``. Apagado por defecto, por expand/contract: el release
-    # que lo trae ENTIENDE los dos formatos, pero un rollback a un codigo
-    # anterior con links con nonce en vuelo rechazaria sus pagos. Se prende
-    # en un deploy SIGUIENTE, con este release ya firme; apagarlo vuelve a
-    # generar la referencia legada y los links con nonce siguen matcheando
-    # (docs/DEPLOY_RUNBOOK.md, seccion 5).
-    MERCADOPAGO_LINK_REF_ENABLED: bool = False
+    # ``preference_id``. Prendido por defecto: Shifty nunca estuvo en
+    # produccion, no hay links legados en vuelo (correccion del coordinador).
+    # Apagarlo solo sirve para volver a un codigo anterior a este release, que
+    # no entiende el nonce; apagado, regenerar el link de un cobro vencido
+    # responde 409 (sin nonce no se distingue un pago del link viejo) y los
+    # links con nonce siguen matcheando (docs/DEPLOY_RUNBOOK.md, seccion 5).
+    MERCADOPAGO_LINK_REF_ENABLED: bool = True
     # Minutos que un turno queda reservado esperando el pago de la seña. Al
     # vencer, el slot vuelve a estar disponible para otro cliente.
     PAYMENT_HOLD_MINUTES: int = 30

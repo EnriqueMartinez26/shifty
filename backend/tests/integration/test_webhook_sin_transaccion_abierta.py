@@ -98,7 +98,7 @@ async def test_el_webhook_consulta_a_mp_sin_transaccion_abierta(
         {
             "id": "pago-b208",
             "status": "approved",
-            "external_reference": turno,
+            "external_reference": cobro.current_external_reference,
             "preference_id": cobro.preference_id,
             "transaction_amount": float(cobro.amount),
             "currency_id": cobro.currency,
@@ -162,7 +162,7 @@ async def test_el_webhook_sigue_aplicando_el_pago_y_sellando_el_inbox(
         {
             "id": "pago-b208-c",
             "status": "approved",
-            "external_reference": turno,
+            "external_reference": cobro.current_external_reference,
             "preference_id": cobro.preference_id,
             "transaction_amount": float(cobro.amount),
             "currency_id": cobro.currency,

@@ -148,10 +148,11 @@ async def test_la_conciliacion_lee_la_config_del_gateway_una_vez_por_tienda(
     _mercadopago_con_pagos_acreditados(
         monkeypatch,
         {
-            cobro.appointment_id: {
+            # La busqueda va por la referencia del link vigente (perf/f4-pay).
+            cobro.current_external_reference: {
                 "id": f"mp-remoto-{i}",
                 "status": "approved",
-                "external_reference": cobro.appointment_id,
+                "external_reference": cobro.current_external_reference,
                 "preference_id": cobro.preference_id,
                 "transaction_amount": float(cobro.amount),
                 "currency_id": cobro.currency,

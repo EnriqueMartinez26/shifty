@@ -238,7 +238,9 @@ async def test_a_la_reserva_crea_la_preferencia_con_importe_cuenta_y_vencimiento
     [item] = pref["items"]
     assert Decimal(str(item["unit_price"])) == SENA == cobro.amount
     assert item["currency_id"] == "ARS" and item["quantity"] == 1
-    assert pref["external_reference"] == turno.id
+    # La del link: <turno>:<link_ref> (perf/f4-pay).
+    assert pref["external_reference"] == cobro.current_external_reference
+    assert pref["external_reference"].split(":")[0] == turno.id
     assert pref["metadata"] == {
         "appointment_id": turno.id,
         "store_id": t.store_id,
@@ -613,7 +615,8 @@ async def test_i_la_conciliacion_recupera_un_pago_sin_webhook(
     assert resultado == {"reconciled": 1, "failed": 0, "inspected": 1}, resultado
 
     [busqueda] = await mp.calls("/v1/payments/search", "GET")
-    assert f"external_reference={turno_id}" in busqueda["query"]
+    referencia = (await _cobro(test_session, turno_id)).current_external_reference
+    assert f"external_reference={referencia.replace(':', '%3A')}" in busqueda["query"]
     assert busqueda["in_tx"] is False, "MP con transaccion abierta (regla 5)"
     cobro = await _cobro(test_session, turno_id)
     assert cobro.status == "approved"

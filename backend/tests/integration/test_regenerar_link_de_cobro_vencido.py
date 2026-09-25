@@ -100,6 +100,7 @@ async def _webhook_de(
     preferencia: str,
     estado: str,
     externo: str,
+    referencia: str | None = None,
 ) -> bool:
     return await apply_mercadopago_webhook_payload(
         session,
@@ -109,7 +110,8 @@ async def _webhook_de(
             "data": {
                 "id": externo,
                 "status": estado,
-                "external_reference": cobro.appointment_id,
+                # Como MP: la del link al que pertenece el pago.
+                "external_reference": referencia or cobro.current_external_reference,
                 "preference_id": preferencia,
                 "transaction_amount": float(cobro.amount),
                 "currency_id": "ARS",
@@ -154,6 +156,7 @@ async def test_un_webhook_de_la_preferencia_vieja_no_toca_el_cobro_regenerado(
         client, test_session, monkeypatch, f"regen-vieja-{estado}"
     )
     (vieja,) = creadas
+    referencia_vieja = (await _cobro(test_session, turno)).current_external_reference
     res = await client.post(
         f"/payments/preferences/{turno}", headers=auth_headers(t.admin)
     )
@@ -164,7 +167,12 @@ async def test_un_webhook_de_la_preferencia_vieja_no_toca_el_cobro_regenerado(
     # Es de un link reemplazado: no se aplica (y si es ``approved``, avisa;
     # tests/integration/test_pago_en_link_reemplazado_avisa.py).
     aplicado = await _webhook_de(
-        test_session, cobro, preferencia=vieja, estado=estado, externo="mp-viejo"
+        test_session,
+        cobro,
+        preferencia=vieja,
+        estado=estado,
+        externo="mp-viejo",
+        referencia=referencia_vieja,
     )
     await test_session.commit()
     assert aplicado is False

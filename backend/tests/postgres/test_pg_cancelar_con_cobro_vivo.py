@@ -213,7 +213,8 @@ async def test_cancelar_con_cobro_vivo_contra_el_pago_aprobado_queda_consistente
         mp.remotos[f"mp-d2-{i}"] = {
             "id": f"mp-d2-{i}",
             "status": "approved",
-            "external_reference": turno,
+            # La del link de su preferencia (<turno>:<link_ref>), como MP.
+            "external_reference": dict(mp.creadas)[cobro["preferencia"]],
             "preference_id": cobro["preferencia"],
             "transaction_amount": cobro["importe"],
             "currency_id": "ARS",
@@ -587,7 +588,8 @@ async def test_bloqueo_sobre_turnos_con_link_contra_el_pago_aprobado(
         mp.remotos[f"mp-bloq-{i}"] = {
             "id": f"mp-bloq-{i}",
             "status": "approved",
-            "external_reference": turno,
+            # La del link de su preferencia (<turno>:<link_ref>), como MP.
+            "external_reference": dict(mp.creadas)[cobro["preferencia"]],
             "preference_id": cobro["preferencia"],
             "transaction_amount": cobro["importe"],
             "currency_id": "ARS",
