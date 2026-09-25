@@ -1398,6 +1398,33 @@ async def _discard_unsealed_link(
         await db.commit()
 
 
+async def _drop_unsealed_link(
+    db: AsyncSession,
+    nueva: str | None,
+    previa: str | None,
+    ids: tuple[str, str, str],
+) -> None:
+    """Rollback de la fase 2 y vencimiento del link que ESTA llamada creo.
+
+    Revision de perf/f4-pay (2026-09-25): si la fase 2 no puede sellar (el
+    turno se solto, o otra escritura choco con la version del cobro), la
+    preferencia que MP ya creo quedaba viva sin que nadie la registrara. Un
+    link igual a ``previa`` no lo creo esta llamada: no se toca. ``nueva`` se
+    lee ANTES del flush (uno fallido expira la instancia) e ``ids`` (tienda,
+    cobro, turno) antes de la fase 2.
+    """
+    store_id, payment_id, appointment_id = ids
+    await db.rollback()
+    if nueva != previa:
+        await _discard_unsealed_link(
+            db,
+            store_id=store_id,
+            appointment_id=appointment_id,
+            payment_id=payment_id,
+            preference_id=nueva,
+        )
+
+
 async def _panel_link_phase_one(
     db: AsyncSession,
     *,
@@ -1492,8 +1519,10 @@ async def create_panel_payment_preference(
         amount_override=amount_override,
     )
     # Leidos antes del commit: tras un rollback las instancias quedan
-    # expiradas y leerlas de nuevo seria IO fuera de lugar.
+    # expiradas y leerlas de nuevo seria IO fuera de lugar. ``previa``: el
+    # link que dejo la fase 1; uno distinto despues lo creo ESTA llamada.
     payment_id, appointment_id = payment.id, appointment.id
+    previa = nueva = payment.preference_id
     await db.commit()
 
     try:
@@ -1504,6 +1533,7 @@ async def create_panel_payment_preference(
             store_id=store_id,
             payment=payment,
         )
+        nueva = payment.preference_id  # antes del flush: si falla, se expira
         sellable = await lock_payable_appointment(
             db, appointment_id=appointment_id, store_id=store_id
         )
@@ -1525,18 +1555,15 @@ async def create_panel_payment_preference(
         raise
     except Exception:
         # Conflicto de concurrencia (StaleDataError, IntegrityError): otra
-        # request esta trabajando sobre el mismo cobro. No se borra nada.
-        await db.rollback()
+        # request esta trabajando sobre el mismo cobro. No se borra el cobro,
+        # pero el link que MP ya creo no puede quedar vivo.
+        await _drop_unsealed_link(
+            db, nueva, previa, (store_id, payment_id, appointment_id)
+        )
         raise
     if not sellable:
-        nueva = payment.preference_id
-        await db.rollback()
-        await _discard_unsealed_link(
-            db,
-            store_id=store_id,
-            appointment_id=appointment_id,
-            payment_id=payment_id,
-            preference_id=nueva,
+        await _drop_unsealed_link(
+            db, nueva, previa, (store_id, payment_id, appointment_id)
         )
         raise AppointmentNotPayableError()
     await db.refresh(payment)
