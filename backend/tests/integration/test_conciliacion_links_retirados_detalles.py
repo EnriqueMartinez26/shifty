@@ -293,3 +293,112 @@ async def test_la_conciliacion_no_se_queda_con_los_mismos_pendientes_del_frente(
         )
     ).all()
     assert all(marca is not None for _id, marca in marcas), marcas
+
+
+async def _tres_cobros_viejos(
+    client: AsyncClient, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> list[str]:
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago_que_registra(monkeypatch, [], remoto=None)
+    turnos = await _tres_retenciones_vencidas(client, session)
+    cobros = [
+        (
+            await session.execute(
+                select(Payment.id).where(Payment.appointment_id == turno)
+            )
+        ).scalar_one()
+        for turno in turnos
+    ]
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    for n, cobro_id in enumerate(cobros):
+        await session.execute(
+            update(Payment)
+            .where(Payment.id == cobro_id)
+            .values(created_at=base + timedelta(minutes=n))
+        )
+    await session.commit()
+    return cobros
+
+
+async def _marcas(session: AsyncSession, cobros: list[str]) -> dict[str, Any]:
+    session.expire_all()
+    filas = await session.execute(
+        select(Payment.id, Payment.reconciled_at).where(Payment.id.in_(cobros))
+    )
+    return {cobro_id: marca for cobro_id, marca in filas.all()}
+
+
+@pytest.mark.asyncio
+async def test_un_cobro_salteado_por_el_lock_del_turno_no_va_al_fondo_de_la_cola(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 6c84d46..79a64e4 (#1). ``reconciled_at`` se anotaba en
+    todo lo que la fase A consulto. Un cobro que MP ya dio por aprobado pero
+    cuya aplicacion se salteo porque un webhook o un "liberar" tenia el turno
+    iba al fondo de la cola. Ahora solo se marca lo que la fase B proceso."""
+    cobros = await _tres_cobros_viejos(client, test_session, monkeypatch)
+    salteado = cobros[0]
+
+    async def mp(_db: Any, payment: Payment, *_args: Any, **_kwargs: Any) -> Any:
+        if payment.id == salteado:
+            return {"id": "mp-aprobado", "status": "approved"}
+        return None
+
+    async def turno(_db: Any, payment: Payment) -> bool:
+        return payment.id != salteado
+
+    monkeypatch.setattr(jobs, "_fetch_remote_payment", mp)
+    monkeypatch.setattr(jobs, "_lock_appointment_or_skip", turno)
+
+    await jobs.reconcile_pending_payments(test_session)
+
+    marcas = await _marcas(test_session, cobros)
+    assert marcas[salteado] is None, marcas
+    assert all(marcas[c] is not None for c in cobros[1:]), marcas
+
+
+@pytest.mark.asyncio
+async def test_si_la_marca_falla_se_loguea_y_lo_conciliado_queda(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 6c84d46..79a64e4 (#1): el camino de falla de
+    ``_marcar_conciliados``. La marca corre despues del commit de la fase B:
+    si falla se loguea y lo ya conciliado no se pierde."""
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.sql.dml import Update
+    from structlog.testing import capture_logs
+
+    turno, _mp, _vieja, _nueva = await _regenerado(
+        client, test_session, monkeypatch, "marca-falla"
+    )
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
+    cobro = await _cobro(test_session, turno)
+    remoto = _pago_de_mp(
+        cobro, referencia=cobro.current_external_reference, externo="mp-ok"
+    )["data"]
+
+    async def mp(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return dict(remoto)
+
+    monkeypatch.setattr(jobs, "_fetch_remote_payment", mp)
+    ejecutar = test_session.execute
+
+    async def execute_que_falla_en_la_marca(statement: Any, *a: Any, **k: Any) -> Any:
+        if isinstance(statement, Update) and "reconciled_at" in str(statement):
+            raise OperationalError(str(statement), {}, Exception("lock_timeout"))
+        return await ejecutar(statement, *a, **k)
+
+    monkeypatch.setattr(test_session, "execute", execute_que_falla_en_la_marca)
+
+    with capture_logs() as logs:
+        resultado = await jobs.reconcile_pending_payments(test_session)
+
+    assert resultado["reconciled"] == 1, resultado
+    fallos = [e for e in logs if e["event"] == "reconciliation_mark_failed"]
+    assert len(fallos) == 1, logs
+    monkeypatch.setattr(test_session, "execute", ejecutar)
+    cobro = await _cobro(test_session, turno)
+    cobro_id = cobro.id
+    assert cobro.status == PaymentStatus.APPROVED.value
+    assert (await _marcas(test_session, [cobro_id]))[cobro_id] is None
