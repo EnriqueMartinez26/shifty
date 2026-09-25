@@ -81,6 +81,12 @@ PRESUPUESTOS: dict[str, Presupuesto] = {
     "GET /notifications": Presupuesto(consultas=3, set_config=3),  # (3)
     # Alta del panel para un cliente (FF-04, 2026-09-24): medida al nacer.
     "POST /appointments/ [cliente]": Presupuesto(consultas=14, set_config=4),
+    # Revision de perf/f4-back: cada forma del alta del panel con su techo;
+    # una fila de una variante no cubre a las otras.
+    "POST /appointments/ [cliente, cualquiera]": Presupuesto(
+        consultas=15, set_config=4
+    ),
+    "POST /appointments/ [auto-turno]": Presupuesto(consultas=11, set_config=4),
 }
 
 # Prefijos de las rutas calientes: el portal publico y las lecturas del panel
@@ -498,6 +504,35 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
                 "client_phone": "+5491166600002",
                 "client_email": "cliente-panel@demo.com",
                 "idempotency_key": "presupuesto-panel-1",
+            },
+            panel,
+            201,
+        ),
+        (
+            "POST /appointments/ [cliente, cualquiera]",
+            "POST",
+            "/appointments/",
+            {},
+            {
+                "service_id": tienda.service_ids[0],
+                "starts_at": tienda.slot_libre.isoformat(),
+                "client_name": "Cliente Panel Dos",
+                "client_phone": "+5491166600003",
+                "idempotency_key": "presupuesto-panel-2",
+            },
+            panel,
+            201,
+        ),
+        (
+            "POST /appointments/ [auto-turno]",
+            "POST",
+            "/appointments/",
+            {},
+            {
+                "service_id": tienda.service_ids[0],
+                "staff_id": tienda.staff_ids[0],
+                "starts_at": (tienda.slot_libre + timedelta(hours=1)).isoformat(),
+                "idempotency_key": "presupuesto-panel-3",
             },
             panel,
             201,
