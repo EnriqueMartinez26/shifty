@@ -37,6 +37,7 @@ from modules.notifications.tasks import (
     smtp_session,
 )
 from modules.payments.model import (
+    LIVE_CHARGE_PAYMENT_STATUSES,
     JsonValue,
     OutboxMessage,
     Payment,
@@ -1489,7 +1490,13 @@ async def _fetch_remote_payment(
 def _expired_holds_query(
     now: datetime, limit: int
 ) -> Select[tuple[Appointment, Payment]]:
-    """Turnos con retencion vencida y sin cobro acreditado, los mas viejos primero."""
+    """Turnos con retencion vencida y sin cobro acreditado, los mas viejos primero.
+
+    Sin cobro o con un cobro VIVO (``LIVE_CHARGE_PAYMENT_STATUSES``, unica
+    fuente): desde la revision de perf/f4-pay (2026-09-25) tambien
+    ``rejected``. Antes solo ``pending``: un turno pendiente cuyo link se
+    rechazo no se liberaba nunca y el cliente tampoco podia cancelarlo.
+    """
     return (
         select(Appointment, Payment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
@@ -1502,7 +1509,10 @@ def _expired_holds_query(
             ),
             Appointment.expires_at.is_not(None),
             Appointment.expires_at <= now,
-            or_(Payment.id.is_(None), Payment.status == PaymentStatus.PENDING.value),
+            or_(
+                Payment.id.is_(None),
+                Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)),
+            ),
         )
         .order_by(Appointment.expires_at.asc())
         .limit(limit)
@@ -1658,7 +1668,11 @@ async def _expire_unpaid_appointments(
         appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         if payment:
             # Por el grafo, no por asignacion directa: si el cobro ya estaba
-            # acreditado no puede degradarse a expirado.
+            # acreditado no puede degradarse a expirado. ``pending`` y
+            # ``rejected`` pasan a ``expired``. Sin ``payment.preference.expire``:
+            # el link de MP se creo con ``expiration_date_to`` = la retencion
+            # (``prepare_mercadopago_preference``), asi que ya vencio solo; un
+            # PUT por retencion vencida solo sumaria carga a MP.
             stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
         publish_slot_released(
             db,

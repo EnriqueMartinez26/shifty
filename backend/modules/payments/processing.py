@@ -17,8 +17,10 @@ from modules.payments.model import (
 from modules.payments.model import JsonValue
 from modules.services.model import Service
 from modules.payments.service import (
+    LINKABLE_APPOINTMENT_STATUSES,
     GatewayConfigs,
     PersistRefresh,
+    expire_live_charge,
     fetch_mercadopago_payment,
     resolve_gateway_config,
     stamp_payment_from_status,
@@ -469,6 +471,12 @@ async def apply_mercadopago_webhook_payload(
         ):
             appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         sync_appointment_with_payment(appointment, payment.status)
+        # El pago saco al turno de los estados cobrables (un rechazo pasa un
+        # ``pending_payment`` a ``expired``): su cobro vivo se vence con el
+        # camino compartido, turno y pago ya lockeados (revision de perf/f4-pay,
+        # 2026-09-25). Antes quedaba ``rejected`` con el link vivo en MP.
+        if appointment.status not in LINKABLE_APPOINTMENT_STATUSES:
+            expire_live_charge(db, payment, reason="appointment_released_by_payment")
     await _avisar_al_dueno(
         db,
         store_id=store_id,
