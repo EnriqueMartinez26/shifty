@@ -73,10 +73,20 @@ async def ensure_store_client(
     2026-09-24, SEG-01: el historial (``GET /ledger/customers/{client_id}``)
     usa el mismo chequeo; antes devolvia 200 con saldo 0 para un cliente
     ajeno.
+
+    2026-09-25 (revision de perf/f4-pay): solo un CLIENTE de la tienda. Antes
+    pasaba cualquier usuario de la tienda, asi que se podia cargar fiado a una
+    cuenta del personal o de un admin. Mismo 404 neutro que un id ajeno o
+    inexistente: la respuesta no dice si el id es de alguien del personal.
     """
     cliente = await UserRepository(db).get_by_public_id(client_id, store_id)
-    if cliente is None:
+    if cliente is None or _valor_de_rol(cliente.role) != UserRole.CLIENT.value:
         raise ResourceNotFoundException("Cliente", client_id)
+
+
+def _valor_de_rol(rol: object) -> str:
+    """El rol puede llegar como ``UserRole`` o como texto (columna String)."""
+    return str(getattr(rol, "value", rol))
 
 
 async def search_store_clients(

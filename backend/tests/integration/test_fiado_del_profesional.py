@@ -216,3 +216,25 @@ async def test_el_buscador_valida_la_entrada(
     res = await client.get("/ledger/clients", headers=t.profesional, params=params)
 
     assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_fiado_es_solo_de_clientes_no_del_personal(
+    client: AsyncClient,
+) -> None:
+    """Revision de perf/f4-pay (2026-09-25, #6): ``ensure_store_client``
+    aceptaba cualquier usuario de la tienda. El personal y los admins no son
+    destinatarios de fiado: 404 neutro, igual que un id de otra tienda."""
+    t = await _tienda(client, "fiado-solo-clientes")
+    del_personal = sorted(t.personal)
+
+    for usuario in del_personal:
+        carga = await client.post(
+            f"/ledger/customers/{usuario}/movements",
+            headers=t.profesional,
+            json={"movement_type": "charge", "amount": "10.00"},
+        )
+        cuenta = await client.get(f"/ledger/customers/{usuario}", headers=t.profesional)
+        for res in (carga, cuenta):
+            assert res.status_code == 404, res.text
+            assert res.json()["error_code"] == "RESOURCE_NOT_FOUND", res.text
