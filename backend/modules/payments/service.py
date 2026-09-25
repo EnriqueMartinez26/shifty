@@ -1243,14 +1243,17 @@ async def _discard_orphan_payment(
     await db.commit()
 
 
-# Estados de un turno sobre los que el panel puede generar un link de pago:
-# los que todavia pueden cobrarse. Un terminal (cancelled, completed, absent,
-# expired) no: el link quedaria vivo sobre un turno que ya no existe.
-LINKABLE_APPOINTMENT_STATUSES: frozenset[str] = frozenset(
+# Estados de un turno cuyo horario ya se SOLTO: un cobro no puede quedar vivo
+# ni nacer sobre ellos (el link apuntaria a un turno que ya no existe) y un
+# pago que llega despues no lo revive (el horario pudo tomarlo otra persona;
+# S-16, 2026-09-19). Unica fuente: la usan el link del panel, la confirmacion
+# manual y el webhook. ``completed`` y ``absent`` NO estan: cobrar despues de
+# atender es un flujo real (correccion de alcance del coordinador,
+# revision de perf/f4-pay 2026-09-25).
+RELEASED_APPOINTMENT_STATUSES: frozenset[str] = frozenset(
     {
-        AppointmentStatus.PENDING.value,
-        AppointmentStatus.CONFIRMED.value,
-        AppointmentStatus.PENDING_PAYMENT.value,
+        AppointmentStatus.CANCELLED.value,
+        AppointmentStatus.EXPIRED.value,
     }
 )
 
@@ -1266,10 +1269,11 @@ class AppointmentNotPayableError(AppException):
         )
 
 
-async def lock_linkable_appointment(
+async def lock_payable_appointment(
     db: AsyncSession, *, appointment_id: str, store_id: str
 ) -> bool:
-    """Lockea el turno (``FOR UPDATE``) y dice si admite un link de pago.
+    """Lockea el turno (``FOR UPDATE``) y dice si admite un cobro: existe y
+    no esta soltado (``RELEASED_APPOINTMENT_STATUSES``).
 
     Es el PRIMER lock de quien toca el cobro del turno (orden turno -> pago,
     regla 7), el mismo que cancelar, liberar y el webhook. Lee la columna, no
@@ -1288,7 +1292,7 @@ async def lock_linkable_appointment(
                 .with_for_update()
             )
         ).scalar_one_or_none()
-    return estado in LINKABLE_APPOINTMENT_STATUSES
+    return estado is not None and estado not in RELEASED_APPOINTMENT_STATUSES
 
 
 async def _discard_unsealed_link(
@@ -1341,14 +1345,14 @@ async def create_panel_payment_preference(
     conexion del pool tomada durante la request externa (regla 5).
 
     Las dos fases lockean el turno antes de escribir el cobro (orden turno ->
-    pago, regla 7) y exigen un estado que admita cobro
-    (``LINKABLE_APPOINTMENT_STATUSES``); si no, 409 ``APPOINTMENT_NOT_PAYABLE``.
+    pago, regla 7) y rechazan un turno soltado
+    (``RELEASED_APPOINTMENT_STATUSES``) con 409 ``APPOINTMENT_NOT_PAYABLE``.
     En la fase 1 no se crea nada. En la fase 2 (el turno se cancelo mientras
     MP respondia) el link nuevo no se sella y se manda a vencer: nunca queda
     un link vivo sobre un turno cancelado (revision de perf/f4-pay,
     2026-09-25).
     """
-    if not await lock_linkable_appointment(
+    if not await lock_payable_appointment(
         db, appointment_id=appointment.id, store_id=store_id
     ):
         await db.rollback()
@@ -1389,7 +1393,7 @@ async def create_panel_payment_preference(
                 keep_existing_amount=True,
                 create_provider_link=True,
             )
-        sellable = await lock_linkable_appointment(
+        sellable = await lock_payable_appointment(
             db, appointment_id=appointment_id, store_id=store_id
         )
         if sellable:

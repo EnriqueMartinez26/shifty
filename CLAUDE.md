@@ -189,7 +189,7 @@ Una instrucción en lenguaje natural no es una garantía.
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);
-   - el webhook que saca al turno de los estados cobrables (un rechazo pasa
+   - el webhook que suelta el turno (un rechazo pasa
      un `pending_payment` a `expired`; `processing.apply_mercadopago_webhook_payload`);
    - el job de retenciones vencidas (`payments/jobs.py`, toma los cobros de
      `LIVE_CHARGE_PAYMENT_STATUSES` y los vence por el grafo; sin publicar:
@@ -198,8 +198,9 @@ Una instrucción en lenguaje natural no es una garantía.
    (`client_cancel_denial`/`client_reschedule_denial`, 409
    `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), y un turno terminal no se
    reprograma desde ningún lado (409 `APPOINTMENT_NOT_ACTIVE`). El link del
-   panel y la confirmación manual solo operan sobre un turno cobrable (409
-   `APPOINTMENT_NOT_PAYABLE`). (`test_link_del_panel_es_cobro_vivo.py`,
+   panel y la confirmación manual lockean el turno y rechazan uno soltado
+   (`cancelled`/`expired`, `RELEASED_APPOINTMENT_STATUSES`: 409
+   `APPOINTMENT_NOT_PAYABLE`); un `completed` o `absent` se sigue cobrando. (`test_link_del_panel_es_cobro_vivo.py`,
    `test_cancelar_desde_el_panel_vence_el_cobro.py`,
    `test_cancelar_dos_veces_desde_el_panel.py`,
    `test_reprogramar_del_panel_vence_el_cobro.py`,
@@ -235,7 +236,7 @@ Una instrucción en lenguaje natural no es una garantía.
    webhook busca el cobro sin lock y lockea turno y después pago, como
    liberar, cancelar y reprogramar desde el panel, la cancelación por bloqueo
    (profesional → turnos → pagos), el link de pago del panel (en sus dos
-   fases, `lock_linkable_appointment`), la confirmación manual y el job de
+   fases, `lock_payable_appointment`), la confirmación manual y el job de
    vencimiento (F1-18, `test_webhook_lockea_turno_antes_que_pago.py`,
    `test_pg_cancelar_con_cobro_vivo.py`). `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`

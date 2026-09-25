@@ -6,9 +6,11 @@ leia el turno sin lock y sin mirar su estado: marcaba como pagado un turno
 que el personal acababa de cancelar (o uno vencido, completado o ausente).
 
 Ahora lockea el turno primero (orden turno -> pago, regla 7), lo relee bajo
-el lock y solo acepta los estados cobrables (``pending``, ``confirmed``,
-``pending_payment``); cualquier otro es 409 ``APPOINTMENT_NOT_PAYABLE`` y no
-crea ni toca el cobro.
+el lock y rechaza un turno SOLTADO (``cancelled``, ``expired``) con 409
+``APPOINTMENT_NOT_PAYABLE`` sin crear ni tocar el cobro. Un turno
+``completed`` o ``absent`` se sigue pudiendo cobrar a mano: registrar el
+efectivo despues de atender es un flujo real (correccion de alcance del
+coordinador, 2026-09-25).
 """
 
 from __future__ import annotations
@@ -37,8 +39,8 @@ async def _cobros(session: AsyncSession, turno: str) -> list[Payment]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("estado", ["cancelled", "expired", "completed", "absent"])
-async def test_no_se_confirma_a_mano_el_cobro_de_un_turno_terminal(
+@pytest.mark.parametrize("estado", ["cancelled", "expired"])
+async def test_no_se_confirma_a_mano_el_cobro_de_un_turno_soltado(
     client: AsyncClient,
     test_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -61,11 +63,21 @@ async def test_no_se_confirma_a_mano_el_cobro_de_un_turno_terminal(
 
 
 @pytest.mark.asyncio
-async def test_se_confirma_a_mano_el_cobro_de_un_turno_vivo(
-    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("estado", ["confirmed", "completed", "absent"])
+async def test_se_confirma_a_mano_el_cobro_de_un_turno_no_soltado(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    estado: str,
 ) -> None:
-    t = await _tienda(client, monkeypatch, "manual-vivo", sena=False)
+    """Cobrar el efectivo despues de atender (``completed``) o de un
+    ausente sigue funcionando como antes de esta rama."""
+    t = await _tienda(client, monkeypatch, f"manual-vivo-{estado}", sena=False)
     turno = await _confirmado(client, t, 13)
+    await test_session.execute(
+        update(Appointment).where(Appointment.id == turno).values(status=estado)
+    )
+    await test_session.commit()
 
     res = await client.post(
         f"/payments/{turno}/manual-confirm", headers=auth_headers(t.admin), json={}

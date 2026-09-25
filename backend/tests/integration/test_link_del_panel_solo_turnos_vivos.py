@@ -7,9 +7,10 @@ completado o vencido, y competia con la cancelacion (del cliente o del
 personal) sin orden de locks.
 
 Ahora:
-- lockea el turno primero (orden turno -> pago, regla 7) y solo acepta
-  ``pending``, ``confirmed`` y ``pending_payment``; cualquier otro estado es
-  409 ``APPOINTMENT_NOT_PAYABLE`` y no crea cobro.
+- lockea el turno primero (orden turno -> pago, regla 7) y rechaza un turno
+  soltado (``cancelled``, ``expired``) con 409 ``APPOINTMENT_NOT_PAYABLE`` sin
+  crear cobro. ``completed`` y ``absent`` se siguen pudiendo cobrar, como
+  antes de esta rama (correccion de alcance del coordinador).
 - la fase 2 (despues de hablar con MP, sin lock) vuelve a lockear el turno
   antes de sellar el link: si en el medio lo cancelaron, no sella nada, manda
   a vencer en MP el link recien creado (``payment.preference.expire``) y
@@ -67,8 +68,8 @@ async def _cobros(session: AsyncSession, turno: str) -> list[Payment]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("estado", ["cancelled", "completed", "expired", "absent"])
-async def test_sobre_un_turno_terminal_no_hay_link(
+@pytest.mark.parametrize("estado", ["cancelled", "expired"])
+async def test_sobre_un_turno_soltado_no_hay_link(
     client: AsyncClient,
     test_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -92,11 +93,22 @@ async def test_sobre_un_turno_terminal_no_hay_link(
 
 
 @pytest.mark.asyncio
-async def test_sobre_un_turno_vivo_hay_link(
-    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("estado", ["confirmed", "completed", "absent"])
+async def test_sobre_un_turno_no_soltado_hay_link(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    estado: str,
 ) -> None:
-    t = await _tienda(client, monkeypatch, "link-vivo-ok", sena=False)
+    """Antes de esta rama el link se generaba sobre cualquier turno; cobrar
+    por link un turno ya atendido (``completed``) o ausente sigue igual
+    (correccion de alcance del coordinador, 2026-09-25)."""
+    t = await _tienda(client, monkeypatch, f"link-vivo-{estado}", sena=False)
     turno = await _confirmado(client, t, 13)
+    await test_session.execute(
+        update(Appointment).where(Appointment.id == turno).values(status=estado)
+    )
+    await test_session.commit()
 
     res = await client.post(
         f"/payments/preferences/{turno}", headers=auth_headers(t.admin)

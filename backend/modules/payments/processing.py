@@ -17,7 +17,7 @@ from modules.payments.model import (
 from modules.payments.model import JsonValue
 from modules.services.model import Service
 from modules.payments.service import (
-    LINKABLE_APPOINTMENT_STATUSES,
+    RELEASED_APPOINTMENT_STATUSES,
     GatewayConfigs,
     PersistRefresh,
     expire_live_charge,
@@ -244,11 +244,9 @@ async def _validate_payment_integrity(
 
 
 # Estados de un turno cuyo horario ya se solto: un pago que llega despues no
-# lo revive (el horario pudo tomarlo otra persona). S-16, 2026-09-19.
-_TURNO_LIBERADO = {
-    AppointmentStatus.EXPIRED.value,
-    AppointmentStatus.CANCELLED.value,
-}
+# lo revive (el horario pudo tomarlo otra persona). S-16, 2026-09-19. Misma
+# fuente que el link del panel y la confirmacion manual.
+_TURNO_LIBERADO = RELEASED_APPOINTMENT_STATUSES
 
 
 async def _publicar_aviso_de_cobro(
@@ -471,11 +469,11 @@ async def apply_mercadopago_webhook_payload(
         ):
             appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         sync_appointment_with_payment(appointment, payment.status)
-        # El pago saco al turno de los estados cobrables (un rechazo pasa un
-        # ``pending_payment`` a ``expired``): su cobro vivo se vence con el
+        # El pago solto el turno (un rechazo pasa un ``pending_payment`` a
+        # ``expired``): su cobro vivo se vence con el
         # camino compartido, turno y pago ya lockeados (revision de perf/f4-pay,
         # 2026-09-25). Antes quedaba ``rejected`` con el link vivo en MP.
-        if appointment.status not in LINKABLE_APPOINTMENT_STATUSES:
+        if appointment.status in RELEASED_APPOINTMENT_STATUSES:
             expire_live_charge(db, payment, reason="appointment_released_by_payment")
     await _avisar_al_dueno(
         db,

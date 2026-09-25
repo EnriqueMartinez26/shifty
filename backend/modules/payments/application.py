@@ -26,7 +26,7 @@ from modules.payments.service import (
     _is_placeholder_preference,
     calculate_service_payment_amount,
     ensure_payment_preference,
-    lock_linkable_appointment,
+    lock_payable_appointment,
     sync_appointment_with_payment,
 )
 from modules.services.model import Service
@@ -64,11 +64,13 @@ class PaymentService:
         (``_expire_live_checkout``): la plata ya entro por otro lado.
 
         Revision de perf/f4-pay (2026-09-25): lockea el turno PRIMERO (orden
-        turno -> pago, regla 7), lo relee bajo el lock y solo acepta estados
-        cobrables; un turno terminal (p. ej. recien cancelado por el personal)
-        es 409 ``APPOINTMENT_NOT_PAYABLE`` y el cobro no se toca.
+        turno -> pago, regla 7), lo relee bajo el lock y rechaza un turno
+        soltado (``cancelled``/``expired``, p. ej. recien cancelado por el
+        personal) con 409 ``APPOINTMENT_NOT_PAYABLE`` sin tocar el cobro. Un
+        ``completed`` o ``absent`` se sigue cobrando a mano (el efectivo se
+        registra despues de atender).
         """
-        if not await lock_linkable_appointment(
+        if not await lock_payable_appointment(
             self.uow.session, appointment_id=appointment.id, store_id=actor.store_id
         ):
             raise AppointmentNotPayableError()
