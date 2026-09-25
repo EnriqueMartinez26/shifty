@@ -381,6 +381,20 @@ Una instrucción en lenguaje natural no es una garantía.
   (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`)
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
+- **Un turno en el pasado lo agenda solo la tienda** (decisión del dueño,
+  2026-09-25). El panel (`POST /appointments/` con datos de cliente) y
+  `POST /waitlist/{id}/book` aceptan un inicio ya pasado para registrar a quien
+  llegó sin turno: pasa por lock, bloqueos, choques y GiST igual que cualquier
+  alta, pero no publica mail de reserva ni de confirmación y no genera
+  recordatorios. El cliente final nunca: la reserva pública, la reprogramación
+  de "Mis turnos" y anotarse en la lista de espera rechazan todo inicio pasado,
+  aunque la tienda tenga `min_booking_notice_hours = 0`. Los topes de fecha de
+  reservar y reprogramar son solo contra el desborde
+  (`core/utils.MAX_BOOKING_AHEAD`, 2 años hacia adelante y hacia atrás en la
+  tienda): los 120 días del cliente los pone la grilla de `/public/availability`.
+  Un tope más estricto es una decisión de producto, no un arreglo.
+  (`test_cliente_final_sin_pasado.py`, `test_alta_del_panel_para_cliente.py`,
+  `test_horizonte_de_reservas.py`, `test_recordatorios_solo_turnos_futuros.py`)
 
 ### Lista de espera, suscripción y avisos (Fases 4-7, 2026-09-11)
 
