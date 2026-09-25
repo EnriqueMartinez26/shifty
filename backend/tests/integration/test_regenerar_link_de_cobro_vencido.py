@@ -164,7 +164,7 @@ async def test_un_webhook_de_la_preferencia_vieja_no_toca_el_cobro_regenerado(
     cobro = await _cobro(test_session, turno)
     nueva = cobro.preference_id
 
-    # ``in_process`` de un link retirado no se aplica. ``approved`` si: el
+    # ``in_process`` de un link retirado no toca el cobro. ``approved`` si: el
     # cobro adopta el link retirado que se pago y el nuevo se vence
     # (tests/integration/test_pago_en_link_retirado.py).
     aplicado = await _webhook_de(
@@ -185,7 +185,9 @@ async def test_un_webhook_de_la_preferencia_vieja_no_toca_el_cobro_regenerado(
             vieja,
         )
     else:
-        assert aplicado is False
+        # Procesado como no-op: el inbox lo cierra sin tocar el cobro
+        # (revision de 7abb9b4..e5579b6, #6).
+        assert aplicado is True
         assert (cobro.status, cobro.preference_id) == (
             PaymentStatus.PENDING.value,
             nueva,

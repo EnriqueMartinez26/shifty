@@ -33,7 +33,7 @@ import modules.notifications.tasks as tasks
 import modules.payments.processing as processing
 from modules.notifications.model import Notification
 from modules.stores.model import Store
-from modules.payments.jobs import process_outbox_batch
+from modules.payments.jobs import process_outbox_batch, process_webhook_inbox_batch
 from modules.payments.model import (
     WEBHOOK_INBOX_MAX_ATTEMPTS,
     OutboxMessage,
@@ -109,13 +109,15 @@ async def test_un_approved_de_un_link_reemplazado_avisa_una_vez(
         for e in logs
         if e["event"] == "payment_on_replaced_link" and e["log_level"] == "warning"
     ]
-    assert len(advertencias) == 2, logs
+    # Una vez por pago de MP, no en cada reintento del inbox (revision de
+    # 7abb9b4..e5579b6, #6): la misma deduplicacion que el aviso.
+    assert len(advertencias) == 1, logs
     assert advertencias[0]["store_id"] == store_id
     assert advertencias[0]["payment_id"] == cobro_id
     assert advertencias[0]["mp_payment_id"] == "mp-viejo-9"
     # Sin datos personales en el log.
     assert not {"client_name", "email", "phone", "payer"} & set(advertencias[0])
-    assert len(reportes) == 2 and reportes[0]["mp_payment_id"] == "mp-viejo-9"
+    assert len(reportes) == 1 and reportes[0]["mp_payment_id"] == "mp-viejo-9"
 
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     await process_outbox_batch(test_session)
@@ -135,19 +137,113 @@ async def test_un_approved_de_un_link_reemplazado_avisa_una_vez(
 
 
 @pytest.mark.asyncio
-async def test_un_in_process_de_un_link_reemplazado_no_avisa(
-    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("link", ["retirado", "desconocido"])
+@pytest.mark.parametrize(
+    "estado", ["in_process", "rejected", "refunded", "charged_back"]
+)
+async def test_un_no_aprobado_de_un_link_reemplazado_se_cierra_sin_dead_letter(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    estado: str,
+    link: str,
 ) -> None:
-    """Sin plata acreditada no hay nada que revisar: solo no se aplica."""
-    turno, mp, vieja, _nueva = await _regenerado(
-        client, test_session, monkeypatch, "reemplazado-en-proceso"
+    """Revision de 7abb9b4..e5579b6 (#6). Sin plata acreditada no hay nada que
+    revisar: el evento se marca procesado como no-op con un log de info. Antes
+    quedaba sin aplicar, el inbox lo reintentaba 10 veces y terminaba como
+    dead letter: disparaba la alerta critica ``dead_letter_webhooks`` por un
+    ``in_process`` o un ``rejected`` que no requieren nada."""
+    reportes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        processing,
+        "report_exception",
+        lambda exc, **contexto: reportes.append(contexto),
+    )
+    turno, mp, vieja, nueva = await _regenerado(
+        client, test_session, monkeypatch, f"no-aprobado-{estado}-{link}"
     )
     cobro = await _cobro(test_session, turno)
-    payload = _pago_de_mp(cobro, referencia=mp.referencias[vieja], externo="mp-x")
-    payload["status"] = payload["data"]["status"] = "in_process"
+    referencia = mp.referencias[vieja] if link == "retirado" else f"{turno}:otro"
+    remoto = _pago_de_mp(cobro, referencia=referencia, externo=f"mp-{estado}")["data"]
+    remoto["status"] = estado
 
-    assert await _aplicar(test_session, cobro, payload) is False
+    async def _detalle(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return dict(remoto)
+
+    monkeypatch.setattr(processing, "fetch_mercadopago_payment", _detalle)
+    test_session.add(
+        WebhookInbox(
+            store_id=cobro.store_id,
+            provider="mercadopago",
+            event_id=f"mercadopago:evt-{estado}-{link}",
+            event_type="payment",
+            payload={"type": "payment", "data": {"id": f"mp-{estado}"}},
+        )
+    )
+    await test_session.commit()
+
+    with capture_logs() as logs:
+        stats = await process_webhook_inbox_batch(test_session)
+
+    assert stats == {"processed": 1, "failed": 0, "inspected": 1}, stats
+    test_session.expire_all()
+    fila = (
+        await test_session.execute(
+            select(WebhookInbox).where(
+                WebhookInbox.event_id == f"mercadopago:evt-{estado}-{link}"
+            )
+        )
+    ).scalar_one()
+    assert fila.processed_at is not None
+    assert (fila.attempts, fila.error) == (0, None)
+    cobro = await _cobro(test_session, turno)
+    assert (cobro.status, cobro.preference_id) == (PaymentStatus.PENDING.value, nueva)
     assert await _avisos(test_session) == []
+    assert reportes == []
+    assert [e["log_level"] for e in logs if e["event"].startswith("payment_on")] == [
+        "info"
+    ], logs
+
+
+@pytest.mark.asyncio
+async def test_sin_id_del_pago_de_mp_avisa_una_vez_por_evento(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 7abb9b4..e5579b6 (#6). Sin id del pago de MP la clave de
+    deduplicacion no puede ser la cadena vacia: el primer aviso tapaba todos
+    los de la tienda. No se deduplica por pago: se avisa una vez por evento
+    (el id de la notificacion de MP), sin repetir en sus reentregas."""
+    reportes: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        processing,
+        "report_exception",
+        lambda exc, **contexto: reportes.append(contexto),
+    )
+    turno, _mp, _vieja, _nueva = await _regenerado(
+        client, test_session, monkeypatch, "reemplazado-sin-id"
+    )
+
+    async def _evento(nombre: str) -> bool:
+        cobro = await _cobro(test_session, turno)
+        payload = _pago_de_mp(cobro, referencia=f"{turno}:desconocido", externo="")
+        payload["data"].pop("id")
+        payload["id"] = nombre
+        return await _aplicar(test_session, cobro, payload)
+
+    with capture_logs() as logs:
+        resultados = [await _evento("evt-a"), await _evento("evt-a")]
+        resultados.append(await _evento("evt-b"))
+
+    assert resultados == [False, False, False]
+    avisos = await _avisos(test_session)
+    assert len(avisos) == 2, [a.payload for a in avisos]
+    advertencias = [
+        e
+        for e in logs
+        if e["event"] == "payment_on_replaced_link" and e["log_level"] == "warning"
+    ]
+    assert len(advertencias) == 2, logs
+    assert len(reportes) == 2, reportes
 
 
 @pytest.mark.asyncio
@@ -166,6 +262,9 @@ async def test_los_dead_letters_del_inbox_se_ven_en_el_slo(
             (ahora - timedelta(hours=1), WEBHOOK_INBOX_MAX_ATTEMPTS),  # dead letter
             (ahora - timedelta(hours=30), WEBHOOK_INBOX_MAX_ATTEMPTS),  # viejo
             (ahora - timedelta(hours=1), 1),  # aplicado bien
+            # Inactivo (dado de baja): la consulta de pendientes ya lo excluye
+            # y la de dead letters tambien (revision de 7abb9b4..e5579b6, #6).
+            (ahora - timedelta(hours=1), WEBHOOK_INBOX_MAX_ATTEMPTS),
         )
     ):
         test_session.add(
@@ -176,6 +275,7 @@ async def test_los_dead_letters_del_inbox_se_ven_en_el_slo(
                 processed_at=procesado,
                 attempts=intentos,
                 error="fallo" if intentos == WEBHOOK_INBOX_MAX_ATTEMPTS else None,
+                is_active=n != 3,
             )
         )
     await test_session.commit()

@@ -163,12 +163,14 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
     ).one()
     # Dead letters: agotaron los reintentos (``register_failure`` pone
     # ``processed_at``) y salen de "pendientes"; sin esto no se veian (revision
-    # de perf/f4-pay). Cae en ``ix_webhook_inbox_processed_history``.
+    # de perf/f4-pay). Cae en ``ix_webhook_inbox_processed_history``. Solo
+    # filas activas, como la consulta de pendientes (revision #6).
     dead_letters = await db.scalar(
         select(func.count(WebhookInbox.id)).where(
             WebhookInbox.processed_at >= ahora - timedelta(hours=24),
             WebhookInbox.attempts >= WEBHOOK_INBOX_MAX_ATTEMPTS,
             WebhookInbox.error.is_not(None),
+            WebhookInbox.is_active.is_(True),
             *store_filter,
         )
     )

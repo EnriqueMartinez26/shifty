@@ -486,6 +486,13 @@ async def _resolver_link(
     None: sigue el camino normal (link vigente, o un link RETIRADO del cobro
     que se adopta). True/False: ya resuelto, con eso responde el webhook.
 
+    Un evento no aprobado (``in_process``, ``rejected``, ``refunded``,
+    ``charged_back``) de un link que no es el vigente es un no-op PROCESADO
+    (True: el inbox lo cierra) con un log de info. Revision de
+    7abb9b4..e5579b6 (#6): devolver False lo dejaba reintentar 10 veces hasta
+    quedar como dead letter y disparar la alerta critica
+    ``dead_letter_webhooks`` sin plata acreditada que revisar.
+
     Un ``approved`` de un link retirado (cupon de efectivo o revision que se
     aprobo despues de regenerar o re-tarifar) se aplica si el cobro todavia
     no esta acreditado y el pago es por el importe y la moneda de ESE link:
@@ -500,8 +507,13 @@ async def _resolver_link(
     if link.tipo == "vigente":
         return None
     if payment_status != PaymentStatus.APPROVED.value:
-        logger.info("payment_on_replaced_link_ignored", store_id=store_id)
-        return False
+        logger.info(
+            "payment_on_replaced_link_ignored",
+            store_id=store_id,
+            payment_id=payment.id,
+            status=payment_status,
+        )
+        return True
     abierto = not payment.is_accredited and can_apply_payment_status(
         payment.status, PaymentStatus.APPROVED.value
     )
@@ -527,14 +539,18 @@ async def _pago_en_link_reemplazado(
     Revision de perf/f4-pay (2026-09-25): aplicar un ``approved`` de un link
     reemplazado dejaria vivo el link vigente (el cliente pagaria dos veces).
     Si entro plata: warning con ids (sin datos personales), evento a Sentry y
-    un aviso al dueno por pago de MP (las reentregas no repiten el aviso). El
-    webhook queda sin aplicar: el inbox lo reintenta hasta agotar y queda como
-    dead letter, visible en ``/ops/slo``. ``duplicado``: el cobro ya estaba
-    acreditado (o devuelto): el aviso pide devolver el pago.
+    un aviso al dueno, los tres UNA vez por pago de MP (revision de
+    7abb9b4..e5579b6, #6: antes el warning y Sentry salian en cada reintento
+    del inbox). El webhook queda sin aplicar: el inbox lo reintenta hasta
+    agotar y queda como dead letter, visible en ``/ops/slo``. ``duplicado``:
+    el cobro ya estaba acreditado (o devuelto): el aviso pide devolver el pago.
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     mp_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    clave = _clave_del_aviso(mp_payment_id, payload)
+    if clave is not None and await _aviso_publicado(db, store_id, clave):
+        return
     contexto = {
         "store_id": store_id,
         "payment_id": payment.id,
@@ -545,32 +561,47 @@ async def _pago_en_link_reemplazado(
     report_exception(
         PaymentOnReplacedLink("pago sobre un link reemplazado"), **contexto
     )
-    ya_avisado = (
-        await db.execute(
-            select(OutboxMessage.id)
-            .where(
-                OutboxMessage.store_id == store_id,
-                OutboxMessage.event_type
-                == NotificationType.PAYMENT_ON_REPLACED_LINK.value,
-                OutboxMessage.payload["mp_payment_id"].as_string() == mp_payment_id,
-            )
-            .limit(1)
+    db.add(
+        OutboxMessage(
+            store_id=store_id,
+            event_type=NotificationType.PAYMENT_ON_REPLACED_LINK.value,
+            payload={
+                "appointment_id": payment.appointment_id,
+                "payment_id": payment.id,
+                "mp_payment_id": mp_payment_id,
+                "amount": str(data.get("transaction_amount") or ""),
+                "duplicado": duplicado,
+                "aviso": clave,
+            },
         )
-    ).first()
-    if ya_avisado is None:
-        db.add(
-            OutboxMessage(
-                store_id=store_id,
-                event_type=NotificationType.PAYMENT_ON_REPLACED_LINK.value,
-                payload={
-                    "appointment_id": payment.appointment_id,
-                    "payment_id": payment.id,
-                    "mp_payment_id": mp_payment_id,
-                    "amount": str(data.get("transaction_amount") or ""),
-                    "duplicado": duplicado,
-                },
-            )
+    )
+
+
+def _clave_del_aviso(mp_payment_id: str, payload: dict[str, Any]) -> str | None:
+    """Clave de deduplicacion del aviso de un pago en un link reemplazado.
+
+    Por pago de MP; sin id de pago, por evento (el id de la notificacion de
+    MP, el mismo que identifica la fila del inbox): la cadena vacia no puede
+    ser una clave, con ella el primer aviso tapaba todos los de la tienda.
+    Sin ninguno de los dos no se deduplica (None): se avisa cada vez.
+    """
+    if mp_payment_id:
+        return f"pago:{mp_payment_id}"
+    evento = str(payload.get("id") or payload.get("resource") or "").strip()
+    return f"evento:{evento}" if evento else None
+
+
+async def _aviso_publicado(db: AsyncSession, store_id: str, clave: str) -> bool:
+    fila = await db.execute(
+        select(OutboxMessage.id)
+        .where(
+            OutboxMessage.store_id == store_id,
+            OutboxMessage.event_type == NotificationType.PAYMENT_ON_REPLACED_LINK.value,
+            OutboxMessage.payload["aviso"].as_string() == clave,
         )
+        .limit(1)
+    )
+    return fila.first() is not None
 
 
 async def _lock_turno_y_pago(
