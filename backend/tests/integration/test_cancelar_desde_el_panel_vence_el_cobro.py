@@ -265,6 +265,23 @@ async def test_el_profesional_cancela_un_pendiente_de_pago_y_el_cobro_se_vence(
 
 
 @pytest.mark.asyncio
+async def test_un_intento_rechazado_tambien_se_vence_al_cancelar(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de perf/f4-pay (2026-09-25): tras un rechazo el link de MP
+    sigue pagable, asi que ``rejected`` es cobro vivo y la cancelacion lo
+    vence por la entidad (``rejected -> expired`` esta en el grafo)."""
+    t = await _tienda(client, monkeypatch, "d2-rechazado", sena=False)
+    token = await _personal(client, t, "staff", "d2-rechazado")
+    turno = await _confirmado_con_link(client, t, 15)
+    cobro = await _cobro(test_session, turno)
+    assert cobro.apply_status(PaymentStatus.REJECTED.value)
+    await test_session.commit()
+
+    await _cancelar_y_verificar(client, test_session, monkeypatch, t, turno, token)
+
+
+@pytest.mark.asyncio
 async def test_un_turno_pagado_se_cancela_como_antes_y_el_pago_queda_acreditado(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

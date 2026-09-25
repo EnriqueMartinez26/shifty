@@ -168,7 +168,8 @@ Una instrucción en lenguaje natural no es una garantía.
    `test_statechart_invariants.py` cubre el grafo en Python (terminales
    absorbentes, una sola fuente por región).
 3. **Un turno con cobro vivo no se suelta sin vencer el cobro.** Cobro vivo
-   es `pending_payment` o un `Payment` en `pending`, p. ej. el link que el
+   es `pending_payment` o un `Payment` en `pending` o `rejected` (MP deja
+   reintentar sobre el mismo link), p. ej. el link que el
    panel genera sobre un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
    `modules/payments/model.py`; en SQL, `live_charge_of` en
    `modules/payments/repository.py`). El cliente no lo cancela ni lo

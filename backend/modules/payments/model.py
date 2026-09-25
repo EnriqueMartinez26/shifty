@@ -48,11 +48,14 @@ ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
 # (2026-09-25, D1): un turno con cobro vivo no lo cancela ni lo reprograma el
 # cliente, y cancelarlo desde el panel vence el cobro en la misma transaccion.
 # Unica fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
-# (``payments.repository.live_charge_filter``). ``expired`` no es vivo (lo
-# vencio Shifty y el outbox vence el link en MP); ``rejected`` tampoco hoy,
-# aunque MP permite reintentar sobre la misma preferencia (ver el reporte de
-# perf/f4-pay).
-LIVE_CHARGE_PAYMENT_STATUSES: frozenset[str] = frozenset({PaymentStatus.PENDING.value})
+# (``payments.repository.live_charge_of``). ``rejected`` SI es vivo: tras un
+# rechazo Mercado Pago deja reintentar sobre la misma preferencia (revision de
+# perf/f4-pay, 2026-09-25); el panel lo vence por ``rejected -> expired``, que
+# ya esta en el grafo. ``expired`` no es vivo (lo vencio Shifty y el outbox
+# vence el link en MP), ni los acreditados ni ``refunded``.
+LIVE_CHARGE_PAYMENT_STATUSES: frozenset[str] = frozenset(
+    {PaymentStatus.PENDING.value, PaymentStatus.REJECTED.value}
+)
 
 
 # Unica fuente de verdad del grafo de la region de facturacion.

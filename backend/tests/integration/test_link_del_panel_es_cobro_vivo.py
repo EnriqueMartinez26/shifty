@@ -8,10 +8,11 @@ pagar un turno que ya no existia. La guarda del cliente
 (``awaits_payment``) solo miraba ``status == pending_payment``.
 
 Ahora un turno tiene cobro vivo si esta en ``pending_payment`` O tiene un
-``Payment`` en ``PENDING`` (``LIVE_CHARGE_PAYMENT_STATUSES``): el cliente no
+``Payment`` en ``PENDING`` o ``REJECTED`` (``LIVE_CHARGE_PAYMENT_STATUSES``): el cliente no
 lo cancela ni lo reprograma (409 ``PAYMENT_APPOINTMENT_REQUIRES_RELEASE`` con
 el mensaje para el cliente) y el historial lo muestra sin "Cancelar" ni
-"Cambiar". Un cobro vencido, rechazado o devuelto no es un cobro vivo.
+"Cambiar". Un cobro rechazado SI es vivo (MP deja reintentar sobre el mismo
+link; revision de perf/f4-pay); uno vencido o devuelto no.
 """
 
 from __future__ import annotations
@@ -77,9 +78,12 @@ async def test_los_flags_del_historial_miran_el_cobro_vivo(
             # El link del panel sobre un confirmado: cobro vivo.
             ("confirmed", PaymentStatus.PENDING, (False, False)),
             ("pending", PaymentStatus.PENDING, (False, False)),
-            # Un link vencido o un intento rechazado no son un cobro vivo.
+            # Un intento rechazado deja el link pagable (MP permite reintentar
+            # sobre la misma preferencia): sigue siendo un cobro vivo
+            # (revision de perf/f4-pay, 2026-09-25).
+            ("confirmed", PaymentStatus.REJECTED, (False, False)),
+            # Un link vencido no es un cobro vivo.
             ("confirmed", PaymentStatus.EXPIRED, (True, True)),
-            ("confirmed", PaymentStatus.REJECTED, (True, True)),
             ("confirmed", PaymentStatus.REFUNDED, (True, True)),
         ),
         start=1,
@@ -122,6 +126,20 @@ async def test_el_cliente_no_cancela_ni_reprograma_un_turno_con_link_vivo(
         await test_session.execute(select(Appointment).where(Appointment.id == turno))
     ).scalar_one()
     assert quedo.status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_con_un_intento_rechazado_el_cliente_tampoco_cancela(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _t, base = await _con_turno(client, monkeypatch, "vivo-rechazado")
+    turno = await _turno_en_estado(test_session, base, "confirmed")
+    await _con_cobro(test_session, turno, PaymentStatus.REJECTED)
+
+    res = await client.patch(**_cancelar(turno))
+
+    assert res.status_code == 409, res.text
+    assert res.json()["error_code"] == "PAYMENT_APPOINTMENT_REQUIRES_RELEASE"
 
 
 @pytest.mark.asyncio
