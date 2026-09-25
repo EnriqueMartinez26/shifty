@@ -36,7 +36,7 @@ from modules.payments.model import (
     external_reference_for,
 )
 from modules.services.model import Service
-from modules.payments.links import record_retired_link
+from modules.payments.links import ImportesDelLink, record_retired_link
 from modules.payments.model import (  # reexportado: lo importan jobs y tests
     EVENT_PREFERENCE_EXPIRE as EVENT_PREFERENCE_EXPIRE,
 )
@@ -944,7 +944,9 @@ def _reprice_existing_payment(
 
 
 def _retire_link(
-    db: AsyncSession, payment: Payment, importe_del_link: Decimal | None = None
+    db: AsyncSession,
+    payment: Payment,
+    importes_del_link: ImportesDelLink | None = None,
 ) -> None:
     """El cobro deja de usar su link: queda un placeholder hasta el nuevo, y
     se olvida el pago de MP que tenia anotado (era del link retirado).
@@ -965,7 +967,7 @@ def _retire_link(
     # Queda en el historial: un pago de este link que llegue despues (webhook
     # tardio o reentregado, o pagado antes de que MP lo venza) se reconoce y
     # se aplica o se alerta (``payments.links``).
-    record_retired_link(db, payment, amount=importe_del_link)
+    record_retired_link(db, payment, importes=importes_del_link)
     payment.preference_id, payment.payment_link = _placeholder_link(
         payment.appointment_id
     )
@@ -983,7 +985,7 @@ def _needs_provider_link(
     *,
     importe_cambio: bool,
     create_provider_link: bool,
-    importe_del_link: Decimal | None = None,
+    importes_del_link: ImportesDelLink | None = None,
 ) -> bool:
     """Hay que pedir un link nuevo a MP: cambio el importe o el que hay es falso.
 
@@ -994,7 +996,7 @@ def _needs_provider_link(
     (misma clase que el bug del 2026-09-11).
     """
     if importe_cambio and not create_provider_link:
-        _retire_link(db, payment, importe_del_link)
+        _retire_link(db, payment, importes_del_link)
     return (
         importe_cambio
         or _is_placeholder_preference(payment.preference_id)
@@ -1240,9 +1242,10 @@ def _refresh_existing_payment(
     ``_expire_replaced_preference``). Antes se devolvia el link viejo, ya
     vencido. La reapertura del cobro la hace la fase 2, ya sellado el link.
     """
-    # El importe que cobra el link vigente: si se re-tarifa y se retira, el
-    # historial guarda el de ESE link, no el nuevo.
-    importe_del_link = payment.amount
+    # Lo que cobra el link vigente (importe, promo, descuento): si se
+    # re-tarifa y se retira, el historial guarda los de ESE link, no los
+    # nuevos.
+    importes_del_link = ImportesDelLink.del_cobro(payment)
     importe_cambio = _reprice_existing_payment(
         payment,
         amount=amount,
@@ -1261,14 +1264,14 @@ def _refresh_existing_payment(
         # ``PaymentLinkRegenerationUnavailableError``.
         if not settings.MERCADOPAGO_LINK_REF_ENABLED:
             raise PaymentLinkRegenerationUnavailableError()
-        _retire_link(db, payment)
+        _retire_link(db, payment, importes_del_link)
     # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
     # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
     payment.apply_status(PaymentStatus.PENDING.value)
     return _needs_provider_link(
         db,
         payment,
-        importe_del_link=importe_del_link,
+        importes_del_link=importes_del_link,
         importe_cambio=importe_cambio,
         create_provider_link=create_provider_link,
     )

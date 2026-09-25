@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, cast
@@ -20,7 +21,9 @@ from modules.payments.model import (
     OutboxMessage,
     can_apply_payment_status,
     appointment_id_from_reference,
+    external_reference_for,
     Payment,
+    PaymentLinkHistory,
     PaymentStatus,
 )
 from modules.payments.model import JsonValue
@@ -262,37 +265,67 @@ def _referencia_del_pago(payload: dict[str, Any]) -> str:
     ).strip()
 
 
-def _validate_payment_link(payment: Payment, payload: dict[str, Any]) -> None:
-    """El pago es del link VIGENTE y por el importe esperado.
+@dataclass(frozen=True)
+class _LinkEsperado:
+    """Contra que link se valida un pago: el vigente del cobro o uno de su
+    historial que se va a adoptar."""
 
-    La referencia del link vigente es ``<turno>:<link_ref>`` (el turno solo si
-    el link es de antes de la columna): un pago de un link reemplazado no se
+    link_ref: str | None
+    referencia: str
+    importe: Decimal
+    preferencia: str | None
+
+    @classmethod
+    def vigente(cls, payment: Payment) -> _LinkEsperado:
+        return cls(
+            link_ref=payment.link_ref,
+            referencia=payment.current_external_reference,
+            importe=payment.amount,
+            preferencia=payment.preference_id,
+        )
+
+    @classmethod
+    def retirado(cls, payment: Payment, fila: PaymentLinkHistory) -> _LinkEsperado:
+        return cls(
+            link_ref=fila.link_ref,
+            referencia=external_reference_for(payment.appointment_id, fila.link_ref),
+            importe=fila.amount,
+            preferencia=fila.preference_id,
+        )
+
+
+def _validate_payment_link(
+    payment: Payment, payload: dict[str, Any], esperado: _LinkEsperado | None = None
+) -> None:
+    """El pago es del link esperado (el VIGENTE si no se dice otro) y por su
+    importe.
+
+    La referencia de un link es ``<turno>:<link_ref>`` (el turno solo si el
+    link es de antes de la columna): un pago de un link reemplazado no se
     aplica aunque MP no mande ``preference_id``, que el pago no trae
-    (revision de perf/f4-pay, 2026-09-25).
+    (revision de perf/f4-pay, 2026-09-25). ``esperado``: el link retirado que
+    se va a adoptar, validado ANTES de tocar el cobro (revision #2).
     """
+    link = esperado or _LinkEsperado.vigente(payment)
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     external_reference = _referencia_del_pago(payload)
     # Con nonce, un pago sin referencia no dice de que link es: no se aplica
     # (antes pasaba, fail-open; revision de perf/f4-pay, 2026-09-25). Sin
     # nonce (link de antes de la columna) se tolera como siempre.
-    if payment.link_ref and not external_reference:
+    if link.link_ref and not external_reference:
         raise RuntimeError("Mercado Pago no devolvio la referencia externa del link")
-    if external_reference and external_reference != payment.current_external_reference:
+    if external_reference and external_reference != link.referencia:
         raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
 
     received_amount = data.get("transaction_amount")
     if received_amount is not None and Decimal(str(received_amount)).quantize(
         Decimal("0.01")
-    ) != Decimal(str(payment.amount)).quantize(Decimal("0.01")):
+    ) != Decimal(str(link.importe)).quantize(Decimal("0.01")):
         raise RuntimeError("El importe acreditado no coincide con la seña esperada")
 
     preference_id = str(data.get("preference_id") or "").strip()
-    if (
-        preference_id
-        and payment.preference_id
-        and preference_id != payment.preference_id
-    ):
+    if preference_id and link.preferencia and preference_id != link.preferencia:
         raise RuntimeError("La preferencia acreditada no coincide con la esperada")
 
 
@@ -518,6 +551,13 @@ async def _resolver_link(
         payment.status, PaymentStatus.APPROVED.value
     )
     if abierto and link.retirado is not None and pays_retired_link(link.retirado, data):
+        # Todas las verificaciones ANTES de tocar el cobro (revision de
+        # e5579b6..3b977a9, #2): una que fallara despues de adoptar dejaba
+        # la adopcion a medias, y el webhook HTTP commitea tras
+        # ``register_failure``.
+        _validate_payment_link(
+            payment, payload, _LinkEsperado.retirado(payment, link.retirado)
+        )
         adopt_retired_link(db, payment, link.retirado)
         return None
     await _pago_en_link_reemplazado(

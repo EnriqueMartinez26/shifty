@@ -8,6 +8,9 @@ el link retirado antes de que MP lo venza, o el webhook tardio, reentregado
 o perdido de un pago hecho antes del retiro. Esta tabla guarda cada link retirado
 (``link_ref``, ``preference_id``, importe y moneda de ESE link) para que el
 webhook y la conciliacion lo reconozcan (``modules/payments/links.py``).
+``original_amount``, ``discount_amount`` y ``promotion_code`` explican ese
+importe: la adopcion del link los restaura (revision de e5579b6..3b977a9,
+#3; se agregaron aca porque la migracion todavia no se libero).
 
 Expand puro (docs/DEPLOY_RUNBOOK.md, seccion 5): tabla nueva, sin tocar las
 existentes. RLS forzada con la misma politica que las demas tablas con
@@ -53,6 +56,9 @@ def upgrade() -> None:
         sa.Column("link_ref", sa.String(length=40), nullable=True),
         sa.Column("preference_id", sa.String(length=255), nullable=True),
         sa.Column("amount", sa.Numeric(12, 2), nullable=False),
+        sa.Column("original_amount", sa.Numeric(12, 2), nullable=True),
+        sa.Column("discount_amount", sa.Numeric(12, 2), nullable=True),
+        sa.Column("promotion_code", sa.String(length=50), nullable=True),
         sa.Column("currency", sa.String(length=10), nullable=False),
         sa.Column("retired_at", sa.DateTime(timezone=True), nullable=False),
     )

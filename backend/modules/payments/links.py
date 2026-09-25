@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +43,8 @@ from modules.payments.model import (
     external_reference_for,
     is_placeholder_preference_id,
 )
+
+logger = structlog.get_logger()
 
 # Cuanto hacia atras la conciliacion busca en MP pagos de links retirados.
 # Con ``binary_mode`` no hay cupones de efectivo pendientes: un pago de un
@@ -78,21 +81,46 @@ def _link_ref_de(referencia: str) -> str | None:
     return referencia.split(EXTERNAL_REFERENCE_SEPARATOR, 1)[1] or None
 
 
+@dataclass(frozen=True)
+class ImportesDelLink:
+    """Importe de un link y lo que lo explica (promo, descuento). Se toma
+    ANTES de re-tarifar: el historial guarda los de ESE link, no los nuevos
+    (revision de e5579b6..3b977a9, #3)."""
+
+    amount: Decimal
+    original_amount: Decimal | None
+    discount_amount: Decimal | None
+    promotion_code: str | None
+
+    @classmethod
+    def del_cobro(cls, payment: Payment) -> ImportesDelLink:
+        return cls(
+            amount=payment.amount,
+            original_amount=payment.original_amount,
+            discount_amount=payment.discount_amount,
+            promotion_code=payment.promotion_code,
+        )
+
+
 def record_retired_link(
-    db: AsyncSession, payment: Payment, *, amount: Decimal | None = None
+    db: AsyncSession, payment: Payment, *, importes: ImportesDelLink | None = None
 ) -> None:
     """Anota el link que el cobro deja de usar. Un placeholder no existe en
-    MP (nadie pudo pagarlo): no se anota. ``amount``: el importe que cobraba
-    ESE link, si el cobro ya se re-tarifo antes de retirarlo."""
+    MP (nadie pudo pagarlo): no se anota. ``importes``: los que cobraba ESE
+    link, si el cobro ya se re-tarifo antes de retirarlo."""
     if is_placeholder_preference_id(payment.preference_id):
         return
+    del_link = importes or ImportesDelLink.del_cobro(payment)
     db.add(
         PaymentLinkHistory(
             store_id=payment.store_id,
             payment_id=payment.id,
             link_ref=payment.link_ref,
             preference_id=payment.preference_id,
-            amount=payment.amount if amount is None else amount,
+            amount=del_link.amount,
+            original_amount=del_link.original_amount,
+            discount_amount=del_link.discount_amount,
+            promotion_code=del_link.promotion_code,
             currency=payment.currency,
             retired_at=datetime.now(timezone.utc),
         )
@@ -169,8 +197,26 @@ def adopt_retired_link(
     El link vigente se retira (queda en el historial) y se manda a vencer en
     MP en esta misma transaccion (``payment.preference.expire``; un
     placeholder no se publica): un solo link vivo o pagado por cobro. El
-    importe del cobro pasa a ser el de ese link: la plata que entro.
+    importe del cobro pasa a ser el de ese link, la plata que entro, con su
+    promo y su descuento.
+
+    Quien la llama ya valido el pago contra ESE link: aca no hay nada que
+    pueda fallar a mitad (revision de e5579b6..3b977a9, #2). Queda un log de
+    info con los importes y los nonces (#3): el modulo de pagos no tiene
+    auditoria propia.
     """
+    logger.info(
+        "payment_adopted_retired_link",
+        store_id=payment.store_id,
+        payment_id=payment.id,
+        appointment_id=payment.appointment_id,
+        previous_amount=str(payment.amount),
+        amount=str(retirado.amount),
+        previous_link_ref=payment.link_ref,
+        link_ref=retirado.link_ref,
+        previous_preference_id=payment.preference_id,
+        preference_id=retirado.preference_id,
+    )
     if not is_placeholder_preference_id(payment.preference_id):
         record_retired_link(db, payment)
         db.add(
@@ -188,6 +234,9 @@ def adopt_retired_link(
     payment.preference_id = retirado.preference_id
     payment.payment_link = None
     payment.amount = retirado.amount
+    payment.original_amount = retirado.original_amount
+    payment.discount_amount = retirado.discount_amount
+    payment.promotion_code = retirado.promotion_code
     payment.currency = retirado.currency
 
 
@@ -238,6 +287,7 @@ async def retired_link_references(
 
 
 __all__ = [
+    "ImportesDelLink",
     "RETIRED_LINK_SEARCH_DAYS",
     "RETIRED_LINK_SEARCH_MAX",
     "LinkDelPago",

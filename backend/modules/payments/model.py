@@ -299,6 +299,15 @@ class PaymentLinkHistory(BaseEntity):
     link_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
     preference_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # Lo que explica ESE importe (promo o descuento del link): la adopcion lo
+    # restaura con el importe (revision de e5579b6..3b977a9, #3).
+    original_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    discount_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    promotion_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     currency: Mapped[str] = mapped_column(String(10))
     retired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
