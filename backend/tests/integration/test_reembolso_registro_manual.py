@@ -6,7 +6,7 @@ sistema informaba "reembolsado", el turno podia cancelarse y la conciliacion
 lo contaba en ``refunded_payments``, pero la plata seguia en la cuenta de MP
 de la tienda: ningun reporte mostraba la diferencia.
 
-Decision del dueno (OK global, 2026-09-18): por ahora el endpoint solo
+Decision de Mateo (OK global, 2026-09-18): por ahora el endpoint solo
 REGISTRA un reembolso hecho fuera de Shifty, con ``manual: true``. Un
 reembolso automatico real es irreversible y necesita compensacion probada:
 no es esta pasada. La ruta y el nombre no cambian (contrato del front).

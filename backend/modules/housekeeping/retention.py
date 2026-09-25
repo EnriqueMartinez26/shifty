@@ -5,7 +5,7 @@ inbox de webhooks, los OTP ni las notificaciones (solo ``auth_sessions``
 tenia su job). A 6.000 turnos/dia son ~10 GB/ano, y cada lote del beat paga
 el bloat de su tabla.
 
-Las ventanas las decidio el dueno (decision 17; CLAUDE.md §1: la IA no
+Las ventanas las decidio Mateo (decision 17 del plan; CLAUDE.md §1: la IA no
 decide destruccion) y viven en settings:
 
 - ``outbox_messages`` y ``webhook_inbox`` PROCESADOS hace mas de

@@ -1,6 +1,6 @@
 """El cliente final nunca reserva en el pasado, aunque la tienda no pida antelacion.
 
-2026-09-25, decision del dueno: la TIENDA puede cargar un horario que ya paso
+2026-09-25, decision de Mateo: la TIENDA puede cargar un horario que ya paso
 (alta del panel para un cliente, reservar desde la lista de espera); el
 CLIENTE FINAL nunca. Estos tests fijan que los caminos del cliente rechazan
 todo inicio en el pasado por si mismos, no por la antelacion minima de la

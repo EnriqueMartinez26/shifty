@@ -178,8 +178,8 @@ Una instrucción en lenguaje natural no es una garantía.
    entidad y `payment.preference.expire` al outbox en la misma transacción
    (salvo un link placeholder, que no existe en MP), con el turno lockeado
    antes que el pago; el link de MP lo anula después el outbox. Todos los
-   caminos que sueltan un turno (decisión del dueño, 2026-09-25, y revisión
-   de perf/f4-pay):
+   caminos que sueltan un turno (propuesta por Mateo, adoptada por el dueño el
+   2026-09-25, y revisión de perf/f4-pay):
    - cancelar desde el panel (`AppointmentService.cancel`, cualquier
      personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
      cancelar no toca un pago acreditado);
@@ -188,7 +188,7 @@ Una instrucción en lenguaje natural no es una garantía.
      (seña REQUERIDA pendiente) no se reprograma: 409
      `DEPOSIT_PENDING_RESCHEDULE_DENIED` bajo el lock del turno y antes de
      tocar nada, la seña nunca se pierde; se cobra y después se mueve, o se
-     cancela (decisión del dueño 2026-09-25: opción A;
+     cancela (opción A, propuesta por Mateo, adoptada por el dueño el 2026-09-25;
      `guards.reject_reschedule_with_pending_deposit`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
@@ -376,8 +376,8 @@ Una instrucción en lenguaje natural no es una garantía.
     camino de alta normaliza con `auth.service.normalize_email` y la base lo
     sostiene: `CHECK (email = lower(email))` (`ck_users_email_lower`, F1-12).
     **El email de quien inicia sesión (personal, admins, superadmin) es único
-    GLOBAL; el de un cliente, único POR TIENDA** (PV-01, decisión del dueño
-    2026-09-25, migración `4b6d8f0a2c13`): `uq_users_email_non_client`
+    GLOBAL; el de un cliente, único POR TIENDA** (PV-01, decisión de Mateo del
+    2026-09-25, a confirmar por el dueño; migración `4b6d8f0a2c13`): `uq_users_email_non_client`
     (`email` WHERE `role <> 'client'`) y `uq_users_client_email_per_store`
     (`store_id, email` WHERE `role = 'client'`); `ix_users_email` quedó como
     índice común y el funcional global `uq_users_email_lower` se retiró. Un

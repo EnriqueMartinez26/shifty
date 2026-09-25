@@ -30,7 +30,7 @@ class UserModel(Base):
     # login lo busca por IGUALDAD sobre la columna, que bajo RLS usa
     # ix_users_email (lower() no es leakproof y recorria la tabla entera).
     #
-    # PV-01 (2026-09-25, decision del dueno): el email de un CLIENTE es unico
+    # PV-01 (2026-09-25, decision de Mateo): el email de un CLIENTE es unico
     # por tienda (uq_users_client_email_per_store); el de quien inicia sesion
     # (personal, admins, superadmin) sigue unico en toda la plataforma
     # (uq_users_email_non_client). Un cliente y un profesional pueden

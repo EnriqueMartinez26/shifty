@@ -185,7 +185,7 @@ async def test_el_admin_reserva_para_un_cliente_nuevo_confirmado_y_sin_cobro(
 async def test_sin_antelacion_minima_y_con_turnos_ya_pasados(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    """Decision del dueno (2026-09-25): la TIENDA puede cargar un horario que
+    """Decision de Mateo (2026-09-25): la TIENDA puede cargar un horario que
     ya paso (un walk-in que se registra despues), hasta el piso contra el
     desborde (2 anios). Sin mail de "turno confirmado" para un turno que ya
     empezo; el cliente final nunca reserva en el pasado."""
@@ -625,7 +625,7 @@ async def test_inicio_lejano_422_y_no_500(client: AsyncClient) -> None:
 async def test_email_de_otra_tienda_entra_y_el_de_la_misma_tienda_es_409_neutro(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    """PV-01 (2026-09-25, decision del dueno): el email de un cliente es unico
+    """PV-01 (2026-09-25, decision de Mateo): el email de un cliente es unico
     POR TIENDA. Hasta ese dia era unico global y un cliente nuevo con el email
     de un usuario de otra tienda chocaba (409): el mismo cliente no podia
     reservar en dos tiendas y el 409 confirmaba que el email existia. Ahora

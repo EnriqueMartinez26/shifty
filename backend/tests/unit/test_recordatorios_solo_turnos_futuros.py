@@ -1,6 +1,6 @@
 """Los recordatorios solo miran turnos futuros.
 
-2026-09-25, decision del dueno: la tienda puede cargar un turno que ya paso
+2026-09-25, decision de Mateo: la tienda puede cargar un turno que ya paso
 (walk-in registrado despues). Ese turno no tiene que disparar recordatorios:
 cada ventana de la corrida empieza en ``now + piso`` de su etapa (piso >= 0),
 asi que ``get_upcoming_for_reminders`` nunca pide un inicio anterior a ahora.

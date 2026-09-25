@@ -9,7 +9,7 @@ era la vigente, se clasificaba como "link reemplazado" y
 ``_notify_payment_reversed`` nunca avisaba al dueno.
 
 Ahora un cobro ``approved``/``manual_confirmed`` conserva importe,
-``link_ref`` y ``external_payment_id``. Decision del dueno (revision de
+``link_ref`` y ``external_payment_id``. Decision de Mateo (revision de
 e5579b6..3b977a9, #5): pedir el link del panel responde 409
 ``PAYMENT_ALREADY_ACCREDITED`` (no hay nada que cobrar), con o sin cambio de
 precio; confirmar a mano es un no-op 200 que devuelve el cobro tal como se

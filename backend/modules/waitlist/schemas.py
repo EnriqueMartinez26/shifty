@@ -109,8 +109,8 @@ class WaitlistBookRequest(BaseModel):
     Cota ancha, solo contra el desborde: entre hace 2 anios y dentro de 2
     anios (``MAX_BOOKING_AHEAD``). Sin ella un 9999-12-31 o un 0001-01-01
     desbordaban ``starts_at + duracion`` (500; revision de perf/f4-back). No
-    hay piso en "ahora": el dueno carga despues a quien ya atendio, y
-    rechazar reservas en el pasado es decision del dueno.
+    hay piso en "ahora": la tienda carga despues a quien ya atendio (decision
+    de Mateo, 2026-09-25).
     """
 
     starts_at: datetime

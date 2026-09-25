@@ -219,7 +219,7 @@ class AffectedAppointmentResponse(BaseModel):
     status: str
     # None = se cancela con cancel_affected; "pending_payment" = esperando la
     # sena en Mercado Pago (liberar a mano); "has_deposit" = sena acreditada
-    # (decision del dueno).
+    # (decision de Mateo).
     blocker: str | None = None
     cancellable: bool
 

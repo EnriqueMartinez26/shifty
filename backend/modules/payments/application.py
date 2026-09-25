@@ -160,7 +160,7 @@ class PaymentService:
     ) -> Payment:
         """REGISTRA un reembolso hecho fuera de Shifty. No pisa el monto historico.
 
-        B2-05 (2026-09-18, decision del dueno): Shifty no mueve plata en
+        B2-05 (2026-09-18, decision de Mateo): Shifty no mueve plata en
         Mercado Pago. Antes, con ``manual`` ausente o ``false``, el cobro
         quedaba ``refunded`` y la conciliacion lo contaba como devuelto
         mientras la plata seguia en la cuenta de MP de la tienda. Ahora solo

@@ -210,7 +210,7 @@ async def search_ledger_clients(
     q: Annotated[str | None, Query(min_length=2, max_length=80)] = None,
     limit: Annotated[int, Query(ge=1, le=LEDGER_CLIENTS_MAX)] = LEDGER_CLIENTS_DEFAULT,
 ) -> list[LedgerClientItem]:
-    """Decision del dueno (2026-09-25, D3): el profesional busca clientes para
+    """Decision de Mateo (2026-09-25, D3): el profesional busca clientes para
     el fiado sin ``/users/``, que es del admin y lista tambien al personal.
     Misma puerta que el resto del fiado (rol, modulo, suspension por router)."""
     _require_financial_access(user)

@@ -233,7 +233,7 @@ class PublicRepository:
         escrita con otra capitalizacion y el INSERT chocaba contra el indice
         funcional ``uq_users_email_lower`` (AUD2-B3-04, 2026-09-20).
 
-        PV-01 (2026-09-25, decision del dueno): el email de un cliente es unico
+        PV-01 (2026-09-25, decision de Mateo): el email de un cliente es unico
         POR TIENDA (``uq_users_client_email_per_store``). El mismo email en
         otra tienda es otra ficha y la reserva entra; antes chocaba con la
         unicidad global y el 409 decia a cualquiera si ese email existia en

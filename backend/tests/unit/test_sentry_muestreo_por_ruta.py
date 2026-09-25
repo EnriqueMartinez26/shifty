@@ -176,7 +176,7 @@ def test_init_usa_el_sampler_la_version_y_monitorea_beat(
 
 
 def test_sentry_crons_monitorea_solo_el_vencimiento_de_senas() -> None:
-    """Plan gratuito de Sentry: UN monitor (decision del dueno, 2026-09-25).
+    """Plan gratuito de Sentry: UN monitor (decision de Mateo, 2026-09-25).
 
     ``monitor_beat_tasks`` creaba un monitor por cada tarea de beat con
     crontab (8). Se monitorea solo el vencimiento de retenciones sin pagar:

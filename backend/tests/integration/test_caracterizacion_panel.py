@@ -284,7 +284,7 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
 
 @pytest.mark.asyncio
 # "con_cobro" (``pending_payment``) es 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
-# (decision del dueno 2026-09-25: opcion A); lo fija
+# (decision de Mateo 2026-09-25: opcion A); lo fija
 # test_reprogramar_del_panel_vence_el_cobro, con la base intacta.
 @pytest.mark.parametrize("caso", ["choque", "inexistente"])
 async def test_reprogramar_del_panel_rechazos(

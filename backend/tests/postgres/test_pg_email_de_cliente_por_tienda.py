@@ -1,6 +1,6 @@
 """PV-01 contra Postgres real: email de cliente por tienda, del personal global.
 
-2026-09-25 (auditoria de privacidad PV-01, decision del dueno). La base es la
+2026-09-25 (auditoria de privacidad PV-01, decision de Mateo). La base es la
 garantia, no el pre-chequeo:
 
 - ``uq_users_client_email_per_store``: UNIQUE ``(store_id, email)`` WHERE

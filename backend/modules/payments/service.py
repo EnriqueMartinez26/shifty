@@ -1669,7 +1669,7 @@ async def _panel_link_phase_one(
             renew_expired_link=True,
         )
         if payment.is_accredited:
-            # Nada que cobrar, cambie o no el precio (decision del dueno,
+            # Nada que cobrar, cambie o no el precio (decision de Mateo,
             # revision de e5579b6..3b977a9, #5): el upsert no escribio nada.
             raise PaymentAlreadyAccreditedError()
         return payment, creado

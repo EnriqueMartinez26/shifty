@@ -1,6 +1,6 @@
 """El profesional ve y carga fiado, y busca clientes sin ver cuentas del personal.
 
-Decision del dueno (2026-09-25, D3). El fiado (``/ledger/*``) ya admitia al
+Decision de Mateo (2026-09-25, D3). El fiado (``/ledger/*``) ya admitia al
 profesional (``_require_financial_access``: rol persistido ``admin`` o
 ``staff``), pero la pantalla no le servia: para elegir el cliente usaba
 ``GET /users/``, que es solo del admin y lista TODAS las cuentas de la tienda

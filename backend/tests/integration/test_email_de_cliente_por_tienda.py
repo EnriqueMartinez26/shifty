@@ -7,7 +7,7 @@ email, por el portal y por el alta del panel. El mismo 409 era un oraculo
 publico: cualquiera, sin cuenta, sabia si un email existia en Shifty (cliente
 de otra tienda o cuenta de administrador).
 
-Decision del dueno (2026-09-25): un cliente usa el mismo email en todas las
+Decision de Mateo (2026-09-25): un cliente usa el mismo email en todas las
 tiendas que quiera. Los clientes no inician sesion (el portal es telefono +
 OTP), asi que su email solo tiene que ser unico dentro de su tienda. El
 personal, los admins y el superadmin entran por email: el suyo sigue unico

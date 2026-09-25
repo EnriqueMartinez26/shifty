@@ -37,7 +37,7 @@ _RATE_PANEL_READ = 0.1
 # traza.
 _RATE_TASK = 0.02
 
-# Sentry Crons en el plan gratuito: UN monitor (decision del dueno,
+# Sentry Crons en el plan gratuito: UN monitor (decision de Mateo,
 # 2026-09-25). ``monitor_beat_tasks`` crea uno por cada tarea de beat con
 # crontab (8); se monitorea solo el vencimiento de retenciones sin pagar
 # (``core/celery_app.py``): si deja de correr, los turnos con sena pendiente no

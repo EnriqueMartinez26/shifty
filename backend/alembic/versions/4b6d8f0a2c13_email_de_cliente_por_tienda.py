@@ -7,7 +7,7 @@ reservar en la B con el mismo email (409), y ese 409 era un oraculo publico:
 cualquiera sabia si un email existia en Shifty, fuera cliente de otra tienda o
 cuenta de administrador.
 
-Decision del dueno (2026-09-25): un cliente usa el mismo email en todas las
+Decision de Mateo (2026-09-25): un cliente usa el mismo email en todas las
 tiendas que quiera. Los clientes no inician sesion (portal por telefono +
 OTP); el personal, los admins y el superadmin si, por email, y el suyo sigue
 unico global. Queda:

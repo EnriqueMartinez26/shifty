@@ -1,6 +1,6 @@
 """Reprogramar desde el panel un turno con cobro vivo vence el cobro.
 
-Decision del dueno (2026-09-25, misma regla que D2: simplificarle al
+Decision de Mateo (2026-09-25, misma regla que D2: simplificarle al
 personal). Sintoma: reprogramar desde el panel un turno CONFIRMADO con un
 link de pago del panel cancelaba el original sin tocar su cobro: el link de
 Mercado Pago quedaba vivo apuntando a un turno cancelado y el turno nuevo
@@ -14,7 +14,7 @@ cancelarlo. El turno nuevo nace sin cobro y un confirmado sigue confirmado.
 
 Un turno en ``pending_payment`` (sena REQUERIDA pendiente) no se reprograma
 desde el panel: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED`` ("Cobrá la seña o
-cancelá el turno antes de moverlo"), sin tocar nada (decision del dueno
+cancelá el turno antes de moverlo"), sin tocar nada (decision de Mateo
 2026-09-25: opcion A). Reprogramarlo como ``pending`` sin cobro, lo que se
 hizo mientras tanto, perdia la sena requerida. El personal lo puede cancelar
 (D2 vence el cobro) o cobrar la sena y despues moverlo. El link del panel de
