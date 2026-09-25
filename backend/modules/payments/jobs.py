@@ -1436,48 +1436,63 @@ async def _reconcile(
             )
         )
         filas = list(result.scalars().all())
-    reconciled = 0
-    inspected = 0
+    conteo = {"reconciled": 0, "failed": fallidos, "inspected": 0}
     for payment in filas:
-        # ``reconciled`` cuenta cambios de estado reales, no no-ops (un pago
-        # remoto que sigue pendiente; revision de e5579b6..3b977a9, #4 f).
-        estado_previo = payment.status
-        remote = remotos.get(payment.id)
-        if not remote:
-            # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
-            inspected += 1
-            continue
-        try:
-            # Savepoint por cobro (AUD2-B2-11): "no frenar al resto del lote"
-            # no alcanzaba si la excepcion venia de la base, porque la
-            # transaccion quedaba abortada y los cobros ya conciliados se
-            # perdian en el commit final. Este lote no tiene attempts propio:
-            # el cobro sigue pendiente y lo toma la corrida siguiente.
-            async with db.begin_nested():
-                # Primero el turno, con SKIP LOCKED: si un webhook o un
-                # "liberar" lo tiene tomado, este cobro queda para la corrida
-                # siguiente en vez de esperar (la semantica que antes daba el
-                # SKIP LOCKED del lote de pagos). Despues el apply lockea el
-                # pago, ya en el orden turno -> pago.
-                if not await _lock_appointment_or_skip(db, payment):
-                    continue
-                inspected += 1
-                applied = await apply_mercadopago_webhook_payload(
-                    db,
-                    store_id=payment.store_id,
-                    payload={"data": remote, "status": remote.get("status")},
-                    configs=configs,
-                )
-        except SoftTimeLimitExceeded:
-            raise
-        except Exception:
-            fallidos += 1
-        else:
-            if applied and payment.status != estado_previo:
-                reconciled += 1
+        resultado = await _conciliar_un_cobro(
+            db, payment, remotos.get(payment.id), configs
+        )
+        for clave in resultado:
+            conteo[clave] += 1
 
     await db.commit()
-    return {"reconciled": reconciled, "failed": fallidos, "inspected": inspected}
+    return conteo
+
+
+async def _conciliar_un_cobro(
+    db: AsyncSession,
+    payment: Payment,
+    remote: dict[str, Any] | None,
+    configs: GatewayConfigs,
+) -> tuple[str, ...]:
+    """Fase B de la conciliacion para UN cobro ya consultado: que contadores
+    suma (``inspected``, ``reconciled``, ``failed``). Extraida de
+    ``_reconcile`` por la regla 29 (revision de 3b977a9..6c84d46, #1)."""
+    if not remote:
+        # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
+        return ("inspected",)
+    # ``reconciled`` cuenta cambios de estado reales, no no-ops (un pago
+    # remoto que sigue pendiente; revision de e5579b6..3b977a9, #4 f).
+    estado_previo = payment.status
+    bloqueado = False
+    try:
+        # Savepoint por cobro (AUD2-B2-11): "no frenar al resto del lote"
+        # no alcanzaba si la excepcion venia de la base, porque la
+        # transaccion quedaba abortada y los cobros ya conciliados se
+        # perdian en el commit final. Este lote no tiene attempts propio:
+        # el cobro sigue pendiente y lo toma la corrida siguiente.
+        async with db.begin_nested():
+            # Primero el turno, con SKIP LOCKED: si un webhook o un
+            # "liberar" lo tiene tomado, este cobro queda para la corrida
+            # siguiente en vez de esperar (la semantica que antes daba el
+            # SKIP LOCKED del lote de pagos). Despues el apply lockea el
+            # pago, ya en el orden turno -> pago.
+            if not await _lock_appointment_or_skip(db, payment):
+                return ()
+            bloqueado = True
+            applied = await apply_mercadopago_webhook_payload(
+                db,
+                store_id=payment.store_id,
+                payload={"data": remote, "status": remote.get("status")},
+                configs=configs,
+            )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        # Como antes: cuenta como inspeccionado si ya habia tomado el turno.
+        return ("inspected", "failed") if bloqueado else ("failed",)
+    if applied and payment.status != estado_previo:
+        return ("inspected", "reconciled")
+    return ("inspected",)
 
 
 async def _lecturas_para_mp(
