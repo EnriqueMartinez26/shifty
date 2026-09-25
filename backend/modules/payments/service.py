@@ -29,6 +29,7 @@ from modules.payments.model import (
     Payment,
     PaymentGatewayConfig,
     PaymentStatus,
+    is_placeholder_preference_id,
 )
 from modules.services.model import Service
 from modules.stores.media import absolute_media_url
@@ -190,7 +191,7 @@ def _placeholder_link(appointment_id: str) -> tuple[str, str]:
 
 
 def _is_placeholder_preference(preference_id: str | None) -> bool:
-    return not preference_id or preference_id.startswith("pref_")
+    return is_placeholder_preference_id(preference_id)
 
 
 def _is_placeholder_payment_link(payment_link: str | None) -> bool:
@@ -1133,6 +1134,51 @@ async def ensure_payment_preference(
     return payment
 
 
+def _refresh_existing_payment(
+    payment: Payment,
+    *,
+    amount: Decimal,
+    original_amount: Decimal,
+    discount_amount: Decimal,
+    promotion_code: str | None,
+    keep_existing_amount: bool,
+    deposit_rule: dict[str, JsonValue] | None,
+    create_provider_link: bool,
+    renew_expired_link: bool,
+) -> bool:
+    """Reaplica importes y estado a un cobro que ya existe; True si hace falta
+    pedirle un link nuevo a MP.
+
+    ``renew_expired_link`` (solo la fase 1 del link del panel, revision de
+    perf/f4-pay): un cobro ``expired`` pierde su link viejo y queda con un
+    placeholder, asi la fase 2 pide uno NUEVO (y el viejo se manda a vencer,
+    ``_expire_replaced_preference``). Antes se devolvia el link viejo, ya
+    vencido. La reapertura del cobro la hace la fase 2, ya sellado el link.
+    """
+    importe_cambio = _reprice_existing_payment(
+        payment,
+        amount=amount,
+        original_amount=original_amount,
+        discount_amount=discount_amount,
+        promotion_code=promotion_code,
+        keep_existing_amount=keep_existing_amount,
+    )
+    if deposit_rule is not None:
+        payment.deposit_rule = deposit_rule
+    if renew_expired_link and payment.status == PaymentStatus.EXPIRED.value:
+        payment.preference_id, payment.payment_link = _placeholder_link(
+            payment.appointment_id
+        )
+    # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
+    # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
+    payment.apply_status(PaymentStatus.PENDING.value)
+    return _needs_provider_link(
+        payment,
+        importe_cambio=importe_cambio,
+        create_provider_link=create_provider_link,
+    )
+
+
 async def _upsert_payment_preference(
     db: AsyncSession,
     *,
@@ -1146,8 +1192,12 @@ async def _upsert_payment_preference(
     create_provider_link: bool,
     deposit_rule: dict[str, JsonValue] | None,
     keep_existing_amount: bool,
+    renew_expired_link: bool = False,
 ) -> tuple[Payment, bool]:
-    """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17)."""
+    """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17).
+
+    ``renew_expired_link``: ver ``_refresh_existing_payment``.
+    """
     amount, original_amount, discount_amount = _resolve_amounts(
         service,
         amount_override=amount_override,
@@ -1164,23 +1214,16 @@ async def _upsert_payment_preference(
     # Un id REAL que se deja de usar hay que vencerlo en MP (AUD2-B2-03).
     preferencia_previa = None if payment is None else payment.preference_id
     if payment:
-        importe_cambio = _reprice_existing_payment(
+        should_refresh_provider_link = _refresh_existing_payment(
             payment,
             amount=amount,
             original_amount=original_amount,
             discount_amount=discount_amount,
             promotion_code=promotion_code,
             keep_existing_amount=keep_existing_amount,
-        )
-        if deposit_rule is not None:
-            payment.deposit_rule = deposit_rule
-        # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
-        # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
-        payment.apply_status(PaymentStatus.PENDING.value)
-        should_refresh_provider_link = _needs_provider_link(
-            payment,
-            importe_cambio=importe_cambio,
+            deposit_rule=deposit_rule,
             create_provider_link=create_provider_link,
+            renew_expired_link=renew_expired_link,
         )
     else:
         payment = _nuevo_cobro_pendiente(
@@ -1324,44 +1367,29 @@ async def _discard_unsealed_link(
         await db.commit()
 
 
-async def create_panel_payment_preference(
+async def _panel_link_phase_one(
     db: AsyncSession,
     *,
     appointment: Appointment,
     service: Service,
     store_id: str,
-    amount_override: Decimal | None = None,
-) -> Payment:
-    """Link de pago pedido desde el panel: commit -> llamada -> compensacion.
+    amount_override: Decimal | None,
+) -> tuple[Payment, bool]:
+    """Fase 1 del link del panel, SIN commit: turno lockeado primero (regla
+    7), 409 si esta soltado, y el cobro persistido (re-tarifado si
+    corresponde; un cobro ``expired`` pierde su link viejo).
 
-    Fase 1: se persiste el cobro PENDING (re-tarifado si corresponde; si el
-    importe cambio, el link viejo queda como placeholder) y se COMMITEA.
-    Fase 2: con la transaccion cerrada y la fila suelta, se llama a Mercado
-    Pago (hasta 20 s) y se sella el link real.
-
-    Si MP falla y el cobro lo creo esta llamada, se borra (compensacion). Si
-    ya existia, queda con su placeholder y el reintento desde el panel lo
-    refresca. Antes las dos fases vivian en la misma transaccion, con la
-    conexion del pool tomada durante la request externa (regla 5).
-
-    Las dos fases lockean el turno antes de escribir el cobro (orden turno ->
-    pago, regla 7) y rechazan un turno soltado
-    (``RELEASED_APPOINTMENT_STATUSES``) con 409 ``APPOINTMENT_NOT_PAYABLE``.
-    En la fase 1 no se crea nada. En la fase 2 (el turno se cancelo mientras
-    MP respondia) el link nuevo no se sella y se manda a vencer: nunca queda
-    un link vivo sobre un turno cancelado (revision de perf/f4-pay,
-    2026-09-25).
+    "Lo cree yo" sale del INSERT mismo, no de un SELECT previo (S-17,
+    2026-09-19): entre ese SELECT y el de la fase 1 otra request podia
+    commitear el cobro; esta lo tomaba por propio y, si su fase 2 chocaba con
+    la de la otra, borraba un cobro ajeno (rafaga -> cero cobros).
     """
     if not await lock_payable_appointment(
         db, appointment_id=appointment.id, store_id=store_id
     ):
         await db.rollback()
         raise AppointmentNotPayableError()
-    # "Lo cree yo" sale del INSERT mismo, no de un SELECT previo (S-17,
-    # 2026-09-19): entre ese SELECT y el de la fase 1 otra request podia
-    # commitear el cobro; esta lo tomaba por propio y, si su fase 2 chocaba
-    # con la de la otra, borraba un cobro ajeno (rafaga -> cero cobros).
-    payment, creado = await _upsert_payment_preference(
+    return await _upsert_payment_preference(
         db,
         appointment=appointment,
         service=service,
@@ -1373,6 +1401,64 @@ async def create_panel_payment_preference(
         create_provider_link=False,
         deposit_rule=None,
         keep_existing_amount=True,
+        renew_expired_link=True,
+    )
+
+
+async def _panel_link_from_provider(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    payment: Payment,
+) -> Payment:
+    """Fase 2 del link del panel hasta MP: pide y sella el link (sin commit)
+    con el importe que dejo la fase 1, dentro del presupuesto del request."""
+    with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+        return await ensure_payment_preference(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            amount_override=payment.amount,
+            original_amount=payment.original_amount,
+            discount_amount=payment.discount_amount,
+            promotion_code=payment.promotion_code,
+            keep_existing_amount=True,
+            create_provider_link=True,
+        )
+
+
+async def create_panel_payment_preference(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    amount_override: Decimal | None = None,
+) -> Payment:
+    """Link de pago pedido desde el panel: commit -> llamada -> compensacion.
+
+    Fase 1 (``_panel_link_phase_one``): se persiste el cobro y se COMMITEA.
+    Fase 2: con la transaccion cerrada se llama a Mercado Pago (regla 5) y se
+    sella el link real. Si MP falla y el cobro lo creo esta llamada, se borra
+    (compensacion); si ya existia, queda con su placeholder.
+
+    Las dos fases lockean el turno antes de escribir el cobro (orden turno ->
+    pago, regla 7) y rechazan un turno soltado
+    (``RELEASED_APPOINTMENT_STATUSES``) con 409 ``APPOINTMENT_NOT_PAYABLE``.
+    Si se solto mientras MP respondia, el link nuevo no se sella y se manda a
+    vencer. Un cobro ``expired`` con link NUEVO recien sellado se reabre con
+    ``Payment.reopen_for_panel_link`` (unico llamador; revision de
+    perf/f4-pay, 2026-09-25).
+    """
+    payment, creado = await _panel_link_phase_one(
+        db,
+        appointment=appointment,
+        service=service,
+        store_id=store_id,
+        amount_override=amount_override,
     )
     # Leidos antes del commit: tras un rollback las instancias quedan
     # expiradas y leerlas de nuevo seria IO fuera de lugar.
@@ -1380,23 +1466,19 @@ async def create_panel_payment_preference(
     await db.commit()
 
     try:
-        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
-            payment = await ensure_payment_preference(
-                db,
-                appointment=appointment,
-                service=service,
-                store_id=store_id,
-                amount_override=payment.amount,
-                original_amount=payment.original_amount,
-                discount_amount=payment.discount_amount,
-                promotion_code=payment.promotion_code,
-                keep_existing_amount=True,
-                create_provider_link=True,
-            )
+        payment = await _panel_link_from_provider(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            payment=payment,
+        )
         sellable = await lock_payable_appointment(
             db, appointment_id=appointment_id, store_id=store_id
         )
         if sellable:
+            # Turno lockeado y no soltado: el cobro vencido vuelve a ser vivo.
+            payment.reopen_for_panel_link()
             await db.commit()
     except RuntimeError, CircuitBreakerOpenError:
         # Fallo del PROVEEDOR (MercadoPagoAPIError es RuntimeError): si el

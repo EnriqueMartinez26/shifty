@@ -79,6 +79,11 @@ ALLOWED_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def is_placeholder_preference_id(preference_id: str | None) -> bool:
+    """Un link placeholder (``pref_<turno>``): no existe en Mercado Pago."""
+    return not preference_id or preference_id.startswith("pref_")
+
+
 def can_apply_payment_status(current: str, attempted: str) -> bool:
     """Indica si el pago puede pasar de ``current`` a ``attempted``."""
     if attempted == current:
@@ -188,6 +193,28 @@ class Payment(BaseEntity):
     def is_live_charge(self) -> bool:
         """El cobro sigue abierto: su link se puede pagar (D1, 2026-09-25)."""
         return self.status in LIVE_CHARGE_PAYMENT_STATUSES
+
+    def reopen_for_panel_link(self) -> bool:
+        """``expired -> pending`` para un link NUEVO generado desde el panel.
+
+        Revision de perf/f4-pay (2026-09-25, opcion b del coordinador): la
+        arista NO esta en ``ALLOWED_PAYMENT_TRANSITIONS`` a proposito. Ese
+        grafo lo usa el webhook, y un ``in_process`` tardio de la preferencia
+        vieja reabriria un cobro vencido (quizas de un turno ya cancelado).
+        Unico llamador: ``payments.service.create_panel_payment_preference``,
+        con el turno lockeado y no soltado, despues de sellar un
+        ``preference_id`` nuevo (un webhook de la preferencia vieja ya no
+        pasa la integridad). Lo fija ``tests/unit/test_reabrir_cobro_para_link_del_panel.py``.
+
+        Devuelve False (sin tocar nada) si el cobro no esta ``expired`` o si
+        no tiene un link real que cobrar.
+        """
+        if self.status != PaymentStatus.EXPIRED.value:
+            return False
+        if is_placeholder_preference_id(self.preference_id):
+            return False
+        self._status = PaymentStatus.PENDING.value
+        return True
 
     def apply_status(
         self, new_status: str, *, payload: dict[str, JsonValue] | None = None
@@ -305,6 +332,7 @@ __all__ = [
     "LIVE_CHARGE_PAYMENT_STATUSES",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
+    "is_placeholder_preference_id",
     "JsonPrimitive",
     "JsonValue",
     "OutboxMessage",

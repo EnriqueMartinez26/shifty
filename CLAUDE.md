@@ -200,7 +200,13 @@ Una instrucción en lenguaje natural no es una garantía.
    reprograma desde ningún lado (409 `APPOINTMENT_NOT_ACTIVE`). El link del
    panel y la confirmación manual lockean el turno y rechazan uno soltado
    (`cancelled`/`expired`, `RELEASED_APPOINTMENT_STATUSES`: 409
-   `APPOINTMENT_NOT_PAYABLE`); un `completed` o `absent` se sigue cobrando. (`test_link_del_panel_es_cobro_vivo.py`,
+   `APPOINTMENT_NOT_PAYABLE`); un `completed` o `absent` se sigue cobrando.
+   Regenerar el link de un cobro `expired` sella un `preference_id` nuevo y
+   lo reabre con `Payment.reopen_for_panel_link` (único llamador el link del
+   panel, bajo el lock del turno; `ALLOWED_PAYMENT_TRANSITIONS` no tiene
+   `expired → pending` para que un webhook tardío no reabra un cobro vencido;
+   `test_reabrir_cobro_para_link_del_panel.py`,
+   `test_regenerar_link_de_cobro_vencido.py`). (`test_link_del_panel_es_cobro_vivo.py`,
    `test_cancelar_desde_el_panel_vence_el_cobro.py`,
    `test_cancelar_dos_veces_desde_el_panel.py`,
    `test_reprogramar_del_panel_vence_el_cobro.py`,

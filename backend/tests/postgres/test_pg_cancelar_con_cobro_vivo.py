@@ -865,3 +865,170 @@ async def test_confirmacion_manual_contra_la_cancelacion_del_personal(
             pagado, cancelado = momentos[turno]
             assert pagado is not None and cancelado is not None
             assert pagado <= cancelado, (turno, pagado, cancelado)
+
+
+# ---------------------------------------------------------------------------
+# Regenerar el link de un cobro vencido contra un webhook tardio de la
+# preferencia vieja (revision de perf/f4-pay, 2026-09-25, #5 opcion b)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("estado_tardio", ["in_process", "approved"])
+@pytest.mark.parametrize("con_cancelacion", [False, True])
+async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vieja(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    estado_tardio: str,
+    con_cancelacion: bool,
+) -> None:
+    """Turnos confirmados cuyo link del panel vencio (cobro ``expired``). A la
+    vez: el admin regenera el link, llega un webhook tardio (``in_process`` o
+    ``approved``) de la preferencia VIEJA y, en una variante, el profesional
+    cancela el turno.
+
+    Todos toman el turno primero (regla 7). Lo que se fija en cualquier orden:
+    cero 5xx; nunca un cobro vivo sobre un turno cancelado; nunca un cobro
+    ``pending`` con la preferencia vieja (``in_process`` no reabre, el grafo
+    general no tiene ``expired -> pending``); un ``approved`` de la vieja solo
+    se registra si llego ANTES de la regeneracion (despues, la preferencia no
+    coincide y la integridad lo rechaza: ``applied`` false), y entonces con un
+    solo aviso al dueno.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    mp = _MercadoPago()
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    slug = f"regen-pg-{estado_tardio}-{int(con_cancelacion)}"
+    store, admin = await register_and_login(
+        client, app_sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(admin),
+        json={"deposit_policy": "La sena se descuenta del total."},
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, admin)
+    await _configure_gateway(client, admin)
+    service = await create_service(client, admin)
+    staff = await create_staff(client, admin, service, email=f"staff-{slug}@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+    profesional = await _profesional(client, admin)
+
+    turnos: list[str] = []
+    for i in range(TURNOS):
+        alta = await client.post(
+            "/appointments/",
+            headers=auth_headers(admin),
+            json={
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": dia.replace(
+                    hour=10 + i, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "client_name": f"Cliente Regen {i}",
+                "client_phone": f"+54911561{i:05d}",
+                "idempotency_key": f"{slug}-alta-{i:04d}",
+            },
+        )
+        assert alta.status_code == 201, alta.text
+        turno = str(alta.json()["public_id"])
+        link = await client.post(
+            f"/payments/preferences/{turno}", headers=auth_headers(admin)
+        )
+        assert link.status_code == 200, link.text
+        turnos.append(turno)
+    # MP vencio los links: los cobros quedan expired y los turnos, vivos.
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text("update payments set status = 'expired', version = version + 1")
+        )
+    viejas = {t: c["preferencia"] for t, c in (await _cobros(owner_engine)).items()}
+    for i, turno in enumerate(turnos):
+        mp.remotos[f"mp-tarde-{i}"] = {
+            "id": f"mp-tarde-{i}",
+            "status": estado_tardio,
+            "external_reference": turno,
+            "preference_id": viejas[turno],
+            "transaction_amount": (await _cobros(owner_engine))[turno]["importe"],
+            "currency_id": "ARS",
+        }
+
+    pedidos: list[tuple[str, str]] = []
+    llamadas: list[Any] = []
+    for i, turno in enumerate(turnos):
+        pedidos.append((turno, "regenerar"))
+        llamadas.append(
+            client.post(f"/payments/preferences/{turno}", headers=auth_headers(admin))
+        )
+        pedidos.append((turno, "webhook"))
+        llamadas.append(
+            client.post(
+                f"/payments/webhooks/mercadopago?store_id={store}",
+                json={
+                    "id": f"evt-tarde-{slug}-{i}",
+                    "type": "payment",
+                    "data": {"id": f"mp-tarde-{i}"},
+                },
+                headers=webhook_signature_headers(
+                    secret="secret-demo",
+                    data_id=f"mp-tarde-{i}",
+                    request_id=f"req-tarde-{slug}-{i}",
+                    ts="0",
+                ),
+            )
+        )
+        if con_cancelacion:
+            pedidos.append((turno, "cancelar"))
+            llamadas.append(
+                client.patch(
+                    f"/appointments/{turno}/cancel",
+                    headers=auth_headers(profesional),
+                )
+            )
+    respuestas: list[Response] = await asyncio.gather(*llamadas)
+
+    assert all(r.status_code < 500 for r in respuestas), [
+        (r.status_code, r.text[:200]) for r in respuestas if r.status_code >= 500
+    ]
+    finales = await _cobros(owner_engine)
+    eventos = await _eventos(owner_engine)
+    for turno in turnos:
+        propias = {
+            tipo: r
+            for (t, tipo), r in zip(pedidos, respuestas, strict=True)
+            if t == turno
+        }
+        final = finales[turno]
+        regenerar, webhook = propias["regenerar"], propias["webhook"]
+        assert regenerar.status_code in {200, 409}, regenerar.text
+        if regenerar.status_code == 409:
+            assert regenerar.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE"
+        assert webhook.status_code == 200, webhook.text
+        if con_cancelacion:
+            assert propias["cancelar"].status_code == 200, propias["cancelar"].text
+            assert final["turno"] == "cancelled", final
+            assert final["pago"] not in {"pending", "rejected"}, final
+        else:
+            assert final["turno"] == "confirmed", final
+        if final["pago"] == "pending":
+            assert final["preferencia"] != viejas[turno], final
+        aplicado = webhook.json().get("data", webhook.json())["applied"]
+        avisos = [
+            e
+            for e, p in eventos
+            if p.get("payment_id") == final["pago_id"]
+            and e
+            in {
+                NotificationType.PAYMENT_APPROVED.value,
+                NotificationType.PAYMENT_ON_RELEASED_APPOINTMENT.value,
+            }
+        ]
+        if final["pago"] == "approved":
+            assert estado_tardio == "approved" and aplicado, (final, aplicado)
+            assert len(avisos) == 1, avisos
+        else:
+            assert avisos == [], avisos
