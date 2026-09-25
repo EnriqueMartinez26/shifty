@@ -545,27 +545,29 @@ async def test_el_panel_no_pide_consentimiento_y_el_portal_si(
 async def test_inicio_lejano_422_y_no_500(client: AsyncClient) -> None:
     """Revision de perf/f4-back: ``starts_at`` = 9999-12-31 daba 500
     (``starts_at + duracion`` levanta ``OverflowError``) en las dos formas.
-    Tope del turno para un cliente: el horizonte del portal (120 dias
-    locales). Auto-turno: 2 anios (el panel no tenia horizonte y un tope de
-    120 dias le quitaria altas que hoy acepta)."""
+    Tope de las dos formas: 2 anios (``MAX_BOOKING_AHEAD``). El alta para un
+    cliente reemplaza al "Nuevo turno" que hoy reserva por el portal con fecha
+    libre; acotarla a 120 dias seria un cambio de producto (revision de
+    perf/f4-back)."""
     agenda = await _agenda(client, "ff04-lejano")
     ahora = datetime.now(timezone.utc)
     lejano = "9999-12-31T23:59:00+00:00"
 
     cliente_lejano = await _reservar(client, agenda, starts_at=lejano)
-    cliente_121 = await _reservar(
+    cliente_731 = await _reservar(
         client,
         agenda,
-        starts_at=(ahora + timedelta(days=121)).isoformat(),
+        starts_at=(ahora + timedelta(days=731)).isoformat(),
         allow_outside_schedule=True,
-        idempotency_key="ff04-lejano-121",
+        idempotency_key="ff04-lejano-731",
     )
-    cliente_119 = await _reservar(
+    cliente_400 = await _reservar(
         client,
         agenda,
-        starts_at=(ahora + timedelta(days=119)).isoformat(),
+        # Un dia despues del auto-turno de 400 dias (mismo profesional).
+        starts_at=(ahora + timedelta(days=401)).isoformat(),
         allow_outside_schedule=True,
-        idempotency_key="ff04-lejano-119",
+        idempotency_key="ff04-lejano-400",
     )
 
     def auto(cuando: str, clave: str) -> dict[str, Any]:
@@ -591,9 +593,9 @@ async def test_inicio_lejano_422_y_no_500(client: AsyncClient) -> None:
         json=auto((ahora + timedelta(days=400)).isoformat(), "ff04-auto-400"),
     )
 
-    for res in (cliente_lejano, cliente_121, auto_lejano, auto_731):
+    for res in (cliente_lejano, cliente_731, auto_lejano, auto_731):
         assert res.status_code == 422, res.text
-    assert cliente_119.status_code == 201, cliente_119.text
+    assert cliente_400.status_code == 201, cliente_400.text
     assert auto_400.status_code == 201, auto_400.text
 
 

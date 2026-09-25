@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.utils import MAX_BOOKING_AHEAD
 from core.validation import (
     PUBLIC_ID_PATTERN,
     normalize_client_phone,
@@ -19,10 +20,10 @@ from modules.appointments.model import AppointmentStatus
 # Un turno cargado desde el panel para un cliente puede empezar hasta 5
 # minutos antes del request: el dueno carga a quien acaba de sentarse (FF-04).
 PANEL_BOOKING_PAST_GRACE = timedelta(minutes=5)
-# Tope hacia adelante del auto-turno (sin cliente): el panel no tenia
-# horizonte y un 9999-12-31 salia 500 (``starts_at + duracion`` desborda).
-# Dos anios: corta lo absurdo sin quitar altas lejanas que hoy se aceptan.
-PANEL_SELF_BOOKING_MAX_AHEAD = timedelta(days=730)
+# Tope hacia adelante de las altas y reprogramaciones del panel: sin el, un
+# 9999-12-31 salia 500 (``starts_at + duracion`` desborda). Dos anios: corta
+# lo absurdo sin quitar altas lejanas que hoy se aceptan.
+PANEL_SELF_BOOKING_MAX_AHEAD = MAX_BOOKING_AHEAD
 
 
 class AppointmentCreate(BaseModel):
@@ -90,13 +91,12 @@ class AppointmentCreate(BaseModel):
         return self
 
     def _within_horizon(self, val: datetime) -> bool:
-        """Para un cliente, el horizonte del portal (``within_booking_horizon``);
-        para el auto-turno, dos anios."""
-        from core.utils import within_booking_horizon, within_max_ahead
+        """Las dos formas, hasta 2 anios (``MAX_BOOKING_AHEAD``): el alta para
+        un cliente reemplaza al "Nuevo turno" que hoy reserva por el portal con
+        fecha libre, y 120 dias ahi seria un cambio de producto."""
+        from core.utils import within_max_ahead
 
-        if self.for_client:
-            return within_booking_horizon(val)
-        return within_max_ahead(val, PANEL_SELF_BOOKING_MAX_AHEAD)
+        return within_max_ahead(val, MAX_BOOKING_AHEAD)
 
     @model_validator(mode="after")
     def reject_control_chars_in_notes(self) -> "AppointmentCreate":

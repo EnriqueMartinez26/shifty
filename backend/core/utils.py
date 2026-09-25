@@ -12,6 +12,12 @@ ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 # (FF-04) no van mas alla.
 BOOKING_HORIZON_DAYS = 120
 
+# Tope ANCHO de un alta o una reprogramacion (revision de perf/f4-back,
+# 2026-09-25): corta lo que desborda (9999-12-31) sin tocar el producto. El
+# front manda fechas libres por el panel y por "Mis turnos"; al cliente lo
+# acota la grilla de ``/public/availability`` (``BOOKING_HORIZON_DAYS``).
+MAX_BOOKING_AHEAD = timedelta(days=730)
+
 
 def local_to_utc(day: _date, moment: _time) -> datetime:
     """Combina fecha y hora locales de Argentina y devuelve el instante en UTC."""
