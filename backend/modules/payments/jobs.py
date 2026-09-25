@@ -1448,34 +1448,56 @@ async def _reconcile(
         )
         filas = list(result.scalars().all())
     conteo = {"reconciled": 0, "failed": fallidos, "inspected": 0}
+    # (cobro, tienda) de lo que la fase B proceso de verdad: no un cobro
+    # salteado porque otro tenia el turno (revision de 6c84d46..79a64e4, #1).
+    procesados: list[tuple[str, str]] = []
     for payment in filas:
         resultado = await _conciliar_un_cobro(
             db, payment, remotos.get(payment.id), configs
         )
         for clave in resultado:
             conteo[clave] += 1
+        if resultado:
+            procesados.append((payment.id, payment.store_id))
 
     await db.commit()
-    await _marcar_conciliados(db, consultados)
+    await _marcar_conciliados(db, procesados)
     return conteo
 
 
-async def _marcar_conciliados(db: AsyncSession, consultados: list[str]) -> None:
-    """Anota ``reconciled_at`` en los cobros que la fase A consulto.
+async def _marcar_conciliados(
+    db: AsyncSession, procesados: list[tuple[str, str]]
+) -> None:
+    """Anota ``reconciled_at`` en los cobros (id, tienda) que la fase B
+    proceso (revision de 3b977a9..6c84d46, #4).
 
     Despues del commit de la fase B y en su propia transaccion corta: un
-    fallo (``lock_timeout`` contra un webhook que tiene el pago) no se lleva
-    lo ya conciliado; se loguea y el orden de la cola se corrige en la
-    corrida siguiente. UPDATE por lote (sin la version del ORM: no es una
-    escritura de negocio y no puede chocar con la de un webhook). Revision
-    de 3b977a9..6c84d46, #4.
+    fallo no se lleva lo ya conciliado; se loguea y el orden de la cola se
+    corrige en la corrida siguiente.
+
+    Excepcion documentada a la regla 7 (CLAUDE.md): toca ``payments`` sin el
+    lock del turno. Es seguro porque solo escribe ``reconciled_at`` (y
+    ``updated_at``, por su ``onupdate``), no ``version`` ni nada de negocio,
+    y toma las filas en orden de id con ``FOR UPDATE SKIP LOCKED`` (revision
+    de 6c84d46..79a64e4, #1): orden determinista, sin esperar el
+    ``lock_timeout`` y sin interbloqueo con un webhook, que no espera nada de
+    esta transaccion; una fila que tiene otro escritor queda sin marcar en
+    esta corrida.
     """
-    if not consultados:
+    if not procesados:
         return
+    ids = [payment_id for payment_id, _ in procesados]
+    tiendas = {store_id for _, store_id in procesados}
+    tomables = (
+        select(Payment.id)
+        .where(Payment.id.in_(ids), Payment.store_id.in_(tiendas))
+        .order_by(Payment.id)
+        .with_for_update(skip_locked=True)
+    )
     try:
         await db.execute(
             update(Payment)
-            .where(Payment.id.in_(consultados))
+            .where(Payment.id.in_(tomables))
             .values(reconciled_at=datetime.now(timezone.utc))
             .execution_options(synchronize_session=False)
         )
@@ -1486,7 +1508,7 @@ async def _marcar_conciliados(db: AsyncSession, consultados: list[str]) -> None:
         await db.rollback()
         logger.warning(
             "reconciliation_mark_failed",
-            payments=len(consultados),
+            payments=len(procesados),
             error_type=type(exc).__name__,
         )
 
@@ -1636,8 +1658,10 @@ async def _fetch_remote_payment(
             )
         if primero is None or _es_aprobado(primero):
             return primero
-        # La consulta por id ocupa uno de los lugares del tope.
-        retirados_en_tope -= 1
+        # La consulta por id ocupa uno de los lugares del tope; nunca por
+        # debajo de 0: ``retiradas[:-1]`` buscaria casi todos (revision de
+        # 6c84d46..79a64e4, #3).
+        retirados_en_tope = max(0, retirados_en_tope - 1)
     referencias = (
         payment.current_external_reference,
         *retiradas[:retirados_en_tope],

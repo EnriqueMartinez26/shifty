@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -33,7 +34,7 @@ import modules.payments.jobs as jobs
 import modules.payments.service as payments_service
 from core.config import settings
 from core.crypto import encrypt_secret
-from modules.payments.model import Payment, PaymentGatewayConfig
+from modules.payments.model import Payment, PaymentGatewayConfig, WebhookInbox
 from tests.integration.test_expiracion_refresh_oauth import _tienda_con_turno_vencido
 from tests.integration.test_mails_al_cliente import Buzon
 from tests.integration.test_mp_lento_presupuesto import (
@@ -120,3 +121,74 @@ async def test_la_consulta_de_la_conciliacion_no_pasa_el_tope_con_refresh_y_rein
     assert transcurrido < REINTENTO_LENTO, transcurrido
     # El reintento cortado es una consulta fallida, no un cuelgue.
     assert resultado["failed"] == 1, resultado
+
+
+def _tope_vigente() -> float | None:
+    """Lo que le queda al ``mercadopago_budget`` activo (None: no hay)."""
+    fin = payments_service._budget_deadline.get()
+    if fin is None:
+        return None
+    return fin - asyncio.get_running_loop().time()
+
+
+@pytest.mark.asyncio
+async def test_la_consulta_por_id_corre_con_el_tope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Revision de 6c84d46..79a64e4 (#4): sacar el ``mercadopago_budget`` de
+    la consulta por id tiene que romper un test."""
+    topes: list[float | None] = []
+
+    async def por_id(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        topes.append(_tope_vigente())
+        return {"id": "mp-1", "status": "approved"}
+
+    monkeypatch.setattr(jobs, "fetch_mercadopago_payment", por_id)
+    cobro = Payment(
+        id="cobro-tope",
+        store_id="tienda-tope",
+        appointment_id="turno-tope",
+        amount=Decimal("100"),
+        provider="mercadopago",
+        external_payment_id="mp-1",
+    )
+
+    await jobs._fetch_remote_payment(None, cobro, {})  # type: ignore[arg-type]
+
+    assert len(topes) == 1 and topes[0] is not None, topes
+    assert 0 < topes[0] <= jobs.MP_QUERY_BUDGET_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_el_enriquecimiento_del_inbox_corre_con_el_tope(
+    test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 6c84d46..79a64e4 (#4): lo mismo para la fase A del
+    inbox."""
+    topes: list[float | None] = []
+
+    async def enriquecer(
+        _db: Any, *, payload: dict[str, Any], **_kwargs: Any
+    ) -> dict[str, Any]:
+        topes.append(_tope_vigente())
+        return payload
+
+    async def aplicar(*_args: Any, **_kwargs: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(jobs, "enrich_mercadopago_webhook_payload", enriquecer)
+    monkeypatch.setattr(jobs, "apply_mercadopago_webhook_payload", aplicar)
+    test_session.add(
+        WebhookInbox(
+            store_id="tienda-tope-inbox",
+            provider="mercadopago",
+            event_id="mercadopago:evt-tope",
+            payload={"data": {"id": "mp-1"}},
+        )
+    )
+    await test_session.commit()
+
+    await jobs.process_webhook_inbox_batch(test_session)
+
+    assert len(topes) == 1 and topes[0] is not None, topes
+    assert 0 < topes[0] <= jobs.MP_QUERY_BUDGET_SECONDS

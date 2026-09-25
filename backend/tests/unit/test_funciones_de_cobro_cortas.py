@@ -37,6 +37,9 @@ FUNCIONES = {
     # Revision de 3b977a9..6c84d46 (#1, RECHAZO): _reconcile llego a 81.
     "modules/payments/jobs.py": [
         "_reconcile",
+        "_conciliar_un_cobro",
+        "_marcar_conciliados",
+        "_enrich_inbox_payloads",
         "_remote_payments_for_reconciliation",
         "_fetch_remote_payment",
         "_expire_unpaid_appointments",

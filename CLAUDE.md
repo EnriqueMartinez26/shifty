@@ -258,7 +258,13 @@ Una instrucción en lenguaje natural no es una garantía.
    `FOR UPDATE` sobre el lado nullable del outer join) y escribe el pago
    serializado por ese lock, sin `FOR UPDATE` propio: todo otro escritor del
    pago toma el turno antes, y la columna `version` corta lo que quede.
-   Lockearlo aparte sumaría una sentencia por lote. `X-Request-ID` es parte de la firma de MP
+   Lockearlo aparte sumaría una sentencia por lote. Otra excepción
+   documentada: la marca `reconciled_at` de la conciliación
+   (`payments/jobs.py::_marcar_conciliados`) escribe pagos sin el lock del
+   turno; es seguro porque solo toca `reconciled_at`/`updated_at` (no
+   `version` ni nada de negocio), en su propia transacción y tomando las
+   filas en orden de id con `FOR UPDATE SKIP LOCKED` (una fila tomada queda
+   sin marcar; `test_pg_conciliacion_reconciled_at.py`). `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
    (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
    `tests/unit/test_nginx_contract.py`).
