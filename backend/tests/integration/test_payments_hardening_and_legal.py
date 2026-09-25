@@ -662,13 +662,15 @@ async def test_deposit_policy_cannot_be_cleared_while_payments_are_active(
 
 
 @pytest.mark.asyncio
-async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
+async def test_reschedule_of_an_appointment_awaiting_payment_expires_the_charge(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reprogramar cancela el turno original: no puede saltear el guard de pago.
+    """Reprogramar cancela el turno original: no puede dejar vivo el cobro.
 
-    Sin este guard, el turno viejo quedaba cancelado pero la preferencia de
-    Mercado Pago seguia viva y el cliente podia pagar un turno inexistente.
+    Antes un guard respondia 409; desde 2026-09-25 (decision del dueno, misma
+    regla que D2) la reprogramacion del panel vence el cobro en la misma
+    transaccion. Lo que importa sigue igual: el turno viejo no queda
+    cancelado con la preferencia de Mercado Pago viva.
     """
     _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
@@ -691,7 +693,7 @@ async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
     if new_slot.tzinfo is None:
         new_slot = new_slot.replace(tzinfo=timezone.utc)
 
-    blocked = await client.patch(
+    moved = await client.patch(
         f"/appointments/{appointment_id}/reschedule",
         headers=auth_headers(token),
         json={
@@ -699,12 +701,18 @@ async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
             "idempotency_key": "reschedule-guard-attempt-001",
         },
     )
-    assert blocked.status_code == 409, blocked.text
-    assert "PAYMENT_APPOINTMENT_REQUIRES_RELEASE" in blocked.text
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["status"] == AppointmentStatus.PENDING.value
 
     await test_session.refresh(appointment)
-    assert appointment.status == AppointmentStatus.PENDING_PAYMENT.value, (
-        "el turno original no debe quedar cancelado"
+    assert appointment.status == AppointmentStatus.CANCELLED.value
+    payment = (
+        await test_session.execute(
+            select(Payment).where(Payment.appointment_id == appointment_id)
+        )
+    ).scalar_one()
+    assert payment.status == PaymentStatus.EXPIRED.value, (
+        "el cobro del turno cancelado no puede quedar vivo"
     )
 
 

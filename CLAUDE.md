@@ -175,14 +175,14 @@ Una instrucción en lenguaje natural no es una garantía.
    reprograma (`client_cancel_denial`/`client_reschedule_denial`, 409
    `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`). El personal que puede cancelar
    (admin, recepción, profesional) sí, sin pasar por el admin (decisión del
-   dueño, 2026-09-25): `AppointmentService.cancel` y `release_pending` (solo
-   admin) comparten `_expire_live_charge`, que vence el pago por la entidad y
-   publica `payment.preference.expire` en la misma transacción, con locks
-   turno → pago; el link de MP lo anula después el outbox. Cancelar no toca
-   un pago acreditado. La reprogramación del panel sigue frenando solo
-   `pending_payment` (`reject_cancellation_while_awaiting_payment` en
-   `modules/appointments/guards.py`). (`test_link_del_panel_es_cobro_vivo.py`,
+   dueño, 2026-09-25): `AppointmentService.cancel`, `reschedule` (el turno
+   nuevo nace sin cobro) y `release_pending` (solo admin) comparten
+   `_expire_live_charge`, que vence el pago por la entidad y publica
+   `payment.preference.expire` en la misma transacción, con locks turno →
+   pago; el link de MP lo anula después el outbox. Cancelar no toca un pago
+   acreditado. (`test_link_del_panel_es_cobro_vivo.py`,
    `test_cancelar_desde_el_panel_vence_el_cobro.py`,
+   `test_reprogramar_del_panel_vence_el_cobro.py`,
    `test_pg_cancelar_con_cobro_vivo.py`)
 4. **Lock pesimista antes de cualquier transición o reserva.**
    `lock_staff_row` / `lock_by_public_id` (`SELECT ... FOR UPDATE`) antes
