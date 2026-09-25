@@ -107,7 +107,7 @@ def _to_affected(item: AffectedAppointment, user: User) -> AffectedAppointmentRe
     )
 
 
-# F4-07: el rango de la agenda, en dias locales, tiene tope (regla 9).
+# F4-07: el rango de la agenda, en dias locales incluidos, tiene tope (regla 9).
 MAX_BLOCK_LIST_DAYS = 400
 
 
@@ -125,11 +125,17 @@ def _block_window(
         raise ValidationException("from_date y to_date van juntos")
     if to_date < from_date:
         raise ValidationException("to_date no puede ser anterior a from_date")
-    if (to_date - from_date).days > MAX_BLOCK_LIST_DAYS:
+    # Dias INCLUIDOS: from_date y to_date cuentan los dos.
+    if (to_date - from_date).days + 1 > MAX_BLOCK_LIST_DAYS:
         raise ValidationException(
             f"El rango no puede superar {MAX_BLOCK_LIST_DAYS} dias"
         )
-    return local_day_start(from_date), local_day_start(to_date + timedelta(days=1))
+    try:
+        return local_day_start(from_date), local_day_start(to_date + timedelta(days=1))
+    except OverflowError:
+        # 9999-12-31 no tiene dia siguiente: era un 500 por el handler
+        # generico (mismo criterio que ``core.keyset.decode_cursor``).
+        raise ValidationException("Fecha fuera de rango") from None
 
 
 @router.get("/", response_model=list[AppointmentBlockResponse])

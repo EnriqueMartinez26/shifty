@@ -155,7 +155,11 @@ async def test_rangos_invalidos_422(
         {"from_date": hoy},
         {"to_date": hoy},
         {"from_date": hoy, "to_date": (DIA - timedelta(days=1)).isoformat()},
-        {"from_date": hoy, "to_date": (DIA + timedelta(days=401)).isoformat()},
+        # 401 dias locales incluidos: uno mas que el tope.
+        {"from_date": hoy, "to_date": (DIA + timedelta(days=400)).isoformat()},
+        # El dia siguiente a 9999-12-31 no existe: era un 500 (OverflowError).
+        {"from_date": "9999-12-31", "to_date": "9999-12-31"},
+        {"from_date": "9999-12-01", "to_date": "9999-12-31"},
     ]
     for params in casos:
         res = await client.get("/appointment-blocks/", headers=headers, params=params)
@@ -164,6 +168,6 @@ async def test_rangos_invalidos_422(
     tope = await client.get(
         "/appointment-blocks/",
         headers=headers,
-        params={"from_date": hoy, "to_date": (DIA + timedelta(days=400)).isoformat()},
+        params={"from_date": hoy, "to_date": (DIA + timedelta(days=399)).isoformat()},
     )
     assert tope.status_code == 200, tope.text
