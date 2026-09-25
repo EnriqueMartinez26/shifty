@@ -45,7 +45,7 @@ from modules.notifications.tasks import (
     EVENT_APPOINTMENT_RESCHEDULED,
     is_deliverable_email,
 )
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import JsonValue, Payment, PaymentStatus
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
@@ -234,15 +234,9 @@ class AppointmentService:
             resource_id=appointment.public_id,
             store_id=store_id,
             actor=actor,
-            payload_after={
-                "status": appointment.status,
-                "starts_at": starts_at.isoformat(),
-                "ends_at": ends_at.isoformat(),
-                "service_id": service.public_id,
-                "staff_id": staff.public_id,
-                "source": "panel_for_client",
-                "outside_schedule": outside_schedule,
-            },
+            payload_after=_client_booking_audit(
+                appointment, service, staff, outside_schedule=outside_schedule
+            ),
         )
         # Un email tecnico (.noreply) o ninguno: no hay a quien avisar.
         if is_deliverable_email(appointment.client_email):
@@ -936,6 +930,21 @@ def _requested_staff(
     if not elegido:
         raise ValidationException("El profesional no realiza el servicio seleccionado")
     return elegido
+
+
+def _client_booking_audit(
+    appointment: Appointment, service: Service, staff: Staff, *, outside_schedule: bool
+) -> dict[str, JsonValue]:
+    """Lo que la auditoria guarda del alta del panel para un cliente."""
+    return {
+        "status": appointment.status,
+        "starts_at": appointment.starts_at.isoformat(),
+        "ends_at": appointment.ends_at.isoformat(),
+        "service_id": service.public_id,
+        "staff_id": staff.public_id,
+        "source": "panel_for_client",
+        "outside_schedule": outside_schedule,
+    }
 
 
 def _raise_for_rejection(rejection: RangeRejection | None) -> None:
