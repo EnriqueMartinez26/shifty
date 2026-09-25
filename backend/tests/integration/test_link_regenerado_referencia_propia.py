@@ -226,3 +226,31 @@ async def test_con_el_flag_apagado_la_referencia_sigue_siendo_el_turno(
     assert link.status_code == 200, link.text
     assert list(mp.referencias.values()) == [turno]
     assert (await _cobro(test_session, turno)).link_ref is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("referencia", [None, ""])
+async def test_sin_referencia_no_se_aplica_si_el_cobro_tiene_link_ref(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    referencia: str | None,
+) -> None:
+    """Revision de 7abb9b4..e5579b6 (#3): con ``link_ref`` puesto, un pago sin
+    ``external_reference`` (o vacia) no dice de que link es. Antes se aplicaba
+    (fail-open); ahora se rechaza por integridad y el inbox lo reintenta."""
+    turno, mp, _vieja, _nueva = await _regenerado(
+        client, test_session, monkeypatch, f"ref-vacia-{referencia is None}"
+    )
+    cobro = await _cobro(test_session, turno)
+    assert cobro.link_ref
+    payload = _pago_de_mp(cobro, referencia="x", externo="mp-sin-ref")
+    if referencia is None:
+        del payload["data"]["external_reference"]
+    else:
+        payload["data"]["external_reference"] = referencia
+
+    aplicado = await _aplicar(test_session, cobro, payload)
+
+    assert aplicado is False
+    assert (await _cobro(test_session, turno)).status == PaymentStatus.PENDING.value

@@ -267,6 +267,11 @@ def _validate_payment_link(payment: Payment, payload: dict[str, Any]) -> None:
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     external_reference = _referencia_del_pago(payload)
+    # Con nonce, un pago sin referencia no dice de que link es: no se aplica
+    # (antes pasaba, fail-open; revision de perf/f4-pay, 2026-09-25). Sin
+    # nonce (link de antes de la columna) se tolera como siempre.
+    if payment.link_ref and not external_reference:
+        raise RuntimeError("Mercado Pago no devolvio la referencia externa del link")
     if external_reference and external_reference != payment.current_external_reference:
         raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
 

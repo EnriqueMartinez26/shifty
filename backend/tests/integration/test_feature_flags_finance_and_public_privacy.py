@@ -1402,6 +1402,8 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
         "data": {
             "id": "mp-pay-123",
             "status": "approved",
+            # Como MP: la referencia del link (con su nonce, perf/f4-pay).
+            "external_reference": payment.current_external_reference,
             "preference_id": payment.preference_id,
             "metadata": {"appointment_id": booking.json()["public_id"]},
         },
