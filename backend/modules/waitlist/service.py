@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
 from typing import Any
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.exceptions import AppException, ResourceNotFoundException
-from core.utils import ensure_utc_aware
+from core.utils import ensure_utc_aware, now_utc
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
@@ -65,7 +65,7 @@ class WaitlistService:
         staff = await self._staff_for(store.id, staff_public_id, service)
         window_starts_at = ensure_utc_aware(window_starts_at)
         window_ends_at = ensure_utc_aware(window_ends_at)
-        if window_ends_at <= datetime.now(timezone.utc):
+        if window_ends_at <= now_utc():
             raise AppException(
                 message="La ventana ya paso",
                 http_status=HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -224,7 +224,7 @@ class WaitlistService:
         # nadie si no dejo uno, como antes).
         # Un turno que ya empezo (la tienda puede cargarlo despues, decision
         # del dueno 2026-09-25) no lleva el mail: el cliente ya estuvo.
-        if ensure_utc_aware(appointment.starts_at) >= datetime.now(timezone.utc):
+        if ensure_utc_aware(appointment.starts_at) >= now_utc():
             payload: dict[str, JsonValue] = {
                 "appointment_id": appointment.id,
                 "email": entry.client_email,
