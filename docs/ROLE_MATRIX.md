@@ -63,6 +63,7 @@ comparan el rol persistido (`user.role` en `admin`/`staff`): en esos
 - Panel (`/dashboard/summary`): los cuatro roles de personal.
 - Reportes y panel del `super_admin`: ve SU tienda, como cualquier usuario; no hay consolidado de todas las tiendas (`core/roles.py::store_scope_for`; `tests/integration/test_superadmin_reportes_de_su_tienda.py`). La consolidacion espera el ok explicito del dueno.
 - Soporte global (`/superadmin/*`): solo `is_global_admin`.
+- Terminos B2B de la tienda (`/stores/me/terms-acceptance`, L1, `2026-09-25`): aceptar (`POST`) solo `store_admin` (el `super_admin` no acepta un contrato en nombre de la tienda); leer el estado (`GET`) `super_admin` y `store_admin` (`tests/integration/test_terminos_b2b.py`).
 
 ## Diferencias entre el objetivo y el codigo
 

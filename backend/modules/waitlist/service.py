@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
@@ -12,10 +13,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
-from core.exceptions import AppException, ResourceNotFoundException
+from core.config import settings
+from core.exceptions import (
+    AppException,
+    ResourceNotFoundException,
+    ValidationException,
+)
 from core.utils import ensure_utc_aware, now_utc
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.legal.versions import AcceptedVersions, check_accepted_versions
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
 from modules.payments.model import JsonValue, OutboxMessage
 from modules.public_api.repository import PublicRepository
@@ -31,6 +38,40 @@ from modules.waitlist.model import (
 from modules.waitlist.offers import mark_booked
 
 WaitlistRow = tuple[WaitlistEntry, Service, Staff | None]
+
+
+@dataclass(frozen=True)
+class WaitlistConsent:
+    """Lo que el cliente acepto al anotarse (PV-09, 2026-09-25)."""
+
+    accepts_terms: bool | None = None
+    terms_version: str | None = None
+    privacy_version: str | None = None
+
+
+def _consent_record(
+    consent: WaitlistConsent,
+) -> tuple[datetime | None, AcceptedVersions]:
+    """Cuando y que versiones se guardan en la entrada.
+
+    ``LEGAL_WAITLIST_CONSENT_REQUIRED`` apagado (hasta que el front tenga la
+    casilla): sin ``accepts_terms`` se anota igual y no se guarda nada. Un
+    ``false`` explicito es 422 siempre. Con el flag: casilla y versiones
+    obligatorias. Versiones que no son las vigentes: 409.
+    """
+    required = settings.LEGAL_WAITLIST_CONSENT_REQUIRED
+    if consent.accepts_terms is False or (
+        required and consent.accepts_terms is not True
+    ):
+        raise ValidationException(
+            "Para anotarte hay que aceptar los terminos y la politica de privacidad"
+        )
+    versions = check_accepted_versions(
+        consent.terms_version, consent.privacy_version, required=required
+    )
+    if consent.accepts_terms is not True:
+        return None, AcceptedVersions()
+    return now_utc(), versions
 
 
 class WaitlistDuplicateException(AppException):
@@ -60,7 +101,9 @@ class WaitlistService:
         client_phone: str,
         client_email: str | None,
         notes: str | None,
+        consent: WaitlistConsent | None = None,
     ) -> WaitlistRow:
+        accepted_at, versions = _consent_record(consent or WaitlistConsent())
         service = await self._service(store.id, service_public_id)
         staff = await self._staff_for(store.id, staff_public_id, service)
         window_starts_at = ensure_utc_aware(window_starts_at)
@@ -99,6 +142,9 @@ class WaitlistService:
             window_starts_at=window_starts_at,
             window_ends_at=window_ends_at,
             notes=(notes or "").strip() or None,
+            terms_accepted_at=accepted_at,
+            terms_version=versions.terms_version,
+            privacy_version=versions.privacy_version,
         )
         self.db.add(entry)
         try:

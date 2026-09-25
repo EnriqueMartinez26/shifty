@@ -37,6 +37,8 @@ from modules.users.router import router as users_router
 from modules.public_api.router import router as public_router
 from modules.reports.router import router as reports_router
 from modules.ledger.router import router as ledger_router
+from modules.legal.router import public_router as public_legal_router
+from modules.legal.router import router as store_terms_router
 from modules.ops.router import router as ops_router
 from modules.notifications.router import router as notifications_router
 from modules.payments.router import router as payments_router
@@ -526,6 +528,9 @@ app.include_router(dashboard_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(users_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(reports_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(stores_router, dependencies=_SUSPENSION_GUARD)
+# Aceptar los terminos B2B esta permitido con la tienda suspendida (una por
+# una en SUSPENSION_ALLOWED_WRITES, como pagos).
+app.include_router(store_terms_router, dependencies=_SUSPENSION_GUARD)
 # Exento: servir una imagen (GET/HEAD, publico). La guarda no mira lecturas
 # y abria una sesion por hit; el 304 no toca la base (F1-27).
 app.include_router(stores_media_router)
@@ -545,6 +550,7 @@ app.include_router(superadmin_router)
 app.include_router(public_router)
 app.include_router(waitlist_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(public_waitlist_router)
+app.include_router(public_legal_router)
 
 
 @app.get("/")

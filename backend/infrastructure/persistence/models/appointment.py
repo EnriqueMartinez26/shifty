@@ -102,6 +102,11 @@ class AppointmentModel(Base):
     terms_accepted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True)
     )
+    # Versiones de los terminos y de la politica de privacidad que acepto
+    # (PV-09, 2026-09-25). NULL si el portal no las mando o si el turno lo
+    # cargo el panel (el personal no es el cliente dando su consentimiento).
+    terms_version: Mapped[Optional[str]] = mapped_column(String(20))
+    privacy_version: Mapped[Optional[str]] = mapped_column(String(20))
     # Marcas durables de recordatorio. El job las reclama con
     # ``UPDATE ... WHERE col IS NULL`` (seguro entre workers) y las deja en
     # nulo si el envio falla. Reprogramar crea un turno nuevo, asi que el

@@ -71,6 +71,14 @@ class WaitlistEntry(BaseEntity):
         String(20), default=WaitlistStatus.WAITING.value, index=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Consentimiento al anotarse (PV-09, 2026-09-25): cuando y que versiones
+    # de los terminos y de la privacidad. NULL si el front no mando la casilla
+    # (``LEGAL_WAITLIST_CONSENT_REQUIRED`` apagado).
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    privacy_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Ofertas que esta entrada dejo vencer sin reservar. Al llegar a
     # MAX_LAPSED_OFFERS la entrada expira: quien no reserva dos veces no
     # bloquea mas la cola.

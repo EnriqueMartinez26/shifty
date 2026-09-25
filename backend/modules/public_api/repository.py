@@ -27,6 +27,7 @@ from modules.appointments.repository import (
     active_block_overlap,
     appointment_overlap,
 )
+from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
 from modules.payments.repository import live_charge_of
@@ -575,6 +576,7 @@ class PublicRepository:
         service: Service | None = None,
         expires_at: datetime | None = None,
         terms_accepted_at: datetime | None = None,
+        accepted_versions: AcceptedVersions | None = None,
     ) -> tuple[Appointment, Service, Staff]:
         """Alta del turno: lock del profesional, relectura bajo lock e INSERT.
 
@@ -621,6 +623,8 @@ class PublicRepository:
             ),
             expires_at=expires_at,
             terms_accepted_at=terms_accepted_at,
+            terms_version=(accepted_versions or AcceptedVersions()).terms_version,
+            privacy_version=(accepted_versions or AcceptedVersions()).privacy_version,
         )
         self.db.add(new_appointment)
         await self.db.flush()

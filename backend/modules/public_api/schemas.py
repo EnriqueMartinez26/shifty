@@ -5,6 +5,7 @@ import re
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from core.utils import MAX_BOOKING_AHEAD, now_utc, within_max_ahead
+from modules.legal.versions import LegalVersion
 from core.validation import (
     PUBLIC_ID_PATTERN,
     normalize_client_phone,
@@ -104,6 +105,11 @@ class PublicBookingCreate(BaseModel):
     # Obligatoria en el servidor (PV-09): antes solo la exigia el checkbox del
     # front y un POST directo reservaba sin consentimiento registrado.
     accepts_terms: bool = False
+    # Versiones aceptadas, tal como las dio ``GET /public/legal/versions``
+    # (PV-09, 2026-09-25). Opcionales para no romper el front actual; si
+    # vienen tienen que ser las vigentes (409 LEGAL_VERSION_MISMATCH).
+    terms_version: LegalVersion | None = None
+    privacy_version: LegalVersion | None = None
 
     @field_validator("client_phone")
     @classmethod

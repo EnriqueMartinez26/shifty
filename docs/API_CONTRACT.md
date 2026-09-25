@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 111 — Operaciones: 138
+- Paths: 113 — Operaciones: 141
 
 ## /
 
@@ -1142,6 +1142,17 @@ Responses:
 - `200` Successful Response — `application/json`: `ApiSuccess_PublicStoreRefResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+## Public Legal
+
+### GET /public/legal/versions
+
+- Summary: Get Legal Versions
+- operationId: `get_legal_versions_public_legal_versions_get`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_LegalVersionsResponse_`
+
 ## Public Waitlist
 
 ### POST /public/waitlist
@@ -1575,6 +1586,26 @@ Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_dict_str__str__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
+
+## Store Terms
+
+### GET /stores/me/terms-acceptance
+
+- Summary: Get Store Terms Status
+- operationId: `get_store_terms_status_stores_me_terms_acceptance_get`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_StoreTermsStatusResponse_`
+
+### POST /stores/me/terms-acceptance
+
+- Summary: Accept Store Terms
+- operationId: `accept_store_terms_stores_me_terms_acceptance_post`
+
+Responses:
+
+- `201` Successful Response — `application/json`: `ApiSuccess_StoreTermsAcceptanceResponse_`
 
 ## Stores
 
@@ -2352,6 +2383,14 @@ Responses:
 | `data` | LedgerSummaryResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_LegalVersionsResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | LegalVersionsResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_list_AppointmentBlockResponse__
 
 | field | type | required | constraints |
@@ -2774,6 +2813,22 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | StoreSubscriptionStatusResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_StoreTermsAcceptanceResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | StoreTermsAcceptanceResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_StoreTermsStatusResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | StoreTermsStatusResponse | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_StoreWideBlockResponse_
@@ -3281,6 +3336,13 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `total_movements` | integer | yes |  |
 | `top_debtors` | array<LedgerSummaryClientItem> | yes |  |
 
+### LegalVersionsResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `terms_version` | string | yes |  |
+| `privacy_version` | string | yes |  |
+
 ### LoginRequest
 
 | field | type | required | constraints |
@@ -3543,6 +3605,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `promotion_code` | string \| null | no | minLength=3, maxLength=30, pattern="^[A-Za-z0-9_-]+$" |
 | `payment_method` | string | no | pattern="^(auto\|manual\|mercadopago)$", default="manual" |
 | `accepts_terms` | boolean | no | default=false |
+| `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
+| `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
 ### PublicBookingResponse
 
@@ -4195,6 +4259,22 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `current_period_end` | string \| null | yes | format="date-time" |
 | `last_redemption_at` | string \| null | yes | format="date-time" |
 
+### StoreTermsAcceptanceResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `terms_version` | string | yes |  |
+| `accepted_at` | string | yes | format="date-time" |
+| `accepted_by` | string | yes |  |
+
+### StoreTermsStatusResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `current_version` | string | yes |  |
+| `current_version_accepted` | boolean | yes |  |
+| `latest` | StoreTermsAcceptanceResponse \| null | no |  |
+
 ### StoreUpdate
 
 | field | type | required | constraints |
@@ -4397,5 +4477,8 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `client_phone` | string | yes | minLength=6, maxLength=30 |
 | `client_email` | string \| null | no | maxLength=255, format="email" |
 | `notes` | string \| null | no | maxLength=300 |
+| `accepts_terms` | boolean \| null | no |  |
+| `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
+| `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit 4ba0fd2
+Generado desde app.openapi() el 2026-09-25, commit 1b8bc0a

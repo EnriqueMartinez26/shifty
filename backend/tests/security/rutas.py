@@ -1255,6 +1255,22 @@ TABLA: tuple[Ruta, ...] = (
     ),
     R("PUT", "/stores/me/feature-flags", ADMINS, A.PROPIA, _flags),
     R("POST", "/stores/me/media", ADMINS, A.PROPIA, _subir_imagen),
+    # Terminos B2B (L1, 2026-09-25): acepta SOLO el admin de la tienda (el
+    # soporte global no acepta un contrato por ella); leer el estado, admins.
+    R(
+        "POST",
+        "/stores/me/terms-acceptance",
+        frozenset({ADMIN_TIENDA}),
+        A.PROPIA,
+        _post("/stores/me/terms-acceptance"),
+    ),
+    R(
+        "GET",
+        "/stores/me/terms-acceptance",
+        ADMINS,
+        A.PROPIA,
+        _get("/stores/me/terms-acceptance"),
+    ),
     # La imagen es publica por diseno: el portal muestra el logo sin login y
     # el id es un ULID que solo se conoce por la vitrina.
     R("GET", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen),
@@ -1618,6 +1634,14 @@ TABLA: tuple[Ruta, ...] = (
     ),
     # portal publico
     R("GET", "/public/stores/{slug}", TODOS, A.PUBLICA, _vitrina),
+    # Versiones vigentes de los textos legales: sin datos de ninguna tienda.
+    R(
+        "GET",
+        "/public/legal/versions",
+        TODOS,
+        A.PUBLICA,
+        _get("/public/legal/versions"),
+    ),
     # FF-16: sigue resolviendo con la tienda suspendida ("Mis turnos").
     R("GET", "/public/stores/{slug}/ref", TODOS, A.PUBLICA, _referencia_de_tienda),
     R("GET", "/public/services", TODOS, A.PUBLICA_TIENDA, _servicios_publicos),

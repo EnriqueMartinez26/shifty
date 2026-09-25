@@ -65,6 +65,7 @@ from modules.notifications.tasks import (
     enqueue_registration_email,
     is_deliverable_email,
 )
+from modules.legal.versions import AcceptedVersions, check_accepted_versions
 from modules.otp.service import OtpService, mask_phone
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
@@ -520,6 +521,8 @@ class PublicBookingService:
         transaccion, con compensacion) -> encolado del mail -> respuesta ->
         cierre de la entrada de lista de espera (best-effort).
         """
+        # Antes de tocar la base: una version vieja no reserva (PV-09).
+        check_accepted_versions(data.terms_version, data.privacy_version)
         service, store = await self._resolve_store_and_service(data)
         request = await self._resolve_request(data, service, store)
         booking = await self._persist(data, request, idempotency_key)
@@ -777,9 +780,12 @@ class PublicBookingService:
                 else request.starts_at_utc
             ),
             # El schema ya exige accepts_terms (PV-09): todo turno publico nace
-            # con el instante del consentimiento. No hay columna de version de
-            # terminos; si hace falta, la agrega una migracion.
+            # con el instante del consentimiento, y con las versiones aceptadas
+            # si el portal las mando (``book`` ya las valido).
             terms_accepted_at=datetime.now(timezone.utc),
+            accepted_versions=AcceptedVersions(
+                data.terms_version, data.privacy_version
+            ),
         )
         promotion_quote = None
         if data.promotion_code:

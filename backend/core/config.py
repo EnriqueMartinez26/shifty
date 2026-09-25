@@ -178,6 +178,8 @@ _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
 # Unica API de Mercado Pago que se acepta fuera de desarrollo (regla 17): otra
 # base mandaria access tokens de las tiendas a un host ajeno.
 MERCADOPAGO_API_BASE_URL_REAL = "https://api.mercadopago.com"
+# Version de un texto legal: corta y sin espacios ("2026-09-25", "v2.1").
+LEGAL_VERSION_PATTERN = r"^[A-Za-z0-9._-]{1,20}$"
 
 
 class Settings(BaseSettings):
@@ -357,6 +359,25 @@ class Settings(BaseSettings):
     SMTP_USER: str
     SMTP_PASS: str
     EMAILS_FROM_EMAIL: str
+
+    # Versiones vigentes de los textos legales (PV-09, L1 O-3/O-4, 2026-09-25).
+    # El portal las lee de ``GET /public/legal/versions`` y las manda con la
+    # aceptacion; quedan en el turno y en la entrada de la lista de espera.
+    # ``STORE_TERMS_VERSION``: terminos B2B que acepta el admin de la tienda
+    # (``/stores/me/terms-acceptance``). Cambiar un texto es subir su version.
+    LEGAL_TERMS_VERSION: str = Field(
+        default="2026-09-25", pattern=LEGAL_VERSION_PATTERN
+    )
+    LEGAL_PRIVACY_VERSION: str = Field(
+        default="2026-09-25", pattern=LEGAL_VERSION_PATTERN
+    )
+    STORE_TERMS_VERSION: str = Field(
+        default="2026-09-25", pattern=LEGAL_VERSION_PATTERN
+    )
+    # Anotarse en la lista de espera EXIGE ``accepts_terms`` y las versiones
+    # solo con este flag. Apagado hasta que el front tenga la casilla: el
+    # front actual no manda el campo y se romperia.
+    LEGAL_WAITLIST_CONSENT_REQUIRED: bool = False
 
     FRONTEND_URL: str = "http://localhost:3000"
     FRONTEND_RESET_PASSWORD_PATH: str = "/reset-password"

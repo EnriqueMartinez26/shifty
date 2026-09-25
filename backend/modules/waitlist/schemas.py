@@ -13,6 +13,7 @@ from core.utils import (
     within_max_ahead,
 )
 from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from modules.legal.versions import LegalVersion
 
 
 def _normalize_phone(value: str) -> str:
@@ -39,6 +40,13 @@ class WaitlistJoinRequest(BaseModel):
     client_phone: str = Field(..., min_length=6, max_length=30)
     client_email: Optional[EmailStr] = Field(default=None, max_length=255)
     notes: Optional[str] = Field(default=None, max_length=300)
+    # Consentimiento (PV-09, 2026-09-25). Opcional mientras
+    # ``LEGAL_WAITLIST_CONSENT_REQUIRED`` este apagado (el front actual no lo
+    # manda); ``false`` es 422 siempre. Versiones: las de
+    # ``GET /public/legal/versions``.
+    accepts_terms: Optional[bool] = None
+    terms_version: Optional[LegalVersion] = None
+    privacy_version: Optional[LegalVersion] = None
 
     @field_validator("client_phone")
     @classmethod

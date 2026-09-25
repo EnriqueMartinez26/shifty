@@ -70,6 +70,9 @@ SUSPENSION_ALLOWED_WRITES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/payments/{payment_id}/refund"),
         # Procesar la cola de efectos de pagos ya ocurridos.
         ("POST", "/payments/outbox/process"),
+        # Aceptar los terminos B2B (L1, 2026-09-25): no genera una obligacion
+        # nueva y la tienda tiene que poder aceptarlos mientras regulariza.
+        ("POST", "/stores/me/terms-acceptance"),
     }
 )
 

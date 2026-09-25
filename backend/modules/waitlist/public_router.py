@@ -29,7 +29,7 @@ from modules.waitlist.schemas import (
     WaitlistEntryResponse,
     WaitlistJoinRequest,
 )
-from modules.waitlist.service import WaitlistService, to_row_dict
+from modules.waitlist.service import WaitlistConsent, WaitlistService, to_row_dict
 
 router = CanonicalAPIRouter(prefix="/public/waitlist", tags=["Public Waitlist"])
 EntryIdPath = Annotated[
@@ -76,6 +76,11 @@ async def join_waitlist(
             client_phone=data.client_phone,
             client_email=str(data.client_email) if data.client_email else None,
             notes=data.notes,
+            consent=WaitlistConsent(
+                accepts_terms=data.accepts_terms,
+                terms_version=data.terms_version,
+                privacy_version=data.privacy_version,
+            ),
         )
         return WaitlistEntryResponse(**to_row_dict(row, show_contact=True))
 
