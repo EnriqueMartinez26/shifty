@@ -4,6 +4,10 @@
 dias en hora argentina. Un turno a las 23:30 de ese dia ya cae, en UTC, en el
 dia siguiente: igual se muestra y se reserva. El dia local siguiente (+121,
 que empieza a las 00:00 ART) no se muestra en la grilla.
+
+El reloj queda congelado al mediodia argentino de hoy (``core.utils.now_utc``,
+del que sale ``today_local``): si el test cruza la medianoche argentina, el
+"hoy" del test y el del servidor no se separan.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ from datetime import time, timedelta
 import pytest
 from httpx import AsyncClient
 
+import core.utils
 from core.utils import BOOKING_HORIZON_DAYS, local_to_utc, today_local
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
@@ -23,8 +28,10 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 
 @pytest.mark.asyncio
 async def test_las_23_30_del_ultimo_dia_se_muestran_y_se_reservan(
-    client: AsyncClient,
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    congelado = local_to_utc(today_local(), time(12, 0))
+    monkeypatch.setattr(core.utils, "now_utc", lambda: congelado)
     store, token = await register_and_login(
         client, slug="borde-horizonte", email="borde-horizonte@t.com"
     )
