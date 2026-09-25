@@ -661,6 +661,12 @@ async def _cotizar_promocion(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _buscar_clientes_de_fiado(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    # "Cliente" es parte del nombre de los clientes de las DOS tiendas: la de
+    # alfa solo puede traer los suyos (D3, 2026-09-25).
+    return Llamada("GET", "/ledger/clients", params={"q": "Cliente"})
+
+
 async def _cuenta_de_fiado(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/ledger/customers/{t.cliente}")
 
@@ -1449,6 +1455,7 @@ TABLA: tuple[Ruta, ...] = (
     ),
     # fiado
     R("GET", "/ledger/summary", OPERATIVOS, A.PROPIA, _get("/ledger/summary")),
+    R("GET", "/ledger/clients", OPERATIVOS, A.PROPIA, _buscar_clientes_de_fiado),
     R(
         "GET",
         "/ledger/customers/{client_id}",

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import ResourceNotFoundException, ValidationException
 from modules.appointments.model import Appointment
 from modules.ledger.model import CustomerLedger
+from modules.users.model import User, UserRole
 from modules.users.repository import UserRepository
 
 
@@ -76,6 +77,27 @@ async def ensure_store_client(
     cliente = await UserRepository(db).get_by_public_id(client_id, store_id)
     if cliente is None:
         raise ResourceNotFoundException("Cliente", client_id)
+
+
+async def search_store_clients(
+    db: AsyncSession, *, store_id: str, q: str | None, limit: int
+) -> list[User]:
+    """Clientes activos de ESTA tienda para el buscador del fiado (D3).
+
+    El rol ``client`` y la tienda los fija el servidor: el profesional usa el
+    fiado pero no ``/users/`` (regla 16), asi que ninguna cuenta del personal,
+    de un admin ni del soporte global sale por aca, pida lo que pida el
+    query. Misma busqueda que ``GET /users/?q=`` (``user_search_condition``,
+    acotada por ``ix_users_store_id``).
+    """
+    return await UserRepository(db).get_all(
+        store_id,
+        only_active=True,
+        role=UserRole.CLIENT.value,
+        q=q,
+        limit=limit,
+        include_global_admins=False,
+    )
 
 
 async def _ensure_store_appointment(

@@ -37,6 +37,16 @@ class CustomerLedgerResponse(BaseModel):
     next_cursor: str | None = None
 
 
+class LedgerClientItem(BaseModel):
+    """Un cliente del buscador del fiado (D3, 2026-09-25): solo lo que la
+    pantalla necesita para elegirlo; nunca una cuenta del personal."""
+
+    public_id: str
+    name: str
+    email: str | None = None
+    phone: str | None = None
+
+
 class LedgerSummaryClientItem(BaseModel):
     client_id: str
     client_name: str
