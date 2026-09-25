@@ -31,10 +31,16 @@ temporal y se renombra despues de quitar el unico: nunca hay un momento sin
 indice sobre ``email``. El upgrade no necesita guarda de datos: lo que era
 unico global ya cumple las dos restricciones nuevas.
 
-Rollback sin migrar (docs/DEPLOY_RUNBOOK.md): el codigo anterior busca el
-login por ``email`` sin filtrar el rol. Si mientras tanto un cliente dejo el
-email de un profesional o admin, el login de esa cuenta con el codigo viejo
-responde 500 (MultipleResultsFound) hasta volver a este release.
+Excepcion fechada a expand/contract (CLAUDE.md, docs/DEPLOY_RUNBOOK.md
+seccion 5, 2026-09-25): quitar el unico global en el mismo release que lo
+reemplaza se permite SOLO porque esta migracion sale en el primer release de
+produccion (sin base viva; el primer deploy migra un esquema vacio). El
+codigo anterior si dependia del unico: busca el login por ``email`` sin
+filtrar el rol, con ``scalar_one_or_none``. En la ventana del deploy (codigo
+viejo sirviendo con esta migracion aplicada) o tras un rollback sin migrar,
+una cuenta del personal cuyo email tambien dejo un cliente responderia 500 en
+el login. Antes del primer release ninguna de las dos ventanas existe; despues
+del lanzamiento un cambio asi va en dos releases.
 
 Downgrade real, con guarda: volver a la unicidad global exige que ningun email
 este en dos filas (dos tiendas, o cliente y personal). Si las hay, se detiene

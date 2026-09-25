@@ -328,6 +328,15 @@ Una instrucción en lenguaje natural no es una garantía.
   la migración no cree): `tests/postgres/test_pg_modelo_y_migraciones.py`
   compara los dos como `alembic check` y fija la deriva previa como techo que
   solo baja (F1-15).
+  **Excepción única, fechada (2026-09-25):** `4b6d8f0a2c13` (PV-01) quita el
+  único global de `users.email` en el MISMO release que lo reemplaza por los
+  únicos parciales. Se permite SOLO porque sale en el primer release de
+  producción: Shifty nunca se desplegó, no hay base viva y el primer deploy
+  arranca de un esquema vacío, así que no existen ni la ventana del deploy
+  (código viejo sirviendo sobre el esquema nuevo) ni la del rollback (volver
+  al código anterior sin migrar). Ese código anterior sí dependía del único:
+  el login busca por email con `scalar_one_or_none`. Después del lanzamiento
+  la regla se aplica sin excepciones.
 - **Bajo RLS solo los predicados leakproof usan índices.** Postgres no
   aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
   que el filtro `store_id` explícito es el camino al índice, no solo defensa.
