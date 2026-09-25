@@ -27,6 +27,7 @@ FUNCIONES = {
     ],
     "modules/payments/service.py": [
         "create_panel_payment_preference",
+        "_panel_link_phase_two",
         "_upsert_payment_preference",
         "_attach_provider_link",
         "prepare_mercadopago_preference",

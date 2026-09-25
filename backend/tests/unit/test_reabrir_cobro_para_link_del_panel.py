@@ -10,8 +10,9 @@ La arista NO se agrega a ``ALLOWED_PAYMENT_TRANSITIONS``: ese grafo lo usa
 tambien el webhook, y un ``in_process`` tardio de la preferencia vieja
 reabriria un cobro vencido (quizas de un turno ya cancelado). La reapertura
 es un metodo aparte de la entidad, con un solo llamador permitido: la
-regeneracion del panel (``create_panel_payment_preference``), bajo el lock
-del turno y con un turno no soltado. Este archivo fija las tres cosas.
+regeneracion del panel (``create_panel_payment_preference``, en su fase 2:
+``_panel_link_phase_two``), bajo el lock del turno y con un turno no
+soltado. Este archivo fija las tres cosas.
 """
 
 from __future__ import annotations
@@ -122,5 +123,7 @@ def test_el_unico_llamador_es_la_regeneracion_del_panel() -> None:
         arbol = ast.parse(archivo.read_text(encoding="utf-8"))
         llamadores.update(f"{relativo.as_posix()}::{f}" for f in _usos(arbol))
     assert sorted(llamadores) == [
-        "modules/payments/service.py::create_panel_payment_preference"
+        # La fase 2 de create_panel_payment_preference, su unico llamador
+        # (extraida en la revision de 7abb9b4..e5579b6, #7).
+        "modules/payments/service.py::_panel_link_phase_two"
     ], llamadores

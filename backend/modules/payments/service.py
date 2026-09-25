@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import secrets
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import cast
 
 import httpx
+import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +24,7 @@ from core.config import settings
 from core.crypto import decrypt_secret, encrypt_secret
 from core.database import _apply_tenant_context
 from core.exceptions import AppException
+from core.observability import report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
@@ -41,6 +43,8 @@ from modules.payments.model import (  # reexportado: lo importan jobs y tests
 from modules.stores.media import absolute_media_url
 from modules.stores.model import Store
 from modules.users.model import User
+
+logger = structlog.get_logger()
 
 
 ACTIVE_APPOINTMENT_STATUSES = {
@@ -1077,6 +1081,19 @@ def expire_live_charge(
     return payment
 
 
+class ProviderPreferenceWithoutLinkError(RuntimeError):
+    """MP creo la preferencia pero no devolvio un link de checkout usable.
+
+    La preferencia existe en MP con ese id: quien compensa la manda a vencer
+    (revision de 7abb9b4..e5579b6, #7). Sigue siendo ``RuntimeError``: se
+    responde como cualquier falla del proveedor.
+    """
+
+    def __init__(self, preference_id: str) -> None:
+        super().__init__("Mercado Pago no devolvio una preferencia valida")
+        self.preference_id = preference_id
+
+
 async def _attach_provider_link(
     db: AsyncSession,
     *,
@@ -1133,8 +1150,10 @@ async def _attach_provider_link(
         )
     preference_id = str(preference_payload.get("id") or "").strip()
     payment_link = _resolve_checkout_link(preference_payload)
-    if not preference_id or not payment_link:
+    if not preference_id:
         raise RuntimeError("Mercado Pago no devolvio una preferencia valida")
+    if not payment_link:
+        raise ProviderPreferenceWithoutLinkError(preference_id)
     payment.preference_id = preference_id
     payment.payment_link = payment_link
     payment.link_ref = link_ref
@@ -1499,6 +1518,35 @@ async def _drop_unsealed_link(
         )
 
 
+async def _drop_unsealed_link_or_log(
+    db: AsyncSession,
+    nueva: str | None,
+    previa: str | None,
+    ids: tuple[str, str, str],
+) -> None:
+    """``_drop_unsealed_link`` sin tapar el error del llamador.
+
+    Revision de 7abb9b4..e5579b6 (#7): si vencer el link falla (base caida al
+    commitear el outbox), ese fallo reemplazaba al error que se estaba
+    compensando (el choque de version o el 409 del turno soltado). Ahora queda
+    en el log y en Sentry, con la preferencia para vencerla a mano, y el
+    llamador sigue con SU error.
+    """
+    try:
+        await _drop_unsealed_link(db, nueva, previa, ids)
+    except Exception as exc:
+        store_id, payment_id, _ = ids
+        contexto = {
+            "store_id": store_id,
+            "payment_id": payment_id,
+            "preference_id": nueva,
+        }
+        logger.exception("panel_link_unsealed_drop_failed", **contexto)
+        report_exception(exc, **contexto)
+        with suppress(Exception):
+            await db.rollback()
+
+
 async def _panel_link_phase_one(
     db: AsyncSession,
     *,
@@ -1599,10 +1647,40 @@ async def create_panel_payment_preference(
     # Leidos antes del commit: tras un rollback las instancias quedan
     # expiradas y leerlas de nuevo seria IO fuera de lugar. ``previa``: el
     # link que dejo la fase 1; uno distinto despues lo creo ESTA llamada.
-    payment_id, appointment_id = payment.id, appointment.id
-    previa = nueva = payment.preference_id
+    ids = (store_id, payment.id, appointment.id)
+    previa = payment.preference_id
     await db.commit()
+    return await _panel_link_phase_two(
+        db,
+        appointment=appointment,
+        service=service,
+        payment=payment,
+        creado=creado,
+        ids=ids,
+        previa=previa,
+    )
 
+
+async def _panel_link_phase_two(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    payment: Payment,
+    creado: bool,
+    ids: tuple[str, str, str],
+    previa: str | None,
+) -> Payment:
+    """Fase 2 del link del panel, con la fase 1 ya commiteada: MP, sellado
+    bajo el lock del turno y las compensaciones de cada falla.
+
+    ``ids``: (tienda, cobro, turno), leidos antes del commit de la fase 1.
+    Ningun camino de falla deja viva en MP una preferencia que ESTA llamada
+    creo y no sello: la del choque de version, la del turno soltado y la que
+    MP devolvio sin link de checkout (revision de 7abb9b4..e5579b6, #7).
+    """
+    store_id, payment_id, appointment_id = ids
+    nueva = previa
     try:
         payment = await _panel_link_from_provider(
             db,
@@ -1619,9 +1697,10 @@ async def create_panel_payment_preference(
             # Turno lockeado y no soltado: el cobro vencido vuelve a ser vivo.
             payment.reopen_for_panel_link()
             await db.commit()
-    except RuntimeError, CircuitBreakerOpenError:
+    except (RuntimeError, CircuitBreakerOpenError) as exc:
         # Fallo del PROVEEDOR (MercadoPagoAPIError es RuntimeError): si el
-        # cobro lo inserto esta llamada, se compensa borrandolo.
+        # cobro lo inserto esta llamada, se compensa borrandolo. Si MP llego a
+        # crear la preferencia (respuesta sin init_point), se vence.
         await db.rollback()
         if creado:
             await _discard_orphan_payment(
@@ -1630,19 +1709,17 @@ async def create_panel_payment_preference(
                 payment_id=payment_id,
                 appointment_id=appointment_id,
             )
+        if isinstance(exc, ProviderPreferenceWithoutLinkError):
+            await _drop_unsealed_link_or_log(db, exc.preference_id, previa, ids)
         raise
     except Exception:
         # Conflicto de concurrencia (StaleDataError, IntegrityError): otra
         # request esta trabajando sobre el mismo cobro. No se borra el cobro,
         # pero el link que MP ya creo no puede quedar vivo.
-        await _drop_unsealed_link(
-            db, nueva, previa, (store_id, payment_id, appointment_id)
-        )
+        await _drop_unsealed_link_or_log(db, nueva, previa, ids)
         raise
     if not sellable:
-        await _drop_unsealed_link(
-            db, nueva, previa, (store_id, payment_id, appointment_id)
-        )
+        await _drop_unsealed_link_or_log(db, nueva, previa, ids)
         raise AppointmentNotPayableError()
     await db.refresh(payment)
     return payment
