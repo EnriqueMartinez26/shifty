@@ -633,7 +633,10 @@ class AppointmentService:
         if not appointment:
             raise AppointmentNotFoundException(public_id)
 
-        payload_before = {"notes_staff": appointment.notes_staff}
+        # La auditoria registra el hecho (quien, cuando, largo), nunca el
+        # texto: las notas pueden ser clinicas y audit_logs no se purga
+        # (L3-02, 2026-09-25). La migracion c7e9a1b3d5f7 recorto las viejas.
+        payload_before = staff_notes_audit_payload(appointment.notes_staff)
         appointment.notes_staff = notes_staff
 
         await self.uow.audit.log(
@@ -643,7 +646,7 @@ class AppointmentService:
             store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
-            payload_after={"notes_staff": notes_staff},
+            payload_after=staff_notes_audit_payload(notes_staff),
         )
 
         await self.uow.commit()
@@ -980,6 +983,11 @@ def _self_booking(
         intake_answers=data.get("intake_answers") or {},
         idempotency_key=data.get("idempotency_key"),
     )
+
+
+def staff_notes_audit_payload(notes_staff: str | None) -> dict[str, JsonValue]:
+    """Lo que la auditoria guarda de ``notes_staff``: que cambio y su largo."""
+    return {"notes_staff_changed": True, "notes_staff_length": len(notes_staff or "")}
 
 
 def _requested_staff(
