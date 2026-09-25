@@ -34,6 +34,10 @@ from modules.payments.model import (
     external_reference_for,
 )
 from modules.services.model import Service
+from modules.payments.links import record_retired_link
+from modules.payments.model import (  # reexportado: lo importan jobs y tests
+    EVENT_PREFERENCE_EXPIRE as EVENT_PREFERENCE_EXPIRE,
+)
 from modules.stores.media import absolute_media_url
 from modules.stores.model import Store
 from modules.users.model import User
@@ -782,10 +786,8 @@ async def prepare_mercadopago_preference(
     )
 
 
-# Evento del outbox: "vencer este link de pago en Mercado Pago". Lo publica
-# quien libera un turno en la misma transaccion y lo consume
-# process_outbox_batch fuera de todo lock (B1-04).
-EVENT_PREFERENCE_EXPIRE = "payment.preference.expire"
+# ``EVENT_PREFERENCE_EXPIRE`` ("vencer este link en MP", B1-04) vive en
+# ``payments.model`` y se reexporta desde aca.
 
 
 async def expire_mercadopago_preference(
@@ -937,7 +939,9 @@ def _reprice_existing_payment(
     return cambio
 
 
-def _retire_link(payment: Payment) -> None:
+def _retire_link(
+    db: AsyncSession, payment: Payment, importe_del_link: Decimal | None = None
+) -> None:
     """El cobro deja de usar su link: queda un placeholder hasta el nuevo, y
     se olvida el pago de MP que tenia anotado (era del link retirado).
 
@@ -954,6 +958,9 @@ def _retire_link(payment: Payment) -> None:
     """
     if payment.is_accredited:
         raise PaymentAlreadyAccreditedError()
+    # Queda en el historial: un pago tardio de este link (cupon de efectivo,
+    # revision) se reconoce y se aplica o se alerta (``payments.links``).
+    record_retired_link(db, payment, amount=importe_del_link)
     payment.preference_id, payment.payment_link = _placeholder_link(
         payment.appointment_id
     )
@@ -966,7 +973,12 @@ def _retire_link(payment: Payment) -> None:
 
 
 def _needs_provider_link(
-    payment: Payment, *, importe_cambio: bool, create_provider_link: bool
+    db: AsyncSession,
+    payment: Payment,
+    *,
+    importe_cambio: bool,
+    create_provider_link: bool,
+    importe_del_link: Decimal | None = None,
 ) -> bool:
     """Hay que pedir un link nuevo a MP: cambio el importe o el que hay es falso.
 
@@ -977,7 +989,7 @@ def _needs_provider_link(
     (misma clase que el bug del 2026-09-11).
     """
     if importe_cambio and not create_provider_link:
-        _retire_link(payment)
+        _retire_link(db, payment, importe_del_link)
     return (
         importe_cambio
         or _is_placeholder_preference(payment.preference_id)
@@ -1187,6 +1199,7 @@ async def ensure_payment_preference(
 
 
 def _refresh_existing_payment(
+    db: AsyncSession,
     payment: Payment,
     *,
     amount: Decimal,
@@ -1207,6 +1220,9 @@ def _refresh_existing_payment(
     ``_expire_replaced_preference``). Antes se devolvia el link viejo, ya
     vencido. La reapertura del cobro la hace la fase 2, ya sellado el link.
     """
+    # El importe que cobra el link vigente: si se re-tarifa y se retira, el
+    # historial guarda el de ESE link, no el nuevo.
+    importe_del_link = payment.amount
     importe_cambio = _reprice_existing_payment(
         payment,
         amount=amount,
@@ -1225,12 +1241,14 @@ def _refresh_existing_payment(
         # ``PaymentLinkRegenerationUnavailableError``.
         if not settings.MERCADOPAGO_LINK_REF_ENABLED:
             raise PaymentLinkRegenerationUnavailableError()
-        _retire_link(payment)
+        _retire_link(db, payment)
     # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
     # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
     payment.apply_status(PaymentStatus.PENDING.value)
     return _needs_provider_link(
+        db,
         payment,
+        importe_del_link=importe_del_link,
         importe_cambio=importe_cambio,
         create_provider_link=create_provider_link,
     )
@@ -1272,6 +1290,7 @@ async def _upsert_payment_preference(
     preferencia_previa = None if payment is None else payment.preference_id
     if payment:
         should_refresh_provider_link = _refresh_existing_payment(
+            db,
             payment,
             amount=amount,
             original_amount=original_amount,

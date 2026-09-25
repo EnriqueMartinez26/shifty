@@ -139,9 +139,13 @@ async def test_cada_link_tiene_su_referencia_y_todas_apuntan_al_turno(
 
 
 @pytest.mark.asyncio
-async def test_un_approved_tardio_del_link_viejo_sin_preference_id_no_se_aplica(
+async def test_un_approved_tardio_del_link_viejo_sin_preference_id_no_deja_dos_vivos(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """El pago del link viejo no se aplica AL LINK NUEVO: desde la revision
+    de 7abb9b4..e5579b6 el cobro adopta el link retirado que se pago (con el
+    importe de ese link) y el nuevo se vence. Nunca quedan dos links vivos
+    (test_pago_en_link_retirado.py)."""
     turno, mp, vieja, nueva = await _regenerado(
         client, test_session, monkeypatch, "ref-vieja-tarde"
     )
@@ -153,14 +157,13 @@ async def test_un_approved_tardio_del_link_viejo_sin_preference_id_no_se_aplica(
         _pago_de_mp(cobro, referencia=mp.referencias[vieja], externo="mp-viejo-1"),
     )
 
-    assert aplicado is False
+    assert aplicado is True
     cobro = await _cobro(test_session, turno)
-    # El link nuevo sigue siendo el unico vivo: el cobro no se acredito.
-    assert (cobro.status, cobro.preference_id) == (PaymentStatus.PENDING.value, nueva)
+    assert (cobro.status, cobro.preference_id) == (PaymentStatus.APPROVED.value, vieja)
     vencidas = {
         e.payload["preference_id"] for e in await _vencimientos(test_session, turno)
     }
-    assert vieja in vencidas and nueva not in vencidas
+    assert {vieja, nueva} <= vencidas
 
 
 @pytest.mark.asyncio

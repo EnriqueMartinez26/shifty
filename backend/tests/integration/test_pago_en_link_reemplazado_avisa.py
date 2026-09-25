@@ -84,7 +84,11 @@ async def test_un_approved_de_un_link_reemplazado_avisa_una_vez(
     )
     cobro = await _cobro(test_session, turno)
     cobro_id, store_id = cobro.id, cobro.store_id
-    payload = _pago_de_mp(cobro, referencia=mp.referencias[vieja], externo="mp-viejo-9")
+    # Un link de este cobro que no esta en su historial: no se puede adoptar
+    # (un link retirado conocido se aplica: test_pago_en_link_retirado.py).
+    payload = _pago_de_mp(
+        cobro, referencia=f"{turno}:desconocido", externo="mp-viejo-9"
+    )
 
     with capture_logs() as logs:
         primero = await _aplicar(test_session, cobro, payload)

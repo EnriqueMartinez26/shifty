@@ -79,6 +79,13 @@ ALLOWED_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+# Evento del outbox: "vencer este link de pago en Mercado Pago". Lo publica
+# quien suelta o reemplaza un link en la misma transaccion y lo consume
+# process_outbox_batch fuera de todo lock (B1-04). Vive aca (y
+# ``payments.service`` lo reexporta) para que ``payments.links`` lo use sin
+# importar el service.
+EVENT_PREFERENCE_EXPIRE = "payment.preference.expire"
+
 # Separador de la ``external_reference`` de un link: ``<turno>:<link_ref>``.
 # Los ids de turno son ULID (sin ``:``), asi que el turno es lo de antes.
 EXTERNAL_REFERENCE_SEPARATOR = ":"
@@ -271,6 +278,30 @@ class Payment(BaseEntity):
         return True
 
 
+class PaymentLinkHistory(BaseEntity):
+    """Un link de pago que el cobro dejo de usar (revision de perf/f4-pay).
+
+    Los cupones de Rapipago/Pago Facil y los pagos en revision se aprueban
+    horas o dias despues de creados: un pago del link retirado tiene que
+    poder reconocerse (misma referencia, mismo importe de ESE link) y
+    aplicarse o alertarse, no perderse. Lo escribe ``payments.links``.
+    """
+
+    __tablename__ = "payment_link_history"
+    __table_args__ = (
+        Index("ix_payment_link_history_payment_retired", "payment_id", "retired_at"),
+    )
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("payments.id"))
+    # NULL = link de antes del nonce: su referencia es el id del turno.
+    link_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    preference_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str] = mapped_column(String(10))
+    retired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class WebhookInbox(BaseEntity):
     __tablename__ = "webhook_inbox"
     # Historico que lee la purga de retencion (F1-19, migracion e5f7a9b1c3d6).
@@ -361,6 +392,8 @@ class OutboxMessage(BaseEntity):
 
 __all__ = [
     "ALLOWED_PAYMENT_TRANSITIONS",
+    "EVENT_PREFERENCE_EXPIRE",
+    "PaymentLinkHistory",
     "LIVE_CHARGE_PAYMENT_STATUSES",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",

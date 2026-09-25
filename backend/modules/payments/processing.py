@@ -11,8 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.observability import report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
+from modules.payments.links import (
+    adopt_retired_link,
+    classify_payment_link,
+    pays_retired_link,
+)
 from modules.payments.model import (
     OutboxMessage,
+    can_apply_payment_status,
     appointment_id_from_reference,
     Payment,
     PaymentStatus,
@@ -467,27 +473,45 @@ def _sync_appointment(
         expire_live_charge(db, payment, reason="appointment_released_by_payment")
 
 
-def _de_un_link_reemplazado(payment: Payment, payload: dict[str, Any]) -> bool:
-    """El pago es de un link de ESTE cobro que ya no es el vigente.
+async def _resolver_link(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment: Payment,
+    payload: dict[str, Any],
+    payment_status: str,
+) -> bool | None:
+    """De que link del cobro es el pago y que se hace (revision de perf/f4-pay).
 
-    Mismo turno pero otra referencia de link (``<turno>:<link_ref>``, la senal
-    que controla Shifty), o, si MP la manda, otra preferencia. Un pago de otro
-    turno no es "reemplazado": lo rechaza la integridad como siempre.
+    None: sigue el camino normal (link vigente, o un link RETIRADO del cobro
+    que se adopta). True/False: ya resuelto, con eso responde el webhook.
+
+    Un ``approved`` de un link retirado (cupon de efectivo o revision que se
+    aprobo despues de regenerar o re-tarifar) se aplica si el cobro todavia
+    no esta acreditado y el pago es por el importe y la moneda de ESE link:
+    el cobro adopta ese link y el vigente se vence (``adopt_retired_link``).
+    Si el cobro ya esta acreditado (o devuelto) es un pago duplicado; si el
+    importe no es el de ese link, o el link no es conocido, va al camino de
+    alerta. La identidad ya se valido: esto nunca corre con un payload ajeno.
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
-    referencia = str(
-        data.get("external_reference") or payload.get("external_reference") or ""
-    ).strip()
-    if referencia and appointment_id_from_reference(referencia) == (
-        payment.appointment_id
-    ):
-        if referencia != payment.current_external_reference:
-            return True
-    preferencia = str(data.get("preference_id") or "").strip()
-    return bool(
-        preferencia and payment.preference_id and preferencia != payment.preference_id
+    link = await classify_payment_link(db, payment, data, _referencia_del_pago(payload))
+    if link.tipo == "vigente":
+        return None
+    if payment_status != PaymentStatus.APPROVED.value:
+        logger.info("payment_on_replaced_link_ignored", store_id=store_id)
+        return False
+    abierto = not payment.is_accredited and can_apply_payment_status(
+        payment.status, PaymentStatus.APPROVED.value
     )
+    if abierto and link.retirado is not None and pays_retired_link(link.retirado, data):
+        adopt_retired_link(db, payment, link.retirado)
+        return None
+    await _pago_en_link_reemplazado(
+        db, store_id=store_id, payment=payment, payload=payload, duplicado=not abierto
+    )
+    return False
 
 
 async def _pago_en_link_reemplazado(
@@ -496,7 +520,7 @@ async def _pago_en_link_reemplazado(
     store_id: str,
     payment: Payment,
     payload: dict[str, Any],
-    payment_status: str,
+    duplicado: bool,
 ) -> None:
     """No se aplica, pero la plata acreditada nunca queda en silencio.
 
@@ -505,11 +529,9 @@ async def _pago_en_link_reemplazado(
     Si entro plata: warning con ids (sin datos personales), evento a Sentry y
     un aviso al dueno por pago de MP (las reentregas no repiten el aviso). El
     webhook queda sin aplicar: el inbox lo reintenta hasta agotar y queda como
-    dead letter, visible en ``/ops/slo``.
+    dead letter, visible en ``/ops/slo``. ``duplicado``: el cobro ya estaba
+    acreditado (o devuelto): el aviso pide devolver el pago.
     """
-    if payment_status != PaymentStatus.APPROVED.value:
-        logger.info("payment_on_replaced_link_ignored", store_id=store_id)
-        return
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     mp_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
@@ -517,6 +539,7 @@ async def _pago_en_link_reemplazado(
         "store_id": store_id,
         "payment_id": payment.id,
         "mp_payment_id": mp_payment_id,
+        "duplicado": duplicado,
     }
     logger.warning("payment_on_replaced_link", **contexto)
     report_exception(
@@ -544,6 +567,7 @@ async def _pago_en_link_reemplazado(
                     "payment_id": payment.id,
                     "mp_payment_id": mp_payment_id,
                     "amount": str(data.get("transaction_amount") or ""),
+                    "duplicado": duplicado,
                 },
             )
         )
@@ -623,15 +647,15 @@ async def apply_mercadopago_webhook_payload(
     await _validate_payment_identity(
         db, store_id=store_id, payment=payment, payload=payload, configs=configs
     )
-    if _de_un_link_reemplazado(payment, payload):
-        await _pago_en_link_reemplazado(
-            db,
-            store_id=store_id,
-            payment=payment,
-            payload=payload,
-            payment_status=payment_status,
-        )
-        return False
+    resuelto = await _resolver_link(
+        db,
+        store_id=store_id,
+        payment=payment,
+        payload=payload,
+        payment_status=payment_status,
+    )
+    if resuelto is not None:
+        return resuelto
 
     _validate_payment_link(payment, payload)
 

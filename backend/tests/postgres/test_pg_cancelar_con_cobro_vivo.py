@@ -1031,7 +1031,13 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
         regenerar, webhook = propias["regenerar"], propias["webhook"]
         assert regenerar.status_code in {200, 409}, regenerar.text
         if regenerar.status_code == 409:
-            assert regenerar.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE"
+            # Turno cancelado, o el pago tardio del link retirado se aplico
+            # entre la fase 1 y la 2 (el cobro adopto ese link): la fase 2
+            # choca con la version y vence el link que habia creado.
+            assert regenerar.json()["error_code"] in {
+                "APPOINTMENT_NOT_PAYABLE",
+                "CONCURRENT_MODIFICATION",
+            }, regenerar.text
         assert webhook.status_code == 200, webhook.text
         if con_cancelacion:
             assert propias["cancelar"].status_code == 200, propias["cancelar"].text
@@ -1066,3 +1072,157 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
             if ref.split(":")[0] == turno and pref not in vencidas
         }
         assert vivos <= {final["preferencia"]}, (turno, vivos, final)
+
+
+# ---------------------------------------------------------------------------
+# Pago de un link retirado contra pago del link vigente (revision de
+# 7abb9b4..e5579b6, 2026-09-25, #1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pago_del_link_retirado_contra_pago_del_link_vigente(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cobros regenerados (link L1 retirado, L2 vigente). A la vez llegan un
+    ``approved`` tardio de L1 (cupon de efectivo) y un ``approved`` de L2.
+    Los dos toman el turno primero (regla 7) y se serializan. Exactamente uno
+    se aplica; el otro encuentra el cobro ya acreditado y va al camino de
+    alerta como pago duplicado (una vez por pago de MP). Cero 5xx y un solo
+    link vivo o pagado por cobro."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    mp = _MercadoPago()
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    slug = "retirado-pg-rafaga"
+    store, admin = await register_and_login(
+        client, app_sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(admin),
+        json={"deposit_policy": "La sena se descuenta del total."},
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, admin)
+    await _configure_gateway(client, admin)
+    service = await create_service(client, admin)
+    staff = await create_staff(client, admin, service, email=f"staff-{slug}@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+
+    turnos: list[str] = []
+    for i in range(TURNOS):
+        alta = await client.post(
+            "/appointments/",
+            headers=auth_headers(admin),
+            json={
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": dia.replace(
+                    hour=10 + i, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "client_name": f"Cliente Retirado {i}",
+                "client_phone": f"+54911562{i:05d}",
+                "idempotency_key": f"{slug}-alta-{i:04d}",
+            },
+        )
+        assert alta.status_code == 201, alta.text
+        turno = str(alta.json()["public_id"])
+        primero = await client.post(
+            f"/payments/preferences/{turno}", headers=auth_headers(admin)
+        )
+        assert primero.status_code == 200, primero.text
+        turnos.append(turno)
+    viejas = {t: c["preferencia"] for t, c in (await _cobros(owner_engine)).items()}
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text("update payments set status = 'expired', version = version + 1")
+        )
+    for turno in turnos:
+        regenerado = await client.post(
+            f"/payments/preferences/{turno}", headers=auth_headers(admin)
+        )
+        assert regenerado.status_code == 200, regenerado.text
+    cobros = await _cobros(owner_engine)
+    referencias = dict(mp.creadas)
+    async with owner_engine.connect() as conn:
+        filas = await conn.execute(text("select id, store_id from payments"))
+        tiendas: dict[str, str] = {str(f[0]): str(f[1]) for f in filas.all()}
+
+    def remoto(turno: str, preferencia: str, externo: str) -> dict[str, Any]:
+        cobro = cobros[turno]
+        return {
+            "id": externo,
+            "status": "approved",
+            "external_reference": referencias[preferencia],
+            "metadata": {
+                "appointment_id": turno,
+                "payment_id": cobro["pago_id"],
+                "store_id": tiendas[cobro["pago_id"]],
+            },
+            "transaction_amount": cobro["importe"],
+            "currency_id": "ARS",
+        }
+
+    llamadas: list[Any] = []
+    for i, turno in enumerate(turnos):
+        for tipo, preferencia in (
+            ("viejo", viejas[turno]),
+            ("nuevo", cobros[turno]["preferencia"]),
+        ):
+            externo = f"mp-{tipo}-{i}"
+            mp.remotos[externo] = remoto(turno, preferencia, externo)
+            llamadas.append(
+                client.post(
+                    f"/payments/webhooks/mercadopago?store_id={store}",
+                    json={
+                        "id": f"evt-{tipo}-{slug}-{i}",
+                        "type": "payment",
+                        "data": {"id": externo},
+                    },
+                    headers=webhook_signature_headers(
+                        secret="secret-demo",
+                        data_id=externo,
+                        request_id=f"req-{tipo}-{slug}-{i}",
+                        ts="0",
+                    ),
+                )
+            )
+    respuestas: list[Response] = await asyncio.gather(*llamadas)
+
+    assert all(r.status_code < 500 for r in respuestas), [
+        (r.status_code, r.text[:200]) for r in respuestas if r.status_code >= 500
+    ]
+    finales = await _cobros(owner_engine)
+    eventos = await _eventos(owner_engine)
+    vencidas = {p["preference_id"] for e, p in eventos if e == EVENT_PREFERENCE_EXPIRE}
+    for i, turno in enumerate(turnos):
+        viejo, nuevo = respuestas[2 * i], respuestas[2 * i + 1]
+        aplicados = [r.json().get("data", r.json())["applied"] for r in (viejo, nuevo)]
+        assert sorted(aplicados) == [False, True], (turno, aplicados)
+        final = finales[turno]
+        assert final["pago"] == "approved", final
+        aprobados = [
+            e
+            for e, p in eventos
+            if e == NotificationType.PAYMENT_APPROVED.value
+            and p.get("payment_id") == final["pago_id"]
+        ]
+        duplicados = [
+            p
+            for e, p in eventos
+            if e == "payment.received_on_replaced_link"
+            and p.get("payment_id") == final["pago_id"]
+        ]
+        assert len(aprobados) == 1, aprobados
+        assert len(duplicados) == 1 and duplicados[0]["duplicado"] is True, duplicados
+        # Un solo link vivo o pagado: el pagado es el del cobro; el otro vencido.
+        otra = (
+            cobros[turno]["preferencia"]
+            if final["preferencia"] == viejas[turno]
+            else viejas[turno]
+        )
+        assert otra in vencidas, (turno, otra, vencidas)
