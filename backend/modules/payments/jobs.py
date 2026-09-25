@@ -60,6 +60,7 @@ from modules.payments.service import (
     expire_mercadopago_preference,
     fetch_mercadopago_payment,
     load_gateway_configs,
+    mercadopago_budget,
     stamp_payment_from_status,
     search_mercadopago_payments,
 )
@@ -69,15 +70,20 @@ from modules.payments.service import (
 RECONCILIATION_LOOKBACK_DAYS = 30
 
 
-# Inbox y conciliacion (F1-20, R9-08): lote de 25 y presupuesto de 60 s para
-# la fase A. Antes eran 100 filas x hasta 20 s por consulta a MP sin tope: con
-# MP lento el hard time limit de Celery (150 s) mataba la tarea antes de la
-# fase B, no se aplicaba nada y la corrida siguiente retomaba las mismas 100.
-# El presupuesto se mira ANTES de cada consulta, asi que el peor caso es el
-# presupuesto mas una consulta, por debajo del soft time limit (120 s). Lo que
-# no entra no gasta un intento: lo toma la corrida siguiente.
+# Inbox, conciliacion y vencimiento de retenciones (F1-20, R9-08): lote de 25
+# y presupuesto de 60 s para la fase A. Antes eran 100 filas x hasta 20 s por
+# consulta a MP sin tope: con MP lento el hard time limit de Celery (150 s)
+# mataba la tarea antes de la fase B, no se aplicaba nada y la corrida
+# siguiente retomaba las mismas 100. El presupuesto se mira ANTES de cada
+# consulta, y cada consulta corre con ``mercadopago_budget`` de
+# ``MP_QUERY_BUDGET_SECONDS``: la cadena entera de una consulta (un 401, el
+# refresh OAuth y el reintento: hasta 3 requests de 20 s) no pasa de 20 s.
+# Peor caso: 60 + 20 = 80 s, por debajo del soft time limit (120 s); antes de
+# ese tope por consulta llegaba a 60 + 60 (revision de 3b977a9..6c84d46, #3).
+# Lo que no entra no gasta un intento: lo toma la corrida siguiente.
 MP_BATCH_LIMIT = 25
 MP_PHASE_A_BUDGET_SECONDS = 60.0
+MP_QUERY_BUDGET_SECONDS = 20.0
 
 
 def _reloj() -> float:
@@ -1304,13 +1310,14 @@ async def _enrich_inbox_payloads(
             limite, job="inbox", sin_consultar=len(pendientes) - indice
         ):
             break
-        enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
-            db,
-            store_id=inbox.store_id,
-            payload=inbox.payload,
-            configs=configs,
-            persist_refresh=persistir,
-        )
+        with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
+            enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
+                db,
+                store_id=inbox.store_id,
+                payload=inbox.payload,
+                configs=configs,
+                persist_refresh=persistir,
+            )
     return enriquecidos
 
 
@@ -1581,26 +1588,29 @@ async def _fetch_remote_payment(
     referencias: tuple[str, ...] = tuple(retiradas[:RETIRED_LINK_SEARCH_MAX])
     if payment.external_payment_id:
         _consultar_si_alcanza(limite)
-        primero = await fetch_mercadopago_payment(
-            db,
-            store_id=payment.store_id,
-            payment_id=payment.external_payment_id,
-            configs=configs,
-            persist_refresh=persist_refresh,
-        )
+        with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
+            primero = await fetch_mercadopago_payment(
+                db,
+                store_id=payment.store_id,
+                payment_id=payment.external_payment_id,
+                configs=configs,
+                persist_refresh=persist_refresh,
+            )
         if primero is None or _es_aprobado(primero):
             return primero
     else:
         referencias = (payment.current_external_reference, *referencias)
     for referencia in referencias:
         _consultar_si_alcanza(limite)
-        candidates = await search_mercadopago_payments(
-            db,
-            store_id=payment.store_id,
-            external_reference=referencia,
-            configs=configs,
-            persist_refresh=persist_refresh,
-        )
+        # Tope por consulta, refresh OAuth y reintento incluidos (#3).
+        with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
+            candidates = await search_mercadopago_payments(
+                db,
+                store_id=payment.store_id,
+                external_reference=referencia,
+                configs=configs,
+                persist_refresh=persist_refresh,
+            )
         # Un cobro acreditado gana; si no hay, el del id o el mas reciente
         # del vigente.
         for candidate in candidates:
