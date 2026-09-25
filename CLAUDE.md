@@ -382,11 +382,11 @@ Una instrucción en lenguaje natural no es una garantía.
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
 - **Un turno en el pasado lo agenda solo la tienda** (decisión del dueño,
-  2026-09-25). El panel (`POST /appointments/` con datos de cliente) y
-  `POST /waitlist/{id}/book` aceptan un inicio ya pasado para registrar a quien
-  llegó sin turno: pasa por lock, bloqueos, choques y GiST igual que cualquier
-  alta, pero no publica mail de reserva ni de confirmación y no genera
-  recordatorios. El cliente final nunca: la reserva pública, la reprogramación
+  2026-09-25). El panel (`POST /appointments/` con datos de cliente y
+  `PATCH /appointments/{id}/reschedule`) y `POST /waitlist/{id}/book` aceptan un
+  inicio ya pasado para registrar a quien llegó sin turno o corregirlo: pasa por
+  lock, bloqueos, choques y GiST igual que cualquier alta, pero no publica mail
+  de reserva, confirmación ni reprogramación y no genera recordatorios. El cliente final nunca: la reserva pública, la reprogramación
   de "Mis turnos" y anotarse en la lista de espera rechazan todo inicio pasado,
   aunque la tienda tenga `min_booking_notice_hours = 0`. Los topes de fecha de
   reservar y reprogramar son solo contra el desborde
