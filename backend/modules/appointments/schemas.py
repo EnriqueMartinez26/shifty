@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -17,9 +17,6 @@ from modules.appointments.model import AppointmentStatus
 # ---------------------------------------------------------------------------
 
 
-# Un turno cargado desde el panel para un cliente puede empezar hasta 5
-# minutos antes del request: el dueno carga a quien acaba de sentarse (FF-04).
-PANEL_BOOKING_PAST_GRACE = timedelta(minutes=5)
 # Tope hacia adelante de las altas y reprogramaciones del panel: sin el, un
 # 9999-12-31 salia 500 (``starts_at + duracion`` desborda). Dos anios: corta
 # lo absurdo sin quitar altas lejanas que hoy se aceptan.
@@ -33,8 +30,9 @@ class AppointmentCreate(BaseModel):
       llama; ``staff_id`` obligatorio y ``starts_at`` en el futuro.
     - Con ``client_name`` + ``client_phone`` (FF-04, 2026-09-24, aditivo): turno
       para ese cliente de la tienda. ``staff_id`` opcional (se elige uno que
-      atienda), ``starts_at`` hasta ``PANEL_BOOKING_PAST_GRACE`` en el pasado,
-      ``allow_outside_schedule`` solo para el admin.
+      atienda), ``starts_at`` desde hace 2 anios (la tienda puede cargar un
+      horario que ya paso: decision del dueno, 2026-09-25) hasta dentro de 2
+      anios, ``allow_outside_schedule`` solo para el admin.
     """
 
     service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
@@ -81,10 +79,12 @@ class AppointmentCreate(BaseModel):
         val = self.starts_at
         if val.tzinfo is None:
             val = val.replace(tzinfo=timezone.utc)
-        limite = now_utc()
         if self.for_client:
-            limite -= PANEL_BOOKING_PAST_GRACE
-        if val <= limite:
+            # La TIENDA puede cargar un horario que ya paso (un walk-in que se
+            # registra despues): solo el piso contra el desborde.
+            if val < now_utc() - MAX_BOOKING_AHEAD:
+                raise ValueError("La fecha esta fuera del rango de reservas.")
+        elif val <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado.")
         if not self._within_horizon(val):
             raise ValueError("La fecha esta fuera del rango de reservas.")

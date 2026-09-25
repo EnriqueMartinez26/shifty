@@ -182,22 +182,27 @@ async def test_el_admin_reserva_para_un_cliente_nuevo_confirmado_y_sin_cobro(
 
 
 @pytest.mark.asyncio
-async def test_sin_antelacion_minima_pero_no_en_el_pasado(
-    client: AsyncClient,
+async def test_sin_antelacion_minima_y_con_turnos_ya_pasados(
+    client: AsyncClient, test_session: AsyncSession
 ) -> None:
+    """Decision del dueno (2026-09-25): la TIENDA puede cargar un horario que
+    ya paso (un walk-in que se registra despues), hasta el piso contra el
+    desborde (2 anios). Sin mail de "turno confirmado" para un turno que ya
+    empezo; el cliente final nunca reserva en el pasado."""
     agenda = await _agenda(client, "ff04-ahora")
     ahora = datetime.now(timezone.utc)
 
-    # Recien empezado: dentro de los 5 minutos de gracia. Fuera de horario a
-    # proposito (admin): la hora a la que corre el test no se controla.
-    recien = await _reservar(
+    # Hace tres horas, con email entregable. Fuera de horario a proposito
+    # (admin): la hora a la que corre el test no se controla.
+    pasado = await _reservar(
         client,
         agenda,
-        starts_at=(ahora - timedelta(minutes=2)).isoformat(),
+        starts_at=(ahora - timedelta(hours=3)).isoformat(),
+        client_email="walkin@example.com",
         allow_outside_schedule=True,
         idempotency_key="ff04-ahora-1",
     )
-    assert recien.status_code == 201, recien.text
+    assert pasado.status_code == 201, pasado.text
 
     # En una hora: el portal exige 2 h de antelacion (default de la tienda).
     en_un_rato = await _reservar(
@@ -209,14 +214,31 @@ async def test_sin_antelacion_minima_pero_no_en_el_pasado(
     )
     assert en_un_rato.status_code == 201, en_un_rato.text
 
-    pasado = await _reservar(
+    muy_viejo = await _reservar(
         client,
         agenda,
-        starts_at=(ahora - timedelta(minutes=10)).isoformat(),
+        starts_at=(ahora - timedelta(days=731)).isoformat(),
         allow_outside_schedule=True,
         idempotency_key="ff04-ahora-4",
     )
-    assert pasado.status_code == 422, pasado.text
+    assert muy_viejo.status_code == 422, muy_viejo.text
+
+    avisos = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == EVENT_APPOINTMENT_BOOKED_BY_PANEL
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Solo el turno futuro (la ficha quedo con el email del walk-in) lleva
+    # aviso; el que ya paso, no.
+    assert [a.payload["appointment_id"] for a in avisos] == [
+        en_un_rato.json()["public_id"]
+    ]
 
 
 @pytest.mark.asyncio

@@ -31,6 +31,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment
+from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
+from modules.payments.model import OutboxMessage
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _tienda
 from tests.integration.test_caracterizacion_autogestion import TELEFONO, _con_turno
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -206,10 +208,12 @@ async def test_reservar_desde_la_lista_de_espera_fuera_de_rango_422(
 
 @pytest.mark.asyncio
 async def test_reservar_desde_la_lista_de_espera_un_turno_que_ya_paso(
-    client: AsyncClient,
+    client: AsyncClient, test_session: AsyncSession
 ) -> None:
     """El dueno carga despues a quien ya atendio (o el horario por defecto,
-    las 10:00, ya paso): sin piso en el pasado."""
+    las 10:00, ya paso): sin piso en el pasado (decision del dueno,
+    2026-09-25: la tienda puede, el cliente final no). Sin mail de "turno
+    confirmado" para un turno que ya empezo."""
     token, entrada = await _lista_de_espera(client, "horiz-espera-pasado")
     # En punto: un servicio de 30 minutos que empieza en punto nunca cruza
     # la medianoche, y el horario del profesional cubre todo el dia.
@@ -224,3 +228,15 @@ async def test_reservar_desde_la_lista_de_espera_un_turno_que_ya_paso(
     )
 
     assert res.status_code == 201, res.text
+    avisos = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == EVENT_APPOINTMENT_CONFIRMED
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert avisos == []

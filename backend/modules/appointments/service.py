@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.database import _apply_tenant_context
-from core.utils import ensure_utc_aware
+from core.utils import ensure_utc_aware, now_utc
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
     AppException,
@@ -238,8 +238,10 @@ class AppointmentService:
                 appointment, service, staff, outside_schedule=outside_schedule
             ),
         )
-        # Un email tecnico (.noreply) o ninguno: no hay a quien avisar.
-        if is_deliverable_email(appointment.client_email):
+        # Un email tecnico (.noreply) o ninguno: no hay a quien avisar. Y un
+        # turno que ya empezo (la tienda carga un walk-in despues) no lleva
+        # "turno confirmado": el cliente ya estuvo.
+        if is_deliverable_email(appointment.client_email) and starts_at >= now_utc():
             self._publish_client_mail(appointment, EVENT_APPOINTMENT_BOOKED_BY_PANEL)
         await self._commit_before_network()
         try:

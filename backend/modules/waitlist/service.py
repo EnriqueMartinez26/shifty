@@ -222,17 +222,20 @@ class WaitlistService:
         # el request mandaba SMTP despues del commit. Va al email que dejo la
         # persona en la lista, que puede no ser el de su ficha de cliente (y a
         # nadie si no dejo uno, como antes).
-        payload: dict[str, JsonValue] = {
-            "appointment_id": appointment.id,
-            "email": entry.client_email,
-        }
-        self.db.add(
-            OutboxMessage(
-                store_id=store.id,
-                event_type=EVENT_APPOINTMENT_CONFIRMED,
-                payload=payload,
+        # Un turno que ya empezo (la tienda puede cargarlo despues, decision
+        # del dueno 2026-09-25) no lleva el mail: el cliente ya estuvo.
+        if ensure_utc_aware(appointment.starts_at) >= datetime.now(timezone.utc):
+            payload: dict[str, JsonValue] = {
+                "appointment_id": appointment.id,
+                "email": entry.client_email,
+            }
+            self.db.add(
+                OutboxMessage(
+                    store_id=store.id,
+                    event_type=EVENT_APPOINTMENT_CONFIRMED,
+                    payload=payload,
+                )
             )
-        )
         await self.db.commit()
         await invalidate_availability(cache, store.id, appointment.starts_at)
         return appointment, service, staff
