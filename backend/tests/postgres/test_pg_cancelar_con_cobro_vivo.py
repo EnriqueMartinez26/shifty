@@ -660,3 +660,101 @@ async def test_bloqueo_sobre_turnos_con_link_contra_el_pago_aprobado(
             assert final["turno"] == "confirmed", final
             assert vencimientos == [], vencimientos
             assert avisos == [NotificationType.PAYMENT_APPROVED.value]
+
+
+# ---------------------------------------------------------------------------
+# Cancelacion del portal en rafaga (revision de perf/f4-pay, 2026-09-25, #2)
+# ---------------------------------------------------------------------------
+
+CANCELACIONES_PORTAL = 6
+
+
+@pytest.mark.asyncio
+async def test_rafaga_de_cancelaciones_del_portal_una_sola_gana(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N cancelaciones del cliente sobre el mismo turno a la vez (CLAUDE.md §4):
+    1 x 200 y N-1 x 409 ``APPOINTMENT_ALREADY_CANCELLED``, cero 5xx, un solo
+    ``appointment.slot_released`` y un solo aviso al dueno. Antes las N
+    respondian 200 y cada una republicaba el cupo y el aviso."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    monkeypatch.setattr(settings, "OTP_PROVIDER", "console")
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", True)
+    slug = "portal-cancela-rafaga"
+    store, admin = await register_and_login(
+        client, app_sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    service = await create_service(client, admin)
+    staff = await create_staff(client, admin, service, email=f"staff-{slug}@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+    reserva = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store,
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": dia.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente Rafaga Portal",
+            "client_email": f"cliente-{slug}@example.com",
+            "client_phone": TELEFONO_CLIENTE,
+            "accepts_terms": True,
+            "idempotency_key": f"{slug}-0001",
+        },
+    )
+    assert reserva.status_code == 201, reserva.text
+    turno = str(reserva.json()["public_id"])
+    pedido = await client.post(
+        "/public/otp/request",
+        json={
+            "store_public_id": store,
+            "phone": TELEFONO_CLIENTE,
+            "channel": "whatsapp",
+        },
+    )
+    assert pedido.status_code == 200, pedido.text
+    verificado = await client.post(
+        "/public/otp/verify",
+        json={
+            "store_public_id": store,
+            "phone": TELEFONO_CLIENTE,
+            "code": pedido.json()["debug_code"],
+        },
+    )
+    assert verificado.status_code == 200, verificado.text
+
+    respuestas: list[Response] = await asyncio.gather(
+        *(
+            client.patch(
+                f"/public/client/appointments/{turno}/cancel",
+                json={"phone": TELEFONO_CLIENTE},
+            )
+            for _ in range(CANCELACIONES_PORTAL)
+        )
+    )
+
+    codigos = sorted(r.status_code for r in respuestas)
+    assert all(c < 500 for c in codigos), [r.text[:200] for r in respuestas]
+    assert codigos == [200] + [409] * (CANCELACIONES_PORTAL - 1), codigos
+    assert {r.json()["error_code"] for r in respuestas if r.status_code == 409} == {
+        "APPOINTMENT_ALREADY_CANCELLED"
+    }
+    eventos = await _eventos(owner_engine)
+    liberados = [
+        e
+        for e, p in eventos
+        if e == "appointment.slot_released" and p.get("appointment_id") == turno
+    ]
+    avisos = [
+        e
+        for e, p in eventos
+        if e == NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value
+        and p.get("appointment_id") == turno
+    ]
+    assert len(liberados) == 1, liberados
+    assert len(avisos) == 1, avisos

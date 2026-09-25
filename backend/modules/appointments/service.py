@@ -32,6 +32,7 @@ from core.exceptions import (
 from http import HTTPStatus
 
 from modules.appointments.domain_service import SchedulingDomainService
+from modules.appointments.guards import reject_already_cancelled, reject_inactive
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.auth.service import normalize_email
@@ -377,17 +378,8 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
-        # Ya cancelado: conflicto, no un no-op (CLAUDE.md §4, "1 exito, N-1
-        # conflictos"). ``apply_status_transition`` deja pasar el mismo estado
-        # y antes se republicaban el cupo liberado y la auditoria (revision de
-        # perf/f4-pay, 2026-09-25). Bajo el lock: dos cancelaciones a la vez
-        # no pueden pasar las dos.
-        if appointment.status == AppointmentStatus.CANCELLED.value:
-            raise AppException(
-                message="El turno ya estaba cancelado",
-                http_status=HTTPStatus.CONFLICT,
-                error_code="APPOINTMENT_ALREADY_CANCELLED",
-            )
+        # Ya cancelado: 409, bajo el lock (dos a la vez no pasan las dos).
+        reject_already_cancelled(appointment)
 
         payload_before = {"status": appointment.status}
 
@@ -688,6 +680,9 @@ class AppointmentService:
         )
         if not original:
             raise AppointmentNotFoundException(public_id)
+        # Un turno terminal no se reprograma: volvia a la vida (revision de
+        # perf/f4-pay, 2026-09-25).
+        reject_inactive(original)
         # El cobro se lockea pegado al turno (regla 7) y antes que el
         # profesional: se vence recien en el swap, con el horario validado.
         payment = await self.uow.payments.get_by_appointment_locked(

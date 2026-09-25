@@ -325,8 +325,10 @@ async def test_portal_publico_con_la_tienda_suspendida(
         },
     )
     assert reprogramado.status_code == 200, reprogramado.text
+    # Se cancela el turno NUEVO: el original ya quedo cancelado al
+    # reprogramar (cancelarlo otra vez es 409 APPOINTMENT_ALREADY_CANCELLED).
     cancelado = await client.patch(
-        f"/public/client/appointments/{reserva.json()['public_id']}/cancel",
+        f"/public/client/appointments/{reprogramado.json()['public_id']}/cancel",
         json={"phone": TELEFONO},
     )
     assert cancelado.status_code == 200, cancelado.text

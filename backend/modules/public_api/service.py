@@ -51,8 +51,12 @@ from core.exceptions import (
 )
 from core.feature_flags import is_store_feature_enabled
 from core.utils import BOOKING_HORIZON_DAYS, today_local
-from infrastructure.persistence.models.appointment import ALLOWED_STATUS_TRANSITIONS
-from modules.appointments.guards import awaits_payment
+from modules.appointments.guards import (
+    awaits_payment,
+    is_active,
+    reject_already_cancelled,
+    reject_inactive,
+)
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
@@ -321,10 +325,9 @@ def client_reschedule_denial(
 def client_may_leave(appointment: Appointment) -> bool:
     """El grafo de estados deja pasar el turno a ``cancelled`` (cancelar y
     reprogramar lo hacen). Es el mismo grafo que aplica
-    ``apply_status_transition``: un terminal no se ofrece."""
-    return AppointmentStatus.CANCELLED.value in ALLOWED_STATUS_TRANSITIONS.get(
-        appointment.status, set()
-    )
+    ``apply_status_transition``: un terminal no se ofrece. Misma regla que
+    la guarda de las acciones (``appointments.guards.is_active``)."""
+    return is_active(appointment)
 
 
 async def require_recent_client_otp(
@@ -939,6 +942,9 @@ class PublicBookingService:
     ) -> PublicBookingResponse:
         """El cliente cancela su turno: commit -> invalidacion -> respuesta."""
         appointment, client = await self._lock_client_appointment(public_id, data.phone)
+        # Ya cancelado: 409 como el panel, sin republicar el cupo ni avisar
+        # otra vez al dueno (revision de perf/f4-pay, 2026-09-25).
+        reject_already_cancelled(appointment)
         # Cobro vivo (solo lo suelta release(), que vence antes la preferencia
         # en MP) y ventana de la tienda: las mismas reglas que el flag
         # ``can_cancel`` del historial.
@@ -985,6 +991,8 @@ class PublicBookingService:
         El llamador maneja la idempotencia (reserva, liberacion y replay).
         """
         original, client = await self._lock_client_appointment(public_id, data.phone)
+        # Un turno terminal no se reprograma (ni vuelve a la vida).
+        reject_inactive(original)
         # Reprogramar cancela el turno original: le corresponden los mismos
         # guards que a cancelar, incluida la ventana de la tienda (AUD2-B1-02).
         # Sin ella, a quien se le paso la hora de cancelar le alcanzaba con
