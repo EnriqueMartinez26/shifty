@@ -157,11 +157,13 @@ async def test_un_webhook_de_la_preferencia_vieja_no_toca_el_cobro_regenerado(
     cobro = await _cobro(test_session, turno)
     nueva = cobro.preference_id
 
-    with pytest.raises(RuntimeError, match="preferencia"):
-        await _webhook_de(
-            test_session, cobro, preferencia=vieja, estado=estado, externo="mp-viejo"
-        )
-    await test_session.rollback()
+    # Es de un link reemplazado: no se aplica (y si es ``approved``, avisa;
+    # tests/integration/test_pago_en_link_reemplazado_avisa.py).
+    aplicado = await _webhook_de(
+        test_session, cobro, preferencia=vieja, estado=estado, externo="mp-viejo"
+    )
+    await test_session.commit()
+    assert aplicado is False
 
     cobro = await _cobro(test_session, turno)
     assert (cobro.status, cobro.preference_id) == (PaymentStatus.PENDING.value, nueva)

@@ -301,6 +301,9 @@ class Settings(BaseSettings):
     OPS_ENABLE_PUBLIC_HEALTH: bool = True
     SLO_MAX_PENDING_WEBHOOKS: int = 200
     SLO_MAX_FAILED_WEBHOOKS: int = 20
+    # Webhooks que agotaron sus reintentos en las ultimas 24 h: cualquiera es
+    # un cobro sin aplicar (revision de perf/f4-pay).
+    SLO_MAX_DEAD_LETTER_WEBHOOKS_24H: int = 0
     SLO_MAX_PENDING_OUTBOX: int = 200
     # Atraso tolerado (F1-25, R9-16): el outbox corre cada 20 s y el inbox
     # cada minuto, con reintento a los 15 s tras un webhook fallido. Un mail

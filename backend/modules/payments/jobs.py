@@ -440,7 +440,9 @@ async def _plan_outbox_message(
     if message.event_type in _MAILS_DEL_PANEL:
         return await _panel_client_mail(db, message, contexto_del_lote)
 
-    notification = _build_store_notification(message)
+    notification = _replaced_link_notification(message) or _build_store_notification(
+        message
+    )
     if notification is None:
         return []
     # La notificacion in-app es la fuente durable; el mail es un efecto
@@ -867,6 +869,31 @@ async def _expire_claimed_preferences(
             fallidos += 1
     await db.commit()
     return vencidos, fallidos
+
+
+def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
+    """Aviso de plata recibida por un link reemplazado (perf/f4-pay).
+
+    Aparte de ``_build_store_notification`` (deuda de la regla 29: no se
+    apila otra rama ahi).
+    """
+    if message.event_type != NotificationType.PAYMENT_ON_REPLACED_LINK.value:
+        return None
+    payload = dict(message.payload or {})
+    amount = payload.get("amount")
+    amount_label = f" de ${amount}" if amount else ""
+    appointment_id = payload.get("appointment_id")
+    return Notification(
+        store_id=message.store_id,
+        type=message.event_type,
+        title="Se recibio un pago sobre un link reemplazado",
+        body=(
+            f"Entro un pago{amount_label} por un link de pago que ya habias "
+            "reemplazado: no se aplico al turno. Revisalo en Mercado Pago y, si "
+            "corresponde, devolvelo."
+        ),
+        appointment_id=str(appointment_id) if appointment_id else None,
+    )
 
 
 def _build_store_notification(message: OutboxMessage) -> Notification | None:

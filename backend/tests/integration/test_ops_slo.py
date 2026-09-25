@@ -59,6 +59,8 @@ async def test_el_admin_ve_su_tienda_y_nunca_el_id_interno(
     assert cuerpo["store_id"] == store_public_id
     assert tienda.id not in res.text, "se filtro el id interno de la tienda"
     assert set(cuerpo["metrics"]) == {
+        # Revision de perf/f4-pay: webhooks que agotaron los reintentos.
+        "dead_letter_webhooks_24h",
         "pending_webhooks",
         "failed_webhooks",
         "pending_outbox",

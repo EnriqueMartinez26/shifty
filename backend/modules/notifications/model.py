@@ -15,6 +15,9 @@ class NotificationType(str, enum.Enum):
     # Pago acreditado de un turno que ya se habia liberado (S-16): la plata
     # entro pero el turno no revive; el dueno decide devolverla o reasignarla.
     PAYMENT_ON_RELEASED_APPOINTMENT = "payment.received_on_released_appointment"
+    # Plata que entro por un link reemplazado (regenerado o re-tarifado): no
+    # se aplica al cobro vigente, pero el dueno se entera (perf/f4-pay).
+    PAYMENT_ON_REPLACED_LINK = "payment.received_on_replaced_link"
     # Registro de un reembolso hecho fuera de Shifty (B2-05 / B2-17).
     PAYMENT_REFUNDED = "payment.refunded"
     # Contracargo avisado por Mercado Pago (AUD2-B2-04): la plata volvio al

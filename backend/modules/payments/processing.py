@@ -4,9 +4,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, cast
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.observability import report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
 from modules.payments.model import (
@@ -27,6 +29,13 @@ from modules.payments.service import (
     stamp_payment_from_status,
     sync_appointment_with_payment,
 )
+
+
+logger = structlog.get_logger()
+
+
+class PaymentOnReplacedLink(RuntimeError):
+    """Evento de Sentry: entro plata por un link que el cobro ya no usa."""
 
 
 def resolve_payment_status(payload: dict[str, Any]) -> str | None:
@@ -426,6 +435,88 @@ def _sync_appointment(
         expire_live_charge(db, payment, reason="appointment_released_by_payment")
 
 
+def _de_un_link_reemplazado(payment: Payment, payload: dict[str, Any]) -> bool:
+    """El pago es de un link de ESTE cobro que ya no es el vigente.
+
+    Mismo turno pero otra referencia de link (``<turno>:<link_ref>``, la senal
+    que controla Shifty), o, si MP la manda, otra preferencia. Un pago de otro
+    turno no es "reemplazado": lo rechaza la integridad como siempre.
+    """
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    referencia = str(
+        data.get("external_reference") or payload.get("external_reference") or ""
+    ).strip()
+    if referencia and appointment_id_from_reference(referencia) == (
+        payment.appointment_id
+    ):
+        if referencia != payment.current_external_reference:
+            return True
+    preferencia = str(data.get("preference_id") or "").strip()
+    return bool(
+        preferencia and payment.preference_id and preferencia != payment.preference_id
+    )
+
+
+async def _pago_en_link_reemplazado(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment: Payment,
+    payload: dict[str, Any],
+    payment_status: str,
+) -> None:
+    """No se aplica, pero la plata acreditada nunca queda en silencio.
+
+    Revision de perf/f4-pay (2026-09-25): aplicar un ``approved`` de un link
+    reemplazado dejaria vivo el link vigente (el cliente pagaria dos veces).
+    Si entro plata: warning con ids (sin datos personales), evento a Sentry y
+    un aviso al dueno por pago de MP (las reentregas no repiten el aviso). El
+    webhook queda sin aplicar: el inbox lo reintenta hasta agotar y queda como
+    dead letter, visible en ``/ops/slo``.
+    """
+    if payment_status != PaymentStatus.APPROVED.value:
+        logger.info("payment_on_replaced_link_ignored", store_id=store_id)
+        return
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    mp_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    contexto = {
+        "store_id": store_id,
+        "payment_id": payment.id,
+        "mp_payment_id": mp_payment_id,
+    }
+    logger.warning("payment_on_replaced_link", **contexto)
+    report_exception(
+        PaymentOnReplacedLink("pago sobre un link reemplazado"), **contexto
+    )
+    ya_avisado = (
+        await db.execute(
+            select(OutboxMessage.id)
+            .where(
+                OutboxMessage.store_id == store_id,
+                OutboxMessage.event_type
+                == NotificationType.PAYMENT_ON_REPLACED_LINK.value,
+                OutboxMessage.payload["mp_payment_id"].as_string() == mp_payment_id,
+            )
+            .limit(1)
+        )
+    ).first()
+    if ya_avisado is None:
+        db.add(
+            OutboxMessage(
+                store_id=store_id,
+                event_type=NotificationType.PAYMENT_ON_REPLACED_LINK.value,
+                payload={
+                    "appointment_id": payment.appointment_id,
+                    "payment_id": payment.id,
+                    "mp_payment_id": mp_payment_id,
+                    "amount": str(data.get("transaction_amount") or ""),
+                },
+            )
+        )
+
+
 async def apply_mercadopago_webhook_payload(
     db: AsyncSession,
     *,
@@ -463,6 +554,15 @@ async def apply_mercadopago_webhook_payload(
         )
     ).scalar_one_or_none()
     if payment is None:
+        return False
+    if _de_un_link_reemplazado(payment, payload):
+        await _pago_en_link_reemplazado(
+            db,
+            store_id=store_id,
+            payment=payment,
+            payload=payload,
+            payment_status=payment_status,
+        )
         return False
 
     await _validate_payment_integrity(
