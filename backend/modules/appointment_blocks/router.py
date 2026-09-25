@@ -1,19 +1,18 @@
 from collections.abc import AsyncGenerator
-from datetime import timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, cast
 
-from fastapi import Depends, Path, status
+from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
 from core.router import CanonicalAPIRouter
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import AvailabilityCacheClient
 from core.database import get_db
 from core.redis import get_availability_cache
-from core.exceptions import PermissionDeniedException
+from core.exceptions import PermissionDeniedException, ValidationException
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AsyncSqlAlchemyUnitOfWork
-from core.utils import ensure_utc_aware
+from core.utils import ensure_utc_aware, local_day_start
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointment_blocks.schemas import (
     AffectedAppointmentResponse,
@@ -33,6 +32,7 @@ from modules.appointment_blocks.service import (
     AppointmentBlockService,
     expand_ranges,
 )
+from modules.appointments.repository import AppointmentRepository
 from modules.auth.dependencies import get_current_user
 from modules.staff.model import StaffBlock
 from modules.users.model import User, UserRole
@@ -96,19 +96,50 @@ def _to_affected(item: AffectedAppointment, user: User) -> AffectedAppointmentRe
     )
 
 
+# F4-07: el rango de la agenda, en dias locales, tiene tope (regla 9).
+MAX_BLOCK_LIST_DAYS = 400
+
+
+def _block_window(
+    from_date: date | None, to_date: date | None
+) -> tuple[datetime, datetime] | None:
+    """``[inicio del primer dia, inicio del dia siguiente al ultimo)`` en UTC.
+
+    Dias LOCALES cortados con ``local_day_start`` (regla 24). Los dos o
+    ninguno; ``None`` es "sin rango" (la respuesta de siempre).
+    """
+    if from_date is None and to_date is None:
+        return None
+    if from_date is None or to_date is None:
+        raise ValidationException("from_date y to_date van juntos")
+    if to_date < from_date:
+        raise ValidationException("to_date no puede ser anterior a from_date")
+    if (to_date - from_date).days > MAX_BLOCK_LIST_DAYS:
+        raise ValidationException(
+            f"El rango no puede superar {MAX_BLOCK_LIST_DAYS} dias"
+        )
+    return local_day_start(from_date), local_day_start(to_date + timedelta(days=1))
+
+
 @router.get("/", response_model=list[AppointmentBlockResponse])
 async def list_blocks(
+    # F4-07 (aditivo): sin ninguno de los tres, todos los bloqueos de la
+    # tienda, activos e inactivos, como siempre. ``include_inactive`` ausente
+    # conserva ese default; ``false`` saca los desactivados.
+    from_date: date | None = Query(default=None, description="Dia local (YYYY-MM-DD)"),
+    to_date: date | None = Query(default=None, description="Dia local (YYYY-MM-DD)"),
+    include_inactive: bool | None = Query(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AppointmentBlockResponse]:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para ver bloqueos")
-    result = await db.execute(
-        select(StaffBlock)
-        .where(StaffBlock.store_id == user.store_id)
-        .order_by(StaffBlock.start_time.asc())
+    blocks = await AppointmentRepository(db).list_store_blocks(
+        str(user.store_id),
+        window=_block_window(from_date, to_date),
+        include_inactive=include_inactive is not False,
     )
-    return [_to_response(block) for block in result.scalars().all()]
+    return [_to_response(block) for block in blocks]
 
 
 @router.post(
