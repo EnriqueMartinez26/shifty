@@ -179,8 +179,10 @@ class AppointmentService:
 
         El dueno, la recepcion o el profesional cargan a alguien que llama o
         esta en el local. Decisiones del dueno (delegadas): sin antelacion
-        minima (el "no mas de 5 minutos en el pasado" lo valida el schema),
-        sin OTP ni campos extra, sin sena: nace CONFIRMED y sin cobro (el link
+        minima y con inicio posible en el pasado (la tienda carga un walk-in
+        despues, decision del 2026-09-25; el schema solo pone las cotas de
+        +-2 anios contra el desborde), sin OTP ni campos extra, sin sena:
+        nace CONFIRMED y sin cobro (el link
         de pago se genera despues, si hace falta, por el endpoint de siempre).
         Horario del profesional salvo ``allow_outside_schedule`` (el router lo
         reserva al admin); bloqueos, choques y buffer siempre.

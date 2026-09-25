@@ -7,15 +7,18 @@ from zoneinfo import ZoneInfo
 # 06:00 de la manana hora argentina.
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
-# Horizonte de reservas en dias locales desde hoy (F1-11, decision 14 del
-# dueno): la disponibilidad publica y el alta del panel para un cliente
-# (FF-04) no van mas alla.
+# Horizonte del portal en dias locales desde hoy (F1-11, decision 14 del
+# dueno). Acota SOLO la grilla de disponibilidad sin token
+# (``/public/availability`` y la rama anonima de ``/appointments/availability``)
+# y el inicio de la ventana al anotarse en la lista de espera. No acota
+# reservas ni reprogramaciones.
 BOOKING_HORIZON_DAYS = 120
 
-# Tope ANCHO de un alta o una reprogramacion (revision de perf/f4-back,
-# 2026-09-25): corta lo que desborda (9999-12-31) sin tocar el producto. El
-# front manda fechas libres por el panel y por "Mis turnos"; al cliente lo
-# acota la grilla de ``/public/availability`` (``BOOKING_HORIZON_DAYS``).
+# Tope contra el desborde de TODA reserva y reprogramacion (portal, panel,
+# alta para un cliente, lista de espera; revision de perf/f4-back,
+# 2026-09-25): corta 9999-12-31 sin tocar el producto. Hacia atras, los
+# caminos de la tienda (que puede cargar un horario que ya paso) usan el
+# mismo valor como piso.
 MAX_BOOKING_AHEAD = timedelta(days=730)
 
 
@@ -51,10 +54,12 @@ def local_day_start(day: _date) -> datetime:
 def within_booking_horizon(value: datetime) -> bool:
     """El dia LOCAL de ``value`` no pasa de hoy + ``BOOKING_HORIZON_DAYS``.
 
-    La cota de todo alta o reprogramacion que tiene horizonte (portal, alta
-    del panel para un cliente, lista de espera). Una fecha que ni se puede
-    llevar a hora local (anio 9999 con offset) queda afuera en vez de
-    levantar ``OverflowError`` (500). Sin offset se toma UTC (regla 24).
+    Hoy la usa solo el inicio de la ventana de la lista de espera; la grilla
+    publica aplica el mismo horizonte por dia (``require_public_availability_day``).
+    Reservar y reprogramar NO se acotan con esto sino con ``within_max_ahead``
+    y ``MAX_BOOKING_AHEAD``. Una fecha que ni se puede llevar a hora local
+    (anio 9999 con offset) queda afuera en vez de levantar ``OverflowError``
+    (500). Sin offset se toma UTC (regla 24).
     """
     try:
         aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -66,8 +71,11 @@ def within_booking_horizon(value: datetime) -> bool:
 
 
 def within_max_ahead(value: datetime, max_ahead: timedelta) -> bool:
-    """``value`` no pasa de ahora + ``max_ahead`` (para caminos sin horizonte
-    de producto, como el auto-turno y la reprogramacion del panel)."""
+    """``value`` no pasa de ahora + ``max_ahead``.
+
+    La cota contra el desborde de toda reserva y reprogramacion, con
+    ``MAX_BOOKING_AHEAD`` (2 anios). No es un horizonte de producto: al
+    cliente lo acota la grilla (``BOOKING_HORIZON_DAYS``)."""
     aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     return aware <= now_utc() + max_ahead
 

@@ -61,9 +61,10 @@ class WaitlistJoinRequest(BaseModel):
             raise ValueError("La ventana termina antes de empezar")
         if (self.window_ends_at - self.window_starts_at).days > 60:
             raise ValueError("La ventana no puede superar los 60 dias")
-        # Una ventana que empieza despues del horizonte de reservas nunca
-        # recibe una oferta: nadie puede reservar ahi (revision de
-        # perf/f4-back). Mensaje neutro, como el del alta publica.
+        # Una ventana que empieza despues del horizonte del portal (120 dias)
+        # no llega a una oferta aprovechable: el cliente reserva desde la
+        # grilla publica, que no pasa de ahi (revision de perf/f4-back).
+        # Mensaje neutro, como el del alta publica.
         if not within_booking_horizon(self.window_starts_at):
             raise ValueError("La fecha esta fuera del rango de reservas")
         return self
