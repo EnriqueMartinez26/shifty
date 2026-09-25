@@ -1623,7 +1623,7 @@ async def _panel_link_phase_one(
         await db.rollback()
         raise AppointmentNotPayableError()
     try:
-        return await _upsert_payment_preference(
+        payment, creado = await _upsert_payment_preference(
             db,
             appointment=appointment,
             service=service,
@@ -1637,6 +1637,11 @@ async def _panel_link_phase_one(
             keep_existing_amount=True,
             renew_expired_link=True,
         )
+        if payment.is_accredited:
+            # Nada que cobrar, cambie o no el precio (decision del dueno,
+            # revision de e5579b6..3b977a9, #5): el upsert no escribio nada.
+            raise PaymentAlreadyAccreditedError()
+        return payment, creado
     except PaymentLinkRegenerationUnavailableError, PaymentAlreadyAccreditedError:
         await db.rollback()  # suelta el lock del turno sin escribir nada
         raise

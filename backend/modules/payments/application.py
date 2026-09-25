@@ -63,6 +63,9 @@ class PaymentService:
         El link real que se conserva se manda a vencer en Mercado Pago
         (``_expire_live_checkout``): la plata ya entro por otro lado.
 
+        Un cobro ya acreditado (``approved``/``manual_confirmed``) es un no-op:
+        se devuelve tal cual (revision de e5579b6..3b977a9, #5).
+
         Revision de perf/f4-pay (2026-09-25): lockea el turno PRIMERO (orden
         turno -> pago, regla 7), lo relee bajo el lock y rechaza un turno
         soltado (``cancelled``/``expired``, p. ej. recien cancelado por el
@@ -76,6 +79,16 @@ class PaymentService:
             raise AppointmentNotPayableError()
         # El router lo leyo sin lock: se relee con la fila ya lockeada.
         await self.uow.session.refresh(appointment)
+        actual = await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+        if actual is not None and actual.is_accredited:
+            # Ya entro la plata: no-op 200 con el cobro tal como se acredito,
+            # sin re-tarifar aunque el pedido traiga importe (decision del
+            # dueno, revision de e5579b6..3b977a9, #5; antes 409). El commit
+            # solo suelta los locks: no hay nada escrito.
+            await self.uow.commit()
+            return actual
         resolved = amount
         if resolved is None and appointment.price_amount is not None:
             resolved = appointment.price_amount

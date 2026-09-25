@@ -9,8 +9,11 @@ era la vigente, se clasificaba como "link reemplazado" y
 ``_notify_payment_reversed`` nunca avisaba al dueno.
 
 Ahora un cobro ``approved``/``manual_confirmed`` conserva importe,
-``link_ref`` y ``external_payment_id``: el pedido que lo cambiaria responde
-409 ``PAYMENT_ALREADY_ACCREDITED``.
+``link_ref`` y ``external_payment_id``. Decision del dueno (revision de
+e5579b6..3b977a9, #5): pedir el link del panel responde 409
+``PAYMENT_ALREADY_ACCREDITED`` (no hay nada que cobrar), con o sin cambio de
+precio; confirmar a mano es un no-op 200 que devuelve el cobro tal como se
+acredito (sin re-tarifar aunque el pedido traiga importe).
 """
 
 from __future__ import annotations
@@ -102,20 +105,51 @@ async def test_el_link_del_panel_tras_un_cambio_de_precio_no_toca_un_cobro_pagad
 
 
 @pytest.mark.asyncio
-async def test_confirmar_a_mano_con_importe_no_toca_un_cobro_pagado(
+async def test_el_link_del_panel_sobre_un_cobro_pagado_es_409_sin_cambio_de_precio(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    t, turno, antes = await _pagado(client, test_session, monkeypatch, "acred-manual")
+    t, turno, antes = await _pagado(client, test_session, monkeypatch, "acred-link")
 
     res = await client.post(
-        f"/payments/{turno}/manual-confirm",
-        headers=auth_headers(t.admin),
-        json={"amount": "12345.00"},
+        f"/payments/preferences/{turno}", headers=auth_headers(t.admin)
     )
 
     assert res.status_code == 409, res.text
     assert res.json()["error_code"] == "PAYMENT_ALREADY_ACCREDITED"
     assert _foto(await _cobro(test_session, turno)) == antes
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("importe", [None, "12345.00"])
+async def test_confirmar_a_mano_un_cobro_pagado_es_un_no_op(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    importe: str | None,
+) -> None:
+    t, turno, antes = await _pagado(
+        client, test_session, monkeypatch, f"acred-manual-{importe or 'sin'}"
+    )
+    eventos_antes = await _cantidad_de_eventos(test_session)
+
+    res = await client.post(
+        f"/payments/{turno}/manual-confirm",
+        headers=auth_headers(t.admin),
+        json={} if importe is None else {"amount": importe},
+    )
+
+    assert res.status_code == 200, res.text
+    cuerpo = res.json()
+    assert cuerpo["status"] == PaymentStatus.APPROVED.value, cuerpo
+    assert Decimal(str(cuerpo["amount"])) == antes[1]
+    assert _foto(await _cobro(test_session, turno)) == antes
+    # Nada que vencer ni avisar: no se publico ningun evento.
+    assert await _cantidad_de_eventos(test_session) == eventos_antes
+
+
+async def _cantidad_de_eventos(session: AsyncSession) -> int:
+    session.expire_all()
+    return len((await session.execute(select(OutboxMessage.id))).all())
 
 
 @pytest.mark.asyncio
