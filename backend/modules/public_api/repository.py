@@ -28,6 +28,7 @@ from modules.appointments.repository import (
     appointment_overlap,
 )
 from modules.payments.deposit_rules import ClientHistory
+from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -676,6 +677,26 @@ class PublicRepository:
             absent=conteo.get(AppointmentStatus.ABSENT.value, 0),
             cancelled=conteo.get(AppointmentStatus.CANCELLED.value, 0),
         )
+
+    async def accredited_appointment_ids(self, appointment_ids: list[str]) -> set[str]:
+        """De estos turnos, los que tienen un pago acreditado. Una consulta.
+
+        Acreditado es ``Payment.is_accredited`` (aprobado o confirmado a mano):
+        un turno asi no se reprograma desde el cliente
+        (``client_reschedule_denial``). La usan la accion (un turno) y el
+        historial (la pagina entera, con ``in_()``: regla 12).
+        """
+        if not appointment_ids:
+            return set()
+        res = await self.db.execute(
+            select(Payment.appointment_id)
+            .where(
+                Payment.appointment_id.in_(appointment_ids),
+                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+            )
+            .distinct()
+        )
+        return {str(appointment_id) for appointment_id in res.scalars().all()}
 
     async def get_client_by_phone(self, store_id: str, phone: str) -> User | None:
         result = await self.db.execute(
