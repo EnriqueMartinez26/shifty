@@ -595,3 +595,39 @@ async def test_inicio_lejano_422_y_no_500(client: AsyncClient) -> None:
         assert res.status_code == 422, res.text
     assert cliente_119.status_code == 201, cliente_119.text
     assert auto_400.status_code == 201, auto_400.text
+
+
+@pytest.mark.asyncio
+async def test_email_de_otra_tienda_409_neutro(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """El email es unico GLOBAL (CLAUDE.md §5): un cliente nuevo con el email
+    de un usuario de otra tienda choca con el indice unico. Tiene que ser el
+    409 neutro de siempre, como en el portal, sin nombrar a la otra tienda
+    ni confirmar que el email existe."""
+    ajena = await _agenda(client, "ff04-email-ajena")
+    agenda = await _agenda(client, "ff04-email")
+    primera = await _reservar(
+        client,
+        ajena,
+        client_email="compartido@example.com",
+        idempotency_key="ff04-email-ajena-1",
+    )
+    assert primera.status_code == 201, primera.text
+
+    res = await _reservar(
+        client,
+        agenda,
+        client_phone="+5491155550707",
+        client_email="Compartido@Example.com",
+        idempotency_key="ff04-email-1",
+    )
+
+    assert res.status_code == 409, res.text
+    cuerpo = res.json()
+    assert cuerpo["error_code"] == "RESOURCE_CONFLICT"
+    texto = res.text.lower()
+    for dato in ("ff04-email-ajena", "tienda ff04", "compartido", ajena.store.lower()):
+        assert dato not in texto, (dato, res.text)
+    turnos = (await test_session.execute(select(Appointment))).scalars().all()
+    assert len(turnos) == 1
