@@ -34,14 +34,14 @@ class AppointmentCreate(BaseModel):
 
     service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     staff_id: Optional[str] = Field(
-        None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+        default=None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
     )
     starts_at: datetime
     notes: Optional[str] = Field(None, max_length=1000)
     idempotency_key: str = Field(..., min_length=10, max_length=128)
-    client_name: Optional[str] = Field(None, min_length=1, max_length=100)
-    client_phone: Optional[str] = Field(None, min_length=6, max_length=30)
-    client_email: Optional[EmailStr] = Field(None, max_length=255)
+    client_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    client_phone: Optional[str] = Field(default=None, min_length=6, max_length=30)
+    client_email: Optional[EmailStr] = Field(default=None, max_length=255)
     allow_outside_schedule: bool = False
 
     @property
