@@ -6,25 +6,27 @@ from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 import secrets
 import smtplib
-from typing import TypedDict
+import ssl
+from typing import NoReturn, TypedDict
 
 import structlog
 from fastapi import status
-from redis.exceptions import RedisError
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import settings
-from core.database import _apply_tenant_context, set_tenant_context
+from core.database import tenant_bypass
 from core.exceptions import (
     AppException,
     AuthenticationException,
     InvalidTokenException,
     PermissionDeniedException,
+    ResourceNotFoundException,
     RateLimitedException,
     UserNotFoundException,
 )
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.roles import (
     ROLE_CLIENT,
     STORE_MANAGERS,
@@ -62,6 +64,7 @@ __all__ = [
     "hash_token",
     "login_user",
     "list_user_sessions",
+    "login_account_email",
     "logout_session",
     "normalize_email",
     "refresh_session",
@@ -115,12 +118,37 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def login_account_email(email: str) -> ColumnElement[bool]:
+    """La cuenta que INICIA SESION con ``email`` (ya normalizado).
+
+    PV-01 (2026-09-25): el email de un cliente es unico por tienda
+    (``uq_users_client_email_per_store``) y el de las cuentas que inician
+    sesion, unico global (``uq_users_email_non_client``). Un cliente puede
+    compartir email con un profesional o con otros clientes de otras tiendas,
+    asi que buscar solo por email podia devolver varias filas y
+    ``scalar_one_or_none`` daba 500 (regla 16). Excluir a los clientes deja a
+    lo sumo UNA fila: la que el indice unico parcial garantiza. Los clientes
+    no inician sesion (portal por telefono + OTP).
+
+    Es el filtro del login, del olvido de clave y del pre-chequeo de alta del
+    personal y de los admins.
+    """
+    return and_(User.email == email, User.role != ROLE_CLIENT)
+
+
 # Hash de sacrificio para igualar el tiempo de respuesta cuando el email no
 # existe. Sin esto, la diferencia entre "no hay usuario" (respuesta rapida) y
 # "password incorrecta" (bcrypt lento) permite enumerar cuentas por timing.
 _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(24))
 
 logger = structlog.get_logger()
+
+# "Redis no esta" es el criterio unico de core.redis (AUD2-B7-14); ValueError
+# suma el contador ilegible, que se trata igual que no poder leerlo.
+_LOGIN_FAILURES_UNREADABLE: tuple[type[Exception], ...] = (
+    *REDIS_UNAVAILABLE_ERRORS,
+    ValueError,
+)
 
 
 def _email_fingerprint(email: str) -> str:
@@ -137,7 +165,7 @@ async def _login_failures(email_key: str) -> int:
         redis = await get_redis()
         value = await redis.get(f"login:fail:{email_key}")
         return int(value) if value else 0
-    except RedisError, OSError, ValueError:
+    except _LOGIN_FAILURES_UNREADABLE:
         if settings.RATE_LIMIT_FAIL_CLOSED:
             raise AppException(
                 message="Servicio temporalmente no disponible",
@@ -157,7 +185,7 @@ async def _register_login_failure(email_key: str) -> None:
         pipe.incr(key)
         pipe.expire(key, settings.LOGIN_LOCKOUT_WINDOW_SECONDS)
         await pipe.execute()
-    except RedisError, OSError:
+    except REDIS_UNAVAILABLE_ERRORS:
         logger.warning("login_lockout_redis_unavailable")
 
 
@@ -167,7 +195,7 @@ async def _clear_login_failures(email_key: str) -> None:
     try:
         redis = await get_redis()
         await redis.delete(f"login:fail:{email_key}")
-    except RedisError, OSError:
+    except REDIS_UNAVAILABLE_ERRORS:
         logger.warning("login_lockout_redis_unavailable")
 
 
@@ -195,7 +223,10 @@ def access_token_for_user(user: User, session_id: str) -> str:
 def _send_email(message: EmailMessage, *, event: str) -> None:
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
-            smtp.starttls()
+            # Sin context, starttls() no verifica certificado ni hostname
+            # (PV-06): el link de reset y las credenciales SMTP viajaban a
+            # quien se hiciera pasar por el servidor.
+            smtp.starttls(context=ssl.create_default_context())
             smtp.login(settings.SMTP_USER, settings.SMTP_PASS)
             smtp.send_message(message)
     except Exception as exc:
@@ -247,23 +278,29 @@ async def revoke_sessions_for_user(
     conservar la sesion desde la que el propio usuario hizo el cambio.
     NO commitea: corre dentro de la transaccion del flujo que la llama.
     """
-    preserve_hash = (
-        hash_token(preserve_refresh_token) if preserve_refresh_token else None
-    )
-    result = await db.execute(
-        select(AuthSession).where(
-            AuthSession.user_id == user_id,
-            AuthSession.revoked_at.is_(None),
+    condiciones: list[ColumnElement[bool]] = [AuthSession.user_id == user_id]
+    if preserve_refresh_token:
+        condiciones.append(
+            AuthSession.refresh_token_hash != hash_token(preserve_refresh_token)
         )
+    return await _revoke_sessions(db, *condiciones)
+
+
+async def _revoke_sessions(db: AsyncSession, *conditions: ColumnElement[bool]) -> int:
+    """Revoca con un solo UPDATE las sesiones vivas que cumplen ``conditions``.
+
+    Las cuatro revocaciones hacian SELECT de todas las sesiones vivas, asignaban
+    ``revoked_at`` en un ``for`` y contaban a mano; ``revoke_all_sessions`` (el
+    boton de panico) hidrataba todas las de todas las tiendas y emitia un UPDATE
+    por fila (B3-10, 2026-09-17). Es el mismo patron que ya usa la rotacion de
+    ``refresh_session``. NO commitea: corre en la transaccion del llamador.
+    """
+    result = await db.execute(
+        update(AuthSession)
+        .where(AuthSession.revoked_at.is_(None), *conditions)
+        .values(revoked_at=datetime.now(timezone.utc))
     )
-    now = datetime.now(timezone.utc)
-    affected = 0
-    for session in result.scalars().all():
-        if preserve_hash and session.refresh_token_hash == preserve_hash:
-            continue
-        session.revoked_at = now
-        affected += 1
-    return affected
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 def _new_auth_session(
@@ -296,12 +333,12 @@ async def login_user(
             headers={"Retry-After": str(settings.LOGIN_LOCKOUT_WINDOW_SECONDS)},
         )
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-
+    async with tenant_bypass(db):
+        # Igualdad sobre la columna normalizada (ck_users_email_lower): bajo
+        # RLS usa ix_users_email; lower(email) recorria users entera (F1-12).
+        # Sin clientes: pueden compartir este email (PV-01).
         result = await db.execute(
-            select(User).where(func.lower(User.email) == normalized_email)
+            select(User).where(login_account_email(normalized_email))
         )
         user = result.scalar_one_or_none()
 
@@ -336,8 +373,30 @@ async def login_user(
         await db.commit()
         await _clear_login_failures(email_key)
         return AuthTokenPair(access_token=access_token, refresh_token=refresh_token)
-    finally:
-        set_tenant_context(None, False)
+
+
+async def _handle_refresh_reuse(
+    db: AsyncSession, user_id: str, ip: str | None
+) -> NoReturn:
+    """Reuso de un refresh ya rotado: se revoca la familia entera y se deja rastro.
+
+    Lo detectan dos ramas de ``refresh_session`` -- el token llega ya revocado,
+    y el UPDATE condicional de la rotacion que pierde la carrera -- y cada una
+    tenia su copia LITERAL de este bloque (B3-09, 2026-09-17): una metrica o un
+    cambio de politica agregado en una se olvidaba en la otra. Devuelve
+    ``NoReturn`` para que mypy impida el ``return`` donde va un ``raise``.
+
+    Regla 15: la revocacion de la familia no cambia; solo vive en un lugar.
+    """
+    revoked = await revoke_sessions_for_user(db, user_id)
+    await db.commit()
+    logger.warning(
+        "refresh_token_reuse_detected",
+        user_id=user_id,
+        revoked_sessions=revoked,
+        ip=ip,
+    )
+    raise AuthenticationException(message="Sesion expirada")
 
 
 async def refresh_session(
@@ -346,9 +405,7 @@ async def refresh_session(
     if not refresh_token:
         raise AuthenticationException(message="Sesion expirada")
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         result = await db.execute(
             select(AuthSession).where(
                 AuthSession.refresh_token_hash == hash_token(refresh_token)
@@ -360,15 +417,7 @@ async def refresh_session(
             # Reuso de un refresh ya rotado: la señal clasica de robo (el
             # atacante y la victima tienen el mismo token; el segundo en llegar
             # cae aca). Se revoca la familia entera y se deja rastro.
-            revoked = await revoke_sessions_for_user(db, session.user_id)
-            await db.commit()
-            logger.warning(
-                "refresh_token_reuse_detected",
-                user_id=session.user_id,
-                revoked_sessions=revoked,
-                ip=context.ip_address,
-            )
-            raise AuthenticationException(message="Sesion expirada")
+            await _handle_refresh_reuse(db, session.user_id, context.ip_address)
 
         expires_at = session.expires_at if session else None
         if expires_at is not None and expires_at.tzinfo is None:
@@ -403,15 +452,7 @@ async def refresh_session(
             .values(revoked_at=now)
         )
         if (getattr(claim, "rowcount", 0) or 0) != 1:
-            revoked = await revoke_sessions_for_user(db, session.user_id)
-            await db.commit()
-            logger.warning(
-                "refresh_token_reuse_detected",
-                user_id=session.user_id,
-                revoked_sessions=revoked,
-                ip=context.ip_address,
-            )
-            raise AuthenticationException(message="Sesion expirada")
+            await _handle_refresh_reuse(db, session.user_id, context.ip_address)
 
         new_refresh_token = generate_refresh_token()
         new_session = _new_auth_session(user, new_refresh_token, context)
@@ -421,17 +462,13 @@ async def refresh_session(
         await db.commit()
 
         return AuthTokenPair(access_token=access_token, refresh_token=new_refresh_token)
-    finally:
-        set_tenant_context(None, False)
 
 
 async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
     if not refresh_token:
         return
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         result = await db.execute(
             select(AuthSession).where(
                 AuthSession.refresh_token_hash == hash_token(refresh_token)
@@ -441,8 +478,6 @@ async def logout_session(refresh_token: str | None, db: AsyncSession) -> None:
         if session and session.revoked_at is None:
             session.revoked_at = datetime.now(timezone.utc)
             await db.commit()
-    finally:
-        set_tenant_context(None, False)
 
 
 async def revoke_store_sessions(
@@ -458,24 +493,22 @@ async def revoke_store_sessions(
             error_code="USER_WITHOUT_STORE",
         )
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-        result = await db.execute(
-            select(AuthSession).where(
-                AuthSession.store_id == current_user.store_id,
-                AuthSession.revoked_at.is_(None),
+    async with tenant_bypass(db):
+        condiciones: list[ColumnElement[bool]] = [
+            AuthSession.store_id == current_user.store_id
+        ]
+        if not current_user.is_global_admin:
+            # La cuenta del superadmin no existe para un admin de tienda
+            # (S-15): su sesion lleva el store_id de su tienda real, asi que
+            # el boton de panico de la tienda la alcanzaba (AUD2-B3-02).
+            condiciones.append(
+                AuthSession.user_id.not_in(
+                    select(User.id).where(User.is_global_admin.is_(True))
+                )
             )
-        )
-        now = datetime.now(timezone.utc)
-        affected = 0
-        for session in result.scalars().all():
-            session.revoked_at = now
-            affected += 1
+        affected = await _revoke_sessions(db, *condiciones)
         await db.commit()
         return {"revoked_sessions": affected}
-    finally:
-        set_tenant_context(None, False)
 
 
 async def revoke_user_sessions(
@@ -491,31 +524,19 @@ async def revoke_user_sessions(
             error_code="USER_WITHOUT_STORE",
         )
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-        user_result = await db.execute(
-            select(User).where(
-                User.id == user_public_id, User.store_id == current_user.store_id
-            )
+    async with tenant_bypass(db):
+        consulta = select(User).where(
+            User.id == user_public_id, User.store_id == current_user.store_id
         )
-        target = user_result.scalar_one_or_none()
+        if not current_user.is_global_admin:
+            # La cuenta del superadmin no existe para un admin de tienda (S-15).
+            consulta = consulta.where(User.is_global_admin.is_(False))
+        target = (await db.execute(consulta)).scalar_one_or_none()
         if not target:
             raise UserNotFoundException(identifier=user_public_id)
-        sessions_result = await db.execute(
-            select(AuthSession).where(
-                AuthSession.user_id == target.id, AuthSession.revoked_at.is_(None)
-            )
-        )
-        now = datetime.now(timezone.utc)
-        affected = 0
-        for session in sessions_result.scalars().all():
-            session.revoked_at = now
-            affected += 1
+        affected = await _revoke_sessions(db, AuthSession.user_id == target.id)
         await db.commit()
         return {"revoked_sessions": affected}
-    finally:
-        set_tenant_context(None, False)
 
 
 async def revoke_all_sessions(
@@ -524,21 +545,10 @@ async def revoke_all_sessions(
     if not current_user.is_global_admin:
         raise PermissionDeniedException(action="Operacion exclusiva para superadmin")
 
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-        result = await db.execute(
-            select(AuthSession).where(AuthSession.revoked_at.is_(None))
-        )
-        now = datetime.now(timezone.utc)
-        affected = 0
-        for session in result.scalars().all():
-            session.revoked_at = now
-            affected += 1
+    async with tenant_bypass(db):
+        affected = await _revoke_sessions(db)
         await db.commit()
         return {"revoked_sessions": affected}
-    finally:
-        set_tenant_context(None, False)
 
 
 async def list_user_sessions(
@@ -575,7 +585,7 @@ async def revoke_own_session(session_id: str, user: User, db: AsyncSession) -> N
     )
     session = result.scalar_one_or_none()
     if session is None:
-        raise UserNotFoundException(identifier=session_id)
+        raise ResourceNotFoundException(resource="Sesión", identifier=session_id)
     if session.revoked_at is None:
         session.revoked_at = datetime.now(timezone.utc)
         await db.commit()
@@ -585,13 +595,10 @@ async def request_password_reset(
     data: ForgotPasswordRequest, db: AsyncSession
 ) -> PasswordResetEmail | None:
     normalized_email = normalize_email(str(data.email))
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-
+    async with tenant_bypass(db):
         result = await db.execute(
             select(User).where(
-                func.lower(User.email) == normalized_email, User.is_active.is_(True)
+                login_account_email(normalized_email), User.is_active.is_(True)
             )
         )
         user = result.scalar_one_or_none()
@@ -618,17 +625,12 @@ async def request_password_reset(
             email_to=user.email,
             reset_url=f"{base_url}{reset_path}?token={token}",
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 async def reset_password(
     data: ResetPasswordRequest, db: AsyncSession
 ) -> PasswordResetOutcome:
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
-
+    async with tenant_bypass(db):
         token_hash = hash_password_reset_token(data.token)
         now = datetime.now(timezone.utc)
         result = await db.execute(
@@ -656,8 +658,6 @@ async def reset_password(
             message="Contraseña actualizada correctamente",
             email_to=user.email,
         )
-    finally:
-        set_tenant_context(None, False)
 
 
 async def change_password(

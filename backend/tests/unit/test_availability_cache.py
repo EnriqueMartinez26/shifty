@@ -18,6 +18,7 @@ from core.availability_cache import (
     slots_key,
     version_key,
 )
+from tests.redis_pipeline_double import PipelineDouble
 
 
 class FakeRedis:
@@ -27,6 +28,9 @@ class FakeRedis:
     async def get(self, key: str) -> str | None:
         return self.store.get(key)
 
+    async def getex(self, key: str, *, ex: int) -> str | None:
+        return self.store.get(key)
+
     async def setex(self, key: str, seconds: int, value: str) -> bool:
         self.store[key] = value
         return True
@@ -34,6 +38,15 @@ class FakeRedis:
     async def incr(self, key: str) -> int:
         self.store[key] = str(int(self.store.get(key, "0")) + 1)
         return int(self.store[key])
+
+    async def expire(self, key: str, seconds: int) -> bool:
+        # El vencimiento de la clave de version lo verifica
+        # tests/unit/test_version_de_cache_expira.py; aca solo hace falta que
+        # el doble satisfaga el protocolo.
+        return key in self.store
+
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
 
 
 @pytest.mark.asyncio

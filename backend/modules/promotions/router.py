@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import Depends, Path, Query, status
@@ -10,13 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from core.exceptions import (
-    AppException,
     PermissionDeniedException,
     ResourceNotFoundException,
     ServiceNotFoundException,
     ValidationException,
 )
-from core.utils import ensure_utc_aware
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_user
 from modules.promotions.model import StorePromotion
@@ -26,7 +23,12 @@ from modules.promotions.schemas import (
     PromotionResponse,
     PromotionUpdate,
 )
-from modules.promotions.service import quote_promotion
+from modules.promotions.service import (
+    create_store_promotion,
+    deactivate_store_promotion,
+    quote_promotion,
+    update_store_promotion,
+)
 from modules.services.model import Service
 from modules.users.model import User, UserRole
 
@@ -37,10 +39,6 @@ PublicIdPath = Annotated[
 PublicIdQuery = Annotated[
     str, Query(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
-
-
-def _aware(value: datetime | None) -> datetime | None:
-    return ensure_utc_aware(value) if value is not None else None
 
 
 def _require_admin(user: User) -> None:
@@ -103,23 +101,7 @@ async def create_promotion(
     db: AsyncSession = Depends(get_db),
 ) -> PromotionResponse:
     _require_admin(user)
-    duplicate = await db.execute(
-        select(StorePromotion).where(
-            StorePromotion.store_id == user.store_id,
-            StorePromotion.code == data.code,
-        )
-    )
-    if duplicate.scalar_one_or_none():
-        raise AppException(
-            message="Ya existe una promocion con ese codigo",
-            http_status=409,
-            error_code="PROMOTION_CODE_DUPLICATE",
-        )
-
-    promotion = StorePromotion(store_id=user.store_id, **data.model_dump())
-    db.add(promotion)
-    await db.commit()
-    await db.refresh(promotion)
+    promotion = await create_store_promotion(db, store_id=user.store_id, data=data)
     return _serialize_promotion(promotion)
 
 
@@ -134,49 +116,7 @@ async def update_promotion(
     promotion = await _get_store_promotion_or_404(
         db, promotion_public_id, user.store_id
     )
-    payload = data.model_dump(exclude_unset=True)
-
-    candidate_code = payload.get("code")
-    if candidate_code and candidate_code != promotion.code:
-        duplicate = await db.execute(
-            select(StorePromotion).where(
-                StorePromotion.store_id == user.store_id,
-                StorePromotion.code == candidate_code,
-                StorePromotion.id != promotion.id,
-            )
-        )
-        if duplicate.scalar_one_or_none():
-            raise AppException(
-                message="Ya existe una promocion con ese codigo",
-                http_status=409,
-                error_code="PROMOTION_CODE_DUPLICATE",
-            )
-
-    candidate_type = payload.get("promotion_type", promotion.promotion_type)
-    candidate_value = payload.get("value", promotion.value)
-    if (
-        candidate_type == "percent"
-        and candidate_value is not None
-        and candidate_value > 100
-    ):
-        raise ValidationException("El descuento porcentual no puede superar 100")
-
-    # El payload llega aware (lo exige el schema) y lo guardado puede venir
-    # naive de SQLite: compararlos crudos levanta TypeError -> 500.
-    candidate_valid_from = _aware(payload.get("valid_from", promotion.valid_from))
-    candidate_valid_until = _aware(payload.get("valid_until", promotion.valid_until))
-    if (
-        candidate_valid_from
-        and candidate_valid_until
-        and candidate_valid_from >= candidate_valid_until
-    ):
-        raise ValidationException("La vigencia de la promocion es invalida")
-
-    for key, value in payload.items():
-        setattr(promotion, key, value)
-
-    await db.commit()
-    await db.refresh(promotion)
+    promotion = await update_store_promotion(db, promotion=promotion, data=data)
     return _serialize_promotion(promotion)
 
 
@@ -196,8 +136,7 @@ async def delete_promotion(
     promotion = await _get_store_promotion_or_404(
         db, promotion_public_id, user.store_id
     )
-    promotion.is_active = False
-    await db.commit()
+    await deactivate_store_promotion(db, promotion=promotion)
 
 
 @router.get("/preview", response_model=PromotionQuoteResponse)
@@ -207,6 +146,11 @@ async def preview_promotion(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> PromotionQuoteResponse:
+    # Mismo control que el resto de /promotions: era el unico handler sin el,
+    # y dejaba al personal sondear codigos y distinguir "no existe" de "vencio
+    # / llego al tope" por el mensaje (AUD2-B2-15, 2026-09-20). El mostrador
+    # publico cotiza por /public/promotions/preview, no por aca.
+    _require_admin(user)
     result = await db.execute(
         select(Service).where(
             Service.public_id == service_id,

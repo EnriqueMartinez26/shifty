@@ -124,6 +124,8 @@ async def _verificar_telefono(
         channel="email",
         email=contacto,
         store_name="Demo",
+        # El envio (post-respuesta desde B4-01) no importa aca.
+        schedule_dispatch=lambda *args: None,
     )
     await servicio.verify_code(
         store_id=tienda.store_id,
@@ -142,6 +144,7 @@ async def _preview(
             "service_id": service,
             "starts_at": _slot(dias).isoformat(),
             "client_phone": phone,
+            "accepts_terms": True,
         },
     )
     assert res.status_code == 200, res.text
@@ -176,6 +179,7 @@ async def test_cliente_nuevo_con_mucha_antelacion_paga_los_recargos_y_queda_el_s
         "starts_at": _slot(10).isoformat(),
         "client_name": "Nuevo Lejano",
         "client_phone": "+5491155550301",
+        "accepts_terms": True,
         "payment_method": "auto",
         "idempotency_key": "sena-nuevo-000001",
     }
@@ -229,6 +233,7 @@ async def test_el_historial_del_cliente_cambia_la_sena(
             "starts_at": _slot(2).isoformat(),
             "client_name": "Cliente Historial",
             "client_phone": telefono,
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "sena-historial-000001",
         },
@@ -254,6 +259,7 @@ async def test_el_historial_del_cliente_cambia_la_sena(
             "starts_at": (_slot(2) + timedelta(hours=1)).isoformat(),
             "client_name": "Cliente Historial",
             "client_phone": telefono,
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "sena-historial-000002",
         },
@@ -300,6 +306,7 @@ async def test_la_antelacion_minima_es_editable_y_se_aplica_al_alta(
             "starts_at": _slot(2).isoformat(),
             "client_name": "Apurado",
             "client_phone": "+5491155550303",
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "sena-antelacion-000001",
         },

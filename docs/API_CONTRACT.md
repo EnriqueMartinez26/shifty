@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 107 — Operaciones: 132
+- Paths: 116 — Operaciones: 145
 
 ## /
 
@@ -23,9 +23,18 @@ Responses:
 - Summary: List Blocks
 - operationId: `list_blocks_appointment_blocks__get`
 
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `from_date` | no | string \| null | format="date" |
+| query | `to_date` | no | string \| null | format="date" |
+| query | `include_inactive` | no | boolean \| null |  |
+
 Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_list_AppointmentBlockResponse__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /appointment-blocks/
 
@@ -192,8 +201,10 @@ Parameters:
 | query | `statuses` | no | array<string> \| null | maxItems=10 |
 | query | `from_date` | no | string \| null | format="date" |
 | query | `to_date` | no | string \| null | format="date" |
-| query | `page` | no | integer | minimum=1, default=1 |
+| query | `page` | no | integer | minimum=1, maximum=10000, default=1 |
 | query | `page_size` | no | integer | minimum=1, maximum=100, default=20 |
+| query | `include_total` | no | boolean | default=true |
+| query | `after` | no | string \| null | maxLength=200 |
 
 Responses:
 
@@ -462,9 +473,26 @@ Responses:
 
 ## Customer Ledger
 
+### GET /ledger/clients
+
+- Summary: Buscador de clientes del fiado
+- operationId: `search_ledger_clients_ledger_clients_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `q` | no | string \| null | minLength=2, maxLength=80 |
+| query | `limit` | no | integer | minimum=1, maximum=100, default=50 |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_list_LedgerClientItem__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### GET /ledger/customers/{client_id}
 
-- Summary: Get Customer Ledger
+- Summary: Historial de fiado de un cliente (paginado)
 - operationId: `get_customer_ledger_ledger_customers__client_id__get`
 
 Parameters:
@@ -472,6 +500,9 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | path | `client_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| query | `limit` | no | integer | minimum=1, maximum=200, default=50 |
+| query | `offset` | no | integer | minimum=0, maximum=100000, default=0 |
+| query | `after` | no | string \| null | maxLength=200 |
 
 Responses:
 
@@ -535,6 +566,40 @@ Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_DashboardSummaryResponse_`
 
+## Data Subject Rights
+
+### POST /users/{client_id}/anonymize
+
+- Summary: Anonymize Client
+- operationId: `anonymize_client_users__client_id__anonymize_post`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `client_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_AnonymizeResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### GET /users/{client_id}/export
+
+- Summary: Export Client Data
+- operationId: `export_client_data_users__client_id__export_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `client_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_ClientDataExport_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ## Notifications
 
 ### GET /notifications
@@ -597,7 +662,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__object__`
+- `200` Successful Response — `application/json`: _(sin esquema)_
 
 ### GET /ops/slo
 
@@ -688,7 +753,7 @@ Parameters:
 
 | in | name | required | type | constraints |
 |---|---|---|---|---|
-| query | `limit` | no | integer | minimum=1, maximum=500, default=100 |
+| query | `limit` | no | integer | minimum=1, maximum=100, default=100 |
 
 Responses:
 
@@ -767,7 +832,7 @@ Responses:
 
 ### POST /payments/{payment_id}/refund
 
-- Summary: Refund Payment
+- Summary: Registro de reembolso hecho fuera de Shifty
 - operationId: `refund_payment_payments__payment_id__refund_post`
 
 Parameters:
@@ -956,6 +1021,7 @@ Parameters:
 |---|---|---|---|---|
 | path | `store_public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | path | `phone` | yes | string | minLength=6, maxLength=30 |
+| query | `limit` | no | integer | minimum=1, maximum=200, default=50 |
 
 Responses:
 
@@ -1094,6 +1160,63 @@ Responses:
 - `200` Successful Response — `application/json`: `ApiSuccess_PublicStoreResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+### GET /public/stores/{slug}/ref
+
+- Summary: Get Store Ref By Slug
+- operationId: `get_store_ref_by_slug_public_stores__slug__ref_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `slug` | yes | string | minLength=2, maxLength=100, pattern="^[A-Za-z0-9][A-Za-z0-9-]{0,98}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_PublicStoreRefResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+## Public Legal
+
+### GET /public/legal/versions
+
+- Summary: Get Legal Versions
+- operationId: `get_legal_versions_public_legal_versions_get`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_LegalVersionsResponse_`
+
+### GET /public/unsubscribe
+
+- Summary: Unsubscribe From Marketing
+- operationId: `unsubscribe_from_marketing_public_unsubscribe_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `token` | yes | string | minLength=1, maxLength=256 |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_UnsubscribeResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### POST /public/unsubscribe
+
+- Summary: Unsubscribe From Marketing Post
+- operationId: `unsubscribe_from_marketing_post_public_unsubscribe_post`
+
+Request body (required):
+
+- `application/json`: `UnsubscribeRequest`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_UnsubscribeResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ## Public Waitlist
 
 ### POST /public/waitlist
@@ -1146,6 +1269,24 @@ Responses:
 
 ## Reports
 
+### GET /reports/audit-logs
+
+- Summary: List Audit Logs
+- operationId: `list_audit_logs_reports_audit_logs_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `limit` | no | integer | minimum=1, maximum=100, default=50 |
+| query | `offset` | no | integer | minimum=0, maximum=10000, default=0 |
+| query | `resource_id` | no | string \| null | maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_list_AuditLogItem__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### POST /reports/export
 
 - Summary: Export Report
@@ -1188,6 +1329,9 @@ Parameters:
 |---|---|---|---|---|
 | query | `from_date` | no | string \| null | format="date" |
 | query | `to_date` | no | string \| null | format="date" |
+| query | `limit` | no | integer | minimum=1, maximum=5000, default=2000 |
+| query | `offset` | no | integer | minimum=0, maximum=100000, default=0 |
+| query | `order` | no | enum("asc", "desc") | default="asc" |
 
 Responses:
 
@@ -1217,9 +1361,18 @@ Responses:
 - Summary: List Services
 - operationId: `list_services_services__get`
 
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `include_inactive` | no | boolean | default=false |
+| query | `limit` | no | integer | minimum=1, maximum=500, default=500 |
+| query | `offset` | no | integer | minimum=0, maximum=1000000, default=0 |
+
 Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_list_ServiceResponse__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /services/
 
@@ -1285,6 +1438,42 @@ Parameters:
 Responses:
 
 - `204` Successful Response
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### POST /services/{public_id}/image
+
+- Summary: Upload Service Image
+- operationId: `upload_service_image_services__public_id__image_post`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Request body (required):
+
+- `multipart/form-data`: `Body_upload_service_image_services__public_id__image_post`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### DELETE /services/{public_id}/image
+
+- Summary: Delete Service Image
+- operationId: `delete_service_image_services__public_id__image_delete`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_ServiceResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Staff
@@ -1462,6 +1651,26 @@ Responses:
 - `200` Successful Response — `application/json`: `ApiSuccess_dict_str__str__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+## Store Terms
+
+### GET /stores/me/terms-acceptance
+
+- Summary: Get Store Terms Status
+- operationId: `get_store_terms_status_stores_me_terms_acceptance_get`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_StoreTermsStatusResponse_`
+
+### POST /stores/me/terms-acceptance
+
+- Summary: Accept Store Terms
+- operationId: `accept_store_terms_stores_me_terms_acceptance_post`
+
+Responses:
+
+- `201` Successful Response — `application/json`: `ApiSuccess_StoreTermsAcceptanceResponse_`
+
 ## Stores
 
 ### GET /stores/me
@@ -1536,13 +1745,29 @@ Responses:
 ### GET /stores/media/{media_id}
 
 - Summary: Serve Store Media
-- operationId: `serve_store_media_stores_media__media_id__get`
+- operationId: `serve_store_media`
 
 Parameters:
 
 | in | name | required | type | constraints |
 |---|---|---|---|---|
-| path | `media_id` | yes | string |  |
+| path | `media_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: _(sin esquema)_
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### HEAD /stores/media/{media_id}
+
+- Summary: Serve Store Media
+- operationId: `head_store_media`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `media_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 
 Responses:
 
@@ -1677,10 +1902,10 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | query | `search` | no | string \| null | maxLength=100 |
-| query | `is_active` | no | boolean \| null | default=true |
+| query | `is_active` | no | boolean \| const "all" | default=true |
 | query | `has_subscription` | no | boolean \| null |  |
 | query | `limit` | no | integer | minimum=1, maximum=200, default=50 |
-| query | `offset` | no | integer | minimum=0, default=0 |
+| query | `offset` | no | integer | minimum=0, maximum=1000000, default=0 |
 
 Responses:
 
@@ -1784,6 +2009,7 @@ Parameters:
 | in | name | required | type | constraints |
 |---|---|---|---|---|
 | path | `store_public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| query | `limit` | no | integer | minimum=1, maximum=200, default=50 |
 
 Responses:
 
@@ -1873,6 +2099,8 @@ Parameters:
 |---|---|---|---|---|
 | path | `store_public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | query | `include_inactive` | no | boolean | default=false |
+| query | `limit` | no | integer | minimum=1, maximum=200, default=50 |
+| query | `offset` | no | integer | minimum=0, maximum=1000000, default=0 |
 
 Responses:
 
@@ -1944,6 +2172,7 @@ Parameters:
 | query | `include_inactive` | no | boolean | default=false |
 | query | `email` | no | string \| null | maxLength=255 |
 | query | `role` | no | string \| null | maxLength=50 |
+| query | `q` | no | string \| null | minLength=2, maxLength=80 |
 | query | `limit` | no | integer | minimum=1, maximum=500, default=200 |
 | query | `offset` | no | integer | minimum=0, maximum=1000000, default=0 |
 
@@ -2082,6 +2311,20 @@ Responses:
 | `blocker` | string \| null | no |  |
 | `cancellable` | boolean | yes |  |
 
+### AnonymizeResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `status` | string | yes |  |
+
+### ApiSuccess_AnonymizeResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | AnonymizeResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_AppointmentBlockBatchResponse_
 
 | field | type | required | constraints |
@@ -2128,6 +2371,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | ClientAppointmentsResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_ClientDataExport_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | ClientDataExport | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_CouponRedemptionResponse_
@@ -2218,6 +2469,14 @@ Responses:
 | `data` | LedgerSummaryResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_LegalVersionsResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | LegalVersionsResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_list_AppointmentBlockResponse__
 
 | field | type | required | constraints |
@@ -2232,6 +2491,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | array<AppointmentListItem> | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_list_AuditLogItem__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<AuditLogItem> | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_list_AuditLogResponse__
@@ -2264,6 +2531,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | array<CouponResponse> | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_list_LedgerClientItem__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<LedgerClientItem> | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_list_object__
@@ -2482,6 +2757,14 @@ Responses:
 | `data` | PublicPromotionPreviewResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_PublicStoreRefResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | PublicStoreRefResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_PublicStoreResponse_
 
 | field | type | required | constraints |
@@ -2618,6 +2901,22 @@ Responses:
 | `data` | StoreSubscriptionStatusResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_StoreTermsAcceptanceResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | StoreTermsAcceptanceResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_StoreTermsStatusResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | StoreTermsStatusResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_StoreWideBlockResponse_
 
 | field | type | required | constraints |
@@ -2632,6 +2931,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | TokenResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_UnsubscribeResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | UnsubscribeResponse | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_UserGlobalResponse_
@@ -2705,16 +3012,21 @@ Responses:
 | `ends_at` | string \| null | no | format="date-time" |
 | `reason` | string \| null | no | maxLength=255 |
 | `is_active` | boolean \| null | no |  |
+| `cancel_affected` | boolean | no | default=false |
 
 ### AppointmentCreate
 
 | field | type | required | constraints |
 |---|---|---|---|
 | `service_id` | string | yes | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
-| `staff_id` | string | yes | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+| `staff_id` | string \| null | no | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | `starts_at` | string | yes | format="date-time" |
 | `notes` | string \| null | no | maxLength=1000 |
 | `idempotency_key` | string | yes | minLength=10, maxLength=128 |
+| `client_name` | string \| null | no | minLength=1, maxLength=100 |
+| `client_phone` | string \| null | no | minLength=6, maxLength=30 |
+| `client_email` | string \| null | no | maxLength=255, format="email" |
+| `allow_outside_schedule` | boolean | no | default=false |
 
 ### AppointmentListItem
 
@@ -2767,10 +3079,11 @@ Responses:
 
 | field | type | required | constraints |
 |---|---|---|---|
-| `total` | integer | yes |  |
+| `total` | integer \| null | yes |  |
 | `page` | integer | yes |  |
 | `page_size` | integer | yes |  |
 | `results` | array<AppointmentSearchResult> | yes |  |
+| `next_cursor` | string \| null | no |  |
 
 ### AppointmentSearchResult
 
@@ -2796,6 +3109,19 @@ Responses:
 ### AppointmentStatus
 
 Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed", "absent", "expired")`
+
+### AuditLogItem
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `id` | string | yes |  |
+| `created_at` | string | yes | format="date-time" |
+| `actor_email` | string \| null | yes |  |
+| `resource_type` | string | yes |  |
+| `resource_id` | string | yes |  |
+| `action` | string | yes |  |
+| `payload_before` | object \| array<any> \| string \| integer \| number \| boolean \| null | yes |  |
+| `payload_after` | object \| array<any> \| string \| integer \| number \| boolean \| null | yes |  |
 
 ### AuditLogResponse
 
@@ -2836,6 +3162,12 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `label` | string | yes |  |
 | `reason` | string | yes |  |
 
+### Body_upload_service_image_services__public_id__image_post
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `file` | string | yes |  |
+
 ### Body_upload_store_media_stores_me_media_post
 
 | field | type | required | constraints |
@@ -2843,12 +3175,19 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `kind` | string | yes |  |
 | `file` | string | yes |  |
 
-### BusinessHourPeriod
+### BusinessHourPeriod-Input
 
 | field | type | required | constraints |
 |---|---|---|---|
-| `open` | string | yes | pattern="^\\d{2}:\\d{2}$" |
-| `close` | string | yes | pattern="^\\d{2}:\\d{2}$" |
+| `open` | string | yes | format="time" |
+| `close` | string | yes | format="time" |
+
+### BusinessHourPeriod-Output
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `open` | string | yes |  |
+| `close` | string | yes |  |
 
 ### ChangePasswordRequest
 
@@ -2886,6 +3225,19 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 |---|---|---|---|
 | `phone` | string | yes | minLength=6, maxLength=30 |
 | `reason` | string \| null | no | maxLength=500 |
+
+### ClientDataExport
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `exported_at` | string | yes | format="date-time" |
+| `store_id` | string | yes |  |
+| `client` | ExportedClient | yes |  |
+| `appointments` | array<ExportedAppointment> | yes |  |
+| `payments` | array<ExportedPayment> | yes |  |
+| `ledger` | array<ExportedLedgerMovement> | yes |  |
+| `waitlist` | array<ExportedWaitlistEntry> | yes |  |
+| `marketing_opted_out_at` | string \| null | no | format="date-time" |
 
 ### ClientRescheduleRequest
 
@@ -2973,7 +3325,9 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 |---|---|---|---|
 | `client_id` | string | yes |  |
 | `balance` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `total` | integer | yes |  |
 | `movements` | array<LedgerMovementResponse> | yes |  |
+| `next_cursor` | string \| null | no |  |
 
 ### DashboardStatSummary
 
@@ -2993,6 +3347,85 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 |---|---|---|---|
 | `stats` | DashboardStatSummary | yes |  |
 | `upcoming_appointments` | array<UpcomingAppointmentItem> | yes |  |
+
+### ExportedAppointment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `starts_at` | string | yes | format="date-time" |
+| `ends_at` | string | yes | format="date-time" |
+| `status` | string | yes |  |
+| `service_id` | string | yes |  |
+| `staff_id` | string | yes |  |
+| `client_name` | string | yes |  |
+| `client_email` | string \| null | no |  |
+| `client_phone` | string \| null | no |  |
+| `notes` | string \| null | no |  |
+| `notes_staff` | string \| null | no |  |
+| `intake_answers` | object \| null | no |  |
+| `price_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `terms_accepted_at` | string \| null | no | format="date-time" |
+| `terms_version` | string \| null | no |  |
+| `privacy_version` | string \| null | no |  |
+| `cancelled_at` | string \| null | no | format="date-time" |
+| `completed_at` | string \| null | no | format="date-time" |
+
+### ExportedClient
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `full_name` | string | yes |  |
+| `first_name` | string \| null | no |  |
+| `last_name` | string \| null | no |  |
+| `email` | string \| null | no |  |
+| `phone` | string \| null | no |  |
+| `is_active` | boolean | yes |  |
+| `created_at` | string \| null | no | format="date-time" |
+
+### ExportedLedgerMovement
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `movement_type` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `balance_after` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `appointment_id` | string \| null | no |  |
+| `notes` | string \| null | no |  |
+| `created_at` | string \| null | no | format="date-time" |
+
+### ExportedPayment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `appointment_id` | string | yes |  |
+| `provider` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `currency` | string | yes |  |
+| `status` | string | yes |  |
+| `paid_at` | string \| null | no | format="date-time" |
+| `created_at` | string \| null | no | format="date-time" |
+
+### ExportedWaitlistEntry
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `status` | string | yes |  |
+| `service_id` | string | yes |  |
+| `window_starts_at` | string | yes | format="date-time" |
+| `window_ends_at` | string | yes | format="date-time" |
+| `client_name` | string | yes |  |
+| `client_phone` | string | yes |  |
+| `client_email` | string \| null | no |  |
+| `notes` | string \| null | no |  |
+| `terms_accepted_at` | string \| null | no | format="date-time" |
+| `terms_version` | string \| null | no |  |
+| `privacy_version` | string \| null | no |  |
+| `created_at` | string \| null | no | format="date-time" |
 
 ### ForgotPasswordRequest
 
@@ -3040,13 +3473,22 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 |---|---|---|---|
 | `detail` | array<ValidationError> | no |  |
 
+### LedgerClientItem
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `name` | string | yes |  |
+| `email` | string \| null | no |  |
+| `phone` | string \| null | no |  |
+
 ### LedgerMovementCreate
 
 | field | type | required | constraints |
 |---|---|---|---|
 | `movement_type` | string | yes | pattern="^(charge\|payment\|adjustment\|refund)$" |
 | `amount` | number \| string | yes | minimum=0.0, maximum=10000000.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
-| `appointment_id` | string \| null | no | maxLength=64 |
+| `appointment_id` | string \| null | no | maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
 | `notes` | string \| null | no | maxLength=500 |
 
 ### LedgerMovementResponse
@@ -3079,6 +3521,13 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `average_balance` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 | `total_movements` | integer | yes |  |
 | `top_debtors` | array<LedgerSummaryClientItem> | yes |  |
+
+### LegalVersionsResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `terms_version` | string | yes |  |
+| `privacy_version` | string | yes |  |
 
 ### LoginRequest
 
@@ -3273,8 +3722,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `title` | string | yes | minLength=2, maxLength=120 |
 | `description` | string \| null | no | maxLength=1000 |
 | `promotion_type` | string | no | pattern="^(percent\|fixed)$", default="percent" |
-| `value` | number \| string | yes | exclusiveMinimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
-| `min_service_amount` | number \| string \| null | no | minimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
+| `value` | number \| string | yes | maximum=10000000.0, exclusiveMinimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
+| `min_service_amount` | number \| string \| null | no | minimum=0.0, maximum=10000000.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
 | `max_uses` | integer \| null | no | maximum=1000000.0, exclusiveMinimum=0.0 |
 | `valid_from` | string \| null | no | format="date-time" |
 | `valid_until` | string \| null | no | format="date-time" |
@@ -3318,8 +3767,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `title` | string \| null | no | minLength=2, maxLength=120 |
 | `description` | string \| null | no | maxLength=1000 |
 | `promotion_type` | string \| null | no | pattern="^(percent\|fixed)$" |
-| `value` | number \| string \| null | no | exclusiveMinimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
-| `min_service_amount` | number \| string \| null | no | minimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
+| `value` | number \| string \| null | no | maximum=10000000.0, exclusiveMinimum=0.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
+| `min_service_amount` | number \| string \| null | no | minimum=0.0, maximum=10000000.0, pattern="^(?!^[-+.]*$)[+-]?0*(?:\\d{0,10}\|(?=[\\d.]{1,13}0*$)\\d{0,10}\\.\\d{0,2}0*$)" |
 | `max_uses` | integer \| null | no | maximum=1000000.0, exclusiveMinimum=0.0 |
 | `valid_from` | string \| null | no | format="date-time" |
 | `valid_until` | string \| null | no | format="date-time" |
@@ -3342,6 +3791,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `promotion_code` | string \| null | no | minLength=3, maxLength=30, pattern="^[A-Za-z0-9_-]+$" |
 | `payment_method` | string | no | pattern="^(auto\|manual\|mercadopago)$", default="manual" |
 | `accepts_terms` | boolean | no | default=false |
+| `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
+| `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
 ### PublicBookingResponse
 
@@ -3430,6 +3881,14 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `email` | string \| null | no |  |
 | `display_name` | string | yes |  |
 | `service_ids` | array<string> | no |  |
+
+### PublicStoreRefResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `store_public_id` | string | yes |  |
+| `name` | string | yes |  |
+| `accepts_new_bookings` | boolean | yes |  |
 
 ### PublicStoreResponse
 
@@ -3547,6 +4006,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `top_clients` | array<ReportTopClientItem> | no |  |
 | `debt_summary` | ReportDebtSummary | yes |  |
 | `appointments` | array<ReportAppointmentItem> | yes |  |
+| `has_more` | boolean | no | default=false |
 
 ### ReportSummaryStats
 
@@ -3559,6 +4019,9 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `confirmed_appointments` | integer | yes |  |
 | `total_revenue` | number | yes |  |
 | `average_ticket` | number | yes |  |
+| `retained_deposit_revenue` | number | no | default=0.0 |
+| `absent_appointments` | integer | no | default=0 |
+| `expired_appointments` | integer | no | default=0 |
 
 ### ReportTopClientItem
 
@@ -3760,7 +4223,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `name` | string | yes | minLength=2, maxLength=255 |
 | `slug` | string | yes | minLength=2, maxLength=100, pattern="^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$" |
 | `logo_url` | string \| null | no | maxLength=500 |
-| `primary_color` | string | no | maxLength=20, default="#000000" |
+| `primary_color` | string | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$", default="#000000" |
 | `cancellation_hours` | integer | no | minimum=0.0, maximum=8760.0, default=24 |
 | `buffer_minutes` | integer | no | minimum=0.0, maximum=1440.0, default=0 |
 | `send_email_confirmation` | boolean | no | default=true |
@@ -3835,7 +4298,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `name` | string \| null | no | minLength=2, maxLength=255 |
 | `slug` | string \| null | no | minLength=2, maxLength=100, pattern="^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$" |
 | `logo_url` | string \| null | no | maxLength=500 |
-| `primary_color` | string \| null | no | maxLength=20 |
+| `primary_color` | string \| null | no | pattern="^#([A-Fa-f0-9]{6}\|[A-Fa-f0-9]{3})$" |
 | `cancellation_hours` | integer \| null | no | minimum=0.0, maximum=8760.0 |
 | `buffer_minutes` | integer \| null | no | minimum=0.0, maximum=1440.0 |
 | `send_email_confirmation` | boolean \| null | no |  |
@@ -3885,7 +4348,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `deposit_far_notice_extra_percent` | integer | no | default=0 |
 | `deposit_new_client_extra_percent` | integer | no | default=0 |
 | `deposit_absent_client_extra_percent` | integer | no | default=0 |
-| `business_hours` | object<string, array<BusinessHourPeriod>> | yes |  |
+| `business_hours` | object<string, array<BusinessHourPeriod-Output>> | yes |  |
 | `send_email_confirmation` | boolean | yes |  |
 | `send_email_reminders` | boolean | yes |  |
 | `feature_flags` | StoreFeatureFlags | yes |  |
@@ -3982,6 +4445,22 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `current_period_end` | string \| null | yes | format="date-time" |
 | `last_redemption_at` | string \| null | yes | format="date-time" |
 
+### StoreTermsAcceptanceResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `terms_version` | string | yes |  |
+| `accepted_at` | string | yes | format="date-time" |
+| `accepted_by` | string | yes |  |
+
+### StoreTermsStatusResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `current_version` | string | yes |  |
+| `current_version_accepted` | boolean | yes |  |
+| `latest` | StoreTermsAcceptanceResponse \| null | no |  |
+
 ### StoreUpdate
 
 | field | type | required | constraints |
@@ -4007,7 +4486,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `deposit_far_notice_extra_percent` | integer \| null | no | minimum=0.0, maximum=100.0 |
 | `deposit_new_client_extra_percent` | integer \| null | no | minimum=0.0, maximum=100.0 |
 | `deposit_absent_client_extra_percent` | integer \| null | no | minimum=0.0, maximum=100.0 |
-| `business_hours` | object<string, array<BusinessHourPeriod>> \| null | no |  |
+| `business_hours` | object<string, array<BusinessHourPeriod-Input>> \| null | no |  |
 | `send_email_confirmation` | boolean \| null | no |  |
 | `send_email_reminders` | boolean \| null | no |  |
 
@@ -4045,6 +4524,18 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 |---|---|---|---|
 | `access_token` | string | yes |  |
 | `token_type` | string | no | default="bearer" |
+
+### UnsubscribeRequest
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `token` | string | yes | minLength=1, maxLength=256 |
+
+### UnsubscribeResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `status` | string | yes |  |
 
 ### UpcomingAppointmentItem
 
@@ -4184,5 +4675,8 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `client_phone` | string | yes | minLength=6, maxLength=30 |
 | `client_email` | string \| null | no | maxLength=255, format="email" |
 | `notes` | string \| null | no | maxLength=300 |
+| `accepts_terms` | boolean \| null | no |  |
+| `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
+| `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit 65c7900
+Generado desde app.openapi() el 2026-09-25, commit 7448c6f

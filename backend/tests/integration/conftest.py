@@ -18,24 +18,17 @@ from sqlalchemy.ext.asyncio import (
 
 from core.config import settings
 from core.database import get_db
+from core.model_registry import load_all_models
 from core.models import Base
 from main import app
 
-# Importados por su efecto: registran los modelos en Base.metadata antes de
-# crear las tablas.
-import modules.appointments.model  # noqa: F401
-import modules.audit.model  # noqa: F401
-import modules.auth.session_model  # noqa: F401
-import modules.budget.model  # noqa: F401
-import modules.ledger.model  # noqa: F401
-import modules.notifications.model  # noqa: F401
-import modules.otp.model  # noqa: F401
-import modules.payments.model  # noqa: F401
-import modules.promotions.model  # noqa: F401
-import modules.services.model  # noqa: F401
-import modules.staff.model  # noqa: F401
-import modules.stores.model  # noqa: F401
-import modules.users.model  # noqa: F401
+# Base.metadata se puebla desde el registro, no desde una lista paralela
+# (2026-09-17, C-13). La de aca tenia trece imports a mano, sin billing ni
+# waitlist; create_all igual veia las 27 tablas porque `from main import app`
+# carga todos los modelos por los routers. El defecto era la duplicacion: una
+# copia del registro que nadie vigilaba y que falla el dia que un modelo no
+# cuelgue de un router.
+load_all_models()
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 

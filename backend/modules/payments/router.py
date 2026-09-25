@@ -1,14 +1,18 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from functools import partial
 import hashlib
 import hmac
+import re
 from typing import Annotated, Any, AsyncGenerator
+
+import structlog
 
 from core.router import CanonicalAPIRouter
 from fastapi import Depends, Path, Query, Request, status
 from fastapi.responses import RedirectResponse
 from redis.asyncio import Redis
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.uow import AsyncSqlAlchemyUnitOfWork
@@ -17,7 +21,7 @@ from modules.payments.application import PaymentService
 from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
 from core.crypto import encrypt_secret
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.database import _apply_tenant_context, get_db, tenant_bypass
 from core.redis import get_redis
 from core.exceptions import (
     AppException,
@@ -33,7 +37,8 @@ from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
-from modules.payments.jobs import process_outbox_batch
+from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
+from modules.payments.on_demand import request_inbox_retry
 from modules.payments.model import (
     OutboxMessage,
     Payment,
@@ -45,6 +50,7 @@ from modules.payments.processing import (
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
+from modules.payments.service import PaymentGatewayNotConnectedError
 from modules.payments.oauth_state import (
     InvalidOAuthStateError,
     create_mercadopago_oauth_state,
@@ -52,13 +58,15 @@ from modules.payments.oauth_state import (
     parse_mercadopago_oauth_state,
 )
 from modules.payments.service import (
+    GatewayConfigs,
     apply_mercadopago_oauth_payload,
     build_mercadopago_oauth_authorization_url,
     calculate_service_payment_amount,
-    exchange_mercadopago_oauth_code,
-    ensure_payment_preference,
+    create_panel_payment_preference,
+    load_gateway_configs,
+    exchange_mercadopago_oauth_code_without_transaction,
     mercadopago_oauth_is_configured,
-    refresh_mercadopago_oauth_connection,
+    refresh_mercadopago_oauth_without_transaction,
 )
 from modules.payments.schemas import (
     GatewayConfigResponse,
@@ -77,10 +85,12 @@ from modules.services.model import Service
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
+logger = structlog.get_logger()
 router = CanonicalAPIRouter(prefix="/payments", tags=["Payments"])
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
+_PUBLIC_ID_RE = re.compile(PUBLIC_ID_PATTERN)
 
 
 async def get_uow(
@@ -95,19 +105,6 @@ def get_payment_service(
     uow: AsyncSqlAlchemyUnitOfWork = Depends(get_uow),
 ) -> PaymentService:
     return PaymentService(uow=uow)
-
-
-def _gateway_config_response(
-    config: PaymentGatewayConfig | None,
-) -> GatewayConfigResponse:
-    if not config:
-        return GatewayConfigResponse(provider="mercadopago", configured=False)
-    return GatewayConfigResponse(
-        provider=config.provider,
-        configured=True,
-        public_key=config.public_key,
-        access_token_masked="********",
-    )
 
 
 def _payment_preference_response(payment: Payment) -> PaymentPreferenceResponse:
@@ -210,7 +207,13 @@ def _webhook_event_id(payload: dict[str, Any]) -> str:
 async def _resolve_store_for_webhook(
     db: AsyncSession, store_reference: str | None
 ) -> tuple[str, PaymentGatewayConfig]:
-    if not store_reference:
+    # La forma se valida ANTES de tocar la base (B2-18): es el unico dato de
+    # un request externo sin autenticar que llega a un WHERE. El rechazo es
+    # el MISMO que el de una tienda inexistente (400, mismo mensaje): no
+    # revela si la tienda existe ni cambia lo que ve Mercado Pago (regla 7).
+    # No va como Query(pattern=...) porque FastAPI responderia 422 con otro
+    # cuerpo, distinguible del de una tienda inexistente.
+    if not store_reference or not _PUBLIC_ID_RE.fullmatch(store_reference):
         raise WebhookException(message="store_id invalido para webhook")
 
     config_result = await db.execute(
@@ -326,19 +329,27 @@ async def _count_store_rows(
     return int(total or 0)
 
 
-def _payment_status_count_query(store_id: str, status_value: str) -> Any:
-    return (
-        select(func.count())
-        .select_from(Payment)
-        .where(Payment.store_id == store_id, Payment.status == status_value)
-    )
+async def _payment_totals_by_status(
+    db: AsyncSession, store_id: str
+) -> dict[str, tuple[int, Decimal]]:
+    """Cantidad e importe de los pagos de la tienda, agrupados por estado.
 
-
-def _payment_status_sum_query(store_id: str, status_value: str) -> Any:
-    return select(func.coalesce(func.sum(Payment.amount), 0)).where(
-        Payment.store_id == store_id,
-        Payment.status == status_value,
+    Un estado sin filas no aparece en el GROUP BY: el llamador lee con
+    ``.get(estado, (0, 0))`` para devolver el 0 explicito que espera el panel.
+    """
+    result = await db.execute(
+        select(
+            Payment.status,
+            func.count(),
+            func.coalesce(func.sum(Payment.amount), 0),
+        )
+        .where(Payment.store_id == store_id)
+        .group_by(Payment.status)
     )
+    return {
+        str(status_value): (int(count or 0), Decimal(str(total or 0)))
+        for status_value, count, total in result.all()
+    }
 
 
 def _mercadopago_oauth_required() -> None:
@@ -499,9 +510,7 @@ async def mercadopago_oauth_callback(
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
     _mercadopago_oauth_required()
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         if error:
             return _oauth_frontend_redirect("denied")
         if not code or not state:
@@ -532,9 +541,10 @@ async def mercadopago_oauth_callback(
         if actor_result.scalar_one_or_none() is None:
             return _oauth_frontend_redirect("forbidden")
 
+        # Sin transaccion abierta durante el POST a MP (F1-05, R8-05).
         try:
-            token_payload = await exchange_mercadopago_oauth_code(
-                code=code, code_verifier=code_verifier
+            token_payload = await exchange_mercadopago_oauth_code_without_transaction(
+                db, code=code, code_verifier=code_verifier
             )
         except RuntimeError:
             return _oauth_frontend_redirect("exchange_failed")
@@ -559,8 +569,6 @@ async def mercadopago_oauth_callback(
         await db.commit()
 
         return _oauth_frontend_redirect("connected")
-    finally:
-        set_tenant_context(None, False)
 
 
 @router.post("/mercadopago/oauth/refresh", response_model=GatewayConfigResponse)
@@ -584,15 +592,25 @@ async def refresh_mercadopago_oauth(
             resource="Conexion de Mercado Pago", identifier=user.store_id
         )
 
+    # Sin transaccion abierta durante el POST a MP (F1-05, R8-05); la config
+    # refrescada se persiste en su propia transaccion corta.
     try:
-        config = await refresh_mercadopago_oauth_connection(db, config=config)
+        config = await refresh_mercadopago_oauth_without_transaction(db, config=config)
     except RuntimeError as exc:
+        # Regla 20: el texto de la excepcion puede traer el cuerpo de la
+        # respuesta de Mercado Pago; al log va solo el tipo y su status.
+        logger.warning(
+            "mercadopago_oauth_refresh_failed",
+            error_type=type(exc).__name__,
+            provider_status=getattr(exc, "status_code", None),
+        )
         raise AppException(
-            message=str(exc),
+            message=(
+                "No se pudo renovar la conexion con Mercado Pago. Volve a conectarla."
+            ),
             http_status=status.HTTP_409_CONFLICT,
             error_code="MERCADOPAGO_REFRESH_FAILED",
         )
-    await db.commit()
     await db.refresh(config)
     return GatewayConfigResponse(
         provider=config.provider,
@@ -642,29 +660,40 @@ async def create_payment_preference(
     )
     try:
         # Sin override: si el turno ya tiene un cobro con la sena calculada
-        # por la regla, se respeta ese importe y solo se refresca el link.
-        payment = await ensure_payment_preference(
+        # por la regla, se respeta ese importe y solo se refresca el link. El
+        # service commitea el cobro ANTES de salir a Mercado Pago (regla 5).
+        payment = await create_panel_payment_preference(
             db,
             appointment=appointment,
             service=service,
             store_id=user.store_id,
             amount_override=_payment_amount_for_service(service),
-            keep_existing_amount=True,
+        )
+    # SEG-04: mensajes fijos; el texto de la excepcion puede traer el detalle
+    # de Mercado Pago y no sale al cliente. Al log va solo el tipo.
+    except PaymentGatewayNotConnectedError as exc:
+        logger.info("payment_link_gateway_not_connected", error_type=type(exc).__name__)
+        raise AppException(
+            message="La tienda debe conectar su cuenta de Mercado Pago antes de cobrar",
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="PAYMENT_GATEWAY_NOT_CONNECTED",
         )
     except CircuitBreakerOpenError as exc:
+        logger.warning(
+            "payment_link_provider_unavailable", error_type=type(exc).__name__
+        )
         raise AppException(
-            message=f"Proveedor de pagos temporalmente no disponible: {exc}",
+            message="Proveedor de pagos temporalmente no disponible",
             http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
             error_code="PAYMENT_PROVIDER_UNAVAILABLE",
         )
     except RuntimeError as exc:
+        logger.warning("payment_link_creation_failed", error_type=type(exc).__name__)
         raise AppException(
-            message=f"No se pudo crear el link de pago: {exc}",
+            message="No se pudo crear el link de pago",
             http_status=status.HTTP_502_BAD_GATEWAY,
             error_code="PAYMENT_LINK_CREATION_FAILED",
         )
-    await db.commit()
-    await db.refresh(payment)
     return _payment_preference_response(payment)
 
 
@@ -692,7 +721,17 @@ async def manual_confirm_payment(
     return _payment_response(payment)
 
 
-@router.post("/{payment_id}/refund", response_model=PaymentResponse)
+@router.post(
+    "/{payment_id}/refund",
+    response_model=PaymentResponse,
+    summary="Registro de reembolso hecho fuera de Shifty",
+    description=(
+        "Registra un reembolso que el dueno ya hizo por su cuenta (desde Mercado "
+        "Pago o en efectivo) y pasa el cobro a refunded. NO llama a Mercado Pago "
+        "ni mueve plata: exige manual=true. Un cobro ya reembolsado no se "
+        "reembolsa dos veces (B2-05)."
+    ),
+)
 async def refund_payment(
     payment_id: PublicIdPath,
     data: RefundRequest,
@@ -714,15 +753,50 @@ async def refund_payment(
     return _payment_response(payment)
 
 
+async def _enriquecer_sin_transaccion_abierta(
+    db: AsyncSession, *, store_id: str, payload: dict[str, Any]
+) -> tuple[dict[str, Any], GatewayConfigs]:
+    """Le pide a Mercado Pago el detalle del evento, sin transaccion abierta.
+
+    Antes el handler consultaba a MP (``GET /v1/payments/{id}``, hasta
+    MP_REQUEST_TIMEOUT, mas un refresh OAuth si da 401) con la transaccion que
+    habian abierto las consultas de la firma: la sesion quedaba ``idle in
+    transaction`` todo ese rato y, con
+    ``idle_in_transaction_session_timeout = 60s`` y MP degradado, Postgres
+    mataba la conexion, el webhook salia 500 y la fila del inbox se perdia con
+    el rollback (AUD2-B2-08, 2026-09-20; regla 5, mismo patron que S-02 y
+    AUD2-B2-02).
+
+    Fase A: la config del gateway es la ultima lectura antes de la red; como
+    la firma, es de solo lectura, asi que cortar aca no deja nada a medias. El
+    commit es de ``AsyncSession`` y no de ``TenantSession`` porque el de
+    ``TenantSession`` reaplica el contexto y con eso reabre otra transaccion
+    en el acto (S-02). Fase B: se reaplica el contexto para volver a escribir.
+    """
+    configs = await load_gateway_configs(db, [store_id])
+    await AsyncSession.commit(db)
+    enriquecido = await enrich_mercadopago_webhook_payload(
+        db,
+        store_id=store_id,
+        payload=payload,
+        configs=configs,
+        # Un 401 refresca el OAuth: se persiste en su propia transaccion corta,
+        # que se cierra antes del segundo HTTP. Sin esto el default hace
+        # db.flush() y reabre la transaccion justo ahi.
+        persist_refresh=partial(persist_gateway_refresh, db),
+    )
+    await _apply_tenant_context(db)
+    return enriquecido, configs
+
+
 @router.post("/webhooks/mercadopago")
 async def mercadopago_webhook(
     request: Request,
     store_id: Annotated[str | None, Query(max_length=64)] = None,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> dict[str, Any]:
-    set_tenant_context(None, True)
-    try:
-        await _apply_tenant_context(db)
+    async with tenant_bypass(db):
         # Un body invalido no puede tirar un 500: es trafico externo no confiable.
         try:
             payload = await request.json()
@@ -736,10 +810,8 @@ async def mercadopago_webhook(
             request=request,
             store_reference=store_id,
         )
-        payload = await enrich_mercadopago_webhook_payload(
-            db,
-            store_id=resolved_store_id,
-            payload=payload,
+        payload, configs = await _enriquecer_sin_transaccion_abierta(
+            db, store_id=resolved_store_id, payload=payload
         )
 
         event_id = _webhook_event_id(payload)
@@ -766,17 +838,33 @@ async def mercadopago_webhook(
         # Pago fallo y el webhook crudo no trae estado), dejamos el evento sin
         # procesar para que el worker del inbox lo reintente. Marcarlo aca perderia
         # el cobro de forma permanente.
-        applied = await apply_mercadopago_webhook_payload(
-            db, store_id=resolved_store_id, payload=payload
-        )
-        if applied:
-            inbox.mark_processed()
+        try:
+            applied = await apply_mercadopago_webhook_payload(
+                db, store_id=resolved_store_id, payload=payload, configs=configs
+            )
+        except RuntimeError as exc:
+            # 2026-09-16 (B2-04): un importe, moneda, referencia o collector
+            # inconsistente llegaba como RuntimeError hasta el handler generico:
+            # 500 hacia Mercado Pago, sin commit, y la fila del inbox recien
+            # agregada se perdia con el rollback. El inbox es el mecanismo de
+            # reintento (regla 7): el motivo queda en `error`, `attempts` suma
+            # uno y `processed_at` sigue vacio hasta agotar los intentos, igual
+            # que hace el lote de `process_webhook_inbox_batch`.
+            applied = False
+            inbox.register_failure(str(exc))
         else:
-            inbox.register_failure("No se pudo resolver el pago del webhook")
+            if applied:
+                inbox.mark_processed()
+            else:
+                inbox.register_failure("No se pudo resolver el pago del webhook")
         await db.commit()
-        return {"success": True, "data": {"received": True, "applied": applied}}
-    finally:
-        set_tenant_context(None, False)
+    if not applied and inbox.processed_at is None:
+        # F1-21 (R9-09): sin esto el cobro esperaba al beat del inbox (60-120 s)
+        # con el cliente mirando "pendiente". Despues del commit, para que la
+        # tarea vea la fila; deduplicado por tienda y nunca con los intentos
+        # agotados (``processed_at`` ya puesto por ``register_failure``).
+        await request_inbox_retry(redis, resolved_store_id)
+    return {"success": True, "data": {"received": True, "applied": applied}}
 
 
 @router.get("/outbox/stats", response_model=OutboxStatsResponse)
@@ -821,92 +909,39 @@ async def reconciliation_summary(
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
 
-    pending_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.PENDING.value)
-            )
-        )
-        or 0
+    sin_filas = (0, Decimal("0"))
+    por_estado = await _payment_totals_by_status(db, user.store_id)
+    pending_count, pending_amount = por_estado.get(
+        PaymentStatus.PENDING.value, sin_filas
     )
-    approved_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.APPROVED.value)
-            )
-        )
-        or 0
+    approved_count, approved_amount = por_estado.get(
+        PaymentStatus.APPROVED.value, sin_filas
     )
-    rejected_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.REJECTED.value)
-            )
-        )
-        or 0
+    manual_count, manual_amount = por_estado.get(
+        PaymentStatus.MANUAL_CONFIRMED.value, sin_filas
     )
-    manual_confirmed_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(
-                    user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
-                )
-            )
-        )
-        or 0
-    )
-    refunded_payments = int(
-        (
-            await db.scalar(
-                _payment_status_count_query(user.store_id, PaymentStatus.REFUNDED.value)
-            )
-        )
-        or 0
-    )
-    total_pending_amount = Decimal(
-        str(
-            (
-                await db.scalar(
-                    _payment_status_sum_query(
-                        user.store_id, PaymentStatus.PENDING.value
+    # Pendientes y fallidos del inbox salen de UNA sentencia: COUNT ignora los
+    # NULL, asi que un CASE sin ELSE cuenta solo las filas que cumplen.
+    pending_webhooks, failed_webhooks = (
+        await db.execute(
+            select(
+                func.count(
+                    case(
+                        (
+                            and_(
+                                WebhookInbox.processed_at.is_(None),
+                                WebhookInbox.error.is_(None),
+                            ),
+                            1,
+                        )
                     )
-                )
+                ),
+                func.count(case((WebhookInbox.error.is_not(None), 1))),
             )
-            or 0
+            .select_from(WebhookInbox)
+            .where(WebhookInbox.store_id == user.store_id)
         )
-    )
-    approved_amount = Decimal(
-        str(
-            await db.scalar(
-                _payment_status_sum_query(user.store_id, PaymentStatus.APPROVED.value)
-            )
-            or 0
-        )
-    )
-    manual_confirmed_amount = Decimal(
-        str(
-            await db.scalar(
-                _payment_status_sum_query(
-                    user.store_id, PaymentStatus.MANUAL_CONFIRMED.value
-                )
-            )
-            or 0
-        )
-    )
-    total_approved_amount = approved_amount + manual_confirmed_amount
-    pending_webhooks = await _count_store_rows(
-        db,
-        WebhookInbox,
-        WebhookInbox.store_id == user.store_id,
-        WebhookInbox.processed_at.is_(None),
-        WebhookInbox.error.is_(None),
-    )
-    failed_webhooks = await _count_store_rows(
-        db,
-        WebhookInbox,
-        WebhookInbox.store_id == user.store_id,
-        WebhookInbox.error.is_not(None),
-    )
+    ).one()
     pending_outbox = await _count_store_rows(
         db,
         OutboxMessage,
@@ -915,15 +950,15 @@ async def reconciliation_summary(
     )
 
     return ReconciliationSummaryResponse(
-        pending_payments=pending_payments,
-        approved_payments=approved_payments,
-        rejected_payments=rejected_payments,
-        manual_confirmed_payments=manual_confirmed_payments,
-        refunded_payments=refunded_payments,
-        total_pending_amount=total_pending_amount,
-        total_approved_amount=total_approved_amount,
-        pending_webhooks=pending_webhooks,
-        failed_webhooks=failed_webhooks,
+        pending_payments=pending_count,
+        approved_payments=approved_count,
+        rejected_payments=por_estado.get(PaymentStatus.REJECTED.value, sin_filas)[0],
+        manual_confirmed_payments=manual_count,
+        refunded_payments=por_estado.get(PaymentStatus.REFUNDED.value, sin_filas)[0],
+        total_pending_amount=pending_amount,
+        total_approved_amount=approved_amount + manual_amount,
+        pending_webhooks=int(pending_webhooks or 0),
+        failed_webhooks=int(failed_webhooks or 0),
         pending_outbox=pending_outbox,
     )
 
@@ -932,9 +967,20 @@ async def reconciliation_summary(
 async def process_outbox(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    # le=100 y no 500 (v-diff de AUD2-B4-02, 2026-09-20): el request del
+    # panel despacha los mails del lote en linea, hasta el presupuesto entero
+    # (OUTBOX_EMAIL_BUDGET_SECONDS). Con 500 mensajes -y varios mails por
+    # mensaje- un click del dueno retenia un worker de la API durante todo el
+    # presupuesto; 100 es el mismo tope que usa el beat cada minuto.
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> OutboxProcessResponse:
     _require_payment_admin(user)
     await _ensure_payments_feature_enabled(db, user)
-    result = await process_outbox_batch(db, store_id=user.store_id, limit=limit)
+    # Sin el paso de vencimiento de links: es el unico que sale a Mercado Pago
+    # y no lo acota el ``limit``, asi que un clic podia colgar el request
+    # varios minutos y devolver un 504 de nginx (AUD2-B2-07, 2026-09-20). Los
+    # eventos siguen en el outbox y el beat los vence cada minuto.
+    result = await process_outbox_batch(
+        db, store_id=user.store_id, limit=limit, incluir_vencimientos=False
+    )
     return OutboxProcessResponse(**result)

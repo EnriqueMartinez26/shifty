@@ -5,6 +5,7 @@ from typing import Any, Generator, cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import core.database as database
 from core.exceptions import AppException, AuthenticationException
 from modules.auth import service
 from modules.auth.schemas import ChangePasswordRequest, ForgotPasswordRequest
@@ -77,7 +78,9 @@ def skip_tenant_sql(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, No
     async def registrar_noop(_key: str) -> None:
         return None
 
-    monkeypatch.setattr(service, "_apply_tenant_context", noop)
+    # El bypass de RLS lo abre y cierra core.database.tenant_bypass (B3-13):
+    # el apply que hay que neutralizar con la sesion falsa vive alli.
+    monkeypatch.setattr(database, "_apply_tenant_context", noop)
     monkeypatch.setattr(service, "_login_failures", sin_fallos)
     monkeypatch.setattr(service, "_register_login_failure", registrar_noop)
     monkeypatch.setattr(service, "_clear_login_failures", registrar_noop)

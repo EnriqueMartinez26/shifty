@@ -12,7 +12,7 @@ All external API interactions must use standard HTTP/1.1 or HTTP/2 over TLS. The
 |---|---|---|
 | `Content-Type` | Yes (for writes) | Must be `application/json`. |
 | `Authorization` | Yes (protected) | Bearer token format: `Bearer <jwt_token>`. |
-| `x-raw-response` | Optional | Set to `true` to bypass the canonical `ApiSuccess` wrapper envelope and receive the raw resource JSON structure. |
+| `x-raw-response` | Test-only | Ignored in production. Only the test suites use it to receive the raw resource JSON without the `ApiSuccess` envelope. |
 | `X-Idempotency-Key` | Optional | Client-generated UUID to safeguard webhook ingestion or critical mutations at the transport level. |
 
 ---
@@ -73,8 +73,8 @@ Successful requests (status codes `2xx`) return the payload wrapped in an `ApiSu
 *   `data`: The actual payload model (object, list, or primitive).
 *   `meta`: Optional operational metadata (such as pagination parameters).
 
-### 3.2. Raw Response Mode (`x-raw-response: true`)
-If your client integration does not support unwrapping envelopes, pass `x-raw-response: true` in the request headers. The API will strip the envelope and return the raw model structure directly:
+### 3.2. Raw Response Mode (`x-raw-response: true`) — test-only
+This switch exists for the backend test suites and is **ignored when `ENV=production`**: production clients always receive the canonical envelope and must read the resource from `data`. Outside production, `x-raw-response: true` strips the envelope and returns the raw model structure:
 ```json
 {
   "public_id": "01HXXXXXX...",
@@ -85,7 +85,7 @@ If your client integration does not support unwrapping envelopes, pass `x-raw-re
 ```
 
 ### 3.3. Error Response Envelope
-Unsuccessful requests (status codes `4xx` and `5xx`) return a structured `ApiError` envelope. Error payloads are **never** affected by the `x-raw-response` header.
+Unsuccessful requests (status codes `4xx` and `5xx`) return a structured error envelope with the shape below (`success`, `error_code`, `message` and an optional `detail`). Error payloads are **never** affected by the `x-raw-response` header.
 ```json
 {
   "success": false,
@@ -131,7 +131,8 @@ Integrators should match against `error_code` strings to customize user experien
 | `VALIDATION_ERROR` | 422 Unprocessable Entity | The payload format is incorrect or business constraints were violated. |
 | `OTP_INVALID` | 400 Bad Request | The OTP verification code is incorrect or expired. |
 | `OTP_RATE_LIMITED` | 429 Too Many Requests | Too many OTP attempts. The client must wait before retrying. |
-| `RATE_LIMITED` | 429 Too Many Requests | Request rate limit exceeded. |
+| `RATE_LIMITED` | 429 Too Many Requests | Request rate limit exceeded. Honour `Retry-After`. |
+| `RATE_LIMIT_UNAVAILABLE` | 503 Service Unavailable | The rate limiter itself is down and the API fails closed. This is not a quota problem: back off for `Retry-After` seconds instead of retrying immediately. |
 | `PAYMENT_ERROR` | 400 Bad Request | A gateway payment preference or capture error occurred. |
 | `WEBHOOK_ERROR` | 400 Bad Request | An external webhook signature or payload parsing verification failed. |
 

@@ -36,7 +36,6 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 
 import modules.appointments.model  # noqa: F401
 import modules.audit.model  # noqa: F401
-import modules.budget.model  # noqa: F401
 import modules.services.model  # noqa: F401
 import modules.staff.model  # noqa: F401
 import modules.stores.model  # noqa: F401
@@ -259,10 +258,16 @@ class TestAppointmentEndpoints:
         assert "detail" in body
 
     @pytest.mark.asyncio
-    async def test_reschedule_to_past_fails(self, client: AsyncClient) -> None:
+    async def test_reschedule_before_the_overflow_floor_fails(
+        self, client: AsyncClient
+    ) -> None:
         """
-        Caso: Intentar reprogramar a una fecha pasada.
+        Caso: Intentar reprogramar a mas de 2 anios en el pasado.
         Esperado: 422 por validación Pydantic en AppointmentReschedule.
+
+        Decision de Mateo (2026-09-25): la tienda puede reprogramar a un
+        horario que ya paso (corregir un walk-in); solo queda el piso contra
+        el desborde. Antes este test pedia 422 para cualquier pasado.
         """
         _, token = await create_test_store_and_admin(client)
 
@@ -270,7 +275,7 @@ class TestAppointmentEndpoints:
             "/appointments/TURNO-ID/reschedule",
             json={
                 "new_starts_at": (
-                    datetime.now(timezone.utc) - timedelta(days=1)
+                    datetime.now(timezone.utc) - timedelta(days=731)
                 ).isoformat(),
                 "idempotency_key": "idempotency-key-reschedule-001",
             },

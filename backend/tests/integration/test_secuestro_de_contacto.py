@@ -8,6 +8,7 @@ persona -- confirmaciones, recordatorios y sus datos de turno -- llegaban al
 atacante.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -27,7 +28,8 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
-from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_mails_al_cliente import Buzon, usar_cola_de_reservas
+from tests.integration.test_otp_por_email import Cola
 from tests.integration.test_sena_por_antelacion_e_historial import (
     _preview,
     _reasons,
@@ -36,6 +38,19 @@ from tests.integration.test_sena_por_antelacion_e_historial import (
 )
 
 VICTIMA = "+5491155550999"
+
+_CODIGO = re.compile(r"\b\d{6}\b")
+
+
+def _destinos_del_codigo(enviados: list[tuple[str, str, str]]) -> list[str]:
+    """Buzones que recibieron un mail CON codigo.
+
+    El OTP se encola (AUD2-B4-06), asi que se mira la cola ``send_otp_email``
+    y no el sink SMTP. Al email tipeado que no coincide con el de la ficha le
+    llega un aviso SIN codigo (AUD2-B4-05: la entrega tampoco dice si el
+    telefono es cliente); lo que nunca puede pasar es que el codigo salga ahi.
+    """
+    return [destino for destino, _asunto, cuerpo in enviados if _CODIGO.search(cuerpo)]
 
 
 async def _tienda(
@@ -91,6 +106,7 @@ async def test_anotarse_en_la_lista_de_espera_no_secuestra_el_email_del_cliente(
             "starts_at": slot.isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "idempotency_key": "secuestro-000001",
         },
     )
@@ -123,6 +139,7 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
 ) -> None:
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
     store, _token, service, staff, slot = await _tienda(client, "secuestro-reserva")
 
     primera = await client.post(
@@ -134,6 +151,7 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
             "starts_at": slot.isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "idempotency_key": "secuestro-reserva-01",
         },
     )
@@ -149,6 +167,7 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
             "starts_at": (slot + timedelta(hours=2)).isoformat(),
             "client_name": "Atacante",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "client_email": "atacante@evil.com",
             "idempotency_key": "secuestro-reserva-02",
         },
@@ -157,7 +176,9 @@ async def test_reservar_sin_otp_no_pisa_el_contacto_pero_si_avisa_a_ese_mail(
     assert await _email_del_cliente(test_session, "5491155550999") == tecnico
 
     # El mail de ESA reserva si va al email que dejaron (es su propia reserva),
-    # pero no queda pegado al cliente para las notificaciones futuras.
+    # pero no queda pegado al cliente para las notificaciones futuras. Desde
+    # F2-01 lo manda el worker, que relee el turno.
+    await cola.entregar()
     assert any(destino == "atacante@evil.com" for destino, _a, _c in buzon.enviados)
 
 
@@ -185,6 +206,7 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio del telefono",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "idempotency_key": "secuestro-otp-01",
         },
     )
@@ -201,6 +223,8 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
         channel="email",
         email="real@example.com",
         store_name="Demo",
+        # El envio (post-respuesta desde B4-01) no importa aca.
+        schedule_dispatch=lambda *args: None,
     )
     verificado = await servicio_otp.verify_code(
         store_id=store_id,
@@ -218,6 +242,7 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
             "starts_at": (slot + timedelta(hours=2)).isoformat(),
             "client_name": "Duenio del telefono",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "client_email": "real@example.com",
             "idempotency_key": "secuestro-otp-02",
         },
@@ -247,8 +272,9 @@ async def test_el_otp_a_un_email_propio_no_abre_los_turnos_de_otro(
     clausula de igualdad de email NUNCA se ejecutaba: el test era verde por la
     razon equivocada. Cada asercion dice abajo que guard ejercita.
     """
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, service, staff, slot = await _tienda(client, "otp-ajeno")
 
     reserva = await client.post(
@@ -260,6 +286,7 @@ async def test_el_otp_a_un_email_propio_no_abre_los_turnos_de_otro(
             "starts_at": slot.isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "client_email": "victima@example.com",
             "idempotency_key": "otp-ajeno-01",
         },
@@ -269,10 +296,10 @@ async def test_el_otp_a_un_email_propio_no_abre_los_turnos_de_otro(
     assert await _email_del_cliente(test_session, "5491155550999") == (
         "victima@example.com"
     ), "la ficha tiene que tener contacto ENTREGABLE para que el test sirva"
-    buzon.enviados.clear()
 
     # GUARD: punto de despacho. El atacante sabe el telefono y pone SU email,
-    # pero el codigo va al buzon de la ficha y el del request se ignora.
+    # pero el codigo va al buzon de la ficha y el del request se ignora como
+    # destino del codigo (le llega solo el aviso sin codigo de AUD2-B4-05).
     pedido = await client.post(
         "/public/otp/request",
         json={
@@ -283,7 +310,7 @@ async def test_el_otp_a_un_email_propio_no_abre_los_turnos_de_otro(
         },
     )
     assert pedido.status_code == 200, pedido.text
-    destinos = [destino for destino, _a, _c in buzon.enviados]
+    destinos = _destinos_del_codigo(cola.enviados)
     assert "atacante@evil.com" not in destinos, (
         f"el codigo del telefono de la victima NO puede llegarle al atacante, "
         f"y fue a {destinos}"
@@ -358,8 +385,9 @@ async def test_el_despacho_encuentra_la_ficha_en_las_tres_formas_de_telefono(
     el cliente legitimo se comia un 403 (falla cerrado, pero lo traba).
     2026-09-20.
     """
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, _service, _staff, _slot = await _tienda(client, "otp-formas")
     store_id = await _store_id(test_session, "otp-formas")
 
@@ -385,7 +413,7 @@ async def test_el_despacho_encuentra_la_ficha_en_las_tres_formas_de_telefono(
     await test_session.commit()
 
     for guardado, email in fichas.items():
-        buzon.enviados.clear()
+        cola.enviados.clear()
         pedido = await client.post(
             "/public/otp/request",
             json={
@@ -396,7 +424,7 @@ async def test_el_despacho_encuentra_la_ficha_en_las_tres_formas_de_telefono(
             },
         )
         assert pedido.status_code == 200, pedido.text
-        destinos = [destino for destino, _a, _c in buzon.enviados]
+        destinos = _destinos_del_codigo(cola.enviados)
         assert destinos == [email], (
             f"con `users.phone` guardado como {guardado!r} el codigo tiene que "
             f"ir al email de la ficha ({email}), y fue a {destinos}"
@@ -426,6 +454,7 @@ async def test_una_verificacion_sin_email_registrado_no_abre_la_autogestion(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             # Ficha con email ENTREGABLE: el unico motivo del 403 tiene que ser
             # el email NULL de la verificacion, no la falta de contacto.
             "client_email": "duenio@example.com",
@@ -461,8 +490,9 @@ async def test_el_duenio_del_email_de_la_ficha_lista_y_cancela_sus_turnos(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """El camino legitimo sigue abierto: el codigo va al email de la ficha."""
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, service, staff, slot = await _tienda(client, "otp-duenio")
 
     reserva = await client.post(
@@ -474,6 +504,7 @@ async def test_el_duenio_del_email_de_la_ficha_lista_y_cancela_sus_turnos(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "client_email": "duenio@example.com",
             "idempotency_key": "otp-duenio-01",
         },
@@ -491,7 +522,7 @@ async def test_el_duenio_del_email_de_la_ficha_lista_y_cancela_sus_turnos(
         },
     )
     assert pedido.status_code == 200, pedido.text
-    assert any(destino == "duenio@example.com" for destino, _a, _c in buzon.enviados)
+    assert _destinos_del_codigo(cola.enviados) == ["duenio@example.com"]
 
     verificado = await client.post(
         "/public/otp/verify",
@@ -520,8 +551,9 @@ async def test_el_email_del_request_se_ignora_cuando_hay_ficha_con_contacto(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Quien pide el codigo no elige el buzon si hay ficha que proteger."""
-    buzon = Buzon()
-    monkeypatch.setattr(tasks, "_send_email", buzon)
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    cola = Cola()
+    monkeypatch.setattr(tasks, "send_otp_email", cola)
     store, _token, service, staff, slot = await _tienda(client, "otp-buzon")
 
     reserva = await client.post(
@@ -533,12 +565,12 @@ async def test_el_email_del_request_se_ignora_cuando_hay_ficha_con_contacto(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "client_email": "duenio@example.com",
             "idempotency_key": "otp-buzon-01",
         },
     )
     assert reserva.status_code == 201, reserva.text
-    buzon.enviados.clear()
 
     pedido = await client.post(
         "/public/otp/request",
@@ -551,11 +583,18 @@ async def test_el_email_del_request_se_ignora_cuando_hay_ficha_con_contacto(
     )
     assert pedido.status_code == 200, pedido.text
 
-    destinos = [destino for destino, _a, _c in buzon.enviados]
+    destinos = _destinos_del_codigo(cola.enviados)
     assert destinos == ["duenio@example.com"], (
         f"el codigo tiene que ir al email de la ficha y no al del request, "
         f"y fue a {destinos}"
     )
+    # Al email tipeado le llega el aviso SIN codigo (AUD2-B4-05): que llegue
+    # algo no dice si el telefono es cliente, y el titular legitimo que tipeo
+    # otra casilla sabe donde buscar el codigo.
+    assert [d for d, _a, _c in cola.enviados] == [
+        "duenio@example.com",
+        "atacante@evil.com",
+    ]
 
 
 @pytest.mark.asyncio
@@ -575,6 +614,7 @@ async def test_pedir_el_codigo_responde_igual_sea_cliente_o_no(
             "starts_at": slot.isoformat(),
             "client_name": "Duenio",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "client_email": "duenio@example.com",
             "idempotency_key": "otp-enumeracion-01",
         },
@@ -642,6 +682,7 @@ async def test_un_cliente_nuevo_reserva_con_otp_booking_activo(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente Nuevo",
             "client_phone": "+5491155550777",
+            "accepts_terms": True,
             "client_email": "nuevo@example.com",
             "idempotency_key": "otp-alta-nueva-01",
         },
@@ -701,6 +742,7 @@ async def test_el_gate_de_reserva_no_exige_que_los_dos_emails_coincidan(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente Nuevo",
             "client_phone": "+5491155550777",
+            "accepts_terms": True,
             "idempotency_key": "otp-dos-emails-01",
         },
     )
@@ -719,6 +761,7 @@ async def test_el_gate_de_reserva_no_exige_que_los_dos_emails_coincidan(
             "starts_at": (slot + timedelta(hours=2)).isoformat(),
             "client_name": "Cliente Nuevo",
             "client_phone": "+5491155550777",
+            "accepts_terms": True,
             "client_email": "contacto@example.com",
             "idempotency_key": "otp-dos-emails-02",
         },
@@ -752,6 +795,7 @@ async def test_sin_contacto_verificado_la_sena_no_filtra_el_historial(
             "starts_at": _slot(2).isoformat(),
             "client_name": "Victima",
             "client_phone": VICTIMA,
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "otp-historial-01",
         },

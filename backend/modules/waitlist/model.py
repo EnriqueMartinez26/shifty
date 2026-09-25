@@ -55,7 +55,7 @@ MAX_LAPSED_OFFERS = 2
 class WaitlistEntry(BaseEntity):
     __tablename__ = "waitlist_entries"
 
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     client_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     client_name: Mapped[str] = mapped_column(String(100))
     client_phone: Mapped[str] = mapped_column(String(30), index=True)
@@ -71,6 +71,14 @@ class WaitlistEntry(BaseEntity):
         String(20), default=WaitlistStatus.WAITING.value, index=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Consentimiento al anotarse (PV-09, 2026-09-25): cuando y que versiones
+    # de los terminos y de la privacidad. NULL si el front no mando la casilla
+    # (``LEGAL_WAITLIST_CONSENT_REQUIRED`` apagado).
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terms_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    privacy_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Ofertas que esta entrada dejo vencer sin reservar. Al llegar a
     # MAX_LAPSED_OFFERS la entrada expira: quien no reserva dos veces no
     # bloquea mas la cola.
@@ -120,10 +128,6 @@ class WaitlistEntry(BaseEntity):
     @property
     def public_id(self) -> str:
         return self.id
-
-    @property
-    def is_open(self) -> bool:
-        return self.status in OPEN_WAITLIST_STATUSES
 
 
 __all__ = ["OPEN_WAITLIST_STATUSES", "WaitlistEntry", "WaitlistStatus"]

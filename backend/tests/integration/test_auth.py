@@ -25,7 +25,6 @@ import modules.users.model
 import modules.services.model
 import modules.staff.model
 import modules.appointments.model
-import modules.budget.model
 import modules.audit.model
 
 from modules.users.model import User

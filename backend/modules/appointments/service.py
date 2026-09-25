@@ -15,8 +15,11 @@ from typing import TYPE_CHECKING, TypedDict
 
 import ulid
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
-from core.circuit_breaker import CircuitBreakerOpenError
+from core.database import _apply_tenant_context
+from core.utils import ensure_utc_aware, now_utc
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
     AppException,
@@ -24,24 +27,29 @@ from core.exceptions import (
     AppointmentNotFoundException,
     BlockedScheduleException,
     ResourceNotFoundException,
+    ValidationException,
 )
 from http import HTTPStatus
 
 from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
-    reject_cancellation_while_awaiting_payment,
+    reject_already_cancelled,
+    reject_inactive,
+    reject_reschedule_with_pending_deposit,
 )
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
-from modules.stores.model import Store
+from modules.auth.service import normalize_email
 from modules.notifications.tasks import (
-    build_client_details,
-    enqueue_confirmation_email,
-    enqueue_rebook_email,
-    enqueue_reschedule_email,
+    EVENT_APPOINTMENT_BOOKED_BY_PANEL,
+    EVENT_APPOINTMENT_COMPLETED,
+    EVENT_APPOINTMENT_CONFIRMED,
+    EVENT_APPOINTMENT_RESCHEDULED,
+    is_deliverable_email,
 )
-from modules.payments.model import PaymentStatus
-from modules.payments.service import expire_mercadopago_preference
+from modules.payments.model import JsonValue, Payment, PaymentStatus
+from modules.payments.service import expire_live_charge
+from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
@@ -58,6 +66,20 @@ class AppointmentBookPayload(TypedDict, total=False):
     notes: str | None
     intake_answers: dict[str, str]
     idempotency_key: str
+
+
+class ClientBookingPayload(TypedDict, total=False):
+    """Alta del panel para un cliente (FF-04); ver ``AppointmentCreate``."""
+
+    service_id: str
+    staff_id: str | None
+    starts_at: datetime
+    notes: str | None
+    idempotency_key: str
+    client_name: str
+    client_phone: str
+    client_email: str | None
+    allow_outside_schedule: bool
 
 
 class AppointmentService:
@@ -85,16 +107,18 @@ class AppointmentService:
         """
         Crea un nuevo turno con:
           1. Resolución de servicio y staff.
-          2. Verificación de bloqueos de agenda (StaffBlock).
-          3. Bloqueo pesimista (FOR UPDATE) + verificación de conflictos.
-          4. Inserción atómica + registro de auditoría.
-          5. Disparo de notificación por email (Celery, fuera de la transacción).
+          2. Bloqueo pesimista (FOR UPDATE) antes de leer bloqueos y conflictos.
+          3. Validación de agenda (con sugerencia de horario si choca).
+          4. Inserción atómica + registro de auditoría + aviso en el outbox.
+          5. Invalidación, fuera de la transacción.
+
+        `actor` NO esta sujeto a min_booking_notice_hours (regla del cliente
+        publico); el "no agendar en el pasado" lo garantiza AppointmentCreate.
+        Reserva al propio actor como cliente: ver ``_self_booking``.
         """
-        # 1. Resolver entidades -----------------------------------------
-        #
-        # Se resuelven acotadas a la tienda del turno: sin esto, un admin podia
-        # mandar el id de un servicio o de un profesional de OTRA tienda y el
-        # turno se creaba igual, apareciendo en la agenda ajena.
+        # 1. Resolver entidades acotadas a la tienda del turno: sin esto, un
+        # admin podia mandar el id de un servicio o de un profesional de OTRA
+        # tienda y el turno se creaba igual, apareciendo en la agenda ajena.
         service = await self.uow.appointments.get_service_by_public_id(
             data["service_id"], store_id
         )
@@ -110,73 +134,23 @@ class AppointmentService:
         starts_at: datetime = data["starts_at"]
         ends_at: datetime = starts_at + timedelta(minutes=service.duration_minutes)
 
-        # Nota: `actor` (el staff autenticado) NO esta sujeto a
-        # min_booking_notice_hours (esa regla es para el cliente publico).
-        # El "no agendar en el pasado" lo garantiza el schema AppointmentCreate.
-        #
-        # Este metodo reserva al propio `actor` como cliente (ver client_id
-        # mas abajo) - es un auto-booking, no un alta de turno para un
-        # tercero. Cargar un walk-in (un cliente distinto al staff logueado)
-        # es responsabilidad de create_public_booking
-        # (modules/public_api/router.py), que ya acepta client_name/phone/
-        # email explicitos y es lo que usa el boton "Nuevo turno" del panel
-        # admin. Este comentario antes prometia soporte de walk-in que el
-        # codigo de abajo (client_id=actor.id) nunca implemento.
-
-        # 2. Bloqueo pesimista ANTES de leer bloqueos y conflictos ---------
-        # Antes los bloqueos se leian sin el lock: un bloqueo creado entre esa
-        # lectura y el INSERT dejaba un turno adentro (2026-09-10).
-        await self.uow.appointments.lock_staff_row(staff.id)
-        block = await self.uow.appointments.get_overlapping_block(
-            staff.id, starts_at, ends_at
-        )
-
-        # 3. Verificación de conflictos ----------------------------------
-        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
-        conflict = await self.uow.appointments.get_conflicting_appointment(
-            staff.id, starts_at, ends_at, buffer_minutes=buffer_minutes
-        )
-
-        # Delegar validación al Domain Service (DDD + UX Feedback)
-        await self._validate_or_suggest(
-            staff_id=staff.id,
-            requested_start=starts_at,
-            requested_end=ends_at,
-            conflict=conflict,
-            block=block,
-            duration_minutes=service.duration_minutes,
-            buffer_minutes=buffer_minutes,
-        )
-
-        # 4. Creación atómica con auditoría ------------------------------
-        appointment = Appointment(
-            id=str(ulid.ULID()),
+        # 2 y 3. Lock del profesional antes de leer bloqueos y conflictos.
+        await self._lock_and_validate_slot(
             store_id=store_id,
             staff_id=staff.id,
-            service_id=service.id,
-            client_id=actor.id,
             starts_at=starts_at,
             ends_at=ends_at,
             duration_minutes=service.duration_minutes,
-            # Congelamos el precio de lista del momento: el reporte de ingresos y
-            # el cobro manual usan este valor, no el precio actual del servicio.
-            price_amount=Decimal(str(service.price or 0)),
-            client_name=(
-                f"{actor.first_name or ''} {actor.last_name or ''}".strip()
-                or actor.email
-            ),
-            client_email=actor.email,
-            client_phone=actor.phone,
-            notes=data.get("notes"),
-            intake_answers=data.get("intake_answers") or {},
-            idempotency_key=data.get("idempotency_key"),
         )
-        self.uow.appointments.add(appointment)
 
+        # 4. Creación atómica con auditoría
+        appointment = _self_booking(data, store_id, service, staff, actor, ends_at)
+        self.uow.appointments.add(appointment)
         await self.uow.audit.log(
             action=AuditAction.CREATE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_after={
                 "status": appointment.status,
@@ -186,30 +160,220 @@ class AppointmentService:
                 "staff_id": staff.public_id,
             },
         )
+        # El mail al cliente lo manda el lote del outbox (F2-02).
+        self._publish_client_mail(appointment, EVENT_APPOINTMENT_BOOKED_BY_PANEL)
+        await self._commit_before_network()
+        try:
+            # 5. El cupo ya no esta libre: la disponibilidad lo refleja ya.
+            await invalidate_availability(self.cache, store_id, starts_at)
+        finally:
+            await _apply_tenant_context(self.uow.session)
+        return appointment, service, staff
 
-        await self.uow.commit()
+    async def book_for_client(
+        self,
+        *,
+        data: ClientBookingPayload,
+        store_id: str,
+        actor: User,
+    ) -> tuple[Appointment, Service, Staff]:
+        """Turno del panel PARA UN CLIENTE de la tienda (FF-04, 2026-09-24).
 
-        # 5. Notificación (fuera de transacción, no blocking) ---------------
-        await enqueue_confirmation_email(
-            email=actor.email,
-            details={
-                "public_id": appointment.public_id,
-                "service": service.name,
-                "staff": staff.display_name,
-                "date": starts_at.isoformat(),
-            },
+        El dueno, la recepcion o el profesional cargan a alguien que llama o
+        esta en el local. Decisiones del dueno (delegadas): sin antelacion
+        minima y con inicio posible en el pasado (la tienda carga un walk-in
+        despues, decision del 2026-09-25; el schema solo pone las cotas de
+        +-2 anios contra el desborde), sin OTP ni campos extra, sin sena:
+        nace CONFIRMED y sin cobro (el link
+        de pago se genera despues, si hace falta, por el endpoint de siempre).
+        Horario del profesional salvo ``allow_outside_schedule`` (el router lo
+        reserva al admin); bloqueos, choques y buffer siempre.
+
+        Identidad: el telefono SI adopta la ficha del cliente de ESTA tienda:
+        quien carga es personal autenticado de la tienda, no un anonimo
+        ("un telefono sin OTP no es de nadie" es la regla del portal). La
+        ficha existente no se pisa; ``get_or_create_client`` filtra por tienda.
+
+        Mismo camino de concurrencia que el portal (regla 4): lock del
+        profesional, relectura de bloqueo y choque bajo el lock, INSERT; la
+        exclusion GiST es la ultima defensa. Aviso al cliente por el outbox en
+        la misma transaccion (F2-02), invalidacion despues del commit plano.
+        """
+        service = await self.uow.appointments.get_service_by_public_id(
+            data["service_id"], store_id
+        )
+        if not service or not service.is_active:
+            raise ResourceNotFoundException("Servicio", data["service_id"])
+        starts_at = ensure_utc_aware(data["starts_at"])
+        ends_at = starts_at + timedelta(minutes=service.duration_minutes)
+        outside_schedule = bool(data.get("allow_outside_schedule", False))
+
+        repo = PublicRepository(self.uow.session)
+        candidates = _requested_staff(
+            await repo.qualified_staff(store_id, service), data.get("staff_id")
+        )
+        client = await repo.get_or_create_client(
+            store_id=store_id,
+            phone=data["client_phone"],
+            name=data["client_name"],
+            email=data.get("client_email"),
+        )
+        staff = await self._lock_panel_staff(
+            repo,
+            store_id,
+            candidates,
+            starts_at,
+            ends_at,
+            chosen=bool(data.get("staff_id")),
+            require_schedule=not outside_schedule,
         )
 
-        await invalidate_availability(self.cache, store_id, starts_at)
-
+        appointment = _client_booking(
+            data, store_id, service, staff, client, starts_at, ends_at
+        )
+        self.uow.appointments.add(appointment)
+        await self.uow.audit.log(
+            action=AuditAction.CREATE,
+            resource_type="Appointment",
+            resource_id=appointment.public_id,
+            store_id=store_id,
+            actor=actor,
+            payload_after=_client_booking_audit(
+                appointment, service, staff, outside_schedule=outside_schedule
+            ),
+        )
+        # Un email tecnico (.noreply) o ninguno: no hay a quien avisar. Y un
+        # turno que ya empezo (la tienda carga un walk-in despues) no lleva
+        # "turno confirmado": el cliente ya estuvo.
+        if is_deliverable_email(appointment.client_email) and starts_at >= now_utc():
+            self._publish_client_mail(appointment, EVENT_APPOINTMENT_BOOKED_BY_PANEL)
+        await self._commit_before_network()
+        try:
+            await invalidate_availability(self.cache, store_id, starts_at)
+        finally:
+            await _apply_tenant_context(self.uow.session)
         return appointment, service, staff
+
+    async def _lock_panel_staff(
+        self,
+        repo: PublicRepository,
+        store_id: str,
+        candidates: list[Staff],
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        chosen: bool,
+        require_schedule: bool,
+    ) -> Staff:
+        """El profesional del turno, ya lockeado y con la agenda releida bajo
+        el lock (regla 4). Elegido: su motivo exacto de rechazo; "cualquiera":
+        el primero libre en el orden de desempate del portal."""
+        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
+        if chosen:
+            staff = candidates[0]
+            _raise_for_rejection(
+                await repo.staff_can_take_range(
+                    staff.id,
+                    starts_at,
+                    ends_at,
+                    buffer_minutes=buffer_minutes,
+                    require_schedule=require_schedule,
+                )
+            )
+            return staff
+        picked = await repo.pick_staff_for_range(
+            store_id,
+            candidates,
+            starts_at,
+            ends_at,
+            buffer_minutes=buffer_minutes,
+            require_schedule=require_schedule,
+        )
+        if picked is None:
+            raise AppException(
+                message="No hay profesionales disponibles para ese horario",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="NO_STAFF_AVAILABLE",
+            )
+        return picked
+
+    async def _commit_before_network(self) -> None:
+        """Commit PLANO antes de salir a la red (Redis) (F1-05, R8-05).
+
+        El commit de ``TenantSession`` reaplica el contexto y con eso abre
+        otra transaccion en el acto: la llamada de red corria con la conexion
+        ``idle in transaction``. Patron de AUD2-B2-08: commit de
+        ``AsyncSession`` (la conexion vuelve al pool), invalidacion, y recien
+        despues ``_apply_tenant_context``. Desde F2-02 el mail ya no sale del
+        request: va por el outbox.
+        """
+        await AsyncSession.commit(self.uow.session)
+
+    def _publish_client_mail(self, appointment: Appointment, event_type: str) -> None:
+        """Aviso al cliente por el outbox, en la transaccion del cambio (F2-02).
+
+        Antes el request mandaba SMTP despues del commit (hasta 10 s por
+        operacion). El lote del outbox relee el turno y manda tras su commit;
+        si este commit no ocurre, el aviso tampoco existe.
+        """
+        self.uow.outbox.publish(
+            store_id=appointment.store_id,
+            event_type=event_type,
+            payload={"appointment_id": appointment.id},
+        )
+
+    async def _lock_and_validate_slot(
+        self,
+        *,
+        store_id: str,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        duration_minutes: int,
+        exclude_appointment_id: str | None = None,
+    ) -> None:
+        """Lock del profesional, relectura de bloqueo y choque, y validacion.
+
+        Regla 4: el ``FOR UPDATE`` va ANTES de leer bloqueos y conflictos. Antes
+        los bloqueos se leian sin el lock: un bloqueo creado entre esa lectura
+        y el INSERT dejaba un turno adentro (2026-09-10; en la reprogramacion,
+        B1-05). Lo comparten ``book`` y ``reschedule``.
+        """
+        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
+        block, conflict = await self.uow.appointments.lock_and_read_range(
+            staff_id,
+            starts_at,
+            ends_at,
+            buffer_minutes=buffer_minutes,
+            exclude_appointment_id=exclude_appointment_id,
+        )
+        await self._validate_or_suggest(
+            store_id=store_id,
+            staff_id=staff_id,
+            requested_start=starts_at,
+            requested_end=ends_at,
+            conflict=conflict,
+            block=block,
+            duration_minutes=duration_minutes,
+            buffer_minutes=buffer_minutes,
+        )
 
     # ------------------------------------------------------------------
     # Cambios de estado
     # ------------------------------------------------------------------
 
     async def cancel(self, *, public_id: str, actor: User) -> Appointment:
-        """Cancela un turno verificando la transición de estado."""
+        """Cancela un turno verificando la transición de estado.
+
+        Decision de Mateo (2026-09-25, D2): el personal que puede cancelar
+        (admin, recepcion, profesional) cancela tambien un turno con cobro
+        vivo, sin depender de la liberacion del admin. La cancelacion hace lo
+        mismo que ``release_pending`` con el cobro, en ESTA transaccion: lo
+        vence por la entidad y publica ``payment.preference.expire`` (el link
+        de MP lo vence el outbox despues, sin lock: regla 5). Orden de locks
+        turno -> pago (regla 7). Un pago ya acreditado no se toca: el turno se
+        cancela como siempre y la devolucion la decide la tienda.
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -218,20 +382,35 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
-        reject_cancellation_while_awaiting_payment(appointment)
+        # Ya cancelado: 409, bajo el lock (dos a la vez no pasan las dos).
+        reject_already_cancelled(appointment)
 
         payload_before = {"status": appointment.status}
 
-        # El modelo valida internamente la transición (lanza excepción si inválida)
+        # El modelo valida internamente la transición (lanza excepción si
+        # inválida) ANTES de tocar el cobro: un turno terminal no vence nada.
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        payload_after: dict[str, JsonValue] = {"status": appointment.status}
+        payment = await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+        vencido = expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="staff_cancel",
+            released_by=actor.public_id,
+        )
+        if vencido is not None:
+            payload_after["expired_payment_id"] = vencido.id
 
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
-            payload_after={"status": appointment.status},
+            payload_after=payload_after,
         )
         self._publish_slot_released(appointment, reason="cancelled")
 
@@ -261,15 +440,16 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={"status": appointment.status},
         )
 
+        # Mail "turno confirmado": por el outbox (F2-02), best-effort; un SMTP
+        # caido no deshace la confirmacion.
+        self._publish_client_mail(appointment, EVENT_APPOINTMENT_CONFIRMED)
         await self.uow.commit()
-        # Mail "turno confirmado" DESPUES del commit y sin lock (regla 5);
-        # best-effort: un SMTP caido no deshace la confirmacion.
-        await self._notify_client_confirmation(appointment)
         return appointment
 
     def _publish_slot_released(self, appointment: Appointment, *, reason: str) -> None:
@@ -285,15 +465,6 @@ class AppointmentService:
                 ends_at=appointment.ends_at,
                 reason=reason,
             ),
-        )
-
-    async def _notify_client_confirmation(self, appointment: Appointment) -> None:
-        store = await self.uow.session.get(Store, appointment.store_id)
-        details = build_client_details(
-            appointment, appointment.service, appointment.staff, store
-        )
-        await enqueue_confirmation_email(
-            email=appointment.client_email, details=details
         )
 
     async def complete(self, *, public_id: str, actor: User) -> Appointment:
@@ -314,6 +485,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={
@@ -324,21 +496,11 @@ class AppointmentService:
             },
         )
 
+        # Mail "reserva tu proximo turno": por el outbox (F2-02), que respeta
+        # el interruptor de mails automaticos de la tienda.
+        self._publish_client_mail(appointment, EVENT_APPOINTMENT_COMPLETED)
         await self.uow.commit()
-        # Mail "reserva tu proximo turno" DESPUES del commit, best-effort: un
-        # SMTP caido no deshace el completado.
-        await self._notify_client_rebook(appointment)
         return appointment
-
-    async def _notify_client_rebook(self, appointment: Appointment) -> None:
-        store = await self.uow.session.get(Store, appointment.store_id)
-        # Mismo interruptor que los recordatorios: es un mail automatico mas.
-        if store is not None and not getattr(store, "send_email_reminders", True):
-            return
-        details = build_client_details(
-            appointment, appointment.service, appointment.staff, store
-        )
-        await enqueue_rebook_email(email=appointment.client_email, details=details)
 
     async def mark_absent(self, *, public_id: str, actor: User) -> Appointment:
         """
@@ -361,6 +523,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
             payload_after={"status": appointment.status},
@@ -372,61 +535,18 @@ class AppointmentService:
     async def release_pending(self, *, public_id: str, actor: User) -> Appointment:
         """Libera un turno pendiente y vence su pago en curso.
 
-        Cruza dos agregados (turno + pago) y toca el gateway de Mercado Pago;
-        por eso es un caso de uso de servicio y no del router. Un turno con pago
-        ya acreditado no se libera: primero hay que reembolsar.
-        """
-        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
-        appointment = await self.uow.appointments.get_by_public_id(
-            public_id, actor.store_id
-        )
-        if not appointment:
-            raise AppointmentNotFoundException(public_id)
-        if appointment.status not in {
-            AppointmentStatus.PENDING.value,
-            AppointmentStatus.PENDING_PAYMENT.value,
-        }:
-            raise AppException(
-                message="Solo se pueden liberar turnos pendientes",
-                http_status=HTTPStatus.CONFLICT,
-                error_code="APPOINTMENT_NOT_RELEASABLE",
-            )
+        Cruza dos agregados (turno + pago); por eso es un caso de uso de
+        servicio y no del router. Un turno con pago ya acreditado no se libera:
+        primero hay que reembolsar.
 
-        payment = await self.uow.payments.get_by_appointment_locked(
-            appointment.id, actor.store_id
-        )
-        if payment and (
-            payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
-        ):
-            raise AppException(
-                message="No se puede liberar un turno que ya tiene un pago acreditado",
-                http_status=HTTPStatus.CONFLICT,
-                error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
-            )
-        if payment and payment.status == PaymentStatus.PENDING.value:
-            if payment.preference_id:
-                try:
-                    await expire_mercadopago_preference(
-                        self.uow.session,
-                        store_id=actor.store_id,
-                        preference_id=payment.preference_id,
-                    )
-                except (RuntimeError, CircuitBreakerOpenError) as exc:
-                    raise AppException(
-                        message=(
-                            "No se libero el turno porque Mercado Pago no pudo "
-                            "vencer el enlace de pago"
-                        ),
-                        http_status=HTTPStatus.BAD_GATEWAY,
-                        error_code="PAYMENT_PREFERENCE_EXPIRATION_FAILED",
-                    ) from exc
-            payment.apply_status(
-                PaymentStatus.EXPIRED.value,
-                payload={
-                    "reason": "manual_store_release",
-                    "released_by": actor.public_id,
-                },
-            )
+        El link de Mercado Pago NO se vence aca (B1-04, regla 5): antes el PUT
+        a MP corria con el turno y el pago bajo ``FOR UPDATE`` y, con MP caido,
+        el turno no se liberaba (502 ``PAYMENT_PREFERENCE_EXPIRATION_FAILED``).
+        Ahora se publica ``payment.preference.expire`` en la misma transaccion
+        y el outbox lo vence despues, sin lock, con reintento.
+        """
+        appointment = await self._lock_releasable(public_id, actor)
+        payment = await self._expire_pending_payment(appointment, actor)
 
         previous_status = appointment.status
         appointment.apply_status_transition(AppointmentStatus.EXPIRED)
@@ -434,6 +554,7 @@ class AppointmentService:
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before={"status": previous_status},
             payload_after={
@@ -458,6 +579,47 @@ class AppointmentService:
         )
         return appointment
 
+    async def _lock_releasable(self, public_id: str, actor: User) -> Appointment:
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        appointment = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
+        if not appointment:
+            raise AppointmentNotFoundException(public_id)
+        if appointment.status not in {
+            AppointmentStatus.PENDING.value,
+            AppointmentStatus.PENDING_PAYMENT.value,
+        }:
+            raise AppException(
+                message="Solo se pueden liberar turnos pendientes",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="APPOINTMENT_NOT_RELEASABLE",
+            )
+        return appointment
+
+    async def _expire_pending_payment(
+        self, appointment: Appointment, actor: User
+    ) -> Payment | None:
+        """Vence el cobro pendiente bajo lock; el link de MP va por el outbox."""
+        payment = await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+        if payment and (
+            payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
+        ):
+            raise AppException(
+                message="No se puede liberar un turno que ya tiene un pago acreditado",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
+            )
+        expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="manual_store_release",
+            released_by=actor.public_id,
+        )
+        return payment
+
     async def update_staff_notes(
         self, *, public_id: str, notes_staff: str, actor: User
     ) -> Appointment:
@@ -471,16 +633,20 @@ class AppointmentService:
         if not appointment:
             raise AppointmentNotFoundException(public_id)
 
-        payload_before = {"notes_staff": appointment.notes_staff}
+        # La auditoria registra el hecho (quien, cuando, largo), nunca el
+        # texto: las notas pueden ser clinicas y audit_logs no se purga
+        # (L3-02, 2026-09-25). La migracion c7e9a1b3d5f7 recorto las viejas.
+        payload_before = staff_notes_audit_payload(appointment.notes_staff)
         appointment.notes_staff = notes_staff
 
         await self.uow.audit.log(
             action=AuditAction.UPDATE,
             resource_type="Appointment",
             resource_id=appointment.public_id,
+            store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
-            payload_after={"notes_staff": notes_staff},
+            payload_after=staff_notes_audit_payload(notes_staff),
         )
 
         await self.uow.commit()
@@ -498,126 +664,150 @@ class AppointmentService:
         Reprograma un turno: cancela el original y crea uno nuevo.
 
         Implementación:
-          1. Buscar y cancelar el turno original (auditoría incluida).
-          2. Verificar disponibilidad en la nueva fecha/hora.
-          3. Crear el nuevo turno con los mismos servicio/staff/cliente.
-          4. Todo en una única transacción atómica.
+          1. Lock y lectura del turno original y, despues, de su cobro
+             (orden turno -> pago, regla 7).
+          2. Lock del profesional y validación de la nueva fecha/hora.
+          3. Vencer el cobro vivo del original, cancelarlo y crear el nuevo,
+             con auditoría.
+          4. Todo en una única transacción atómica, con el aviso en el outbox;
+             invalidación después.
+
+        Cobro vivo (decision de Mateo 2026-09-25, misma regla que D2 para
+        cancelar): el link del panel de un turno confirmado se vence en esta
+        transaccion con ``expire_live_charge`` (el link de MP lo vence el
+        outbox, sin lock) en vez de dejarlo apuntando a un turno cancelado; el
+        turno nuevo nace sin cobro. Un ``pending_payment`` (sena REQUERIDA
+        pendiente) no se reprograma: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
+        bajo el lock del turno y antes de tocar nada (decision de Mateo
+        2026-09-25: opcion A).
+
+        El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
+        el schema AppointmentReschedule.
         """
-        # 1. Buscar turno original
+        original, payment = await self._lock_reschedulable(public_id, actor)
+        service, staff = await self._service_and_staff_of(original, actor)
+
+        ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
+        await self._lock_and_validate_slot(
+            store_id=original.store_id,
+            staff_id=original.staff_id,
+            starts_at=new_starts_at,
+            ends_at=ends_at,
+            duration_minutes=service.duration_minutes,
+            exclude_appointment_id=original.id,
+        )
+
+        new_appointment = await self._swap_for_new_slot(
+            original, payment, service, new_starts_at, ends_at, idempotency_key, actor
+        )
+        # El cliente tiene que enterarse del horario nuevo: la fila nueva nace
+        # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
+        # le corresponde y sin este mail no se enteraba por ningun canal. Va
+        # por el outbox, en esta transaccion (F2-02).
+        # Un horario que ya paso (la tienda corrige un walk-in, decision del
+        # dueno 2026-09-25) no lleva "tu turno cambio": el cliente ya estuvo.
+        if ensure_utc_aware(new_starts_at) >= now_utc():
+            self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
+        await self._commit_before_network()
+        try:
+            await invalidate_availability(
+                self.cache, original.store_id, original.starts_at, new_starts_at
+            )
+        finally:
+            await _apply_tenant_context(self.uow.session)
+        return new_appointment, service, staff
+
+    async def _lock_reschedulable(
+        self, public_id: str, actor: User
+    ) -> tuple[Appointment, Payment | None]:
+        """Turno a reprogramar, lockeado, activo, y su cobro lockeado despues.
+
+        Un turno terminal no se reprograma: volvia a la vida (revision de
+        perf/f4-pay, 2026-09-25). El cobro se lockea pegado al turno (regla 7)
+        y antes que el profesional; se vence recien en el swap, con el
+        horario ya validado.
+        """
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
         original = await self.uow.appointments.get_by_public_id(
             public_id, actor.store_id
         )
         if not original:
             raise AppointmentNotFoundException(public_id)
-        # Reprogramar cancela el turno original: le corresponde el mismo guard
-        # que a cancel(). Sin esto la preferencia de pago quedaba viva.
-        reject_cancellation_while_awaiting_payment(original)
+        reject_inactive(original)
+        # Antes de lockear el cobro y de cualquier mutacion, evento o
+        # invalidacion (decision de Mateo 2026-09-25: opcion A).
+        reject_reschedule_with_pending_deposit(original)
+        payment = await self.uow.payments.get_by_appointment_locked(
+            original.id, actor.store_id
+        )
+        return original, payment
 
-        # Guardar IDs antes de cancelar
-        store_id = original.store_id
-        staff_id = original.staff_id
-        service_id = original.service_id
-        client_id = original.client_id
-        orig_notes = original.notes
-        orig_intake_answers = original.intake_answers or {}
-        # El precio quedo congelado en la reserva original: reprogramar cambia
-        # el horario, no re-tarifa al precio de lista de hoy.
-        orig_price_amount = original.price_amount
-        # El contacto es el DEL CLIENTE, no el de quien reprograma: se copiaba
-        # el del administrador y a partir de ahi la confirmacion, el
-        # recordatorio y el boton de WhatsApp apuntaban a la tienda misma.
-        orig_client_name = original.client_name
-        orig_client_email = original.client_email
-        orig_client_phone = original.client_phone
-
-        # 2. Resolver servicio para calcular duración
+    async def _service_and_staff_of(
+        self, original: Appointment, actor: User
+    ) -> tuple[Service, Staff]:
+        """Servicio y profesional del turno, acotados a la tienda (404 si no)."""
         service = await self.uow.appointments.get_service_by_id(
-            service_id, actor.store_id
+            original.service_id, actor.store_id
         )
         if not service:
-            raise ResourceNotFoundException("Servicio", str(service_id))
-
-        staff = await self.uow.appointments.get_staff_by_id(staff_id, actor.store_id)
+            raise ResourceNotFoundException("Servicio", str(original.service_id))
+        staff = await self.uow.appointments.get_staff_by_id(
+            original.staff_id, actor.store_id
+        )
         if not staff:
-            raise ResourceNotFoundException("Profesional", str(staff_id))
+            raise ResourceNotFoundException("Profesional", str(original.staff_id))
+        return service, staff
 
-        ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
-
-        # El dueno reprograma sin la antelacion minima; el "no pasado" lo
-        # valida el schema AppointmentReschedule.
-
-        # 3. Verificar bloqueos de agenda en la nueva fecha
-        block = await self.uow.appointments.get_overlapping_block(
-            staff_id, new_starts_at, ends_at
+    async def _swap_for_new_slot(
+        self,
+        original: Appointment,
+        payment: Payment | None,
+        service: Service,
+        new_starts_at: datetime,
+        ends_at: datetime,
+        idempotency_key: str,
+        actor: User,
+    ) -> Appointment:
+        """Vence el cobro vivo del original, lo cancela y agrega el nuevo, con
+        auditoria. Sin commit."""
+        # El turno nuevo se arma ANTES de cancelar: copia del original el
+        # contacto DEL CLIENTE (no el de quien reprograma: se copiaba el del
+        # administrador y la confirmacion, el recordatorio y el WhatsApp
+        # apuntaban a la tienda misma) y el precio congelado (reprogramar
+        # cambia el horario, no re-tarifa al precio de lista de hoy).
+        # El estado se lee ANTES de cancelar el original: la copia lo conserva
+        # y ``apply_status_transition`` ya lo habria pisado.
+        estado_previo = original.status
+        new_appointment = _rescheduled_copy(
+            original, service, new_starts_at, ends_at, idempotency_key, estado_previo
         )
-
-        # 4. Bloqueo pesimista + verificar conflictos (excluyendo el turno original)
-        await self.uow.appointments.lock_staff_row(staff_id)
-
-        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
-        conflict = await self.uow.appointments.get_conflicting_appointment(
-            staff_id,
-            new_starts_at,
-            ends_at,
-            exclude_appointment_id=original.id,
-            buffer_minutes=buffer_minutes,
-        )
-
-        # Delegar validación al Domain Service (DDD + UX Feedback)
-        await self._validate_or_suggest(
-            staff_id=staff_id,
-            requested_start=new_starts_at,
-            requested_end=ends_at,
-            conflict=conflict,
-            block=block,
-            duration_minutes=service.duration_minutes,
-            buffer_minutes=buffer_minutes,
-        )
-
-        # 5. Cancelar original (con timestamp y auditoría)
         original.apply_status_transition(AppointmentStatus.CANCELLED)
+        vencido = expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="staff_reschedule",
+            released_by=actor.public_id,
+        )
         self._publish_slot_released(original, reason="rescheduled")
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
             resource_type="Appointment",
             resource_id=original.public_id,
+            store_id=original.store_id,
             actor=actor,
             payload_before={"status": "prev"},
             payload_after={
                 "status": AppointmentStatus.CANCELLED.value,
                 "reason": f"Reprogramado a {new_starts_at.isoformat()}",
+                **({"expired_payment_id": vencido.id} if vencido is not None else {}),
             },
         )
-
-        # 6. Crear nuevo turno
-        new_appointment = Appointment(
-            id=str(ulid.ULID()),
-            store_id=store_id,
-            staff_id=staff_id,
-            service_id=service_id,
-            client_id=client_id,
-            starts_at=new_starts_at,
-            ends_at=ends_at,
-            duration_minutes=service.duration_minutes,
-            price_amount=(
-                orig_price_amount
-                if orig_price_amount is not None
-                else Decimal(str(service.price or 0))
-            ),
-            client_name=orig_client_name,
-            client_email=orig_client_email,
-            client_phone=orig_client_phone,
-            notes=orig_notes,
-            intake_answers=orig_intake_answers,
-            idempotency_key=idempotency_key,
-        )
         self.uow.appointments.add(new_appointment)
-
         await self.uow.audit.log(
             action=AuditAction.CREATE,
             resource_type="Appointment",
             resource_id=new_appointment.public_id,
+            store_id=new_appointment.store_id,
             actor=actor,
             payload_after={
                 "status": new_appointment.status,
@@ -625,26 +815,12 @@ class AppointmentService:
                 "rescheduled_from": original.public_id,
             },
         )
-
-        await self.uow.commit()
-
-        await invalidate_availability(
-            self.cache, store_id, original.starts_at, new_starts_at
-        )
-        # El cliente tiene que enterarse del horario nuevo: la fila nueva nace
-        # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
-        # le corresponde y sin este mail no se enteraba por ningun canal.
-        store = await self.uow.session.get(Store, store_id)
-        await enqueue_reschedule_email(
-            email=new_appointment.client_email,
-            details=build_client_details(new_appointment, service, staff, store),
-        )
-
-        return new_appointment, service, staff
+        return new_appointment
 
     async def _validate_or_suggest(
         self,
         *,
+        store_id: str,
         staff_id: str,
         requested_start: datetime,
         requested_end: datetime,
@@ -671,7 +847,7 @@ class AppointmentService:
                 assert block is not None
                 search_start = block.ends_at
             suggestion = await self._find_suggestion(
-                staff_id, search_start, duration_minutes, buffer_minutes
+                store_id, staff_id, search_start, duration_minutes, buffer_minutes
             )
             if isinstance(e, AppointmentConflictException):
                 assert conflict is not None
@@ -690,6 +866,7 @@ class AppointmentService:
 
     async def _find_suggestion(
         self,
+        store_id: str,
         staff_id: str,
         start_from: datetime,
         duration_mins: int,
@@ -701,36 +878,251 @@ class AppointmentService:
 
         Respeta el mismo ``buffer_minutes`` que la validación de conflictos, para
         no sugerir un horario que después el alta rechazaría.
-        """
-        from datetime import timedelta
 
-        current = start_from
-        max_search = start_from + timedelta(hours=6)
+        Bloqueos y turnos de toda la ventana se traen en UNA consulta cada uno
+        y se recorren en memoria (regla 12, B1-15): antes eran dos consultas
+        por intento, hasta 48, con el lock del profesional tomado. Mismo
+        criterio que antes: primero bloqueos, despues choques ensanchados por
+        el buffer, en orden de inicio.
+        """
+        duration = timedelta(minutes=duration_mins)
+        buffer = timedelta(minutes=buffer_minutes)
+        current = ensure_utc_aware(start_from)
+        max_search = current + timedelta(hours=6)
+
+        # La ventana cubre todo intento posible: [current, max_search + duracion),
+        # y para los turnos ensanchada por el buffer a cada lado.
+        blocks = [
+            (ensure_utc_aware(block.starts_at), ensure_utc_aware(block.ends_at))
+            for block in await self.uow.appointments.list_active_blocks_in_window(
+                staff_id, current, max_search + duration, store_id=store_id
+            )
+        ]
+        booked = [
+            (ensure_utc_aware(appt.starts_at), ensure_utc_aware(appt.ends_at))
+            for appt in await self.uow.appointments.list_active_appointments_in_window(
+                staff_id,
+                current - buffer,
+                max_search + duration + buffer,
+                store_id=store_id,
+            )
+        ]
 
         while current < max_search:
-            end = current + timedelta(minutes=duration_mins)
+            end = current + duration
 
             # 1. Verificar bloqueos
-            block = await self.uow.appointments.get_overlapping_block(
-                staff_id, current, end
+            block_end = next(
+                (
+                    b_end
+                    for b_start, b_end in blocks
+                    if b_start < end and b_end > current
+                ),
+                None,
             )
-            if block:
-                current = block.ends_at
+            if block_end is not None:
+                current = block_end
                 continue
 
             # 2. Verificar conflictos
-            conflict = await self.uow.appointments.get_conflicting_appointment(
-                staff_id, current, end, buffer_minutes=buffer_minutes
+            conflict_end = next(
+                (
+                    a_end
+                    for a_start, a_end in booked
+                    if a_start < end + buffer and a_end > current - buffer
+                ),
+                None,
             )
-            if conflict:
+            if conflict_end is not None:
                 # Saltar hasta despues del turno MAS el buffer: si solo saltaramos
                 # a ends_at, con buffer > 0 el mismo turno seguiria en conflicto
                 # (se extiende 'buffer' mas alla) y current no avanzaria -> loop
                 # infinito.
-                current = conflict.ends_at + timedelta(minutes=buffer_minutes)
+                current = conflict_end + buffer
                 continue
 
             # Si llegamos aquí, el hueco está libre
             return current
 
         return None
+
+
+def _self_booking(
+    data: AppointmentBookPayload,
+    store_id: str,
+    service: Service,
+    staff: Staff,
+    actor: User,
+    ends_at: datetime,
+) -> Appointment:
+    """Turno del panel a nombre del propio actor (client_id=actor.id).
+
+    Es un auto-booking, no un alta para un tercero. Cargar un walk-in (un
+    cliente distinto al staff logueado) es responsabilidad del alta publica
+    (``PublicBookingService.book``), que acepta client_name/phone/email y es
+    lo que usa el boton "Nuevo turno" del panel admin.
+    """
+    return Appointment(
+        id=str(ulid.ULID()),
+        store_id=store_id,
+        staff_id=staff.id,
+        service_id=service.id,
+        client_id=actor.id,
+        starts_at=data["starts_at"],
+        ends_at=ends_at,
+        duration_minutes=service.duration_minutes,
+        # Congelamos el precio de lista del momento: el reporte de ingresos y
+        # el cobro manual usan este valor, no el precio actual del servicio.
+        price_amount=Decimal(str(service.price or 0)),
+        client_name=(
+            f"{actor.first_name or ''} {actor.last_name or ''}".strip() or actor.email
+        ),
+        client_email=actor.email,
+        client_phone=actor.phone,
+        notes=data.get("notes"),
+        intake_answers=data.get("intake_answers") or {},
+        idempotency_key=data.get("idempotency_key"),
+    )
+
+
+def staff_notes_audit_payload(notes_staff: str | None) -> dict[str, JsonValue]:
+    """Lo que la auditoria guarda de ``notes_staff``: que cambio y su largo."""
+    return {"notes_staff_changed": True, "notes_staff_length": len(notes_staff or "")}
+
+
+def _requested_staff(
+    qualified: list[Staff], staff_public_id: str | None
+) -> list[Staff]:
+    """Candidatos del alta: el elegido (422 si no hace el servicio o no es de
+    la tienda) o todos los que lo hacen."""
+    if not staff_public_id:
+        return qualified
+    elegido = [m for m in qualified if m.public_id == staff_public_id]
+    if not elegido:
+        raise ValidationException("El profesional no realiza el servicio seleccionado")
+    return elegido
+
+
+def _client_booking_audit(
+    appointment: Appointment, service: Service, staff: Staff, *, outside_schedule: bool
+) -> dict[str, JsonValue]:
+    """Lo que la auditoria guarda del alta del panel para un cliente."""
+    return {
+        "status": appointment.status,
+        "starts_at": appointment.starts_at.isoformat(),
+        "ends_at": appointment.ends_at.isoformat(),
+        "service_id": service.public_id,
+        "staff_id": staff.public_id,
+        "source": "panel_for_client",
+        "outside_schedule": outside_schedule,
+    }
+
+
+def _raise_for_rejection(rejection: RangeRejection | None) -> None:
+    """Mismos codigos que la reprogramacion del cliente (``_check_new_slot``)."""
+    if rejection is RangeRejection.OUT_OF_SCHEDULE:
+        raise AppException(
+            message="El profesional no atiende en ese horario",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="OUT_OF_SCHEDULE",
+        )
+    if rejection is RangeRejection.BLOCKED:
+        raise AppException(
+            message="Ese horario esta bloqueado en la agenda",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="SCHEDULE_BLOCKED",
+        )
+    if rejection is RangeRejection.TAKEN:
+        raise AppointmentConflictException()
+
+
+def _client_booking(
+    data: ClientBookingPayload,
+    store_id: str,
+    service: Service,
+    staff: Staff,
+    client: User,
+    starts_at: datetime,
+    ends_at: datetime,
+) -> Appointment:
+    """Turno del panel para un cliente (FF-04): confirmado, sin retencion."""
+    email = data.get("client_email")
+    return Appointment(
+        id=str(ulid.ULID()),
+        store_id=store_id,
+        staff_id=staff.id,
+        service_id=service.id,
+        client_id=client.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        duration_minutes=service.duration_minutes,
+        # Precio de lista congelado, como el resto de las altas del panel.
+        price_amount=Decimal(str(service.price or 0)),
+        # Snapshot de ESTA reserva (mismo criterio que el portal): el nombre de
+        # la ficha, y el email que dejaron ahora sin pisar el de la ficha.
+        client_name=client.full_name or data["client_name"],
+        client_email=normalize_email(email) if email else client.email,
+        client_phone=client.phone,
+        notes=data.get("notes"),
+        intake_answers={},
+        idempotency_key=data["idempotency_key"],
+        # Sin sena: nace confirmado y sin ``expires_at`` (no hay retencion que
+        # vencer; el job de expiracion no lo toca).
+        status=AppointmentStatus.CONFIRMED.value,
+        expires_at=None,
+        # El personal no es el cliente dando su consentimiento: el alta del
+        # panel no pide ``accepts_terms`` y no inventa uno (PV-09 es del portal).
+        terms_accepted_at=None,
+    )
+
+
+def _rescheduled_copy(
+    original: Appointment,
+    service: Service,
+    new_starts_at: datetime,
+    ends_at: datetime,
+    idempotency_key: str,
+    estado_previo: str,
+) -> Appointment:
+    # Mismo criterio que el portal (``public_api.service._rescheduled_copy``,
+    # AUD2-B1-14; al panel en AUD2-POST-05, 2026-09-23): el turno movido
+    # conserva el estado del original. Antes nacia con el default de la
+    # columna y un confirmado volvia a "pendiente de confirmar" sin aviso. A
+    # esta altura el cobro vivo del original (un link del panel) ya se vencio
+    # (``_swap_for_new_slot``) y el nuevo nace sin cobro: un ``confirmed``
+    # sigue confirmado sin retencion y un ``pending`` sigue ``pending``. Un
+    # ``pending_payment`` no llega aca: su sena requerida no se pierde, se
+    # rechaza antes con 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
+    # (``reject_reschedule_with_pending_deposit``, decision de Mateo
+    # 2026-09-25: opcion A). Si el original tenia retencion, el nuevo NO la
+    # conserva: nace con ``expires_at = new_starts_at`` (vence al inicio si
+    # nadie lo confirma); el alta del panel no retiene y moverlo tampoco.
+    confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
+    retenido = not confirmado and original.expires_at is not None
+    return Appointment(
+        status=(
+            AppointmentStatus.CONFIRMED.value
+            if confirmado
+            else AppointmentStatus.PENDING.value
+        ),
+        expires_at=new_starts_at if retenido else None,
+        id=str(ulid.ULID()),
+        store_id=original.store_id,
+        staff_id=original.staff_id,
+        service_id=original.service_id,
+        client_id=original.client_id,
+        starts_at=new_starts_at,
+        ends_at=ends_at,
+        duration_minutes=service.duration_minutes,
+        price_amount=(
+            original.price_amount
+            if original.price_amount is not None
+            else Decimal(str(service.price or 0))
+        ),
+        client_name=original.client_name,
+        client_email=original.client_email,
+        client_phone=original.client_phone,
+        notes=original.notes,
+        intake_answers=original.intake_answers or {},
+        idempotency_key=idempotency_key,
+    )

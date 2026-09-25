@@ -1,0 +1,16 @@
+# Dispara shifty-backup.service todos los dias.
+# Instalar: docs/BACKUP_RESTORE_RUNBOOK.md ("Backup diario en el host").
+[Unit]
+Description=Shifty: backup diario a las 03:00 de Argentina
+
+[Timer]
+# 03:00 America/Argentina/Buenos_Aires = 06:00 UTC. Argentina no tiene
+# horario de verano hoy; si volviera, este horario se corre una hora (el
+# backup sigue saliendo una vez por dia, que es lo que importa para el RPO).
+OnCalendar=*-*-* 06:00:00 UTC
+# Si el host estaba apagado a esa hora, corre al arrancar.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

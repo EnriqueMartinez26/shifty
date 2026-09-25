@@ -1,6 +1,9 @@
 from collections.abc import Mapping
+from datetime import date
 import re
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import AfterValidator
 
 PUBLIC_ID_PATTERN = r"^[A-Za-z0-9_-]{1,64}$"
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$"
@@ -58,6 +61,52 @@ def reject_control_chars(value: str | None) -> str | None:
         if (ord(char) < 32 and char not in "\t\n\r") or char in _FORBIDDEN_UNICODE:
             raise ValueError("El texto contiene caracteres de control no permitidos")
     return value
+
+
+def _has_next_day(value: date) -> date:
+    """Un dia de consulta se corta en ``local_day_start(dia + 1)``: el ultimo
+    dia representable (9999-12-31) no tiene siguiente y desbordaba (500)."""
+    if value >= date.max:
+        raise ValueError("La fecha esta fuera de rango")
+    return value
+
+
+# Dia local de un filtro (agenda, busqueda, reportes): 422 si no tiene dia
+# siguiente (revision de perf/f4-back, 2026-09-24).
+LocalDay = Annotated[date, AfterValidator(_has_next_day)]
+
+
+def _has_both_neighbors(value: date) -> date:
+    """La grilla de disponibilidad mira tambien el dia anterior y el
+    siguiente (turnos que cruzan la medianoche): el primer y el ultimo dia
+    representables desbordaban (500)."""
+    if value <= date.min or value >= date.max:
+        raise ValueError("La fecha esta fuera de rango")
+    return value
+
+
+# Dia de la grilla de disponibilidad del panel.
+GridDay = Annotated[date, AfterValidator(_has_both_neighbors)]
+
+
+_PHONE_SEPARATORS = re.compile(r"[\s\-\(\)\+]")
+
+
+def normalize_client_phone(value: str) -> str:
+    """Telefono del cliente como lo guarda ``users.phone``: solo digitos.
+
+    Es la identidad del cliente en la tienda (``uq_users_client_phone_per_store``):
+    el portal y el alta del panel (FF-04) normalizan igual o el mismo cliente
+    quedaria con dos fichas.
+    """
+    cleaned = _PHONE_SEPARATORS.sub("", value)
+    if not cleaned.isdigit():
+        raise ValueError(
+            "El telefono solo puede contener digitos, espacios o los caracteres: + - ( )"
+        )
+    if len(cleaned) < 6:
+        raise ValueError("El telefono debe tener al menos 6 digitos")
+    return cleaned
 
 
 def reject_payload_control_chars(value: Any) -> Any:

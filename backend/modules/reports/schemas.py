@@ -1,17 +1,12 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from core.validation import SAFE_FILENAME_PREFIX_PATTERN
+from core.validation import SAFE_FILENAME_PREFIX_PATTERN, LocalDay
 
 
 ExportFormat = Literal["csv", "excel", "pdf"]
-
-
-class ReportQueryParams(BaseModel):
-    from_date: date | None = None
-    to_date: date | None = None
 
 
 class ReportSummaryStats(BaseModel):
@@ -22,6 +17,17 @@ class ReportSummaryStats(BaseModel):
     confirmed_appointments: int
     total_revenue: float
     average_ticket: float
+    # B5-10: parte de total_revenue que es sena retenida de turnos que NO se
+    # prestaron —cancelado, ausente o vencido— (plata acreditada, no
+    # reembolsada; AUD2-B5-06). No es ingreso por servicio: ese es
+    # total_revenue - retained_deposit_revenue. Aditivo, con default para no
+    # romper a quien arma el DTO sin el.
+    retained_deposit_revenue: float = 0.0
+    # AUD2-B5-14: sin estos dos, los contadores por estado no sumaban el total
+    # y no habia fila "otros" que explicara la diferencia. Aditivos, con
+    # default por la misma razon que el campo de arriba.
+    absent_appointments: int = 0
+    expired_appointments: int = 0
 
 
 class ReportClientStats(BaseModel):
@@ -80,6 +86,9 @@ class ReportSummaryResponse(BaseModel):
     top_clients: list[ReportTopClientItem] = Field(default_factory=list)
     debt_summary: ReportDebtSummary
     appointments: list[ReportAppointmentItem]
+    # AUD2-B5-01: ``appointments`` es una pagina; esto dice si quedan mas
+    # (y con ``stats.total_appointments``, cuantas en total). Aditivo.
+    has_more: bool = False
 
 
 class ProfessionalReportItem(BaseModel):
@@ -119,11 +128,28 @@ class ReportTrendResponse(BaseModel):
 
 class ReportExportRequest(BaseModel):
     format: ExportFormat
-    from_date: date | None = None
-    to_date: date | None = None
+    from_date: LocalDay | None = None
+    to_date: LocalDay | None = None
     filename_prefix: str = Field(
         default="reporte-turnos",
         min_length=3,
         max_length=50,
         pattern=SAFE_FILENAME_PREFIX_PATTERN,
     )
+
+
+class AuditLogItem(BaseModel):
+    """Una entrada de la auditoria de turnos y bloqueos de la tienda (B5-12).
+
+    Sin ``context`` ni ids internos del actor: lo que ya ve un admin en el
+    panel (quien, que turno, que cambio).
+    """
+
+    id: str
+    created_at: datetime
+    actor_email: str | None
+    resource_type: str
+    resource_id: str
+    action: str
+    payload_before: dict[str, Any] | list[Any] | str | int | float | bool | None
+    payload_after: dict[str, Any] | list[Any] | str | int | float | bool | None

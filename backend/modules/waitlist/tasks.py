@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from celery.exceptions import SoftTimeLimitExceeded
 from core.celery_app import celery_app
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
 from core.worker_loop import run_in_worker_loop
-from modules.notifications.tasks import enqueue_waitlist_offer_email
+from modules.notifications.tasks import send_waitlist_offer_email, smtp_session
 from modules.waitlist.offers import expire_lapsed_offers
 
 
@@ -25,17 +26,23 @@ async def process_waitlist_offers_once(
             await db.commit()
         finally:
             set_tenant_context(None, False)
-    # Los mails salen con la transaccion ya cerrada (regla 5).
-    for pendiente in resultado.pending_emails:
-        await enqueue_waitlist_offer_email(
-            email=pendiente.email, details=pendiente.details
-        )
+    # Los mails salen con la transaccion ya cerrada (regla 5) y con UNA sola
+    # conexion SMTP para todo el lote (AUD2-B4-02, 2026-09-20): antes cada
+    # oferta pagaba conexion + STARTTLS + LOGIN contra el time limit de Celery.
+    if resultado.pending_emails:
+        async with smtp_session() as smtp:
+            for pendiente in resultado.pending_emails:
+                await send_waitlist_offer_email(
+                    email=pendiente.email, details=pendiente.details, smtp=smtp
+                )
     return resultado.counters()
 
 
 def process_waitlist_offers(self: Any) -> dict[str, int]:
     try:
         return run_in_worker_loop(process_waitlist_offers_once())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 

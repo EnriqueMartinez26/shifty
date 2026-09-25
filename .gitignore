@@ -45,6 +45,16 @@ Thumbs.db
 # Artefactos de Playwright MCP
 .playwright-mcp/
 
+# Dumps y evidencias del drill de backup (docs/BACKUP_RESTORE_RUNBOOK.md y
+# .github/workflows/monthly-backup-drill.yml escriben aca). Un .dump trae datos
+# de clientes, hashes y tokens cifrados: en el historial no se borra con un
+# commit, y gitleaks no lo detecta porque es un binario de pg_dump.
+backups/
+*.dump
+*.dump.sha256
 # Indice local de CodeGraph: 32 MB por checkout y no es reutilizable
 # entre clones ni worktrees (sus bytes dependen del arbol indexado).
 .codegraph/
+# Restos de `make makemigrations` anterior a 2026-09-24 (copiaba por un
+# directorio temporal que una corrida fallida podia dejar en el arbol).
+.makemigrations-tmp/

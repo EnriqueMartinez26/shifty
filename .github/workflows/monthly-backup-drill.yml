@@ -1,5 +1,17 @@
 name: Monthly Backup Restore Drill
 
+# Restaura el ultimo backup en una base APARTE y la consulta
+# (backend/scripts/backup_restore_drill.py). docs/BACKUP_RESTORE_RUNBOOK.md.
+#
+# Con `ports: !reset []` la base de produccion no se publica: un runner de
+# GitHub (ubuntu-latest) no la alcanza. El drill corre en un runner
+# self-hosted en el VPS o contra staging: fijar la variable del repo
+# BACKUP_DRILL_RUNNER con la etiqueta del runner (`self-hosted`).
+#
+# Hasta 2026-09-24 fallo tres veces sin decir por que: los secretos estaban
+# vacios y el error aparecia recien en pg_dump. Ahora el primer paso los
+# verifica y falla con un mensaje claro.
+
 on:
   schedule:
     - cron: "0 5 1 * *"
@@ -7,37 +19,52 @@ on:
 
 jobs:
   drill:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.BACKUP_DRILL_RUNNER || 'ubuntu-latest' }}
     defaults:
       run:
         working-directory: backend
     steps:
+      - name: Verificar secretos del drill
+        working-directory: .
+        env:
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          DRILL_DATABASE_URL: ${{ secrets.DRILL_DATABASE_URL }}
+          APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
+        run: |
+          faltan=""
+          [ -n "$BACKUP_DATABASE_URL" ] || faltan="$faltan BACKUP_DATABASE_URL"
+          [ -n "$DRILL_DATABASE_URL" ] || faltan="$faltan DRILL_DATABASE_URL"
+          [ -n "$APP_DB_PASSWORD" ] || faltan="$faltan APP_DB_PASSWORD"
+          if [ -n "$faltan" ]; then
+            echo "::error title=Drill de backup sin configurar::Faltan los secretos del repo:$faltan. BACKUP_DATABASE_URL = rol DUENO de la base de origen (nunca el rol de la app, con RLS); DRILL_DATABASE_URL = una base APARTE donde restaurar; APP_DB_PASSWORD = contrasena con la que el drill crea shifty_app en el destino si falta (restore_backup.py --create-app-role). Ver docs/BACKUP_RESTORE_RUNBOOK.md."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v7.0.0
 
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: "3.14.6"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: "0.11.29"
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
 
       - name: Install dependencies
         run: uv sync --frozen
 
       - name: Run backup/restore drill
         env:
-          DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
+          # Rol dueno: backup_db.py rechaza DATABASE_URL (rol de la app, RLS).
+          BACKUP_DATABASE_URL: ${{ secrets.BACKUP_DATABASE_URL }}
           DRILL_DATABASE_URL: ${{ secrets.DRILL_DATABASE_URL }}
+          # Los roles no viajan en el dump (drill 2026-09-24): sin shifty_app
+          # en el destino pg_restore aborta en el primer GRANT. El drill lo
+          # crea si falta; restore_backup.py nunca imprime la contrasena.
+          APP_DB_PASSWORD: ${{ secrets.APP_DB_PASSWORD }}
         run: |
           uv run python scripts/backup_restore_drill.py \
             --backup-dir ../backups \
             --evidence-dir ../backups/evidence \
             --run-backup \
-            --run-restore
+            --run-restore \
+            --create-app-role
 
       - name: Upload drill evidence
         if: always()

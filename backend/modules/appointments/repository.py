@@ -10,11 +10,16 @@ El commit siempre lo realiza la capa de Servicios.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import TypeAlias
+from typing import Any, NamedTuple, TypeAlias
 
-from sqlalchemy import and_, or_, select, func, update
+from sqlalchemy import Select, and_, or_, select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from core.database import _apply_tenant_context
+from core.keyset import before_key
+from core.utils import local_to_utc
+from infrastructure.persistence.models.appointment import MAX_APPOINTMENT_SPAN
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.appointments.schemas import AppointmentFilterParams
@@ -24,7 +29,84 @@ from modules.stores.model import Store
 from modules.users.model import User
 
 AppointmentAgendaRow: TypeAlias = tuple[Appointment, Service, Staff, User]
+# Fila de la busqueda: del profesional solo ``id`` y ``display_name`` (F3-06),
+# para no disparar las relaciones de ``Staff`` en cada pagina.
+AppointmentSearchRow: TypeAlias = tuple[Appointment, Service, str, str, User]
+
+
+class SearchPage(NamedTuple):
+    """Una pagina de la busqueda: total (``None`` si no se pidio), filas y si
+    hay otra despues de la ultima."""
+
+    total: int | None
+    rows: list[AppointmentSearchRow]
+    has_more: bool
+
+
 AppointmentReminderRow: TypeAlias = tuple[Appointment, Service, Staff, User, Store]
+
+
+# Columnas de reclamo de recordatorio que acepta ``get_upcoming_for_reminders``:
+# ``getattr`` sobre el modelo con un nombre de afuera no puede quedar abierto.
+REMINDER_COLUMNS = frozenset({"reminder_24h_sent_at", "reminder_2h_sent_at"})
+
+
+def appointment_overlap(
+    store_id: str, starts_at: datetime, ends_at: datetime
+) -> ColumnElement[bool]:
+    """Turno de la tienda que solapa ``[starts_at, ends_at)``, con las dos cotas.
+
+    F1-13 (R7-02, 2026-09-24): ``starts_at < fin AND ends_at > inicio`` solo
+    acota por ARRIBA sobre un indice que empieza por ``starts_at``, y la
+    consulta recorria toda la historia del profesional, tambien bajo el
+    ``FOR UPDATE`` del alta. La cota inferior sale del tope de duracion que
+    garantiza la base (``MAX_APPOINTMENT_SPAN``, ``ck_appointments_max_span``):
+    un turno que termina despues de ``inicio`` empezo despues de
+    ``inicio - MAX_APPOINTMENT_SPAN``. ``store_id`` es lo que deja usar los
+    indices compuestos bajo RLS (el predicado de la politica nunca es
+    condicion de indice; el GiST tampoco sirve: ``&&`` no es leakproof).
+
+    No filtra estado ni profesional: eso lo agrega cada consulta. Quien
+    necesita el buffer ensancha el rango antes de llamar.
+    """
+    return and_(
+        Appointment.store_id == store_id,
+        Appointment.starts_at < ends_at,
+        Appointment.ends_at > starts_at,
+        Appointment.starts_at > starts_at - MAX_APPOINTMENT_SPAN,
+    )
+
+
+def active_block_overlap(
+    store_id: str, starts_at: datetime, ends_at: datetime
+) -> ColumnElement[bool]:
+    """Bloqueo activo de la tienda que solapa ``[starts_at, ends_at)``.
+
+    Un bloqueo puede durar hasta 366 dias (``MAX_BLOCK_DURATION``), asi que la
+    cota inferior no sale de un tope: es ``end_time > inicio``, condicion del
+    indice ``ix_appointment_blocks_store_staff_end`` (store_id, staff_id,
+    end_time), que deja afuera todo bloqueo ya terminado (F1-13).
+    """
+    return and_(
+        block_overlap(store_id, starts_at, ends_at),
+        StaffBlock.is_active.is_(True),
+    )
+
+
+def block_overlap(
+    store_id: str, starts_at: datetime, ends_at: datetime
+) -> ColumnElement[bool]:
+    """Bloqueo de la tienda, activo o no, que solapa ``[starts_at, ends_at)``.
+
+    Las mismas cotas que ``active_block_overlap`` (tienda y ``end_time >
+    inicio``) sin filtrar el estado: el listado de la agenda (F4-07) puede
+    pedir tambien los desactivados.
+    """
+    return and_(
+        StaffBlock.store_id == store_id,
+        StaffBlock.starts_at < ends_at,
+        StaffBlock.ends_at > starts_at,
+    )
 
 
 class AppointmentRepository:
@@ -100,9 +182,16 @@ class AppointmentRepository:
         Se toma por separado y antes de ``get_by_public_id`` porque ese metodo
         usa ``joinedload``, que arma OUTER JOINs, y Postgres rechaza FOR UPDATE
         sobre el lado nullable de un outer join.
+
+        Filtra por tienda igual que ``get_by_public_id`` (AUD2-B1-09): el
+        ``store_id`` estaba en la firma y no se usaba. Con RLS la fila ajena no
+        es visible y no habia fuga, pero §2 pide las DOS capas, y en SQLite
+        -donde corre toda la suite de integracion- no hay RLS que respalde.
         """
         await self.db.execute(
-            select(Appointment.id).where(Appointment.id == public_id).with_for_update()
+            select(Appointment.id)
+            .where(Appointment.id == public_id, Appointment.store_id == store_id)
+            .with_for_update()
         )
 
     def add(self, appointment: Appointment) -> None:
@@ -116,14 +205,89 @@ class AppointmentRepository:
     # Verificaciones de concurrencia y conflictos
     # ------------------------------------------------------------------
 
-    async def lock_staff_row(self, staff_id: str) -> None:
+    async def lock_staff_row(self, staff_id: str) -> str | None:
         """
         Bloqueo pesimista (SELECT … FOR UPDATE) sobre la fila del staff.
         Previene overbooking en escenarios de alta concurrencia.
         Siempre se llama dentro de una transacción abierta (por get_db).
+
+        Devuelve la tienda del profesional (``None`` si no lo ve): las lecturas
+        bajo el lock filtran por ella para llegar a los indices (F1-13).
         """
+        res = await self.db.execute(
+            select(Staff.store_id).where(Staff.id == staff_id).with_for_update()
+        )
+        return res.scalar_one_or_none()
+
+    async def lock_and_read_range(
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        buffer_minutes: int,
+        exclude_appointment_id: str | None = None,
+    ) -> tuple[StaffBlock | None, Appointment | None]:
+        """Choca este rango con la agenda del profesional? Unica respuesta (S-07).
+
+        Toma el ``FOR UPDATE`` del profesional y, BAJO el lock (regla 4), lee
+        el primer bloqueo activo que solapa y el primer turno activo que choca
+        (ensanchado por ``buffer_minutes`` a cada lado, sin contar
+        ``exclude_appointment_id``: el turno que se esta moviendo). Devuelve
+        los dos; que hacer con ellos (sugerencia, codigo de error) es de cada
+        llamador. La usan el panel (``AppointmentService``) y el portal
+        (``PublicRepository``), que antes tenian cada uno su copia.
+        """
+        store_id = await self.lock_staff_row(staff_id)
+        if store_id is None:
+            # Profesional invisible (otra tienda bajo RLS): no hay agenda que
+            # leer. Es lo mismo que devolvian las lecturas antes de F1-13.
+            return None, None
+        block = await self.get_overlapping_block(
+            staff_id, starts_at, ends_at, store_id=store_id
+        )
+        conflict = await self.get_conflicting_appointment(
+            staff_id,
+            starts_at,
+            ends_at,
+            store_id=store_id,
+            exclude_appointment_id=exclude_appointment_id,
+            buffer_minutes=buffer_minutes,
+        )
+        return block, conflict
+
+    async def lock_staff_rows(self, staff_ids: list[str]) -> None:
+        """``FOR UPDATE`` sobre varios profesionales, en orden total por id.
+
+        Una sola sentencia ``... WHERE id IN (...) ORDER BY id FOR UPDATE``:
+        Postgres toma los locks en el orden de salida, asi que dos
+        transacciones que lockean conjuntos solapados nunca se esperan en
+        ciclo (S-11). Lockearlos de a uno en el orden de otra consulta (sin
+        ``ORDER BY``) permitia el deadlock entre dos altas de bloqueos.
+
+        Orden de locks vigente y riesgo residual (S-18, documentado; no se
+        reordena):
+
+        - Alta de bloqueos: profesionales (aca, por id) -> turnos del rango
+          (``list_active_overlapping(lock=True)``).
+        - Reprogramar (panel y cliente): turno original -> profesional. No se
+          invierte porque el estado del turno se valida bajo su lock antes de
+          tocar la agenda; cambiarlo cambia el orden de validacion.
+        - Alta publica: un profesional por vez en orden de desempate; solo
+          toma un segundo si el primero falla la relectura bajo lock.
+
+        Si una reprogramacion de un turno que cae en el rango se cruza con un
+        alta de bloqueos, o el segundo lock del alta publica con un cierre de
+        tienda, Postgres detecta el ciclo y aborta una transaccion (40P01):
+        el handler de ``main.py`` responde 409 neutro y el cliente reintenta.
+        """
+        if not staff_ids:
+            return
         await self.db.execute(
-            select(Staff).where(Staff.id == staff_id).with_for_update()
+            select(Staff.id)
+            .where(Staff.id.in_(staff_ids))
+            .order_by(Staff.id)
+            .with_for_update()
         )
 
     async def get_conflicting_appointment(
@@ -131,6 +295,8 @@ class AppointmentRepository:
         staff_id: str,
         starts_at: datetime,
         ends_at: datetime,
+        *,
+        store_id: str,
         exclude_appointment_id: str | None = None,
         buffer_minutes: int = 0,
     ) -> Appointment | None:
@@ -142,29 +308,23 @@ class AppointmentRepository:
         preparación): se ensancha la ventana del turno nuevo ese tanto a cada
         lado, de modo que quede al menos ``buffer`` de separación con cualquier
         turno vecino.
+
+        Sin ``joinedload(service)``: los llamadores solo leen ``starts_at`` y
+        ``ends_at`` del choque (S-07; el eager load armaba un JOIN inutil).
         """
-        from sqlalchemy.orm import joinedload
-
-        # Filtro base: mismo staff y no cancelado
-        conditions = [
-            Appointment.staff_id == staff_id,
-            Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
-        ]
-
         # Fórmula de solapamiento (Sentinel 2.2), ensanchada por el buffer:
         # existente.starts_at < nuevo.ends_at + buffer
         # existente.ends_at   > nuevo.starts_at - buffer
-        # Usamos la columna ends_at almacenada directamente — no hace falta JOIN con Service.
+        # con la tienda y la cota inferior de appointment_overlap (F1-13).
         buffer = timedelta(minutes=buffer_minutes)
-        overlap_condition = and_(
-            Appointment.starts_at < ends_at + buffer,
-            Appointment.ends_at > starts_at - buffer,
-        )
-        conditions.append(overlap_condition)
+        conditions = [
+            Appointment.staff_id == staff_id,
+            Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+            appointment_overlap(store_id, starts_at - buffer, ends_at + buffer),
+        ]
 
         query = (
             select(Appointment)
-            .options(joinedload(Appointment.service))
             .where(and_(*conditions))
             .order_by(Appointment.starts_at.asc())
             .limit(1)
@@ -201,6 +361,14 @@ class AppointmentRepository:
                 for starts_at, ends_at in ranges
             ]
         )
+        # El OR de rangos queda como filtro; el sobre de todos los rangos es la
+        # condicion de indice, con las dos cotas de appointment_overlap (F1-13):
+        # un alta de bloqueos recurrentes no recorre la historia del profesional.
+        envolvente = appointment_overlap(
+            store_id,
+            min(inicio for inicio, _ in ranges),
+            max(fin for _, fin in ranges),
+        )
         stmt = (
             select(Appointment)
             .options(
@@ -209,7 +377,7 @@ class AppointmentRepository:
                 joinedload(Appointment.client),
             )
             .where(
-                Appointment.store_id == store_id,
+                envolvente,
                 Appointment.staff_id.in_(staff_ids),
                 Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
                 overlaps,
@@ -222,31 +390,120 @@ class AppointmentRepository:
         return list(res.scalars().unique().all())
 
     async def get_overlapping_block(
-        self, staff_id: str, starts_at: datetime, ends_at: datetime
+        self,
+        staff_id: str,
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        store_id: str,
     ) -> StaffBlock | None:
-        """Retorna el primer StaffBlock que solape con el rango dado."""
+        """Retorna el primer StaffBlock que solape con el rango dado.
+
+        ``limit(1)`` porque puede haber mas de uno (dos bloqueos solapados del
+        mismo profesional): sin el, ``scalar_one_or_none`` levantaba
+        ``MultipleResultsFound`` y la reserva salia 500 (B1-02).
+
+        ``store_id`` es obligatorio: en los consumidores que corren con bypass
+        de RLS (el outbox de la lista de espera) es la unica capa de
+        aislamiento (§2, AUD2-POST-03), y en todos es el camino al indice
+        (F1-13).
+        """
         res = await self.db.execute(
-            select(StaffBlock).where(
-                and_(
-                    StaffBlock.staff_id == staff_id,
-                    StaffBlock.is_active.is_(True),
-                    StaffBlock.starts_at < ends_at,
-                    StaffBlock.ends_at > starts_at,
-                )
+            select(StaffBlock)
+            .where(
+                StaffBlock.staff_id == staff_id,
+                active_block_overlap(store_id, starts_at, ends_at),
             )
+            .limit(1)
         )
         return res.scalar_one_or_none()
+
+    async def list_store_blocks(
+        self,
+        store_id: str,
+        *,
+        window: tuple[datetime, datetime] | None,
+        include_inactive: bool,
+    ) -> list[StaffBlock]:
+        """Bloqueos de la tienda para la agenda (``GET /appointment-blocks/``).
+
+        ``window``: solo los que solapan ``[inicio, fin)`` (F4-07), por el
+        indice de ``end_time``; ``None`` es toda la historia, como antes de
+        F4-07. ``StaffBlock`` no tiene relaciones: nada que cargar aparte.
+        """
+        query = select(StaffBlock).where(StaffBlock.store_id == store_id)
+        if window is not None:
+            query = query.where(block_overlap(store_id, *window))
+        if not include_inactive:
+            query = query.where(StaffBlock.is_active.is_(True))
+        res = await self.db.execute(query.order_by(StaffBlock.start_time.asc()))
+        return list(res.scalars().all())
+
+    async def list_active_blocks_in_window(
+        self,
+        staff_id: str,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        store_id: str,
+    ) -> list[StaffBlock]:
+        """Bloqueos activos del profesional que solapan la ventana, por inicio.
+
+        Una sola consulta para que ``_find_suggestion`` recorra en memoria en
+        vez de preguntar por cada hueco (regla 12, B1-15).
+        """
+        res = await self.db.execute(
+            select(StaffBlock)
+            .where(
+                StaffBlock.staff_id == staff_id,
+                active_block_overlap(store_id, window_start, window_end),
+            )
+            .order_by(StaffBlock.starts_at.asc())
+        )
+        return list(res.scalars().all())
+
+    async def list_active_appointments_in_window(
+        self,
+        staff_id: str,
+        window_start: datetime,
+        window_end: datetime,
+        *,
+        store_id: str,
+    ) -> list[Appointment]:
+        """Turnos activos del profesional que solapan la ventana, por inicio.
+
+        Mismo filtro de estados que ``get_conflicting_appointment`` (B1-15).
+        """
+        res = await self.db.execute(
+            select(Appointment)
+            .where(
+                Appointment.staff_id == staff_id,
+                Appointment.status.in_(list(ACTIVE_APPOINTMENT_STATUSES)),
+                appointment_overlap(store_id, window_start, window_end),
+            )
+            .order_by(Appointment.starts_at.asc())
+        )
+        return list(res.scalars().all())
 
     # ------------------------------------------------------------------
     # Listados
     # ------------------------------------------------------------------
 
-    async def get_by_date(self, target_date: date) -> list[AppointmentAgendaRow]:
-        """Lista turnos de una fecha para la agenda diaria."""
-        from datetime import timezone
+    async def get_by_date(
+        self, target_date: date, store_id: str
+    ) -> list[AppointmentAgendaRow]:
+        """Lista turnos de una fecha para la agenda diaria.
 
-        day_start = datetime.combine(target_date, time.min).replace(tzinfo=timezone.utc)
-        day_end = day_start + timedelta(days=1)
+        La fecha es un dia calendario argentino, no una ventana UTC (regla
+        24): cortar en UTC mandaba los turnos de 21:00 a 23:59 locales a la
+        agenda del dia siguiente (B1-08). Mismo criterio que availability.
+
+        ``store_id`` es obligatorio (B1-09): RLS es la garantia y este filtro
+        la defensa en profundidad (CLAUDE.md §2); sin el, un contexto de
+        tenant sin aplicar devolvia la agenda de todas las tiendas.
+        """
+        day_start = local_to_utc(target_date, time.min)
+        day_end = local_to_utc(target_date + timedelta(days=1), time.min)
 
         result = await self.db.execute(
             select(Appointment, Service, Staff, User)
@@ -254,6 +511,7 @@ class AppointmentRepository:
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
             .where(
+                Appointment.store_id == store_id,
                 Appointment.starts_at >= day_start,
                 Appointment.starts_at < day_end,
             )
@@ -265,90 +523,201 @@ class AppointmentRepository:
     # Búsqueda avanzada con filtros dinámicos
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _search_conditions(
+        filters: AppointmentFilterParams, store_id: str
+    ) -> list[ColumnElement[bool]]:
+        """Filtros de la busqueda que leen solo columnas de ``appointments``."""
+        conditions: list[ColumnElement[bool]] = [Appointment.store_id == store_id]
+        if filters.staff_id:
+            # ``Staff.id`` es la FK del turno: no hace falta el join.
+            conditions.append(Appointment.staff_id == filters.staff_id)
+        if filters.statuses:
+            conditions.append(Appointment.status.in_(filters.statuses))
+        # Rango de fechas en dias calendario argentinos (regla 24), como la
+        # agenda diaria; antes cortaba en UTC y ademas con datetimes naive.
+        if filters.from_date:
+            conditions.append(
+                Appointment.starts_at >= local_to_utc(filters.from_date, time.min)
+            )
+        if filters.to_date:
+            conditions.append(
+                Appointment.starts_at
+                < local_to_utc(filters.to_date + timedelta(days=1), time.min)
+            )
+        return conditions
+
+    @staticmethod
+    def _client_name_condition(
+        filters: AppointmentFilterParams,
+    ) -> ColumnElement[bool] | None:
+        if not filters.client_name:
+            return None
+        term = f"%{filters.client_name.strip()}%"
+        return or_(
+            User.first_name.ilike(term),
+            User.last_name.ilike(term),
+            User.email.ilike(term),
+        )
+
+    @staticmethod
+    def _search_base(
+        columns: list[Any],
+        conditions: list[ColumnElement[bool]],
+        by_client: ColumnElement[bool] | None,
+        service_public_id: str | None,
+        store_id: str,
+    ) -> Select[Any]:
+        """Filas de la busqueda leyendo solo ``appointments`` (y lo que filtra).
+
+        Base del total y de las claves de la pagina (F3-06/F3-08): los joins
+        entran solo si filtran, ``services`` para ``service_id`` (se filtra
+        por su ``public_id``) y ``users`` para ``client_name``.
+
+        Pertenencia UNICA para el total y la pagina: el turno tiene un cliente
+        que es usuario de ESTA tienda. Sin filtro de nombre es un ``EXISTS``
+        por la PK de ``users`` (semi-join barato, sin traer columnas); con
+        filtro, el join lleva el mismo ``users.store_id``. Antes el total
+        exigia solo ``client_id IS NOT NULL`` y la pagina hacia inner join a
+        ``users`` (acotado por tienda bajo RLS): un cliente de otra tienda
+        contaba en el total y no aparecia en ninguna pagina, y ``total`` y
+        ``next_cursor`` podian contradecir a la pagina.
+        """
+        query = select(*columns).select_from(Appointment)
+        if service_public_id:
+            query = query.join(Service, Appointment.service_id == Service.id).where(
+                Service.public_id == service_public_id
+            )
+        if by_client is not None:
+            query = query.join(
+                User,
+                and_(Appointment.client_id == User.id, User.store_id == store_id),
+            ).where(by_client)
+        else:
+            query = query.where(
+                select(User.id)
+                .where(User.id == Appointment.client_id, User.store_id == store_id)
+                .exists()
+            )
+        return query.where(*conditions)
+
     async def search_appointments(
         self,
         filters: AppointmentFilterParams,
         store_id: str,
-    ) -> tuple[int, list[AppointmentAgendaRow]]:
+        *,
+        include_total: bool = True,
+        after: tuple[datetime, str] | None = None,
+    ) -> SearchPage:
         """
         Búsqueda avanzada con filtros dinámicos y paginación.
         Solo construye la query; no interpreta resultados.
 
         ``store_id`` es obligatorio: sin el, la busqueda devolvia turnos de
         todas las tiendas de la instalacion.
+
+        - Total (F3-06, R2-05): ``count(appointments.id)`` sobre la base
+          angosta; antes era ``count(*)`` sobre la consulta de la pagina
+          entera con sus cuatro entidades. ``include_total=False`` no cuenta
+          (``None``): el panel lo pide solo en la primera pagina.
+        - Pagina: primero las claves de la pagina sobre la base angosta
+          (indice ``(store_id, starts_at)``), despues las entidades de ESAS
+          filas. Con los joins en la misma consulta, bajo RLS el planner
+          subestima las filas y ordena todo el historial del profesional.
+        - ``after`` (F3-08, R7-11): la clave ``(starts_at, id)`` de la ultima
+          fila vista; la pagina arranca justo despues, sin ``OFFSET`` (que lee
+          y descarta todo lo saltado). Se pide una fila de mas para saber si
+          hay pagina siguiente sin otra consulta.
+
+        Orden ``(starts_at, id)`` descendente: el ``id`` desempata turnos a la
+        misma hora para que las paginas no repitan ni salteen filas.
         """
-        base = (
-            select(Appointment, Service, Staff, User)
+        conditions = self._search_conditions(filters, store_id)
+        by_client = self._client_name_condition(filters)
+        base: dict[str, Any] = {
+            "conditions": conditions,
+            "by_client": by_client,
+            "service_public_id": filters.service_id,
+            "store_id": store_id,
+        }
+        total = None
+        if include_total:
+            conteo = self._search_base([func.count(Appointment.id)], **base)
+            total = int((await self.db.execute(conteo)).scalar_one())
+
+        claves = self._search_base([Appointment.id], **base).order_by(
+            Appointment.starts_at.desc(), Appointment.id.desc()
+        )
+        if after is not None:
+            claves = claves.where(
+                before_key(Appointment.starts_at, Appointment.id, *after)
+            )
+        else:
+            claves = claves.offset((filters.page - 1) * filters.page_size)
+        pagina = claves.limit(filters.page_size + 1).subquery("pagina")
+        result = await self.db.execute(
+            select(Appointment, Service, Staff.id, Staff.display_name, User)
+            .join(pagina, Appointment.id == pagina.c.id)
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
             .join(User, Appointment.client_id == User.id)
+            .where(Appointment.store_id == store_id)
+            .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
         )
-
-        conditions = [Appointment.store_id == store_id]
-
-        if filters.client_name:
-            term = f"%{filters.client_name.strip()}%"
-            conditions.append(
-                or_(
-                    User.first_name.ilike(term),
-                    User.last_name.ilike(term),
-                    User.email.ilike(term),
-                )
-            )
-
-        if filters.staff_id:
-            conditions.append(Staff.id == filters.staff_id)
-
-        if filters.service_id:
-            conditions.append(Service.public_id == filters.service_id)
-
-        if filters.statuses:
-            conditions.append(Appointment.status.in_(filters.statuses))
-
-        if filters.from_date:
-            conditions.append(
-                Appointment.starts_at >= datetime.combine(filters.from_date, time.min)
-            )
-
-        if filters.to_date:
-            conditions.append(
-                Appointment.starts_at
-                < datetime.combine(filters.to_date + timedelta(days=1), time.min)
-            )
-
-        if conditions:
-            base = base.where(and_(*conditions))
-
-        # COUNT total
-        count_result = await self.db.execute(
-            select(func.count()).select_from(base.subquery())
+        rows: list[AppointmentSearchRow] = [
+            (appointment, service, staff_id, staff_name, client)
+            for appointment, service, staff_id, staff_name, client in result.all()
+        ]
+        return SearchPage(
+            total=total,
+            rows=rows[: filters.page_size],
+            has_more=len(rows) > filters.page_size,
         )
-        total = count_result.scalar_one()
-
-        # Paginación
-        offset = (filters.page - 1) * filters.page_size
-        data_query = (
-            base.order_by(Appointment.starts_at.desc())
-            .offset(offset)
-            .limit(filters.page_size)
-        )
-
-        result = await self.db.execute(data_query)
-        rows = [(row[0], row[1], row[2], row[3]) for row in result.all()]
-        return total, rows
 
     # ------------------------------------------------------------------
     # Consulta para recordatorios automáticos (Celery Beat)
     # ------------------------------------------------------------------
 
     async def get_upcoming_for_reminders(
-        self, starts_after: datetime, starts_before: datetime
+        self,
+        starts_after: datetime,
+        starts_before: datetime,
+        *,
+        pending_column: str,
+        limit: int | None = None,
     ) -> list[AppointmentReminderRow]:
         """
         Devuelve turnos CONFIRMED o PENDING en el rango horario indicado a los
-        que todavia les falta algun recordatorio (24h o 2h).
+        que todavia les falta el recordatorio de ``pending_column``.
+
+        ``pending_column`` es obligatoria (v-diff de AUD2-B4-04, 2026-09-20):
+        la consulta filtraba ``24h IS NULL OR 2h IS NULL``, asi que la ventana
+        de la etapa de 24 h traia tambien los turnos que YA la habian
+        recibido (a todos les falta la de 2 h), ordenados primero por
+        ``starts_at``; con mas de ``limit`` turnos en las proximas 21 h los
+        candidatos frescos quedaban al final y el tope los cortaba. Cada
+        etapa pide SU columna y el tope corta sobre filas que hay que mandar.
+
+        ``limit`` acota el lote por corrida (B4-02, 2026-09-17): el orden por
+        ``starts_at`` hace que los mas proximos salgan primero y el resto
+        espere al tick siguiente.
+
+        ``FOR UPDATE OF appointments SKIP LOCKED`` (S-06, 2026-09-18, regla
+        8): una corrida solapada saltea los turnos que otra tiene tomados en
+        vez de recorrerlos o esperarlos. Se bloquea solo la fila del turno,
+        no la tienda ni el cliente del JOIN. El lock dura hasta el primer
+        commit de la sesion (``claim_reminder`` commitea por turno y etapa):
+        la exclusion entre workers sigue siendo el reclamo ``UPDATE ... WHERE
+        col IS NULL``; SKIP LOCKED achica el solapamiento, no lo reemplaza.
+
+        Reaplica el contexto de tienda antes de leer: el reclamo anterior del
+        lote dejo la sesion SIN transaccion (``claim_reminder``, F1-22).
         """
-        result = await self.db.execute(
+        if pending_column not in REMINDER_COLUMNS:
+            raise ValueError(f"columna de recordatorio desconocida: {pending_column}")
+        await _apply_tenant_context(self.db)
+        pendiente = getattr(Appointment, pending_column).is_(None)
+        query = (
             select(Appointment, Service, Staff, User, Store)
             .join(Service, Appointment.service_id == Service.id)
             .join(Staff, Appointment.staff_id == Staff.id)
@@ -364,13 +733,14 @@ class AppointmentRepository:
                         AppointmentStatus.CONFIRMED.value,
                     ]
                 ),
-                or_(
-                    Appointment.reminder_24h_sent_at.is_(None),
-                    Appointment.reminder_2h_sent_at.is_(None),
-                ),
+                pendiente,
             )
             .order_by(Appointment.starts_at.asc())
+            .with_for_update(of=Appointment, skip_locked=True)
         )
+        if limit is not None:
+            query = query.limit(limit)
+        result = await self.db.execute(query)
         return [(row[0], row[1], row[2], row[3], row[4]) for row in result.all()]
 
     async def claim_reminder(
@@ -381,7 +751,15 @@ class AppointmentRepository:
         ``UPDATE ... WHERE col IS NULL`` es atomico: con varios workers solo
         uno ve rowcount 1. Commitea por su cuenta (operacion tecnica atomica)
         para que el reclamo sea visible antes de mandar el mail.
+
+        F1-22 (R3-05, 2026-09-24): el commit es el PLANO de ``AsyncSession``,
+        no el de ``TenantSession``, que reaplica el contexto y con eso abre
+        otra transaccion en el acto: la conexion quedaba "idle in transaction"
+        durante todo el envio SMTP que viene despues (patron S-02 de
+        ``payments/jobs.py``). La sesion sale de aca sin transaccion; el
+        contexto se reaplica al entrar a la sentencia siguiente del lote.
         """
+        await _apply_tenant_context(self.db)
         col = getattr(Appointment, column)
         result = await self.db.execute(
             update(Appointment)
@@ -389,15 +767,20 @@ class AppointmentRepository:
             .values({column: sent_at})
             .execution_options(synchronize_session=False)
         )
-        await self.db.commit()
+        await AsyncSession.commit(self.db)
         return int(getattr(result, "rowcount", 0) or 0) == 1
 
     async def release_reminder(self, appointment_id: str, column: str) -> None:
-        """Deshace el reclamo cuando el envio fallo, para reintentar despues."""
+        """Deshace el reclamo cuando el envio fallo, para reintentar despues.
+
+        Mismo commit plano que ``claim_reminder`` (F1-22): entra reaplicando el
+        contexto y sale sin transaccion abierta.
+        """
+        await _apply_tenant_context(self.db)
         await self.db.execute(
             update(Appointment)
             .where(Appointment.id == appointment_id)
             .values({column: None})
             .execution_options(synchronize_session=False)
         )
-        await self.db.commit()
+        await AsyncSession.commit(self.db)

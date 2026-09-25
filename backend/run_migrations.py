@@ -10,8 +10,6 @@ psycopg2 en Windows con codificación regional española.
 
 import sys
 import os
-from urllib.parse import parse_qs, unquote, urlparse
-from typing import Any
 
 backend_dir = os.path.dirname(__file__)
 if sys.path and os.path.abspath(sys.path[0]) == os.path.abspath(backend_dir):
@@ -27,20 +25,9 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(backend_dir, "..", ".env"))
 
-
-def parse_db_url(url: str) -> dict[str, Any]:
-    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
-    if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
-        raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
-    query = parse_qs(parsed.query)
-    return {
-        "user": unquote(parsed.username or ""),
-        "password": unquote(parsed.password or ""),
-        "host": parsed.hostname,
-        "port": int(parsed.port or 5432),
-        "dbname": parsed.path.lstrip("/"),
-        "sslmode": query.get("sslmode", ["require"])[0],
-    }
+# Unica lectura de la URL del repo (B7-11): lee `ssl`, acepta `sslmode` y
+# usa `require` cuando falta. Los errores no llevan credenciales.
+from core.config import parse_db_url
 
 
 def main() -> None:

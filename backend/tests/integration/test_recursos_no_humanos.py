@@ -8,6 +8,8 @@ lock, exclusion, bloqueos) que ya estaba indexada por staff_id.
 
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
@@ -21,6 +23,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
     register_and_login,
 )
+from tests.integration.test_mails_al_cliente import usar_cola_de_reservas
 
 
 async def _usuarios(session: AsyncSession) -> int:
@@ -76,15 +79,17 @@ async def test_una_persona_sigue_exigiendo_nombre_y_email(client: AsyncClient) -
 
 @pytest.mark.asyncio
 async def test_se_reserva_una_cancha_por_el_flujo_publico_y_el_mail_dice_en(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     enviados: list[tuple[str, str, str]] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append((to, subject, body))
         return True
 
     monkeypatch.setattr(tasks, "_send_email", buzon)
+    # F2-01: el mail de la reserva lo manda el worker.
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
     store, token = await register_and_login(
         client, slug="padel", email="padel@example.com"
     )
@@ -114,10 +119,12 @@ async def test_se_reserva_una_cancha_por_el_flujo_publico_y_el_mail_dice_en(
             "client_name": "Lucas",
             "client_email": "lucas@example.com",
             "client_phone": "+5491155550088",
+            "accepts_terms": True,
             "idempotency_key": "padel-cancha-000001",
         },
     )
     assert reserva.status_code == 201, reserva.text
+    await cola.entregar()
     registrada = next(e for e in enviados if e[1].startswith("Reserva registrada"))
     assert "en Cancha 1" in registrada[2]
     assert "con Cancha 1" not in registrada[2]
@@ -132,6 +139,7 @@ async def test_se_reserva_una_cancha_por_el_flujo_publico_y_el_mail_dice_en(
             "starts_at": slot.isoformat(),
             "client_name": "Otro",
             "client_phone": "+5491155550089",
+            "accepts_terms": True,
             "idempotency_key": "padel-cancha-000002",
         },
     )

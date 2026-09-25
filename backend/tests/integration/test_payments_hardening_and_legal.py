@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.payments.jobs import (
@@ -150,7 +151,7 @@ def _approved_remote_payment(payment: Payment) -> dict[str, Any]:
     return {
         "id": "mp-remote-1",
         "status": "approved",
-        "external_reference": payment.appointment_id,
+        "external_reference": payment.current_external_reference,
         "preference_id": payment.preference_id,
         "transaction_amount": float(payment.amount),
         "currency_id": payment.currency,
@@ -162,6 +163,8 @@ async def test_reconciliation_recovers_a_payment_whose_webhook_never_arrived(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Si la notificacion nunca llego, el cobro se recupera preguntandole a Mercado Pago."""
+    # F1-20: sin edad minima, el cobro recien creado ya es conciliable.
+    monkeypatch.setattr(settings, "RECONCILIATION_MIN_AGE_MINUTES", 0)
     _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
         client, slug="tienda-concilia-job", email="concilia-job@test.com"
@@ -376,6 +379,7 @@ async def test_required_deposit_blocks_manual_when_store_disallows_coordination(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente Evasor",
             "client_phone": "+5491155522222",
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "blocked-manual-booking-001",
         },
@@ -658,13 +662,16 @@ async def test_deposit_policy_cannot_be_cleared_while_payments_are_active(
 
 
 @pytest.mark.asyncio
-async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
+async def test_reschedule_of_an_appointment_awaiting_payment_is_refused(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Reprogramar cancela el turno original: no puede saltear el guard de pago.
+    """Un turno con sena requerida pendiente no se reprograma desde el panel.
 
-    Sin este guard, el turno viejo quedaba cancelado pero la preferencia de
-    Mercado Pago seguia viva y el cliente podia pagar un turno inexistente.
+    Decision de Mateo 2026-09-25: opcion A. 409
+    ``DEPOSIT_PENDING_RESCHEDULE_DENIED`` sin tocar el turno ni el cobro: la
+    sena no se pierde (la reprogramacion interina lo pasaba a ``pending`` sin
+    cobro). Lo que importaba antes sigue: ningun turno cancelado queda con la
+    preferencia de Mercado Pago viva, porque el original ni se cancela.
     """
     _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
@@ -687,7 +694,7 @@ async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
     if new_slot.tzinfo is None:
         new_slot = new_slot.replace(tzinfo=timezone.utc)
 
-    blocked = await client.patch(
+    moved = await client.patch(
         f"/appointments/{appointment_id}/reschedule",
         headers=auth_headers(token),
         json={
@@ -695,13 +702,17 @@ async def test_reschedule_cannot_cancel_an_appointment_awaiting_payment(
             "idempotency_key": "reschedule-guard-attempt-001",
         },
     )
-    assert blocked.status_code == 409, blocked.text
-    assert "PAYMENT_APPOINTMENT_REQUIRES_RELEASE" in blocked.text
+    assert moved.status_code == 409, moved.text
+    assert moved.json()["error_code"] == "DEPOSIT_PENDING_RESCHEDULE_DENIED"
 
     await test_session.refresh(appointment)
-    assert appointment.status == AppointmentStatus.PENDING_PAYMENT.value, (
-        "el turno original no debe quedar cancelado"
-    )
+    assert appointment.status == AppointmentStatus.PENDING_PAYMENT.value
+    payment = (
+        await test_session.execute(
+            select(Payment).where(Payment.appointment_id == appointment_id)
+        )
+    ).scalar_one()
+    assert payment.status == PaymentStatus.PENDING.value
 
 
 @pytest.mark.asyncio
@@ -714,7 +725,7 @@ async def test_el_dueno_recibe_la_notificacion_tambien_por_mail(
     enviados: list[dict[str, str | None]] = []
 
     async def fake_send(
-        *, email: str, title: str, body: str | None = None
+        *, email: str, title: str, body: str | None = None, smtp: Any = None
     ) -> dict[str, str]:
         enviados.append({"email": email, "title": title, "body": body})
         return {"status": "sent"}

@@ -14,10 +14,6 @@ class BaseEntity(Base):
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(ulid.ULID())
     )
-    # Note: public_id was dropped in the database for some tables.
-    # For legacy compatibility, we might need to keep it in models that still have it.
-    # But it's better to remove it from BaseEntity if it's no longer global.
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

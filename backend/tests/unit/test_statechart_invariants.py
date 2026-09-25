@@ -124,13 +124,24 @@ def test_reembolso_sobre_turno_esperando_pago_lo_cancela() -> None:
 
 
 def test_el_conjunto_de_estados_terminales_es_el_documentado() -> None:
-    """Contrato cruzado con el frontend.
+    """Congela los estados terminales del backend contra una lista escrita a mano.
 
-    ``BookingStatus.isFinalized()`` en frontend/src/domain/value-objects/
-    replica esta lista. No hay forma de verificar la equivalencia entre
-    lenguajes en tiempo de compilacion, asi que este test la congela: si alguien
-    agrega un estado absorbente al backend, CI falla aca y el mensaje indica
-    que hay que actualizar el frontend.
+    Compara los estados sin salida de ``ALLOWED_STATUS_TRANSITIONS`` con la
+    constante ``TERMINAL_APPOINTMENT`` de este archivo. Si el grafo de Python
+    gana o pierde un estado absorbente, CI falla aca y el mensaje recuerda
+    actualizar ``TERMINAL_STATUSES`` en
+    ``frontend/src/domain/value-objects/BookingStatus.ts`` (la usa
+    ``BookingStatus.isFinalized()``).
+
+    Lo que NO verifica (F8-03/F8-04, 2026-09-18):
+    - No lee el archivo del front: un cambio solo en ``TERMINAL_STATUSES``
+      pasa los dos CI. La equivalencia se sostiene en un solo sentido.
+    - Solo congela el subconjunto terminal, no el conjunto completo de estados;
+      un estado no terminal nuevo pasa este test aunque
+      ``BookingStatus.create()`` del front lo rechace.
+    - No compara contra el trigger de Postgres: eso lo hace
+      ``tests/unit/test_trigger_matches_python_graph.py``, que lee el SQL de
+      ``alembic/versions/b2c3d4e5f6a7_statechart_hardening.py`` (regla 2).
     """
     terminales = {
         origen

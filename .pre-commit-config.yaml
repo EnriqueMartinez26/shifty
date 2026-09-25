@@ -1,3 +1,30 @@
+# Compuerta de pre-commit del repo. HOY NO ESTA ACTIVA (C-22, 2026-09-19).
+#
+# Como se activa, por clon:
+#
+#     uv run pre-commit install
+#
+# Antes de activarla hay dos cosas que resolver:
+#
+# 1. Alinear el toolchain de Node. `.githooks/verify-toolchain` (el primer
+#    hook de abajo) acepta solo el conjunto soportado: Node 24.18.0 o 26.5.0
+#    (npm 11.16.0 u 11.17.0), que es lo que usan CI y el carril de compat.
+#    Una maquina con otra version -- 24.16.0, por ejemplo -- queda afuera y,
+#    con la compuerta activa, TODOS los commits quedan bloqueados. Ademas
+#    `npm ci` necesita `--engine-strict=false` en esa situacion.
+# 2. Elegir UNA compuerta. `.githooks/pre-commit` hace lo mismo que este
+#    archivo pero se activa con `git config core.hooksPath .githooks`, y eso
+#    deja de mirar `.git/hooks/`, que es justamente donde escribe
+#    `pre-commit install`: activar una desactiva la otra. Mientras no se
+#    elija, las dos conviven sin correr.
+#
+# Tiempos medidos en el backend (2026-09-19) para que la compuerta no sea
+# insoportable: mypy tarda 32 s la primera vez y 1,8 s con cache, asi que
+# queda adentro; ruff es inmediato.
+#
+# Lo que corre aca es lo mismo que el gate de CLAUDE.md §6: ruff format
+# --check, ruff check y mypy en el backend, y los cuatro pasos de
+# `npm run check` en el front.
 minimum_pre_commit_version: "4.6.0"
 
 repos:

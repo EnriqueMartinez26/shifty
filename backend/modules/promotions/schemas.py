@@ -5,6 +5,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from core.validation import reject_control_chars
+
 # Techos de los enteros expuestos por la API.
 #
 # Las columnas son INTEGER de PostgreSQL: cualquier valor por encima de 2^31-1
@@ -14,6 +16,10 @@ MAX_HORAS_ANIO = 8760  # un anio
 MAX_MINUTOS_DIA = 1440  # un dia
 MAX_ELEMENTOS_PLAN = 10_000
 MAX_USOS_CUPON = 1_000_000
+# Techo del dinero alineado con services.price, payments/schemas.py y
+# ledger/schemas.py (le=10_000_000): regla 9 pide ge Y le. Hoy el mismo numero
+# esta copiado en cuatro archivos; es candidato a constante compartida.
+MAX_MONTO = 10_000_000
 
 
 PROMOTION_CODE_PATTERN = r"^[A-Za-z0-9_-]{3,30}$"
@@ -31,6 +37,11 @@ def _require_aware(value: datetime | None) -> datetime | None:
     guardaba como si fuera UTC y la promo vencia tres horas antes de lo que el
     dueno habia tipeado (2026-09-20). Suponer una zona aca solo mueve la
     adivinanza de lugar; el front ahora manda siempre el instante en UTC.
+
+    Con offset se lleva a UTC (F11b-02, 2026-09-18): la columna es timestamptz
+    y el service compara contra now(UTC); un naive mezclado con un aware
+    levantaba TypeError (500, no 422) en el ``valid_from >= valid_until`` del
+    schema y en el PATCH contra la fecha guardada.
     """
     if value is None:
         return None
@@ -47,9 +58,9 @@ class PromotionBase(BaseModel):
     title: str = Field(..., min_length=2, max_length=120)
     description: str | None = Field(None, max_length=1000)
     promotion_type: str = Field(default="percent", pattern=r"^(percent|fixed)$")
-    value: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
+    value: Decimal = Field(..., gt=0, le=MAX_MONTO, max_digits=12, decimal_places=2)
     min_service_amount: Decimal | None = Field(
-        None, ge=0, max_digits=12, decimal_places=2
+        None, ge=0, le=MAX_MONTO, max_digits=12, decimal_places=2
     )
     max_uses: int | None = Field(None, gt=0, le=MAX_USOS_CUPON)
     valid_from: datetime | None = None
@@ -60,6 +71,14 @@ class PromotionBase(BaseModel):
     @classmethod
     def normalize_code(cls, value: str) -> str:
         return _normalize_code(value)
+
+    @field_validator("title")
+    @classmethod
+    def reject_control_chars_in_title(cls, value: str) -> str:
+        # Regla 19 (SEG-02): el titulo sale al portal en
+        # /public/promotions/preview. La descripcion solo la ve el panel.
+        reject_control_chars(value)
+        return value
 
     @field_validator("valid_from", "valid_until")
     @classmethod
@@ -86,9 +105,11 @@ class PromotionUpdate(BaseModel):
     title: str | None = Field(None, min_length=2, max_length=120)
     description: str | None = Field(None, max_length=1000)
     promotion_type: str | None = Field(None, pattern=r"^(percent|fixed)$")
-    value: Decimal | None = Field(None, gt=0, max_digits=12, decimal_places=2)
+    value: Decimal | None = Field(
+        None, gt=0, le=MAX_MONTO, max_digits=12, decimal_places=2
+    )
     min_service_amount: Decimal | None = Field(
-        None, ge=0, max_digits=12, decimal_places=2
+        None, ge=0, le=MAX_MONTO, max_digits=12, decimal_places=2
     )
     max_uses: int | None = Field(None, gt=0, le=MAX_USOS_CUPON)
     valid_from: datetime | None = None
@@ -101,6 +122,11 @@ class PromotionUpdate(BaseModel):
         if value is None:
             return None
         return _normalize_code(value)
+
+    @field_validator("title")
+    @classmethod
+    def reject_control_chars_in_title(cls, value: str | None) -> str | None:
+        return reject_control_chars(value)
 
     @field_validator("valid_from", "valid_until")
     @classmethod

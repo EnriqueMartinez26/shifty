@@ -1,4 +1,6 @@
-FROM nginx:1.27-alpine
+# Parche fijo: `server ... resolve` en upstream exige nginx >= 1.27.3 y un tag
+# flotante cacheado viejo en el servidor no arrancaria.
+FROM nginx:1.27.5-alpine
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

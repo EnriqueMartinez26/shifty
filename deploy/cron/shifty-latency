@@ -1,0 +1,10 @@
+# /etc/cron.d/shifty-latency -- p95/p99 y 5xx por ruta desde el log de nginx (F5-01).
+#
+# Instalar: install -m 0644 deploy/cron/shifty-latency /etc/cron.d/shifty-latency
+# Necesita python3 en el host (solo stdlib). Alerta si una ruta con >= 20
+# muestras pasa p95 500 ms o 5xx 0,1 % en los ultimos 5 minutos.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+*/5 * * * * root /bin/bash /opt/shifty/scripts/latency-check.sh >> /var/log/shifty/latency.log 2>&1

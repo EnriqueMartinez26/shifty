@@ -6,13 +6,103 @@ import time
 import structlog
 from fastapi import Request
 from core.exceptions import AppException, RateLimitedException
-from redis.exceptions import RedisError
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from core.config import settings
-from core.redis import get_redis
+from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 
 logger = structlog.get_logger()
+
+# Cuanto esperar cuando el limitador NO esta disponible (Redis caido y
+# RATE_LIMIT_FAIL_CLOSED). No es la ventana del limite: la ventana describe
+# cuando se libera una cuota, y aca no hay cuota que liberar sino un servicio
+# que volver a intentar. Un valor chico y fijo le da al cliente un backoff
+# concreto en vez de dejarlo reintentar a discrecion (AUD2-B7-09).
+RETRY_AFTER_SIN_RATE_LIMIT_SECONDS = 5
+
+# Un limite alcanzado y un limitador caido son eventos distintos y el front
+# decide el reintento por el codigo, no por el status.
+_ERROR_CODE_LIMITE_ALCANZADO = "RATE_LIMITED"
+_ERROR_CODE_LIMITE_NO_DISPONIBLE = "RATE_LIMIT_UNAVAILABLE"
+_MENSAJE_LIMITE_NO_DISPONIBLE = "Rate limit temporalmente no disponible"
+
+# Que hacer si Redis no responde, POR POLITICA (F1-09, plan de rendimiento,
+# decision 9 del dueno, 2026-09-24). Antes ``RATE_LIMIT_FAIL_CLOSED`` cerraba
+# todo: un Redis caido o lleno era 503 en toda la API (health, webhook de MP,
+# vitrina, panel). Ahora el flag significa "cerrado" solo aca:
+#
+# - ``auth``: login, refresh, reset y cambio de clave (fuerza bruta).
+# - ``public-write``: escrituras anonimas (reservas, lista de espera,
+#   autogestion).
+# - ``otp``: pedir y verificar codigos. El presupuesto por telefono
+#   (``otp/service.py``) y el lockout de login (``auth/service.py``) leen el
+#   flag directo y siguen cerrados.
+#
+# ``public-read`` y ``global`` (panel, ops y el webhook de Mercado Pago, que
+# tiene HMAC + ventana + idempotencia) fallan ABIERTO con warning y aviso a
+# Sentry. Una politica que no este en ninguna tabla falla cerrada.
+FAIL_CLOSED_POLICIES: frozenset[str] = frozenset({"auth", "public-write", "otp"})
+FAIL_OPEN_POLICIES: frozenset[str] = frozenset({"public-read", "global"})
+
+# Politica de cada accion de ``enforce_rate_limit``. Una accion nueva que no
+# este aca falla cerrada, y
+# ``tests/unit/test_rate_limit_falla_por_politica.py`` exige declararla.
+ACTION_POLICIES: dict[str, str] = {
+    "auth:login": "auth",
+    "auth:forgot-password": "auth",
+    "auth:reset-password": "auth",
+    "auth:change-password": "auth",
+    "public:otp:request": "otp",
+    "public:otp:verify": "otp",
+    "public:booking:create": "public-write",
+    "public:client:cancel": "public-write",
+    "public:client:reschedule": "public-write",
+    "public:waitlist:join": "public-write",
+    "public:waitlist:leave": "public-write",
+    "public:deposit:preview": "public-read",
+    "public:payment:status": "public-read",
+    "public:client:appointments": "public-read",
+    "public:waitlist:mine": "public-read",
+    "public:unsubscribe": "public-read",
+}
+
+# Un Redis caido falla abierto en CADA request: el log es por request, el
+# evento de Sentry a lo sumo uno por intervalo y por proceso.
+FAIL_OPEN_REPORT_INTERVAL_SECONDS = 60.0
+_last_fail_open_report = float("-inf")
+
+
+def _fails_closed(policy: str) -> bool:
+    if not settings.RATE_LIMIT_FAIL_CLOSED:
+        return False
+    return policy not in FAIL_OPEN_POLICIES
+
+
+def _report_fail_open(policy: str) -> None:
+    """Miga de Sentry siempre; evento a lo sumo uno por intervalo. Nunca rompe."""
+    global _last_fail_open_report
+    try:
+        import sentry_sdk
+    except ImportError:  # pragma: no cover - dependencia opcional
+        return
+    try:
+        sentry_sdk.add_breadcrumb(
+            category="rate_limit",
+            message="rate_limit_fail_open",
+            level="warning",
+            data={"policy": policy},
+        )
+        now = time.monotonic()
+        if now - _last_fail_open_report >= FAIL_OPEN_REPORT_INTERVAL_SECONDS:
+            _last_fail_open_report = now
+            sentry_sdk.capture_message("rate_limit_fail_open", level="warning")
+    except Exception:  # pragma: no cover - Sentry nunca rompe el camino
+        logger.warning("sentry_capture_failed", exc_info=True)
+
+
+def _let_through_without_limit(policy: str) -> None:
+    logger.warning("rate_limit_fail_open", policy=policy)
+    _report_fail_open(policy)
 
 
 def _hash_identifier(value: str) -> str:
@@ -105,14 +195,24 @@ async def enforce_rate_limit(
             retry_after = await _hit_rate_limit(
                 f"subject:{subject.lower()}", action, limit, window
             )
-    except (RedisError, OSError) as exc:
-        logger.warning("rate_limit_redis_unavailable", action=action, error=str(exc))
-        if settings.RATE_LIMIT_FAIL_CLOSED:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
+        # PV-22: solo el tipo; el texto de un error de redis-py puede repetir
+        # la URL de conexion con la clave.
+        logger.warning(
+            "rate_limit_redis_unavailable",
+            action=action,
+            error_type=type(exc).__name__,
+        )
+        # Accion sin politica declarada: falla cerrada (F1-09).
+        policy = ACTION_POLICIES.get(action, "undeclared")
+        if _fails_closed(policy):
             raise AppException(
-                message="Rate limit temporalmente no disponible",
+                message=_MENSAJE_LIMITE_NO_DISPONIBLE,
                 http_status=503,
-                error_code="RATE_LIMIT_UNAVAILABLE",
+                error_code=_ERROR_CODE_LIMITE_NO_DISPONIBLE,
+                headers={"Retry-After": str(RETRY_AFTER_SIN_RATE_LIMIT_SECONDS)},
             ) from exc
+        _let_through_without_limit(policy)
         return
 
     if retry_after is not None:
@@ -133,10 +233,21 @@ def _policy_for_request(method: str, path: str) -> tuple[str, int]:
 
 
 async def _send_rate_limit_response(
-    send: Send, status_code: int, message: str, retry_after: int | None = None
+    send: Send,
+    status_code: int,
+    message: str,
+    retry_after: int | None = None,
+    error_code: str = _ERROR_CODE_LIMITE_ALCANZADO,
 ) -> None:
+    """Sobre canonico del limitador, armado a mano por estar fuera del router.
+
+    ``error_code`` es parametro y no una constante porque esta capa responde
+    dos eventos distintos: un limite alcanzado (429) y un limitador que no esta
+    disponible (503). Fijarlo en "RATE_LIMITED" hacia que el segundo se leyera
+    como el primero (AUD2-B7-09).
+    """
     body = json.dumps(
-        {"success": False, "error_code": "RATE_LIMITED", "message": message},
+        {"success": False, "error_code": error_code, "message": message},
         separators=(",", ":"),
     ).encode("utf-8")
     headers = [
@@ -179,15 +290,22 @@ class RedisRateLimitMiddleware:
             retry_after = await _hit_rate_limit(
                 ip, action, limit, settings.RATE_LIMIT_WINDOW_SECONDS
             )
-        except (RedisError, OSError) as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             logger.warning(
-                "rate_limit_middleware_redis_unavailable", action=action, error=str(exc)
+                "rate_limit_middleware_redis_unavailable",
+                action=action,
+                error_type=type(exc).__name__,
             )
-            if settings.RATE_LIMIT_FAIL_CLOSED:
+            if _fails_closed(action):
                 await _send_rate_limit_response(
-                    send, 503, "Rate limit temporalmente no disponible"
+                    send,
+                    503,
+                    _MENSAJE_LIMITE_NO_DISPONIBLE,
+                    retry_after=RETRY_AFTER_SIN_RATE_LIMIT_SECONDS,
+                    error_code=_ERROR_CODE_LIMITE_NO_DISPONIBLE,
                 )
                 return
+            _let_through_without_limit(action)
             await self.app(scope, receive, send)
             return
 

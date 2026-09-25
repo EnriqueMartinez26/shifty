@@ -1,11 +1,17 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 
 from core.validation import validate_password_strength
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN, SLUG_PATTERN, reject_unsafe_url
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    SLUG_PATTERN,
+    reject_control_chars,
+)
+from modules.stores.media import reject_media_url, validate_image_url
+from modules.stores.schemas import HEX_COLOR_PATTERN
 from modules.users.model import UserRole
 
 # Techos de los enteros expuestos por la API.
@@ -26,7 +32,10 @@ class StoreCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=255)
     slug: str = Field(..., min_length=2, max_length=100, pattern=SLUG_PATTERN)
     logo_url: str | None = Field(None, max_length=500)
-    primary_color: str = Field(default="#000000", max_length=20)
+    # Mismo patron que el panel de la tienda (StoreUpdate): el valor sale al
+    # portal publico como color CSS, asi que se valida igual lo mande el
+    # dueno o el superadmin (AUD2-B3-13, regla 19).
+    primary_color: str = Field(default="#000000", pattern=HEX_COLOR_PATTERN)
     cancellation_hours: int = Field(default=24, ge=0, le=MAX_HORAS_ANIO)
     buffer_minutes: int = Field(default=0, ge=0, le=MAX_MINUTOS_DIA)
     send_email_confirmation: bool = True
@@ -35,14 +44,21 @@ class StoreCreate(BaseModel):
     @field_validator("logo_url")
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
-        return reject_unsafe_url(value)
+        # Una tienda nueva no tiene logo subido que enlazar (F1-30).
+        return reject_media_url(value)
+
+    @field_validator("name")
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        # El nombre de la tienda sale al portal publico (B3-15, regla 19).
+        return reject_control_chars(value)
 
 
 class StoreGlobalUpdate(BaseModel):
     name: str | None = Field(None, min_length=2, max_length=255)
     slug: str | None = Field(None, min_length=2, max_length=100, pattern=SLUG_PATTERN)
     logo_url: str | None = Field(None, max_length=500)
-    primary_color: str | None = Field(None, max_length=20)
+    primary_color: str | None = Field(None, pattern=HEX_COLOR_PATTERN)
     cancellation_hours: int | None = Field(None, ge=0, le=MAX_HORAS_ANIO)
     buffer_minutes: int | None = Field(None, ge=0, le=MAX_MINUTOS_DIA)
     send_email_confirmation: bool | None = None
@@ -52,7 +68,15 @@ class StoreGlobalUpdate(BaseModel):
     @field_validator("logo_url")
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
-        return reject_unsafe_url(value)
+        # El logo subido (relativo o absoluto) o http(s): que la subida sea
+        # la de la tienda lo decide media.resolve_image_link (F1-30).
+        return validate_image_url(value)
+
+    @field_validator("name")
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        # El nombre de la tienda sale al portal publico (B3-15, regla 19).
+        return reject_control_chars(value)
 
 
 class StoreGlobalResponse(BaseModel):
@@ -162,6 +186,11 @@ class PlanResponse(PlanCreate):
         from_attributes = True
 
 
+# Ventana del periodo de una suscripcion que carga el soporte: un plan anual
+# con holgura para contratos largos.
+SUBSCRIPTION_PERIOD_WINDOW = timedelta(days=5 * 365)
+
+
 class StoreSubscriptionCreate(BaseModel):
     plan_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     # Los cuatro estados del grafo (modules/billing/subscription_rules.py); el
@@ -171,6 +200,27 @@ class StoreSubscriptionCreate(BaseModel):
     currency: str | None = Field(None, min_length=3, max_length=10)
     current_period_start: datetime | None = None
     current_period_end: datetime | None = None
+
+    @field_validator("current_period_start", "current_period_end")
+    @classmethod
+    def period_within_window(cls, value: datetime | None) -> datetime | None:
+        """El periodo cae entre hace 5 anios y dentro de 5 anios.
+
+        Revision de perf/f4-back (2026-09-24): con 9999-12-31 el alta daba 200
+        y despues el banner del panel y la corrida diaria calculaban
+        ``fin + dias de gracia`` y desbordaban (500) para la tienda.
+        """
+        if value is None:
+            return value
+        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        ahora = datetime.now(timezone.utc)
+        if (
+            not ahora - SUBSCRIPTION_PERIOD_WINDOW
+            <= aware
+            <= ahora + SUBSCRIPTION_PERIOD_WINDOW
+        ):
+            raise ValueError("La fecha del periodo esta fuera del rango permitido")
+        return value
 
 
 class StoreSubscriptionResponse(BaseModel):

@@ -10,7 +10,7 @@ import modules.notifications.tasks as notification_tasks
 
 
 @pytest.mark.asyncio
-async def test_confirmation_enqueue_returns_failed_when_smtp_send_fails(
+async def test_confirmation_send_returns_failed_when_smtp_send_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def smtp_failure(*args: Any, **kwargs: Any) -> bool:
@@ -18,7 +18,7 @@ async def test_confirmation_enqueue_returns_failed_when_smtp_send_fails(
 
     monkeypatch.setattr(notification_tasks, "_send_email", smtp_failure)
 
-    result = await notification_tasks.enqueue_confirmation_email(
+    result = await notification_tasks.send_confirmation_email(
         email="cliente@example.com",
         details={"public_id": "appt-1", "service": "Consulta", "staff": "Pro Demo"},
     )
@@ -51,7 +51,9 @@ def _fila(now: datetime, horas_hasta: float) -> tuple[Any, Any, Any, Any, Any]:
         client_name="Cliente",
     )
     service = SimpleNamespace(name="Consulta", public_id="svc-1")
-    staff = SimpleNamespace(display_name="Pro Demo", id="st-1", kind="person")
+    staff = SimpleNamespace(
+        display_name="Pro Demo", id="st-1", public_id="st-1", kind="person"
+    )
     client = SimpleNamespace(email="cliente@example.com", phone="+5491100000000")
     store = SimpleNamespace(send_email_reminders=True, slug="demo", name="Demo")
     return (appointment, service, staff, client, store)
@@ -63,15 +65,24 @@ class _FakeRepo:
     claims: list[tuple[str, str]] = []
     releases: list[tuple[str, str]] = []
     rows: list[tuple[Any, Any, Any, Any, Any]] = []
+    limits: list[int | None] = []
+    columns: list[str | None] = []
     claim_result = True
 
     def __init__(self, db: Any) -> None:
         self.db = db
 
     async def get_upcoming_for_reminders(
-        self, starts_after: datetime, starts_before: datetime
+        self,
+        starts_after: datetime,
+        starts_before: datetime,
+        *,
+        pending_column: str | None = None,
+        limit: int | None = None,
     ) -> list[tuple[Any, Any, Any, Any, Any]]:
-        return list(self.rows)
+        self.limits.append(limit)
+        self.columns.append(pending_column)
+        return list(self.rows)[:limit]
 
     async def claim_reminder(
         self, appointment_id: str, column: str, sent_at: datetime
@@ -89,13 +100,18 @@ def _preparar(
     enviados: list[dict[str, Any]] = []
 
     async def fake_notify_client_reminder(
-        *, phone: str | None, email: str | None, details: dict[str, Any]
+        *,
+        email: str | None,
+        details: dict[str, Any],
+        smtp: Any = None,
     ) -> dict[str, str]:
         enviados.append(details)
         return {"status": "sent", "channel": "email", "to": email or ""}
 
     _FakeRepo.claims = []
     _FakeRepo.releases = []
+    _FakeRepo.limits = []
+    _FakeRepo.columns = []
     _FakeRepo.rows = rows
     _FakeRepo.claim_result = claim_result
     monkeypatch.setattr(

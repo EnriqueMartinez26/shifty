@@ -138,3 +138,121 @@ async def test_middleware_returns_429_response_with_retry_after(
     assert start["status"] == 429
     assert (b"retry-after", b"17") in start["headers"]
     assert b"RATE_LIMITED" in sent_messages[1]["body"]
+
+
+@pytest.mark.asyncio
+async def test_middleware_con_redis_caido_no_dice_que_es_un_limite_de_tasa(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """AUD2-B7-09 (2026-09-20): el 503 por Redis caido salia como RATE_LIMITED.
+
+    Sintoma: con RATE_LIMIT_FAIL_CLOSED (obligatorio en produccion) y Redis sin
+    responder, el middleware devolvia 503 con error_code "RATE_LIMITED" y sin
+    Retry-After. El front decide el reintento por el codigo, no por el status:
+    trataba una caida de Redis como un limite de tasa y reintentaba sin backoff
+    contra un backend que justamente no puede limitarlo. El mismo evento por la
+    otra capa (enforce_rate_limit) ya salia como RATE_LIMIT_UNAVAILABLE.
+
+    Desde F1-09 (2026-09-24) la lectura publica falla abierta: el caso se
+    prueba sobre una escritura publica, que sigue cerrada.
+    """
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", True)
+
+    async def broken(*args: Any, **kwargs: Any) -> int:
+        raise RedisError("redis down")
+
+    async def app(_scope: Any, _receive: Any, _send: Any) -> None:
+        raise AssertionError("la app interna no corre si el limite falla cerrado")
+
+    sent_messages: list[MutableMapping[str, Any]] = []
+    middleware = rate_limit.RedisRateLimitMiddleware(app)
+    monkeypatch.setattr(rate_limit, "_hit_rate_limit", broken)
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        sent_messages.append(message)
+
+    await middleware(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/public/appointments",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        },
+        receive,
+        send,
+    )
+
+    start = sent_messages[0]
+    assert start["status"] == 503
+    assert b"RATE_LIMIT_UNAVAILABLE" in sent_messages[1]["body"]
+    assert b"RATE_LIMITED" not in sent_messages[1]["body"]
+    assert (
+        b"retry-after",
+        str(rate_limit.RETRY_AFTER_SIN_RATE_LIMIT_SECONDS).encode("ascii"),
+    ) in start["headers"]
+
+
+@pytest.mark.asyncio
+async def test_las_dos_capas_describen_igual_un_redis_caido(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """El mismo evento no puede tener dos codigos segun por donde salga."""
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_FAIL_CLOSED", True)
+
+    async def broken(*args: Any, **kwargs: Any) -> int:
+        raise RedisError("redis down")
+
+    monkeypatch.setattr(rate_limit, "_hit_rate_limit", broken)
+
+    with pytest.raises(AppException) as exc_info:
+        await rate_limit.enforce_rate_limit(_request(), "public:test", 5)
+
+    assert exc_info.value.error_code == "RATE_LIMIT_UNAVAILABLE"
+    assert exc_info.value.headers == {
+        "Retry-After": str(rate_limit.RETRY_AFTER_SIN_RATE_LIMIT_SECONDS)
+    }
+
+
+@pytest.mark.asyncio
+async def test_el_429_sigue_diciendo_rate_limited(monkeypatch: MonkeyPatch) -> None:
+    """La guarda de verdad sigue viva: un limite alcanzado no se confunde."""
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    async def limited(*args: Any, **kwargs: Any) -> int:
+        return 17
+
+    async def app(_scope: Any, _receive: Any, _send: Any) -> None:
+        raise AssertionError("la app interna no corre si el request esta limitado")
+
+    sent_messages: list[MutableMapping[str, Any]] = []
+    middleware = rate_limit.RedisRateLimitMiddleware(app)
+    monkeypatch.setattr(rate_limit, "_hit_rate_limit", limited)
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        sent_messages.append(message)
+
+    await middleware(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/public/availability",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        },
+        receive,
+        send,
+    )
+
+    assert sent_messages[0]["status"] == 429
+    assert b'"error_code":"RATE_LIMITED"' in sent_messages[1]["body"]
+    assert (b"retry-after", b"17") in sent_messages[0]["headers"]

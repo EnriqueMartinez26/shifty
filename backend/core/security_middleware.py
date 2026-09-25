@@ -1,4 +1,6 @@
 import json
+import re
+from collections import deque
 from typing import Iterable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -8,11 +10,26 @@ from core.config import Environment, settings
 
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
-# Rutas que aceptan multipart (subida de imagenes de tienda) con su propio
-# limite de tamano. El path que ve el ASGI NO trae el prefijo /api (lo reescribe
-# nginx). Van con Bearer, no cookie: no alcanzables por CSRF de formulario.
+# Rutas que aceptan multipart (subida de imagenes de tienda y de servicio) con
+# su propio limite de tamano. El path que ve el ASGI NO trae el prefijo /api
+# (lo reescribe nginx). Van con Bearer, no cookie: no alcanzables por CSRF de
+# formulario (regla 18).
 UPLOAD_PATHS = ("/stores/me/media",)
+# POST /services/{public_id}/image (F1-28), con el patron de PUBLIC_ID_PATTERN.
+_UPLOAD_PATH_PATTERN = re.compile(r"^/services/[A-Za-z0-9_-]{1,64}/image$")
 UPLOAD_CONTENT_TYPES = {"multipart/form-data"}
+
+
+def is_upload_path(path: str) -> bool:
+    return path in UPLOAD_PATHS or _UPLOAD_PATH_PATTERN.fullmatch(path) is not None
+
+
+# SEG-03: Postgres no acepta NUL (U+0000) en un parametro de texto (SQLSTATE
+# 22021) y el error subia como 500. Se rechaza aca, antes de cualquier router,
+# para que ningun campo (body, query o path) pueda olvidarlo.
+_JSON_NUL_ESCAPE = b"\\u0000"
+_BACKSLASH = 0x5C
+NUL_REJECTED_MESSAGE = "Error de validación en los datos enviados."
 
 
 class _RejectedRequest(Exception):
@@ -33,6 +50,37 @@ def _media_type(content_type: str | None) -> str:
     if not content_type:
         return ""
     return content_type.split(";", 1)[0].strip().lower()
+
+
+def _is_json(content_type: str) -> bool:
+    return content_type == "application/json" or content_type.endswith("+json")
+
+
+def contains_json_nul(data: bytes) -> bool:
+    r"""True si el JSON crudo trae un NUL, como byte o como escape ``\u0000``.
+
+    Un ``\u0000`` es escape solo si lo precede una cantidad impar de barras:
+    ``"\\u0000"`` es una barra literal seguida de ``u0000``. Lineal: las
+    corridas de barras de dos coincidencias no se solapan.
+    """
+    if b"\x00" in data:
+        return True
+    found = data.find(_JSON_NUL_ESCAPE)
+    while found != -1:
+        index = found
+        while index >= 0 and data[index] == _BACKSLASH:
+            index -= 1
+        if (found - index) % 2 == 1:
+            return True
+        found = data.find(_JSON_NUL_ESCAPE, found + 1)
+    return False
+
+
+def _url_has_nul(scope: Scope) -> bool:
+    # ``path`` ya viene decodificado; el query es crudo y un ``%`` literal
+    # viaja como ``%25``, asi que ``%00`` solo puede ser un NUL.
+    query = bytes(scope.get("query_string", b""))
+    return "\x00" in str(scope.get("path", "")) or b"%00" in query or b"\x00" in query
 
 
 async def _send_json(
@@ -57,6 +105,26 @@ async def _send_json(
     await send({"type": "http.response.body", "body": body})
 
 
+async def _read_body(receive: Receive) -> list[Message]:
+    messages: list[Message] = []
+    while True:
+        message = await receive()
+        messages.append(message)
+        if message["type"] != "http.request" or not message.get("more_body", False):
+            return messages
+
+
+def _replay(messages: list[Message], receive: Receive) -> Receive:
+    pending = deque(messages)
+
+    async def replay_receive() -> Message:
+        if pending:
+            return pending.popleft()
+        return await receive()
+
+    return replay_receive
+
+
 class RequestGuardMiddleware:
     """Rejects oversized or unsupported request bodies before FastAPI parses them."""
 
@@ -71,7 +139,7 @@ class RequestGuardMiddleware:
         }
 
     def _limits_for(self, path: str) -> tuple[int, set[str]]:
-        if path in UPLOAD_PATHS:
+        if is_upload_path(path):
             return self.max_upload_bytes, UPLOAD_CONTENT_TYPES
         return self.max_body_bytes, self.allowed_write_content_types
 
@@ -127,6 +195,10 @@ class RequestGuardMiddleware:
         max_bytes, allowed_content_types = self._limits_for(path)
         response_started = False
 
+        if _url_has_nul(scope):
+            await _send_json(send, 422, "VALIDATION_ERROR", NUL_REJECTED_MESSAGE)
+            return
+
         try:
             self._validate_headers(method, headers, path)
         except _RejectedRequest as exc:
@@ -163,8 +235,29 @@ class RequestGuardMiddleware:
                 response_started = True
             await send(message)
 
+        app_receive: Receive = guarded_receive
+        content_type = _media_type(headers.get("content-type"))
+        if _is_json(content_type) and not is_upload_path(path):
+            # El body JSON se lee entero ANTES del router (ya tiene tope de
+            # bytes): un error levantado desde receive() dentro de FastAPI
+            # se convierte en 400 "error parsing the body".
+            try:
+                buffered = await _read_body(guarded_receive)
+            except _RejectedRequest as exc:
+                await _send_json(send, exc.status_code, exc.error_code, exc.message)
+                return
+            body = b"".join(
+                message.get("body", b"") or b""
+                for message in buffered
+                if message["type"] == "http.request"
+            )
+            if contains_json_nul(body):
+                await _send_json(send, 422, "VALIDATION_ERROR", NUL_REJECTED_MESSAGE)
+                return
+            app_receive = _replay(buffered, receive)
+
         try:
-            await self.app(scope, guarded_receive, guarded_send)
+            await self.app(scope, app_receive, guarded_send)
         except _RejectedRequest as exc:
             if response_started:
                 raise
@@ -223,7 +316,13 @@ class SecurityHeadersMiddleware:
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
+                # Una ruta que fijo su propio Cache-Control (la imagen
+                # inmutable, el catalogo publico) no lleva `pragma: no-cache`:
+                # un cache HTTP/1.0 lo leeria como "revalidar siempre" (F1-27).
+                route_cache = any(k.lower() == b"cache-control" for k, _ in headers)
                 for key, value in self._security_headers(path):
+                    if route_cache and key == b"pragma":
+                        continue
                     self._append_if_missing(headers, key, value)
                 message["headers"] = headers
             await send(message)

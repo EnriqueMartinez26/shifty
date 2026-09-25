@@ -115,7 +115,7 @@ class TestSchedulingDomainService:
         assert exc.value.error_code == "APPOINTMENT_CONFLICT"
 
     def test_conflict_message_contains_times(self) -> None:
-        existing = make_appointment(dt(14), 90)  # 14:00–15:30
+        existing = make_appointment(dt(14), 90)  # 14:00–15:30 UTC
         with pytest.raises(AppointmentConflictException) as exc:
             self.svc.validate_availability(
                 requested_start=dt(15),
@@ -123,8 +123,10 @@ class TestSchedulingDomainService:
                 conflicting_appointment=existing,
                 overlapping_block=None,
             )
-        assert "14:00" in exc.value.message
-        assert "15:30" in exc.value.message
+        # 2026-09-16 (B7-03): el mensaje va en hora argentina (UTC-3); antes
+        # este test afirmaba la hora UTC, que era el defecto.
+        assert "11:00" in exc.value.message
+        assert "12:30" in exc.value.message
 
     def test_conflict_includes_suggestion_when_provided(self) -> None:
         existing = make_appointment(dt(10), 60)
@@ -138,7 +140,7 @@ class TestSchedulingDomainService:
                 suggestion=suggestion,
             )
         assert exc.value.detail["suggestion"] is not None
-        assert "11:00" in exc.value.message
+        assert "08:00" in exc.value.message  # 11:00 UTC en hora argentina
 
     # --- Bloqueo manual ---
 

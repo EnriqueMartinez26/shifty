@@ -1,26 +1,39 @@
-from datetime import time
-from typing import Any
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import datetime, time, timezone
+from email.utils import format_datetime
+from typing import Annotated, Any
 
-from fastapi import Depends, File, Form, UploadFile
+import structlog
+from fastapi import Depends, File, Form, Path, Request, UploadFile
 from fastapi.responses import Response
 from core.router import CanonicalAPIRouter
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.availability_cache import invalidate_store_availability
+from core.database import get_db, tenant_bypass
 from core.exceptions import (
     AppException,
     PermissionDeniedException,
     StoreNotFoundException,
 )
 from core.feature_flags import is_store_feature_enabled, merge_store_feature_flags
+from core.redis import get_availability_cache
+from core.roles import STORE_MANAGERS, has_any_role
+from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
 from modules.stores.mappers import to_store_response
 from modules.stores.media import (
     ALLOWED_KINDS,
-    MAX_IMAGE_BYTES,
-    detect_image_type,
-    exceeds_pixel_budget,
+    IMAGE_CAPS,
+    media_url,
+    prepare_image,
+    resolve_image_link,
 )
 from modules.stores.model import Store, StoreMedia, StoreSchedule
 from modules.billing.service import get_active_subscription, today_local
@@ -34,15 +47,38 @@ from modules.stores.schemas import (
     StoreSubscriptionStatusResponse,
     StoreUpdate,
 )
-from modules.users.model import User, UserRole
+from modules.users.model import User
 
+logger = structlog.get_logger()
 router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
+PublicIdPath = Annotated[
+    str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+]
 
-BusinessHoursPayload = dict[str, list[dict[str, str]]]
+# Ya validado por BusinessHourPeriod: horas reales y open < close.
+BusinessHoursPayload = dict[str, list[dict[str, time]]]
 
 
-async def _get_current_store(user: User, db: AsyncSession) -> Store:
-    result = await db.execute(select(Store).where(Store.id == user.store_id))
+async def _get_current_store(
+    user: User,
+    db: AsyncSession,
+    *,
+    with_schedules: bool = False,
+    reload: bool = False,
+) -> Store:
+    """Tienda del usuario; el horario comercial solo si se va a leer.
+
+    ``Store.schedules`` es ``lazy="raise"`` (F3-01): la ficha
+    (``business_hours``) y su edicion lo piden aca con ``selectinload``; el
+    resto de los endpoints no paga la consulta. ``reload`` relee la fila y la
+    coleccion sobre el objeto del identity map (despues de un commit).
+    """
+    query = select(Store).where(Store.id == user.store_id)
+    if with_schedules:
+        query = query.options(selectinload(Store.schedules))
+    if reload:
+        query = query.execution_options(populate_existing=True)
+    result = await db.execute(query)
     store = result.scalar_one_or_none()
     if not store:
         raise StoreNotFoundException(user.store_id)
@@ -63,15 +99,71 @@ def _replace_business_hours(
         if day_of_week is None or not periods:
             continue
 
+        # Un solo periodo por dia: ``StoreUpdate.reject_extra_periods`` da 422
+        # ante un segundo, asi que aca ya no se pierde nada en silencio
+        # (AUD2-B3-07). Soportar horario partido es producto, y esta pendiente.
         period = periods[0]
         store.schedules.append(
             StoreSchedule(
                 store_id=store.id,
                 day_of_week=day_of_week,
-                open_time=time.fromisoformat(period["open"]),
-                close_time=time.fromisoformat(period["close"]),
+                open_time=period["open"],
+                close_time=period["close"],
             )
         )
+
+
+# Campos del local que son insumo de la grilla de disponibilidad: el horario
+# comercial, el hueco obligatorio entre turnos y la antelacion minima. Cambiar
+# uno cambia lo que el portal puede ofrecer cualquier dia, asi que invalida la
+# generacion de la tienda entera, no un dia (AUD2-B3-05).
+_CAMPOS_DE_AGENDA = frozenset(
+    {"business_hours", "buffer_minutes", "min_booking_notice_hours"}
+)
+
+
+async def _invalidar_agenda(redis: Redis, store_id: str) -> None:
+    """Best-effort DESPUES del commit, igual que ``services/router.py``.
+
+    Un Redis caido no revierte la configuracion ya guardada; en el peor caso
+    el portal muestra lo viejo hasta que vence la agenda cacheada del dia:
+    300 s desde que se leyo de la base (``DAY_AGENDA_TTL_SECONDS``), porque
+    los slots derivados de ella viven solo lo que le queda
+    (``_DayAgenda.remaining_ttl``).
+    """
+    try:
+        await invalidate_store_availability(redis, store_id)
+    except RedisError as exc:
+        logger.warning(
+            "store_cache_invalidation_failed",
+            store_id=store_id,
+            error_type=type(exc).__name__,
+        )
+
+
+_CAMPOS_DE_IMAGEN = ("logo_url", "cover_url")
+
+
+def _unlinked_media_ids(store: Store, update_data: dict[str, Any]) -> list[str]:
+    """Imagenes subidas que el PATCH deja sin enlazar (F1-30, decision 21).
+
+    Vaciar el logo o cambiarlo por una URL externa dejaba la fila huerfana en
+    ``store_media`` (solo otra subida la borraba). La regla (misma imagen por
+    id, otra URL de medios es 422) vive en ``media.resolve_image_link``; el
+    valor a guardar reemplaza al enviado.
+    """
+    actuales = {"logo_url": store.logo_url, "cover_url": store.cover_url}
+    ids: list[str] = []
+    for campo in _CAMPOS_DE_IMAGEN:
+        if campo not in update_data:
+            continue
+        guardar, huerfana = resolve_image_link(
+            campo, actuales[campo], update_data[campo]
+        )
+        update_data[campo] = guardar
+        if huerfana is not None:
+            ids.append(huerfana)
+    return ids
 
 
 @router.get("/me", response_model=StoreResponse)
@@ -79,7 +171,7 @@ async def get_my_store(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreResponse:
-    store = await _get_current_store(user, db)
+    store = await _get_current_store(user, db, with_schedules=True)
     return to_store_response(store)
 
 
@@ -88,22 +180,22 @@ async def update_my_store(
     data: StoreUpdate,
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> StoreResponse:
-    if user.role != UserRole.ADMIN:
-        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
+    # Rol canonico de core/roles.py, no el enum crudo (B3-18): un superadmin
+    # cuyo role no sea 'admin' quedaba afuera, y era una segunda llave de rol
+    # como la que auth/dependencies.py ya elimino.
+    if not has_any_role(user, STORE_MANAGERS):
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
-    store = await _get_current_store(user, db)
+    # Con horario: `_replace_business_hours` lo reemplaza y la respuesta lo lee.
+    store = await _get_current_store(user, db, with_schedules=True)
     update_data = data.model_dump(exclude_unset=True)
+    toca_la_agenda = bool(_CAMPOS_DE_AGENDA & update_data.keys())
 
-    slug = update_data.get("slug")
-    if isinstance(slug, str) and slug != store.slug:
-        slug_check = await db.execute(select(Store).where(Store.slug == slug))
-        if slug_check.scalar_one_or_none():
-            raise AppException(
-                "El slug ya est? en uso",
-                http_status=400,
-                error_code="SLUG_ALREADY_IN_USE",
-            )
+    # El slug duplicado lo decide el UNIQUE de `stores.slug`, no un pre-chequeo
+    # (AUD2-B3-15): bajo RLS ese chequeo nunca veia la otra tienda. El porque
+    # completo vive en tests/integration/test_slug_duplicado_de_tienda.py.
 
     # Contracara de la validacion en feature-flags: si los cobros ya estan
     # activos, vaciar la politica dejaria al cliente aceptando un texto que ya
@@ -119,6 +211,8 @@ async def update_my_store(
                 error_code="DEPOSIT_POLICY_REQUIRED",
             )
         update_data["deposit_policy"] = policy or None
+
+    unlinked_media = _unlinked_media_ids(store, update_data)
 
     raw_business_hours = update_data.pop("business_hours", None)
     business_hours = (
@@ -144,8 +238,28 @@ async def update_my_store(
         setattr(store, key, value)
 
     _replace_business_hours(store, business_hours)
-    await db.commit()
-    await db.refresh(store)
+    if unlinked_media:
+        await db.execute(
+            delete(StoreMedia).where(
+                StoreMedia.store_id == store.id, StoreMedia.id.in_(unlinked_media)
+            )
+        )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Mismo patron que `UserService.create`: rollback y re-raise para que el
+        # handler global responda 409 neutro con la SESION SANA. Sin el
+        # rollback, la sesion queda en `PendingRollbackError` y cualquier
+        # consulta posterior de la misma request revienta con un error que no
+        # tiene nada que ver (AUD2-B3-15). Este router es dueno de su
+        # transaccion por deuda declarada de CLAUDE.md; migrarlo a un service
+        # es otro trabajo, pero la sesion tiene que quedar usable igual.
+        await db.rollback()
+        raise
+    # Relee fila y horario: un `refresh` dejaba `schedules` expirado.
+    store = await _get_current_store(user, db, with_schedules=True, reload=True)
+    if toca_la_agenda:
+        await _invalidar_agenda(availability_cache, str(store.id))
     return to_store_response(store)
 
 
@@ -187,8 +301,8 @@ async def update_my_store_feature_flags(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreFeatureFlagsResponse:
-    if user.role != UserRole.ADMIN:
-        raise PermissionDeniedException("cambiar la configuraci?n del negocio")
+    if not has_any_role(user, STORE_MANAGERS):
+        raise PermissionDeniedException("cambiar la configuración del negocio")
 
     store = await _get_current_store(user, db)
     updates = data.model_dump(exclude_unset=True)
@@ -220,7 +334,7 @@ async def upload_store_media(
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> StoreMediaUploadResponse:
-    if user.role != UserRole.ADMIN:
+    if not has_any_role(user, STORE_MANAGERS):
         raise PermissionDeniedException("cambiar la imagen del negocio")
     if kind not in ALLOWED_KINDS:
         raise AppException(
@@ -229,36 +343,12 @@ async def upload_store_media(
             error_code="INVALID_MEDIA_KIND",
         )
 
-    # Cota de tamano antes de materializar: se leen a lo sumo MAX+1 bytes para
+    # Cota de tamano antes de materializar: se leen a lo sumo tope+1 bytes para
     # distinguir "justo en el limite" de "se paso" sin cargar un blob gigante.
-    data = await file.read(MAX_IMAGE_BYTES + 1)
-    if len(data) > MAX_IMAGE_BYTES:
-        raise AppException(
-            "La imagen supera el maximo de 2 MB",
-            http_status=413,
-            error_code="MEDIA_TOO_LARGE",
-        )
-    if not data:
-        raise AppException("Archivo vacio", http_status=422, error_code="EMPTY_MEDIA")
-
-    # Validacion por MAGIC BYTES, no por el Content-Type declarado (falsificable).
-    # SVG queda excluido: puede ejecutar JS y volverse XSS al servirse inline.
-    content_type = detect_image_type(data)
-    if content_type is None:
-        raise AppException(
-            "Formato no permitido. Solo PNG, JPEG o WebP.",
-            http_status=422,
-            error_code="UNSUPPORTED_MEDIA_TYPE",
-        )
-
-    # Dentro de 2MB entra una imagen que declara dimensiones enormes (bomba de
-    # pixeles): rechaza el navegador del visitante al decodificarla.
-    if exceeds_pixel_budget(data, content_type):
-        raise AppException(
-            "La imagen tiene demasiados pixeles (maximo 25 megapixeles).",
-            http_status=422,
-            error_code="IMAGE_TOO_LARGE_DIMENSIONS",
-        )
+    # Topes por tipo, por magic bytes y fail-closed (F1-26): ver media.py.
+    # Un JPEG se guarda sin Exif/XMP (PV-15): ver media.prepare_image.
+    data = await file.read(IMAGE_CAPS[kind].max_bytes + 1)
+    data, content_type = prepare_image(data, kind)
 
     store = await _get_current_store(user, db)
 
@@ -279,7 +369,7 @@ async def upload_store_media(
     db.add(media)
     await db.flush()
 
-    url = f"/api/stores/media/{media.id}"
+    url = media_url(media.id)
     if kind == "logo":
         store.logo_url = url
     else:
@@ -292,32 +382,86 @@ async def upload_store_media(
     return StoreMediaUploadResponse(url=url, media_id=media.id, kind=kind)
 
 
-@router.get("/media/{media_id}")
+# Router aparte y SIN la guarda de suspension (main.py): servir una imagen es
+# lectura pura, y la guarda depende de ``get_db``, asi que abria una sesion
+# (y una ida a la base) en cada hit, 304 incluido (F1-27). Solo GET y HEAD:
+# tests/integration/test_media_cache_http.py falla si aparece otro verbo.
+media_router = CanonicalAPIRouter(prefix="/stores", tags=["Stores"])
+
+# La URL es inmutable: cada upload crea un id nuevo. Una imagen reemplazada
+# sigue cacheada bajo su id viejo, que la tienda ya no referencia.
+MEDIA_CACHE_CONTROL = "public, max-age=31536000, immutable"
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """Comparacion debil de ``If-None-Match`` (RFC 9110 13.1.2, para GET)."""
+    if not if_none_match:
+        return False
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip().removeprefix("W/")
+        if candidate == etag:
+            return True
+    return False
+
+
+def _http_date(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return format_datetime(value.astimezone(timezone.utc), usegmt=True)
+
+
+@asynccontextmanager
+async def _open_db(request: Request) -> AsyncIterator[AsyncSession]:
+    """Sesion abierta a demanda, despues de decidir que hace falta.
+
+    ``Depends(get_db)`` abre la sesion (y aplica el contexto de tenant, una
+    ida a la base) antes de entrar al handler. Respeta
+    ``dependency_overrides`` para que los tests usen su base.
+    """
+    provider = request.app.dependency_overrides.get(get_db, get_db)
+    async with asynccontextmanager(provider)() as db:
+        yield db
+
+
+# GET y HEAD registrados por separado: un api_route con los dos metodos le da
+# el mismo operationId a las dos operaciones del contrato (docs/API_CONTRACT.md).
+@media_router.get("/media/{media_id}", operation_id="serve_store_media")
+@media_router.head("/media/{media_id}", operation_id="head_store_media")
 async def serve_store_media(
-    media_id: str,
-    db: AsyncSession = Depends(get_db),
+    # Validado como el resto de los path params (B3-17): la ruta es publica y
+    # consulta bajo bypass de RLS; un id fuera del patron no llega a la base.
+    media_id: PublicIdPath,
+    request: Request,
 ) -> Response:
+    etag = f'"{media_id}"'
+    cache_headers = {"Cache-Control": MEDIA_CACHE_CONTROL, "ETag": etag}
+    # El validador ES el id: un navegador o el edge que ya tiene la imagen
+    # la revalida sin que el backend toque la base.
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=cache_headers)
+
+    is_head = request.method == "HEAD"
+    columns = [StoreMedia.content_type, StoreMedia.byte_size, StoreMedia.created_at]
+    if not is_head:
+        columns.append(StoreMedia.data)
     # Publico: el portal de reservas muestra el logo sin login. Se lee por id
     # bajando el filtro RLS por tienda (como el resto de las lecturas publicas);
     # el id es un ULID no adivinable y la imagen es publica por naturaleza.
-    set_tenant_context(None, is_admin=True)
-    try:
-        await _apply_tenant_context(db)
-        result = await db.execute(select(StoreMedia).where(StoreMedia.id == media_id))
-        media = result.scalar_one_or_none()
-    finally:
-        set_tenant_context(None, False)
+    async with _open_db(request) as db, tenant_bypass(db):
+        result = await db.execute(select(*columns).where(StoreMedia.id == media_id))
+        row = result.one_or_none()
 
-    if media is None:
+    if row is None:
         raise AppException(
             "Imagen no encontrada", http_status=404, error_code="MEDIA_NOT_FOUND"
         )
 
-    return Response(
-        content=media.data,
-        media_type=media.content_type,
-        headers={
-            "Cache-Control": "public, max-age=86400",
-            "Content-Disposition": "inline",
-        },
-    )
+    headers = {
+        **cache_headers,
+        "Last-Modified": _http_date(row.created_at),
+        "Content-Disposition": "inline",
+    }
+    if is_head:
+        headers["Content-Length"] = str(row.byte_size)
+        return Response(media_type=row.content_type, headers=headers)
+    return Response(content=row.data, media_type=row.content_type, headers=headers)
