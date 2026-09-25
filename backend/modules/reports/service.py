@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute, aliased
 
 from core.config import settings
+from core.exceptions import ValidationException
 from core.utils import ensure_utc_aware, local_day_start, today_local
 
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -395,7 +396,13 @@ class ReportService:
     ) -> tuple[date, date]:
         today = today_local()
         resolved_to = to_date or today
-        resolved_from = from_date or (resolved_to - timedelta(days=30))
+        try:
+            resolved_from = from_date or (resolved_to - timedelta(days=30))
+        except OverflowError:
+            # to_date en el primer mes representable (0001-01-01..30): el
+            # desde por defecto no existe. Era un 500 (revision de
+            # perf/f4-back); ValueError aca seria un 400, esto es entrada.
+            raise ValidationException("La fecha esta fuera de rango") from None
 
         if resolved_from > resolved_to:
             raise ValueError("from_date no puede ser mayor a to_date")

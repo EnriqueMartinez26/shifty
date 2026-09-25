@@ -102,3 +102,26 @@ async def test_disponibilidad_del_panel_en_los_dias_extremos_422(
                 headers=auth,
             )
             assert res.status_code == esperado, (dia, bool(auth), res.text[:200])
+
+
+@pytest.mark.asyncio
+async def test_reporte_sin_desde_y_con_hasta_en_el_primer_mes_422(
+    client: AsyncClient,
+) -> None:
+    """Sin ``from_date`` el reporte arranca 30 dias antes de ``to_date``:
+    con un ``to_date`` entre 0001-01-01 y 0001-01-30 ese dia no existe
+    (``OverflowError``, 500). Revision de perf/f4-back."""
+    _store, token = await register_and_login(
+        client, slug="dia-primer-mes", email="dia-primer-mes@t.com"
+    )
+    headers = auth_headers(token)
+
+    for metodo, url, params, cuerpo in (
+        ("GET", "/reports/summary", {"to_date": "0001-01-15"}, None),
+        ("GET", "/reports/professionals", {"to_date": "0001-01-15"}, None),
+        ("POST", "/reports/export", None, {"format": "csv", "to_date": "0001-01-15"}),
+    ):
+        res = await client.request(
+            metodo, url, params=params, json=cuerpo, headers=headers
+        )
+        assert res.status_code == 422, (url, res.text)
