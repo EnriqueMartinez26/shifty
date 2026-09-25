@@ -203,3 +203,49 @@ async def test_el_vencimiento_de_retenciones_tiene_presupuesto_y_no_vence_lo_no_
     assert estados.count(AppointmentStatus.EXPIRED.value) == 2
     # El que no se consulto sigue retenido: lo decide la corrida siguiente.
     assert estados.count(AppointmentStatus.PENDING_PAYMENT.value) == 1, estados
+
+
+@pytest.mark.asyncio
+async def test_una_retencion_que_aparece_entre_las_fases_no_se_vence_sin_consultar(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 3b977a9..6c84d46 (#2). La fase B vuelve a leer las
+    retenciones vencidas con ``SKIP LOCKED``: una que vencio mientras la fase
+    A le preguntaba a MP por las otras (o que entro en el ``limit``) no estaba
+    ni en ``remotos`` ni en los cortados por presupuesto, y se vencia sin
+    consultar a MP: un turno pagado cuyo webhook no llego se perdia. Ahora la
+    fase B solo decide sobre los cobros que la fase A consulto (mas los
+    turnos sin cobro de MP) y el resto espera a la corrida siguiente."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mercadopago_que_registra(monkeypatch, [], remoto=None)
+    ids = await _tres_retenciones_vencidas(client, test_session)
+    tardio = ids[-1]
+    # Todavia no vencio cuando arranca la corrida.
+    await test_session.execute(
+        update(Appointment)
+        .where(Appointment.id == tardio)
+        .values(expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
+    )
+    await test_session.commit()
+    fase_a = jobs._fetch_remote_payments
+
+    async def fase_a_y_vence_otro(*args: Any, **kwargs: Any) -> Any:
+        resultado = await fase_a(*args, **kwargs)
+        # Vence mientras la fase A le preguntaba a MP por las otras.
+        await test_session.execute(
+            update(Appointment)
+            .where(Appointment.id == tardio)
+            .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+        )
+        await AsyncSession.commit(test_session)
+        return resultado
+
+    monkeypatch.setattr(jobs, "_fetch_remote_payments", fase_a_y_vence_otro)
+
+    stats = await jobs.expire_unpaid_appointments(test_session)
+
+    assert stats["expired"] == 2, stats
+    test_session.expire_all()
+    turno = await test_session.get(Appointment, tardio)
+    assert turno is not None
+    assert turno.status == AppointmentStatus.PENDING_PAYMENT.value

@@ -1768,7 +1768,7 @@ async def _expire_unpaid_appointments(
     # de TenantSession reabre otra transaccion); el contexto vuelve en fase B.
     configs, retiradas = await _lecturas_para_mp(db, pendientes)
     await AsyncSession.commit(db)
-    remotos, sin_consultar = await _fetch_remote_payments(
+    remotos, consultados = await _fetch_remote_payments(
         pendientes,
         db=db,
         configs=configs,
@@ -1789,7 +1789,7 @@ async def _expire_unpaid_appointments(
     )
     rows = list(result.all())
     expired, rescued, liberados = await _vencer_o_rescatar(
-        db, rows, remotos, sin_consultar
+        db, rows, remotos, consultados
     )
     await db.commit()
     # El cupo vuelve a estar libre: la pagina publica no puede seguir
@@ -1813,20 +1813,28 @@ async def _vencer_o_rescatar(
     db: AsyncSession,
     rows: Sequence[Row[tuple[Appointment, Payment]]],
     remotos: Mapping[str, dict[str, Any]],
-    sin_consultar: set[str],
+    consultados: set[str],
 ) -> tuple[int, int, list[tuple[str, datetime]]]:
     """Fase B del job de vencimiento, con los turnos bloqueados.
 
-    Un cobro que el presupuesto dejo sin consultar no se vence en esta corrida
-    (revision de e5579b6..3b977a9, #1): pudo estar pagado; lo decide la
-    corrida siguiente. Devuelve (vencidos, rescatados, (tienda, inicio) de
-    cada turno liberado).
+    Solo decide sobre los cobros de MP que la fase A consulto (``consultados``,
+    tambien los que fallaron) y sobre los turnos sin cobro de MP. Uno que el
+    presupuesto dejo sin consultar (revision de e5579b6..3b977a9, #1), o que
+    la relectura con ``SKIP LOCKED`` trajo sin que la fase A lo viera (vencio
+    mientras tanto o entro en el ``limit``; revision de 3b977a9..6c84d46,
+    #2), no se vence en esta corrida: pudo estar pagado; lo decide la
+    siguiente. Devuelve (vencidos, rescatados, (tienda, inicio) de cada turno
+    liberado).
     """
     expired = 0
     rescued = 0
     liberados: list[tuple[str, datetime]] = []
     for appointment, payment in rows:
-        if payment and payment.id in sin_consultar:
+        if (
+            payment is not None
+            and payment.provider == "mercadopago"
+            and payment.id not in consultados
+        ):
             continue
         # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
         # webhook nunca llego, vencerlo perderia una reserva ya pagada.
@@ -1895,7 +1903,7 @@ async def _fetch_remote_payments(
     persist_refresh: PersistRefresh | None = None,
 ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Consulta a Mercado Pago los cobros pendientes: ({payment.id: pago
-    remoto}, ids que el presupuesto dejo sin consultar).
+    remoto}, ids que se consultaron, aunque la consulta haya fallado).
 
     Se llama sin ningun lock tomado. Si la consulta de un cobro falla, no
     figura en el resultado y el turno vence: la conciliacion posterior va a
@@ -1904,13 +1912,14 @@ async def _fetch_remote_payments(
     #1: este job no tenia): lo que no se llego a consultar NO vence.
     """
     remotos: dict[str, dict[str, Any]] = {}
+    consultados: set[str] = set()
     de_mp = [p for p in payments if p.provider == "mercadopago"]
     limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
     for indice, payment in enumerate(de_mp):
         if _presupuesto_agotado(
             limite, job="expire_holds", sin_consultar=len(de_mp) - indice
         ):
-            return remotos, {p.id for p in de_mp[indice:]}
+            return remotos, consultados
         try:
             remote = await _fetch_remote_payment(
                 db,
@@ -1924,14 +1933,17 @@ async def _fetch_remote_payments(
             _presupuesto_agotado(
                 limite, job="expire_holds", sin_consultar=len(de_mp) - indice
             )
-            return remotos, {p.id for p in de_mp[indice:]}
+            return remotos, consultados
         except SoftTimeLimitExceeded:
             raise
         except Exception:
+            # Consultado aunque haya fallado: el turno vence, como antes.
+            consultados.add(payment.id)
             continue
+        consultados.add(payment.id)
         if remote:
             remotos[payment.id] = remote
-    return remotos, set()
+    return remotos, consultados
 
 
 async def _apply_remote_payment(
