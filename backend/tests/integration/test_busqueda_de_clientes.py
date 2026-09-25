@@ -155,3 +155,30 @@ async def test_q_invalido_422(client: AsyncClient, test_session: AsyncSession) -
     for q in ("a", "x" * 81, "an\x00a", "an‮a"):
         res = await client.get("/users/", headers=headers, params={"q": q})
         assert res.status_code == 422, (q, res.text)
+
+
+@pytest.mark.asyncio
+async def test_la_barra_invertida_es_literal(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """``\`` es el caracter de escape del LIKE: en ``q`` tiene que buscar una
+    barra, no escapar al caracter siguiente ni romper el patron."""
+    store, token = await register_and_login(
+        client, slug="busca-barra", email="busca-barra@t.com"
+    )
+    await _clientes(
+        test_session,
+        store,
+        [("Back\Slash", "5491188880001"), ("Backslash Sin", "5491188880002")],
+    )
+    headers = auth_headers(token)
+
+    barra = await client.get(
+        "/users/", headers=headers, params={"role": "client", "q": "k\s"}
+    )
+    barra_y_comodin = await client.get(
+        "/users/", headers=headers, params={"role": "client", "q": "\%"}
+    )
+
+    assert _nombres(barra) == ["Back\Slash None"]
+    assert _nombres(barra_y_comodin) == []
