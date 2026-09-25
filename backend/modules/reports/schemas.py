@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from core.validation import SAFE_FILENAME_PREFIX_PATTERN
+from core.validation import SAFE_FILENAME_PREFIX_PATTERN, LocalDay
 
 
 ExportFormat = Literal["csv", "excel", "pdf"]
@@ -128,8 +128,8 @@ class ReportTrendResponse(BaseModel):
 
 class ReportExportRequest(BaseModel):
     format: ExportFormat
-    from_date: date | None = None
-    to_date: date | None = None
+    from_date: LocalDay | None = None
+    to_date: LocalDay | None = None
     filename_prefix: str = Field(
         default="reporte-turnos",
         min_length=3,

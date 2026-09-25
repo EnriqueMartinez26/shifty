@@ -4,11 +4,11 @@ from fastapi import Depends, Path, Query, Response, status
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.exceptions import AppException, UserNotFoundException
+from core.exceptions import AppException, UserNotFoundException, ValidationException
 from core.database import get_db
 from core.roles import assert_can_change_access, assert_can_grant_role
 from modules.users.guards import assert_deactivation_allowed
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
 from modules.auth.dependencies import get_current_admin
 from modules.users.model import User
 from modules.users.repository import UserRepository
@@ -42,6 +42,8 @@ async def list_users(
     include_inactive: bool = Query(False),
     email: str | None = Query(None, max_length=255),
     role: str | None = Query(None, max_length=50),
+    # FF-20 / F4-03 (aditivo): nombre que contiene q o digitos del telefono.
+    q: str | None = Query(None, min_length=2, max_length=80),
     limit: int = Query(200, ge=1, le=500),
     # Tope superior: sin el, un offset por encima del bigint de Postgres
     # (2^63-1) desbordaba la query y salia 500. Un millon ya es absurdo para
@@ -50,6 +52,10 @@ async def list_users(
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserResponse]:
+    try:
+        reject_control_chars(q)
+    except ValueError as exc:
+        raise ValidationException(str(exc)) from None
     repo = UserRepository(db)
     users = await repo.get_all(
         admin.store_id,
@@ -59,6 +65,7 @@ async def list_users(
         limit=limit,
         offset=offset,
         include_global_admins=admin.is_global_admin,
+        q=q,
     )
     return [UserResponse.model_validate(user) for user in users]
 

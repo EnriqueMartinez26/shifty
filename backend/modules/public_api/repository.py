@@ -13,7 +13,7 @@ from enum import Enum
 from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, raiseload, selectinload
 
@@ -28,6 +28,7 @@ from modules.appointments.repository import (
     appointment_overlap,
 )
 from modules.payments.deposit_rules import ClientHistory
+from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -85,6 +86,24 @@ class PublicRepository:
             select(Store).where(Store.slug == slug, Store.is_active == True)
         )
         return result.scalar_one_or_none()
+
+    async def get_store_ref_by_slug(self, slug: str) -> tuple[str, str, str] | None:
+        """``(id, public_id, name)`` de una tienda activa por slug, en columnas.
+
+        Para ``GET /public/stores/{slug}/ref`` (FF-16): ``select(Store)``
+        arrastra los horarios comerciales (``lazy="selectin"``) que la
+        referencia no usa.
+        """
+        row = (
+            await self.db.execute(
+                select(Store.id, Store.public_id, Store.name).where(
+                    Store.slug == slug, Store.is_active == True
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return str(row.id), str(row.public_id), str(row.name)
 
     async def get_store_by_public_id(self, public_id: str) -> Store | None:
         result = await self.db.execute(
@@ -255,6 +274,7 @@ class PublicRepository:
         *,
         buffer_minutes: int,
         exclude_appointment_id: str | None = None,
+        require_schedule: bool = True,
     ) -> RangeRejection | None:
         """Este profesional, puede tomar este rango? ``None`` si puede.
 
@@ -263,9 +283,17 @@ class PublicRepository:
         de aca, un lock y una consulta de choque a mano) y las dos divergieron
         (B1-05 orden del lock, B1-07 buffer). Si devuelve ``None`` el
         profesional queda lockeado hasta el commit.
+
+        ``require_schedule=False``: el admin carga desde el panel un turno
+        fuera de la jornada del profesional (FF-04). Bloqueos, choques y
+        buffer siguen valiendo.
         """
-        if staff_id not in await self._staff_ids_with_schedule_for_slot(
-            [staff_id], starts_at, ends_at
+        if (
+            require_schedule
+            and staff_id
+            not in await self._staff_ids_with_schedule_for_slot(
+                [staff_id], starts_at, ends_at
+            )
         ):
             return RangeRejection.OUT_OF_SCHEDULE
         return await self._lock_and_recheck(
@@ -403,6 +431,8 @@ class PublicRepository:
         starts_at: datetime,
         ends_at: datetime,
         buffer_minutes: int,
+        *,
+        require_schedule: bool = True,
     ) -> Staff | None:
         """Primer candidato (en el orden dado) que puede tomar el rango, ya lockeado.
 
@@ -425,8 +455,12 @@ class PublicRepository:
         asigna el turno o volveria a lockear a todos los candidatos (B1-13).
         """
         ids = [member.id for member in candidates]
-        with_schedule = await self._staff_ids_with_schedule_for_slot(
-            ids, starts_at, ends_at
+        # Sin exigir jornada (alta del panel con ``allow_outside_schedule``,
+        # FF-04) todos los candidatos "atienden"; el resto no cambia.
+        with_schedule = (
+            await self._staff_ids_with_schedule_for_slot(ids, starts_at, ends_at)
+            if require_schedule
+            else set(ids)
         )
         ids = [staff_id for staff_id in ids if staff_id in with_schedule]
         # Con un solo candidato (profesional elegido por el cliente) el
@@ -451,6 +485,46 @@ class PublicRepository:
             return staff
         return None
 
+    async def pick_staff_for_range(
+        self,
+        store_id: str,
+        candidates: list[Staff],
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        buffer_minutes: int,
+        require_schedule: bool = True,
+    ) -> Staff | None:
+        """El alta con "cualquier profesional" del panel (FF-04): mismo camino
+        que el portal (lectura en lote, lock del elegido y relectura bajo el
+        lock, regla 4)."""
+        return await self._pick_staff_for_slot(
+            store_id,
+            candidates,
+            starts_at,
+            ends_at,
+            buffer_minutes,
+            require_schedule=require_schedule,
+        )
+
+    async def qualified_staff(self, store_id: str, service: Service) -> list[Staff]:
+        """Profesionales activos de la tienda que hacen el servicio, en el orden
+        de desempate (display_name, public_id). Una consulta (F3-03)."""
+        result = await self.db.execute(
+            select(Staff)
+            .join(StaffServiceModel, StaffServiceModel.staff_id == Staff.id)
+            .where(
+                StaffServiceModel.service_id == service.id,
+                Staff.store_id == store_id,
+                Staff.is_active == True,
+            )
+            .options(raiseload(Staff.services), raiseload(Staff.schedules))
+        )
+        return sorted(
+            result.scalars().all(),
+            key=lambda member: (member.display_name or "", member.public_id),
+        )
+
     async def _candidates(
         self, store_id: str, service: Service, staff_public_id: str | None
     ) -> list[Staff]:
@@ -467,17 +541,7 @@ class PublicRepository:
         lee esas colecciones (AUD2-B6-02), y un acceso levanta en vez de
         consultar.
         """
-        result = await self.db.execute(
-            select(Staff)
-            .join(StaffServiceModel, StaffServiceModel.staff_id == Staff.id)
-            .where(
-                StaffServiceModel.service_id == service.id,
-                Staff.store_id == store_id,
-                Staff.is_active == True,
-            )
-            .options(raiseload(Staff.services), raiseload(Staff.schedules))
-        )
-        qualified_staff = list(result.scalars().all())
+        qualified_staff = await self.qualified_staff(store_id, service)
         if staff_public_id:
             candidates = [
                 member
@@ -487,10 +551,7 @@ class PublicRepository:
             if not candidates:
                 raise ValueError("El profesional no realiza el servicio seleccionado")
         else:
-            candidates = sorted(
-                qualified_staff,
-                key=lambda member: (member.display_name or "", member.public_id),
-            )
+            candidates = qualified_staff
         if not candidates:
             raise ValueError("No hay profesionales disponibles para este servicio")
         return candidates
@@ -617,6 +678,26 @@ class PublicRepository:
             cancelled=conteo.get(AppointmentStatus.CANCELLED.value, 0),
         )
 
+    async def accredited_appointment_ids(self, appointment_ids: list[str]) -> set[str]:
+        """De estos turnos, los que tienen un pago acreditado. Una consulta.
+
+        Acreditado es ``Payment.is_accredited`` (aprobado o confirmado a mano):
+        un turno asi no se reprograma desde el cliente
+        (``client_reschedule_denial``). La usa la accion; el historial lo
+        resuelve en su propio SELECT (``get_client_appointments``).
+        """
+        if not appointment_ids:
+            return set()
+        res = await self.db.execute(
+            select(Payment.appointment_id)
+            .where(
+                Payment.appointment_id.in_(appointment_ids),
+                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+            )
+            .distinct()
+        )
+        return {str(appointment_id) for appointment_id in res.scalars().all()}
+
     async def get_client_by_phone(self, store_id: str, phone: str) -> User | None:
         result = await self.db.execute(
             select(User)
@@ -632,8 +713,14 @@ class PublicRepository:
 
     async def get_client_appointments(
         self, client_id: str, store_id: str, *, limit: int
-    ) -> list[Appointment]:
-        """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional.
+    ) -> list[tuple[Appointment, bool]]:
+        """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional,
+        y si cada uno tiene un pago acreditado (para ``can_reschedule``).
+
+        El pago acreditado va en el MISMO SELECT como ``EXISTS`` correlacionado
+        por ``uq_payments_store_appointment`` (store_id, appointment_id): una
+        consulta aparte sumaba una sentencia al historial (techo de
+        ``test_historial_del_cliente_con_limite``).
 
         Un solo SELECT con JOIN (F3-09, R1-09): antes eran ``selectinload`` de
         servicio y profesional, y el profesional arrastraba en cascada sus
@@ -642,8 +729,17 @@ class PublicRepository:
         pueda tomar por una coleccion modificada (AUD2-B6-02), y un acceso
         accidental levanta en vez de volver a consultar.
         """
+        pagado = (
+            exists()
+            .where(
+                Payment.store_id == Appointment.store_id,
+                Payment.appointment_id == Appointment.id,
+                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+            )
+            .label("paid")
+        )
         result = await self.db.execute(
-            select(Appointment)
+            select(Appointment, pagado)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
             .options(
                 joinedload(Appointment.service),
@@ -654,4 +750,4 @@ class PublicRepository:
             .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
             .limit(limit)
         )
-        return list(result.scalars().all())
+        return [(appointment, bool(paid)) for appointment, paid in result.all()]

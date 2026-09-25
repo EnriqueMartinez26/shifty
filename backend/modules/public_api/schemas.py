@@ -4,13 +4,27 @@ import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.utils import now_utc
+from core.utils import MAX_BOOKING_AHEAD, now_utc, within_max_ahead
 from core.validation import (
     PUBLIC_ID_PATTERN,
+    normalize_client_phone,
     reject_control_chars,
     reject_payload_control_chars,
 )
 from modules.stores.schemas import StoreCustomField
+
+
+class PublicStoreRefResponse(BaseModel):
+    """Referencia minima de la tienda para "Mis turnos" (FF-16).
+
+    Sale tambien con la suscripcion suspendida: el cliente tiene que poder
+    cancelar o reprogramar lo que ya reservo. De la suscripcion solo expone
+    si la tienda toma reservas nuevas.
+    """
+
+    store_public_id: str
+    name: str
+    accepts_new_bookings: bool
 
 
 class PublicStoreResponse(BaseModel):
@@ -94,14 +108,7 @@ class PublicBookingCreate(BaseModel):
     @field_validator("client_phone")
     @classmethod
     def phone_must_be_numeric(cls, value: str) -> str:
-        cleaned = re.sub(r"[\s\-\(\)\+]", "", value)
-        if not cleaned.isdigit():
-            raise ValueError(
-                "El telefono solo puede contener digitos, espacios o los caracteres: + - ( )"
-            )
-        if len(cleaned) < 6:
-            raise ValueError("El telefono debe tener al menos 6 digitos")
-        return cleaned
+        return normalize_client_phone(value)
 
     @field_validator("starts_at")
     @classmethod
@@ -112,6 +119,11 @@ class PublicBookingCreate(BaseModel):
             value = value.replace(tzinfo=timezone.utc)
         if value <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado")
+        # Tope ancho (2 anios): 9999-12-31 desbordaba ``starts_at + duracion``
+        # (500). No el horizonte de 120 dias: el "Nuevo turno" del panel
+        # reserva por aca con fecha libre; al cliente lo acota la grilla.
+        if not within_max_ahead(value, MAX_BOOKING_AHEAD):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return value
 
     @model_validator(mode="after")
@@ -243,6 +255,10 @@ class ClientRescheduleRequest(BaseModel):
             value = value.replace(tzinfo=timezone.utc)
         if value <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro")
+        # Mismo tope ancho: "Mis turnos" reprograma con fecha libre y un turno
+        # que ya esta mas alla de +120 dias se tiene que poder mover.
+        if not within_max_ahead(value, MAX_BOOKING_AHEAD):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return value
 
 

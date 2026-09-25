@@ -1,4 +1,4 @@
-from datetime import date as _date, datetime, time as _time, timezone
+from datetime import date as _date, datetime, time as _time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 # Shifty opera solo en Argentina. Los horarios que carga una tienda ("abro
@@ -6,6 +6,17 @@ from zoneinfo import ZoneInfo
 # negocio que abre 09:00 terminaba aceptando reservas a las 09:00 UTC, o sea
 # 06:00 de la manana hora argentina.
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
+
+# Horizonte de reservas en dias locales desde hoy (F1-11, decision 14 del
+# dueno): la disponibilidad publica y el alta del panel para un cliente
+# (FF-04) no van mas alla.
+BOOKING_HORIZON_DAYS = 120
+
+# Tope ANCHO de un alta o una reprogramacion (revision de perf/f4-back,
+# 2026-09-25): corta lo que desborda (9999-12-31) sin tocar el producto. El
+# front manda fechas libres por el panel y por "Mis turnos"; al cliente lo
+# acota la grilla de ``/public/availability`` (``BOOKING_HORIZON_DAYS``).
+MAX_BOOKING_AHEAD = timedelta(days=730)
 
 
 def local_to_utc(day: _date, moment: _time) -> datetime:
@@ -35,6 +46,30 @@ def local_day_start(day: _date) -> datetime:
     pasar por aca, nunca sumando ``timedelta(hours=24)`` a un instante.
     """
     return local_to_utc(day, _time.min)
+
+
+def within_booking_horizon(value: datetime) -> bool:
+    """El dia LOCAL de ``value`` no pasa de hoy + ``BOOKING_HORIZON_DAYS``.
+
+    La cota de todo alta o reprogramacion que tiene horizonte (portal, alta
+    del panel para un cliente, lista de espera). Una fecha que ni se puede
+    llevar a hora local (anio 9999 con offset) queda afuera en vez de
+    levantar ``OverflowError`` (500). Sin offset se toma UTC (regla 24).
+    """
+    try:
+        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return aware.astimezone(ARGENTINA_TZ).date() <= today_local() + timedelta(
+            days=BOOKING_HORIZON_DAYS
+        )
+    except OverflowError:
+        return False
+
+
+def within_max_ahead(value: datetime, max_ahead: timedelta) -> bool:
+    """``value`` no pasa de ahora + ``max_ahead`` (para caminos sin horizonte
+    de producto, como el auto-turno y la reprogramacion del panel)."""
+    aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    return aware <= now_utc() + max_ahead
 
 
 def ensure_utc_aware(value: datetime) -> datetime:

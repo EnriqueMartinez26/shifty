@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient, invalidate_availability
 from core.database import _apply_tenant_context
-from core.utils import ensure_utc_aware
+from core.utils import ensure_utc_aware, now_utc
 from core.uow import AbstractUnitOfWork
 from core.exceptions import (
     AppException,
@@ -27,6 +27,7 @@ from core.exceptions import (
     AppointmentNotFoundException,
     BlockedScheduleException,
     ResourceNotFoundException,
+    ValidationException,
 )
 from http import HTTPStatus
 
@@ -36,14 +37,17 @@ from modules.appointments.guards import (
 )
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
+from modules.auth.service import normalize_email
 from modules.notifications.tasks import (
     EVENT_APPOINTMENT_BOOKED_BY_PANEL,
     EVENT_APPOINTMENT_COMPLETED,
     EVENT_APPOINTMENT_CONFIRMED,
     EVENT_APPOINTMENT_RESCHEDULED,
+    is_deliverable_email,
 )
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import JsonValue, Payment, PaymentStatus
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
+from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.users.model import User
@@ -60,6 +64,20 @@ class AppointmentBookPayload(TypedDict, total=False):
     notes: str | None
     intake_answers: dict[str, str]
     idempotency_key: str
+
+
+class ClientBookingPayload(TypedDict, total=False):
+    """Alta del panel para un cliente (FF-04); ver ``AppointmentCreate``."""
+
+    service_id: str
+    staff_id: str | None
+    starts_at: datetime
+    notes: str | None
+    idempotency_key: str
+    client_name: str
+    client_phone: str
+    client_email: str | None
+    allow_outside_schedule: bool
 
 
 class AppointmentService:
@@ -149,6 +167,131 @@ class AppointmentService:
         finally:
             await _apply_tenant_context(self.uow.session)
         return appointment, service, staff
+
+    async def book_for_client(
+        self,
+        *,
+        data: ClientBookingPayload,
+        store_id: str,
+        actor: User,
+    ) -> tuple[Appointment, Service, Staff]:
+        """Turno del panel PARA UN CLIENTE de la tienda (FF-04, 2026-09-24).
+
+        El dueno, la recepcion o el profesional cargan a alguien que llama o
+        esta en el local. Decisiones del dueno (delegadas): sin antelacion
+        minima (el "no mas de 5 minutos en el pasado" lo valida el schema),
+        sin OTP ni campos extra, sin sena: nace CONFIRMED y sin cobro (el link
+        de pago se genera despues, si hace falta, por el endpoint de siempre).
+        Horario del profesional salvo ``allow_outside_schedule`` (el router lo
+        reserva al admin); bloqueos, choques y buffer siempre.
+
+        Identidad: el telefono SI adopta la ficha del cliente de ESTA tienda:
+        quien carga es personal autenticado de la tienda, no un anonimo
+        ("un telefono sin OTP no es de nadie" es la regla del portal). La
+        ficha existente no se pisa; ``get_or_create_client`` filtra por tienda.
+
+        Mismo camino de concurrencia que el portal (regla 4): lock del
+        profesional, relectura de bloqueo y choque bajo el lock, INSERT; la
+        exclusion GiST es la ultima defensa. Aviso al cliente por el outbox en
+        la misma transaccion (F2-02), invalidacion despues del commit plano.
+        """
+        service = await self.uow.appointments.get_service_by_public_id(
+            data["service_id"], store_id
+        )
+        if not service or not service.is_active:
+            raise ResourceNotFoundException("Servicio", data["service_id"])
+        starts_at = ensure_utc_aware(data["starts_at"])
+        ends_at = starts_at + timedelta(minutes=service.duration_minutes)
+        outside_schedule = bool(data.get("allow_outside_schedule", False))
+
+        repo = PublicRepository(self.uow.session)
+        candidates = _requested_staff(
+            await repo.qualified_staff(store_id, service), data.get("staff_id")
+        )
+        client = await repo.get_or_create_client(
+            store_id=store_id,
+            phone=data["client_phone"],
+            name=data["client_name"],
+            email=data.get("client_email"),
+        )
+        staff = await self._lock_panel_staff(
+            repo,
+            store_id,
+            candidates,
+            starts_at,
+            ends_at,
+            chosen=bool(data.get("staff_id")),
+            require_schedule=not outside_schedule,
+        )
+
+        appointment = _client_booking(
+            data, store_id, service, staff, client, starts_at, ends_at
+        )
+        self.uow.appointments.add(appointment)
+        await self.uow.audit.log(
+            action=AuditAction.CREATE,
+            resource_type="Appointment",
+            resource_id=appointment.public_id,
+            store_id=store_id,
+            actor=actor,
+            payload_after=_client_booking_audit(
+                appointment, service, staff, outside_schedule=outside_schedule
+            ),
+        )
+        # Un email tecnico (.noreply) o ninguno: no hay a quien avisar. Y un
+        # turno que ya empezo (la tienda carga un walk-in despues) no lleva
+        # "turno confirmado": el cliente ya estuvo.
+        if is_deliverable_email(appointment.client_email) and starts_at >= now_utc():
+            self._publish_client_mail(appointment, EVENT_APPOINTMENT_BOOKED_BY_PANEL)
+        await self._commit_before_network()
+        try:
+            await invalidate_availability(self.cache, store_id, starts_at)
+        finally:
+            await _apply_tenant_context(self.uow.session)
+        return appointment, service, staff
+
+    async def _lock_panel_staff(
+        self,
+        repo: PublicRepository,
+        store_id: str,
+        candidates: list[Staff],
+        starts_at: datetime,
+        ends_at: datetime,
+        *,
+        chosen: bool,
+        require_schedule: bool,
+    ) -> Staff:
+        """El profesional del turno, ya lockeado y con la agenda releida bajo
+        el lock (regla 4). Elegido: su motivo exacto de rechazo; "cualquiera":
+        el primero libre en el orden de desempate del portal."""
+        buffer_minutes = await self.uow.appointments.get_store_buffer_minutes(store_id)
+        if chosen:
+            staff = candidates[0]
+            _raise_for_rejection(
+                await repo.staff_can_take_range(
+                    staff.id,
+                    starts_at,
+                    ends_at,
+                    buffer_minutes=buffer_minutes,
+                    require_schedule=require_schedule,
+                )
+            )
+            return staff
+        picked = await repo.pick_staff_for_range(
+            store_id,
+            candidates,
+            starts_at,
+            ends_at,
+            buffer_minutes=buffer_minutes,
+            require_schedule=require_schedule,
+        )
+        if picked is None:
+            raise AppException(
+                message="No hay profesionales disponibles para ese horario",
+                http_status=HTTPStatus.CONFLICT,
+                error_code="NO_STAFF_AVAILABLE",
+            )
+        return picked
 
     async def _commit_before_network(self) -> None:
         """Commit PLANO antes de salir a la red (Redis) (F1-05, R8-05).
@@ -775,6 +918,92 @@ def _self_booking(
         notes=data.get("notes"),
         intake_answers=data.get("intake_answers") or {},
         idempotency_key=data.get("idempotency_key"),
+    )
+
+
+def _requested_staff(
+    qualified: list[Staff], staff_public_id: str | None
+) -> list[Staff]:
+    """Candidatos del alta: el elegido (422 si no hace el servicio o no es de
+    la tienda) o todos los que lo hacen."""
+    if not staff_public_id:
+        return qualified
+    elegido = [m for m in qualified if m.public_id == staff_public_id]
+    if not elegido:
+        raise ValidationException("El profesional no realiza el servicio seleccionado")
+    return elegido
+
+
+def _client_booking_audit(
+    appointment: Appointment, service: Service, staff: Staff, *, outside_schedule: bool
+) -> dict[str, JsonValue]:
+    """Lo que la auditoria guarda del alta del panel para un cliente."""
+    return {
+        "status": appointment.status,
+        "starts_at": appointment.starts_at.isoformat(),
+        "ends_at": appointment.ends_at.isoformat(),
+        "service_id": service.public_id,
+        "staff_id": staff.public_id,
+        "source": "panel_for_client",
+        "outside_schedule": outside_schedule,
+    }
+
+
+def _raise_for_rejection(rejection: RangeRejection | None) -> None:
+    """Mismos codigos que la reprogramacion del cliente (``_check_new_slot``)."""
+    if rejection is RangeRejection.OUT_OF_SCHEDULE:
+        raise AppException(
+            message="El profesional no atiende en ese horario",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="OUT_OF_SCHEDULE",
+        )
+    if rejection is RangeRejection.BLOCKED:
+        raise AppException(
+            message="Ese horario esta bloqueado en la agenda",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="SCHEDULE_BLOCKED",
+        )
+    if rejection is RangeRejection.TAKEN:
+        raise AppointmentConflictException()
+
+
+def _client_booking(
+    data: ClientBookingPayload,
+    store_id: str,
+    service: Service,
+    staff: Staff,
+    client: User,
+    starts_at: datetime,
+    ends_at: datetime,
+) -> Appointment:
+    """Turno del panel para un cliente (FF-04): confirmado, sin retencion."""
+    email = data.get("client_email")
+    return Appointment(
+        id=str(ulid.ULID()),
+        store_id=store_id,
+        staff_id=staff.id,
+        service_id=service.id,
+        client_id=client.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        duration_minutes=service.duration_minutes,
+        # Precio de lista congelado, como el resto de las altas del panel.
+        price_amount=Decimal(str(service.price or 0)),
+        # Snapshot de ESTA reserva (mismo criterio que el portal): el nombre de
+        # la ficha, y el email que dejaron ahora sin pisar el de la ficha.
+        client_name=client.full_name or data["client_name"],
+        client_email=normalize_email(email) if email else client.email,
+        client_phone=client.phone,
+        notes=data.get("notes"),
+        intake_answers={},
+        idempotency_key=data["idempotency_key"],
+        # Sin sena: nace confirmado y sin ``expires_at`` (no hay retencion que
+        # vencer; el job de expiracion no lo toca).
+        status=AppointmentStatus.CONFIRMED.value,
+        expires_at=None,
+        # El personal no es el cliente dando su consentimiento: el alta del
+        # panel no pide ``accepts_terms`` y no inventa uno (PV-09 es del portal).
+        terms_accepted_at=None,
     )
 
 

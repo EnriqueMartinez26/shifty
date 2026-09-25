@@ -116,6 +116,30 @@ def _latest_subscription_subquery() -> Subquery:
     return select(ranked).where(ranked.c.rn == 1).subquery()
 
 
+def _store_filters(
+    search: str | None,
+    is_active: bool | None,
+    has_subscription: bool | None,
+    suscripcion: Subquery,
+) -> list[ColumnElement[bool]]:
+    """Filtros del listado de tiendas; los comparten la pagina y el total.
+
+    ``is_active=None`` es "todas" (``is_active=all`` en la API, FF-24).
+    ``has_subscription`` exige que la consulta junte ``suscripcion``.
+    """
+    filtros: list[ColumnElement[bool]] = []
+    if is_active is not None:
+        filtros.append(Store.is_active.is_(is_active))
+    if search:
+        pattern = f"%{search}%"
+        filtros.append(or_(Store.name.ilike(pattern), Store.slug.ilike(pattern)))
+    if has_subscription is True:
+        filtros.append(suscripcion.c.store_id.is_not(None))
+    elif has_subscription is False:
+        filtros.append(suscripcion.c.store_id.is_(None))
+    return filtros
+
+
 def _last_redemption_subquery() -> Subquery:
     return (
         select(
@@ -262,22 +286,32 @@ class StoreAdminRepository(_BaseAdminRepository):
             .outerjoin(suscripcion, suscripcion.c.store_id == Store.id)
             .outerjoin(Plan, Plan.id == suscripcion.c.plan_id)
             .outerjoin(canjes, canjes.c.store_id == Store.id)
+            .where(*_store_filters(search, is_active, has_subscription, suscripcion))
         )
-        if is_active is not None:
-            query = query.where(Store.is_active.is_(is_active))
-        if search:
-            pattern = f"%{search}%"
-            query = query.where(
-                (Store.name.ilike(pattern)) | (Store.slug.ilike(pattern))
-            )
-        if has_subscription is True:
-            query = query.where(suscripcion.c.store_id.is_not(None))
-        elif has_subscription is False:
-            query = query.where(suscripcion.c.store_id.is_(None))
         query = query.order_by(Store.created_at.desc()).offset(offset).limit(limit)
 
         result = await self.db.execute(query)
         return [_store_row(row[0], row) for row in result.all()]
+
+    async def count_stores(
+        self,
+        search: str | None,
+        is_active: bool | None,
+        has_subscription: bool | None,
+    ) -> int:
+        """Total de ``list_stores`` con los mismos filtros, sin paginar (FF-24).
+
+        Solo junta la ultima suscripcion si el filtro la pide: los agregados
+        de usuarios y canjes no cambian cuantas tiendas hay.
+        """
+        suscripcion = _latest_subscription_subquery()
+        query = select(func.count()).select_from(Store)
+        if has_subscription is not None:
+            query = query.outerjoin(suscripcion, suscripcion.c.store_id == Store.id)
+        query = query.where(
+            *_store_filters(search, is_active, has_subscription, suscripcion)
+        )
+        return int((await self.db.execute(query)).scalar_one())
 
     async def get_store(self, public_id: str) -> Store | None:
         result = await self.db.execute(

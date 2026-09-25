@@ -1,9 +1,11 @@
 """Consultas y escrituras de usuarios del panel. Sin commit: lo hace UserService."""
 
+import re
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from core.security import hash_password_async
 from infrastructure.persistence.patch import apply_patch
@@ -18,6 +20,45 @@ def _valor_de_rol(dato: object) -> str | None:
     puede traer el enum, asi que la comparacion se hace sobre el valor.
     """
     return None if dato is None else str(getattr(dato, "value", dato))
+
+
+_LIKE_ESCAPE = "\\"
+_PHONE_SEPARATORS = re.compile(r"[\s\-\(\)\+]")
+
+
+def _like_contains(texto: str) -> str:
+    """``%texto%`` con los comodines de LIKE del texto como literales."""
+    escapado = (
+        texto.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", _LIKE_ESCAPE + "%")
+        .replace("_", _LIKE_ESCAPE + "_")
+    )
+    return f"%{escapado}%"
+
+
+def user_search_condition(q: str) -> ColumnElement[bool]:
+    """Nombre que contiene ``q`` (sin distinguir mayusculas) o, si ``q`` es un
+    telefono (digitos y separadores, 2 o mas digitos), telefono que contiene
+    esos digitos (FF-20, F4-03).
+
+    ``ILIKE`` no es leakproof: bajo RLS nunca es condicion de indice. La
+    consulta queda acotada por ``users.store_id`` (igualdad leakproof sobre
+    ``ix_users_store_id``) y el filtro recorre solo las filas de la tienda;
+    lo fija ``tests/postgres/test_pg_busqueda_de_clientes.py``.
+    """
+    patron = _like_contains(q)
+    nombre_completo = (
+        func.coalesce(User.first_name, "") + " " + func.coalesce(User.last_name, "")
+    )
+    condiciones = [
+        User.first_name.ilike(patron, escape=_LIKE_ESCAPE),
+        User.last_name.ilike(patron, escape=_LIKE_ESCAPE),
+        nombre_completo.ilike(patron, escape=_LIKE_ESCAPE),
+    ]
+    digitos = _PHONE_SEPARATORS.sub("", q)
+    if len(digitos) >= 2 and digitos.isdigit():
+        condiciones.append(User.phone.like(f"%{digitos}%"))
+    return or_(*condiciones)
 
 
 class UserRepository:
@@ -60,6 +101,7 @@ class UserRepository:
         limit: int = 200,
         offset: int = 0,
         include_global_admins: bool = False,
+        q: str | None = None,
     ) -> list[User]:
         query = select(User).where(
             User.store_id == store_id,
@@ -74,6 +116,8 @@ class UserRepository:
             query = query.where(User.email == email)
         if role:
             query = query.where(User.role == role)
+        if q:
+            query = query.where(user_search_condition(q))
 
         # Cota: la tabla crece con cada reserva publica (un User CLIENT por
         # cliente nuevo), asi que un listado sin techo escalaba mal. El default

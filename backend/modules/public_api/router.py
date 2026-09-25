@@ -6,7 +6,7 @@ Rutas sin autenticación para reservas, OTP y autogestión del cliente.
 
 import hashlib
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Annotated
 
@@ -30,10 +30,9 @@ from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
-from core.utils import today_local
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService, StoreRules
-from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.model import Appointment
 from modules.billing.service import store_is_suspended
 from modules.notifications.tasks import enqueue_otp_email
 from modules.otp.service import OtpService
@@ -49,8 +48,11 @@ from modules.promotions.service import quote_promotion
 from modules.public_api.repository import PublicRepository
 from modules.public_api.service import (
     PublicBookingService,
+    client_cancel_denial,
+    require_public_availability_day,
+    client_may_leave,
+    client_reschedule_denial,
     decide,
-    now_compatible_with as _now_compatible_with,
     require_recent_client_otp as _require_recent_client_otp,
 )
 from modules.public_api.schemas import (
@@ -67,6 +69,7 @@ from modules.public_api.schemas import (
     PublicPaymentStatusResponse,
     PublicServiceResponse,
     PublicStaffResponse,
+    PublicStoreRefResponse,
     PublicStoreResponse,
 )
 from modules.stores.model import Store
@@ -171,6 +174,32 @@ async def get_store_by_slug(
         )
 
 
+@router.get("/stores/{slug}/ref", response_model=PublicStoreRefResponse)
+async def get_store_ref_by_slug(
+    slug: SlugPath, response: Response, db: AsyncSession = Depends(get_db)
+) -> PublicStoreRefResponse:
+    """Slug -> tienda para "Mis turnos", tambien con la tienda suspendida (FF-16).
+
+    La vitrina (``/stores/{slug}``) desaparece con la suscripcion suspendida
+    y el cliente no podia llegar a cancelar ni reprogramar, que siguen
+    permitidos (B1-06). Esto solo resuelve la referencia: inexistente o dada
+    de baja es el mismo 404 neutro que la vitrina. Rate limit ``public-read``
+    (middleware, GET bajo ``/public/``) y ``no-store``: el booleano cambia
+    cuando la tienda regulariza.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    async with tenant_bypass(db):
+        ref = await PublicRepository(db).get_store_ref_by_slug(slug.lower())
+        if ref is None:
+            raise StoreNotFoundException(identifier=slug)
+        store_id, store_public_id, name = ref
+        return PublicStoreRefResponse(
+            store_public_id=store_public_id,
+            name=name,
+            accepts_new_bookings=not await store_is_suspended(db, store_id),
+        )
+
+
 # F1-29 (decision 11): servicios y profesionales se cachean en el edge
 # (nginx proxy_cache) hasta 30 s, y 30 s mas mientras se renuevan; el
 # navegador revalida siempre. Solo el 200: un error sale con el no-store del
@@ -262,25 +291,12 @@ async def get_public_staff(
         ]
 
 
-# Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
-PUBLIC_AVAILABILITY_PAST_DAYS = 1
-PUBLIC_AVAILABILITY_FUTURE_DAYS = 120
-
-
 def _public_availability_date(raw: str) -> date:
     try:
         search_date = date.fromisoformat(raw)
     except ValueError:
         raise ValidationException("Fecha inválida")
-    today = today_local()
-    earliest = today - timedelta(days=PUBLIC_AVAILABILITY_PAST_DAYS)
-    latest = today + timedelta(days=PUBLIC_AVAILABILITY_FUTURE_DAYS)
-    if not earliest <= search_date <= latest:
-        raise ValidationException(
-            "La fecha esta fuera del rango de reservas: elegi una entre ayer "
-            f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
-        )
-    return search_date
+    return require_public_availability_day(search_date)
 
 
 @router.get("/availability")
@@ -585,6 +601,37 @@ CLIENT_HISTORY_DEFAULT_LIMIT = 50
 CLIENT_HISTORY_MAX_LIMIT = 200
 
 
+def _client_item(
+    appt: Appointment, cancellation_hours: int, *, paid: bool
+) -> ClientAppointmentItem:
+    """Un turno del historial con lo que el cliente puede hacer con el.
+
+    Los flags salen de las MISMAS reglas que las acciones
+    (``client_cancel_denial`` / ``client_reschedule_denial`` y el grafo de
+    estados): antes se repetian a mano, ``can_reschedule`` era ``can_cancel``
+    y "Cambiar"/"Cancelar" aparecian en turnos con pago pendiente o
+    acreditado que la accion rebotaba con 409.
+    """
+    vigente = client_may_leave(appt)
+    return ClientAppointmentItem(
+        public_id=appt.public_id,
+        service_name=appt.service.name,
+        staff_name=appt.staff.display_name,
+        starts_at=appt.starts_at,
+        ends_at=appt.ends_at,
+        status=appt.status,
+        notes=appt.notes,
+        custom_fields=appt.intake_answers or {},
+        can_cancel=vigente
+        and client_cancel_denial(appt, cancellation_hours=cancellation_hours) is None,
+        can_reschedule=vigente
+        and client_reschedule_denial(
+            appt, cancellation_hours=cancellation_hours, paid=paid
+        )
+        is None,
+    )
+
+
 @router.get(
     "/client/{store_public_id}/{phone}/appointments",
     response_model=ClientAppointmentsResponse,
@@ -623,40 +670,12 @@ async def get_client_appointments(
                 error_code="CLIENT_APPOINTMENTS_NOT_FOUND",
             )
 
-        appointments = await repo.get_client_appointments(
-            client.id, store.id, limit=limit
-        )
-        cancellation_cutoff_hours = store.cancellation_hours
-        items = []
-        for appt in appointments:
-            now = _now_compatible_with(appt.starts_at)
-            current_status = AppointmentStatus(appt.status)
-            is_upcoming = appt.starts_at > now
-            hours_until = (appt.starts_at - now).total_seconds() / 3600
-            can_cancel = (
-                current_status
-                in (
-                    AppointmentStatus.PENDING,
-                    AppointmentStatus.PENDING_PAYMENT,
-                    AppointmentStatus.CONFIRMED,
-                )
-                and is_upcoming
-                and hours_until >= cancellation_cutoff_hours
-            )
-            items.append(
-                ClientAppointmentItem(
-                    public_id=appt.public_id,
-                    service_name=appt.service.name,
-                    staff_name=appt.staff.display_name,
-                    starts_at=appt.starts_at,
-                    ends_at=appt.ends_at,
-                    status=appt.status,
-                    notes=appt.notes,
-                    custom_fields=appt.intake_answers or {},
-                    can_cancel=can_cancel,
-                    can_reschedule=can_cancel,
-                )
-            )
+        # Con el pago acreditado de cada turno en el mismo SELECT.
+        filas = await repo.get_client_appointments(client.id, store.id, limit=limit)
+        items = [
+            _client_item(appt, store.cancellation_hours, paid=paid)
+            for appt, paid in filas
+        ]
 
         return ClientAppointmentsResponse(
             client_name=client.full_name or "Cliente",

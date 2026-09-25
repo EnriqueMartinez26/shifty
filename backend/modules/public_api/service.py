@@ -23,7 +23,7 @@ en el router) vive tambien aca; la fijan los tests de
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import structlog
@@ -50,7 +50,9 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
-from modules.appointments.guards import reject_cancellation_while_awaiting_payment
+from core.utils import BOOKING_HORIZON_DAYS, today_local
+from infrastructure.persistence.models.appointment import ALLOWED_STATUS_TRANSITIONS
+from modules.appointments.guards import awaits_payment
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
@@ -67,7 +69,7 @@ from modules.payments.deposit_rules import (
     DepositRules,
     decide_deposit,
 )
-from modules.payments.model import JsonValue, OutboxMessage, Payment, PaymentStatus
+from modules.payments.model import JsonValue, OutboxMessage, Payment
 from modules.payments.service import (
     MercadoPagoAPIError,
     PaymentGatewayNotConnectedError,
@@ -204,6 +206,114 @@ def resolve_payment_requirement(
             )
         return False
     return viable  # "auto"
+
+
+# Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
+PUBLIC_AVAILABILITY_PAST_DAYS = 1
+PUBLIC_AVAILABILITY_FUTURE_DAYS = BOOKING_HORIZON_DAYS
+
+
+def require_public_availability_day(day: date) -> date:
+    """El dia de una consulta ANONIMA de disponibilidad, o 422.
+
+    Entre ayer y hoy + 120 dias locales (F1-11): cada fecha es una clave de
+    cache y la fecha libre dejaba su cardinalidad sin tope. La aplican
+    ``/public/availability`` y la rama sin token de
+    ``/appointments/availability`` (revision de perf/f4-back), que comparten
+    claves.
+    """
+    today = today_local()
+    earliest = today - timedelta(days=PUBLIC_AVAILABILITY_PAST_DAYS)
+    latest = today + timedelta(days=PUBLIC_AVAILABILITY_FUTURE_DAYS)
+    if not earliest <= day <= latest:
+        raise ValidationException(
+            "La fecha esta fuera del rango de reservas: elegi una entre ayer "
+            f"y los proximos {PUBLIC_AVAILABILITY_FUTURE_DAYS} dias"
+        )
+    return day
+
+
+# ---------------------------------------------------------------------------
+# Autogestion: que puede hacer el cliente con SU turno (una sola fuente)
+# ---------------------------------------------------------------------------
+
+_CLIENT_PAYMENT_IN_PROGRESS = (
+    "Este turno tiene un pago en curso. Para cancelarlo o cambiarlo, "
+    "comunicate con la tienda."
+)
+_CLIENT_PAID_RESCHEDULE = (
+    "Este turno ya tiene un pago registrado; contactá a la tienda para reprogramarlo."
+)
+
+
+def client_cancel_denial(
+    appointment: Appointment,
+    *,
+    cancellation_hours: int,
+    now: datetime | None = None,
+) -> AppException | None:
+    """Por que el cliente NO puede cancelar este turno; ``None`` si puede.
+
+    Unica fuente de la regla: la usan ``cancel_by_client`` (levanta lo que
+    devuelve) y el flag ``can_cancel`` del historial, que antes repetia parte
+    de las condiciones a mano y mostraba "Cancelar" en turnos que rebotaban.
+    El orden es el de la accion: cobro vivo (``awaits_payment``, la condicion
+    de la guarda del panel, con un mensaje para el cliente) y despues la
+    ventana de la tienda.
+    """
+    if awaits_payment(appointment):
+        return AppException(
+            message=_CLIENT_PAYMENT_IN_PROGRESS,
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="PAYMENT_APPOINTMENT_REQUIRES_RELEASE",
+        )
+    ahora = now or now_compatible_with(appointment.starts_at)
+    hours_until = (appointment.starts_at - ahora).total_seconds() / 3600
+    if hours_until < cancellation_hours:
+        return AppException(
+            message=f"Solo se puede cancelar con {cancellation_hours}h de anticipación",
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="CANCELLATION_WINDOW_EXPIRED",
+        )
+    return None
+
+
+def client_reschedule_denial(
+    appointment: Appointment,
+    *,
+    cancellation_hours: int,
+    paid: bool,
+    now: datetime | None = None,
+) -> AppException | None:
+    """Por que el cliente NO puede reprogramar este turno; ``None`` si puede.
+
+    Reprogramar cancela el original: primero las reglas de cancelar
+    (AUD2-B1-02). Despues, un pago acreditado: el ``Payment`` quedaria
+    huerfano apuntando al turno cancelado y el nuevo apareceria impago; eso lo
+    maneja la tienda. ``paid`` sale de
+    ``PublicRepository.accredited_appointment_ids``.
+    """
+    denial = client_cancel_denial(
+        appointment, cancellation_hours=cancellation_hours, now=now
+    )
+    if denial is not None:
+        return denial
+    if paid:
+        return AppException(
+            message=_CLIENT_PAID_RESCHEDULE,
+            http_status=status.HTTP_409_CONFLICT,
+            error_code="PAID_APPOINTMENT_RESCHEDULE_DENIED",
+        )
+    return None
+
+
+def client_may_leave(appointment: Appointment) -> bool:
+    """El grafo de estados deja pasar el turno a ``cancelled`` (cancelar y
+    reprogramar lo hacen). Es el mismo grafo que aplica
+    ``apply_status_transition``: un terminal no se ofrece."""
+    return AppointmentStatus.CANCELLED.value in ALLOWED_STATUS_TRANSITIONS.get(
+        appointment.status, set()
+    )
 
 
 async def require_recent_client_otp(
@@ -818,10 +928,15 @@ class PublicBookingService:
     ) -> PublicBookingResponse:
         """El cliente cancela su turno: commit -> invalidacion -> respuesta."""
         appointment, client = await self._lock_client_appointment(public_id, data.phone)
-        # Mismo guard que la via administrativa: un turno con cobro vivo solo
-        # se suelta por release(), que vence antes la preferencia en MP.
-        reject_cancellation_while_awaiting_payment(appointment)
-        await self._check_cancellation_window(appointment)
+        # Cobro vivo (solo lo suelta release(), que vence antes la preferencia
+        # en MP) y ventana de la tienda: las mismas reglas que el flag
+        # ``can_cancel`` del historial.
+        denial = client_cancel_denial(
+            appointment,
+            cancellation_hours=await self._cancellation_hours(appointment.store_id),
+        )
+        if denial is not None:
+            raise denial
 
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
         publish_slot_released(
@@ -862,9 +977,15 @@ class PublicBookingService:
         # guards que a cancelar, incluida la ventana de la tienda (AUD2-B1-02).
         # Sin ella, a quien se le paso la hora de cancelar le alcanzaba con
         # mover el turno a una fecha lejana para liberar el horario igual.
-        reject_cancellation_while_awaiting_payment(original)
-        await self._check_cancellation_window(original)
-        await self._reject_paid_reschedule(original)
+        # Y un turno con pago acreditado no se mueve desde el cliente. Las
+        # mismas reglas que el flag ``can_reschedule`` del historial.
+        denial = client_reschedule_denial(
+            original,
+            cancellation_hours=await self._cancellation_hours(original.store_id),
+            paid=bool(await self.repo.accredited_appointment_ids([original.id])),
+        )
+        if denial is not None:
+            raise denial
         service, staff = await self._service_and_staff(original)
         new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
         await self._check_new_slot(original, staff, data.new_starts_at, new_ends_at)
@@ -927,18 +1048,10 @@ class PublicBookingService:
         )
         return appointment, client
 
-    async def _check_cancellation_window(self, appointment: Appointment) -> None:
-        store = await self.repo.get_store_by_id(appointment.store_id)
-        cancellation_hours = getattr(store, "cancellation_hours", 2) if store else 2
-        hours_until = (
-            appointment.starts_at - now_compatible_with(appointment.starts_at)
-        ).total_seconds() / 3600
-        if hours_until < cancellation_hours:
-            raise AppException(
-                message=f"Solo se puede cancelar con {cancellation_hours}h de anticipación",
-                http_status=409,
-                error_code="CANCELLATION_WINDOW_EXPIRED",
-            )
+    async def _cancellation_hours(self, store_id: str) -> int:
+        """Ventana de cancelacion de la tienda (2 h si no se encuentra)."""
+        store = await self.repo.get_store_by_id(store_id)
+        return getattr(store, "cancellation_hours", 2) if store else 2
 
     async def _notify_owner_of_cancellation(
         self, appointment: Appointment, client: User, reason: str | None
@@ -972,31 +1085,6 @@ class PublicBookingService:
             )
         )
         return service
-
-    async def _reject_paid_reschedule(self, original: Appointment) -> None:
-        # Un turno con pago acreditado no se reprograma desde el cliente: el
-        # Payment quedaria huerfano apuntando al turno cancelado y el nuevo
-        # apareceria como impago. Que lo maneje la tienda.
-        paid_res = await self.db.execute(
-            select(Payment.id).where(
-                Payment.appointment_id == original.id,
-                Payment.status.in_(
-                    [
-                        PaymentStatus.APPROVED.value,
-                        PaymentStatus.MANUAL_CONFIRMED.value,
-                    ]
-                ),
-            )
-        )
-        if paid_res.scalar_one_or_none() is not None:
-            raise AppException(
-                message=(
-                    "Este turno ya tiene un pago registrado; contactá a la tienda "
-                    "para reprogramarlo."
-                ),
-                http_status=status.HTTP_409_CONFLICT,
-                error_code="PAID_APPOINTMENT_RESCHEDULE_DENIED",
-            )
 
     async def _service_and_staff(self, original: Appointment) -> tuple[Service, Staff]:
         svc_res = await self.db.execute(
@@ -1072,8 +1160,8 @@ def _rescheduled_copy(
     # nacia siempre con el default de la columna, asi que un turno confirmado
     # volvia a "pendiente de confirmar" sin que nadie se enterara y el job de
     # expiracion lo levantaba a la hora de inicio. A esta altura no hay sena
-    # de por medio -``reject_cancellation_while_awaiting_payment`` frena el
-    # ``pending_payment`` y ``_reject_paid_reschedule`` el pago acreditado-,
+    # de por medio -``client_reschedule_denial`` frena el ``pending_payment``
+    # y el pago acreditado-,
     # asi que lo unico que se conserva es un ``confirmed`` sin cobro, y con el
     # se va el ``expires_at``: no hay retencion que vencer.
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value

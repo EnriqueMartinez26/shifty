@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, model_validator
 
-from core.utils import ensure_utc_aware
+from core.utils import ensure_utc_aware, now_utc
 from core.validation import reject_payload_control_chars
 
 # Tope de duracion de UN rango de bloqueo (AUD2-B1-10). Regla 9 aplicada a
@@ -11,6 +11,28 @@ from core.validation import reject_payload_control_chars
 # uno, sobre el mismo Redis que sostiene el rate limit y la idempotencia de
 # cobros. Un anio entero (con bisiesto) cubre una licencia larga.
 MAX_BLOCK_DURATION = timedelta(days=366)
+
+# Ventana de los instantes que puede mandar un request (revision de
+# perf/f4-back, 2026-09-24): 9999-12-31 o 0001-01-01 hacian 500 despues del
+# commit, en la invalidacion del cache, y el bloqueo imposible quedaba en la
+# agenda. Hasta 2 anios hacia atras (cargar una ausencia pasada) y 2 anios
+# hacia adelante mas la duracion maxima de un bloqueo.
+BLOCK_WINDOW = timedelta(days=730)
+
+
+def block_instants_error(*instants: datetime | None) -> str | None:
+    """Motivo si algun instante mandado cae fuera de ``BLOCK_WINDOW``.
+
+    Solo para los valores que trae el request: el PATCH no revalida el
+    extremo que no cambia (editar el motivo de un bloqueo viejo sigue).
+    """
+    ahora = now_utc()
+    desde = ahora - BLOCK_WINDOW
+    hasta = ahora + BLOCK_WINDOW + MAX_BLOCK_DURATION
+    for instante in instants:
+        if instante is not None and not desde <= ensure_utc_aware(instante) <= hasta:
+            return "La fecha del bloqueo esta fuera del rango permitido"
+    return None
 
 
 def block_range_error(starts_at: datetime, ends_at: datetime) -> str | None:
@@ -38,7 +60,9 @@ class AppointmentBlockBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "AppointmentBlockBase":
-        error = block_range_error(self.starts_at, self.ends_at)
+        error = block_instants_error(self.starts_at, self.ends_at) or block_range_error(
+            self.starts_at, self.ends_at
+        )
         if error:
             raise ValueError(error)
         return self
@@ -72,7 +96,9 @@ class StoreWideBlockCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "StoreWideBlockCreate":
-        error = block_range_error(self.starts_at, self.ends_at)
+        error = block_instants_error(self.starts_at, self.ends_at) or block_range_error(
+            self.starts_at, self.ends_at
+        )
         if error:
             raise ValueError(error)
         return self
@@ -168,7 +194,9 @@ class BlockPreviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "BlockPreviewRequest":
-        error = block_range_error(self.starts_at, self.ends_at)
+        error = block_instants_error(self.starts_at, self.ends_at) or block_range_error(
+            self.starts_at, self.ends_at
+        )
         if error:
             raise ValueError(error)
         if self.recurrence != "none" and self.recurrence_until is None:

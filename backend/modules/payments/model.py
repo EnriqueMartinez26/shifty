@@ -36,6 +36,14 @@ class PaymentStatus(str, enum.Enum):
     MANUAL_CONFIRMED = "manual_confirmed"
 
 
+# Estados en los que la plata efectivamente entro. Unica fuente: la leen
+# ``Payment.is_accredited`` y las consultas que filtran en SQL (la guarda de
+# reprogramacion del cliente, ``PublicRepository.accredited_appointment_ids``).
+ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
+    {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
+)
+
+
 # Unica fuente de verdad del grafo de la region de facturacion.
 #
 # Invariante central: una vez que la plata se asento (approved /
@@ -160,10 +168,7 @@ class Payment(BaseEntity):
     @property
     def is_accredited(self) -> bool:
         """La plata efectivamente entro (aprobada o confirmada manual)."""
-        return self.status in {
-            PaymentStatus.APPROVED.value,
-            PaymentStatus.MANUAL_CONFIRMED.value,
-        }
+        return self.status in ACCREDITED_PAYMENT_STATUSES
 
     def apply_status(
         self, new_status: str, *, payload: dict[str, JsonValue] | None = None

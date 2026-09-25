@@ -1,9 +1,14 @@
 from datetime import date, datetime, timezone
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from core.utils import MAX_BOOKING_AHEAD
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    normalize_client_phone,
+    reject_payload_control_chars,
+)
 from modules.appointments.model import AppointmentStatus
 
 
@@ -12,12 +17,60 @@ from modules.appointments.model import AppointmentStatus
 # ---------------------------------------------------------------------------
 
 
+# Tope hacia adelante de las altas y reprogramaciones del panel: sin el, un
+# 9999-12-31 salia 500 (``starts_at + duracion`` desborda). Dos anios: corta
+# lo absurdo sin quitar altas lejanas que hoy se aceptan.
+PANEL_SELF_BOOKING_MAX_AHEAD = MAX_BOOKING_AHEAD
+
+
 class AppointmentCreate(BaseModel):
+    """Alta desde el panel. Dos formas, segun venga o no el cliente:
+
+    - Sin ``client_phone`` (la de siempre): auto-turno a nombre de quien
+      llama; ``staff_id`` obligatorio y ``starts_at`` en el futuro.
+    - Con ``client_name`` + ``client_phone`` (FF-04, 2026-09-24, aditivo): turno
+      para ese cliente de la tienda. ``staff_id`` opcional (se elige uno que
+      atienda), ``starts_at`` desde hace 2 anios (la tienda puede cargar un
+      horario que ya paso: decision del dueno, 2026-09-25) hasta dentro de 2
+      anios, ``allow_outside_schedule`` solo para el admin.
+    """
+
     service_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
-    staff_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
+    staff_id: Optional[str] = Field(
+        default=None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
+    )
     starts_at: datetime
     notes: Optional[str] = Field(None, max_length=1000)
     idempotency_key: str = Field(..., min_length=10, max_length=128)
+    client_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    client_phone: Optional[str] = Field(default=None, min_length=6, max_length=30)
+    client_email: Optional[EmailStr] = Field(default=None, max_length=255)
+    allow_outside_schedule: bool = False
+
+    @property
+    def for_client(self) -> bool:
+        return self.client_phone is not None
+
+    @field_validator("client_phone")
+    @classmethod
+    def phone_must_be_numeric(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else normalize_client_phone(value)
+
+    @model_validator(mode="after")
+    def client_fields_go_together(self) -> "AppointmentCreate":
+        if self.for_client:
+            if self.client_name is None:
+                raise ValueError("Falta el nombre del cliente.")
+            return self
+        if (
+            self.client_name is not None
+            or self.client_email is not None
+            or self.allow_outside_schedule
+        ):
+            raise ValueError("Falta el telefono del cliente.")
+        if self.staff_id is None:
+            raise ValueError("Falta el profesional.")
+        return self
 
     @model_validator(mode="after")
     def starts_at_must_be_future(self) -> "AppointmentCreate":
@@ -26,13 +79,29 @@ class AppointmentCreate(BaseModel):
         val = self.starts_at
         if val.tzinfo is None:
             val = val.replace(tzinfo=timezone.utc)
-        if val <= now_utc():
+        if self.for_client:
+            # La TIENDA puede cargar un horario que ya paso (un walk-in que se
+            # registra despues): solo el piso contra el desborde.
+            if val < now_utc() - MAX_BOOKING_AHEAD:
+                raise ValueError("La fecha esta fuera del rango de reservas.")
+        elif val <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado.")
+        if not self._within_horizon(val):
+            raise ValueError("La fecha esta fuera del rango de reservas.")
         return self
+
+    def _within_horizon(self, val: datetime) -> bool:
+        """Las dos formas, hasta 2 anios (``MAX_BOOKING_AHEAD``): el alta para
+        un cliente reemplaza al "Nuevo turno" que hoy reserva por el portal con
+        fecha libre, y 120 dias ahi seria un cambio de producto."""
+        from core.utils import within_max_ahead
+
+        return within_max_ahead(val, MAX_BOOKING_AHEAD)
 
     @model_validator(mode="after")
     def reject_control_chars_in_notes(self) -> "AppointmentCreate":
         self.notes = reject_payload_control_chars(self.notes)
+        self.client_name = reject_payload_control_chars(self.client_name)
         return self
 
 
@@ -114,6 +183,12 @@ class AppointmentReschedule(BaseModel):
             val = val.replace(tzinfo=timezone.utc)
         if val <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro.")
+        # Mismo tope que el auto-turno: sin el, 9999-12-31 desbordaba
+        # ``new_starts_at + duracion`` (500; revision de perf/f4-back).
+        from core.utils import within_max_ahead
+
+        if not within_max_ahead(val, PANEL_SELF_BOOKING_MAX_AHEAD):
+            raise ValueError("La fecha esta fuera del rango de reservas.")
         return self
 
 

@@ -44,10 +44,11 @@ comparan el rol persistido (`user.role` en `admin`/`staff`): en esos
 
 - Agenda interna (`/appointments/*`):
   - listar, buscar y crear: `super_admin`, `store_admin`, `professional`, `receptionist`.
+  - crear un turno para un cliente (`POST /appointments/` con `client_name` + `client_phone`, FF-04): los mismos cuatro; el `professional` solo en su propia agenda (`staff_id` igual a su usuario, o ninguno). Cargarlo fuera de la jornada del profesional (`allow_outside_schedule`): `super_admin`, `store_admin`.
   - cancelar y reprogramar: cualquier usuario autenticado de la tienda (el `client` no inicia sesion; cancela por el portal publico).
   - confirmar, completar, ausente y notas internas: rol persistido `admin` o `staff` (`store_admin`, `professional`).
   - liberar un turno pendiente: `super_admin`, `store_admin`.
-- Bloqueos (`/appointment-blocks/*`): `super_admin`, `store_admin`, `professional`. Cancelar en bloque los turnos afectados: `super_admin`, `store_admin`.
+- Bloqueos (`/appointment-blocks/*`): `super_admin`, `store_admin`, `professional`. Cancelar en bloque los turnos afectados: `super_admin`, `store_admin`. Leer la lista (`GET /appointment-blocks/`): ademas `receptionist` (FF-14, `2026-09-24`), solo lectura; todos ven los bloqueos de toda la tienda (el `professional` no se acota a su agenda, igual que en `GET /appointments/`).
 - Pagos operativos (`POST /payments/preferences/{appointment_id}`, `POST /payments/{appointment_id}/manual-confirm`, `GET /payments/gateway-config`): `super_admin`, `store_admin`, `professional`.
 - Pagos administrativos (`PUT /payments/gateway-config`, OAuth de Mercado Pago, `POST /payments/{payment_id}/refund`, conciliacion y outbox): `super_admin`, `store_admin`.
 - Deuda (`/ledger/*`): `super_admin`, `store_admin`, `professional`.
@@ -67,5 +68,5 @@ comparan el rol persistido (`user.role` en `admin`/`staff`): en esos
 
 Pendientes de decision del dueno; no se corrigen desde la documentacion.
 
-- `receptionist` no puede cobrar (pagos operativos), ni tocar deuda, ni gestionar bloqueos, ni confirmar, completar o marcar ausente un turno, aunque el objetivo le da cobros operativos/manuales y gestion de turnos. Tampoco ve reportes (403).
+- `receptionist` no puede cobrar (pagos operativos), ni tocar deuda, ni gestionar bloqueos (solo los lee, FF-14), ni confirmar, completar o marcar ausente un turno, aunque el objetivo le da cobros operativos/manuales y gestion de turnos. Tampoco ve reportes (403).
 - `professional` no exporta reportes: la decision del `2026-09-18` (B5-06) lo dejo solo con la lectura de los propios.

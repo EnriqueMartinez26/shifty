@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -186,6 +186,11 @@ class PlanResponse(PlanCreate):
         from_attributes = True
 
 
+# Ventana del periodo de una suscripcion que carga el soporte: un plan anual
+# con holgura para contratos largos.
+SUBSCRIPTION_PERIOD_WINDOW = timedelta(days=5 * 365)
+
+
 class StoreSubscriptionCreate(BaseModel):
     plan_id: str = Field(..., min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
     # Los cuatro estados del grafo (modules/billing/subscription_rules.py); el
@@ -195,6 +200,27 @@ class StoreSubscriptionCreate(BaseModel):
     currency: str | None = Field(None, min_length=3, max_length=10)
     current_period_start: datetime | None = None
     current_period_end: datetime | None = None
+
+    @field_validator("current_period_start", "current_period_end")
+    @classmethod
+    def period_within_window(cls, value: datetime | None) -> datetime | None:
+        """El periodo cae entre hace 5 anios y dentro de 5 anios.
+
+        Revision de perf/f4-back (2026-09-24): con 9999-12-31 el alta daba 200
+        y despues el banner del panel y la corrida diaria calculaban
+        ``fin + dias de gracia`` y desbordaban (500) para la tienda.
+        """
+        if value is None:
+            return value
+        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        ahora = datetime.now(timezone.utc)
+        if (
+            not ahora - SUBSCRIPTION_PERIOD_WINDOW
+            <= aware
+            <= ahora + SUBSCRIPTION_PERIOD_WINDOW
+        ):
+            raise ValueError("La fecha del periodo esta fuera del rango permitido")
+        return value
 
 
 class StoreSubscriptionResponse(BaseModel):

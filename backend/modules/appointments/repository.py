@@ -88,8 +88,22 @@ def active_block_overlap(
     end_time), que deja afuera todo bloqueo ya terminado (F1-13).
     """
     return and_(
-        StaffBlock.store_id == store_id,
+        block_overlap(store_id, starts_at, ends_at),
         StaffBlock.is_active.is_(True),
+    )
+
+
+def block_overlap(
+    store_id: str, starts_at: datetime, ends_at: datetime
+) -> ColumnElement[bool]:
+    """Bloqueo de la tienda, activo o no, que solapa ``[starts_at, ends_at)``.
+
+    Las mismas cotas que ``active_block_overlap`` (tienda y ``end_time >
+    inicio``) sin filtrar el estado: el listado de la agenda (F4-07) puede
+    pedir tambien los desactivados.
+    """
+    return and_(
+        StaffBlock.store_id == store_id,
         StaffBlock.starts_at < ends_at,
         StaffBlock.ends_at > starts_at,
     )
@@ -403,6 +417,27 @@ class AppointmentRepository:
             .limit(1)
         )
         return res.scalar_one_or_none()
+
+    async def list_store_blocks(
+        self,
+        store_id: str,
+        *,
+        window: tuple[datetime, datetime] | None,
+        include_inactive: bool,
+    ) -> list[StaffBlock]:
+        """Bloqueos de la tienda para la agenda (``GET /appointment-blocks/``).
+
+        ``window``: solo los que solapan ``[inicio, fin)`` (F4-07), por el
+        indice de ``end_time``; ``None`` es toda la historia, como antes de
+        F4-07. ``StaffBlock`` no tiene relaciones: nada que cargar aparte.
+        """
+        query = select(StaffBlock).where(StaffBlock.store_id == store_id)
+        if window is not None:
+            query = query.where(block_overlap(store_id, *window))
+        if not include_inactive:
+            query = query.where(StaffBlock.is_active.is_(True))
+        res = await self.db.execute(query.order_by(StaffBlock.start_time.asc()))
+        return list(res.scalars().all())
 
     async def list_active_blocks_in_window(
         self,

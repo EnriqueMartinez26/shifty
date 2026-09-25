@@ -15,6 +15,16 @@ from core.exceptions import AppException
 from modules.appointments.model import Appointment, AppointmentStatus
 
 
+def awaits_payment(appointment: Appointment) -> bool:
+    """El turno tiene un cobro vivo: solo lo suelta ``release()``.
+
+    Unica condicion de la regla: la usan la guarda del panel (abajo) y la del
+    cliente (``public_api.service.client_cancel_denial``), que responde el
+    mismo codigo con un mensaje para el cliente.
+    """
+    return appointment.status == AppointmentStatus.PENDING_PAYMENT.value
+
+
 def reject_cancellation_while_awaiting_payment(appointment: Appointment) -> None:
     """Bloquea la cancelacion iniciada por una persona sobre un turno con cobro vivo.
 
@@ -23,7 +33,7 @@ def reject_cancellation_while_awaiting_payment(appointment: Appointment) -> None
     via dejaria el link de pago activo y el cliente podria pagar un turno que ya
     no existe.
     """
-    if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
+    if awaits_payment(appointment):
         raise AppException(
             message=(
                 "Los turnos con un pago pendiente deben liberarse desde "
@@ -34,4 +44,4 @@ def reject_cancellation_while_awaiting_payment(appointment: Appointment) -> None
         )
 
 
-__all__ = ["reject_cancellation_while_awaiting_payment"]
+__all__ = ["awaits_payment", "reject_cancellation_while_awaiting_payment"]

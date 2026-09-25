@@ -66,6 +66,8 @@ class Presupuesto:
 # En el panel la primera consulta es la identidad (sesion + usuario, F1-01).
 PRESUPUESTOS: dict[str, Presupuesto] = {
     "GET /public/stores/{slug}": Presupuesto(consultas=2, set_config=3),  # (3)
+    # FF-16 (2026-09-24): referencia para "Mis turnos", medida al nacer.
+    "GET /public/stores/{slug}/ref": Presupuesto(consultas=2, set_config=3),
     "GET /public/services": Presupuesto(consultas=2, set_config=3),  # (3)
     "GET /public/staff": Presupuesto(consultas=3, set_config=3),  # (5)
     "GET /public/availability [miss]": Presupuesto(consultas=5, set_config=3),  # (11)
@@ -77,6 +79,14 @@ PRESUPUESTOS: dict[str, Presupuesto] = {
     "GET /dashboard/summary": Presupuesto(consultas=5, set_config=3),  # (12)
     "GET /reports/summary": Presupuesto(consultas=7, set_config=3),  # (11)
     "GET /notifications": Presupuesto(consultas=3, set_config=3),  # (3)
+    # Alta del panel para un cliente (FF-04, 2026-09-24): medida al nacer.
+    "POST /appointments/ [cliente]": Presupuesto(consultas=14, set_config=4),
+    # Revision de perf/f4-back: cada forma del alta del panel con su techo;
+    # una fila de una variante no cubre a las otras.
+    "POST /appointments/ [cliente, cualquiera]": Presupuesto(
+        consultas=15, set_config=4
+    ),
+    "POST /appointments/ [auto-turno]": Presupuesto(consultas=11, set_config=4),
 }
 
 # Prefijos de las rutas calientes: el portal publico y las lecturas del panel
@@ -94,7 +104,6 @@ PREFIJOS_CALIENTES = (
 # decir por que no se mide.
 SIN_PRESUPUESTO: dict[str, str] = {
     "GET /appointments/availability": "misma logica que la publica, ya medida",
-    "POST /appointments/": "alta desde el panel; la rafaga la cubre test_pg_reserva",
     "PATCH /appointments/{public_id}/absent": "transicion unitaria, fuera del camino caliente",
     "PATCH /appointments/{public_id}/cancel": "transicion unitaria, fuera del camino caliente",
     "PATCH /appointments/{public_id}/complete": "transicion unitaria, fuera del camino caliente",
@@ -400,6 +409,15 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
             {},
             200,
         ),
+        (
+            "GET /public/stores/{slug}/ref",
+            "GET",
+            f"/public/stores/{SLUG}/ref",
+            {},
+            None,
+            {},
+            200,
+        ),
         ("GET /public/services", "GET", "/public/services", tienda_q, None, {}, 200),
         ("GET /public/staff", "GET", "/public/staff", tienda_q, None, {}, 200),
         (
@@ -471,6 +489,52 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
                 "idempotency_key": "presupuesto-reserva-1",
             },
             {},
+            201,
+        ),
+        (
+            "POST /appointments/ [cliente]",
+            "POST",
+            "/appointments/",
+            {},
+            {
+                "service_id": tienda.service_ids[0],
+                "staff_id": tienda.staff_ids[2],
+                "starts_at": tienda.slot_libre.isoformat(),
+                "client_name": "Cliente Panel",
+                "client_phone": "+5491166600002",
+                "client_email": "cliente-panel@demo.com",
+                "idempotency_key": "presupuesto-panel-1",
+            },
+            panel,
+            201,
+        ),
+        (
+            "POST /appointments/ [cliente, cualquiera]",
+            "POST",
+            "/appointments/",
+            {},
+            {
+                "service_id": tienda.service_ids[0],
+                "starts_at": tienda.slot_libre.isoformat(),
+                "client_name": "Cliente Panel Dos",
+                "client_phone": "+5491166600003",
+                "idempotency_key": "presupuesto-panel-2",
+            },
+            panel,
+            201,
+        ),
+        (
+            "POST /appointments/ [auto-turno]",
+            "POST",
+            "/appointments/",
+            {},
+            {
+                "service_id": tienda.service_ids[0],
+                "staff_id": tienda.staff_ids[0],
+                "starts_at": (tienda.slot_libre + timedelta(hours=1)).isoformat(),
+                "idempotency_key": "presupuesto-panel-3",
+            },
+            panel,
             201,
         ),
     ]

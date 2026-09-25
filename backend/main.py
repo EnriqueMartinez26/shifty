@@ -498,7 +498,8 @@ app.add_middleware(
         "X-Requested-With",
         "X-Idempotency-Key",
     ],
-    expose_headers=["X-Idempotency-Key", "Content-Disposition"],
+    # X-Total-Count: total del listado de tiendas del superadmin (FF-24).
+    expose_headers=["X-Idempotency-Key", "Content-Disposition", "X-Total-Count"],
     max_age=600,
 )
 

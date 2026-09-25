@@ -44,7 +44,7 @@ from core.exceptions import (
 from core.roles import STORE_MANAGERS, has_any_role
 from core.uow import AbstractUnitOfWork
 from core.utils import ARGENTINA_TZ, ensure_utc_aware
-from modules.appointment_blocks.schemas import block_range_error
+from modules.appointment_blocks.schemas import block_instants_error, block_range_error
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.notifications.tasks import build_client_details, is_deliverable_email
@@ -388,7 +388,19 @@ class AppointmentBlockService:
         # Misma regla que los schemas del alta, incluido el tope de duracion
         # (AUD2-B1-10): el schema del PATCH no puede medirla porque puede
         # venir un solo extremo.
-        error = block_range_error(starts_at, ends_at)
+        # Solo los extremos cuyo VALOR cambia caen en la ventana de fechas: el
+        # formulario de la agenda reenvia siempre los dos, y editar el motivo
+        # de un bloqueo viejo no puede revalidar un rango que no se toca.
+        nuevos = [
+            valor
+            for valor, guardado in (
+                (changes.get("starts_at"), block.start_time),
+                (changes.get("ends_at"), block.end_time),
+            )
+            if isinstance(valor, datetime)
+            and ensure_utc_aware(valor) != ensure_utc_aware(guardado)
+        ]
+        error = block_instants_error(*nuevos) or block_range_error(starts_at, ends_at)
         if error:
             raise ValidationException(error)
         return (starts_at, ends_at)
