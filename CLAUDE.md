@@ -169,22 +169,44 @@ Una instrucción en lenguaje natural no es una garantía.
    absorbentes, una sola fuente por región).
 3. **Un turno con cobro vivo no se suelta sin vencer el cobro.** Cobro vivo
    es `pending_payment` o un `Payment` en `pending` o `rejected` (MP deja
-   reintentar sobre el mismo link), p. ej. el link que el
-   panel genera sobre un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
+   reintentar sobre el mismo link), p. ej. el link que el panel genera sobre
+   un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
    `modules/payments/model.py`; en SQL, `live_charge_of` en
-   `modules/payments/repository.py`). El cliente no lo cancela ni lo
-   reprograma (`client_cancel_denial`/`client_reschedule_denial`, 409
-   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`). El personal que puede cancelar
-   (admin, recepción, profesional) sí, sin pasar por el admin (decisión del
-   dueño, 2026-09-25): `AppointmentService.cancel`, `reschedule` (el turno
-   nuevo nace sin cobro; un `pending_payment` queda `pending` sin seña y con
-   `expires_at` = nuevo inicio, no conserva la retención: pendiente del dueño) y `release_pending` (solo admin) comparten
-   `_expire_live_charge`, que vence el pago por la entidad y publica
-   `payment.preference.expire` en la misma transacción, con locks turno →
-   pago; el link de MP lo anula después el outbox. Cancelar no toca un pago
-   acreditado. (`test_link_del_panel_es_cobro_vivo.py`,
+   `modules/payments/repository.py`). El camino compartido que lo vence es
+   `payments/service.py::expire_live_charge` (todos menos el job de
+   retenciones, que vence por el grafo sin publicar; ver abajo): pago a `expired` por la
+   entidad y `payment.preference.expire` al outbox en la misma transacción
+   (salvo un link placeholder, que no existe en MP), con el turno lockeado
+   antes que el pago; el link de MP lo anula después el outbox. Todos los
+   caminos que sueltan un turno (decisión del dueño, 2026-09-25, y revisión
+   de perf/f4-pay):
+   - cancelar desde el panel (`AppointmentService.cancel`, cualquier
+     personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
+     cancelar no toca un pago acreditado);
+   - reprogramar desde el panel (`reschedule`: el turno nuevo nace sin
+     cobro; un `pending_payment` queda `pending` sin seña y con `expires_at`
+     = nuevo inicio, no conserva la retención: pendiente del dueño);
+   - liberar (`release_pending`, solo admin);
+   - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
+     tienda y edición);
+   - el webhook que saca al turno de los estados cobrables (un rechazo pasa
+     un `pending_payment` a `expired`; `processing.apply_mercadopago_webhook_payload`);
+   - el job de retenciones vencidas (`payments/jobs.py`, toma los cobros de
+     `LIVE_CHARGE_PAYMENT_STATUSES` y los vence por el grafo; sin publicar:
+     el link se creó con `expiration_date_to` = la retención y ya venció).
+   El cliente no lo cancela ni lo reprograma
+   (`client_cancel_denial`/`client_reschedule_denial`, 409
+   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), y un turno terminal no se
+   reprograma desde ningún lado (409 `APPOINTMENT_NOT_ACTIVE`). El link del
+   panel y la confirmación manual solo operan sobre un turno cobrable (409
+   `APPOINTMENT_NOT_PAYABLE`). (`test_link_del_panel_es_cobro_vivo.py`,
    `test_cancelar_desde_el_panel_vence_el_cobro.py`,
+   `test_cancelar_dos_veces_desde_el_panel.py`,
    `test_reprogramar_del_panel_vence_el_cobro.py`,
+   `test_bloqueo_vence_el_cobro_vivo.py`, `test_cobro_rechazado_se_suelta.py`,
+   `test_turnos_terminales_no_reviven.py`,
+   `test_link_del_panel_solo_turnos_vivos.py`,
+   `test_confirmacion_manual_solo_turnos_vivos.py`,
    `test_pg_cancelar_con_cobro_vivo.py`)
 4. **Lock pesimista antes de cualquier transición o reserva.**
    `lock_staff_row` / `lock_by_public_id` (`SELECT ... FOR UPDATE`) antes
@@ -210,9 +232,12 @@ Una instrucción en lenguaje natural no es una garantía.
    `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
-   webhook busca el cobro sin lock y lockea turno y después pago, como liberar
-   desde el panel y el job de vencimiento (F1-18,
-   `test_webhook_lockea_turno_antes_que_pago.py`). `X-Request-ID` es parte de la firma de MP
+   webhook busca el cobro sin lock y lockea turno y después pago, como
+   liberar, cancelar y reprogramar desde el panel, la cancelación por bloqueo
+   (profesional → turnos → pagos), el link de pago del panel (en sus dos
+   fases, `lock_linkable_appointment`), la confirmación manual y el job de
+   vencimiento (F1-18, `test_webhook_lockea_turno_antes_que_pago.py`,
+   `test_pg_cancelar_con_cobro_vivo.py`). `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
    (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
    `tests/unit/test_nginx_contract.py`).
