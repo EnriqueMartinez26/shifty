@@ -12,6 +12,10 @@ quedaba esa fila; al volver desde otro telefono con ``juan@gmail.com`` la
 busqueda exacta no encontraba nada, el codigo iba al INSERT y chocaba contra el
 indice funcional ``uq_users_email_lower``. main.py responde 409 neutro y la
 reserva legitima no se podia completar con ninguna variante de mayusculas.
+
+2026-09-25 (PV-01): ese indice funcional global ya no existe. El email de un
+cliente es unico por tienda (``uq_users_client_email_per_store``) y, con
+``ck_users_email_lower``, sin importar mayusculas.
 """
 
 from datetime import datetime, timedelta, timezone

@@ -78,10 +78,19 @@ async def test_un_email_repetido_tambien_sale_como_409_neutro(
     _, token = await register_and_login(
         client, slug="alta-409-mail", email="alta-409-mail@test.com"
     )
+    # PV-01 (2026-09-25): un cliente puede tener el email de una cuenta del
+    # personal; lo que choca es el email de OTRO cliente de la misma tienda
+    # (uq_users_client_email_per_store).
+    primero = await client.post(
+        "/users/",
+        headers=auth_headers(token),
+        json=_cliente("cliente-409-mail@test.com", "1166660002"),
+    )
+    assert primero.status_code == 201, primero.text
     repetido = await client.post(
         "/users/",
         headers=auth_headers(token),
-        json=_cliente("alta-409-mail@test.com", "1166660000"),
+        json=_cliente("cliente-409-mail@test.com", "1166660000"),
     )
     assert repetido.status_code == 409, repetido.text
     _es_409_neutro(cast(JsonDict, repetido.json()))

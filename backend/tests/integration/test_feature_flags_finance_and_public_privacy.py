@@ -209,8 +209,9 @@ async def create_staff(
     *,
     email: str = "pro-demo@test.com",
 ) -> str:
-    # El email es unico global (falta unique(store_id, email)): con mas de una
-    # tienda en el mismo test hay que pasarlo distinto o choca con 409.
+    # El email del personal es unico global (PV-01: solo el de los clientes es
+    # por tienda): con mas de una tienda en el mismo test hay que pasarlo
+    # distinto o choca.
     res = await client.post(
         "/staff/",
         headers=auth_headers(token),

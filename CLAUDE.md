@@ -328,6 +328,15 @@ Una instrucción en lenguaje natural no es una garantía.
   la migración no cree): `tests/postgres/test_pg_modelo_y_migraciones.py`
   compara los dos como `alembic check` y fija la deriva previa como techo que
   solo baja (F1-15).
+  **Excepción única, fechada (2026-09-25):** `4b6d8f0a2c13` (PV-01) quita el
+  único global de `users.email` en el MISMO release que lo reemplaza por los
+  únicos parciales. Se permite SOLO porque sale en el primer release de
+  producción: Shifty nunca se desplegó, no hay base viva y el primer deploy
+  arranca de un esquema vacío, así que no existen ni la ventana del deploy
+  (código viejo sirviendo sobre el esquema nuevo) ni la del rollback (volver
+  al código anterior sin migrar). Ese código anterior sí dependía del único:
+  el login busca por email con `scalar_one_or_none`. Después del lanzamiento
+  la regla se aplica sin excepciones.
 - **Bajo RLS solo los predicados leakproof usan índices.** Postgres no
   aplica un operador que no sea `LEAKPROOF` antes de la política de fila, así
   que el filtro `store_id` explícito es el camino al índice, no solo defensa.
@@ -360,17 +369,30 @@ Una instrucción en lenguaje natural no es una garantía.
     validado contra `auth_sessions`.
 16. **Alta de admins solo por superadmin, con email normalizado a
     minúsculas y rechazo del duplicado case-insensitive antes del insert**:
-    el login busca por igualdad `users.email = normalize_email(x)` con
-    `scalar_one_or_none` (bajo RLS usa `ix_users_email`; `lower(email)`
-    recorría la tabla). Todo camino de alta normaliza con
-    `auth.service.normalize_email` y la base lo sostiene:
-    `CHECK (email = lower(email))` (`ck_users_email_lower`, F1-12) más la
-    columna única, con `uq_users_email_lower` como red previa. Un admin de tienda no crea ni asciende admins por
+    el login busca por igualdad `users.email = normalize_email(x)` SIN
+    clientes (`auth.service.login_account_email`: `role <> 'client'`) con
+    `scalar_one_or_none` (bajo RLS usa `ix_users_email` o
+    `uq_users_email_non_client`; `lower(email)` recorría la tabla). Todo
+    camino de alta normaliza con `auth.service.normalize_email` y la base lo
+    sostiene: `CHECK (email = lower(email))` (`ck_users_email_lower`, F1-12).
+    **El email de quien inicia sesión (personal, admins, superadmin) es único
+    GLOBAL; el de un cliente, único POR TIENDA** (PV-01, decisión del dueño
+    2026-09-25, migración `4b6d8f0a2c13`): `uq_users_email_non_client`
+    (`email` WHERE `role <> 'client'`) y `uq_users_client_email_per_store`
+    (`store_id, email` WHERE `role = 'client'`); `ix_users_email` quedó como
+    índice común y el funcional global `uq_users_email_lower` se retiró. Un
+    cliente puede compartir email con clientes de otras tiendas y con una
+    cuenta del personal (el barbero que es cliente de otra tienda): toda
+    búsqueda de login, olvido de clave o pre-chequeo de alta del personal
+    filtra `role <> 'client'`, o `scalar_one_or_none` vuelve a dar 500. Un
+    email de cliente se busca SIEMPRE con su `store_id`. Un admin de tienda no crea ni asciende admins por
     `/users/` (`core/roles.py::assert_can_grant_role`), no ve ni edita la
     cuenta de un superadmin y no cambia clave, estado, rol ni email de otro
     admin (`assert_can_change_access`, también por `/staff/`).
     (`test_superadmin.py`, `test_alta_de_admin_solo_superadmin.py`,
     `test_email_unico_apoyado_en_indice.py`, `test_pg_email_por_igualdad.py`,
+    `test_email_de_cliente_por_tienda.py`,
+    `test_pg_email_de_cliente_por_tienda.py`,
     `test_panel_no_toca_superadmin.py`, `test_staff_no_toca_cuentas_admin.py`)
 17. **Config de producción falla cerrada** (`core/config.py`,
     `test_config_production_guards.py`): sin placeholders en `SECRET_KEY` /
@@ -528,7 +550,14 @@ Una instrucción en lenguaje natural no es una garantía.
   `uq_users_client_phone_per_store` (`role = 'client' AND phone IS NOT NULL`;
   el personal puede compartir el teléfono del local). La migración que lo crea
   se detiene con el conteo si ya hay duplicados: no borra ni elige por nadie.
-  El email sigue siendo único GLOBAL (`users.email`), no por tienda.
+  El email de un cliente también es único POR TIENDA
+  (`uq_users_client_email_per_store`, PV-01, 2026-09-25): el mismo email
+  reserva en todas las tiendas que quiera, cada una con su ficha, y el 409 ya
+  no dice a nadie si un email existe en otra tienda. Dentro de la tienda, un
+  teléfono nuevo con el email de otro cliente sigue siendo 409 neutro (no se
+  adopta la ficha por email). El email del personal sigue único global (regla
+  16). El downgrade de `4b6d8f0a2c13` se detiene con el conteo si un email
+  quedó en dos filas.
 
 ### Configuración y despliegue
 
@@ -722,9 +751,7 @@ Una instrucción en lenguaje natural no es una garantía.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
   las 11 funciones de más de 80 líneas que quedan en el backend (regla 29);
-  zona horaria por tienda; unicidad de email de clientes POR tienda (hoy es
-  global, así que un mismo email no puede ser cliente en dos tiendas);
-  migrar los commits de routers/repos que quedan en
+  zona horaria por tienda; migrar los commits de routers/repos que quedan en
   `COMMITS_DECLARADOS_FUERA_DE_SERVICE` al patrón de `appointments`; medir
   la cobertura del backend en CI (`fail_under = 80` en `pyproject.toml`,
   pero CI corre `pytest` sin `--cov`); probar la cadena completa de
@@ -738,7 +765,8 @@ Una instrucción en lenguaje natural no es una garantía.
   Cerrado el 2026-09-19: descomposición de `create_public_booking` y
   `client_reschedule_appointment` y migración de `public_api` al service
   (B1-12). Cerrado el 2026-09-22: el pre-commit hook quedó activado en el
-  clon de Enrique.
+  clon de Enrique. Cerrado el 2026-09-25: email de cliente único POR tienda
+  (PV-01, regla 16).
 
 ## 6. Compuertas de proceso
 

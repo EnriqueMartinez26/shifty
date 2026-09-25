@@ -11,7 +11,7 @@ from typing import NoReturn, TypedDict
 
 import structlog
 from fastapi import status
-from sqlalchemy import select, update
+from sqlalchemy import and_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -64,6 +64,7 @@ __all__ = [
     "hash_token",
     "login_user",
     "list_user_sessions",
+    "login_account_email",
     "logout_session",
     "normalize_email",
     "refresh_session",
@@ -115,6 +116,24 @@ class PasswordResetOutcome:
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def login_account_email(email: str) -> ColumnElement[bool]:
+    """La cuenta que INICIA SESION con ``email`` (ya normalizado).
+
+    PV-01 (2026-09-25): el email de un cliente es unico por tienda
+    (``uq_users_client_email_per_store``) y el de las cuentas que inician
+    sesion, unico global (``uq_users_email_non_client``). Un cliente puede
+    compartir email con un profesional o con otros clientes de otras tiendas,
+    asi que buscar solo por email podia devolver varias filas y
+    ``scalar_one_or_none`` daba 500 (regla 16). Excluir a los clientes deja a
+    lo sumo UNA fila: la que el indice unico parcial garantiza. Los clientes
+    no inician sesion (portal por telefono + OTP).
+
+    Es el filtro del login, del olvido de clave y del pre-chequeo de alta del
+    personal y de los admins.
+    """
+    return and_(User.email == email, User.role != ROLE_CLIENT)
 
 
 # Hash de sacrificio para igualar el tiempo de respuesta cuando el email no
@@ -317,7 +336,10 @@ async def login_user(
     async with tenant_bypass(db):
         # Igualdad sobre la columna normalizada (ck_users_email_lower): bajo
         # RLS usa ix_users_email; lower(email) recorria users entera (F1-12).
-        result = await db.execute(select(User).where(User.email == normalized_email))
+        # Sin clientes: pueden compartir este email (PV-01).
+        result = await db.execute(
+            select(User).where(login_account_email(normalized_email))
+        )
         user = result.scalar_one_or_none()
 
         # Se verifica SIEMPRE una password (real o de sacrificio) para que el
@@ -575,7 +597,9 @@ async def request_password_reset(
     normalized_email = normalize_email(str(data.email))
     async with tenant_bypass(db):
         result = await db.execute(
-            select(User).where(User.email == normalized_email, User.is_active.is_(True))
+            select(User).where(
+                login_account_email(normalized_email), User.is_active.is_(True)
+            )
         )
         user = result.scalar_one_or_none()
 

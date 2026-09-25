@@ -15,7 +15,11 @@ from infrastructure.persistence.models.staff import (
     STAFF_KIND_RESOURCE,
 )
 from modules.staff.model import Schedule, Staff
-from modules.auth.service import normalize_email, revoke_sessions_for_user
+from modules.auth.service import (
+    login_account_email,
+    normalize_email,
+    revoke_sessions_for_user,
+)
 from modules.users.model import User, UserRole
 import ulid
 
@@ -130,10 +134,11 @@ class StaffRepository:
         # bajo RLS (F1-12). Este pre-chequeo es el mensaje amable, con limit(1)
         # para no dar 500 ante duplicados heredados. En la carrera
         # SELECT/INSERT decide el indice unico: la IntegrityError sube hasta
-        # main.py y sale como 409.
+        # main.py y sale como 409. Solo cuentas que inician sesion: un cliente
+        # (de esta u otra tienda) puede tener el mismo email (PV-01).
         email = normalize_email(str(data["email"]))
         user_res = await self.db.execute(
-            select(User.id).where(User.email == email).limit(1)
+            select(User.id).where(login_account_email(email)).limit(1)
         )
         if user_res.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")
@@ -341,7 +346,9 @@ class StaffRepository:
         if email is not None and email != staff.email:
             # Mensaje amable; la garantia es el indice unico (ver create).
             existing_res = await self.db.execute(
-                select(User.id).where(User.email == email, User.id != staff.id).limit(1)
+                select(User.id)
+                .where(login_account_email(email), User.id != staff.id)
+                .limit(1)
             )
             if existing_res.first() is not None:
                 raise ValueError("Ya existe un usuario con ese email")

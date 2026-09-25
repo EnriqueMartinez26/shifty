@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password_async
 from infrastructure.persistence.patch import apply_patch
-from modules.auth.service import normalize_email, revoke_sessions_for_user
+from modules.auth.service import (
+    login_account_email,
+    normalize_email,
+    revoke_sessions_for_user,
+)
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
@@ -468,10 +472,11 @@ class UserAdminRepository(_BaseAdminRepository):
         # mensaje amable (regla 16). Con limit(1) no puede dar 500 aunque la
         # base traiga duplicados heredados, y no se atrapa la IntegrityError:
         # en la carrera entre el SELECT y el INSERT decide el indice y main.py
-        # responde 409 neutro (regla 20).
+        # responde 409 neutro (regla 20). Solo cuentas que inician sesion: un
+        # cliente de cualquier tienda puede tener el mismo email (PV-01).
         data["email"] = normalize_email(str(data["email"]))
         existing = await self.db.execute(
-            select(User.id).where(User.email == data["email"]).limit(1)
+            select(User.id).where(login_account_email(data["email"])).limit(1)
         )
         if existing.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")
@@ -537,8 +542,12 @@ class UserAdminRepository(_BaseAdminRepository):
             await self.db.refresh(user)
             return user
         except IntegrityError:
+            # Regla 20: 409 neutro por el handler de main.py, como /users/.
+            # Antes era 400 "No se pudo actualizar el usuario": desde PV-01 un
+            # cambio de rol puede chocar con el email de una cuenta de login
+            # (uq_users_email_non_client) y eso es un conflicto.
             await self.db.rollback()
-            raise ValueError("No se pudo actualizar el usuario")
+            raise
 
     async def set_global_admin(self, user: User, enabled: bool, actor: User) -> User:
         # Regla 14, en el unico lugar donde vive (AUD2-B3-12): el conteo era
@@ -554,7 +563,14 @@ class UserAdminRepository(_BaseAdminRepository):
         # Cambiar el poder global exige re-login: las sesiones (y con ellas los
         # access tokens atados por sid) mueren aca mismo, en ambas direcciones.
         await revoke_sessions_for_user(self.db, user.id)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError:
+            # PV-01: promover un cliente que comparte email con una cuenta de
+            # login choca con uq_users_email_non_client. 409 neutro (regla 20)
+            # con la sesion sana.
+            await self.db.rollback()
+            raise
         self._audit(
             actor,
             "User",

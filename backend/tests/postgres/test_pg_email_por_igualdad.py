@@ -9,6 +9,14 @@ publico. El indice funcional ``uq_users_email_lower`` tenia ``idx_scan = 0``.
 Ahora el email vive normalizado en la columna, lo sostiene
 ``CHECK (email = lower(email))`` (``ck_users_email_lower``) y las consultas
 comparan ``users.email = :email``, que usa ``ix_users_email``.
+
+2026-09-25 (PV-01): el login y el olvido de clave filtran ademas ``role <>
+'client'`` (el email de un cliente es unico por tienda y puede repetirse). Con
+el rol como literal del plan, Postgres elige el indice unico parcial
+``uq_users_email_non_client``; con un plan generico (rol como parametro) no
+puede probar el predicado y usa ``ix_users_email``, que sigue como indice
+comun. Los dos son igualdad sobre la columna: lo que no puede volver es el
+recorrido de la tabla.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from tests.postgres.planes import (
 pytestmark = pytest.mark.postgres
 
 REVISION_DEL_CHECK = "c4e6a8b0d2f1"
+INDICES_DE_EMAIL = ("ix_users_email", "uq_users_email_non_client")
 
 
 def _busquedas_por_email(
@@ -65,9 +74,9 @@ async def test_login_y_olvido_de_clave_usan_el_indice_de_email(
     for sentencia in busquedas:
         plan = await plan_de(app_engine, sentencia, global_admin=True)
         condiciones = condiciones_de_indice(plan)
-        assert "email" in condiciones.get("ix_users_email", ""), (
-            f"{sentencia[0]}\n{resumen(plan)}"
-        )
+        assert any(
+            "email" in condiciones.get(indice, "") for indice in INDICES_DE_EMAIL
+        ), f"{sentencia[0]}\n{resumen(plan)}"
 
 
 @pytest.mark.asyncio

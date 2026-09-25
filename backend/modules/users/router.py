@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import AppException, UserNotFoundException, ValidationException
 from core.database import get_db
-from core.roles import assert_can_change_access, assert_can_grant_role
+from core.roles import (
+    assert_can_change_access,
+    assert_can_grant_role,
+    assert_global_admin_keeps_login_role,
+)
 from modules.users.guards import assert_deactivation_allowed
 from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
 from modules.auth.dependencies import get_current_admin
@@ -114,6 +118,8 @@ async def update_user(
     assert_can_change_access(
         admin, user, password=data.password, is_active=data.is_active, role=data.role
     )
+    # PV-01: un superadmin con rol de cliente quedaba afuera del login.
+    assert_global_admin_keeps_login_role(user, data.role)
     # Regla 14: tambien por aca se llegaba a dejar la plataforma sin SuperAdmin
     # activo (AUD2-B3-01).
     await assert_deactivation_allowed(db, admin, user, is_active=data.is_active)

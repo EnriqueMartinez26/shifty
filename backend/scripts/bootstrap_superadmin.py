@@ -27,6 +27,7 @@ from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant
 from core.model_registry import load_all_models
 from core.validation import validate_password_strength
 from core.security import hash_password
+from modules.auth.service import login_account_email
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -93,7 +94,10 @@ async def bootstrap() -> None:
     async with AsyncSessionFactory() as db:
         await _apply_tenant_context(db)
 
-        result = await db.execute(select(User).where(User.email == email))
+        # Solo cuentas que inician sesion: clientes de varias tiendas pueden
+        # tener este mismo email (PV-01) y nunca se promueve una ficha de
+        # cliente a superadmin.
+        result = await db.execute(select(User).where(login_account_email(email)))
         user = result.scalar_one_or_none()
 
         if user:
