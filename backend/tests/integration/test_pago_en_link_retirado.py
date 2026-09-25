@@ -239,9 +239,9 @@ async def test_la_conciliacion_encuentra_un_pago_de_un_link_retirado(
     )
     cobro = await _cobro(test_session, turno)
     referencia_vieja = mp.referencias[vieja]
-    remoto = _pago_de_mp(cobro, referencia=referencia_vieja, externo="mp-cupon-9")[
-        "data"
-    ]
+    remoto: dict[str, Any] = _pago_de_mp(
+        cobro, referencia=referencia_vieja, externo="mp-cupon-9"
+    )["data"]
     busquedas: list[str] = []
 
     async def mp_busqueda(
