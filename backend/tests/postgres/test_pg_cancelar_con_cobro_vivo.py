@@ -758,3 +758,110 @@ async def test_rafaga_de_cancelaciones_del_portal_una_sola_gana(
     ]
     assert len(liberados) == 1, liberados
     assert len(avisos) == 1, avisos
+
+
+# ---------------------------------------------------------------------------
+# Confirmacion manual contra cancelar (revision de perf/f4-pay, 2026-09-25, #4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirmacion_manual_contra_la_cancelacion_del_personal(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``POST /payments/{turno}/manual-confirm`` (admin) y la cancelacion del
+    profesional sobre el mismo turno a la vez. Los dos lockean el turno
+    primero y se serializan. Lo que se fija, sea cual sea el orden:
+    - gano la cancelacion: la confirmacion es 409 ``APPOINTMENT_NOT_PAYABLE``
+      y no hay cobro acreditado (no hay cobro o, si habia un link, vencido);
+    - gano la confirmacion: cobro ``manual_confirmed`` y la cancelacion
+      cancela el turno pagado como siempre (fuera de D2).
+    Cero 5xx; la cancelacion siempre gana su 200; nunca un cobro acreditado
+    que se registro DESPUES de cancelar (409 implica que no se acredito)."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    mp = _MercadoPago()
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    store, admin = await register_and_login(
+        client, app_sessions, slug="manual-pg-rafaga", email="manual-pg@demo.com"
+    )
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(admin),
+        json={"deposit_policy": "La sena se descuenta del total."},
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, admin)
+    await _configure_gateway(client, admin)
+    service = await create_service(client, admin)
+    staff = await create_staff(client, admin, service, email="staff-manual-pg@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+    profesional = await _profesional(client, admin)
+
+    turnos: list[str] = []
+    for i in range(CARRERAS):
+        alta = await client.post(
+            "/appointments/",
+            headers=auth_headers(admin),
+            json={
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": dia.replace(
+                    hour=10 + i, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "client_name": f"Cliente Manual {i}",
+                "client_phone": f"+54911560{i:05d}",
+                "idempotency_key": f"manual-pg-alta-{i:04d}",
+            },
+        )
+        assert alta.status_code == 201, alta.text
+        turnos.append(str(alta.json()["public_id"]))
+
+    llamadas: list[Any] = []
+    for turno in turnos:
+        llamadas.append(
+            client.post(
+                f"/payments/{turno}/manual-confirm",
+                headers=auth_headers(admin),
+                json={"notes": "efectivo"},
+            )
+        )
+        llamadas.append(
+            client.patch(
+                f"/appointments/{turno}/cancel", headers=auth_headers(profesional)
+            )
+        )
+    respuestas: list[Response] = await asyncio.gather(*llamadas)
+
+    assert all(r.status_code < 500 for r in respuestas), [
+        (r.status_code, r.text[:200]) for r in respuestas if r.status_code >= 500
+    ]
+    estado = await _estado_de_turnos_y_cobros(owner_engine)
+    async with owner_engine.connect() as conn:
+        filas = await conn.execute(
+            text(
+                "select a.id, p.paid_at, a.cancelled_at from appointments a "
+                "join payments p on p.appointment_id = a.id"
+            )
+        )
+        momentos = {str(f[0]): (f[1], f[2]) for f in filas.all()}
+    for i, turno in enumerate(turnos):
+        manual, cancelacion = respuestas[2 * i], respuestas[2 * i + 1]
+        turno_estado, cobros = estado[turno]
+        assert cancelacion.status_code == 200, cancelacion.text
+        assert turno_estado == "cancelled"
+        acreditados = [c for c in cobros if c[0] == "manual_confirmed"]
+        if manual.status_code == 409:
+            assert manual.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE"
+            assert acreditados == [], (turno, cobros)
+        else:
+            assert manual.status_code == 200, manual.text
+            assert len(acreditados) == 1, (turno, cobros)
+            # Se registro ANTES de cancelar: bajo el lock del turno, la
+            # confirmacion que llega despues de la cancelacion es 409.
+            pagado, cancelado = momentos[turno]
+            assert pagado is not None and cancelado is not None
+            assert pagado <= cancelado, (turno, pagado, cancelado)

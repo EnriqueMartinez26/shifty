@@ -1266,7 +1266,7 @@ class AppointmentNotPayableError(AppException):
         )
 
 
-async def _lock_linkable_appointment(
+async def lock_linkable_appointment(
     db: AsyncSession, *, appointment_id: str, store_id: str
 ) -> bool:
     """Lockea el turno (``FOR UPDATE``) y dice si admite un link de pago.
@@ -1348,7 +1348,7 @@ async def create_panel_payment_preference(
     un link vivo sobre un turno cancelado (revision de perf/f4-pay,
     2026-09-25).
     """
-    if not await _lock_linkable_appointment(
+    if not await lock_linkable_appointment(
         db, appointment_id=appointment.id, store_id=store_id
     ):
         await db.rollback()
@@ -1389,7 +1389,7 @@ async def create_panel_payment_preference(
                 keep_existing_amount=True,
                 create_provider_link=True,
             )
-        sellable = await _lock_linkable_appointment(
+        sellable = await lock_linkable_appointment(
             db, appointment_id=appointment_id, store_id=store_id
         )
         if sellable:

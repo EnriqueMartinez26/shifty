@@ -22,9 +22,11 @@ from modules.notifications.model import NotificationType
 from modules.payments.model import Payment, PaymentStatus
 from modules.payments.service import (
     EVENT_PREFERENCE_EXPIRE,
+    AppointmentNotPayableError,
     _is_placeholder_preference,
     calculate_service_payment_amount,
     ensure_payment_preference,
+    lock_linkable_appointment,
     sync_appointment_with_payment,
 )
 from modules.services.model import Service
@@ -60,7 +62,18 @@ class PaymentService:
 
         El link real que se conserva se manda a vencer en Mercado Pago
         (``_expire_live_checkout``): la plata ya entro por otro lado.
+
+        Revision de perf/f4-pay (2026-09-25): lockea el turno PRIMERO (orden
+        turno -> pago, regla 7), lo relee bajo el lock y solo acepta estados
+        cobrables; un turno terminal (p. ej. recien cancelado por el personal)
+        es 409 ``APPOINTMENT_NOT_PAYABLE`` y el cobro no se toca.
         """
+        if not await lock_linkable_appointment(
+            self.uow.session, appointment_id=appointment.id, store_id=actor.store_id
+        ):
+            raise AppointmentNotPayableError()
+        # El router lo leyo sin lock: se relee con la fila ya lockeada.
+        await self.uow.session.refresh(appointment)
         resolved = amount
         if resolved is None and appointment.price_amount is not None:
             resolved = appointment.price_amount
