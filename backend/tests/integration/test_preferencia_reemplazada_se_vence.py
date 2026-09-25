@@ -9,7 +9,7 @@ descartan un ``preference_id`` real dejaban el checkout viejo vivo en MP:
    mismo turno, con importes distintos;
 2. confirmar a mano con un importe explicito (mismo camino).
 
-Si el cliente paga el link viejo, ``_validate_payment_integrity`` lo rechaza
+Si el cliente paga el link viejo, ``_validate_payment_link`` lo rechaza
 por preferencia y por importe: 10 reintentos del inbox y a ``failed_webhooks``.
 La plata entro a la cuenta de la tienda y Shifty no la registra.
 

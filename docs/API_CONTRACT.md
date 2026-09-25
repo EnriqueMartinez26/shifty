@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 110 — Operaciones: 137
+- Paths: 111 — Operaciones: 138
 
 ## /
 
@@ -472,6 +472,23 @@ Responses:
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Customer Ledger
+
+### GET /ledger/clients
+
+- Summary: Buscador de clientes del fiado
+- operationId: `search_ledger_clients_ledger_clients_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `q` | no | string \| null | minLength=2, maxLength=80 |
+| query | `limit` | no | integer | minimum=1, maximum=100, default=50 |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_list_LedgerClientItem__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /ledger/customers/{client_id}
 
@@ -2391,6 +2408,14 @@ Responses:
 | `data` | array<CouponResponse> | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_list_LedgerClientItem__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<LedgerClientItem> | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_list_object__
 
 | field | type | required | constraints |
@@ -3206,6 +3231,15 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | field | type | required | constraints |
 |---|---|---|---|
 | `detail` | array<ValidationError> | no |  |
+
+### LedgerClientItem
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `name` | string | yes |  |
+| `email` | string \| null | no |  |
+| `phone` | string \| null | no |  |
 
 ### LedgerMovementCreate
 
@@ -4364,4 +4398,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `client_email` | string \| null | no | maxLength=255, format="email" |
 | `notes` | string \| null | no | maxLength=300 |
 
-Generado desde app.openapi() el 2026-09-25, commit 89da468
+Generado desde app.openapi() el 2026-09-25, commit e6c32d4

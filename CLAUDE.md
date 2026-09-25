@@ -167,12 +167,54 @@ Una instrucción en lenguaje natural no es una garantía.
    (hoy `b2c3d4e5f6a7_statechart_hardening.py`).
    `test_statechart_invariants.py` cubre el grafo en Python (terminales
    absorbentes, una sola fuente por región).
-3. **Un turno con pago pendiente no se cancela directo.** Pasa por
-   `AppointmentService.release_pending` (`modules/appointments/service.py`),
-   que vence el pago y publica `payment.preference.expire` en la misma
-   transacción; el link de MP lo anula después el outbox; la guarda es
-   `reject_cancellation_while_awaiting_payment` en
-   `modules/appointments/guards.py`.
+3. **Un turno con cobro vivo no se suelta sin vencer el cobro.** Cobro vivo
+   es `pending_payment` o un `Payment` en `pending` o `rejected` (MP deja
+   reintentar sobre el mismo link), p. ej. el link que el panel genera sobre
+   un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
+   `modules/payments/model.py`; en SQL, `live_charge_of` en
+   `modules/payments/repository.py`). El camino compartido que lo vence es
+   `payments/service.py::expire_live_charge` (todos menos el job de
+   retenciones, que vence por el grafo sin publicar; ver abajo): pago a `expired` por la
+   entidad y `payment.preference.expire` al outbox en la misma transacción
+   (salvo un link placeholder, que no existe en MP), con el turno lockeado
+   antes que el pago; el link de MP lo anula después el outbox. Todos los
+   caminos que sueltan un turno (decisión del dueño, 2026-09-25, y revisión
+   de perf/f4-pay):
+   - cancelar desde el panel (`AppointmentService.cancel`, cualquier
+     personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
+     cancelar no toca un pago acreditado);
+   - reprogramar desde el panel (`reschedule`: el turno nuevo nace sin
+     cobro; un `pending_payment` queda `pending` sin seña y con `expires_at`
+     = nuevo inicio, no conserva la retención: pendiente del dueño);
+   - liberar (`release_pending`, solo admin);
+   - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
+     tienda y edición);
+   - el webhook que suelta el turno (un rechazo pasa
+     un `pending_payment` a `expired`; `processing.apply_mercadopago_webhook_payload`);
+   - el job de retenciones vencidas (`payments/jobs.py`, toma los cobros de
+     `LIVE_CHARGE_PAYMENT_STATUSES` y los vence por el grafo; sin publicar:
+     el link se creó con `expiration_date_to` = la retención y ya venció).
+   El cliente no lo cancela ni lo reprograma
+   (`client_cancel_denial`/`client_reschedule_denial`, 409
+   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), y un turno terminal no se
+   reprograma desde ningún lado (409 `APPOINTMENT_NOT_ACTIVE`). El link del
+   panel y la confirmación manual lockean el turno y rechazan uno soltado
+   (`cancelled`/`expired`, `RELEASED_APPOINTMENT_STATUSES`: 409
+   `APPOINTMENT_NOT_PAYABLE`); un `completed` o `absent` se sigue cobrando.
+   Regenerar el link de un cobro `expired` sella un `preference_id` nuevo y
+   lo reabre con `Payment.reopen_for_panel_link` (único llamador el link del
+   panel, bajo el lock del turno; `ALLOWED_PAYMENT_TRANSITIONS` no tiene
+   `expired → pending` para que un webhook tardío no reabra un cobro vencido;
+   `test_reabrir_cobro_para_link_del_panel.py`,
+   `test_regenerar_link_de_cobro_vencido.py`). (`test_link_del_panel_es_cobro_vivo.py`,
+   `test_cancelar_desde_el_panel_vence_el_cobro.py`,
+   `test_cancelar_dos_veces_desde_el_panel.py`,
+   `test_reprogramar_del_panel_vence_el_cobro.py`,
+   `test_bloqueo_vence_el_cobro_vivo.py`, `test_cobro_rechazado_se_suelta.py`,
+   `test_turnos_terminales_no_reviven.py`,
+   `test_link_del_panel_solo_turnos_vivos.py`,
+   `test_confirmacion_manual_solo_turnos_vivos.py`,
+   `test_pg_cancelar_con_cobro_vivo.py`)
 4. **Lock pesimista antes de cualquier transición o reserva.**
    `lock_staff_row` / `lock_by_public_id` (`SELECT ... FOR UPDATE`) antes
    de leer disponibilidad. Prohibido "verificar y luego actuar" sin lock.
@@ -194,12 +236,29 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`). `processed_at` solo si se aplicó de verdad; el inbox
+   `processing.py`); la integridad exige la `external_reference` del link
+   VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`, prendido
+   por defecto; apagado, regenerar el link de un cobro vencido es 409; el pago
+   de MP no trae `preference_id`). Los links que un cobro deja de usar quedan en
+   `payment_link_history` (`modules/payments/links.py`) porque su pago puede
+   avisarse tarde (webhook demorado, reentregado o perdido; con `binary_mode`
+   no hay cupones pendientes) y la conciliacion lo busca 7 días: un `approved`
+   de uno de ellos, por su importe, lo adopta un cobro no acreditado (el
+   vigente se vence) y cualquier otro pago en un link reemplazado avisa una
+   vez por pago de MP; los no aprobados se cierran como no-op. `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
-   webhook busca el cobro sin lock y lockea turno y después pago, como liberar
-   desde el panel y el job de vencimiento (F1-18,
-   `test_webhook_lockea_turno_antes_que_pago.py`). `X-Request-ID` es parte de la firma de MP
+   webhook busca el cobro sin lock y lockea turno y después pago, como
+   liberar, cancelar y reprogramar desde el panel, la cancelación por bloqueo
+   (profesional → turnos → pagos), el link de pago del panel (en sus dos
+   fases, `lock_payable_appointment`) y la confirmación manual (F1-18,
+   `test_webhook_lockea_turno_antes_que_pago.py`,
+   `test_pg_cancelar_con_cobro_vivo.py`). El job de retenciones vencidas
+   lockea SOLO el turno (`SKIP LOCKED`, `of=Appointment`: Postgres no deja
+   `FOR UPDATE` sobre el lado nullable del outer join) y escribe el pago
+   serializado por ese lock, sin `FOR UPDATE` propio: todo otro escritor del
+   pago toma el turno antes, y la columna `version` corta lo que quede.
+   Lockearlo aparte sumaría una sentencia por lote. `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
    (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
    `tests/unit/test_nginx_contract.py`).
@@ -560,12 +619,16 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Tamaño y forma
 
 29. **Función de más de 80 líneas necesita justificación en el PR.** En el
-    backend quedan 8 al 2026-09-19 (AST, `end_lineno - lineno + 1 > 80`,
-    sin `tests/` ni `alembic/`): `process_outbox_batch`,
-    `_build_store_notification` y `_claim_and_expire_preferences`
-    (`payments/jobs.py`), `OtpService.request_code`,
-    `ledger/router.py::get_ledger_summary` y tres en `scripts/`. Son deuda,
-    no permiso. `create_public_booking` y `client_reschedule_appointment`
+    backend quedan 11 al 2026-09-25 (AST, `end_lineno - lineno + 1 > 80`,
+    sin `tests/` ni `alembic/`): `_build_store_notification` y
+    `_claim_and_expire_preferences` (`payments/jobs.py`), `book_for_client` y `_find_suggestion`
+    (`appointments/service.py`), `availability.get_available_slots`,
+    `ledger/router.py::get_ledger_summary`,
+    `stores/router.py::update_my_store`,
+    `core/security_middleware.py::__call__` y tres en `scripts/`.
+    `process_outbox_batch`, `OtpService.request_code` y
+    `_expire_unpaid_appointments` ya bajaron del tope.
+    Son deuda, no permiso. `create_public_booking` y `client_reschedule_appointment`
     se descompusieron (B1-12). El front no está medido acá. Ante una
     validación nueva se extrae, no se apila.
 
@@ -648,7 +711,7 @@ Una instrucción en lenguaje natural no es una garantía.
   RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
-  las 8 funciones de más de 80 líneas que quedan en el backend (regla 29);
+  las 11 funciones de más de 80 líneas que quedan en el backend (regla 29);
   zona horaria por tienda; unicidad de email de clientes POR tienda (hoy es
   global, así que un mismo email no puede ser cliente en dos tiendas);
   migrar los commits de routers/repos que quedan en

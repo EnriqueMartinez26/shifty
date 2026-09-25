@@ -89,7 +89,7 @@ def _remoto(turno: str, cobro: Payment, estado: str) -> dict[str, Any]:
     return {
         "id": "mp-pago-contracargo",
         "status": estado,
-        "external_reference": turno,
+        "external_reference": cobro.current_external_reference,
         "preference_id": cobro.preference_id,
         "transaction_amount": float(cobro.amount),
         "currency_id": cobro.currency,

@@ -51,8 +51,12 @@ from core.exceptions import (
 )
 from core.feature_flags import is_store_feature_enabled
 from core.utils import BOOKING_HORIZON_DAYS, today_local
-from infrastructure.persistence.models.appointment import ALLOWED_STATUS_TRANSITIONS
-from modules.appointments.guards import awaits_payment
+from modules.appointments.guards import (
+    awaits_payment,
+    is_active,
+    reject_already_cancelled,
+    reject_inactive,
+)
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.billing.dependencies import reject_new_public_business_when_suspended
 from modules.notifications.model import NotificationType
@@ -70,10 +74,13 @@ from modules.payments.deposit_rules import (
     decide_deposit,
 )
 from modules.payments.model import JsonValue, OutboxMessage, Payment
+from modules.payments.repository import PaymentRepository
 from modules.payments.service import (
     MercadoPagoAPIError,
     PaymentGatewayNotConnectedError,
+    ProviderPreferenceWithoutLinkError,
     ensure_payment_preference,
+    expire_unsealed_preference,
     mercadopago_budget,
 )
 from modules.promotions.model import PromotionRedemption
@@ -250,6 +257,7 @@ def client_cancel_denial(
     appointment: Appointment,
     *,
     cancellation_hours: int,
+    live_payment: bool,
     now: datetime | None = None,
 ) -> AppException | None:
     """Por que el cliente NO puede cancelar este turno; ``None`` si puede.
@@ -260,8 +268,13 @@ def client_cancel_denial(
     El orden es el de la accion: cobro vivo (``awaits_payment``, la condicion
     de la guarda del panel, con un mensaje para el cliente) y despues la
     ventana de la tienda.
+
+    ``live_payment``: el turno tiene un ``Payment`` vivo (un link generado
+    desde el panel sobre un turno confirmado, D1 2026-09-25). Lo calcula el
+    llamador con ``live_charge_of``: la accion con
+    ``PaymentRepository.has_live_charge``, el historial en su mismo SELECT.
     """
-    if awaits_payment(appointment):
+    if awaits_payment(appointment, live_payment=live_payment):
         return AppException(
             message=_CLIENT_PAYMENT_IN_PROGRESS,
             http_status=status.HTTP_409_CONFLICT,
@@ -283,6 +296,7 @@ def client_reschedule_denial(
     *,
     cancellation_hours: int,
     paid: bool,
+    live_payment: bool,
     now: datetime | None = None,
 ) -> AppException | None:
     """Por que el cliente NO puede reprogramar este turno; ``None`` si puede.
@@ -294,7 +308,10 @@ def client_reschedule_denial(
     ``PublicRepository.accredited_appointment_ids``.
     """
     denial = client_cancel_denial(
-        appointment, cancellation_hours=cancellation_hours, now=now
+        appointment,
+        cancellation_hours=cancellation_hours,
+        live_payment=live_payment,
+        now=now,
     )
     if denial is not None:
         return denial
@@ -310,10 +327,9 @@ def client_reschedule_denial(
 def client_may_leave(appointment: Appointment) -> bool:
     """El grafo de estados deja pasar el turno a ``cancelled`` (cancelar y
     reprogramar lo hacen). Es el mismo grafo que aplica
-    ``apply_status_transition``: un terminal no se ofrece."""
-    return AppointmentStatus.CANCELLED.value in ALLOWED_STATUS_TRANSITIONS.get(
-        appointment.status, set()
-    )
+    ``apply_status_transition``: un terminal no se ofrece. Misma regla que
+    la guarda de las acciones (``appointments.guards.is_active``)."""
+    return is_active(appointment)
 
 
 async def require_recent_client_otp(
@@ -847,11 +863,15 @@ class PublicBookingService:
         """Link real de MP, ya fuera de la transaccion y sin el lock (regla 5).
 
         Si MP falla se compensa: turno, pago y canje se borran y se invalida
-        la disponibilidad (B1-10); el llamador libera la idempotencia.
+        la disponibilidad (B1-10); el llamador libera la idempotencia. Si MP
+        llego a crear la preferencia (respuesta sin link de checkout), se
+        manda a vencer despues de la compensacion, como en el panel.
         """
         payment = booking.payment
         if not request.payment_required or payment is None:
             return
+        # Leidos antes: la compensacion borra el turno y el cobro.
+        payment_id, appointment_id = payment.id, booking.appointment.id
         try:
             # Presupuesto total de la cadena de MP (F1-04): agotarlo es
             # MercadoPagoAPIError(transient=True) y se compensa como cualquier
@@ -878,6 +898,14 @@ class PublicBookingService:
             # TimeoutError por si un tope ajeno al presupuesto corta la red:
             # antes no era RuntimeError y el turno quedaba retenido sin link.
             await revert_failed_booking(self.db, self.cache, booking.appointment)
+            if isinstance(exc, ProviderPreferenceWithoutLinkError):
+                await expire_unsealed_preference(
+                    self.db,
+                    store_id=request.store_id,
+                    appointment_id=appointment_id,
+                    payment_id=payment_id,
+                    preference_id=exc.preference_id,
+                )
             raise _payment_link_failed(exc)
 
     async def _notify_client(self, request: _BookingRequest, booking: _Booking) -> None:
@@ -928,12 +956,16 @@ class PublicBookingService:
     ) -> PublicBookingResponse:
         """El cliente cancela su turno: commit -> invalidacion -> respuesta."""
         appointment, client = await self._lock_client_appointment(public_id, data.phone)
+        # Ya cancelado: 409 como el panel, sin republicar el cupo ni avisar
+        # otra vez al dueno (revision de perf/f4-pay, 2026-09-25).
+        reject_already_cancelled(appointment)
         # Cobro vivo (solo lo suelta release(), que vence antes la preferencia
         # en MP) y ventana de la tienda: las mismas reglas que el flag
         # ``can_cancel`` del historial.
         denial = client_cancel_denial(
             appointment,
             cancellation_hours=await self._cancellation_hours(appointment.store_id),
+            live_payment=await self._has_live_charge(appointment),
         )
         if denial is not None:
             raise denial
@@ -973,6 +1005,8 @@ class PublicBookingService:
         El llamador maneja la idempotencia (reserva, liberacion y replay).
         """
         original, client = await self._lock_client_appointment(public_id, data.phone)
+        # Un turno terminal no se reprograma (ni vuelve a la vida).
+        reject_inactive(original)
         # Reprogramar cancela el turno original: le corresponden los mismos
         # guards que a cancelar, incluida la ventana de la tienda (AUD2-B1-02).
         # Sin ella, a quien se le paso la hora de cancelar le alcanzaba con
@@ -983,6 +1017,7 @@ class PublicBookingService:
             original,
             cancellation_hours=await self._cancellation_hours(original.store_id),
             paid=bool(await self.repo.accredited_appointment_ids([original.id])),
+            live_payment=await self._has_live_charge(original),
         )
         if denial is not None:
             raise denial
@@ -1052,6 +1087,12 @@ class PublicBookingService:
         """Ventana de cancelacion de la tienda (2 h si no se encuentra)."""
         store = await self.repo.get_store_by_id(store_id)
         return getattr(store, "cancellation_hours", 2) if store else 2
+
+    async def _has_live_charge(self, appointment: Appointment) -> bool:
+        """El turno (ya lockeado) tiene un cobro vivo: un link del panel (D1)."""
+        return await PaymentRepository(self.db).has_live_charge(
+            appointment.id, appointment.store_id
+        )
 
     async def _notify_owner_of_cancellation(
         self, appointment: Appointment, client: User, reason: str | None
@@ -1160,8 +1201,8 @@ def _rescheduled_copy(
     # nacia siempre con el default de la columna, asi que un turno confirmado
     # volvia a "pendiente de confirmar" sin que nadie se enterara y el job de
     # expiracion lo levantaba a la hora de inicio. A esta altura no hay sena
-    # de por medio -``client_reschedule_denial`` frena el ``pending_payment``
-    # y el pago acreditado-,
+    # de por medio -``client_reschedule_denial`` frena el ``pending_payment``,
+    # el cobro vivo (link del panel, D1) y el pago acreditado-,
     # asi que lo unico que se conserva es un ``confirmed`` sin cobro, y con el
     # se va el ``expires_at``: no hay retencion que vencer.
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value

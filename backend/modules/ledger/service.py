@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.exceptions import ResourceNotFoundException, ValidationException
 from modules.appointments.model import Appointment
 from modules.ledger.model import CustomerLedger
-from modules.users.repository import UserRepository
+from modules.users.model import User, UserRole
+from modules.users.repository import UserRepository, _valor_de_rol
 
 
 async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -> None:
@@ -72,10 +73,36 @@ async def ensure_store_client(
     2026-09-24, SEG-01: el historial (``GET /ledger/customers/{client_id}``)
     usa el mismo chequeo; antes devolvia 200 con saldo 0 para un cliente
     ajeno.
+
+    2026-09-25 (revision de perf/f4-pay): solo un CLIENTE de la tienda. Antes
+    pasaba cualquier usuario de la tienda, asi que se podia cargar fiado a una
+    cuenta del personal o de un admin. Mismo 404 neutro que un id ajeno o
+    inexistente: la respuesta no dice si el id es de alguien del personal.
     """
     cliente = await UserRepository(db).get_by_public_id(client_id, store_id)
-    if cliente is None:
+    if cliente is None or _valor_de_rol(cliente.role) != UserRole.CLIENT.value:
         raise ResourceNotFoundException("Cliente", client_id)
+
+
+async def search_store_clients(
+    db: AsyncSession, *, store_id: str, q: str | None, limit: int
+) -> list[User]:
+    """Clientes activos de ESTA tienda para el buscador del fiado (D3).
+
+    El rol ``client`` y la tienda los fija el servidor: el profesional usa el
+    fiado pero no ``/users/`` (regla 16), asi que ninguna cuenta del personal,
+    de un admin ni del soporte global sale por aca, pida lo que pida el
+    query. Misma busqueda que ``GET /users/?q=`` (``user_search_condition``,
+    acotada por ``ix_users_store_id``).
+    """
+    return await UserRepository(db).get_all(
+        store_id,
+        only_active=True,
+        role=UserRole.CLIENT.value,
+        q=q,
+        limit=limit,
+        include_global_admins=False,
+    )
 
 
 async def _ensure_store_appointment(
@@ -146,6 +173,13 @@ async def reverse_movement(
     movimiento de ajuste que compensa su efecto y deja el saldo como si el
     movimiento erroneo nunca hubiera existido. Cada movimiento se puede
     revertir una sola vez.
+
+    NO llama a ``ensure_store_client`` a proposito (decision del coordinador,
+    revision de perf/f4-pay 2026-09-25): los movimientos que quedaron
+    cargados a una cuenta del personal antes de que el fiado se cerrara a
+    clientes se pueden revertir (limpieza). El movimiento igual tiene que ser
+    de esta tienda y de esa cuenta. Lo fija
+    ``test_un_movimiento_viejo_sobre_el_personal_se_puede_revertir``.
     """
     await _lock_client_ledger(db, store_id, client_id)
 

@@ -43,6 +43,20 @@ ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 )
 
+# Cobro VIVO: el cobro del turno sigue abierto y su link se puede pagar (o
+# el panel lo puede volver a generar sin tocar el turno). Decision del dueno
+# (2026-09-25, D1): un turno con cobro vivo no lo cancela ni lo reprograma el
+# cliente, y cancelarlo desde el panel vence el cobro en la misma transaccion.
+# Unica fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
+# (``payments.repository.live_charge_of``). ``rejected`` SI es vivo: tras un
+# rechazo Mercado Pago deja reintentar sobre la misma preferencia (revision de
+# perf/f4-pay, 2026-09-25); el panel lo vence por ``rejected -> expired``, que
+# ya esta en el grafo. ``expired`` no es vivo (lo vencio Shifty y el outbox
+# vence el link en MP), ni los acreditados ni ``refunded``.
+LIVE_CHARGE_PAYMENT_STATUSES: frozenset[str] = frozenset(
+    {PaymentStatus.PENDING.value, PaymentStatus.REJECTED.value}
+)
+
 
 # Unica fuente de verdad del grafo de la region de facturacion.
 #
@@ -63,6 +77,41 @@ ALLOWED_PAYMENT_TRANSITIONS: dict[str, set[str]] = {
     "manual_confirmed": {"refunded"},
     "refunded": set(),
 }
+
+
+# Evento del outbox: "vencer este link de pago en Mercado Pago". Lo publica
+# quien suelta o reemplaza un link en la misma transaccion y lo consume
+# process_outbox_batch fuera de todo lock (B1-04). Vive aca (y
+# ``payments.service`` lo reexporta) para que ``payments.links`` lo use sin
+# importar el service.
+EVENT_PREFERENCE_EXPIRE = "payment.preference.expire"
+
+# Separador de la ``external_reference`` de un link: ``<turno>:<link_ref>``.
+# Los ids de turno son ULID (sin ``:``), asi que el turno es lo de antes.
+EXTERNAL_REFERENCE_SEPARATOR = ":"
+
+
+def external_reference_for(appointment_id: str, link_ref: str | None) -> str:
+    """``external_reference`` de un link de pago (revision de perf/f4-pay).
+
+    Cada link lleva un nonce propio (``Payment.link_ref``): el pago de MP no
+    trae ``preference_id``, asi que es la senal que controla Shifty para
+    saber de QUE link es un pago. Sin nonce (links creados antes del deploy)
+    es el id del turno, como siempre: esos links siguen matcheando.
+    """
+    if not link_ref:
+        return appointment_id
+    return f"{appointment_id}{EXTERNAL_REFERENCE_SEPARATOR}{link_ref}"
+
+
+def appointment_id_from_reference(reference: str) -> str:
+    """El turno de una ``external_reference``, con o sin nonce de link."""
+    return reference.split(EXTERNAL_REFERENCE_SEPARATOR, 1)[0]
+
+
+def is_placeholder_preference_id(preference_id: str | None) -> bool:
+    """Un link placeholder (``pref_<turno>``): no existe en Mercado Pago."""
+    return not preference_id or preference_id.startswith("pref_")
 
 
 def can_apply_payment_status(current: str, attempted: str) -> bool:
@@ -124,6 +173,10 @@ class Payment(BaseEntity):
         String(255), nullable=True, index=True
     )
     payment_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Nonce del link VIGENTE: va en su ``external_reference`` y la integridad
+    # del webhook lo exige (revision de perf/f4-pay, 2026-09-25). NULL = link
+    # creado antes de la columna (referencia = id del turno).
+    link_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
     external_payment_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
@@ -170,6 +223,38 @@ class Payment(BaseEntity):
         """La plata efectivamente entro (aprobada o confirmada manual)."""
         return self.status in ACCREDITED_PAYMENT_STATUSES
 
+    @property
+    def current_external_reference(self) -> str:
+        """La ``external_reference`` del link vigente de este cobro."""
+        return external_reference_for(self.appointment_id, self.link_ref)
+
+    @property
+    def is_live_charge(self) -> bool:
+        """El cobro sigue abierto: su link se puede pagar (D1, 2026-09-25)."""
+        return self.status in LIVE_CHARGE_PAYMENT_STATUSES
+
+    def reopen_for_panel_link(self) -> bool:
+        """``expired -> pending`` para un link NUEVO generado desde el panel.
+
+        Revision de perf/f4-pay (2026-09-25, opcion b del coordinador): la
+        arista NO esta en ``ALLOWED_PAYMENT_TRANSITIONS`` a proposito. Ese
+        grafo lo usa el webhook, y un ``in_process`` tardio de la preferencia
+        vieja reabriria un cobro vencido (quizas de un turno ya cancelado).
+        Unico llamador: ``payments.service.create_panel_payment_preference``,
+        con el turno lockeado y no soltado, despues de sellar un
+        ``preference_id`` nuevo (un webhook de la preferencia vieja ya no
+        pasa la integridad). Lo fija ``tests/unit/test_reabrir_cobro_para_link_del_panel.py``.
+
+        Devuelve False (sin tocar nada) si el cobro no esta ``expired`` o si
+        no tiene un link real que cobrar.
+        """
+        if self.status != PaymentStatus.EXPIRED.value:
+            return False
+        if is_placeholder_preference_id(self.preference_id):
+            return False
+        self._status = PaymentStatus.PENDING.value
+        return True
+
     def apply_status(
         self, new_status: str, *, payload: dict[str, JsonValue] | None = None
     ) -> bool:
@@ -191,6 +276,40 @@ class Payment(BaseEntity):
         }:
             self.paid_at = self.paid_at or datetime.now(timezone.utc)
         return True
+
+
+class PaymentLinkHistory(BaseEntity):
+    """Un link de pago que el cobro dejo de usar (revision de perf/f4-pay).
+
+    El webhook de un pago del link retirado puede llegar tarde o
+    reentregarse, y el link sigue pagable hasta que MP lo vence (con
+    ``binary_mode`` no hay cupones de efectivo pendientes): ese pago tiene que
+    poder reconocerse (misma referencia, mismo importe de ESE link) y
+    aplicarse o alertarse, no perderse. Lo escribe ``payments.links``.
+    """
+
+    __tablename__ = "payment_link_history"
+    __table_args__ = (
+        Index("ix_payment_link_history_payment_retired", "payment_id", "retired_at"),
+    )
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    payment_id: Mapped[str] = mapped_column(ForeignKey("payments.id"))
+    # NULL = link de antes del nonce: su referencia es el id del turno.
+    link_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    preference_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # Lo que explica ESE importe (promo o descuento del link): la adopcion lo
+    # restaura con el importe (revision de e5579b6..3b977a9, #3).
+    original_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    discount_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    promotion_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10))
+    retired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class WebhookInbox(BaseEntity):
@@ -283,8 +402,14 @@ class OutboxMessage(BaseEntity):
 
 __all__ = [
     "ALLOWED_PAYMENT_TRANSITIONS",
+    "EVENT_PREFERENCE_EXPIRE",
+    "PaymentLinkHistory",
+    "LIVE_CHARGE_PAYMENT_STATUSES",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
+    "is_placeholder_preference_id",
+    "external_reference_for",
+    "appointment_id_from_reference",
     "JsonPrimitive",
     "JsonValue",
     "OutboxMessage",

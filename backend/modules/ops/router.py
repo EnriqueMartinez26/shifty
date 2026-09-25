@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Depends, status
@@ -27,7 +27,11 @@ from core.roles import (
 from core.utils import ensure_utc_aware
 from modules.auth.dependencies import get_current_user
 from modules.payments.jobs import EVENT_EMAIL_SEND
-from modules.payments.model import OutboxMessage, WebhookInbox
+from modules.payments.model import (
+    WEBHOOK_INBOX_MAX_ATTEMPTS,
+    OutboxMessage,
+    WebhookInbox,
+)
 from modules.stores.model import Store
 from modules.users.model import User
 
@@ -157,7 +161,21 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
             )
         )
     ).one()
+    # Dead letters: agotaron los reintentos (``register_failure`` pone
+    # ``processed_at``) y salen de "pendientes"; sin esto no se veian (revision
+    # de perf/f4-pay). Cae en ``ix_webhook_inbox_processed_history``. Solo
+    # filas activas, como la consulta de pendientes (revision #6).
+    dead_letters = await db.scalar(
+        select(func.count(WebhookInbox.id)).where(
+            WebhookInbox.processed_at >= ahora - timedelta(hours=24),
+            WebhookInbox.attempts >= WEBHOOK_INBOX_MAX_ATTEMPTS,
+            WebhookInbox.error.is_not(None),
+            WebhookInbox.is_active.is_(True),
+            *store_filter,
+        )
+    )
     return {
+        "dead_letter_webhooks_24h": int(dead_letters or 0),
         "pending_webhooks": int(inbox[0] or 0),
         "failed_webhooks": int(inbox[1] or 0),
         "pending_outbox": int(outbox[0] or 0),
@@ -169,6 +187,7 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
 
 def _slo_thresholds() -> dict[str, int]:
     return {
+        "dead_letter_webhooks_24h": settings.SLO_MAX_DEAD_LETTER_WEBHOOKS_24H,
         "pending_webhooks": settings.SLO_MAX_PENDING_WEBHOOKS,
         "failed_webhooks": settings.SLO_MAX_FAILED_WEBHOOKS,
         "pending_outbox": settings.SLO_MAX_PENDING_OUTBOX,
@@ -182,6 +201,8 @@ def _slo_thresholds() -> dict[str, int]:
 
 # Metrica -> (codigo de alerta, severidad), en el orden en que se reportan.
 _SLO_ALERTS = (
+    # Un webhook que agoto sus reintentos es un cobro que nadie aplico.
+    ("dead_letter_webhooks_24h", "dead_letter_webhooks", "critical"),
     ("pending_webhooks", "pending_webhooks_high", "critical"),
     ("failed_webhooks", "failed_webhooks_high", "critical"),
     ("pending_outbox", "pending_outbox_high", "warning"),

@@ -1,6 +1,6 @@
 """Un webhook con importe inconsistente no devuelve 500 ni pierde la fila del inbox.
 
-2026-09-16, hallazgo B2-04: ``_validate_payment_integrity`` levanta
+2026-09-16, hallazgo B2-04: ``_validate_payment_link`` levanta
 ``RuntimeError`` cuando el importe, la moneda, la referencia, la preferencia o
 el collector no coinciden. En el camino HTTP esa excepcion no se capturaba:
 subia al handler generico (500), la transaccion no commiteaba y el

@@ -29,6 +29,7 @@ from modules.appointments.repository import (
 )
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
+from modules.payments.repository import live_charge_of
 from modules.services.model import Service
 from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -713,14 +714,16 @@ class PublicRepository:
 
     async def get_client_appointments(
         self, client_id: str, store_id: str, *, limit: int
-    ) -> list[tuple[Appointment, bool]]:
+    ) -> list[tuple[Appointment, bool, bool]]:
         """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional,
-        y si cada uno tiene un pago acreditado (para ``can_reschedule``).
+        si cada uno tiene un pago acreditado (para ``can_reschedule``) y si
+        tiene un cobro vivo (para ``can_cancel`` y ``can_reschedule``, D1).
 
-        El pago acreditado va en el MISMO SELECT como ``EXISTS`` correlacionado
-        por ``uq_payments_store_appointment`` (store_id, appointment_id): una
-        consulta aparte sumaba una sentencia al historial (techo de
-        ``test_historial_del_cliente_con_limite``).
+        El pago acreditado y el cobro vivo van en el MISMO SELECT como
+        ``EXISTS`` correlacionados por ``uq_payments_store_appointment``
+        (store_id, appointment_id): una consulta aparte sumaba una sentencia al
+        historial (techo de ``test_historial_del_cliente_con_limite``). El del
+        cobro vivo es ``live_charge_of``, la misma condicion que la accion.
 
         Un solo SELECT con JOIN (F3-09, R1-09): antes eran ``selectinload`` de
         servicio y profesional, y el profesional arrastraba en cascada sus
@@ -738,8 +741,11 @@ class PublicRepository:
             )
             .label("paid")
         )
+        cobro_vivo = live_charge_of(Appointment.id, Appointment.store_id).label(
+            "live_charge"
+        )
         result = await self.db.execute(
-            select(Appointment, pagado)
+            select(Appointment, pagado, cobro_vivo)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
             .options(
                 joinedload(Appointment.service),
@@ -750,4 +756,7 @@ class PublicRepository:
             .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
             .limit(limit)
         )
-        return [(appointment, bool(paid)) for appointment, paid in result.all()]
+        return [
+            (appointment, bool(paid), bool(vivo))
+            for appointment, paid, vivo in result.all()
+        ]

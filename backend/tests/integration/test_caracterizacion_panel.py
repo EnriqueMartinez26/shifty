@@ -283,7 +283,9 @@ async def test_reprogramar_del_panel_cuerpo_filas_auditoria_outbox_y_orden(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("caso", ["choque", "con_cobro", "inexistente"])
+# "con_cobro" (``pending_payment``) ya no es un rechazo: desde 2026-09-25 la
+# reprogramacion del panel vence el cobro (test_reprogramar_del_panel_vence_el_cobro).
+@pytest.mark.parametrize("caso", ["choque", "inexistente"])
 async def test_reprogramar_del_panel_rechazos(
     client: AsyncClient,
     test_session: AsyncSession,
@@ -300,15 +302,7 @@ async def test_reprogramar_del_panel_rechazos(
     )
     assert otro.status_code == 201, otro.text
     objetivo = turno
-    if caso == "con_cobro":
-        await test_session.execute(
-            update(Appointment)
-            .where(Appointment.id == turno)
-            .values(status="pending_payment")
-        )
-        await test_session.commit()
-        esperado = (409, "PAYMENT_APPOINTMENT_REQUIRES_RELEASE")
-    elif caso == "inexistente":
+    if caso == "inexistente":
         objetivo = "01J00000000000000000000000"
         esperado = (404, "APPOINTMENT_NOT_FOUND")
     else:

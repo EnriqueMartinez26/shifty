@@ -151,7 +151,11 @@ async def test_el_slo_mide_atraso_y_mails_cortados_por_presupuesto(
         "email_send_lag_high",
     }
     # Una sentencia agregada por tabla, con el filtro de la tienda.
-    assert len(sentencias) == 2, sentencias
+    # Una agregada por tabla, mas la de dead letters del inbox (revision de
+    # perf/f4-pay): otra condicion sobre otro indice parcial
+    # (``ix_webhook_inbox_processed_history``); unirla con un OR a la de
+    # pendientes perdia el indice.
+    assert len(sentencias) == 3, sentencias
     assert all("store_id" in s for s in sentencias)
 
 

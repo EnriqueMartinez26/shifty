@@ -244,6 +244,16 @@ class Settings(BaseSettings):
     # Base de la API de Mercado Pago. Configurable SOLO para apuntar al
     # emulador de tests/e2e en desarrollo; staging y produccion exigen la real.
     MERCADOPAGO_API_BASE_URL: str = MERCADOPAGO_API_BASE_URL_REAL
+    # Nonce propio en la ``external_reference`` de cada link NUEVO
+    # (``<turno>:<link_ref>``; revision de perf/f4-pay, 2026-09-25): un pago de
+    # un link reemplazado deja de pasar la integridad aunque MP no mande
+    # ``preference_id``. Prendido por defecto: Shifty nunca estuvo en
+    # produccion, no hay links legados en vuelo (correccion del coordinador).
+    # Apagarlo solo sirve para volver a un codigo anterior a este release, que
+    # no entiende el nonce; apagado, regenerar el link de un cobro vencido
+    # responde 409 (sin nonce no se distingue un pago del link viejo) y los
+    # links con nonce siguen matcheando (docs/DEPLOY_RUNBOOK.md, seccion 5).
+    MERCADOPAGO_LINK_REF_ENABLED: bool = True
     # Minutos que un turno queda reservado esperando el pago de la seña. Al
     # vencer, el slot vuelve a estar disponible para otro cliente.
     PAYMENT_HOLD_MINUTES: int = 30
@@ -291,6 +301,9 @@ class Settings(BaseSettings):
     OPS_ENABLE_PUBLIC_HEALTH: bool = True
     SLO_MAX_PENDING_WEBHOOKS: int = 200
     SLO_MAX_FAILED_WEBHOOKS: int = 20
+    # Webhooks que agotaron sus reintentos en las ultimas 24 h: cualquiera es
+    # un cobro sin aplicar (revision de perf/f4-pay).
+    SLO_MAX_DEAD_LETTER_WEBHOOKS_24H: int = 0
     SLO_MAX_PENDING_OUTBOX: int = 200
     # Atraso tolerado (F1-25, R9-16): el outbox corre cada 20 s y el inbox
     # cada minuto, con reintento a los 15 s tras un webhook fallido. Un mail

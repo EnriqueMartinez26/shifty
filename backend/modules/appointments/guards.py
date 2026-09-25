@@ -1,47 +1,87 @@
-"""Guardas de transicion compartidas por todos los caminos que cancelan turnos.
+"""Guarda del cobro vivo, compartida por los caminos que sueltan un turno.
 
 El grafo permite ``pending_payment -> cancelled`` porque un reembolso legitimo
 lo necesita (``sync_appointment_with_payment``). Lo que no puede pasar es que
-esa transicion la dispare *un actor humano* por una via que no venza antes la
+un actor humano suelte un turno con cobro vivo sin vencer antes el cobro y la
 preferencia remota de Mercado Pago.
 
-La guarda pertenece al evento, no al endpoint: por eso vive aca y no duplicada
-en cada router.
+Desde 2026-09-25 el panel ya no se frena: cancelar y reprogramar vencen el
+cobro en la misma transaccion (``payments.service.expire_live_charge``, D2).
+La guarda que frenaba al panel (``reject_cancellation_while_awaiting_payment``)
+se borro con su ultimo llamador; lo que protegia (que el link quedara vivo
+sobre un turno cancelado) lo sostiene ``expire_live_charge`` y lo prueban
+``test_cancelar_desde_el_panel_vence_el_cobro.py`` y
+``test_reprogramar_del_panel_vence_el_cobro.py``. El cliente sigue frenado:
+``public_api.service.client_cancel_denial`` usa ``awaits_payment``.
 """
 
 from __future__ import annotations
+
+from http import HTTPStatus
 
 from core.exceptions import AppException
 from modules.appointments.model import Appointment, AppointmentStatus
 
 
-def awaits_payment(appointment: Appointment) -> bool:
-    """El turno tiene un cobro vivo: solo lo suelta ``release()``.
+def awaits_payment(appointment: Appointment, *, live_payment: bool) -> bool:
+    """El turno tiene un cobro vivo.
 
-    Unica condicion de la regla: la usan la guarda del panel (abajo) y la del
-    cliente (``public_api.service.client_cancel_denial``), que responde el
-    mismo codigo con un mensaje para el cliente.
+    Unica condicion de la regla: el turno espera su sena (``pending_payment``)
+    O tiene un ``Payment`` vivo (``live_payment``: un link generado desde el
+    panel sobre un turno confirmado, decision del dueno D1, 2026-09-25). La
+    guarda es pura: ``live_payment`` lo calcula el repositorio
+    (``payments.repository.live_charge_of``) antes de llamarla.
     """
-    return appointment.status == AppointmentStatus.PENDING_PAYMENT.value
+    return appointment.status == AppointmentStatus.PENDING_PAYMENT.value or live_payment
 
 
-def reject_cancellation_while_awaiting_payment(appointment: Appointment) -> None:
-    """Bloquea la cancelacion iniciada por una persona sobre un turno con cobro vivo.
+def is_active(appointment: Appointment) -> bool:
+    """El turno todavia puede soltarse (cancelarse o moverse).
 
-    Liberar uno de estos turnos exige pasar por ``release()``, que vence la
-    preferencia en Mercado Pago antes de soltar el horario. Cancelarlo por otra
-    via dejaria el link de pago activo y el cliente podria pagar un turno que ya
-    no existe.
+    Sale del grafo de estados (``ALLOWED_STATUS_TRANSITIONS``, unica fuente):
+    activo es todo estado desde el que se llega a ``cancelled``. Terminales:
+    ``cancelled``, ``expired``, ``completed`` y ``absent``.
     """
-    if awaits_payment(appointment):
+    return AppointmentStatus(appointment.status).can_transition_to(
+        AppointmentStatus.CANCELLED
+    )
+
+
+def reject_already_cancelled(appointment: Appointment) -> None:
+    """Cancelar un turno ya cancelado es un conflicto, no un no-op.
+
+    CLAUDE.md §4 ("1 exito, N-1 conflictos"): ``apply_status_transition`` deja
+    pasar el mismo estado y cada cancelacion repetida republicaba el cupo
+    liberado, la auditoria y el aviso al dueno. Lo usan el panel y el portal,
+    con el turno ya lockeado (revision de perf/f4-pay, 2026-09-25).
+    """
+    if appointment.status == AppointmentStatus.CANCELLED.value:
         raise AppException(
-            message=(
-                "Los turnos con un pago pendiente deben liberarse desde "
-                "la accion protegida para administradores"
-            ),
-            http_status=409,
-            error_code="PAYMENT_APPOINTMENT_REQUIRES_RELEASE",
+            message="El turno ya estaba cancelado",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="APPOINTMENT_ALREADY_CANCELLED",
         )
 
 
-__all__ = ["awaits_payment", "reject_cancellation_while_awaiting_payment"]
+def reject_inactive(appointment: Appointment) -> None:
+    """Un turno terminal no se reprograma: 409 neutro.
+
+    Reprogramar cancela el original con ``apply_status_transition``, que deja
+    pasar el mismo estado: un turno ya cancelado volvia a la vida como turno
+    nuevo (revision de perf/f4-pay, 2026-09-25). Lo usan el panel y el portal,
+    con el turno ya lockeado.
+    """
+    if not is_active(appointment):
+        raise AppException(
+            message="El turno ya no esta activo",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="APPOINTMENT_NOT_ACTIVE",
+        )
+
+
+__all__ = [
+    "awaits_payment",
+    "is_active",
+    "reject_already_cancelled",
+    "reject_inactive",
+]

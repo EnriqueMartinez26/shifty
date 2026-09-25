@@ -32,9 +32,7 @@ from core.exceptions import (
 from http import HTTPStatus
 
 from modules.appointments.domain_service import SchedulingDomainService
-from modules.appointments.guards import (
-    reject_cancellation_while_awaiting_payment,
-)
+from modules.appointments.guards import reject_already_cancelled, reject_inactive
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.audit.model import AuditAction
 from modules.auth.service import normalize_email
@@ -46,7 +44,7 @@ from modules.notifications.tasks import (
     is_deliverable_email,
 )
 from modules.payments.model import JsonValue, Payment, PaymentStatus
-from modules.payments.service import EVENT_PREFERENCE_EXPIRE
+from modules.payments.service import expire_live_charge
 from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
@@ -361,7 +359,17 @@ class AppointmentService:
     # ------------------------------------------------------------------
 
     async def cancel(self, *, public_id: str, actor: User) -> Appointment:
-        """Cancela un turno verificando la transición de estado."""
+        """Cancela un turno verificando la transición de estado.
+
+        Decision del dueno (2026-09-25, D2): el personal que puede cancelar
+        (admin, recepcion, profesional) cancela tambien un turno con cobro
+        vivo, sin depender de la liberacion del admin. La cancelacion hace lo
+        mismo que ``release_pending`` con el cobro, en ESTA transaccion: lo
+        vence por la entidad y publica ``payment.preference.expire`` (el link
+        de MP lo vence el outbox despues, sin lock: regla 5). Orden de locks
+        turno -> pago (regla 7). Un pago ya acreditado no se toca: el turno se
+        cancela como siempre y la devolucion la decide la tienda.
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -370,12 +378,26 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
-        reject_cancellation_while_awaiting_payment(appointment)
+        # Ya cancelado: 409, bajo el lock (dos a la vez no pasan las dos).
+        reject_already_cancelled(appointment)
 
         payload_before = {"status": appointment.status}
 
-        # El modelo valida internamente la transición (lanza excepción si inválida)
+        # El modelo valida internamente la transición (lanza excepción si
+        # inválida) ANTES de tocar el cobro: un turno terminal no vence nada.
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        payload_after: dict[str, JsonValue] = {"status": appointment.status}
+        payment = await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+        vencido = expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="staff_cancel",
+            released_by=actor.public_id,
+        )
+        if vencido is not None:
+            payload_after["expired_payment_id"] = vencido.id
 
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
@@ -384,7 +406,7 @@ class AppointmentService:
             store_id=appointment.store_id,
             actor=actor,
             payload_before=payload_before,
-            payload_after={"status": appointment.status},
+            payload_after=payload_after,
         )
         self._publish_slot_released(appointment, reason="cancelled")
 
@@ -586,25 +608,12 @@ class AppointmentService:
                 http_status=HTTPStatus.CONFLICT,
                 error_code="PAID_APPOINTMENT_NOT_RELEASABLE",
             )
-        if payment and payment.status == PaymentStatus.PENDING.value:
-            if payment.preference_id:
-                # Se vence despues del commit, desde el outbox (B1-04).
-                self.uow.outbox.publish(
-                    store_id=actor.store_id,
-                    event_type=EVENT_PREFERENCE_EXPIRE,
-                    payload={
-                        "appointment_id": appointment.id,
-                        "payment_id": payment.id,
-                        "preference_id": payment.preference_id,
-                    },
-                )
-            payment.apply_status(
-                PaymentStatus.EXPIRED.value,
-                payload={
-                    "reason": "manual_store_release",
-                    "released_by": actor.public_id,
-                },
-            )
+        expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="manual_store_release",
+            released_by=actor.public_id,
+        )
         return payment
 
     async def update_staff_notes(
@@ -648,35 +657,25 @@ class AppointmentService:
         Reprograma un turno: cancela el original y crea uno nuevo.
 
         Implementación:
-          1. Lock y lectura del turno original (guarda de cobro pendiente).
+          1. Lock y lectura del turno original y, despues, de su cobro
+             (orden turno -> pago, regla 7).
           2. Lock del profesional y validación de la nueva fecha/hora.
-          3. Cancelar el original y crear el nuevo, con auditoría.
+          3. Vencer el cobro vivo del original, cancelarlo y crear el nuevo,
+             con auditoría.
           4. Todo en una única transacción atómica, con el aviso en el outbox;
              invalidación después.
+
+        Cobro vivo (decision del dueno 2026-09-25, misma regla que D2 para
+        cancelar): reprogramar lo vence en esta transaccion con
+        ``expire_live_charge`` (el link de MP lo vence el outbox, sin lock) en
+        vez de dejarlo apuntando a un turno cancelado o de responder 409 a un
+        ``pending_payment``. El turno nuevo nace sin cobro.
 
         El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
         el schema AppointmentReschedule.
         """
-        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
-        original = await self.uow.appointments.get_by_public_id(
-            public_id, actor.store_id
-        )
-        if not original:
-            raise AppointmentNotFoundException(public_id)
-        # Reprogramar cancela el turno original: le corresponde el mismo guard
-        # que a cancel(). Sin esto la preferencia de pago quedaba viva.
-        reject_cancellation_while_awaiting_payment(original)
-
-        service = await self.uow.appointments.get_service_by_id(
-            original.service_id, actor.store_id
-        )
-        if not service:
-            raise ResourceNotFoundException("Servicio", str(original.service_id))
-        staff = await self.uow.appointments.get_staff_by_id(
-            original.staff_id, actor.store_id
-        )
-        if not staff:
-            raise ResourceNotFoundException("Profesional", str(original.staff_id))
+        original, payment = await self._lock_reschedulable(public_id, actor)
+        service, staff = await self._service_and_staff_of(original, actor)
 
         ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
         await self._lock_and_validate_slot(
@@ -689,7 +688,7 @@ class AppointmentService:
         )
 
         new_appointment = await self._swap_for_new_slot(
-            original, service, new_starts_at, ends_at, idempotency_key, actor
+            original, payment, service, new_starts_at, ends_at, idempotency_key, actor
         )
         # El cliente tiene que enterarse del horario nuevo: la fila nueva nace
         # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
@@ -708,16 +707,56 @@ class AppointmentService:
             await _apply_tenant_context(self.uow.session)
         return new_appointment, service, staff
 
+    async def _lock_reschedulable(
+        self, public_id: str, actor: User
+    ) -> tuple[Appointment, Payment | None]:
+        """Turno a reprogramar, lockeado, activo, y su cobro lockeado despues.
+
+        Un turno terminal no se reprograma: volvia a la vida (revision de
+        perf/f4-pay, 2026-09-25). El cobro se lockea pegado al turno (regla 7)
+        y antes que el profesional; se vence recien en el swap, con el
+        horario ya validado.
+        """
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        original = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
+        if not original:
+            raise AppointmentNotFoundException(public_id)
+        reject_inactive(original)
+        payment = await self.uow.payments.get_by_appointment_locked(
+            original.id, actor.store_id
+        )
+        return original, payment
+
+    async def _service_and_staff_of(
+        self, original: Appointment, actor: User
+    ) -> tuple[Service, Staff]:
+        """Servicio y profesional del turno, acotados a la tienda (404 si no)."""
+        service = await self.uow.appointments.get_service_by_id(
+            original.service_id, actor.store_id
+        )
+        if not service:
+            raise ResourceNotFoundException("Servicio", str(original.service_id))
+        staff = await self.uow.appointments.get_staff_by_id(
+            original.staff_id, actor.store_id
+        )
+        if not staff:
+            raise ResourceNotFoundException("Profesional", str(original.staff_id))
+        return service, staff
+
     async def _swap_for_new_slot(
         self,
         original: Appointment,
+        payment: Payment | None,
         service: Service,
         new_starts_at: datetime,
         ends_at: datetime,
         idempotency_key: str,
         actor: User,
     ) -> Appointment:
-        """Cancela el original y agrega el nuevo, con auditoria. Sin commit."""
+        """Vence el cobro vivo del original, lo cancela y agrega el nuevo, con
+        auditoria. Sin commit."""
         # El turno nuevo se arma ANTES de cancelar: copia del original el
         # contacto DEL CLIENTE (no el de quien reprograma: se copiaba el del
         # administrador y la confirmacion, el recordatorio y el WhatsApp
@@ -730,6 +769,12 @@ class AppointmentService:
             original, service, new_starts_at, ends_at, idempotency_key, estado_previo
         )
         original.apply_status_transition(AppointmentStatus.CANCELLED)
+        vencido = expire_live_charge(
+            self.uow.session,
+            payment,
+            reason="staff_reschedule",
+            released_by=actor.public_id,
+        )
         self._publish_slot_released(original, reason="rescheduled")
         await self.uow.audit.log(
             action=AuditAction.STATUS_CHANGE,
@@ -741,6 +786,7 @@ class AppointmentService:
             payload_after={
                 "status": AppointmentStatus.CANCELLED.value,
                 "reason": f"Reprogramado a {new_starts_at.isoformat()}",
+                **({"expired_payment_id": vencido.id} if vencido is not None else {}),
             },
         )
         self.uow.appointments.add(new_appointment)
@@ -1024,11 +1070,14 @@ def _rescheduled_copy(
     # AUD2-B1-14; al panel en AUD2-POST-05, 2026-09-23): el turno movido
     # conserva el estado del original. Antes nacia con el default de la
     # columna y un confirmado volvia a "pendiente de confirmar" sin aviso. A
-    # esta altura no hay sena de por medio (``pending_payment`` lo frena
-    # ``reject_cancellation_while_awaiting_payment``), asi que lo que se
-    # conserva es un ``confirmed`` sin retencion que vencer. Un pendiente
-    # conserva la retencion que TENIA: la del portal (hasta el inicio) pasa
-    # al horario nuevo; el alta del panel no retiene y moverlo tampoco.
+    # esta altura el cobro vivo del original ya se vencio (``_swap_for_new_slot``)
+    # y el nuevo nace sin cobro: un ``confirmed`` sigue confirmado sin
+    # retencion y cualquier otro (``pending`` o ``pending_payment``) queda
+    # ``pending`` SIN cobro ni sena requerida. Si el original tenia retencion,
+    # el nuevo NO la conserva: nace con ``expires_at = new_starts_at`` (vence
+    # al inicio si nadie lo confirma); el alta del panel no retiene y moverlo
+    # tampoco. Para un ``pending_payment`` eso pierde la sena requerida:
+    # decision pendiente del dueno (revision de perf/f4-pay, 2026-09-25).
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
     retenido = not confirmado and original.expires_at is not None
     return Appointment(

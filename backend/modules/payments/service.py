@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import cast
 
 import httpx
+import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +23,8 @@ from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 from core.config import settings
 from core.crypto import decrypt_secret, encrypt_secret
 from core.database import _apply_tenant_context
+from core.exceptions import AppException
+from core.observability import report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
@@ -28,11 +32,19 @@ from modules.payments.model import (
     Payment,
     PaymentGatewayConfig,
     PaymentStatus,
+    is_placeholder_preference_id,
+    external_reference_for,
 )
 from modules.services.model import Service
+from modules.payments.links import ImportesDelLink, record_retired_link
+from modules.payments.model import (  # reexportado: lo importan jobs y tests
+    EVENT_PREFERENCE_EXPIRE as EVENT_PREFERENCE_EXPIRE,
+)
 from modules.stores.media import absolute_media_url
 from modules.stores.model import Store
 from modules.users.model import User
+
+logger = structlog.get_logger()
 
 
 ACTIVE_APPOINTMENT_STATUSES = {
@@ -188,8 +200,13 @@ def _placeholder_link(appointment_id: str) -> tuple[str, str]:
     )
 
 
+def new_link_ref() -> str:
+    """Nonce de un link de pago: corto, unico y sin ``:``."""
+    return secrets.token_hex(8)
+
+
 def _is_placeholder_preference(preference_id: str | None) -> bool:
-    return not preference_id or preference_id.startswith("pref_")
+    return is_placeholder_preference_id(preference_id)
 
 
 def _is_placeholder_payment_link(payment_link: str | None) -> bool:
@@ -703,8 +720,14 @@ async def prepare_mercadopago_preference(
     service: Service,
     store_id: str,
     amount: Decimal,
+    link_ref: str | None,
 ) -> PreparedPreference | None:
-    """Lecturas de la preferencia (gateway, tienda, pagador). None: sin token."""
+    """Lecturas de la preferencia (gateway, tienda, pagador). None: sin token.
+
+    ``link_ref``: nonce del link que se pide; va en la ``external_reference``
+    (``external_reference_for``) para que el webhook sepa de que link es cada
+    pago sin depender de ``preference_id``, que el pago de MP no trae.
+    """
     config = await _get_gateway_config(db, store_id)
     if config is None or not _resolve_access_token(config):
         return None
@@ -738,7 +761,7 @@ async def prepare_mercadopago_preference(
                     "name": payer_name,
                     "email": _normalize_payer_email(payer_email),
                 },
-                "external_reference": appointment.id,
+                "external_reference": external_reference_for(appointment.id, link_ref),
                 "notification_url": _notification_url(store),
                 "back_urls": {
                     "success": _booking_return_url(store, payment),
@@ -767,10 +790,8 @@ async def prepare_mercadopago_preference(
     )
 
 
-# Evento del outbox: "vencer este link de pago en Mercado Pago". Lo publica
-# quien libera un turno en la misma transaccion y lo consume
-# process_outbox_batch fuera de todo lock (B1-04).
-EVENT_PREFERENCE_EXPIRE = "payment.preference.expire"
+# ``EVENT_PREFERENCE_EXPIRE`` ("vencer este link en MP", B1-04) vive en
+# ``payments.model`` y se reexporta desde aca.
 
 
 async def expire_mercadopago_preference(
@@ -908,6 +929,12 @@ def _reprice_existing_payment(
     conserva_importe = keep_existing_amount and payment.deposit_rule is not None
     if amount <= 0 or conserva_importe:
         return False
+    if payment.is_accredited:
+        # Un cobro acreditado no se re-tarifa: su importe es la plata que entro
+        # (revision de perf/f4-pay, 2026-09-25).
+        if payment.amount != amount:
+            raise PaymentAlreadyAccreditedError()
+        return False
     cambio = payment.amount != amount
     payment.amount = amount
     payment.original_amount = original_amount
@@ -916,8 +943,49 @@ def _reprice_existing_payment(
     return cambio
 
 
+def _retire_link(
+    db: AsyncSession,
+    payment: Payment,
+    importes_del_link: ImportesDelLink | None = None,
+) -> None:
+    """El cobro deja de usar su link: queda un placeholder hasta el nuevo, y
+    se olvida el pago de MP que tenia anotado (era del link retirado).
+
+    Con ``MERCADOPAGO_LINK_REF_ENABLED`` tambien rota ``link_ref`` a un nonce
+    que ningun link lleva: desde este momento un pago del link retirado no
+    pasa la integridad, aunque llegue antes de que se selle el nuevo (entre la
+    fase 1 y la 2 del link del panel). Sin esto el pago viejo se aplicaba en
+    esa ventana y la fase 2 chocaba con la version del cobro (revision de
+    perf/f4-pay, 2026-09-25).
+
+    Un cobro acreditado nunca retira su link: conserva ``link_ref`` y
+    ``external_payment_id`` para que un reembolso o contracargo posterior se
+    reconozca como del link vigente y avise al dueno.
+    """
+    if payment.is_accredited:
+        raise PaymentAlreadyAccreditedError()
+    # Queda en el historial: un pago de este link que llegue despues (webhook
+    # tardio o reentregado, o pagado antes de que MP lo venza) se reconoce y
+    # se aplica o se alerta (``payments.links``).
+    record_retired_link(db, payment, importes=importes_del_link)
+    payment.preference_id, payment.payment_link = _placeholder_link(
+        payment.appointment_id
+    )
+    # El id del pago de MP es de un intento sobre el link retirado: la
+    # conciliacion y el rescate del job consultarian ese pago viejo en vez de
+    # buscar los del link nuevo por su referencia (revision de perf/f4-pay).
+    payment.external_payment_id = None
+    if settings.MERCADOPAGO_LINK_REF_ENABLED:
+        payment.link_ref = new_link_ref()
+
+
 def _needs_provider_link(
-    payment: Payment, *, importe_cambio: bool, create_provider_link: bool
+    db: AsyncSession,
+    payment: Payment,
+    *,
+    importe_cambio: bool,
+    create_provider_link: bool,
+    importes_del_link: ImportesDelLink | None = None,
 ) -> bool:
     """Hay que pedir un link nuevo a MP: cambio el importe o el que hay es falso.
 
@@ -928,9 +996,7 @@ def _needs_provider_link(
     (misma clase que el bug del 2026-09-11).
     """
     if importe_cambio and not create_provider_link:
-        payment.preference_id, payment.payment_link = _placeholder_link(
-            payment.appointment_id
-        )
+        _retire_link(db, payment, importes_del_link)
     return (
         importe_cambio
         or _is_placeholder_preference(payment.preference_id)
@@ -970,6 +1036,67 @@ def _expire_replaced_preference(
     )
 
 
+def expire_live_charge(
+    db: AsyncSession,
+    payment: Payment | None,
+    *,
+    reason: str,
+    released_by: str | None = None,
+) -> Payment | None:
+    """Vence el cobro vivo de un turno que se suelta; devuelve el cobro si lo vencio.
+
+    Camino compartido que suelta un cobro vivo
+    (``LIVE_CHARGE_PAYMENT_STATUSES``: ``pending`` o ``rejected``) cuando su
+    turno se suelta (revision de perf/f4-pay, 2026-09-25). Lo usan cancelar,
+    reprogramar y liberar desde el panel (``AppointmentService``), la
+    cancelacion por bloqueo (``AppointmentBlockService``) y el webhook que
+    suelta el turno (``processing._sync_appointment``). NO es el unico: el job
+    de retenciones vencidas vence el cobro con ``stamp_payment_from_status``
+    sin publicar el vencimiento, porque el link ya vencio solo en MP
+    (``jobs._expired_holds_query``).
+
+    Precondicion del llamador: el TURNO ya esta lockeado y ``payment`` se leyo
+    despues (orden turno -> pago, regla 7). El estado lo cambia la entidad
+    (``apply_status``: ``pending``/``rejected`` -> ``expired`` estan en el
+    grafo) y el link de MP no se toca aca: se publica
+    ``payment.preference.expire`` en la misma transaccion y el outbox lo vence
+    despues del commit, sin lock (B1-04, regla 5). Un placeholder no existe en
+    MP: no se publica nada.
+    """
+    if payment is None or not payment.is_live_charge:
+        return None
+    if not _is_placeholder_preference(payment.preference_id):
+        db.add(
+            OutboxMessage(
+                store_id=payment.store_id,
+                event_type=EVENT_PREFERENCE_EXPIRE,
+                payload={
+                    "appointment_id": payment.appointment_id,
+                    "payment_id": payment.id,
+                    "preference_id": payment.preference_id,
+                },
+            )
+        )
+    payment.apply_status(
+        PaymentStatus.EXPIRED.value,
+        payload={"reason": reason, "released_by": released_by},
+    )
+    return payment
+
+
+class ProviderPreferenceWithoutLinkError(RuntimeError):
+    """MP creo la preferencia pero no devolvio un link de checkout usable.
+
+    La preferencia existe en MP con ese id: quien compensa la manda a vencer
+    (revision de 7abb9b4..e5579b6, #7). Sigue siendo ``RuntimeError``: se
+    responde como cualquier falla del proveedor.
+    """
+
+    def __init__(self, preference_id: str) -> None:
+        super().__init__("Mercado Pago no devolvio una preferencia valida")
+        self.preference_id = preference_id
+
+
 async def _attach_provider_link(
     db: AsyncSession,
     *,
@@ -999,6 +1126,9 @@ async def _attach_provider_link(
     # Import diferido: jobs importa este modulo.
     from modules.payments.jobs import persist_gateway_refresh
 
+    # Nonce propio de ESTE link (revision de perf/f4-pay): se sella con el
+    # link; un pago de un link anterior ya no pasa la integridad.
+    link_ref = new_link_ref() if settings.MERCADOPAGO_LINK_REF_ENABLED else None
     prepared = await prepare_mercadopago_preference(
         db,
         payment=payment,
@@ -1006,6 +1136,7 @@ async def _attach_provider_link(
         service=service,
         store_id=store_id,
         amount=amount,
+        link_ref=link_ref,
     )
     preference_payload = None
     if prepared is not None:
@@ -1022,10 +1153,13 @@ async def _attach_provider_link(
         )
     preference_id = str(preference_payload.get("id") or "").strip()
     payment_link = _resolve_checkout_link(preference_payload)
-    if not preference_id or not payment_link:
+    if not preference_id:
         raise RuntimeError("Mercado Pago no devolvio una preferencia valida")
+    if not payment_link:
+        raise ProviderPreferenceWithoutLinkError(preference_id)
     payment.preference_id = preference_id
     payment.payment_link = payment_link
+    payment.link_ref = link_ref
     payment.raw_payload = preference_payload
 
 
@@ -1086,6 +1220,63 @@ async def ensure_payment_preference(
     return payment
 
 
+def _refresh_existing_payment(
+    db: AsyncSession,
+    payment: Payment,
+    *,
+    amount: Decimal,
+    original_amount: Decimal,
+    discount_amount: Decimal,
+    promotion_code: str | None,
+    keep_existing_amount: bool,
+    deposit_rule: dict[str, JsonValue] | None,
+    create_provider_link: bool,
+    renew_expired_link: bool,
+) -> bool:
+    """Reaplica importes y estado a un cobro que ya existe; True si hace falta
+    pedirle un link nuevo a MP.
+
+    ``renew_expired_link`` (solo la fase 1 del link del panel, revision de
+    perf/f4-pay): un cobro ``expired`` pierde su link viejo y queda con un
+    placeholder, asi la fase 2 pide uno NUEVO (y el viejo se manda a vencer,
+    ``_expire_replaced_preference``). Antes se devolvia el link viejo, ya
+    vencido. La reapertura del cobro la hace la fase 2, ya sellado el link.
+    """
+    # Lo que cobra el link vigente (importe, promo, descuento): si se
+    # re-tarifa y se retira, el historial guarda los de ESE link, no los
+    # nuevos.
+    importes_del_link = ImportesDelLink.del_cobro(payment)
+    importe_cambio = _reprice_existing_payment(
+        payment,
+        amount=amount,
+        original_amount=original_amount,
+        discount_amount=discount_amount,
+        promotion_code=promotion_code,
+        keep_existing_amount=keep_existing_amount,
+    )
+    if payment.is_accredited:
+        # Ni se retira su link ni se pide uno nuevo (revision de perf/f4-pay).
+        return False
+    if deposit_rule is not None:
+        payment.deposit_rule = deposit_rule
+    if renew_expired_link and payment.status == PaymentStatus.EXPIRED.value:
+        # Sin nonce por link no se reabre: ver
+        # ``PaymentLinkRegenerationUnavailableError``.
+        if not settings.MERCADOPAGO_LINK_REF_ENABLED:
+            raise PaymentLinkRegenerationUnavailableError()
+        _retire_link(db, payment, importes_del_link)
+    # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
+    # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
+    payment.apply_status(PaymentStatus.PENDING.value)
+    return _needs_provider_link(
+        db,
+        payment,
+        importes_del_link=importes_del_link,
+        importe_cambio=importe_cambio,
+        create_provider_link=create_provider_link,
+    )
+
+
 async def _upsert_payment_preference(
     db: AsyncSession,
     *,
@@ -1099,8 +1290,12 @@ async def _upsert_payment_preference(
     create_provider_link: bool,
     deposit_rule: dict[str, JsonValue] | None,
     keep_existing_amount: bool,
+    renew_expired_link: bool = False,
 ) -> tuple[Payment, bool]:
-    """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17)."""
+    """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17).
+
+    ``renew_expired_link``: ver ``_refresh_existing_payment``.
+    """
     amount, original_amount, discount_amount = _resolve_amounts(
         service,
         amount_override=amount_override,
@@ -1117,23 +1312,17 @@ async def _upsert_payment_preference(
     # Un id REAL que se deja de usar hay que vencerlo en MP (AUD2-B2-03).
     preferencia_previa = None if payment is None else payment.preference_id
     if payment:
-        importe_cambio = _reprice_existing_payment(
+        should_refresh_provider_link = _refresh_existing_payment(
+            db,
             payment,
             amount=amount,
             original_amount=original_amount,
             discount_amount=discount_amount,
             promotion_code=promotion_code,
             keep_existing_amount=keep_existing_amount,
-        )
-        if deposit_rule is not None:
-            payment.deposit_rule = deposit_rule
-        # Reabrir solo si el grafo lo permite (lo decide la entidad): un pago
-        # acreditado o devuelto no vuelve a pendiente por re-tarifarse.
-        payment.apply_status(PaymentStatus.PENDING.value)
-        should_refresh_provider_link = _needs_provider_link(
-            payment,
-            importe_cambio=importe_cambio,
+            deposit_rule=deposit_rule,
             create_provider_link=create_provider_link,
+            renew_expired_link=renew_expired_link,
         )
     else:
         payment = _nuevo_cobro_pendiente(
@@ -1196,6 +1385,324 @@ async def _discard_orphan_payment(
     await db.commit()
 
 
+# Estados de un turno cuyo horario ya se SOLTO: un cobro no puede quedar vivo
+# ni nacer sobre ellos (el link apuntaria a un turno que ya no existe) y un
+# pago que llega despues no lo revive (el horario pudo tomarlo otra persona;
+# S-16, 2026-09-19). Unica fuente: la usan el link del panel, la confirmacion
+# manual y el webhook. ``completed`` y ``absent`` NO estan: cobrar despues de
+# atender es un flujo real (correccion de alcance del coordinador,
+# revision de perf/f4-pay 2026-09-25).
+RELEASED_APPOINTMENT_STATUSES: frozenset[str] = frozenset(
+    {
+        AppointmentStatus.CANCELLED.value,
+        AppointmentStatus.EXPIRED.value,
+    }
+)
+
+
+class PaymentAlreadyAccreditedError(AppException):
+    """409 neutro: el cobro ya esta acreditado y no se re-tarifa ni cambia de
+    link (revision de perf/f4-pay, 2026-09-25)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="El cobro ya esta acreditado",
+            http_status=409,
+            error_code="PAYMENT_ALREADY_ACCREDITED",
+        )
+
+
+class PaymentLinkRegenerationUnavailableError(AppException):
+    """409 neutro: regenerar el link de un cobro vencido no esta disponible.
+
+    Sin ``MERCADOPAGO_LINK_REF_ENABLED`` el link nuevo tendria la misma
+    ``external_reference`` que el viejo y un pago tardio del viejo se
+    aplicaria al cobro reabierto con el nuevo vivo: pago doble. Asi esta rama
+    nunca abre esa ventana, aunque operaciones apague el flag.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="Por ahora no se puede generar un link nuevo para este cobro",
+            http_status=409,
+            error_code="PAYMENT_LINK_REGENERATION_UNAVAILABLE",
+        )
+
+
+class AppointmentNotPayableError(AppException):
+    """409 neutro: el turno ya no admite un cobro."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="El turno ya no admite un cobro",
+            http_status=409,
+            error_code="APPOINTMENT_NOT_PAYABLE",
+        )
+
+
+async def lock_payable_appointment(
+    db: AsyncSession, *, appointment_id: str, store_id: str
+) -> bool:
+    """Lockea el turno (``FOR UPDATE``) y dice si admite un cobro: existe y
+    no esta soltado (``RELEASED_APPOINTMENT_STATUSES``).
+
+    Es el PRIMER lock de quien toca el cobro del turno (orden turno -> pago,
+    regla 7), el mismo que cancelar, liberar y el webhook. Lee la columna, no
+    la entidad: el turno que trae el router se leyo sin lock y puede estar
+    viejo. Sin autoflush: un cambio pendiente del cobro no puede tomar la fila
+    del pago antes que la del turno.
+    """
+    with db.no_autoflush:
+        estado = (
+            await db.execute(
+                select(Appointment.status)
+                .where(
+                    Appointment.id == appointment_id,
+                    Appointment.store_id == store_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+    return estado is not None and estado not in RELEASED_APPOINTMENT_STATUSES
+
+
+async def _discard_unsealed_link(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    appointment_id: str,
+    payment_id: str,
+    preference_id: str | None,
+) -> None:
+    """El turno se solto mientras MP creaba el link: no se sella y se vence.
+
+    Transaccion propia, despues del rollback de la fase 2: el link existe en
+    Mercado Pago y nadie lo va a registrar, asi que se manda a vencer por el
+    outbox (``payment.preference.expire``, sin lock ni llamada en el request).
+    """
+    if preference_id and not _is_placeholder_preference(preference_id):
+        db.add(
+            OutboxMessage(
+                store_id=store_id,
+                event_type=EVENT_PREFERENCE_EXPIRE,
+                payload={
+                    "appointment_id": appointment_id,
+                    "payment_id": payment_id,
+                    "preference_id": preference_id,
+                },
+            )
+        )
+        await db.commit()
+
+
+async def _drop_unsealed_link(
+    db: AsyncSession,
+    nueva: str | None,
+    previa: str | None,
+    ids: tuple[str, str, str],
+) -> None:
+    """Rollback de la fase 2 y vencimiento del link que ESTA llamada creo.
+
+    Revision de perf/f4-pay (2026-09-25): si la fase 2 no puede sellar (el
+    turno se solto, o otra escritura choco con la version del cobro), la
+    preferencia que MP ya creo quedaba viva sin que nadie la registrara. Un
+    link igual a ``previa`` no lo creo esta llamada: no se toca. ``nueva`` se
+    lee ANTES del flush (uno fallido expira la instancia) e ``ids`` (tienda,
+    cobro, turno) antes de la fase 2.
+    """
+    store_id, payment_id, appointment_id = ids
+    await db.rollback()
+    if nueva != previa:
+        await _discard_unsealed_link(
+            db,
+            store_id=store_id,
+            appointment_id=appointment_id,
+            payment_id=payment_id,
+            preference_id=nueva,
+        )
+
+
+async def _drop_unsealed_link_or_log(
+    db: AsyncSession,
+    nueva: str | None,
+    previa: str | None,
+    ids: tuple[str, str, str],
+) -> None:
+    """``_drop_unsealed_link`` sin tapar el error del llamador.
+
+    Revision de 7abb9b4..e5579b6 (#7): si vencer el link falla (base caida al
+    commitear el outbox), ese fallo reemplazaba al error que se estaba
+    compensando (el choque de version o el 409 del turno soltado). Ahora queda
+    en el log y en Sentry, con la preferencia para vencerla a mano, y el
+    llamador sigue con SU error.
+    """
+    try:
+        await _drop_unsealed_link(db, nueva, previa, ids)
+    except Exception as exc:
+        store_id, payment_id, _ = ids
+        await _unsealed_expire_failed(
+            db, exc, store_id=store_id, payment_id=payment_id, preference_id=nueva
+        )
+
+
+async def expire_unsealed_preference(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    appointment_id: str,
+    payment_id: str,
+    preference_id: str,
+) -> None:
+    """Manda a vencer una preferencia que MP creo y nadie va a registrar.
+
+    Para quien ya compenso (rollback o reserva revertida): publica
+    ``payment.preference.expire`` en su propia transaccion y NUNCA levanta;
+    un fallo queda en el log y en Sentry y el llamador sigue con su error.
+    Lo usa la reserva publica cuando MP devuelve una preferencia sin link de
+    checkout (seguimiento del #7 de la revision de 7abb9b4..e5579b6).
+    """
+    try:
+        await _discard_unsealed_link(
+            db,
+            store_id=store_id,
+            appointment_id=appointment_id,
+            payment_id=payment_id,
+            preference_id=preference_id,
+        )
+    except Exception as exc:
+        await _unsealed_expire_failed(
+            db,
+            exc,
+            store_id=store_id,
+            payment_id=payment_id,
+            preference_id=preference_id,
+        )
+
+
+async def _unsealed_expire_failed(
+    db: AsyncSession,
+    exc: Exception,
+    *,
+    store_id: str,
+    payment_id: str,
+    preference_id: str | None,
+) -> None:
+    """Log y Sentry con la preferencia (para vencerla a mano) y rollback
+    best-effort: la sesion puede haber quedado con un commit fallido."""
+    contexto = {
+        "store_id": store_id,
+        "payment_id": payment_id,
+        "preference_id": preference_id,
+    }
+    logger.exception("unsealed_preference_expire_failed", **contexto)
+    report_exception(exc, **contexto)
+    with suppress(Exception):
+        await db.rollback()
+
+
+async def _discard_orphan_payment_or_log(
+    db: AsyncSession, ids: tuple[str, str, str]
+) -> None:
+    """``_discard_orphan_payment`` sin tapar el error del proveedor.
+
+    Revision de e5579b6..3b977a9 (#6): si el borrado falla (base caida, o el
+    ``IntegrityError`` de la carrera con el historial de links: otra request
+    anoto un link retirado de este cobro), queda en el log y en Sentry y el
+    llamador sigue con SU error, como ``_drop_unsealed_link_or_log``. El
+    cobro queda con su placeholder y lo retoma un reintento.
+    """
+    store_id, payment_id, appointment_id = ids
+    try:
+        await _discard_orphan_payment(
+            db,
+            store_id=store_id,
+            payment_id=payment_id,
+            appointment_id=appointment_id,
+        )
+    except Exception as exc:
+        contexto = {
+            "store_id": store_id,
+            "payment_id": payment_id,
+            "appointment_id": appointment_id,
+        }
+        logger.exception("panel_link_orphan_discard_failed", **contexto)
+        report_exception(exc, **contexto)
+        with suppress(Exception):
+            await db.rollback()
+
+
+async def _panel_link_phase_one(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    amount_override: Decimal | None,
+) -> tuple[Payment, bool]:
+    """Fase 1 del link del panel, SIN commit: turno lockeado primero (regla
+    7), 409 si esta soltado, y el cobro persistido (re-tarifado si
+    corresponde; un cobro ``expired`` pierde su link viejo).
+
+    "Lo cree yo" sale del INSERT mismo, no de un SELECT previo (S-17,
+    2026-09-19): entre ese SELECT y el de la fase 1 otra request podia
+    commitear el cobro; esta lo tomaba por propio y, si su fase 2 chocaba con
+    la de la otra, borraba un cobro ajeno (rafaga -> cero cobros).
+    """
+    if not await lock_payable_appointment(
+        db, appointment_id=appointment.id, store_id=store_id
+    ):
+        await db.rollback()
+        raise AppointmentNotPayableError()
+    try:
+        payment, creado = await _upsert_payment_preference(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            amount_override=amount_override,
+            original_amount=None,
+            discount_amount=None,
+            promotion_code=None,
+            create_provider_link=False,
+            deposit_rule=None,
+            keep_existing_amount=True,
+            renew_expired_link=True,
+        )
+        if payment.is_accredited:
+            # Nada que cobrar, cambie o no el precio (decision del dueno,
+            # revision de e5579b6..3b977a9, #5): el upsert no escribio nada.
+            raise PaymentAlreadyAccreditedError()
+        return payment, creado
+    except PaymentLinkRegenerationUnavailableError, PaymentAlreadyAccreditedError:
+        await db.rollback()  # suelta el lock del turno sin escribir nada
+        raise
+
+
+async def _panel_link_from_provider(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    store_id: str,
+    payment: Payment,
+) -> Payment:
+    """Fase 2 del link del panel hasta MP: pide y sella el link (sin commit)
+    con el importe que dejo la fase 1, dentro del presupuesto del request."""
+    with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
+        return await ensure_payment_preference(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            amount_override=payment.amount,
+            original_amount=payment.original_amount,
+            discount_amount=payment.discount_amount,
+            promotion_code=payment.promotion_code,
+            keep_existing_amount=True,
+            create_provider_link=True,
+        )
+
+
 async def create_panel_payment_preference(
     db: AsyncSession,
     *,
@@ -1206,70 +1713,98 @@ async def create_panel_payment_preference(
 ) -> Payment:
     """Link de pago pedido desde el panel: commit -> llamada -> compensacion.
 
-    Fase 1: se persiste el cobro PENDING (re-tarifado si corresponde; si el
-    importe cambio, el link viejo queda como placeholder) y se COMMITEA.
-    Fase 2: con la transaccion cerrada y la fila suelta, se llama a Mercado
-    Pago (hasta 20 s) y se sella el link real.
+    Fase 1 (``_panel_link_phase_one``): se persiste el cobro y se COMMITEA.
+    Fase 2: con la transaccion cerrada se llama a Mercado Pago (regla 5) y se
+    sella el link real. Si MP falla y el cobro lo creo esta llamada, se borra
+    (compensacion); si ya existia, queda con su placeholder.
 
-    Si MP falla y el cobro lo creo esta llamada, se borra (compensacion). Si
-    ya existia, queda con su placeholder y el reintento desde el panel lo
-    refresca. Antes las dos fases vivian en la misma transaccion, con la
-    conexion del pool tomada durante la request externa (regla 5).
+    Las dos fases lockean el turno antes de escribir el cobro (orden turno ->
+    pago, regla 7) y rechazan un turno soltado
+    (``RELEASED_APPOINTMENT_STATUSES``) con 409 ``APPOINTMENT_NOT_PAYABLE``.
+    Si se solto mientras MP respondia, el link nuevo no se sella y se manda a
+    vencer. Un cobro ``expired`` con link NUEVO recien sellado se reabre con
+    ``Payment.reopen_for_panel_link`` (unico llamador; revision de
+    perf/f4-pay, 2026-09-25).
     """
-    # "Lo cree yo" sale del INSERT mismo, no de un SELECT previo (S-17,
-    # 2026-09-19): entre ese SELECT y el de la fase 1 otra request podia
-    # commitear el cobro; esta lo tomaba por propio y, si su fase 2 chocaba
-    # con la de la otra, borraba un cobro ajeno (rafaga -> cero cobros).
-    payment, creado = await _upsert_payment_preference(
+    payment, creado = await _panel_link_phase_one(
         db,
         appointment=appointment,
         service=service,
         store_id=store_id,
         amount_override=amount_override,
-        original_amount=None,
-        discount_amount=None,
-        promotion_code=None,
-        create_provider_link=False,
-        deposit_rule=None,
-        keep_existing_amount=True,
     )
     # Leidos antes del commit: tras un rollback las instancias quedan
-    # expiradas y leerlas de nuevo seria IO fuera de lugar.
-    payment_id, appointment_id = payment.id, appointment.id
+    # expiradas y leerlas de nuevo seria IO fuera de lugar. ``previa``: el
+    # link que dejo la fase 1; uno distinto despues lo creo ESTA llamada.
+    ids = (store_id, payment.id, appointment.id)
+    previa = payment.preference_id
     await db.commit()
+    return await _panel_link_phase_two(
+        db,
+        appointment=appointment,
+        service=service,
+        payment=payment,
+        creado=creado,
+        ids=ids,
+        previa=previa,
+    )
 
+
+async def _panel_link_phase_two(
+    db: AsyncSession,
+    *,
+    appointment: Appointment,
+    service: Service,
+    payment: Payment,
+    creado: bool,
+    ids: tuple[str, str, str],
+    previa: str | None,
+) -> Payment:
+    """Fase 2 del link del panel, con la fase 1 ya commiteada: MP, sellado
+    bajo el lock del turno y las compensaciones de cada falla.
+
+    ``ids``: (tienda, cobro, turno), leidos antes del commit de la fase 1.
+    Ningun camino de falla deja viva en MP una preferencia que ESTA llamada
+    creo y no sello: la del choque de version, la del turno soltado y la que
+    MP devolvio sin link de checkout (revision de 7abb9b4..e5579b6, #7).
+    """
+    store_id, payment_id, appointment_id = ids
+    nueva = previa
     try:
-        with mercadopago_budget(settings.MERCADOPAGO_REQUEST_BUDGET_SECONDS):
-            payment = await ensure_payment_preference(
-                db,
-                appointment=appointment,
-                service=service,
-                store_id=store_id,
-                amount_override=payment.amount,
-                original_amount=payment.original_amount,
-                discount_amount=payment.discount_amount,
-                promotion_code=payment.promotion_code,
-                keep_existing_amount=True,
-                create_provider_link=True,
-            )
-        await db.commit()
-    except RuntimeError, CircuitBreakerOpenError:
+        payment = await _panel_link_from_provider(
+            db,
+            appointment=appointment,
+            service=service,
+            store_id=store_id,
+            payment=payment,
+        )
+        nueva = payment.preference_id  # antes del flush: si falla, se expira
+        sellable = await lock_payable_appointment(
+            db, appointment_id=appointment_id, store_id=store_id
+        )
+        if sellable:
+            # Turno lockeado y no soltado: el cobro vencido vuelve a ser vivo.
+            payment.reopen_for_panel_link()
+            await db.commit()
+    except (RuntimeError, CircuitBreakerOpenError) as exc:
         # Fallo del PROVEEDOR (MercadoPagoAPIError es RuntimeError): si el
-        # cobro lo inserto esta llamada, se compensa borrandolo.
+        # cobro lo inserto esta llamada, se compensa borrandolo. Si MP llego a
+        # crear la preferencia (respuesta sin init_point), se vence.
         await db.rollback()
         if creado:
-            await _discard_orphan_payment(
-                db,
-                store_id=store_id,
-                payment_id=payment_id,
-                appointment_id=appointment_id,
-            )
+            await _discard_orphan_payment_or_log(db, ids)
+        if isinstance(exc, ProviderPreferenceWithoutLinkError):
+            await _drop_unsealed_link_or_log(db, exc.preference_id, previa, ids)
         raise
     except Exception:
         # Conflicto de concurrencia (StaleDataError, IntegrityError): otra
-        # request esta trabajando sobre el mismo cobro. No se borra nada.
-        await db.rollback()
+        # request esta trabajando sobre el mismo cobro. No se borra el cobro,
+        # pero el link que MP ya creo no puede quedar vivo.
+        await _drop_unsealed_link_or_log(db, nueva, previa, ids)
         raise
+    if not sellable:
+        await _drop_unsealed_link_or_log(db, nueva, previa, ids)
+        raise AppointmentNotPayableError()
     await db.refresh(payment)
     return payment
 

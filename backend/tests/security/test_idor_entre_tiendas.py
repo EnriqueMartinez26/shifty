@@ -34,10 +34,19 @@ from tests.security.mundo import (
     ADMIN_TIENDA,
     ANON,
     CLIENTE_OTP,
+    PROFESIONAL,
     SUPERADMIN,
+    Llamada,
     Mundo,
 )
-from tests.security.rutas import DEFECTOS_IDOR, SOLO_OTP, TABLA, Alcance, Ruta
+from tests.security.rutas import (
+    DEFECTOS_IDOR,
+    IDOR_POR_ID,
+    SOLO_OTP,
+    TABLA,
+    Alcance,
+    Ruta,
+)
 from tests.security.verificacion import (
     exigir,
     pagos_sin_red,
@@ -112,6 +121,7 @@ def test_cada_recurso_por_id_tiene_su_caso_entre_tiendas() -> None:
         ("/appointment-blocks/", "public_id"),
         ("/waitlist/", "public_id"),
         ("/users/", "public_id"),
+        ("/ledger/clients", "public_id"),
     ],
 )
 async def test_los_listados_de_alfa_traen_solo_filas_de_alfa(
@@ -126,3 +136,49 @@ async def test_los_listados_de_alfa_traen_solo_filas_de_alfa(
     assert isinstance(filas, list) and filas, f"{url} vino vacio para alfa"
     ids = {fila[clave] for fila in filas}
     assert not ids & mundo.beta.marcadores, f"{url} trae filas de beta"
+
+
+@en_el_loop_del_mundo
+async def test_el_profesional_de_alfa_no_alcanza_el_fiado_ni_los_clientes_de_beta(
+    mundo: Mundo,
+) -> None:
+    """D3 (2026-09-25): el profesional usa el fiado y su buscador de clientes.
+
+    Con el id de un cliente de beta: 404 al leer, cargar o revertir su fiado.
+    El buscador de alfa no trae a nadie de beta ni ninguna cuenta del personal
+    de alfa (admin, profesional, recepcion, el propio actor): solo clientes.
+    """
+    alfa, beta = mundo.alfa, mundo.beta
+    actor = await mundo.actor(PROFESIONAL, alfa)
+    ajenas = (
+        Llamada("GET", f"/ledger/customers/{beta.cliente}"),
+        Llamada(
+            "POST",
+            f"/ledger/customers/{beta.cliente}/movements",
+            json={"movement_type": "charge", "amount": "10.00"},
+        ),
+        Llamada(
+            "POST",
+            f"/ledger/customers/{beta.cliente}/movements/{beta.movimiento}/reverse",
+        ),
+    )
+    for llamada in ajenas:
+        res = await mundo.llamar(actor, llamada)
+        revisar_respuesta(res, llamada, beta.marcadores)
+        assert res.status_code in IDOR_POR_ID, (llamada.url, res.status_code, res.text)
+
+    for params in ({"q": "Cliente"}, {}):
+        llamada = Llamada("GET", "/ledger/clients", params=params)
+        res = await mundo.llamar(actor, llamada)
+        revisar_respuesta(res, llamada, beta.marcadores)
+        assert res.status_code == 200, res.text
+        ids = {fila["public_id"] for fila in res.json()}
+        assert alfa.cliente in ids, "el buscador de alfa vino sin su cliente"
+        assert not ids & beta.marcadores, "trae clientes de beta"
+        personal = {
+            alfa.admin_id,
+            alfa.profesional_id,
+            alfa.recepcionista_id,
+            actor.user_id,
+        }
+        assert not ids & personal, "trae cuentas del personal"

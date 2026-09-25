@@ -22,11 +22,12 @@ from core.keyset import (
     decode_cursor,
     encode_cursor,
 )
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
 from modules.auth.dependencies import get_current_user
 from modules.ledger.model import CustomerLedger
 from modules.ledger.schemas import (
     CustomerLedgerResponse,
+    LedgerClientItem,
     LedgerMovementCreate,
     LedgerMovementResponse,
     LedgerSummaryClientItem,
@@ -37,6 +38,7 @@ from modules.ledger.service import (
     current_balance,
     ensure_store_client,
     reverse_movement,
+    search_store_clients,
 )
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
@@ -47,6 +49,9 @@ LEDGER_PAGE_MAX = 200
 LEDGER_PAGE_DEFAULT = 50
 # Cota superior del salto: regla 9 exige ge Y le en todo parametro numerico.
 LEDGER_OFFSET_MAX = 100_000
+# Buscador de clientes del fiado (D3): una pagina corta alcanza para elegir.
+LEDGER_CLIENTS_MAX = 100
+LEDGER_CLIENTS_DEFAULT = 50
 PublicIdPath = Annotated[
     str, Path(min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN)
 ]
@@ -187,6 +192,43 @@ async def get_ledger_summary(
             for client_id, balance_after, created_at, customer in top_result.all()
         ],
     )
+
+
+@router.get(
+    "/clients",
+    response_model=list[LedgerClientItem],
+    summary="Buscador de clientes del fiado",
+    description=(
+        "Clientes activos de la tienda para elegir a quien cargar fiado. Solo "
+        "cuentas con rol cliente: el rol lo fija el servidor. `q` (2..80): "
+        "nombre que contiene q o digitos del telefono, como `GET /users/?q=`."
+    ),
+)
+async def search_ledger_clients(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    q: Annotated[str | None, Query(min_length=2, max_length=80)] = None,
+    limit: Annotated[int, Query(ge=1, le=LEDGER_CLIENTS_MAX)] = LEDGER_CLIENTS_DEFAULT,
+) -> list[LedgerClientItem]:
+    """Decision del dueno (2026-09-25, D3): el profesional busca clientes para
+    el fiado sin ``/users/``, que es del admin y lista tambien al personal.
+    Misma puerta que el resto del fiado (rol, modulo, suspension por router)."""
+    _require_financial_access(user)
+    try:
+        reject_control_chars(q)
+    except ValueError as exc:
+        raise ValidationException(str(exc)) from None
+    await _ensure_ledger_feature_enabled(db, user)
+    clientes = await search_store_clients(db, store_id=user.store_id, q=q, limit=limit)
+    return [
+        LedgerClientItem(
+            public_id=cliente.public_id,
+            name=_client_display_name(cliente, fallback_id=cliente.public_id),
+            email=cliente.email,
+            phone=cliente.phone,
+        )
+        for cliente in clientes
+    ]
 
 
 @router.get(

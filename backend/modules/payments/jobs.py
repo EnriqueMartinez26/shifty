@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import Select, or_, select, text
+from sqlalchemy import Row, Select, or_, select, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
@@ -36,7 +36,9 @@ from modules.notifications.tasks import (
     send_store_notification_email,
     smtp_session,
 )
+from modules.payments.links import RETIRED_LINK_SEARCH_MAX, retired_link_references
 from modules.payments.model import (
+    LIVE_CHARGE_PAYMENT_STATUSES,
     JsonValue,
     OutboxMessage,
     Payment,
@@ -94,6 +96,18 @@ def _presupuesto_agotado(limite: float, *, job: str, sin_consultar: int) -> bool
         budget_seconds=MP_PHASE_A_BUDGET_SECONDS,
     )
     return True
+
+
+class _PresupuestoAgotado(Exception):
+    """La fase A se quedo sin presupuesto ANTES de una consulta a MP, quizas a
+    mitad de un cobro (revision de e5579b6..3b977a9, #1). El cobro cortado no
+    cuenta como consultado: lo toma la corrida siguiente."""
+
+
+def _consultar_si_alcanza(limite: float | None) -> None:
+    """Se llama antes de CADA consulta a MP; ``None`` = sin presupuesto."""
+    if limite is not None and _reloj() >= limite:
+        raise _PresupuestoAgotado()
 
 
 logger = structlog.get_logger()
@@ -439,7 +453,9 @@ async def _plan_outbox_message(
     if message.event_type in _MAILS_DEL_PANEL:
         return await _panel_client_mail(db, message, contexto_del_lote)
 
-    notification = _build_store_notification(message)
+    notification = _replaced_link_notification(message) or _build_store_notification(
+        message
+    )
     if notification is None:
         return []
     # La notificacion in-app es la fuente durable; el mail es un efecto
@@ -866,6 +882,43 @@ async def _expire_claimed_preferences(
             fallidos += 1
     await db.commit()
     return vencidos, fallidos
+
+
+def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
+    """Aviso de plata recibida por un link reemplazado (perf/f4-pay).
+
+    Aparte de ``_build_store_notification`` (deuda de la regla 29: no se
+    apila otra rama ahi).
+    """
+    if message.event_type != NotificationType.PAYMENT_ON_REPLACED_LINK.value:
+        return None
+    payload = dict(message.payload or {})
+    amount = payload.get("amount")
+    amount_label = f" de ${amount}" if amount else ""
+    appointment_id = payload.get("appointment_id")
+    if payload.get("duplicado"):
+        titulo = "Pago duplicado"
+        # "Duplicado" incluye un cobro devuelto o con contracargo: no se dice
+        # "ya estaba pagado" (revision de e5579b6..3b977a9, #6).
+        cuerpo = (
+            f"Entro un pago{amount_label} por un link viejo de un turno que ya "
+            "tenia un pago registrado: no se aplico. Revisalo en Mercado Pago y "
+            "devolvelo."
+        )
+    else:
+        titulo = "Se recibio un pago sobre un link reemplazado"
+        cuerpo = (
+            f"Entro un pago{amount_label} por un link de pago que ya habias "
+            "reemplazado: no se aplico al turno. Revisalo en Mercado Pago y, si "
+            "corresponde, devolvelo."
+        )
+    return Notification(
+        store_id=message.store_id,
+        type=message.event_type,
+        title=titulo,
+        body=cuerpo,
+        appointment_id=str(appointment_id) if appointment_id else None,
+    )
 
 
 def _build_store_notification(message: OutboxMessage) -> Notification | None:
@@ -1359,10 +1412,10 @@ async def _reconcile(
     # La configuracion es por tienda, no por cobro: una lectura con in_() antes
     # del for en vez de dos por cobro, una en la consulta a MP y otra en la
     # validacion de integridad (regla 12; 2026-09-20, AUD2-B2-06).
-    configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
+    configs, retiradas = await _lecturas_para_mp(db, pendientes)
     await AsyncSession.commit(db)
     remotos, fallidos, consultados = await _remote_payments_for_reconciliation(
-        db, pendientes, configs
+        db, pendientes, configs, retiradas
     )
     await _apply_tenant_context(db)
 
@@ -1386,6 +1439,9 @@ async def _reconcile(
     reconciled = 0
     inspected = 0
     for payment in filas:
+        # ``reconciled`` cuenta cambios de estado reales, no no-ops (un pago
+        # remoto que sigue pendiente; revision de e5579b6..3b977a9, #4 f).
+        estado_previo = payment.status
         remote = remotos.get(payment.id)
         if not remote:
             # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
@@ -1417,15 +1473,28 @@ async def _reconcile(
         except Exception:
             fallidos += 1
         else:
-            if applied:
+            if applied and payment.status != estado_previo:
                 reconciled += 1
 
     await db.commit()
     return {"reconciled": reconciled, "failed": fallidos, "inspected": inspected}
 
 
+async def _lecturas_para_mp(
+    db: AsyncSession, pendientes: list[Payment]
+) -> tuple[GatewayConfigs, dict[str, list[str]]]:
+    """Lo que la fase A necesita leer ANTES de cerrar la transaccion: la config
+    del gateway por tienda y las referencias de los links retirados de cada
+    cobro (revision de perf/f4-pay). Dos consultas con in_() para el lote."""
+    configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
+    return configs, await retired_link_references(db, pendientes)
+
+
 async def _remote_payments_for_reconciliation(
-    db: AsyncSession, pendientes: list[Payment], configs: GatewayConfigs
+    db: AsyncSession,
+    pendientes: list[Payment],
+    configs: GatewayConfigs,
+    retiradas: Mapping[str, Sequence[str]],
 ) -> tuple[dict[str, dict[str, Any]], int, list[str]]:
     """{payment.id: pago remoto}, cuantos fallaron y cuales se consultaron.
 
@@ -1438,18 +1507,33 @@ async def _remote_payments_for_reconciliation(
     consultados: list[str] = []
     limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
     for indice, payment in enumerate(pendientes):
+        # Entre cobros y, adentro de ``_fetch_remote_payment``, antes de cada
+        # consulta del mismo cobro.
         if _presupuesto_agotado(
             limite, job="reconciliation", sin_consultar=len(pendientes) - indice
         ):
             break
-        consultados.append(payment.id)
         try:
-            remote = await _fetch_remote_payment(db, payment, configs, persistir)
+            remote = await _fetch_remote_payment(
+                db,
+                payment,
+                configs,
+                persistir,
+                retiradas.get(payment.id, ()),
+                limite=limite,
+            )
+        except _PresupuestoAgotado:
+            _presupuesto_agotado(
+                limite, job="reconciliation", sin_consultar=len(pendientes) - indice
+            )
+            break
         except SoftTimeLimitExceeded:
             raise
         except Exception:
             fallidos += 1
+            consultados.append(payment.id)
             continue
+        consultados.append(payment.id)
         if remote:
             remotos[payment.id] = remote
     return remotos, fallidos, consultados
@@ -1460,36 +1544,78 @@ async def _fetch_remote_payment(
     payment: Payment,
     configs: GatewayConfigs | None = None,
     persist_refresh: PersistRefresh | None = None,
+    retiradas: Sequence[str] = (),
+    *,
+    limite: float | None = None,
 ) -> dict[str, Any] | None:
+    """El pago de MP de este cobro: por id si lo tiene; si no, por la
+    referencia del link vigente y, si ahi no hay uno acreditado, por las de
+    sus links retirados en la ventana (``RETIRED_LINK_SEARCH_DAYS``): el
+    webhook del pago de un link viejo pudo perderse.
+
+    Como mucho ``RETIRED_LINK_SEARCH_MAX`` links retirados (los primeros de
+    ``retiradas``, que viene del mas reciente al mas viejo) y el presupuesto
+    ``limite`` se mira antes de CADA consulta: levanta ``_PresupuestoAgotado``
+    aunque sea a mitad del cobro (revision de e5579b6..3b977a9, #1).
+
+    Con id de MP, si ese pago no esta aprobado tambien se buscan los links
+    retirados (revision #4 d): un rechazo sobre el link vigente no puede
+    tapar un pago aprobado de un link viejo cuyo webhook se perdio.
+    """
+    primero: dict[str, Any] | None = None
+    referencias: tuple[str, ...] = tuple(retiradas[:RETIRED_LINK_SEARCH_MAX])
     if payment.external_payment_id:
-        return await fetch_mercadopago_payment(
+        _consultar_si_alcanza(limite)
+        primero = await fetch_mercadopago_payment(
             db,
             store_id=payment.store_id,
             payment_id=payment.external_payment_id,
             configs=configs,
             persist_refresh=persist_refresh,
         )
+        if primero is None or _es_aprobado(primero):
+            return primero
+    else:
+        referencias = (payment.current_external_reference, *referencias)
+    for referencia in referencias:
+        _consultar_si_alcanza(limite)
+        candidates = await search_mercadopago_payments(
+            db,
+            store_id=payment.store_id,
+            external_reference=referencia,
+            configs=configs,
+            persist_refresh=persist_refresh,
+        )
+        # Un cobro acreditado gana; si no hay, el del id o el mas reciente
+        # del vigente.
+        for candidate in candidates:
+            if _es_aprobado(candidate):
+                return candidate
+        if primero is None and candidates:
+            primero = candidates[0]
+    return primero
 
-    candidates = await search_mercadopago_payments(
-        db,
-        store_id=payment.store_id,
-        external_reference=payment.appointment_id,
-        configs=configs,
-        persist_refresh=persist_refresh,
-    )
-    if not candidates:
-        return None
-    # Nos quedamos con un cobro acreditado si existe; si no, con el mas reciente.
-    for candidate in candidates:
-        if str(candidate.get("status") or "").lower() == "approved":
-            return candidate
-    return candidates[0]
+
+def _es_aprobado(remoto: Mapping[str, Any]) -> bool:
+    return str(remoto.get("status") or "").lower() == "approved"
 
 
 def _expired_holds_query(
     now: datetime, limit: int
 ) -> Select[tuple[Appointment, Payment]]:
-    """Turnos con retencion vencida y sin cobro acreditado, los mas viejos primero."""
+    """Turnos con retencion vencida y sin cobro acreditado, los mas viejos primero.
+
+    Sin cobro o con un cobro VIVO (``LIVE_CHARGE_PAYMENT_STATUSES``, unica
+    fuente): desde la revision de perf/f4-pay (2026-09-25) tambien
+    ``rejected``. Antes solo ``pending``: un turno pendiente cuyo link se
+    rechazo no se liberaba nunca y el cliente tampoco podia cancelarlo.
+
+    El job los vence por el grafo SIN publicar ``payment.preference.expire``:
+    el link de MP se creo con ``expiration_date_to`` = la retencion
+    (``prepare_mercadopago_preference``), asi que ya vencio solo; un PUT por
+    retencion vencida solo sumaria carga a MP. Si el cobro ya estaba
+    acreditado, el grafo no lo degrada.
+    """
     return (
         select(Appointment, Payment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
@@ -1502,7 +1628,10 @@ def _expired_holds_query(
             ),
             Appointment.expires_at.is_not(None),
             Appointment.expires_at <= now,
-            or_(Payment.id.is_(None), Payment.status == PaymentStatus.PENDING.value),
+            or_(
+                Payment.id.is_(None),
+                Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)),
+            ),
         )
         .order_by(Appointment.expires_at.asc())
         .limit(limit)
@@ -1620,15 +1749,15 @@ async def _expire_unpaid_appointments(
     # gateway se lee ACA, una vez por tienda, y la transaccion de lectura se
     # cierra antes del HTTP. Sin esto la sesion quedaba "idle in transaction"
     # toda la fase y el idle_in_transaction_session_timeout (60 s) del rol la
-    # mataba a mitad del job. Commit de AsyncSession y no de TenantSession: el
-    # de TenantSession reaplica el contexto y con eso reabre otra transaccion
-    # en el acto; el contexto se reaplica recien en la fase B.
-    configs = await load_gateway_configs(db, (p.store_id for p in pendientes))
+    # mataba a mitad del job. Commit de AsyncSession y no de TenantSession (el
+    # de TenantSession reabre otra transaccion); el contexto vuelve en fase B.
+    configs, retiradas = await _lecturas_para_mp(db, pendientes)
     await AsyncSession.commit(db)
-    remotos = await _fetch_remote_payments(
+    remotos, sin_consultar = await _fetch_remote_payments(
         pendientes,
         db=db,
         configs=configs,
+        retiradas=retiradas,
         persist_refresh=partial(persist_gateway_refresh, db),
     )
     await _apply_tenant_context(db)
@@ -1644,34 +1773,9 @@ async def _expire_unpaid_appointments(
         )
     )
     rows = list(result.all())
-    expired = 0
-    rescued = 0
-    liberados: list[tuple[str, datetime]] = []
-    for appointment, payment in rows:
-        # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
-        # webhook nunca llego, vencerlo perderia una reserva ya pagada.
-        if payment and await _apply_remote_payment(
-            db, payment, remotos.get(payment.id)
-        ):
-            rescued += 1
-            continue
-        appointment.apply_status_transition(AppointmentStatus.EXPIRED)
-        if payment:
-            # Por el grafo, no por asignacion directa: si el cobro ya estaba
-            # acreditado no puede degradarse a expirado.
-            stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
-        publish_slot_released(
-            db,
-            store_id=appointment.store_id,
-            staff_id=appointment.staff_id,
-            service_id=appointment.service_id,
-            appointment_id=appointment.id,
-            starts_at=appointment.starts_at,
-            ends_at=appointment.ends_at,
-            reason="hold_expired",
-        )
-        expired += 1
-        liberados.append((appointment.store_id, appointment.starts_at))
+    expired, rescued, liberados = await _vencer_o_rescatar(
+        db, rows, remotos, sin_consultar
+    )
     await db.commit()
     # El cupo vuelve a estar libre: la pagina publica no puede seguir
     # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
@@ -1688,6 +1792,52 @@ async def _expire_unpaid_appointments(
                 error_type=type(exc).__name__,
             )
     return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
+
+
+async def _vencer_o_rescatar(
+    db: AsyncSession,
+    rows: Sequence[Row[tuple[Appointment, Payment]]],
+    remotos: Mapping[str, dict[str, Any]],
+    sin_consultar: set[str],
+) -> tuple[int, int, list[tuple[str, datetime]]]:
+    """Fase B del job de vencimiento, con los turnos bloqueados.
+
+    Un cobro que el presupuesto dejo sin consultar no se vence en esta corrida
+    (revision de e5579b6..3b977a9, #1): pudo estar pagado; lo decide la
+    corrida siguiente. Devuelve (vencidos, rescatados, (tienda, inicio) de
+    cada turno liberado).
+    """
+    expired = 0
+    rescued = 0
+    liberados: list[tuple[str, datetime]] = []
+    for appointment, payment in rows:
+        if payment and payment.id in sin_consultar:
+            continue
+        # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
+        # webhook nunca llego, vencerlo perderia una reserva ya pagada.
+        if payment and await _apply_remote_payment(
+            db, payment, remotos.get(payment.id)
+        ):
+            rescued += 1
+            continue
+        appointment.apply_status_transition(AppointmentStatus.EXPIRED)
+        if payment:
+            # Por el grafo (pending/rejected -> expired); sin vencer el link:
+            # ver ``_expired_holds_query``.
+            stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
+        publish_slot_released(
+            db,
+            store_id=appointment.store_id,
+            staff_id=appointment.staff_id,
+            service_id=appointment.service_id,
+            appointment_id=appointment.id,
+            starts_at=appointment.starts_at,
+            ends_at=appointment.ends_at,
+            reason="hold_expired",
+        )
+        expired += 1
+        liberados.append((appointment.store_id, appointment.starts_at))
+    return expired, rescued, liberados
 
 
 async def persist_gateway_refresh(
@@ -1726,27 +1876,47 @@ async def _fetch_remote_payments(
     *,
     db: AsyncSession,
     configs: GatewayConfigs,
+    retiradas: Mapping[str, Sequence[str]] | None = None,
     persist_refresh: PersistRefresh | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Una request HTTP a Mercado Pago por cobro pendiente: {payment.id: pago remoto}.
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
+    """Consulta a Mercado Pago los cobros pendientes: ({payment.id: pago
+    remoto}, ids que el presupuesto dejo sin consultar).
 
-    Se llama sin ningun lock tomado. Si no se puede preguntar por un cobro, no
+    Se llama sin ningun lock tomado. Si la consulta de un cobro falla, no
     figura en el resultado y el turno vence: la conciliacion posterior va a
-    detectar el cobro y dejarlo visible para reembolso.
+    detectar el cobro y dejarlo visible para reembolso. Con el mismo
+    presupuesto que la conciliacion y el inbox (revision de e5579b6..3b977a9,
+    #1: este job no tenia): lo que no se llego a consultar NO vence.
     """
     remotos: dict[str, dict[str, Any]] = {}
-    for payment in payments:
-        if payment.provider != "mercadopago":
-            continue
+    de_mp = [p for p in payments if p.provider == "mercadopago"]
+    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    for indice, payment in enumerate(de_mp):
+        if _presupuesto_agotado(
+            limite, job="expire_holds", sin_consultar=len(de_mp) - indice
+        ):
+            return remotos, {p.id for p in de_mp[indice:]}
         try:
-            remote = await _fetch_remote_payment(db, payment, configs, persist_refresh)
+            remote = await _fetch_remote_payment(
+                db,
+                payment,
+                configs,
+                persist_refresh,
+                (retiradas or {}).get(payment.id, ()),
+                limite=limite,
+            )
+        except _PresupuestoAgotado:
+            _presupuesto_agotado(
+                limite, job="expire_holds", sin_consultar=len(de_mp) - indice
+            )
+            return remotos, {p.id for p in de_mp[indice:]}
         except SoftTimeLimitExceeded:
             raise
         except Exception:
             continue
         if remote:
             remotos[payment.id] = remote
-    return remotos
+    return remotos, set()
 
 
 async def _apply_remote_payment(
