@@ -202,3 +202,13 @@ async def test_la_api_responde_400_y_no_500_con_un_token_raro(
     res = await client.get("/public/unsubscribe", params={"token": token})
     assert res.status_code == 400, res.text
     assert res.json()["error_code"] == "UNSUBSCRIBE_LINK_INVALID"
+
+
+def test_el_contexto_del_lote_no_tiene_bajas_por_defecto() -> None:
+    """Revision de fix/legal-datos (2026-09-25): con ``bajas`` vacio por
+    defecto, un llamador nuevo que se olvidara de cargarlas le mandaria el
+    mail promocional a quien se dio de baja. Es obligatorio."""
+    from modules.payments.jobs import _ContextoDelLote
+
+    with pytest.raises(TypeError):
+        _ContextoDelLote(admins={}, tiendas={}, turnos={})  # type: ignore[call-arg]

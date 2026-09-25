@@ -340,7 +340,9 @@ class _ContextoDelLote:
     turnos: Mapping[str, Appointment | None]
     # (store_id, client_id) con baja de los mails promocionales, de los
     # turnos del lote que mandan "volve a reservar" (art. 27, 2026-09-25).
-    bajas: frozenset[tuple[str, str]] = frozenset()
+    # Sin default a proposito: un vacio por omision le mandaria el mail a
+    # quien se dio de baja (revision de fix/legal-datos).
+    bajas: frozenset[tuple[str, str]]
 
 
 # Eventos que no generan aviso al dueno: no necesitan sus admins. Los del
