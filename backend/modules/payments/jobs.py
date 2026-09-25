@@ -36,6 +36,8 @@ from modules.notifications.tasks import (
     send_store_notification_email,
     smtp_session,
 )
+from modules.legal.repository import opted_out_clients
+from modules.legal.unsubscribe import unsubscribe_url
 from modules.payments.links import RETIRED_LINK_SEARCH_MAX, retired_link_references
 from modules.payments.model import (
     LIVE_CHARGE_PAYMENT_STATUSES,
@@ -336,6 +338,9 @@ class _ContextoDelLote:
     # appointment_id -> turno (None si no existe) de los mensajes que mandan
     # un mail al cliente: la sena acreditada y los eventos del panel (F2-02).
     turnos: Mapping[str, Appointment | None]
+    # (store_id, client_id) con baja de los mails promocionales, de los
+    # turnos del lote que mandan "volve a reservar" (art. 27, 2026-09-25).
+    bajas: frozenset[tuple[str, str]] = frozenset()
 
 
 # Eventos que no generan aviso al dueno: no necesitan sus admins. Los del
@@ -357,6 +362,22 @@ def _turnos_con_detalle(ids: list[str]) -> Select[tuple[Appointment]]:
         .options(joinedload(Appointment.service), joinedload(Appointment.staff))
         .where(Appointment.id.in_(ids))
     )
+
+
+def _clientes_con_mail_de_volver(
+    con_mail: list[OutboxMessage], turnos: Mapping[str, Appointment | None]
+) -> set[tuple[str, str]]:
+    """(tienda, cliente) de los turnos completados del lote: los que reciben
+    el mail promocional "volve a reservar"."""
+    pares: set[tuple[str, str]] = set()
+    for message in con_mail:
+        if message.event_type != EVENT_APPOINTMENT_COMPLETED:
+            continue
+        payload = message.payload if isinstance(message.payload, dict) else {}
+        completado = turnos.get(str(payload.get("appointment_id") or ""))
+        if completado is not None and completado.client_id:
+            pares.add((completado.store_id, completado.client_id))
+    return pares
 
 
 async def _contexto_del_lote(
@@ -406,7 +427,12 @@ async def _contexto_del_lote(
         if ids:
             for turno in (await db.execute(_turnos_con_detalle(ids))).scalars():
                 turnos[turno.id] = turno
-    return _ContextoDelLote(admins=admins, tiendas=tiendas, turnos=turnos)
+    # Una consulta para todo el lote (regla 12): quien se dio de baja del
+    # mail promocional no lo recibe.
+    bajas = await opted_out_clients(db, _clientes_con_mail_de_volver(con_mail, turnos))
+    return _ContextoDelLote(
+        admins=admins, tiendas=tiendas, turnos=turnos, bajas=frozenset(bajas)
+    )
 
 
 async def _plan_outbox_message(
@@ -1145,8 +1171,22 @@ async def _panel_client_mail(
     appointment, store, details = cargado
     if appointment.status not in estados:
         return []
-    if kind == "rebook" and not getattr(store, "send_email_reminders", True):
-        return []
+    if kind == "rebook":
+        # Promocional: respeta el interruptor de la tienda y la baja del
+        # cliente, y lleva su link de baja (art. 27 Ley 25.326).
+        if not getattr(store, "send_email_reminders", True):
+            return []
+        # Sin cliente no hay a quien darle la baja: el mail no sale.
+        if not appointment.client_id:
+            return []
+        if (appointment.store_id, appointment.client_id) in contexto_del_lote.bajas:
+            return []
+        details = {
+            **details,
+            "unsubscribe_url": unsubscribe_url(
+                appointment.store_id, appointment.client_id
+            ),
+        }
     email = payload["email"] if "email" in payload else appointment.client_email
     return [_Mail(kind, {"email": email, "details": details})]
 

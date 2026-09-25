@@ -582,10 +582,18 @@ def _rebook_body(details: dict[str, Any]) -> str:
     link = details.get("rebook_url") or details.get("booking_url") or ""
     tienda = details.get("store_name") or "la tienda"
     linea_link = f"\n\nReserva tu proximo turno en un toque: {link}" if link else ""
+    baja = details.get("unsubscribe_url")
+    # Art. 27 Ley 25.326: el derecho a pedir el retiro, expreso y destacado.
+    linea_baja = (
+        f"\n\nSi no queres recibir mas estas invitaciones de {tienda}, podes "
+        f"darte de baja aca: {baja}"
+        if baja
+        else ""
+    )
     return (
         f"{_saludo(details)}\n\n"
         f'Gracias por venir a {tienda}. Esperamos que "{details.get("service")}" '
-        f"{_con_quien(details)} haya salido bien.{linea_link}\n\n"
+        f"{_con_quien(details)} haya salido bien.{linea_link}{linea_baja}\n\n"
         f"{_contacto(details)}\n\n" + _pie(details, "tuviste un turno en {tienda}")
     )
 

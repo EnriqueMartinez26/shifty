@@ -25,3 +25,9 @@ class StoreTermsStatusResponse(BaseModel):
     current_version: str
     current_version_accepted: bool
     latest: StoreTermsAcceptanceResponse | None = None
+
+
+class UnsubscribeResponse(BaseModel):
+    """Confirmacion neutra de la baja: no dice de quien ni de que tienda."""
+
+    status: str

@@ -2,6 +2,8 @@
 
 - ``GET /public/legal/versions``: anonimo, sin datos de ninguna tienda; lo
   lee el portal antes de mostrar la casilla de aceptacion.
+- ``GET /public/unsubscribe`` (``token`` en la query): baja del mail promocional por el link
+  firmado del mail; anonimo, rate limit ``public-read``.
 - ``POST /stores/me/terms-acceptance``: el admin de la tienda acepta la
   version vigente de los terminos B2B. Solo el admin de la tienda: el soporte
   global no acepta un contrato en nombre de la tienda.
@@ -14,12 +16,15 @@ esta en ``SUSPENSION_ALLOWED_WRITES``.
 
 from __future__ import annotations
 
-from fastapi import Depends, Request, status
+from typing import Annotated
+
+from fastapi import Depends, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.database import get_db
+from core.config import settings
+from core.database import get_db, tenant_bypass
 from core.exceptions import PermissionDeniedException
-from core.rate_limit import client_ip_from_request
+from core.rate_limit import client_ip_from_request, enforce_rate_limit
 from core.roles import ROLE_STORE_ADMIN, STORE_MANAGERS, canonical_role, has_any_role
 from core.router import CanonicalAPIRouter
 from modules.auth.dependencies import get_current_user
@@ -28,20 +33,39 @@ from modules.legal.schemas import (
     LegalVersionsResponse,
     StoreTermsAcceptanceResponse,
     StoreTermsStatusResponse,
+    UnsubscribeResponse,
 )
-from modules.legal.service import StoreTermsService
+from modules.legal.service import MarketingOptOutService, StoreTermsService
 from modules.legal.versions import current_versions
 from modules.users.model import User
 
-public_router = CanonicalAPIRouter(prefix="/public/legal", tags=["Public Legal"])
+public_router = CanonicalAPIRouter(prefix="/public", tags=["Public Legal"])
 router = CanonicalAPIRouter(prefix="/stores/me/terms-acceptance", tags=["Store Terms"])
 
 
-@public_router.get("/versions", response_model=LegalVersionsResponse)
+@public_router.get("/legal/versions", response_model=LegalVersionsResponse)
 async def get_legal_versions() -> LegalVersionsResponse:
     """Versiones vigentes de los terminos y de la politica de privacidad. El
     portal las manda con la aceptacion (reserva y lista de espera)."""
     return LegalVersionsResponse(**current_versions())
+
+
+@public_router.get("/unsubscribe", response_model=UnsubscribeResponse)
+async def unsubscribe_from_marketing(
+    request: Request,
+    token: Annotated[str, Query(min_length=1, max_length=256)],
+    db: AsyncSession = Depends(get_db),
+) -> UnsubscribeResponse:
+    """Baja del mail promocional "volve a reservar" por el link firmado del
+    mail (art. 27 Ley 25.326). Confirmacion neutra e idempotente; un link
+    adulterado o vencido es 400 ``UNSUBSCRIBE_LINK_INVALID``. El token no se
+    loguea (el borde registra ``$uri`` sin query y Sentry la descarta)."""
+    await enforce_rate_limit(
+        request, "public:unsubscribe", settings.RATE_LIMIT_PUBLIC_READ_PER_MINUTE
+    )
+    async with tenant_bypass(db):
+        await MarketingOptOutService(db).opt_out(token)
+    return UnsubscribeResponse(status="unsubscribed")
 
 
 def _to_response(acceptance: StoreTermsAcceptance) -> StoreTermsAcceptanceResponse:

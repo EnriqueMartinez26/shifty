@@ -1,10 +1,10 @@
-"""Aceptacion de los terminos B2B por la tienda (L1, O-6 y 4.1; 2026-09-25)."""
+"""Constancias legales: terminos B2B aceptados y bajas de mails promocionales."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String
+from sqlalchemy import DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
@@ -29,3 +29,23 @@ class StoreTermsAcceptance(BaseEntity):
     terms_version: Mapped[str] = mapped_column(String(20))
     accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class MarketingOptOut(BaseEntity):
+    """Baja de un cliente de los mails promocionales de UNA tienda (art. 27
+    Ley 25.326, 2026-09-25). Hoy cubre el mail "volve a reservar"; los
+    transaccionales (registro, confirmacion, recordatorios, cancelaciones) no
+    se tocan. Una fila por cliente y tienda: darse de baja dos veces no
+    cambia la fecha original.
+    """
+
+    __tablename__ = "marketing_opt_outs"
+    __table_args__ = (
+        UniqueConstraint(
+            "store_id", "client_id", name="uq_marketing_opt_outs_store_client"
+        ),
+    )
+
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
+    client_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    opted_out_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

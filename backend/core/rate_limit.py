@@ -63,6 +63,7 @@ ACTION_POLICIES: dict[str, str] = {
     "public:payment:status": "public-read",
     "public:client:appointments": "public-read",
     "public:waitlist:mine": "public-read",
+    "public:unsubscribe": "public-read",
 }
 
 # Un Redis caido falla abierto en CADA request: el log es por request, el

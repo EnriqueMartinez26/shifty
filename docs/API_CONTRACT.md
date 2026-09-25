@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 113 — Operaciones: 141
+- Paths: 114 — Operaciones: 142
 
 ## /
 
@@ -1152,6 +1152,22 @@ Responses:
 Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_LegalVersionsResponse_`
+
+### GET /public/unsubscribe
+
+- Summary: Unsubscribe From Marketing
+- operationId: `unsubscribe_from_marketing_public_unsubscribe_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| query | `token` | yes | string | minLength=1, maxLength=256 |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_UnsubscribeResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Public Waitlist
 
@@ -2847,6 +2863,14 @@ Responses:
 | `data` | TokenResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_UnsubscribeResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | UnsubscribeResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_UserGlobalResponse_
 
 | field | type | required | constraints |
@@ -4339,6 +4363,12 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `access_token` | string | yes |  |
 | `token_type` | string | no | default="bearer" |
 
+### UnsubscribeResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `status` | string | yes |  |
+
 ### UpcomingAppointmentItem
 
 | field | type | required | constraints |
@@ -4481,4 +4511,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit 1b8bc0a
+Generado desde app.openapi() el 2026-09-25, commit 682fa47
