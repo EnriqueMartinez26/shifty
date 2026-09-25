@@ -106,10 +106,9 @@ async def test_la_reserva_publica_guarda_las_versiones_aceptadas(
     [
         {"terms_version": "2020-01-01", "privacy_version": "2026-09-25"},
         {"terms_version": "2026-09-25", "privacy_version": "2020-01-01"},
-        {"terms_version": "2026-09-25"},
     ],
 )
-async def test_una_version_vieja_o_incompleta_se_rechaza(
+async def test_una_version_vieja_se_rechaza_con_409(
     client: AsyncClient, test_session: AsyncSession, versiones: dict[str, str]
 ) -> None:
     store, _token, service, staff, slot = await _tienda(
@@ -242,3 +241,51 @@ def test_las_versiones_no_aceptan_cualquier_texto() -> None:
             PublicBookingCreate.model_validate(
                 {**base, "terms_version": malo, "privacy_version": "v1"}
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "versiones",
+    [{"terms_version": "2026-09-25"}, {"privacy_version": "2026-09-25"}],
+)
+async def test_una_sola_version_es_un_422_no_un_cambio_de_textos(
+    client: AsyncClient, test_session: AsyncSession, versiones: dict[str, str]
+) -> None:
+    """Revision de fix/legal-datos (2026-09-25): mandar una sola version no
+    es "los textos cambiaron" (409): es un pedido mal armado (422)."""
+    store, _token, service, staff, slot = await _tienda(
+        client, f"consent-una-{sorted(versiones)[0][:5]}"
+    )
+
+    res = await client.post(
+        "/public/appointments",
+        json=_reserva(store, service, staff, slot, "consent-una-00001", **versiones),
+    )
+    espera = await client.post(
+        "/public/waitlist",
+        json=_alta(store, service, slot, accepts_terms=True, **versiones),
+    )
+
+    for respuesta in (res, espera):
+        assert respuesta.status_code == 422, respuesta.text
+        assert respuesta.json()["error_code"] == "VALIDATION_ERROR"
+    assert (await test_session.execute(select(Appointment))).first() is None
+
+
+@pytest.mark.asyncio
+async def test_el_reintento_de_una_reserva_ya_hecha_devuelve_la_original(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El control de versiones corre DESPUES del replay de idempotencia: si
+    los textos cambian entre el alta y el reintento del cliente (la respuesta
+    se perdio), el reintento devuelve la reserva ya hecha y no un 409."""
+    store, _token, service, staff, slot = await _tienda(client, "consent-replay")
+    cuerpo = _reserva(store, service, staff, slot, "consent-replay-01", **VIGENTES)
+
+    primera = await client.post("/public/appointments", json=cuerpo)
+    assert primera.status_code == 201, primera.text
+    monkeypatch.setattr(settings, "LEGAL_TERMS_VERSION", "2027-01-01")
+    reintento = await client.post("/public/appointments", json=cuerpo)
+
+    assert reintento.status_code == 201, reintento.text
+    assert reintento.json()["public_id"] == primera.json()["public_id"]

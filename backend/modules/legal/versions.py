@@ -61,7 +61,13 @@ def check_accepted_versions(
 
     Sin ninguna de las dos y sin ``required``: se acepta (compatibilidad con
     el front que todavia no las manda) y no se inventa una version. Con una
-    sola, o distintas de las vigentes: 409. Con ``required`` y sin ellas: 422.
+    sola: 422 (pedido mal armado, no "los textos cambiaron"; revision de
+    fix/legal-datos, 2026-09-25). Distintas de las vigentes: 409. Con
+    ``required`` y sin ellas: 422.
+
+    Los llamadores lo corren despues del replay de idempotencia (la guarda
+    del router va antes que el caso de uso): el reintento de una reserva ya
+    hecha devuelve la original aunque los textos hayan cambiado despues.
     """
     if terms_version is None and privacy_version is None:
         if required:
@@ -69,6 +75,10 @@ def check_accepted_versions(
                 "Faltan las versiones de los terminos y de la politica de privacidad"
             )
         return AcceptedVersions()
+    if terms_version is None or privacy_version is None:
+        raise ValidationException(
+            "Hay que mandar las dos versiones: terminos y politica de privacidad"
+        )
     vigentes = current_versions()
     if (terms_version, privacy_version) != (
         vigentes["terms_version"],
