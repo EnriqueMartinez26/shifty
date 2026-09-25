@@ -923,6 +923,12 @@ def _reprice_existing_payment(
     conserva_importe = keep_existing_amount and payment.deposit_rule is not None
     if amount <= 0 or conserva_importe:
         return False
+    if payment.is_accredited:
+        # Un cobro acreditado no se re-tarifa: su importe es la plata que entro
+        # (revision de perf/f4-pay, 2026-09-25).
+        if payment.amount != amount:
+            raise PaymentAlreadyAccreditedError()
+        return False
     cambio = payment.amount != amount
     payment.amount = amount
     payment.original_amount = original_amount
@@ -941,7 +947,13 @@ def _retire_link(payment: Payment) -> None:
     fase 1 y la 2 del link del panel). Sin esto el pago viejo se aplicaba en
     esa ventana y la fase 2 chocaba con la version del cobro (revision de
     perf/f4-pay, 2026-09-25).
+
+    Un cobro acreditado nunca retira su link: conserva ``link_ref`` y
+    ``external_payment_id`` para que un reembolso o contracargo posterior se
+    reconozca como del link vigente y avise al dueno.
     """
+    if payment.is_accredited:
+        raise PaymentAlreadyAccreditedError()
     payment.preference_id, payment.payment_link = _placeholder_link(
         payment.appointment_id
     )
@@ -1203,6 +1215,9 @@ def _refresh_existing_payment(
         promotion_code=promotion_code,
         keep_existing_amount=keep_existing_amount,
     )
+    if payment.is_accredited:
+        # Ni se retira su link ni se pide uno nuevo (revision de perf/f4-pay).
+        return False
     if deposit_rule is not None:
         payment.deposit_rule = deposit_rule
     if renew_expired_link and payment.status == PaymentStatus.EXPIRED.value:
@@ -1341,6 +1356,18 @@ RELEASED_APPOINTMENT_STATUSES: frozenset[str] = frozenset(
         AppointmentStatus.EXPIRED.value,
     }
 )
+
+
+class PaymentAlreadyAccreditedError(AppException):
+    """409 neutro: el cobro ya esta acreditado y no se re-tarifa ni cambia de
+    link (revision de perf/f4-pay, 2026-09-25)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="El cobro ya esta acreditado",
+            http_status=409,
+            error_code="PAYMENT_ALREADY_ACCREDITED",
+        )
 
 
 class PaymentLinkRegenerationUnavailableError(AppException):
@@ -1490,7 +1517,7 @@ async def _panel_link_phase_one(
             keep_existing_amount=True,
             renew_expired_link=True,
         )
-    except PaymentLinkRegenerationUnavailableError:
+    except PaymentLinkRegenerationUnavailableError, PaymentAlreadyAccreditedError:
         await db.rollback()  # suelta el lock del turno sin escribir nada
         raise
 
