@@ -21,6 +21,7 @@ from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
 from core.config import settings
 from core.crypto import decrypt_secret, encrypt_secret
 from core.database import _apply_tenant_context
+from core.exceptions import AppException
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     JsonValue,
@@ -1196,6 +1197,83 @@ async def _discard_orphan_payment(
     await db.commit()
 
 
+# Estados de un turno sobre los que el panel puede generar un link de pago:
+# los que todavia pueden cobrarse. Un terminal (cancelled, completed, absent,
+# expired) no: el link quedaria vivo sobre un turno que ya no existe.
+LINKABLE_APPOINTMENT_STATUSES: frozenset[str] = frozenset(
+    {
+        AppointmentStatus.PENDING.value,
+        AppointmentStatus.CONFIRMED.value,
+        AppointmentStatus.PENDING_PAYMENT.value,
+    }
+)
+
+
+class AppointmentNotPayableError(AppException):
+    """409 neutro: el turno ya no admite un cobro."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            message="El turno ya no admite un cobro",
+            http_status=409,
+            error_code="APPOINTMENT_NOT_PAYABLE",
+        )
+
+
+async def _lock_linkable_appointment(
+    db: AsyncSession, *, appointment_id: str, store_id: str
+) -> bool:
+    """Lockea el turno (``FOR UPDATE``) y dice si admite un link de pago.
+
+    Es el PRIMER lock de quien toca el cobro del turno (orden turno -> pago,
+    regla 7), el mismo que cancelar, liberar y el webhook. Lee la columna, no
+    la entidad: el turno que trae el router se leyo sin lock y puede estar
+    viejo. Sin autoflush: un cambio pendiente del cobro no puede tomar la fila
+    del pago antes que la del turno.
+    """
+    with db.no_autoflush:
+        estado = (
+            await db.execute(
+                select(Appointment.status)
+                .where(
+                    Appointment.id == appointment_id,
+                    Appointment.store_id == store_id,
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+    return estado in LINKABLE_APPOINTMENT_STATUSES
+
+
+async def _discard_unsealed_link(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    appointment_id: str,
+    payment_id: str,
+    preference_id: str | None,
+) -> None:
+    """El turno se solto mientras MP creaba el link: no se sella y se vence.
+
+    Transaccion propia, despues del rollback de la fase 2: el link existe en
+    Mercado Pago y nadie lo va a registrar, asi que se manda a vencer por el
+    outbox (``payment.preference.expire``, sin lock ni llamada en el request).
+    """
+    if preference_id and not _is_placeholder_preference(preference_id):
+        db.add(
+            OutboxMessage(
+                store_id=store_id,
+                event_type=EVENT_PREFERENCE_EXPIRE,
+                payload={
+                    "appointment_id": appointment_id,
+                    "payment_id": payment_id,
+                    "preference_id": preference_id,
+                },
+            )
+        )
+        await db.commit()
+
+
 async def create_panel_payment_preference(
     db: AsyncSession,
     *,
@@ -1215,7 +1293,20 @@ async def create_panel_payment_preference(
     ya existia, queda con su placeholder y el reintento desde el panel lo
     refresca. Antes las dos fases vivian en la misma transaccion, con la
     conexion del pool tomada durante la request externa (regla 5).
+
+    Las dos fases lockean el turno antes de escribir el cobro (orden turno ->
+    pago, regla 7) y exigen un estado que admita cobro
+    (``LINKABLE_APPOINTMENT_STATUSES``); si no, 409 ``APPOINTMENT_NOT_PAYABLE``.
+    En la fase 1 no se crea nada. En la fase 2 (el turno se cancelo mientras
+    MP respondia) el link nuevo no se sella y se manda a vencer: nunca queda
+    un link vivo sobre un turno cancelado (revision de perf/f4-pay,
+    2026-09-25).
     """
+    if not await _lock_linkable_appointment(
+        db, appointment_id=appointment.id, store_id=store_id
+    ):
+        await db.rollback()
+        raise AppointmentNotPayableError()
     # "Lo cree yo" sale del INSERT mismo, no de un SELECT previo (S-17,
     # 2026-09-19): entre ese SELECT y el de la fase 1 otra request podia
     # commitear el cobro; esta lo tomaba por propio y, si su fase 2 chocaba
@@ -1252,7 +1343,11 @@ async def create_panel_payment_preference(
                 keep_existing_amount=True,
                 create_provider_link=True,
             )
-        await db.commit()
+        sellable = await _lock_linkable_appointment(
+            db, appointment_id=appointment_id, store_id=store_id
+        )
+        if sellable:
+            await db.commit()
     except RuntimeError, CircuitBreakerOpenError:
         # Fallo del PROVEEDOR (MercadoPagoAPIError es RuntimeError): si el
         # cobro lo inserto esta llamada, se compensa borrandolo.
@@ -1270,6 +1365,17 @@ async def create_panel_payment_preference(
         # request esta trabajando sobre el mismo cobro. No se borra nada.
         await db.rollback()
         raise
+    if not sellable:
+        nueva = payment.preference_id
+        await db.rollback()
+        await _discard_unsealed_link(
+            db,
+            store_id=store_id,
+            appointment_id=appointment_id,
+            payment_id=payment_id,
+            preference_id=nueva,
+        )
+        raise AppointmentNotPayableError()
     await db.refresh(payment)
     return payment
 

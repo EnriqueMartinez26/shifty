@@ -42,6 +42,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import modules.notifications.tasks as tasks
+from core.config import settings
 import modules.payments.service as payments_service
 from modules.notifications.model import NotificationType
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
@@ -307,3 +308,194 @@ async def test_cancelar_con_cobro_vivo_contra_el_pago_aprobado_queda_consistente
         else:
             # Gano el webhook: el pago acreditado no se vence al cancelar.
             assert avisos == [NotificationType.PAYMENT_APPROVED.value]
+
+
+# ---------------------------------------------------------------------------
+# Link del panel contra cancelar (revision de perf/f4-pay, 2026-09-25, #3)
+# ---------------------------------------------------------------------------
+
+TELEFONO_CLIENTE = "+5491155577001"
+CARRERAS = 4
+
+
+class _MercadoPagoLento:
+    """Crea preferencias despacio (ensancha la ventana de la fase 2) y anota
+    de que turno es cada una (``external_reference``)."""
+
+    def __init__(self) -> None:
+        self._n = itertools.count(1)
+        self.creadas: list[tuple[str, str]] = []
+
+    async def __call__(
+        self,
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assert method == "POST" and path == "/checkout/preferences", (method, path)
+        await asyncio.sleep(0.2)
+        preferencia = f"pref-carrera-{next(self._n)}"
+        assert json_body is not None
+        self.creadas.append((preferencia, str(json_body["external_reference"])))
+        return {
+            "id": preferencia,
+            "init_point": f"https://www.mercadopago.com/checkout?pref={preferencia}",
+        }
+
+
+async def _estado_de_turnos_y_cobros(
+    owner_engine: AsyncEngine,
+) -> dict[str, tuple[str, list[tuple[str, str | None]]]]:
+    async with owner_engine.connect() as conn:
+        turnos = await conn.execute(text("select id, status from appointments"))
+        cobros = await conn.execute(
+            text("select appointment_id, status, preference_id from payments")
+        )
+        por_turno: dict[str, tuple[str, list[tuple[str, str | None]]]] = {
+            str(t[0]): (str(t[1]), []) for t in turnos.all()
+        }
+        for turno, estado, preferencia in cobros.all():
+            por_turno[str(turno)][1].append((str(estado), preferencia))
+        return por_turno
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quien", ["cliente", "personal"])
+async def test_link_del_panel_contra_cancelar_nunca_deja_un_link_vivo_cancelado(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    quien: str,
+) -> None:
+    """``POST /payments/preferences/{id}`` y la cancelacion del mismo turno a
+    la vez (cliente por el portal o profesional por el panel).
+
+    Lo que se garantiza en cualquier orden: cero 5xx y NUNCA un turno
+    cancelado con un cobro vivo; todo link creado en MP para un turno que
+    termino cancelado tiene su ``payment.preference.expire`` publicado. Con el
+    cliente, gana uno solo: o cancela (y el link responde 409
+    ``APPOINTMENT_NOT_PAYABLE`` sin crear cobro) o el link queda y el cliente
+    recibe 409 ``PAYMENT_APPOINTMENT_REQUIRES_RELEASE`` (D1).
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    monkeypatch.setattr(settings, "OTP_PROVIDER", "console")
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", True)
+    mp = _MercadoPagoLento()
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    slug = f"link-carrera-{quien}"
+    store, admin = await register_and_login(
+        client, app_sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    politica = await client.patch(
+        "/stores/me",
+        headers=auth_headers(admin),
+        json={"deposit_policy": "La sena se descuenta del total."},
+    )
+    assert politica.status_code == 200, politica.text
+    await _enable_payments(client, admin)
+    await _configure_gateway(client, admin)
+    service = await create_service(client, admin)
+    staff = await create_staff(client, admin, service, email=f"staff-{slug}@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, admin, staff, target_date=dia)
+
+    turnos: list[str] = []
+    for i in range(CARRERAS):
+        reserva = await client.post(
+            "/public/appointments",
+            json={
+                "store_public_id": store,
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": dia.replace(
+                    hour=10 + i, minute=0, second=0, microsecond=0
+                ).isoformat(),
+                "client_name": "Cliente Carrera",
+                "client_email": f"cliente-{slug}@example.com",
+                "client_phone": TELEFONO_CLIENTE,
+                "accepts_terms": True,
+                "idempotency_key": f"{slug}-{i:04d}",
+            },
+        )
+        assert reserva.status_code == 201, reserva.text
+        turnos.append(str(reserva.json()["public_id"]))
+
+    if quien == "cliente":
+        pedido = await client.post(
+            "/public/otp/request",
+            json={
+                "store_public_id": store,
+                "phone": TELEFONO_CLIENTE,
+                "channel": "whatsapp",
+            },
+        )
+        assert pedido.status_code == 200, pedido.text
+        verificado = await client.post(
+            "/public/otp/verify",
+            json={
+                "store_public_id": store,
+                "phone": TELEFONO_CLIENTE,
+                "code": pedido.json()["debug_code"],
+            },
+        )
+        assert verificado.status_code == 200, verificado.text
+
+        def cancelar(turno: str) -> Any:
+            return client.patch(
+                f"/public/client/appointments/{turno}/cancel",
+                json={"phone": TELEFONO_CLIENTE},
+            )
+
+    else:
+        profesional = await _profesional(client, admin)
+
+        def cancelar(turno: str) -> Any:
+            return client.patch(
+                f"/appointments/{turno}/cancel", headers=auth_headers(profesional)
+            )
+
+    llamadas: list[Any] = []
+    for turno in turnos:
+        llamadas.append(
+            client.post(f"/payments/preferences/{turno}", headers=auth_headers(admin))
+        )
+        llamadas.append(cancelar(turno))
+    respuestas: list[Response] = await asyncio.gather(*llamadas)
+
+    assert all(r.status_code < 500 for r in respuestas), [
+        (r.status_code, r.text[:200]) for r in respuestas if r.status_code >= 500
+    ]
+    estado = await _estado_de_turnos_y_cobros(owner_engine)
+    vencidas = {
+        p["preference_id"]
+        for e, p in await _eventos(owner_engine)
+        if e == EVENT_PREFERENCE_EXPIRE
+    }
+    for i, turno in enumerate(turnos):
+        link, cancelacion = respuestas[2 * i], respuestas[2 * i + 1]
+        turno_estado, cobros = estado[turno]
+        assert link.status_code in {200, 409}, link.text
+        if link.status_code == 409:
+            assert link.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE", link.text
+        if turno_estado == "cancelled":
+            vivos = [c for c in cobros if c[0] in {"pending", "rejected"}]
+            assert vivos == [], (turno, cobros)
+            creadas = [p for p, t in mp.creadas if t == turno]
+            assert set(creadas) <= vencidas, (turno, creadas, vencidas)
+        if quien == "cliente":
+            codigos = sorted([link.status_code, cancelacion.status_code])
+            assert codigos == [200, 409], (turno, link.text, cancelacion.text)
+            if cancelacion.status_code == 200:
+                assert cobros == [], (turno, cobros)
+            else:
+                assert (
+                    cancelacion.json()["error_code"]
+                    == "PAYMENT_APPOINTMENT_REQUIRES_RELEASE"
+                )
+                assert turno_estado != "cancelled"
+        else:
+            assert cancelacion.status_code == 200, cancelacion.text
+            assert turno_estado == "cancelled"
