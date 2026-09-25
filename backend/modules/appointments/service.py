@@ -43,7 +43,10 @@ from modules.notifications.tasks import (
     is_deliverable_email,
 )
 from modules.payments.model import JsonValue, Payment, PaymentStatus
-from modules.payments.service import EVENT_PREFERENCE_EXPIRE
+from modules.payments.service import (
+    EVENT_PREFERENCE_EXPIRE,
+    _is_placeholder_preference,
+)
 from modules.public_api.repository import PublicRepository, RangeRejection
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
@@ -638,7 +641,9 @@ class AppointmentService:
         """
         if payment is None or not payment.is_live_charge:
             return None
-        if payment.preference_id:
+        # Un placeholder no existe en Mercado Pago: no hay link que vencer
+        # (mismo criterio que ``_expire_live_checkout``/``_discard_unsealed_link``).
+        if not _is_placeholder_preference(payment.preference_id):
             self.uow.outbox.publish(
                 store_id=actor.store_id,
                 event_type=EVENT_PREFERENCE_EXPIRE,

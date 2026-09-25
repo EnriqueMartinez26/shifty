@@ -324,3 +324,25 @@ async def test_liberar_sigue_siendo_solo_del_admin_y_funciona_igual(
     assert del_admin.json()["status"] == "expired"
     assert (await _cobro(test_session, turno)).status == PaymentStatus.EXPIRED.value
     assert len(await _vencimientos(test_session, turno)) == 1
+
+
+@pytest.mark.asyncio
+async def test_un_cobro_con_link_placeholder_se_vence_sin_publicar_nada(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de perf/f4-pay (2026-09-25, #6): un placeholder no existe en
+    Mercado Pago. El cobro se vence igual, pero sin ``payment.preference.expire``
+    (mismo criterio que ``_expire_live_checkout`` y ``_discard_unsealed_link``)."""
+    t = await _tienda(client, monkeypatch, "d2-placeholder", sena=False)
+    turno = await _confirmado_con_link(client, t, 16)
+    cobro = await _cobro(test_session, turno)
+    cobro.preference_id, cobro.payment_link = payments_service._placeholder_link(turno)
+    await test_session.commit()
+
+    res = await client.patch(
+        f"/appointments/{turno}/cancel", headers=auth_headers(t.admin)
+    )
+
+    assert res.status_code == 200, res.text
+    assert (await _cobro(test_session, turno)).status == PaymentStatus.EXPIRED.value
+    assert await _vencimientos(test_session, turno) == []
