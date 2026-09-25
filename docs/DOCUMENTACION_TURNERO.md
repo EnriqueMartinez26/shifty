@@ -137,6 +137,7 @@ Una interfaz optimizada para móviles donde los clientes finales:
 | `GET` | `/appointments/search` | Búsqueda con filtros dinámicos y paginación (`page`/`page_size`). `include_total=false` no cuenta el total y devuelve `total: null` (para las paginas 2 en adelante; F3-06). Cada respuesta trae `next_cursor` (null si no hay mas); pasarlo como `after` pide la pagina siguiente por clave `(starts_at, id)` sin `OFFSET` (`after` con `page` > 1 es 422; F3-08). |
 | `GET` | `/ledger/customers/{client_id}` | Historial de fiado paginado (`limit`/`offset`). Trae `next_cursor`; pasarlo como `after` pide la pagina siguiente por clave `(created_at, id)` sin `OFFSET` (`after` con `offset` > 0 es 422; F3-08). |
 | `GET` | `/reports/summary` | Resumen del rango con detalle paginado (`limit`/`offset`). `order=desc` devuelve el detalle del mas reciente al mas viejo; con `limit=6`, los 6 mas recientes (F3-06). |
+| `GET` | `/public/stores/{slug}/ref` | Referencia minima para "Mis turnos" (FF-16): `{store_public_id, name, accepts_new_bookings}`. Responde tambien con la suscripcion suspendida (`accepts_new_bookings: false`), para que el cliente llegue a cancelar o reprogramar; `GET /public/stores/{slug}` sigue dando 404 en ese caso. 404 `STORE_NOT_FOUND` (el mismo de la vitrina) si la tienda no existe o esta dada de baja. Slug sin distinguir mayusculas. `Cache-Control: no-store`; rate limit `public-read`. |
 
 ---
 

@@ -86,6 +86,24 @@ class PublicRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_store_ref_by_slug(self, slug: str) -> tuple[str, str, str] | None:
+        """``(id, public_id, name)`` de una tienda activa por slug, en columnas.
+
+        Para ``GET /public/stores/{slug}/ref`` (FF-16): ``select(Store)``
+        arrastra los horarios comerciales (``lazy="selectin"``) que la
+        referencia no usa.
+        """
+        row = (
+            await self.db.execute(
+                select(Store.id, Store.public_id, Store.name).where(
+                    Store.slug == slug, Store.is_active == True
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return str(row.id), str(row.public_id), str(row.name)
+
     async def get_store_by_public_id(self, public_id: str) -> Store | None:
         result = await self.db.execute(
             select(Store).where(Store.public_id == public_id, Store.is_active == True)

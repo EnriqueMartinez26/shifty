@@ -800,6 +800,10 @@ async def _vitrina(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", f"/public/stores/{t.slug}")
 
 
+async def _referencia_de_tienda(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("GET", f"/public/stores/{t.slug}/ref")
+
+
 async def _servicios_publicos(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada("GET", "/public/services", params={"store_public_id": a.tienda.id})
 
@@ -1605,6 +1609,8 @@ TABLA: tuple[Ruta, ...] = (
     ),
     # portal publico
     R("GET", "/public/stores/{slug}", TODOS, A.PUBLICA, _vitrina),
+    # FF-16: sigue resolviendo con la tienda suspendida ("Mis turnos").
+    R("GET", "/public/stores/{slug}/ref", TODOS, A.PUBLICA, _referencia_de_tienda),
     R("GET", "/public/services", TODOS, A.PUBLICA_TIENDA, _servicios_publicos),
     R(
         "GET",

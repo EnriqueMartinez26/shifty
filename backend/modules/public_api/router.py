@@ -67,6 +67,7 @@ from modules.public_api.schemas import (
     PublicPaymentStatusResponse,
     PublicServiceResponse,
     PublicStaffResponse,
+    PublicStoreRefResponse,
     PublicStoreResponse,
 )
 from modules.stores.model import Store
@@ -168,6 +169,32 @@ async def get_store_by_slug(
                 flag: bool(store.normalized_feature_flags.get(flag, False))
                 for flag in ("payments", "otp_booking")
             },
+        )
+
+
+@router.get("/stores/{slug}/ref", response_model=PublicStoreRefResponse)
+async def get_store_ref_by_slug(
+    slug: SlugPath, response: Response, db: AsyncSession = Depends(get_db)
+) -> PublicStoreRefResponse:
+    """Slug -> tienda para "Mis turnos", tambien con la tienda suspendida (FF-16).
+
+    La vitrina (``/stores/{slug}``) desaparece con la suscripcion suspendida
+    y el cliente no podia llegar a cancelar ni reprogramar, que siguen
+    permitidos (B1-06). Esto solo resuelve la referencia: inexistente o dada
+    de baja es el mismo 404 neutro que la vitrina. Rate limit ``public-read``
+    (middleware, GET bajo ``/public/``) y ``no-store``: el booleano cambia
+    cuando la tienda regulariza.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    async with tenant_bypass(db):
+        ref = await PublicRepository(db).get_store_ref_by_slug(slug.lower())
+        if ref is None:
+            raise StoreNotFoundException(identifier=slug)
+        store_id, store_public_id, name = ref
+        return PublicStoreRefResponse(
+            store_public_id=store_public_id,
+            name=name,
+            accepts_new_bookings=not await store_is_suspended(db, store_id),
         )
 
 

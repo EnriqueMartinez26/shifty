@@ -14,6 +14,19 @@ from core.validation import (
 from modules.stores.schemas import StoreCustomField
 
 
+class PublicStoreRefResponse(BaseModel):
+    """Referencia minima de la tienda para "Mis turnos" (FF-16).
+
+    Sale tambien con la suscripcion suspendida: el cliente tiene que poder
+    cancelar o reprogramar lo que ya reservo. De la suscripcion solo expone
+    si la tienda toma reservas nuevas.
+    """
+
+    store_public_id: str
+    name: str
+    accepts_new_bookings: bool
+
+
 class PublicStoreResponse(BaseModel):
     public_id: str
     name: str

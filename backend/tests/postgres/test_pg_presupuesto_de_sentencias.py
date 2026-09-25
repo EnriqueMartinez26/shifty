@@ -66,6 +66,8 @@ class Presupuesto:
 # En el panel la primera consulta es la identidad (sesion + usuario, F1-01).
 PRESUPUESTOS: dict[str, Presupuesto] = {
     "GET /public/stores/{slug}": Presupuesto(consultas=2, set_config=3),  # (3)
+    # FF-16 (2026-09-24): referencia para "Mis turnos", medida al nacer.
+    "GET /public/stores/{slug}/ref": Presupuesto(consultas=2, set_config=3),
     "GET /public/services": Presupuesto(consultas=2, set_config=3),  # (3)
     "GET /public/staff": Presupuesto(consultas=3, set_config=3),  # (5)
     "GET /public/availability [miss]": Presupuesto(consultas=5, set_config=3),  # (11)
@@ -396,6 +398,15 @@ async def test_los_endpoints_calientes_no_pasan_su_presupuesto(
             "GET /public/stores/{slug}",
             "GET",
             f"/public/stores/{SLUG}",
+            {},
+            None,
+            {},
+            200,
+        ),
+        (
+            "GET /public/stores/{slug}/ref",
+            "GET",
+            f"/public/stores/{SLUG}/ref",
             {},
             None,
             {},
