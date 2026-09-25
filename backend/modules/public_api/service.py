@@ -787,37 +787,56 @@ class PublicBookingService:
                 data.terms_version, data.privacy_version
             ),
         )
-        promotion_quote = None
-        if data.promotion_code:
-            try:
-                promotion_quote = await redeem_promotion(
-                    self.db,
-                    store_id=store_id,
-                    appointment_id=appointment.id,
-                    client=client,
-                    service=service,
-                    code=data.promotion_code,
-                )
-            except ValueError as exc:
-                raise ValidationException(str(exc))
+        promotion_quote = await self._redeem_promotion_code(
+            data, store_id, appointment, client, service
+        )
         booking = _Booking(appointment, service, staff, None, promotion_quote)
         if request.payment_required:
             booking.payment = await self._create_pending_payment(request, booking)
         else:
-            # El pago se coordina por fuera, asi que la tienda tiene que
-            # confirmar el turno a mano cuando reciba la transferencia.
-            self.db.add(
-                OutboxMessage(
-                    store_id=store_id,
-                    event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
-                    payload={
-                        "appointment_id": appointment.id,
-                        "client_name": data.client_name,
-                        "service_name": service.name,
-                    },
-                )
-            )
+            self._publish_pending_confirmation(data, store_id, booking)
         return booking
+
+    async def _redeem_promotion_code(
+        self,
+        data: PublicBookingCreate,
+        store_id: str,
+        appointment: Appointment,
+        client: User,
+        service: Service,
+    ) -> PromotionQuote | None:
+        """Canje del codigo de promocion dentro del alta (regla 29: extraido
+        de ``_write_booking``)."""
+        if not data.promotion_code:
+            return None
+        try:
+            return await redeem_promotion(
+                self.db,
+                store_id=store_id,
+                appointment_id=appointment.id,
+                client=client,
+                service=service,
+                code=data.promotion_code,
+            )
+        except ValueError as exc:
+            raise ValidationException(str(exc))
+
+    def _publish_pending_confirmation(
+        self, data: PublicBookingCreate, store_id: str, booking: _Booking
+    ) -> None:
+        """El pago se coordina por fuera, asi que la tienda tiene que
+        confirmar el turno a mano cuando reciba la transferencia."""
+        self.db.add(
+            OutboxMessage(
+                store_id=store_id,
+                event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
+                payload={
+                    "appointment_id": booking.appointment.id,
+                    "client_name": data.client_name,
+                    "service_name": booking.service.name,
+                },
+            )
+        )
 
     async def _create_pending_payment(
         self, request: _BookingRequest, booking: _Booking

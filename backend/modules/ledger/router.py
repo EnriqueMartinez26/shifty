@@ -1,10 +1,11 @@
 from datetime import datetime
 from decimal import ROUND_HALF_EVEN, Decimal
-from typing import Annotated
+from collections.abc import Sequence
+from typing import Annotated, Any
 
 from fastapi import Depends, Path, Query
 from core.router import CanonicalAPIRouter
-from sqlalchemy import and_, func, select
+from sqlalchemy import Row, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -130,7 +131,6 @@ async def get_ledger_summary(
 ) -> LedgerSummaryResponse:
     _require_financial_access(user)
     await _ensure_ledger_feature_enabled(db, user)
-    full_contact = _shows_contact(user)
     # La deuda vigente de un cliente es su ULTIMO movimiento (balance_after es
     # un saldo incremental). La DB se queda con uno por cliente (row_number
     # sobre la particion por client_id) y agrega ahi mismo: total, cantidad y
@@ -206,18 +206,28 @@ async def get_ledger_summary(
             Decimal("0.01"), rounding=ROUND_HALF_EVEN
         ),
         total_movements=total_movements,
-        top_debtors=[
-            LedgerSummaryClientItem(
-                client_id=client_id,
-                client_name=_client_display_name(
-                    customer, fallback_id=client_id, full_contact=full_contact
-                ),
-                balance=Decimal(str(balance_after)).quantize(Decimal("0.01")),
-                last_movement_at=created_at,
-            )
-            for client_id, balance_after, created_at, customer in top_result.all()
-        ],
+        top_debtors=_top_debtor_items(top_result.all(), viewer=user),
     )
+
+
+def _top_debtor_items(
+    rows: Sequence[Row[Any]], *, viewer: User
+) -> list[LedgerSummaryClientItem]:
+    """Filas del top de deudores con el nombre visible para ``viewer``
+    (L3-03: sin nombre, el profesional no ve el email ni el telefono
+    completos). Extraido de ``get_ledger_summary`` por la regla 29."""
+    full_contact = _shows_contact(viewer)
+    return [
+        LedgerSummaryClientItem(
+            client_id=client_id,
+            client_name=_client_display_name(
+                customer, fallback_id=client_id, full_contact=full_contact
+            ),
+            balance=Decimal(str(balance_after)).quantize(Decimal("0.01")),
+            last_movement_at=created_at,
+        )
+        for client_id, balance_after, created_at, customer in rows
+    ]
 
 
 @router.get(
