@@ -5,7 +5,9 @@ guardaba el recurso completo del pago de Mercado Pago (email, nombre,
 identificacion y telefono del pagador, titular y digitos de la tarjeta, IP) y
 la creacion del link guardaba la preferencia con ``payer`` e ``items``. El
 codigo ya guarda solo la lista blanca (``modules/payments/minimization.py``);
-esta migracion recorta las filas escritas antes.
+esta migracion recorta las filas escritas antes. El recorte es decision de
+Mateo (auditoria legal, 2026-09-25): la IA no decide destruccion de datos
+(CLAUDE.md §1). Todavia no hay datos de produccion.
 
 Solo migracion de datos, sin cambio de esquema. Que se recorta:
 

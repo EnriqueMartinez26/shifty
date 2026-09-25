@@ -6,8 +6,10 @@ clinica", hasta 1000 caracteres) a ``payload_before``/``payload_after`` de
 ``audit_logs``, una tabla que no se purga y que leen ``/reports/audit-logs`` y
 el superadmin. El codigo ya audita solo el hecho
 (``{"notes_staff_changed": true, "notes_staff_length": n}``); esta migracion
-deja las filas viejas con esa misma forma. Decision del dueno transmitida en
-el encargo del 2026-09-25: la tabla es inmutable salvo este recorte.
+deja las filas viejas con esa misma forma. Recortar la tabla, que por lo
+demas es inmutable, es decision de Mateo (auditoria legal, 2026-09-25): la IA
+no decide destruccion de datos (CLAUDE.md §1). Todavia no hay datos de
+produccion.
 
 Solo migracion de datos, sin cambio de esquema. Toca unicamente filas de
 ``Appointment`` con accion ``update`` cuyo payload tiene la clave
