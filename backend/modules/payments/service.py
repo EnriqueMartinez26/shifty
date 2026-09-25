@@ -1014,13 +1014,15 @@ def expire_live_charge(
 ) -> Payment | None:
     """Vence el cobro vivo de un turno que se suelta; devuelve el cobro si lo vencio.
 
-    UNICO camino que suelta un cobro vivo (``LIVE_CHARGE_PAYMENT_STATUSES``:
-    ``pending`` o ``rejected``) cuando su turno deja de poder cobrarse
-    (revision de perf/f4-pay, 2026-09-25). Lo usan cancelar, reprogramar y
-    liberar desde el panel (``AppointmentService``), la cancelacion por
-    bloqueo (``AppointmentBlockService``), el webhook que saca al turno de los
-    estados cobrables (``processing.apply_mercadopago_webhook_payload``) y el
-    job de vencimiento de retenciones.
+    Camino compartido que suelta un cobro vivo
+    (``LIVE_CHARGE_PAYMENT_STATUSES``: ``pending`` o ``rejected``) cuando su
+    turno se suelta (revision de perf/f4-pay, 2026-09-25). Lo usan cancelar,
+    reprogramar y liberar desde el panel (``AppointmentService``), la
+    cancelacion por bloqueo (``AppointmentBlockService``) y el webhook que
+    suelta el turno (``processing._sync_appointment``). NO es el unico: el job
+    de retenciones vencidas vence el cobro con ``stamp_payment_from_status``
+    sin publicar el vencimiento, porque el link ya vencio solo en MP
+    (``jobs._expired_holds_query``).
 
     Precondicion del llamador: el TURNO ya esta lockeado y ``payment`` se leyo
     despues (orden turno -> pago, regla 7). El estado lo cambia la entidad

@@ -244,9 +244,14 @@ Una instrucción en lenguaje natural no es una garantía.
    webhook busca el cobro sin lock y lockea turno y después pago, como
    liberar, cancelar y reprogramar desde el panel, la cancelación por bloqueo
    (profesional → turnos → pagos), el link de pago del panel (en sus dos
-   fases, `lock_payable_appointment`), la confirmación manual y el job de
-   vencimiento (F1-18, `test_webhook_lockea_turno_antes_que_pago.py`,
-   `test_pg_cancelar_con_cobro_vivo.py`). `X-Request-ID` es parte de la firma de MP
+   fases, `lock_payable_appointment`) y la confirmación manual (F1-18,
+   `test_webhook_lockea_turno_antes_que_pago.py`,
+   `test_pg_cancelar_con_cobro_vivo.py`). El job de retenciones vencidas
+   lockea SOLO el turno (`SKIP LOCKED`, `of=Appointment`: Postgres no deja
+   `FOR UPDATE` sobre el lado nullable del outer join) y escribe el pago
+   serializado por ese lock, sin `FOR UPDATE` propio: todo otro escritor del
+   pago toma el turno antes, y la columna `version` corta lo que quede.
+   Lockearlo aparte sumaría una sentencia por lote. `X-Request-ID` es parte de la firma de MP
    y nadie lo pisa: el id del borde viaja como `X-Edge-Request-Id`
    (`nginx/nginx.conf` y `nginx/nginx.prod.conf`,
    `tests/unit/test_nginx_contract.py`).

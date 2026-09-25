@@ -13,11 +13,15 @@ Ahora la regeneracion:
   NUEVO y reabre el cobro con ``Payment.reopen_for_panel_link``.
 
 Un webhook tardio de la preferencia VIEJA:
-- con el cobro ya regenerado, no pasa la integridad (preferencia distinta):
-  no toca el cobro nuevo;
-- con el cobro todavia vencido, ``in_process`` no lo reabre (el grafo general
-  no tiene ``expired -> pending``) y ``approved`` registra la plata por el
-  camino de siempre (``expired -> approved``, un solo aviso al dueno).
+- con el cobro todavia vencido (antes de la fase 1 de la regeneracion),
+  ``in_process`` no lo reabre (el grafo general no tiene
+  ``expired -> pending``) y ``approved`` registra la plata por el camino de
+  siempre (``expired -> approved``, un solo aviso al dueno);
+- una vez commiteada la fase 1 (el link viejo retirado), ya es de un link
+  reemplazado: NO se registra automaticamente. No toca el cobro nuevo y, si
+  trae plata, va al camino de alerta (warning, Sentry y aviso al dueno una
+  vez por pago de MP; ``test_pago_en_link_reemplazado_avisa.py``). Correccion
+  de lo que decia 5d41644 (revision de perf/f4-pay, 2026-09-25).
 """
 
 from __future__ import annotations

@@ -76,22 +76,51 @@ def test_reabrir_exige_un_link_real() -> None:
     assert cobro.status == PaymentStatus.EXPIRED.value
 
 
+METODO = "reopen_for_panel_link"
+# Codigo de produccion: todo ``backend/`` salvo tests, migraciones y entornos.
+EXCLUIDOS = {"tests", "alembic", ".venv", "venv", "__pycache__"}
+
+
+def _usos(arbol: ast.AST) -> list[str]:
+    """Donde se usa el metodo: acceso ``x.reopen_for_panel_link`` o el nombre
+    como texto (``getattr(x, "reopen_for_panel_link")``,
+    ``methodcaller(...)``). Devuelve la funcion que lo contiene, o
+    ``<modulo>`` si esta fuera de toda funcion."""
+    usos: list[str] = []
+
+    def recorrer(nodo: ast.AST, funcion: str) -> None:
+        if isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcion = nodo.name
+        if (
+            isinstance(nodo, ast.Attribute)
+            and nodo.attr == METODO
+            and isinstance(nodo.ctx, ast.Load)
+        ) or (isinstance(nodo, ast.Constant) and nodo.value == METODO):
+            usos.append(funcion)
+        for hijo in ast.iter_child_nodes(nodo):
+            recorrer(hijo, funcion)
+
+    recorrer(arbol, "<modulo>")
+    return usos
+
+
+def test_el_detector_ve_getattr_y_usos_fuera_de_funciones() -> None:
+    fuente = "def f(p):\n    getattr(p, 'reopen_for_panel_link')()"
+    assert _usos(ast.parse(fuente)) == ["f"]
+    assert _usos(ast.parse("pago.reopen_for_panel_link()")) == ["<modulo>"]
+    assert _usos(ast.parse("x = 'otra cosa'")) == []
+
+
 def test_el_unico_llamador_es_la_regeneracion_del_panel() -> None:
-    llamadores: list[str] = []
-    for archivo in (BACKEND / "modules").rglob("*.py"):
+    """Todo ``backend/`` salvo ``tests/`` y ``alembic/`` (revision de
+    perf/f4-pay): tambien scripts y core, no solo ``modules/``."""
+    llamadores: set[str] = set()
+    for archivo in BACKEND.rglob("*.py"):
+        relativo = archivo.relative_to(BACKEND)
+        if EXCLUIDOS & set(relativo.parts):
+            continue
         arbol = ast.parse(archivo.read_text(encoding="utf-8"))
-        for funcion in ast.walk(arbol):
-            if not isinstance(funcion, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for nodo in ast.walk(funcion):
-                if (
-                    isinstance(nodo, ast.Attribute)
-                    and nodo.attr == "reopen_for_panel_link"
-                    and isinstance(nodo.ctx, ast.Load)
-                ):
-                    llamadores.append(
-                        f"{archivo.relative_to(BACKEND).as_posix()}::{funcion.name}"
-                    )
-    assert sorted(set(llamadores)) == [
+        llamadores.update(f"{relativo.as_posix()}::{f}" for f in _usos(arbol))
+    assert sorted(llamadores) == [
         "modules/payments/service.py::create_panel_payment_preference"
     ], llamadores
