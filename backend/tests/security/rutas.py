@@ -1254,10 +1254,12 @@ TABLA: tuple[Ruta, ...] = (
     R("GET", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen),
     R("HEAD", "/stores/media/{media_id}", TODOS, A.PUBLICA, _ver_imagen_head),
     # bloqueos
+    # FF-14: la recepcion LEE los bloqueos (su agenda los muestra); crear,
+    # editar y borrar siguen siendo de OPERATIVOS.
     R(
         "GET",
         "/appointment-blocks/",
-        OPERATIVOS,
+        PERSONAL,
         A.PROPIA,
         _get("/appointment-blocks/"),
     ),

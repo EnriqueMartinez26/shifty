@@ -10,7 +10,7 @@ from core.availability_cache import AvailabilityCacheClient
 from core.database import get_db
 from core.redis import get_availability_cache
 from core.exceptions import PermissionDeniedException, ValidationException
-from core.roles import STORE_MANAGERS, has_any_role
+from core.roles import ROLE_RECEPTIONIST, STORE_MANAGERS, canonical_role, has_any_role
 from core.uow import AsyncSqlAlchemyUnitOfWork
 from core.utils import ensure_utc_aware, local_day_start
 from core.validation import PUBLIC_ID_PATTERN
@@ -45,6 +45,17 @@ PublicIdPath = Annotated[
 
 def _can_manage_blocks(user: User) -> bool:
     return user.role in (UserRole.ADMIN, UserRole.STAFF) or user.is_global_admin
+
+
+def _can_read_blocks(user: User) -> bool:
+    """Leer los bloqueos: quien los gestiona y, ademas, la recepcion (FF-14).
+
+    La agenda de la recepcion los muestra para no ofrecer un horario
+    bloqueado; crear, editar y borrar siguen en ``_can_manage_blocks``. El
+    profesional no se acota a su agenda: ``GET /appointments/`` tampoco lo
+    acota.
+    """
+    return _can_manage_blocks(user) or canonical_role(user) == ROLE_RECEPTIONIST
 
 
 def _require_manage(user: User, action: str) -> None:
@@ -132,7 +143,7 @@ async def list_blocks(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AppointmentBlockResponse]:
-    if not _can_manage_blocks(user):
+    if not _can_read_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para ver bloqueos")
     blocks = await AppointmentRepository(db).list_store_blocks(
         str(user.store_id),
