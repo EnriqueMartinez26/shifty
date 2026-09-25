@@ -19,6 +19,10 @@ from modules.appointments.model import AppointmentStatus
 # Un turno cargado desde el panel para un cliente puede empezar hasta 5
 # minutos antes del request: el dueno carga a quien acaba de sentarse (FF-04).
 PANEL_BOOKING_PAST_GRACE = timedelta(minutes=5)
+# Tope hacia adelante del auto-turno (sin cliente): el panel no tenia
+# horizonte y un 9999-12-31 salia 500 (``starts_at + duracion`` desborda).
+# Dos anios: corta lo absurdo sin quitar altas lejanas que hoy se aceptan.
+PANEL_SELF_BOOKING_MAX_AHEAD = timedelta(days=730)
 
 
 class AppointmentCreate(BaseModel):
@@ -81,7 +85,24 @@ class AppointmentCreate(BaseModel):
             limite -= PANEL_BOOKING_PAST_GRACE
         if val <= limite:
             raise ValueError("No se puede agendar un turno en el pasado.")
+        if not self._within_horizon(val):
+            raise ValueError("La fecha esta fuera del rango de reservas.")
         return self
+
+    def _within_horizon(self, val: datetime) -> bool:
+        """Para un cliente, el horizonte del portal en dias locales
+        (``BOOKING_HORIZON_DAYS``); para el auto-turno, dos anios. Una fecha
+        que ni se puede llevar a hora local (anio 9999 con offset) queda afuera
+        en vez de levantar ``OverflowError`` (500)."""
+        from core.utils import ARGENTINA_TZ, BOOKING_HORIZON_DAYS, now_utc, today_local
+
+        try:
+            if self.for_client:
+                ultimo_dia = today_local() + timedelta(days=BOOKING_HORIZON_DAYS)
+                return val.astimezone(ARGENTINA_TZ).date() <= ultimo_dia
+            return val <= now_utc() + PANEL_SELF_BOOKING_MAX_AHEAD
+        except OverflowError:
+            return False
 
     @model_validator(mode="after")
     def reject_control_chars_in_notes(self) -> "AppointmentCreate":

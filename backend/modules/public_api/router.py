@@ -30,7 +30,7 @@ from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
-from core.utils import today_local
+from core.utils import BOOKING_HORIZON_DAYS, today_local
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointments.availability import AvailabilityService, StoreRules
 from modules.appointments.model import Appointment
@@ -293,7 +293,7 @@ async def get_public_staff(
 
 # Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
 PUBLIC_AVAILABILITY_PAST_DAYS = 1
-PUBLIC_AVAILABILITY_FUTURE_DAYS = 120
+PUBLIC_AVAILABILITY_FUTURE_DAYS = BOOKING_HORIZON_DAYS
 
 
 def _public_availability_date(raw: str) -> date:

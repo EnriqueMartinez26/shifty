@@ -7,6 +7,11 @@ from zoneinfo import ZoneInfo
 # 06:00 de la manana hora argentina.
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
+# Horizonte de reservas en dias locales desde hoy (F1-11, decision 14 del
+# dueno): la disponibilidad publica y el alta del panel para un cliente
+# (FF-04) no van mas alla.
+BOOKING_HORIZON_DAYS = 120
+
 
 def local_to_utc(day: _date, moment: _time) -> datetime:
     """Combina fecha y hora locales de Argentina y devuelve el instante en UTC."""
