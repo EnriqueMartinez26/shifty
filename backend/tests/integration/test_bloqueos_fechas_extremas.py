@@ -162,20 +162,33 @@ async def test_editar_el_motivo_de_un_bloqueo_viejo_con_el_payload_del_front(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inicio", "otro"),
+    [
+        (
+            datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc),
+            datetime(9999, 12, 31, 21, 0, tzinfo=timezone.utc),
+        ),
+        # En 0001 la zona argentina es la hora media local (-3:53): llevar
+        # 0001-01-01T00:00Z a hora local cae en el anio 0 (revision de
+        # perf/f4-back, 2026-09-25: ``days_covered`` desbordaba sin guarda).
+        (
+            datetime(1, 1, 1, 0, 0, tzinfo=timezone.utc),
+            datetime(1, 1, 1, 2, 0, tzinfo=timezone.utc),
+        ),
+    ],
+)
 async def test_borrar_o_editar_un_bloqueo_imposible_ya_guardado_no_da_500(
-    client: AsyncClient, test_session: AsyncSession
+    client: AsyncClient, test_session: AsyncSession, inicio: datetime, otro: datetime
 ) -> None:
-    """Un bloqueo en 9999-12-31 que ya esta en la base (de antes de la
-    ventana) se tiene que poder editar y borrar: la invalidacion del cache
-    del rango desbordaba DESPUES del commit (500). Ahora cae a invalidar la
+    """Un bloqueo en 9999-12-31 o en 0001-01-01 que ya esta en la base (de
+    antes de la ventana) se tiene que poder editar y borrar: la invalidacion
+    del cache desbordaba DESPUES del commit (500). Ahora cae a invalidar la
     tienda entera."""
-    store, token, staff = await _tienda(client, "bloq-imposible")
+    store, token, staff = await _tienda(client, f"bloq-imposible-{inicio.year}")
     headers = auth_headers(token)
-    inicio = datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc)
     editar = await _bloqueo_guardado(test_session, store, staff, inicio, "Imposible")
-    borrar = await _bloqueo_guardado(
-        test_session, store, staff, inicio - timedelta(hours=2), "Imposible 2"
-    )
+    borrar = await _bloqueo_guardado(test_session, store, staff, otro, "Imposible 2")
 
     editado = await client.patch(
         f"/appointment-blocks/{editar}",
