@@ -252,28 +252,35 @@ async def test_un_broker_caido_no_impide_reservar(
 async def test_la_reserva_publica_no_espera_al_smtp(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """F2-01: un SMTP que tarda 3 s por mail no demora el 201.
+    """F2-01: el request de la reserva nunca llega al SMTP.
 
-    Con la tarea real (broker ``memory://`` en los tests): si el request
-    volviera a mandar en linea, la respuesta tardaria los 3 s del stub.
+    Se verifica que el SMTP no se llame, no cuanto tarda la respuesta: con la
+    maquina saturada la publicacion al broker puede agotar su tope de 2 s
+    (``core/enqueue.py``) y un umbral de tiempo menor a ese tope confundia "la
+    publicacion tardo" con "mando en linea" (2026-09-25: fallo con 3,10 s y el
+    log mostraba ``enqueue_failed`` con ``TimeoutError``; el stub nunca se
+    llamo). Con la tarea real y el broker ``memory://`` nada consume la cola,
+    y ``ASGITransport`` corre los ``BackgroundTasks`` antes de volver: un envio
+    en linea o en segundo plano aparece en ``llamadas``.
     """
+    llamadas: list[str] = []
 
-    async def smtp_lento(to: str, subject: str, body: str, smtp: Any = None) -> bool:
-        await asyncio.sleep(3)
+    async def smtp_registrado(
+        to: str, subject: str, body: str, smtp: Any = None
+    ) -> bool:
+        llamadas.append(to)
         return True
 
-    monkeypatch.setattr(tasks, "_send_email", smtp_lento)
+    monkeypatch.setattr(tasks, "_send_email", smtp_registrado)
     store, _token, service, staff, slot = await _tienda_reservable(client, "mail-lento")
 
-    inicio = time.perf_counter()
     reserva = await client.post(
         "/public/appointments",
         json=_reserva(store, service, staff, slot, client_email="carla@example.com"),
     )
-    demora = time.perf_counter() - inicio
 
     assert reserva.status_code == 201, reserva.text
-    assert demora < 1.0, f"la reserva espero al SMTP: {demora:.2f} s"
+    assert llamadas == [], f"el request de la reserva llamo al SMTP: {llamadas}"
 
 
 @pytest.mark.asyncio
