@@ -19,9 +19,11 @@ toma el horizonte que ya le corresponde:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _tienda
 from tests.integration.test_caracterizacion_autogestion import TELEFONO, _con_turno
@@ -30,6 +32,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 )
 
 LEJANO = "9999-12-31T23:59:00+00:00"
+ANTIGUO = "0001-01-01T01:00:00+00:00"
 
 
 def _en(dias: int) -> str:
@@ -88,5 +91,34 @@ async def test_reprogramar_desde_el_portal_mas_alla_del_horizonte_422(
                 "new_starts_at": cuando,
                 "idempotency_key": f"horiz-cliente-rs-{i}",
             },
+        )
+        assert res.status_code == 422, (cuando, res.text)
+
+
+@pytest.mark.asyncio
+async def test_reservar_desde_la_lista_de_espera_fuera_de_rango_422(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    t = await _tienda(client, "horiz-espera")
+    anotado = await client.post(
+        "/public/waitlist",
+        json={
+            "store_public_id": t.store,
+            "service_id": t.service,
+            "window_starts_at": t.slot.isoformat(),
+            "window_ends_at": (t.slot + timedelta(days=2)).isoformat(),
+            "client_name": "En Espera",
+            "client_phone": "+5491100001111",
+        },
+    )
+    assert anotado.status_code == 201, anotado.text
+    entrada = anotado.json()["public_id"]
+
+    casos: list[Any] = [LEJANO, ANTIGUO, _en(122), _en(-1)]
+    for cuando in casos:
+        res = await client.post(
+            f"/waitlist/{entrada}/book",
+            headers=auth_headers(t.token),
+            json={"starts_at": cuando},
         )
         assert res.status_code == 422, (cuando, res.text)
