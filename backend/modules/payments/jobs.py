@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import Row, Select, or_, select, text
+from sqlalchemy import Row, Select, or_, select, text, update
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
@@ -60,6 +60,7 @@ from modules.payments.service import (
     expire_mercadopago_preference,
     fetch_mercadopago_payment,
     load_gateway_configs,
+    mercadopago_budget,
     stamp_payment_from_status,
     search_mercadopago_payments,
 )
@@ -69,15 +70,20 @@ from modules.payments.service import (
 RECONCILIATION_LOOKBACK_DAYS = 30
 
 
-# Inbox y conciliacion (F1-20, R9-08): lote de 25 y presupuesto de 60 s para
-# la fase A. Antes eran 100 filas x hasta 20 s por consulta a MP sin tope: con
-# MP lento el hard time limit de Celery (150 s) mataba la tarea antes de la
-# fase B, no se aplicaba nada y la corrida siguiente retomaba las mismas 100.
-# El presupuesto se mira ANTES de cada consulta, asi que el peor caso es el
-# presupuesto mas una consulta, por debajo del soft time limit (120 s). Lo que
-# no entra no gasta un intento: lo toma la corrida siguiente.
+# Inbox, conciliacion y vencimiento de retenciones (F1-20, R9-08): lote de 25
+# y presupuesto de 60 s para la fase A. Antes eran 100 filas x hasta 20 s por
+# consulta a MP sin tope: con MP lento el hard time limit de Celery (150 s)
+# mataba la tarea antes de la fase B, no se aplicaba nada y la corrida
+# siguiente retomaba las mismas 100. El presupuesto se mira ANTES de cada
+# consulta, y cada consulta corre con ``mercadopago_budget`` de
+# ``MP_QUERY_BUDGET_SECONDS``: la cadena entera de una consulta (un 401, el
+# refresh OAuth y el reintento: hasta 3 requests de 20 s) no pasa de 20 s.
+# Peor caso: 60 + 20 = 80 s, por debajo del soft time limit (120 s); antes de
+# ese tope por consulta llegaba a 60 + 60 (revision de 3b977a9..6c84d46, #3).
+# Lo que no entra no gasta un intento: lo toma la corrida siguiente.
 MP_BATCH_LIMIT = 25
 MP_PHASE_A_BUDGET_SECONDS = 60.0
+MP_QUERY_BUDGET_SECONDS = 20.0
 
 
 def _reloj() -> float:
@@ -1304,13 +1310,14 @@ async def _enrich_inbox_payloads(
             limite, job="inbox", sin_consultar=len(pendientes) - indice
         ):
             break
-        enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
-            db,
-            store_id=inbox.store_id,
-            payload=inbox.payload,
-            configs=configs,
-            persist_refresh=persistir,
-        )
+        with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
+            enriquecidos[inbox.id] = await enrich_mercadopago_webhook_payload(
+                db,
+                store_id=inbox.store_id,
+                payload=inbox.payload,
+                configs=configs,
+                persist_refresh=persistir,
+            )
     return enriquecidos
 
 
@@ -1349,10 +1356,14 @@ def _reconciliation_query(limit: int, now: datetime) -> Select[tuple[Payment]]:
     # Edad minima (F1-20, decision 20): un cobro recien creado es un cliente
     # que sigue en el checkout; preguntarle a MP por el gasta la corrida.
     min_age = now - timedelta(minutes=settings.RECONCILIATION_MIN_AGE_MINUTES)
+    # Primero los nunca consultados, despues los consultados hace mas tiempo
+    # (revision de 3b977a9..6c84d46, #4): por ``created_at`` solo, los que
+    # siguen ``pending`` en MP ocupaban siempre el frente y la cola no se
+    # consultaba nunca con MP lento.
     return (
         _reconcilable_payments()
         .where(Payment.created_at >= cutoff, Payment.created_at <= min_age)
-        .order_by(Payment.created_at.asc())
+        .order_by(Payment.reconciled_at.asc().nulls_first(), Payment.created_at.asc())
         .limit(limit)
     )
 
@@ -1436,48 +1447,95 @@ async def _reconcile(
             )
         )
         filas = list(result.scalars().all())
-    reconciled = 0
-    inspected = 0
+    conteo = {"reconciled": 0, "failed": fallidos, "inspected": 0}
     for payment in filas:
-        # ``reconciled`` cuenta cambios de estado reales, no no-ops (un pago
-        # remoto que sigue pendiente; revision de e5579b6..3b977a9, #4 f).
-        estado_previo = payment.status
-        remote = remotos.get(payment.id)
-        if not remote:
-            # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
-            inspected += 1
-            continue
-        try:
-            # Savepoint por cobro (AUD2-B2-11): "no frenar al resto del lote"
-            # no alcanzaba si la excepcion venia de la base, porque la
-            # transaccion quedaba abortada y los cobros ya conciliados se
-            # perdian en el commit final. Este lote no tiene attempts propio:
-            # el cobro sigue pendiente y lo toma la corrida siguiente.
-            async with db.begin_nested():
-                # Primero el turno, con SKIP LOCKED: si un webhook o un
-                # "liberar" lo tiene tomado, este cobro queda para la corrida
-                # siguiente en vez de esperar (la semantica que antes daba el
-                # SKIP LOCKED del lote de pagos). Despues el apply lockea el
-                # pago, ya en el orden turno -> pago.
-                if not await _lock_appointment_or_skip(db, payment):
-                    continue
-                inspected += 1
-                applied = await apply_mercadopago_webhook_payload(
-                    db,
-                    store_id=payment.store_id,
-                    payload={"data": remote, "status": remote.get("status")},
-                    configs=configs,
-                )
-        except SoftTimeLimitExceeded:
-            raise
-        except Exception:
-            fallidos += 1
-        else:
-            if applied and payment.status != estado_previo:
-                reconciled += 1
+        resultado = await _conciliar_un_cobro(
+            db, payment, remotos.get(payment.id), configs
+        )
+        for clave in resultado:
+            conteo[clave] += 1
 
     await db.commit()
-    return {"reconciled": reconciled, "failed": fallidos, "inspected": inspected}
+    await _marcar_conciliados(db, consultados)
+    return conteo
+
+
+async def _marcar_conciliados(db: AsyncSession, consultados: list[str]) -> None:
+    """Anota ``reconciled_at`` en los cobros que la fase A consulto.
+
+    Despues del commit de la fase B y en su propia transaccion corta: un
+    fallo (``lock_timeout`` contra un webhook que tiene el pago) no se lleva
+    lo ya conciliado; se loguea y el orden de la cola se corrige en la
+    corrida siguiente. UPDATE por lote (sin la version del ORM: no es una
+    escritura de negocio y no puede chocar con la de un webhook). Revision
+    de 3b977a9..6c84d46, #4.
+    """
+    if not consultados:
+        return
+    try:
+        await db.execute(
+            update(Payment)
+            .where(Payment.id.in_(consultados))
+            .values(reconciled_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        await db.rollback()
+        logger.warning(
+            "reconciliation_mark_failed",
+            payments=len(consultados),
+            error_type=type(exc).__name__,
+        )
+
+
+async def _conciliar_un_cobro(
+    db: AsyncSession,
+    payment: Payment,
+    remote: dict[str, Any] | None,
+    configs: GatewayConfigs,
+) -> tuple[str, ...]:
+    """Fase B de la conciliacion para UN cobro ya consultado: que contadores
+    suma (``inspected``, ``reconciled``, ``failed``). Extraida de
+    ``_reconcile`` por la regla 29 (revision de 3b977a9..6c84d46, #1)."""
+    if not remote:
+        # Sin respuesta de MP no hay nada que aplicar: tampoco se lockea.
+        return ("inspected",)
+    # ``reconciled`` cuenta cambios de estado reales, no no-ops (un pago
+    # remoto que sigue pendiente; revision de e5579b6..3b977a9, #4 f).
+    estado_previo = payment.status
+    bloqueado = False
+    try:
+        # Savepoint por cobro (AUD2-B2-11): "no frenar al resto del lote"
+        # no alcanzaba si la excepcion venia de la base, porque la
+        # transaccion quedaba abortada y los cobros ya conciliados se
+        # perdian en el commit final. Este lote no tiene attempts propio:
+        # el cobro sigue pendiente y lo toma la corrida siguiente.
+        async with db.begin_nested():
+            # Primero el turno, con SKIP LOCKED: si un webhook o un
+            # "liberar" lo tiene tomado, este cobro queda para la corrida
+            # siguiente en vez de esperar (la semantica que antes daba el
+            # SKIP LOCKED del lote de pagos). Despues el apply lockea el
+            # pago, ya en el orden turno -> pago.
+            if not await _lock_appointment_or_skip(db, payment):
+                return ()
+            bloqueado = True
+            applied = await apply_mercadopago_webhook_payload(
+                db,
+                store_id=payment.store_id,
+                payload={"data": remote, "status": remote.get("status")},
+                configs=configs,
+            )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception:
+        # Como antes: cuenta como inspeccionado si ya habia tomado el turno.
+        return ("inspected", "failed") if bloqueado else ("failed",)
+    if applied and payment.status != estado_previo:
+        return ("inspected", "reconciled")
+    return ("inspected",)
 
 
 async def _lecturas_para_mp(
@@ -1558,34 +1616,43 @@ async def _fetch_remote_payment(
     ``limite`` se mira antes de CADA consulta: levanta ``_PresupuestoAgotado``
     aunque sea a mitad del cobro (revision de e5579b6..3b977a9, #1).
 
-    Con id de MP, si ese pago no esta aprobado tambien se buscan los links
-    retirados (revision #4 d): un rechazo sobre el link vigente no puede
-    tapar un pago aprobado de un link viejo cuyo webhook se perdio.
+    Con id de MP, si ese pago no esta aprobado tambien se buscan la referencia
+    vigente y UN link retirado, con la misma cota de 3 consultas (revision
+    #4 d y revision de 3b977a9..6c84d46, #5): un rechazo no puede tapar un
+    reintento aprobado en el mismo link ni un pago aprobado de un link viejo
+    cuyo webhook se perdio.
     """
     primero: dict[str, Any] | None = None
-    referencias: tuple[str, ...] = tuple(retiradas[:RETIRED_LINK_SEARCH_MAX])
+    retirados_en_tope = RETIRED_LINK_SEARCH_MAX
     if payment.external_payment_id:
         _consultar_si_alcanza(limite)
-        primero = await fetch_mercadopago_payment(
-            db,
-            store_id=payment.store_id,
-            payment_id=payment.external_payment_id,
-            configs=configs,
-            persist_refresh=persist_refresh,
-        )
+        with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
+            primero = await fetch_mercadopago_payment(
+                db,
+                store_id=payment.store_id,
+                payment_id=payment.external_payment_id,
+                configs=configs,
+                persist_refresh=persist_refresh,
+            )
         if primero is None or _es_aprobado(primero):
             return primero
-    else:
-        referencias = (payment.current_external_reference, *referencias)
+        # La consulta por id ocupa uno de los lugares del tope.
+        retirados_en_tope -= 1
+    referencias = (
+        payment.current_external_reference,
+        *retiradas[:retirados_en_tope],
+    )
     for referencia in referencias:
         _consultar_si_alcanza(limite)
-        candidates = await search_mercadopago_payments(
-            db,
-            store_id=payment.store_id,
-            external_reference=referencia,
-            configs=configs,
-            persist_refresh=persist_refresh,
-        )
+        # Tope por consulta, refresh OAuth y reintento incluidos (#3).
+        with mercadopago_budget(MP_QUERY_BUDGET_SECONDS):
+            candidates = await search_mercadopago_payments(
+                db,
+                store_id=payment.store_id,
+                external_reference=referencia,
+                configs=configs,
+                persist_refresh=persist_refresh,
+            )
         # Un cobro acreditado gana; si no hay, el del id o el mas reciente
         # del vigente.
         for candidate in candidates:
@@ -1753,7 +1820,7 @@ async def _expire_unpaid_appointments(
     # de TenantSession reabre otra transaccion); el contexto vuelve en fase B.
     configs, retiradas = await _lecturas_para_mp(db, pendientes)
     await AsyncSession.commit(db)
-    remotos, sin_consultar = await _fetch_remote_payments(
+    remotos, consultados = await _fetch_remote_payments(
         pendientes,
         db=db,
         configs=configs,
@@ -1774,7 +1841,7 @@ async def _expire_unpaid_appointments(
     )
     rows = list(result.all())
     expired, rescued, liberados = await _vencer_o_rescatar(
-        db, rows, remotos, sin_consultar
+        db, rows, remotos, consultados
     )
     await db.commit()
     # El cupo vuelve a estar libre: la pagina publica no puede seguir
@@ -1798,20 +1865,28 @@ async def _vencer_o_rescatar(
     db: AsyncSession,
     rows: Sequence[Row[tuple[Appointment, Payment]]],
     remotos: Mapping[str, dict[str, Any]],
-    sin_consultar: set[str],
+    consultados: set[str],
 ) -> tuple[int, int, list[tuple[str, datetime]]]:
     """Fase B del job de vencimiento, con los turnos bloqueados.
 
-    Un cobro que el presupuesto dejo sin consultar no se vence en esta corrida
-    (revision de e5579b6..3b977a9, #1): pudo estar pagado; lo decide la
-    corrida siguiente. Devuelve (vencidos, rescatados, (tienda, inicio) de
-    cada turno liberado).
+    Solo decide sobre los cobros de MP que la fase A consulto (``consultados``,
+    tambien los que fallaron) y sobre los turnos sin cobro de MP. Uno que el
+    presupuesto dejo sin consultar (revision de e5579b6..3b977a9, #1), o que
+    la relectura con ``SKIP LOCKED`` trajo sin que la fase A lo viera (vencio
+    mientras tanto o entro en el ``limit``; revision de 3b977a9..6c84d46,
+    #2), no se vence en esta corrida: pudo estar pagado; lo decide la
+    siguiente. Devuelve (vencidos, rescatados, (tienda, inicio) de cada turno
+    liberado).
     """
     expired = 0
     rescued = 0
     liberados: list[tuple[str, datetime]] = []
     for appointment, payment in rows:
-        if payment and payment.id in sin_consultar:
+        if (
+            payment is not None
+            and payment.provider == "mercadopago"
+            and payment.id not in consultados
+        ):
             continue
         # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
         # webhook nunca llego, vencerlo perderia una reserva ya pagada.
@@ -1880,7 +1955,7 @@ async def _fetch_remote_payments(
     persist_refresh: PersistRefresh | None = None,
 ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Consulta a Mercado Pago los cobros pendientes: ({payment.id: pago
-    remoto}, ids que el presupuesto dejo sin consultar).
+    remoto}, ids que se consultaron, aunque la consulta haya fallado).
 
     Se llama sin ningun lock tomado. Si la consulta de un cobro falla, no
     figura en el resultado y el turno vence: la conciliacion posterior va a
@@ -1889,13 +1964,14 @@ async def _fetch_remote_payments(
     #1: este job no tenia): lo que no se llego a consultar NO vence.
     """
     remotos: dict[str, dict[str, Any]] = {}
+    consultados: set[str] = set()
     de_mp = [p for p in payments if p.provider == "mercadopago"]
     limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
     for indice, payment in enumerate(de_mp):
         if _presupuesto_agotado(
             limite, job="expire_holds", sin_consultar=len(de_mp) - indice
         ):
-            return remotos, {p.id for p in de_mp[indice:]}
+            return remotos, consultados
         try:
             remote = await _fetch_remote_payment(
                 db,
@@ -1909,14 +1985,17 @@ async def _fetch_remote_payments(
             _presupuesto_agotado(
                 limite, job="expire_holds", sin_consultar=len(de_mp) - indice
             )
-            return remotos, {p.id for p in de_mp[indice:]}
+            return remotos, consultados
         except SoftTimeLimitExceeded:
             raise
         except Exception:
+            # Consultado aunque haya fallado: el turno vence, como antes.
+            consultados.add(payment.id)
             continue
+        consultados.add(payment.id)
         if remote:
             remotos[payment.id] = remote
-    return remotos, set()
+    return remotos, consultados
 
 
 async def _apply_remote_payment(
