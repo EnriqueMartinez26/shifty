@@ -39,6 +39,7 @@ from modules.reports.router import router as reports_router
 from modules.ledger.router import router as ledger_router
 from modules.legal.router import public_router as public_legal_router
 from modules.legal.router import router as store_terms_router
+from modules.privacy.router import router as privacy_router
 from modules.ops.router import router as ops_router
 from modules.notifications.router import router as notifications_router
 from modules.payments.router import router as payments_router
@@ -526,6 +527,9 @@ app.include_router(staff_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(appointments_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(dashboard_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(users_router, dependencies=_SUSPENSION_GUARD)
+# Derechos del titular (exportar y anonimizar un cliente): anonimizar esta
+# permitido con la tienda suspendida (SUSPENSION_ALLOWED_WRITES).
+app.include_router(privacy_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(reports_router, dependencies=_SUSPENSION_GUARD)
 app.include_router(stores_router, dependencies=_SUSPENSION_GUARD)
 # Aceptar los terminos B2B esta permitido con la tienda suspendida (una por

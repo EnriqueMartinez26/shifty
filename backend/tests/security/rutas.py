@@ -690,6 +690,16 @@ async def _revertir_fiado(m: Mundo, a: Actor, t: Tienda) -> Llamada:
 # -- superadmin ---------------------------------------------------------------
 
 
+async def _exportar_titular(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada("GET", f"/users/{t.cliente}/export")
+
+
+async def _anonimizar_titular(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    # Destructivo: un cliente fresco de la tienda duena por llamada.
+    cliente, _email = await m.usuario(t, "client", nombre="Titular")
+    return Llamada("POST", f"/users/{cliente}/anonymize")
+
+
 async def _baja_de_promociones(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada(
         "GET",
@@ -1211,6 +1221,24 @@ TABLA: tuple[Ruta, ...] = (
     R("POST", "/users/", ADMINS, A.PROPIA, _crear_usuario),
     R("GET", "/users/", ADMINS, A.PROPIA, _listar_usuarios),
     R("GET", "/users/{public_id}", ADMINS, A.RECURSO, _ver_usuario, idor=IDOR_POR_ID),
+    # Derechos del titular (PV-05, 2026-09-25): solo clientes de la tienda;
+    # un id ajeno, del personal o de un admin es 404 neutro.
+    R(
+        "GET",
+        "/users/{client_id}/export",
+        ADMINS,
+        A.RECURSO,
+        _exportar_titular,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "POST",
+        "/users/{client_id}/anonymize",
+        ADMINS,
+        A.RECURSO,
+        _anonimizar_titular,
+        idor=IDOR_POR_ID,
+    ),
     R(
         "PATCH",
         "/users/{public_id}",

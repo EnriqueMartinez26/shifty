@@ -73,6 +73,10 @@ SUSPENSION_ALLOWED_WRITES: frozenset[tuple[str, str]] = frozenset(
         # Aceptar los terminos B2B (L1, 2026-09-25): no genera una obligacion
         # nueva y la tienda tiene que poder aceptarlos mientras regulariza.
         ("POST", "/stores/me/terms-acceptance"),
+        # Anonimizar un cliente (PV-05, 2026-09-25): atender un pedido de
+        # supresion es una obligacion legal con plazo (art. 16 Ley 25.326) y
+        # no crea una obligacion comercial nueva.
+        ("POST", "/users/{client_id}/anonymize"),
     }
 )
 

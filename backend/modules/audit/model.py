@@ -25,6 +25,10 @@ class AuditAction(str, enum.Enum):
     UPDATE = "update"
     DELETE = "delete"  # Soft delete (is_active = False)
     STATUS_CHANGE = "status_change"
+    # Derechos del titular (PV-05, 2026-09-25): exportar y anonimizar a un
+    # cliente. La fila no lleva datos personales, solo el hecho.
+    EXPORT = "export"
+    ANONYMIZE = "anonymize"
 
 
 # ---------------------------------------------------------------------------

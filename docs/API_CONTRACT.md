@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 114 — Operaciones: 142
+- Paths: 116 — Operaciones: 144
 
 ## /
 
@@ -565,6 +565,40 @@ Responses:
 Responses:
 
 - `200` Successful Response — `application/json`: `ApiSuccess_DashboardSummaryResponse_`
+
+## Data Subject Rights
+
+### POST /users/{client_id}/anonymize
+
+- Summary: Anonymize Client
+- operationId: `anonymize_client_users__client_id__anonymize_post`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `client_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_AnonymizeResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### GET /users/{client_id}/export
+
+- Summary: Export Client Data
+- operationId: `export_client_data_users__client_id__export_get`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `client_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_ClientDataExport_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Notifications
 
@@ -2263,6 +2297,20 @@ Responses:
 | `blocker` | string \| null | no |  |
 | `cancellable` | boolean | yes |  |
 
+### AnonymizeResponse
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `status` | string | yes |  |
+
+### ApiSuccess_AnonymizeResponse_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | AnonymizeResponse | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_AppointmentBlockBatchResponse_
 
 | field | type | required | constraints |
@@ -2309,6 +2357,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | ClientAppointmentsResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_ClientDataExport_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | ClientDataExport | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_CouponRedemptionResponse_
@@ -3156,6 +3212,18 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `phone` | string | yes | minLength=6, maxLength=30 |
 | `reason` | string \| null | no | maxLength=500 |
 
+### ClientDataExport
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `exported_at` | string | yes | format="date-time" |
+| `store_id` | string | yes |  |
+| `client` | ExportedClient | yes |  |
+| `appointments` | array<ExportedAppointment> | yes |  |
+| `payments` | array<ExportedPayment> | yes |  |
+| `ledger` | array<ExportedLedgerMovement> | yes |  |
+| `waitlist` | array<ExportedWaitlistEntry> | yes |  |
+
 ### ClientRescheduleRequest
 
 | field | type | required | constraints |
@@ -3264,6 +3332,83 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 |---|---|---|---|
 | `stats` | DashboardStatSummary | yes |  |
 | `upcoming_appointments` | array<UpcomingAppointmentItem> | yes |  |
+
+### ExportedAppointment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `starts_at` | string | yes | format="date-time" |
+| `ends_at` | string | yes | format="date-time" |
+| `status` | string | yes |  |
+| `service_id` | string | yes |  |
+| `staff_id` | string | yes |  |
+| `client_name` | string | yes |  |
+| `client_email` | string \| null | no |  |
+| `client_phone` | string \| null | no |  |
+| `notes` | string \| null | no |  |
+| `notes_staff` | string \| null | no |  |
+| `intake_answers` | object \| null | no |  |
+| `price_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `terms_accepted_at` | string \| null | no | format="date-time" |
+| `terms_version` | string \| null | no |  |
+| `privacy_version` | string \| null | no |  |
+| `cancelled_at` | string \| null | no | format="date-time" |
+| `completed_at` | string \| null | no | format="date-time" |
+
+### ExportedClient
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `full_name` | string | yes |  |
+| `first_name` | string \| null | no |  |
+| `last_name` | string \| null | no |  |
+| `email` | string \| null | no |  |
+| `phone` | string \| null | no |  |
+| `is_active` | boolean | yes |  |
+| `created_at` | string \| null | no | format="date-time" |
+
+### ExportedLedgerMovement
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `movement_type` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `balance_after` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `appointment_id` | string \| null | no |  |
+| `notes` | string \| null | no |  |
+| `created_at` | string \| null | no | format="date-time" |
+
+### ExportedPayment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `appointment_id` | string | yes |  |
+| `provider` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `currency` | string | yes |  |
+| `status` | string | yes |  |
+| `paid_at` | string \| null | no | format="date-time" |
+| `created_at` | string \| null | no | format="date-time" |
+
+### ExportedWaitlistEntry
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `status` | string | yes |  |
+| `service_id` | string | yes |  |
+| `window_starts_at` | string | yes | format="date-time" |
+| `window_ends_at` | string | yes | format="date-time" |
+| `client_name` | string | yes |  |
+| `client_phone` | string | yes |  |
+| `client_email` | string \| null | no |  |
+| `notes` | string \| null | no |  |
+| `terms_accepted_at` | string \| null | no | format="date-time" |
+| `created_at` | string \| null | no | format="date-time" |
 
 ### ForgotPasswordRequest
 
@@ -4511,4 +4656,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit 682fa47
+Generado desde app.openapi() el 2026-09-25, commit 8232d61
