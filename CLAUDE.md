@@ -240,10 +240,12 @@ Una instrucción en lenguaje natural no es una garantía.
    VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`, prendido
    por defecto; apagado, regenerar el link de un cobro vencido es 409; el pago
    de MP no trae `preference_id`). Los links que un cobro deja de usar quedan en
-   `payment_link_history` (`modules/payments/links.py`): un `approved` de uno
-   de ellos, por su importe, lo adopta un cobro no acreditado (el vigente se
-   vence) y cualquier otro pago en un link reemplazado avisa una vez por pago
-   de MP; los no aprobados se cierran como no-op. `processed_at` solo si se aplicó de verdad; el inbox
+   `payment_link_history` (`modules/payments/links.py`) porque su pago puede
+   avisarse tarde (webhook demorado, reentregado o perdido; con `binary_mode`
+   no hay cupones pendientes) y la conciliacion lo busca 7 días: un `approved`
+   de uno de ellos, por su importe, lo adopta un cobro no acreditado (el
+   vigente se vence) y cualquier otro pago en un link reemplazado avisa una
+   vez por pago de MP; los no aprobados se cierran como no-op. `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
    webhook busca el cobro sin lock y lockea turno y después pago, como

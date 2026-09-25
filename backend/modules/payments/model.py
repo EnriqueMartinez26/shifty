@@ -281,8 +281,9 @@ class Payment(BaseEntity):
 class PaymentLinkHistory(BaseEntity):
     """Un link de pago que el cobro dejo de usar (revision de perf/f4-pay).
 
-    Los cupones de Rapipago/Pago Facil y los pagos en revision se aprueban
-    horas o dias despues de creados: un pago del link retirado tiene que
+    El webhook de un pago del link retirado puede llegar tarde o
+    reentregarse, y el link sigue pagable hasta que MP lo vence (con
+    ``binary_mode`` no hay cupones de efectivo pendientes): ese pago tiene que
     poder reconocerse (misma referencia, mismo importe de ESE link) y
     aplicarse o alertarse, no perderse. Lo escribe ``payments.links``.
     """

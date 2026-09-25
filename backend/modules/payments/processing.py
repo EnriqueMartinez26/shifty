@@ -493,8 +493,8 @@ async def _resolver_link(
     quedar como dead letter y disparar la alerta critica
     ``dead_letter_webhooks`` sin plata acreditada que revisar.
 
-    Un ``approved`` de un link retirado (cupon de efectivo o revision que se
-    aprobo despues de regenerar o re-tarifar) se aplica si el cobro todavia
+    Un ``approved`` de un link retirado (webhook tardio o reentregado, o un
+    pago hecho antes de que MP venciera ese link) se aplica si el cobro todavia
     no esta acreditado y el pago es por el importe y la moneda de ESE link:
     el cobro adopta ese link y el vigente se vence (``adopt_retired_link``).
     Si el cobro ya esta acreditado (o devuelto) es un pago duplicado; si el

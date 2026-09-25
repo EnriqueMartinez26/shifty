@@ -1,11 +1,15 @@
 """Historial de links retirados de un cobro (revision de perf/f4-pay, 2026-09-25).
 
-Un cobro cambia de link cuando se regenera (cobro vencido) o se re-tarifa. Los
-pagos en efectivo (Rapipago, Pago Facil) y los que quedan en revision
-(``in_process``) se aprueban horas o dias DESPUES de creados, asi que un pago
-del link viejo puede llegar con el link nuevo ya vivo. Este modulo guarda cada
-link retirado (``PaymentLinkHistory``: referencia, preferencia, importe y
-moneda de ESE link) para que el webhook y la conciliacion puedan reconocerlo:
+Un cobro cambia de link cuando se regenera (cobro vencido) o se re-tarifa.
+Las preferencias usan ``binary_mode``: MP aprueba o rechaza en el momento, sin
+cupones de efectivo ni pagos que queden pendientes. Aun asi un pago del link
+viejo puede llegar con el link nuevo ya vivo: el link retirado sigue pagable
+hasta que el outbox lo vence en MP (un tick de 20 s, o mas si esa llamada
+falla), un rechazo se reintenta en el mismo link, y el webhook de un pago
+hecho antes del retiro puede llegar tarde, reentregarse o perderse. Este
+modulo guarda cada link retirado (``PaymentLinkHistory``: referencia,
+preferencia, importe y moneda de ESE link) para que el webhook y la
+conciliacion puedan reconocerlo:
 
 - ``record_retired_link``: lo anota ``service._retire_link`` al retirarlo.
 - ``classify_payment_link``: dice si un pago es del link vigente, de uno
@@ -39,15 +43,15 @@ from modules.payments.model import (
     is_placeholder_preference_id,
 )
 
-# Cuanto hacia atras la conciliacion busca pagos de links retirados. Un cupon
-# de efectivo de Checkout Pro vence a los pocos dias (MP recomienda dejar al
-# menos 3 y, pasados 30 dias de su vencimiento sin pago, lo da por vencido;
-# despues del vencimiento un pago se devuelve al pagador en vez de
-# acreditarse). Un pago que se aprueba despues del retiro se creo ANTES del
-# retiro, asi que su aprobacion llega dentro de esa vida del cupon: 30 dias
-# cubren el cupon, la acreditacion (hasta 2 horas habiles) y las revisiones
-# con margen, y acotan la busqueda.
-RETIRED_LINK_SEARCH_DAYS = 30
+# Cuanto hacia atras la conciliacion busca en MP pagos de links retirados.
+# Con ``binary_mode`` no hay cupones de efectivo pendientes: un pago de un
+# link retirado se aprueba en el momento (antes del retiro o en la ventana en
+# que el link sigue pagable) y lo que puede demorarse es SU aviso: un webhook
+# tardio o perdido, o una reentrega. La conciliacion corre cada 2 minutos
+# (``core/celery_app.py``), asi que una semana cubre esos casos con margen y
+# acota la busqueda de cada corrida (una request a MP por link retirado). El webhook no usa la
+# ventana: reconoce un link retirado del historial a cualquier edad.
+RETIRED_LINK_SEARCH_DAYS = 7
 
 TipoDeLink = Literal["vigente", "retirado", "desconocido"]
 

@@ -1,9 +1,10 @@
 """Un pago aprobado sobre un link RETIRADO del mismo cobro no se pierde.
 
-Revision de 7abb9b4..e5579b6 (2026-09-25, #1, hueco de plata). Los cupones
-de Rapipago/Pago Facil y los ``in_process`` en revision se aprueban horas o
-dias despues de creados. Un pago creado sobre el link L y aprobado despues de
-que L se retiro (regenerar un cobro vencido, o re-tarifar) no se aplicaba: el
+Revision de 7abb9b4..e5579b6 (2026-09-25, #1, hueco de plata). Con
+``binary_mode`` MP aprueba o rechaza en el momento, pero el aviso de un pago
+del link L puede llegar despues de que L se retiro (regenerar un cobro
+vencido, o re-tarifar): webhook tardio, reentregado o perdido, o un pago en L
+antes de que MP lo venciera. Ese pago no se aplicaba: el
 cobro seguia ``pending`` con el link nuevo vivo (el cliente podia pagar dos
 veces) y la conciliacion no lo veia porque solo buscaba la referencia vigente.
 
@@ -22,6 +23,7 @@ retirados del cobro en los ultimos ``RETIRED_LINK_SEARCH_DAYS`` dias.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -33,6 +35,10 @@ import modules.payments.service as payments_service
 from core.config import settings
 from modules.notifications.model import NotificationType
 from modules.payments.jobs import reconcile_pending_payments
+from modules.payments.links import (
+    RETIRED_LINK_SEARCH_DAYS,
+    retired_link_references,
+)
 from modules.payments.model import OutboxMessage, PaymentLinkHistory, PaymentStatus
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from tests.integration.test_cancelar_desde_el_panel_vence_el_cobro import _cobro
@@ -266,3 +272,36 @@ async def test_la_conciliacion_encuentra_un_pago_de_un_link_retirado(
     cobro = await _cobro(test_session, turno)
     assert cobro.status == PaymentStatus.APPROVED.value
     assert cobro.preference_id == vieja
+
+
+@pytest.mark.asyncio
+async def test_la_conciliacion_busca_links_retirados_de_la_ultima_semana(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ventana de ``RETIRED_LINK_SEARCH_DAYS`` = 7 (seguimiento de la revision
+    de 7abb9b4..e5579b6). Las preferencias usan ``binary_mode``: MP aprueba o
+    rechaza en el momento, sin cupones de efectivo pendientes. Lo que la
+    ventana cubre son webhooks tardios o perdidos y reentregas; una semana
+    alcanza y acota la busqueda en MP de cada corrida."""
+    turno, mp, vieja, _nueva = await _regenerado(
+        client, test_session, monkeypatch, "retirado-ventana"
+    )
+    cobro = await _cobro(test_session, turno)
+    retirado = (
+        await test_session.execute(
+            select(PaymentLinkHistory.retired_at).where(
+                PaymentLinkHistory.payment_id == cobro.id
+            )
+        )
+    ).scalar_one()
+
+    adentro = await retired_link_references(
+        test_session, [cobro], ahora=retirado + timedelta(days=6, hours=23)
+    )
+    afuera = await retired_link_references(
+        test_session, [cobro], ahora=retirado + timedelta(days=7, minutes=1)
+    )
+
+    assert RETIRED_LINK_SEARCH_DAYS == 7
+    assert adentro == {cobro.id: [mp.referencias[vieja]]}
+    assert afuera == {}

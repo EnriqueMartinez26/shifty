@@ -962,8 +962,9 @@ def _retire_link(
     """
     if payment.is_accredited:
         raise PaymentAlreadyAccreditedError()
-    # Queda en el historial: un pago tardio de este link (cupon de efectivo,
-    # revision) se reconoce y se aplica o se alerta (``payments.links``).
+    # Queda en el historial: un pago de este link que llegue despues (webhook
+    # tardio o reentregado, o pagado antes de que MP lo venza) se reconoce y
+    # se aplica o se alerta (``payments.links``).
     record_retired_link(db, payment, amount=importe_del_link)
     payment.preference_id, payment.payment_link = _placeholder_link(
         payment.appointment_id

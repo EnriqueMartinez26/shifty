@@ -1,10 +1,11 @@
 """payment_link_history: links de pago retirados de cada cobro (perf/f4-pay)
 
-2026-09-25, revision de 7abb9b4..e5579b6. Los cupones de efectivo (Rapipago,
-Pago Facil) y los pagos en revision se aprueban horas o dias despues de
-creados. Un pago creado sobre un link que despues se retiro (regenerar un
-cobro vencido, re-tarifar) no se aplicaba ni se conciliaba: el cobro seguia
-pendiente con el link nuevo vivo. Esta tabla guarda cada link retirado
+2026-09-25, revision de 7abb9b4..e5579b6. Un pago sobre un link que el cobro
+ya retiro (regenerar un cobro vencido, re-tarifar) no se aplicaba ni se
+conciliaba: el cobro seguia pendiente con el link nuevo vivo. Con
+``binary_mode`` no hay cupones de efectivo pendientes; el caso es un pago en
+el link retirado antes de que MP lo venza, o el webhook tardio, reentregado
+o perdido de un pago hecho antes del retiro. Esta tabla guarda cada link retirado
 (``link_ref``, ``preference_id``, importe y moneda de ESE link) para que el
 webhook y la conciliacion lo reconozcan (``modules/payments/links.py``).
 

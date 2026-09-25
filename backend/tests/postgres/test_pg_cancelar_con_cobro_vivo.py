@@ -1088,7 +1088,7 @@ async def test_pago_del_link_retirado_contra_pago_del_link_vigente(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cobros regenerados (link L1 retirado, L2 vigente). A la vez llegan un
-    ``approved`` tardio de L1 (cupon de efectivo) y un ``approved`` de L2.
+    ``approved`` tardio de L1 (webhook demorado) y un ``approved`` de L2.
     Los dos toman el turno primero (regla 7) y se serializan. Exactamente uno
     se aplica; el otro encuentra el cobro ya acreditado y va al camino de
     alerta como pago duplicado (una vez por pago de MP). Cero 5xx y un solo

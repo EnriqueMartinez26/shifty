@@ -1517,8 +1517,8 @@ async def _fetch_remote_payment(
 ) -> dict[str, Any] | None:
     """El pago de MP de este cobro: por id si lo tiene; si no, por la
     referencia del link vigente y, si ahi no hay uno acreditado, por las de
-    sus links retirados en la ventana (``RETIRED_LINK_SEARCH_DAYS``): un
-    cupon de efectivo del link viejo se aprueba despues del retiro."""
+    sus links retirados en la ventana (``RETIRED_LINK_SEARCH_DAYS``): el
+    webhook del pago de un link viejo pudo perderse."""
     if payment.external_payment_id:
         return await fetch_mercadopago_payment(
             db,
