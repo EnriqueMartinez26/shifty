@@ -932,7 +932,8 @@ def _reprice_existing_payment(
 
 
 def _retire_link(payment: Payment) -> None:
-    """El cobro deja de usar su link: queda un placeholder hasta el nuevo.
+    """El cobro deja de usar su link: queda un placeholder hasta el nuevo, y
+    se olvida el pago de MP que tenia anotado (era del link retirado).
 
     Con ``MERCADOPAGO_LINK_REF_ENABLED`` tambien rota ``link_ref`` a un nonce
     que ningun link lleva: desde este momento un pago del link retirado no
@@ -944,6 +945,10 @@ def _retire_link(payment: Payment) -> None:
     payment.preference_id, payment.payment_link = _placeholder_link(
         payment.appointment_id
     )
+    # El id del pago de MP es de un intento sobre el link retirado: la
+    # conciliacion y el rescate del job consultarian ese pago viejo en vez de
+    # buscar los del link nuevo por su referencia (revision de perf/f4-pay).
+    payment.external_payment_id = None
     if settings.MERCADOPAGO_LINK_REF_ENABLED:
         payment.link_ref = new_link_ref()
 
