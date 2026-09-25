@@ -94,7 +94,7 @@ def reject_reschedule_with_pending_deposit(appointment: Appointment) -> None:
     """
     if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
         raise AppException(
-            message="Cobra la sena o cancela el turno antes de moverlo",
+            message="Cobrá la seña o cancelá el turno antes de moverlo",
             http_status=HTTPStatus.CONFLICT,
             error_code="DEPOSIT_PENDING_RESCHEDULE_DENIED",
         )

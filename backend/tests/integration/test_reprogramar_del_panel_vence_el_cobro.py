@@ -13,8 +13,8 @@ transaccion (``expire_live_charge``: pago ``expired`` por la entidad,
 cancelarlo. El turno nuevo nace sin cobro y un confirmado sigue confirmado.
 
 Un turno en ``pending_payment`` (sena REQUERIDA pendiente) no se reprograma
-desde el panel: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED`` ("Cobra la sena o
-cancela el turno antes de moverlo"), sin tocar nada (decision del dueno
+desde el panel: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED`` ("Cobrá la seña o
+cancelá el turno antes de moverlo"), sin tocar nada (decision del dueno
 2026-09-25: opcion A). Reprogramarlo como ``pending`` sin cobro, lo que se
 hizo mientras tanto, perdia la sena requerida. El personal lo puede cancelar
 (D2 vence el cobro) o cobrar la sena y despues moverlo. El link del panel de
@@ -153,7 +153,7 @@ async def test_reprogramar_un_pendiente_de_pago_es_409_y_no_toca_nada(
 
     assert res.status_code == 409, res.text
     assert res.json()["error_code"] == "DEPOSIT_PENDING_RESCHEDULE_DENIED"
-    assert res.json()["message"] == "Cobra la sena o cancela el turno antes de moverlo"
+    assert res.json()["message"] == "Cobrá la seña o cancelá el turno antes de moverlo"
     # Nada cambio: la sena sigue pendiente con su link, el turno igual.
     cobro = await _cobro(test_session, turno)
     assert (cobro.status, cobro.preference_id, cobro.version, cobro.amount) == antes
