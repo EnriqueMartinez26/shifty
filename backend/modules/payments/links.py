@@ -203,10 +203,13 @@ def adopt_retired_link(
     Quien la llama ya valido el pago contra ESE link: aca no hay nada que
     pueda fallar a mitad (revision de e5579b6..3b977a9, #2). Queda un log de
     info con los importes y los nonces (#3): el modulo de pagos no tiene
-    auditoria propia.
+    auditoria propia. El log sale ANTES del commit, que hace el llamador
+    (webhook, lote del inbox o conciliacion): por eso dice "adopting"; si la
+    transaccion se deshace, la fuente de verdad es la fila del cobro
+    (revision de 3b977a9..6c84d46, #6).
     """
     logger.info(
-        "payment_adopted_retired_link",
+        "payment_adopting_retired_link",
         store_id=payment.store_id,
         payment_id=payment.id,
         appointment_id=payment.appointment_id,

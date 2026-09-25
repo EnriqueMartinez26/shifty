@@ -9,8 +9,10 @@ Revision de e5579b6..3b977a9 (2026-09-25):
   revision: flag apagado, cobro en placeholder que conserva el nonce del
   link retirado, pago con referencia vacia y la ``preference_id`` retirada.
   Ahora el pago se valida contra el link retirado ANTES de tocar el cobro.
-- #3: la adopcion deja un log de info (``payment_adopted_retired_link``) con
-  los ids, el importe anterior y el nuevo y los nonces; y el historial guarda
+- #3: la adopcion deja un log de info con los ids, el importe anterior y el
+  nuevo y los nonces. Se llama ``payment_adopting_retired_link`` (revision de
+  3b977a9..6c84d46, #6): sale antes del commit, que lo hace el llamador; si
+  la transaccion se deshace, la fuente de verdad es la fila del cobro; y el historial guarda
   ``original_amount``, ``discount_amount`` y ``promotion_code`` de ESE link,
   que la adopcion restaura junto con el importe (antes quedaban los del
   link vigente: el cobro decia un descuento que el pago no tuvo).
@@ -169,7 +171,7 @@ async def test_la_adopcion_restaura_el_descuento_del_link_y_queda_en_el_log(
         Decimal("500"),
         "PROMO500",
     )
-    adopciones = [e for e in logs if e["event"] == "payment_adopted_retired_link"]
+    adopciones = [e for e in logs if e["event"] == "payment_adopting_retired_link"]
     assert len(adopciones) == 1, logs
     adopcion = adopciones[0]
     assert adopcion["log_level"] == "info"
@@ -186,3 +188,64 @@ async def test_la_adopcion_restaura_el_descuento_del_link_y_queda_en_el_log(
         nonce_nuevo,
         nonce_viejo,
     )
+
+
+@pytest.mark.asyncio
+async def test_regenerar_un_cobro_vencido_guarda_los_importes_del_link_viejo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision de 3b977a9..6c84d46 (#6). El camino de regenerar el link de
+    un cobro vencido re-tarifa ANTES de retirar el link: el historial tiene
+    que guardar la promo y el descuento de ESE link (``ImportesDelLink``
+    tomado antes de re-tarifar), no los que deja la re-tarifa."""
+    monkeypatch.setattr(settings, "MERCADOPAGO_LINK_REF_ENABLED", True)
+    t = await _tienda(client, monkeypatch, "regenera-importes", sena=False)
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", _MP())
+    turno = await _confirmado(client, t, 13)
+    primero = await client.post(
+        f"/payments/preferences/{turno}", headers=auth_headers(t.admin)
+    )
+    assert primero.status_code == 200, primero.text
+    viejo = await _cobro(test_session, turno)
+    vieja, importe = str(viejo.preference_id), viejo.amount
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.id == viejo.id)
+        .values(
+            original_amount=importe + Decimal("500"),
+            discount_amount=Decimal("500"),
+            promotion_code="PROMO500",
+        )
+    )
+    await test_session.commit()
+    cobro = await _cobro(test_session, turno)
+    assert cobro.apply_status(PaymentStatus.EXPIRED.value)
+    await test_session.commit()
+
+    segundo = await client.post(
+        f"/payments/preferences/{turno}", headers=auth_headers(t.admin)
+    )
+
+    assert segundo.status_code == 200, segundo.text
+    cobro = await _cobro(test_session, turno)
+    assert cobro.preference_id != vieja
+    # La re-tarifa del panel no conserva la promo del link viejo...
+    assert (cobro.original_amount, cobro.promotion_code) != (
+        importe + Decimal("500"),
+        "PROMO500",
+    )
+    fila = (
+        await test_session.execute(
+            select(PaymentLinkHistory).where(
+                PaymentLinkHistory.payment_id == cobro.id,
+                PaymentLinkHistory.preference_id == vieja,
+            )
+        )
+    ).scalar_one()
+    # ...pero el historial guarda los del link que se retiro.
+    assert (
+        fila.amount,
+        fila.original_amount,
+        fila.discount_amount,
+        fila.promotion_code,
+    ) == (importe, importe + Decimal("500"), Decimal("500"), "PROMO500")
