@@ -166,7 +166,35 @@ def test_init_usa_el_sampler_la_version_y_monitorea_beat(
         i for i in capturado["integrations"] if isinstance(i, CeleryIntegrationFalsa)
     ]
     assert len(celery) == 1
-    assert celery[0].kwargs == {"monitor_beat_tasks": True}
+    assert celery[0].kwargs == {
+        "monitor_beat_tasks": True,
+        "exclude_beat_tasks": observability.SENTRY_CRONS_EXCLUDED_BEAT_TASKS,
+    }
     # El scrubbing de F1-A sigue enchufado a eventos y transacciones.
     assert capturado["before_send"] is observability._scrub_event
     assert capturado["before_send_transaction"] is observability._scrub_event
+
+
+def test_sentry_crons_monitorea_solo_el_vencimiento_de_senas() -> None:
+    """Plan gratuito de Sentry: UN monitor (decision del dueno, 2026-09-25).
+
+    ``monitor_beat_tasks`` creaba un monitor por cada tarea de beat con
+    crontab (8). Se monitorea solo el vencimiento de retenciones sin pagar:
+    si deja de correr, los turnos con sena pendiente no se liberan y la agenda
+    queda tomada. El resto lo cubren ``/ops/slo`` y el latido del worker. Se
+    prueba con el matcher real del SDK (lista de regex, ``re.search`` con
+    ``$`` agregado) contra los nombres reales del beat: una tarea nueva nace
+    excluida y no consume cuota.
+    """
+    from sentry_sdk.utils import match_regex_list
+
+    from core.celery_app import celery_app
+
+    nombres = set(celery_app.conf.beat_schedule)
+    assert observability.SENTRY_CRONS_MONITORED_BEAT_TASK in nombres
+    monitoreadas = {
+        nombre
+        for nombre in nombres | {"una-tarea-nueva-cada-hora"}
+        if not match_regex_list(nombre, observability.SENTRY_CRONS_EXCLUDED_BEAT_TASKS)
+    }
+    assert monitoreadas == {"expire-unpaid-appointment-holds-every-minute"}
