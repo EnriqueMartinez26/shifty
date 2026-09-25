@@ -69,3 +69,4 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] Rollback target is known: `.deploy/previous` (what `make rollback` deploys, without migrating), previous environment values, and the forward-fix plan for the migration.
 - [ ] Rollback trigger thresholds are defined for error rate, latency, failed payments, failed workers, and failed health checks.
 - [ ] Release notes include owner, time window, risks, checklist exceptions, and exact verification evidence.
+- [ ] Release notes for perf/f4-back mention that panel idempotency keys in Redis are now namespaced per store: an idempotent retry that spans the deploy gets a 409 instead of the cached response (see `docs/DOCUMENTACION_TURNERO.md`, "Idempotencia y Resiliencia").
