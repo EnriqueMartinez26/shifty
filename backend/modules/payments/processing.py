@@ -517,23 +517,16 @@ async def _pago_en_link_reemplazado(
         )
 
 
-async def apply_mercadopago_webhook_payload(
-    db: AsyncSession,
-    *,
-    store_id: str,
-    payload: dict[str, Any],
-    configs: GatewayConfigs | None = None,
-) -> bool:
-    encontrado = await find_payment_for_webhook(db, store_id, payload)
-    payment_status = resolve_payment_status(payload)
-    if not encontrado or not payment_status:
-        return False
+async def _lock_turno_y_pago(
+    db: AsyncSession, store_id: str, encontrado: Payment
+) -> tuple[Appointment | None, Payment | None]:
+    """Turno y pago del webhook, lockeados en el orden unico TURNO -> PAGO.
 
-    # Orden unico de locks: TURNO -> PAGO (F1-18, decision 23 del plan), el
-    # mismo que liberar desde el panel y el job de vencimiento. Turno y pago se
-    # releen bajo su lock (populate_existing): entre la busqueda sin lock y el
-    # lock pudieron cambiar, y todo lo que sigue decide sobre la version
-    # lockeada.
+    F1-18 (decision 23 del plan): el mismo orden que liberar desde el panel y
+    el job de vencimiento. Se releen bajo su lock (populate_existing): entre
+    la busqueda sin lock y el lock pudieron cambiar, y todo lo que sigue
+    decide sobre la version lockeada.
+    """
     appointment = (
         await db.execute(
             select(Appointment)
@@ -553,6 +546,45 @@ async def apply_mercadopago_webhook_payload(
             .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
+    return appointment, payment
+
+
+def _stamp_payment(
+    payment: Payment,
+    payment_status: str,
+    payload: dict[str, Any],
+    data: dict[str, Any],
+) -> None:
+    """Aplica el estado remoto por el grafo y anota el id del pago de MP.
+
+    El id se escribe DESPUES de la transicion y solo si la entidad la acepto
+    (AUD2-B2-05, 2026-09-20). Antes se escribia primero: con un reintento del
+    cliente (pago A aprobado, pago B rechazado sobre la misma preferencia) el
+    webhook de B se descartaba por el grafo pero ya habia dejado el id de B,
+    contra un raw_payload que seguia siendo el de A. Un cobro sin id lo toma
+    igual: es la unica trazabilidad que hay.
+    """
+    external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    aplicada = stamp_payment_from_status(
+        payment, payment_status, payload=cast(dict[str, JsonValue], payload)
+    )
+    if external_payment_id and (aplicada or not payment.external_payment_id):
+        payment.external_payment_id = external_payment_id
+
+
+async def apply_mercadopago_webhook_payload(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payload: dict[str, Any],
+    configs: GatewayConfigs | None = None,
+) -> bool:
+    encontrado = await find_payment_for_webhook(db, store_id, payload)
+    payment_status = resolve_payment_status(payload)
+    if not encontrado or not payment_status:
+        return False
+
+    appointment, payment = await _lock_turno_y_pago(db, store_id, encontrado)
     if payment is None:
         return False
     if _de_un_link_reemplazado(payment, payload):
@@ -571,24 +603,8 @@ async def apply_mercadopago_webhook_payload(
 
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
-    external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
-    was_settled = payment.status in {
-        PaymentStatus.APPROVED.value,
-        PaymentStatus.MANUAL_CONFIRMED.value,
-    }
-    aplicada = stamp_payment_from_status(
-        payment,
-        payment_status,
-        payload=cast(dict[str, JsonValue], payload),
-    )
-    # El id del pago de MP se escribe DESPUES de la transicion y solo si la
-    # entidad la acepto (AUD2-B2-05, 2026-09-20). Antes se escribia primero:
-    # con un reintento del cliente (pago A aprobado, pago B rechazado sobre la
-    # misma preferencia) el webhook de B se descartaba por el grafo pero ya
-    # habia dejado el id de B, contra un raw_payload que seguia siendo el de
-    # A. Un cobro sin id lo toma igual: es la unica trazabilidad que hay.
-    if external_payment_id and (aplicada or not payment.external_payment_id):
-        payment.external_payment_id = external_payment_id
+    was_settled = payment.is_accredited
+    _stamp_payment(payment, payment_status, payload, data)
     if appointment:
         _sync_appointment(db, appointment, payment, payment_status)
     await _avisar_al_dueno(
