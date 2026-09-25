@@ -239,7 +239,11 @@ Una instrucción en lenguaje natural no es una garantía.
    `processing.py`); la integridad exige la `external_reference` del link
    VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`, prendido
    por defecto; apagado, regenerar el link de un cobro vencido es 409; el pago
-   de MP no trae `preference_id`). `processed_at` solo si se aplicó de verdad; el inbox
+   de MP no trae `preference_id`). Los links que un cobro deja de usar quedan en
+   `payment_link_history` (`modules/payments/links.py`): un `approved` de uno
+   de ellos, por su importe, lo adopta un cobro no acreditado (el vigente se
+   vence) y cualquier otro pago en un link reemplazado avisa una vez por pago
+   de MP; los no aprobados se cierran como no-op. `processed_at` solo si se aplicó de verdad; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
    webhook busca el cobro sin lock y lockea turno y después pago, como
@@ -611,12 +615,16 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Tamaño y forma
 
 29. **Función de más de 80 líneas necesita justificación en el PR.** En el
-    backend quedan 8 al 2026-09-19 (AST, `end_lineno - lineno + 1 > 80`,
-    sin `tests/` ni `alembic/`): `process_outbox_batch`,
-    `_build_store_notification` y `_claim_and_expire_preferences`
-    (`payments/jobs.py`), `OtpService.request_code`,
-    `ledger/router.py::get_ledger_summary` y tres en `scripts/`. Son deuda,
-    no permiso. `create_public_booking` y `client_reschedule_appointment`
+    backend quedan 12 al 2026-09-25 (AST, `end_lineno - lineno + 1 > 80`,
+    sin `tests/` ni `alembic/`): `_build_store_notification`,
+    `_claim_and_expire_preferences` y `_expire_unpaid_appointments`
+    (`payments/jobs.py`), `book_for_client` y `_find_suggestion`
+    (`appointments/service.py`), `availability.get_available_slots`,
+    `ledger/router.py::get_ledger_summary`,
+    `stores/router.py::update_my_store`,
+    `core/security_middleware.py::__call__` y tres en `scripts/`.
+    `process_outbox_batch` y `OtpService.request_code` ya bajaron del tope.
+    Son deuda, no permiso. `create_public_booking` y `client_reschedule_appointment`
     se descompusieron (B1-12). El front no está medido acá. Ante una
     validación nueva se extrae, no se apila.
 
@@ -700,7 +708,7 @@ Una instrucción en lenguaje natural no es una garantía.
   RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
-  las 8 funciones de más de 80 líneas que quedan en el backend (regla 29);
+  las 12 funciones de más de 80 líneas que quedan en el backend (regla 29);
   zona horaria por tienda; unicidad de email de clientes POR tienda (hoy es
   global, así que un mismo email no puede ser cliente en dos tiendas);
   migrar los commits de routers/repos que quedan en
