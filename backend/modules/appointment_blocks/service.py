@@ -388,12 +388,17 @@ class AppointmentBlockService:
         # Misma regla que los schemas del alta, incluido el tope de duracion
         # (AUD2-B1-10): el schema del PATCH no puede medirla porque puede
         # venir un solo extremo.
-        # Solo los extremos que cambian caen en la ventana de fechas: editar
-        # el motivo de un bloqueo viejo no revalida su rango.
+        # Solo los extremos cuyo VALOR cambia caen en la ventana de fechas: el
+        # formulario de la agenda reenvia siempre los dos, y editar el motivo
+        # de un bloqueo viejo no puede revalidar un rango que no se toca.
         nuevos = [
             valor
-            for valor in (changes.get("starts_at"), changes.get("ends_at"))
+            for valor, guardado in (
+                (changes.get("starts_at"), block.start_time),
+                (changes.get("ends_at"), block.end_time),
+            )
             if isinstance(valor, datetime)
+            and ensure_utc_aware(valor) != ensure_utc_aware(guardado)
         ]
         error = block_instants_error(*nuevos) or block_range_error(starts_at, ends_at)
         if error:

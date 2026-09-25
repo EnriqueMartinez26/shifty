@@ -333,12 +333,12 @@ async def invalidate_availability(
     cubierto (AUD2-B7-03). Solo se traga el Redis caido: cualquier otro error
     sube, para que esto no se vuelva un silenciador de bugs.
     """
-    await _bump_days(
-        client,
-        store_id,
-        local_days_touched(*instants),
-        operacion="invalidate_availability",
-    )
+    try:
+        days = local_days_touched(*instants)
+    except OverflowError, ValueError:
+        await _invalidate_store_for_unrepresentable_days(client, store_id)
+        return
+    await _bump_days(client, store_id, days, operacion="invalidate_availability")
 
 
 async def invalidate_availability_range(
@@ -348,6 +348,15 @@ async def invalidate_availability_range(
     ends_at: datetime,
 ) -> None:
     """Como ``invalidate_availability`` pero para cada dia local de un rango (bloqueos)."""
+    try:
+        seen = _range_days(starts_at, ends_at)
+    except OverflowError, ValueError:
+        await _invalidate_store_for_unrepresentable_days(client, store_id)
+        return
+    await _bump_days(client, store_id, seen, operacion="invalidate_availability_range")
+
+
+def _range_days(starts_at: datetime, ends_at: datetime) -> set[date]:
     start_local = (
         starts_at if starts_at.tzinfo else starts_at.replace(tzinfo=timezone.utc)
     ).astimezone(ARGENTINA_TZ)
@@ -360,8 +369,19 @@ async def invalidate_availability_range(
     while day <= last:
         seen.add(day)
         day = date.fromordinal(day.toordinal() + 1)
-    seen |= local_days_touched(starts_at, ends_at)
-    await _bump_days(client, store_id, seen, operacion="invalidate_availability_range")
+    return seen | local_days_touched(starts_at, ends_at)
+
+
+async def _invalidate_store_for_unrepresentable_days(
+    client: AvailabilityCacheClient, store_id: str
+) -> None:
+    """Un instante sin dia local representable (anio 9999 o 0001 guardado
+    antes de las cotas de fechas) desbordaba DESPUES del commit y daba 500 al
+    editar o borrar esa fila (revision de perf/f4-back, 2026-09-25). No hay
+    dia que invalidar: se invalida la tienda entera, que siempre es correcto.
+    """
+    logger.warning("availability_invalidation_unrepresentable_day", store_id=store_id)
+    await invalidate_store_availability(client, store_id)
 
 
 async def invalidate_store_availability(

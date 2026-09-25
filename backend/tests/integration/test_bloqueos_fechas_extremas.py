@@ -96,31 +96,98 @@ async def test_mover_un_bloqueo_a_fechas_extremas_422(
         assert res.status_code == 422, (inicio_x, res.text)
 
 
-@pytest.mark.asyncio
-async def test_editar_el_motivo_de_un_bloqueo_viejo_sigue_andando(
-    client: AsyncClient, test_session: AsyncSession
-) -> None:
-    store, token, staff = await _tienda(client, "bloq-viejo")
+def _iso_del_front(instante: datetime) -> str:
+    """Como ``argentinaLocalToUtcIso`` del front: UTC con milisegundos y Z."""
+    return instante.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+async def _bloqueo_guardado(
+    session: AsyncSession, store: str, staff: str, inicio: datetime, motivo: str
+) -> str:
     store_id = (
-        await test_session.execute(select(Store.id).where(Store.public_id == store))
+        await session.execute(select(Store.id).where(Store.public_id == store))
     ).scalar_one()
-    inicio = datetime.now(timezone.utc) - timedelta(days=3 * 365)
-    viejo = StaffBlock(
+    bloqueo = StaffBlock(
         store_id=store_id,
         staff_id=staff,
         start_time=inicio,
-        end_time=inicio + timedelta(hours=1),
-        reason="Hace tres anios",
+        end_time=inicio + timedelta(minutes=30),
+        reason=motivo,
         is_active=True,
     )
-    test_session.add(viejo)
-    await test_session.commit()
+    session.add(bloqueo)
+    await session.commit()
+    return str(bloqueo.id)
+
+
+@pytest.mark.asyncio
+async def test_editar_el_motivo_de_un_bloqueo_viejo_con_el_payload_del_front(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """El formulario de la agenda (``CalendarContainer``) manda SIEMPRE
+    ``staff_id``, ``starts_at``, ``ends_at`` y ``reason``: editar solo el
+    motivo de un bloqueo de hace 3 anios reenvia los mismos extremos. Solo se
+    mira la ventana de fechas en el extremo cuyo VALOR cambia."""
+    store, token, staff = await _tienda(client, "bloq-viejo")
+    inicio = (datetime.now(timezone.utc) - timedelta(days=3 * 365)).replace(
+        second=0, microsecond=0
+    )
+    viejo = await _bloqueo_guardado(test_session, store, staff, inicio, "Hace 3 anios")
 
     res = await client.patch(
-        f"/appointment-blocks/{viejo.id}",
+        f"/appointment-blocks/{viejo}",
         headers=auth_headers(token),
-        json={"reason": "Motivo corregido"},
+        json={
+            "staff_id": staff,
+            "starts_at": _iso_del_front(inicio),
+            "ends_at": _iso_del_front(inicio + timedelta(minutes=30)),
+            "reason": "Motivo corregido",
+        },
+    )
+    movido = await client.patch(
+        f"/appointment-blocks/{viejo}",
+        headers=auth_headers(token),
+        json={
+            "staff_id": staff,
+            "starts_at": _iso_del_front(inicio - timedelta(hours=1)),
+            "ends_at": _iso_del_front(inicio + timedelta(minutes=30)),
+            "reason": "Motivo corregido",
+        },
     )
 
     assert res.status_code == 200, res.text
     assert res.json()["reason"] == "Motivo corregido"
+    # Mover el inicio a otra fecha fuera de la ventana si se rechaza.
+    assert movido.status_code == 422, movido.text
+
+
+@pytest.mark.asyncio
+async def test_borrar_o_editar_un_bloqueo_imposible_ya_guardado_no_da_500(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Un bloqueo en 9999-12-31 que ya esta en la base (de antes de la
+    ventana) se tiene que poder editar y borrar: la invalidacion del cache
+    del rango desbordaba DESPUES del commit (500). Ahora cae a invalidar la
+    tienda entera."""
+    store, token, staff = await _tienda(client, "bloq-imposible")
+    headers = auth_headers(token)
+    inicio = datetime(9999, 12, 31, 23, 0, tzinfo=timezone.utc)
+    editar = await _bloqueo_guardado(test_session, store, staff, inicio, "Imposible")
+    borrar = await _bloqueo_guardado(
+        test_session, store, staff, inicio - timedelta(hours=2), "Imposible 2"
+    )
+
+    editado = await client.patch(
+        f"/appointment-blocks/{editar}",
+        headers=headers,
+        json={
+            "staff_id": staff,
+            "starts_at": _iso_del_front(inicio),
+            "ends_at": _iso_del_front(inicio + timedelta(minutes=30)),
+            "reason": "Imposible corregido",
+        },
+    )
+    borrado = await client.delete(f"/appointment-blocks/{borrar}", headers=headers)
+
+    assert editado.status_code == 200, editado.text
+    assert borrado.status_code == 204, borrado.text
