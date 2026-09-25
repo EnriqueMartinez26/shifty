@@ -542,8 +542,12 @@ class UserAdminRepository(_BaseAdminRepository):
             await self.db.refresh(user)
             return user
         except IntegrityError:
+            # Regla 20: 409 neutro por el handler de main.py, como /users/.
+            # Antes era 400 "No se pudo actualizar el usuario": desde PV-01 un
+            # cambio de rol puede chocar con el email de una cuenta de login
+            # (uq_users_email_non_client) y eso es un conflicto.
             await self.db.rollback()
-            raise ValueError("No se pudo actualizar el usuario")
+            raise
 
     async def set_global_admin(self, user: User, enabled: bool, actor: User) -> User:
         # Regla 14, en el unico lugar donde vive (AUD2-B3-12): el conteo era
@@ -559,7 +563,14 @@ class UserAdminRepository(_BaseAdminRepository):
         # Cambiar el poder global exige re-login: las sesiones (y con ellas los
         # access tokens atados por sid) mueren aca mismo, en ambas direcciones.
         await revoke_sessions_for_user(self.db, user.id)
-        await self.db.flush()
+        try:
+            await self.db.flush()
+        except IntegrityError:
+            # PV-01: promover un cliente que comparte email con una cuenta de
+            # login choca con uq_users_email_non_client. 409 neutro (regla 20)
+            # con la sesion sana.
+            await self.db.rollback()
+            raise
         self._audit(
             actor,
             "User",
