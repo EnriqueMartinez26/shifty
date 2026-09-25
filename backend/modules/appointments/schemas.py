@@ -175,19 +175,23 @@ class AppointmentReschedule(BaseModel):
     idempotency_key: str = Field(..., min_length=10, max_length=128)
 
     @model_validator(mode="after")
-    def new_date_must_be_future(self) -> "AppointmentReschedule":
-        from core.utils import now_utc
+    def new_date_within_range(self) -> "AppointmentReschedule":
+        """Entre hace 2 anios y dentro de 2 anios.
+
+        Decision del dueno (2026-09-25): la TIENDA puede reservar un horario
+        que ya paso, asi que tambien puede corregir un walk-in mal cargado
+        moviendolo a la hora real. Solo quedan las cotas contra el desborde:
+        sin ellas 9999-12-31 desbordaba ``new_starts_at + duracion`` (500).
+        El cliente reprograma por el portal, que sigue exigiendo el futuro.
+        """
+        from core.utils import now_utc, within_max_ahead
 
         val = self.new_starts_at
         if val.tzinfo is None:
             val = val.replace(tzinfo=timezone.utc)
-        if val <= now_utc():
-            raise ValueError("La nueva fecha debe ser en el futuro.")
-        # Mismo tope que el auto-turno: sin el, 9999-12-31 desbordaba
-        # ``new_starts_at + duracion`` (500; revision de perf/f4-back).
-        from core.utils import within_max_ahead
-
-        if not within_max_ahead(val, PANEL_SELF_BOOKING_MAX_AHEAD):
+        if val < now_utc() - MAX_BOOKING_AHEAD or not within_max_ahead(
+            val, PANEL_SELF_BOOKING_MAX_AHEAD
+        ):
             raise ValueError("La fecha esta fuera del rango de reservas.")
         return self
 

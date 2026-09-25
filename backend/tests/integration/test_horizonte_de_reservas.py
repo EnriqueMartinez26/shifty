@@ -31,7 +31,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment
-from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
+from modules.notifications.tasks import (
+    EVENT_APPOINTMENT_CONFIRMED,
+    EVENT_APPOINTMENT_RESCHEDULED,
+)
 from modules.payments.model import OutboxMessage
 from tests.integration.test_caracterizacion_alta_publica import _reserva, _tienda
 from tests.integration.test_caracterizacion_autogestion import TELEFONO, _con_turno
@@ -233,6 +236,64 @@ async def test_reservar_desde_la_lista_de_espera_un_turno_que_ya_paso(
             await test_session.execute(
                 select(OutboxMessage).where(
                     OutboxMessage.event_type == EVENT_APPOINTMENT_CONFIRMED
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert avisos == []
+
+
+@pytest.mark.asyncio
+async def test_reprogramar_desde_el_panel_a_un_horario_que_ya_paso(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Decision del dueno (2026-09-25): la tienda puede reservar un horario
+    que ya paso, asi que tambien puede corregir un walk-in mal cargado
+    moviendolo a la hora real, hasta el piso contra el desborde (2 anios).
+    Sin mail de "tu turno cambio" para un inicio que ya paso."""
+    t = await _tienda(client, "horiz-panel-pasado")
+    alta = await client.post(
+        "/appointments/",
+        headers=auth_headers(t.token),
+        json={
+            "service_id": t.service,
+            "staff_id": t.staff,
+            "starts_at": t.slot.isoformat(),
+            "idempotency_key": "horiz-panel-pasado-alta",
+        },
+    )
+    assert alta.status_code == 201, alta.text
+    hace_tres_horas = (datetime.now(timezone.utc) - timedelta(hours=3)).replace(
+        second=0, microsecond=0
+    )
+
+    movido = await client.patch(
+        f"/appointments/{alta.json()['public_id']}/reschedule",
+        headers=auth_headers(t.token),
+        json={
+            "new_starts_at": hace_tres_horas.isoformat(),
+            "idempotency_key": "horiz-panel-pasado-rs-1",
+        },
+    )
+    assert movido.status_code == 200, movido.text
+
+    muy_viejo = await client.patch(
+        f"/appointments/{movido.json()['public_id']}/reschedule",
+        headers=auth_headers(t.token),
+        json={
+            "new_starts_at": _en(-731),
+            "idempotency_key": "horiz-panel-pasado-rs-2",
+        },
+    )
+    assert muy_viejo.status_code == 422, muy_viejo.text
+
+    avisos = (
+        (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == EVENT_APPOINTMENT_RESCHEDULED
                 )
             )
         )

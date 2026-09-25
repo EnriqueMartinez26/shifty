@@ -179,8 +179,10 @@ class AppointmentService:
 
         El dueno, la recepcion o el profesional cargan a alguien que llama o
         esta en el local. Decisiones del dueno (delegadas): sin antelacion
-        minima (el "no mas de 5 minutos en el pasado" lo valida el schema),
-        sin OTP ni campos extra, sin sena: nace CONFIRMED y sin cobro (el link
+        minima y con inicio posible en el pasado (la tienda carga un walk-in
+        despues, decision del 2026-09-25; el schema solo pone las cotas de
+        +-2 anios contra el desborde), sin OTP ni campos extra, sin sena:
+        nace CONFIRMED y sin cobro (el link
         de pago se genera despues, si hace falta, por el endpoint de siempre).
         Horario del profesional salvo ``allow_outside_schedule`` (el router lo
         reserva al admin); bloqueos, choques y buffer siempre.
@@ -693,7 +695,10 @@ class AppointmentService:
         # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
         # le corresponde y sin este mail no se enteraba por ningun canal. Va
         # por el outbox, en esta transaccion (F2-02).
-        self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
+        # Un horario que ya paso (la tienda corrige un walk-in, decision del
+        # dueno 2026-09-25) no lleva "tu turno cambio": el cliente ya estuvo.
+        if ensure_utc_aware(new_starts_at) >= now_utc():
+            self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
         await self._commit_before_network()
         try:
             await invalidate_availability(

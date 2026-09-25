@@ -489,7 +489,15 @@ class AppointmentBlockService:
         un bloqueo largo o un lote recurrente disparaba miles de comandos a
         Redis con la transaccion ya commiteada y el request colgado.
         """
-        if days_covered(ranges) > MAX_DAYS_INVALIDATED_ONE_BY_ONE:
+        try:
+            muchos = days_covered(ranges) > MAX_DAYS_INVALIDATED_ONE_BY_ONE
+        except OverflowError, ValueError:
+            # Una fila imposible ya guardada (anio 0001 o 9999, de antes de
+            # las cotas de fechas) no tiene dia local representable: se
+            # invalida la tienda entera en vez de dar 500 despues del commit
+            # (revision de perf/f4-back, mismo criterio que 8250b86).
+            muchos = True
+        if muchos:
             await invalidate_store_availability(self.cache, self.actor.store_id)
             return
         for starts_at, ends_at in ranges:
