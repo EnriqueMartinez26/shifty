@@ -395,6 +395,31 @@ async def _avisar_al_dueno(
         )
 
 
+def _sync_appointment(
+    db: AsyncSession, appointment: Appointment, payment: Payment, payment_status: str
+) -> None:
+    """Lleva el turno (ya lockeado) al estado que corresponde al pago.
+
+    Un ``approved`` que llega con el turno ``pending_payment`` ya empezado lo
+    vence en vez de confirmarlo. Si el pago solto el turno (un rechazo pasa
+    un ``pending_payment`` a ``expired``), su cobro vivo se vence con el
+    camino compartido, turno y pago ya lockeados (revision de perf/f4-pay,
+    2026-09-25). Antes quedaba ``rejected`` con el link vivo en MP.
+    """
+    appointment_start = appointment.starts_at
+    if appointment_start.tzinfo is None:
+        appointment_start = appointment_start.replace(tzinfo=timezone.utc)
+    if (
+        payment_status == PaymentStatus.APPROVED.value
+        and appointment.status == AppointmentStatus.PENDING_PAYMENT.value
+        and appointment_start <= datetime.now(timezone.utc)
+    ):
+        appointment.apply_status_transition(AppointmentStatus.EXPIRED)
+    sync_appointment_with_payment(appointment, payment.status)
+    if appointment.status in RELEASED_APPOINTMENT_STATUSES:
+        expire_live_charge(db, payment, reason="appointment_released_by_payment")
+
+
 async def apply_mercadopago_webhook_payload(
     db: AsyncSession,
     *,
@@ -459,22 +484,7 @@ async def apply_mercadopago_webhook_payload(
     if external_payment_id and (aplicada or not payment.external_payment_id):
         payment.external_payment_id = external_payment_id
     if appointment:
-        appointment_start = appointment.starts_at
-        if appointment_start.tzinfo is None:
-            appointment_start = appointment_start.replace(tzinfo=timezone.utc)
-        if (
-            payment_status == PaymentStatus.APPROVED.value
-            and appointment.status == AppointmentStatus.PENDING_PAYMENT.value
-            and appointment_start <= datetime.now(timezone.utc)
-        ):
-            appointment.apply_status_transition(AppointmentStatus.EXPIRED)
-        sync_appointment_with_payment(appointment, payment.status)
-        # El pago solto el turno (un rechazo pasa un ``pending_payment`` a
-        # ``expired``): su cobro vivo se vence con el
-        # camino compartido, turno y pago ya lockeados (revision de perf/f4-pay,
-        # 2026-09-25). Antes quedaba ``rejected`` con el link vivo en MP.
-        if appointment.status in RELEASED_APPOINTMENT_STATUSES:
-            expire_live_charge(db, payment, reason="appointment_released_by_payment")
+        _sync_appointment(db, appointment, payment, payment_status)
     await _avisar_al_dueno(
         db,
         store_id=store_id,

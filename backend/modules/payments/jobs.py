@@ -1496,6 +1496,12 @@ def _expired_holds_query(
     fuente): desde la revision de perf/f4-pay (2026-09-25) tambien
     ``rejected``. Antes solo ``pending``: un turno pendiente cuyo link se
     rechazo no se liberaba nunca y el cliente tampoco podia cancelarlo.
+
+    El job los vence por el grafo SIN publicar ``payment.preference.expire``:
+    el link de MP se creo con ``expiration_date_to`` = la retencion
+    (``prepare_mercadopago_preference``), asi que ya vencio solo; un PUT por
+    retencion vencida solo sumaria carga a MP. Si el cobro ya estaba
+    acreditado, el grafo no lo degrada.
     """
     return (
         select(Appointment, Payment)
@@ -1667,12 +1673,8 @@ async def _expire_unpaid_appointments(
             continue
         appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         if payment:
-            # Por el grafo, no por asignacion directa: si el cobro ya estaba
-            # acreditado no puede degradarse a expirado. ``pending`` y
-            # ``rejected`` pasan a ``expired``. Sin ``payment.preference.expire``:
-            # el link de MP se creo con ``expiration_date_to`` = la retencion
-            # (``prepare_mercadopago_preference``), asi que ya vencio solo; un
-            # PUT por retencion vencida solo sumaria carga a MP.
+            # Por el grafo (pending/rejected -> expired); sin vencer el link:
+            # ver ``_expired_holds_query``.
             stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
         publish_slot_released(
             db,

@@ -674,31 +674,8 @@ class AppointmentService:
         El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
         el schema AppointmentReschedule.
         """
-        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
-        original = await self.uow.appointments.get_by_public_id(
-            public_id, actor.store_id
-        )
-        if not original:
-            raise AppointmentNotFoundException(public_id)
-        # Un turno terminal no se reprograma: volvia a la vida (revision de
-        # perf/f4-pay, 2026-09-25).
-        reject_inactive(original)
-        # El cobro se lockea pegado al turno (regla 7) y antes que el
-        # profesional: se vence recien en el swap, con el horario validado.
-        payment = await self.uow.payments.get_by_appointment_locked(
-            original.id, actor.store_id
-        )
-
-        service = await self.uow.appointments.get_service_by_id(
-            original.service_id, actor.store_id
-        )
-        if not service:
-            raise ResourceNotFoundException("Servicio", str(original.service_id))
-        staff = await self.uow.appointments.get_staff_by_id(
-            original.staff_id, actor.store_id
-        )
-        if not staff:
-            raise ResourceNotFoundException("Profesional", str(original.staff_id))
+        original, payment = await self._lock_reschedulable(public_id, actor)
+        service, staff = await self._service_and_staff_of(original, actor)
 
         ends_at = new_starts_at + timedelta(minutes=service.duration_minutes)
         await self._lock_and_validate_slot(
@@ -729,6 +706,44 @@ class AppointmentService:
         finally:
             await _apply_tenant_context(self.uow.session)
         return new_appointment, service, staff
+
+    async def _lock_reschedulable(
+        self, public_id: str, actor: User
+    ) -> tuple[Appointment, Payment | None]:
+        """Turno a reprogramar, lockeado, activo, y su cobro lockeado despues.
+
+        Un turno terminal no se reprograma: volvia a la vida (revision de
+        perf/f4-pay, 2026-09-25). El cobro se lockea pegado al turno (regla 7)
+        y antes que el profesional; se vence recien en el swap, con el
+        horario ya validado.
+        """
+        await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
+        original = await self.uow.appointments.get_by_public_id(
+            public_id, actor.store_id
+        )
+        if not original:
+            raise AppointmentNotFoundException(public_id)
+        reject_inactive(original)
+        payment = await self.uow.payments.get_by_appointment_locked(
+            original.id, actor.store_id
+        )
+        return original, payment
+
+    async def _service_and_staff_of(
+        self, original: Appointment, actor: User
+    ) -> tuple[Service, Staff]:
+        """Servicio y profesional del turno, acotados a la tienda (404 si no)."""
+        service = await self.uow.appointments.get_service_by_id(
+            original.service_id, actor.store_id
+        )
+        if not service:
+            raise ResourceNotFoundException("Servicio", str(original.service_id))
+        staff = await self.uow.appointments.get_staff_by_id(
+            original.staff_id, actor.store_id
+        )
+        if not staff:
+            raise ResourceNotFoundException("Profesional", str(original.staff_id))
+        return service, staff
 
     async def _swap_for_new_slot(
         self,
