@@ -693,7 +693,10 @@ class AppointmentService:
         # despues de starts_at-24h, asi que el recordatorio de 24 horas ya no
         # le corresponde y sin este mail no se enteraba por ningun canal. Va
         # por el outbox, en esta transaccion (F2-02).
-        self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
+        # Un horario que ya paso (la tienda corrige un walk-in, decision del
+        # dueno 2026-09-25) no lleva "tu turno cambio": el cliente ya estuvo.
+        if ensure_utc_aware(new_starts_at) >= now_utc():
+            self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
         await self._commit_before_network()
         try:
             await invalidate_availability(
