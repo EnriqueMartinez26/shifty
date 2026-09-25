@@ -31,7 +31,7 @@ class AppointmentCreate(BaseModel):
     - Con ``client_name`` + ``client_phone`` (FF-04, 2026-09-24, aditivo): turno
       para ese cliente de la tienda. ``staff_id`` opcional (se elige uno que
       atienda), ``starts_at`` desde hace 2 anios (la tienda puede cargar un
-      horario que ya paso: decision del dueno, 2026-09-25) hasta dentro de 2
+      horario que ya paso: decision de Mateo, 2026-09-25) hasta dentro de 2
       anios, ``allow_outside_schedule`` solo para el admin.
     """
 
@@ -178,7 +178,7 @@ class AppointmentReschedule(BaseModel):
     def new_date_within_range(self) -> "AppointmentReschedule":
         """Entre hace 2 anios y dentro de 2 anios.
 
-        Decision del dueno (2026-09-25): la TIENDA puede reservar un horario
+        Decision de Mateo (2026-09-25): la TIENDA puede reservar un horario
         que ya paso, asi que tambien puede corregir un walk-in mal cargado
         moviendolo a la hora real. Solo quedan las cotas contra el desborde:
         sin ellas 9999-12-31 desbordaba ``new_starts_at + duracion`` (500).

@@ -28,10 +28,16 @@ class UserModel(Base):
     # El email se guarda normalizado (minusculas) y ck_users_email_lower lo
     # exige en la base (F1-12, migraciones c4e6a8b0d2f1 + d5f7b9c1e3a2): el
     # login lo busca por IGUALDAD sobre la columna, que bajo RLS usa
-    # ix_users_email (lower() no es leakproof y recorria la tabla entera). Con
-    # el CHECK, la columna unica ya es unica sin importar mayusculas; el
-    # indice funcional uq_users_email_lower queda como red previa hasta que un
-    # release posterior lo retire (expand/contract).
+    # ix_users_email (lower() no es leakproof y recorria la tabla entera).
+    #
+    # PV-01 (2026-09-25, decision de Mateo): el email de un CLIENTE es unico
+    # por tienda (uq_users_client_email_per_store); el de quien inicia sesion
+    # (personal, admins, superadmin) sigue unico en toda la plataforma
+    # (uq_users_email_non_client). Un cliente y un profesional pueden
+    # compartir email, asi que toda busqueda de login filtra role <> 'client'
+    # y nunca ve dos filas. Con el CHECK de minusculas los dos indices valen
+    # sin importar mayusculas: el funcional uq_users_email_lower (global) se
+    # retiro en la misma migracion, 4b6d8f0a2c13.
     __table_args__ = (
         Index(
             "uq_users_client_phone_per_store",
@@ -41,14 +47,28 @@ class UserModel(Base):
             postgresql_where=text("role = 'client' AND phone IS NOT NULL"),
             sqlite_where=text("role = 'client' AND phone IS NOT NULL"),
         ),
-        Index("uq_users_email_lower", text("lower(email)"), unique=True),
+        Index(
+            "uq_users_client_email_per_store",
+            "store_id",
+            "email",
+            unique=True,
+            postgresql_where=text("role = 'client'"),
+            sqlite_where=text("role = 'client'"),
+        ),
+        Index(
+            "uq_users_email_non_client",
+            "email",
+            unique=True,
+            postgresql_where=text("role <> 'client'"),
+            sqlite_where=text("role <> 'client'"),
+        ),
         CheckConstraint("email = lower(email)", name="ck_users_email_lower"),
     )
 
     id: Mapped[str] = mapped_column(
         String, primary_key=True, default=lambda: str(ulid.ULID())
     )
-    email: Mapped[str] = mapped_column(String(255), index=True, unique=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)

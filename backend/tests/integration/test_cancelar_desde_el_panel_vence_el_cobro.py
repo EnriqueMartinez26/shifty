@@ -1,6 +1,6 @@
 """El personal cancela un turno con cobro vivo y la cancelacion vence el cobro.
 
-Decision del dueno (2026-09-25, D2): "la idea es simplificarle al
+Decision de Mateo (2026-09-25, D2): "la idea es simplificarle al
 profesional". Antes, cancelar desde el panel un turno ``pending_payment``
 respondia 409 ``PAYMENT_APPOINTMENT_REQUIRES_RELEASE`` y exigia la liberacion,
 que es solo del admin: el profesional dependia del dueno. Y un turno

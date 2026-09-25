@@ -8,9 +8,11 @@ chequear colision). Desde ese momento ``POST /auth/login`` con
 victima. Regla 16 de CLAUDE.md.
 
 La garantia determinista es la base: ``CHECK (email = lower(email))``
-(``ck_users_email_lower``, F1-12) rechaza un email sin normalizar y la columna
-unica hace el resto; el indice funcional ``uq_users_email_lower`` (migracion
-``d2f4a6b8c0e2``) queda como red previa. La normalizacion en
+(``ck_users_email_lower``, F1-12) rechaza un email sin normalizar y los indices
+unicos hacen el resto: desde PV-01 (2026-09-25, migracion ``4b6d8f0a2c13``)
+``uq_users_email_non_client`` para las cuentas que inician sesion (global) y
+``uq_users_client_email_per_store`` para los clientes (por tienda); el
+funcional global ``uq_users_email_lower`` se retiro ahi. La normalizacion en
 ``UserRepository.create`` es el camino feliz.
 """
 

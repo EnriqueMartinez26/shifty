@@ -160,6 +160,28 @@ def assert_can_change_access(
         )
 
 
+def assert_global_admin_keeps_login_role(target: User, role: object) -> None:
+    """Un superadmin no pasa a ``role = client`` (409).
+
+    PV-01 (2026-09-25): el login y el olvido de clave excluyen a los clientes
+    (``auth.service.login_account_email``), porque el email de un cliente se
+    repite entre tiendas. Un superadmin con ``role = client`` quedaba afuera
+    del login sin pasar por la guarda de la regla 14 (nunca el ultimo
+    superadmin activo). Primero se le quita el flag global
+    (``/superadmin/users/{id}/global-admin``, que si aplica la regla 14) y
+    despues se le cambia el rol.
+    """
+    if not bool(getattr(target, "is_global_admin", False)):
+        return
+    if _valor(role) != ROLE_CLIENT:
+        return
+    raise AppException(
+        message="Esta cuenta no puede pasar a cliente",
+        http_status=status.HTTP_409_CONFLICT,
+        error_code="GLOBAL_ADMIN_ROLE_LOCKED",
+    )
+
+
 def require_roles(user: User, allowed_roles: Iterable[str], detail: str) -> None:
     if not has_any_role(user, allowed_roles):
         raise AppException(

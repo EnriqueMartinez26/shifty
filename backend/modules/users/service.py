@@ -47,7 +47,8 @@ class UserService:
         except IntegrityError:
             # Misma decision que el alta (AUD2-B3-10): rollback y re-raise. El
             # 400 anterior tenia mensaje neutro pero codigo equivocado; chocar
-            # con uq_users_client_phone_per_store o con uq_users_email_lower es
+            # con uq_users_client_phone_per_store o con el email unico
+            # (uq_users_client_email_per_store / uq_users_email_non_client) es
             # un conflicto, no un error de la solicitud, y el front no lo podia
             # distinguir de una validacion.
             await self.db.rollback()

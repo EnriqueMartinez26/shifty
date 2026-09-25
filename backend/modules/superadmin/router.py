@@ -1,6 +1,7 @@
 from typing import Annotated, Literal
 
 from fastapi import Depends, Path, Query, Response, status
+from core.roles import assert_global_admin_keeps_login_role
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -317,6 +318,8 @@ async def update_user(
     user = await repo.users.get_user(user_public_id)
     if not user:
         raise UserNotFoundException(identifier=user_public_id)
+    # PV-01: un superadmin con rol de cliente quedaba afuera del login.
+    assert_global_admin_keeps_login_role(user, data.role)
     try:
         updated = await repo.users.update_user(
             user, data.model_dump(exclude_unset=True), actor

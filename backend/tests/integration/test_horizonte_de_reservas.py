@@ -16,7 +16,7 @@ cortan lo absurdo:
   anios hacia adelante (``MAX_BOOKING_AHEAD``). Al cliente lo sigue acotando
   la grilla de ``/public/availability`` (120 dias).
 - Reservar desde la lista de espera: entre hace 2 anios y dentro de 2 anios.
-  Si se rechazan reservas en el pasado es decision del dueno.
+  La tienda puede reservar en el pasado (decision de Mateo, 2026-09-25).
 """
 
 from __future__ import annotations
@@ -214,7 +214,7 @@ async def test_reservar_desde_la_lista_de_espera_un_turno_que_ya_paso(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
     """El dueno carga despues a quien ya atendio (o el horario por defecto,
-    las 10:00, ya paso): sin piso en el pasado (decision del dueno,
+    las 10:00, ya paso): sin piso en el pasado (decision de Mateo,
     2026-09-25: la tienda puede, el cliente final no). Sin mail de "turno
     confirmado" para un turno que ya empezo."""
     token, entrada = await _lista_de_espera(client, "horiz-espera-pasado")
@@ -249,7 +249,7 @@ async def test_reservar_desde_la_lista_de_espera_un_turno_que_ya_paso(
 async def test_reprogramar_desde_el_panel_a_un_horario_que_ya_paso(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    """Decision del dueno (2026-09-25): la tienda puede reservar un horario
+    """Decision de Mateo (2026-09-25): la tienda puede reservar un horario
     que ya paso, asi que tambien puede corregir un walk-in mal cargado
     moviendolo a la hora real, hasta el piso contra el desborde (2 anios).
     Sin mail de "tu turno cambio" para un inicio que ya paso."""

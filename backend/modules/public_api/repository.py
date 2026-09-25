@@ -233,6 +233,13 @@ class PublicRepository:
         unico que lo guardaba crudo: la busqueda exacta no encontraba la fila
         escrita con otra capitalizacion y el INSERT chocaba contra el indice
         funcional ``uq_users_email_lower`` (AUD2-B3-04, 2026-09-20).
+
+        PV-01 (2026-09-25, decision de Mateo): el email de un cliente es unico
+        POR TIENDA (``uq_users_client_email_per_store``). El mismo email en
+        otra tienda es otra ficha y la reserva entra; antes chocaba con la
+        unicidad global y el 409 decia a cualquiera si ese email existia en
+        Shifty. Dentro de la tienda, un telefono nuevo con el email de otro
+        cliente sigue siendo 409 neutro: no se adopta la ficha por email.
         """
         email = normalize_email(email) if email else None
         # Dos clientes con el mismo telefono (alta vieja sin unicidad) rompian

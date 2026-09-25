@@ -207,7 +207,7 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}
       # Dos schedulers de Erlang (uno por nucleo del HOST por defecto): baja la
       # memoria base del broker. Con 16 nucleos, un broker recien arrancado ya
-      # rozaba la alarma de 180 MiB (decision del dueno, 2026-09-24).
+      # rozaba la alarma de 180 MiB (decision de Mateo, 2026-09-24).
       RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
     ports:
       - "127.0.0.1:5672:5672"
@@ -228,7 +228,7 @@ services:
     deploy:
       resources:
         limits:
-          # 280 MiB de alarma + margen para Erlang (decision del dueno,
+          # 280 MiB de alarma + margen para Erlang (decision de Mateo,
           # 2026-09-24; reemplaza los 256M/180MiB de la decision 6).
           memory: 384M
 

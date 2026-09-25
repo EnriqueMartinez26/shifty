@@ -128,7 +128,7 @@ def test_con_los_secretos_el_drill_sigue() -> None:
 
 def test_el_drill_crea_el_rol_de_la_app_en_el_destino() -> None:
     """Drill 2026-09-24: sin shifty_app en el destino, pg_restore aborta en el
-    primer GRANT y restore_backup.py se niega. Decision del dueno: el drill
+    primer GRANT y restore_backup.py se niega. Decision de Mateo: el drill
     mensual se basta solo, crea el rol con APP_DB_PASSWORD."""
     paso = next(
         p for p in _pasos_del_drill() if "backup_restore_drill.py" in p.get("run", "")

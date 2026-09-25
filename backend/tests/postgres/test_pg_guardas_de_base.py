@@ -11,8 +11,10 @@ triggers ni constraints) para simular un bug o un acceso directo a la base:
 - La base rechaza un segundo usuario cuyo email difiera del existente solo
   en mayusculas, aunque el camino de escritura se olvide de normalizar
   (auditoria B3-01, 2026-09-16). Desde F1-12 (2026-09-24) lo frena primero
-  ``ck_users_email_lower`` (el email se guarda en minusculas); el indice
-  funcional ``uq_users_email_lower`` quedo como red previa.
+  ``ck_users_email_lower`` (el email se guarda en minusculas). El indice
+  funcional ``uq_users_email_lower`` se retiro con PV-01 (2026-09-25,
+  ``4b6d8f0a2c13``): la unicidad la llevan ``uq_users_email_non_client``
+  (global) y ``uq_users_client_email_per_store`` (por tienda).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -187,8 +189,8 @@ async def test_la_base_frena_la_colision_de_mayusculas_del_email(
     # junto a "colision@x.com" y el login de ambos pasaba a 500. La columna
     # email es unica case-sensitive, asi que esa segunda fila entraba. Hoy la
     # rechaza ck_users_email_lower (F1-12: el email se guarda en minusculas),
-    # antes que el indice funcional uq_users_email_lower, sin importar por
-    # donde se escriba.
+    # sin importar por donde se escriba. El funcional uq_users_email_lower ya
+    # no existe (PV-01, 4b6d8f0a2c13).
     await seed_store_and_admin(app_sessions, slug="email-idx", email="dueno@demo.com")
 
     with pytest.raises(IntegrityError, match="ck_users_email_lower"):

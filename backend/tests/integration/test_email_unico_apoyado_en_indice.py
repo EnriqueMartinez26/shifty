@@ -10,9 +10,12 @@ de staff y la edicion de staff hacian "SELECT lower(email) y despues INSERT":
    (500) en los tres sitios.
 
 La garantia determinista es la base: el email se guarda en minusculas
-(``ck_users_email_lower``, F1-12) y la columna es unica, asi que dos
-capitalizaciones son la misma fila; el indice funcional ``uq_users_email_lower``
-(B3-01, migracion ``d2f4a6b8c0e2``) sigue como red previa. El pre-chequeo queda
+(``ck_users_email_lower``, F1-12), asi que dos capitalizaciones son el mismo
+valor, y desde PV-01 (2026-09-25, migracion ``4b6d8f0a2c13``) lo hacen unico
+``uq_users_email_non_client`` (cuentas que inician sesion, global) y
+``uq_users_client_email_per_store`` (clientes, por tienda). El funcional
+global ``uq_users_email_lower`` (B3-01, ``d2f4a6b8c0e2``) se retiro en esa
+migracion. El pre-chequeo queda
 solo como mensaje amable (regla 16), busca por IGUALDAD sobre la columna (bajo
 RLS usa ``ix_users_email``; ``lower()`` recorria la tabla) y la carrera termina
 en la base -> ``IntegrityError`` -> 409.

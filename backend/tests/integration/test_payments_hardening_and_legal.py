@@ -667,7 +667,7 @@ async def test_reschedule_of_an_appointment_awaiting_payment_is_refused(
 ) -> None:
     """Un turno con sena requerida pendiente no se reprograma desde el panel.
 
-    Decision del dueno 2026-09-25: opcion A. 409
+    Decision de Mateo 2026-09-25: opcion A. 409
     ``DEPOSIT_PENDING_RESCHEDULE_DENIED`` sin tocar el turno ni el cobro: la
     sena no se pierde (la reprogramacion interina lo pasaba a ``pending`` sin
     cobro). Lo que importaba antes sigue: ningun turno cancelado queda con la

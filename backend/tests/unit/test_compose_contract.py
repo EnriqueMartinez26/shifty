@@ -736,7 +736,7 @@ def test_la_vista_fusionada_distingue_la_lista_vacia_del_reset() -> None:
 
 # --- La API escala por replicas de un proceso (F0-04, plan de rendimiento) ----
 #
-# Decision del dueno (2026-09-24): tres replicas de UN proceso de uvicorn, no
+# Decision de Mateo (2026-09-24): tres replicas de UN proceso de uvicorn, no
 # `--workers 3`. Con varios workers dentro de un contenedor, uno que muere en
 # loop queda escondido detras de un contenedor "sano" (regla 21). Con replicas,
 # cada proceso tiene su healthcheck y su reinicio. `container_name` fija un
@@ -1174,7 +1174,7 @@ def test_rabbitmq_frena_a_los_publicadores_antes_del_oom() -> None:
         assert 280 < _megas(_limite(rabbit))
         # Con 180 MiB un broker recien arrancado ya levantaba la alarma en un
         # host de 16 nucleos (~170 MB propios); dos schedulers de Erlang
-        # bajan la memoria base (decision del dueno, 2026-09-24).
+        # bajan la memoria base (decision de Mateo, 2026-09-24).
         env = _env_items(rabbit)
         assert env.get("RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS") == "+S 2:2", (vista, env)
         # El healthcheck no puede depender del plugin de management.

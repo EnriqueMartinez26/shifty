@@ -365,7 +365,7 @@ class AppointmentService:
     async def cancel(self, *, public_id: str, actor: User) -> Appointment:
         """Cancela un turno verificando la transición de estado.
 
-        Decision del dueno (2026-09-25, D2): el personal que puede cancelar
+        Decision de Mateo (2026-09-25, D2): el personal que puede cancelar
         (admin, recepcion, profesional) cancela tambien un turno con cobro
         vivo, sin depender de la liberacion del admin. La cancelacion hace lo
         mismo que ``release_pending`` con el cobro, en ESTA transaccion: lo
@@ -672,13 +672,13 @@ class AppointmentService:
           4. Todo en una única transacción atómica, con el aviso en el outbox;
              invalidación después.
 
-        Cobro vivo (decision del dueno 2026-09-25, misma regla que D2 para
+        Cobro vivo (decision de Mateo 2026-09-25, misma regla que D2 para
         cancelar): el link del panel de un turno confirmado se vence en esta
         transaccion con ``expire_live_charge`` (el link de MP lo vence el
         outbox, sin lock) en vez de dejarlo apuntando a un turno cancelado; el
         turno nuevo nace sin cobro. Un ``pending_payment`` (sena REQUERIDA
         pendiente) no se reprograma: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
-        bajo el lock del turno y antes de tocar nada (decision del dueno
+        bajo el lock del turno y antes de tocar nada (decision de Mateo
         2026-09-25: opcion A).
 
         El dueno reprograma sin la antelacion minima; el "no pasado" lo valida
@@ -735,7 +735,7 @@ class AppointmentService:
             raise AppointmentNotFoundException(public_id)
         reject_inactive(original)
         # Antes de lockear el cobro y de cualquier mutacion, evento o
-        # invalidacion (decision del dueno 2026-09-25: opcion A).
+        # invalidacion (decision de Mateo 2026-09-25: opcion A).
         reject_reschedule_with_pending_deposit(original)
         payment = await self.uow.payments.get_by_appointment_locked(
             original.id, actor.store_id
@@ -1093,7 +1093,7 @@ def _rescheduled_copy(
     # sigue confirmado sin retencion y un ``pending`` sigue ``pending``. Un
     # ``pending_payment`` no llega aca: su sena requerida no se pierde, se
     # rechaza antes con 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED``
-    # (``reject_reschedule_with_pending_deposit``, decision del dueno
+    # (``reject_reschedule_with_pending_deposit``, decision de Mateo
     # 2026-09-25: opcion A). Si el original tenia retencion, el nuevo NO la
     # conserva: nace con ``expires_at = new_starts_at`` (vence al inicio si
     # nadie lo confirma); el alta del panel no retiene y moverlo tampoco.

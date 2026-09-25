@@ -265,7 +265,7 @@ class TestAppointmentEndpoints:
         Caso: Intentar reprogramar a mas de 2 anios en el pasado.
         Esperado: 422 por validación Pydantic en AppointmentReschedule.
 
-        Decision del dueno (2026-09-25): la tienda puede reprogramar a un
+        Decision de Mateo (2026-09-25): la tienda puede reprogramar a un
         horario que ya paso (corregir un walk-in); solo queda el piso contra
         el desborde. Antes este test pedia 422 para cualquier pasado.
         """

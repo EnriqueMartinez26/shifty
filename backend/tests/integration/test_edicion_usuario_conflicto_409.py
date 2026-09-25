@@ -11,6 +11,10 @@ El mensaje era neutro, asi que no afirmaba una causa falsa, pero el CODIGO si:
 chocar con ``uq_users_client_phone_per_store`` o con ``uq_users_email_lower`` es
 un conflicto (409), no un error de la solicitud, y el front no podia
 distinguirlo de una validacion. Misma decision que el alta, mismo contrato.
+
+2026-09-25 (PV-01): ``uq_users_email_lower`` se retiro; el email choca con
+``uq_users_email_non_client`` (cuentas que inician sesion, global) o con
+``uq_users_client_email_per_store`` (clientes, por tienda). Mismo 409.
 """
 
 from typing import Any, cast

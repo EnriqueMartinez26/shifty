@@ -1,6 +1,6 @@
 """Un link de pago vivo deja el turno "con pago en curso" para el cliente.
 
-Decision del dueno (2026-09-25, D1). Sintoma: el dueno genera un link de pago
+Decision de Mateo (2026-09-25, D1). Sintoma: el dueno genera un link de pago
 desde el panel (``POST /payments/preferences/{id}``) sobre un turno
 CONFIRMADO; el turno sigue confirmado y el cliente podia cancelarlo o
 reprogramarlo desde "Mis turnos" con el link de Mercado Pago vivo: podia

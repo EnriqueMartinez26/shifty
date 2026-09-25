@@ -9,7 +9,7 @@ Desde 2026-09-25 el panel ya no se frena al cancelar: cancelar (y
 reprogramar un turno con un link del panel) vence el cobro en la misma
 transaccion (``payments.service.expire_live_charge``, D2). Reprogramar un
 ``pending_payment`` si se frena: ``reject_reschedule_with_pending_deposit``
-(decision del dueno 2026-09-25: opcion A).
+(decision de Mateo 2026-09-25: opcion A).
 La guarda que frenaba al panel (``reject_cancellation_while_awaiting_payment``)
 se borro con su ultimo llamador; lo que protegia (que el link quedara vivo
 sobre un turno cancelado) lo sostiene ``expire_live_charge`` y lo prueban
@@ -31,7 +31,7 @@ def awaits_payment(appointment: Appointment, *, live_payment: bool) -> bool:
 
     Unica condicion de la regla: el turno espera su sena (``pending_payment``)
     O tiene un ``Payment`` vivo (``live_payment``: un link generado desde el
-    panel sobre un turno confirmado, decision del dueno D1, 2026-09-25). La
+    panel sobre un turno confirmado, decision de Mateo D1, 2026-09-25). La
     guarda es pura: ``live_payment`` lo calcula el repositorio
     (``payments.repository.live_charge_of``) antes de llamarla.
     """
@@ -85,7 +85,7 @@ def reject_inactive(appointment: Appointment) -> None:
 def reject_reschedule_with_pending_deposit(appointment: Appointment) -> None:
     """Un turno con sena REQUERIDA pendiente no se reprograma desde el panel.
 
-    Decision del dueno 2026-09-25: opcion A. Moverlo como ``pending`` sin
+    Decision de Mateo 2026-09-25: opcion A. Moverlo como ``pending`` sin
     cobro (lo que se hizo mientras se decidia) perdia la sena requerida. El
     personal cobra la sena y despues lo mueve, o lo cancela (D2 vence el
     cobro). Solo ``pending_payment``: el link del panel de un turno

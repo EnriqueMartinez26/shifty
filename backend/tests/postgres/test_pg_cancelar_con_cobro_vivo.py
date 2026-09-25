@@ -1,6 +1,6 @@
 """Rafaga: el personal cancela un turno con cobro vivo mientras llega el pago.
 
-Decision del dueno (2026-09-25, D2): cancelar desde el panel un turno con
+Decision de Mateo (2026-09-25, D2): cancelar desde el panel un turno con
 cobro vivo vence el cobro en la misma transaccion. Esto es lo que SQLite no
 puede probar: N cancelaciones del profesional y el webhook de Mercado Pago
 aprobando el MISMO turno a la vez, con una sesion por request.
@@ -1229,7 +1229,7 @@ async def test_pago_del_link_retirado_contra_pago_del_link_vigente(
 
 
 # ---------------------------------------------------------------------------
-# Reprogramar un turno con sena pendiente (decision del dueno 2026-09-25:
+# Reprogramar un turno con sena pendiente (decision de Mateo 2026-09-25:
 # opcion A)
 # ---------------------------------------------------------------------------
 

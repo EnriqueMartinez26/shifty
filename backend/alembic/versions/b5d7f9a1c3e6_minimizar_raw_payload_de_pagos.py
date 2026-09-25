@@ -33,7 +33,7 @@ ningun lector usaba esos datos). Si hace falta el original, esta en el
 recurso de MP (``GET /v1/payments/{id}``) o en un backup.
 
 Revision ID: b5d7f9a1c3e6
-Revises: a3c5e7f9b1d2
+Revises: 4b6d8f0a2c13
 Create Date: 2026-09-25
 """
 
@@ -45,7 +45,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b5d7f9a1c3e6"
-down_revision: Union[str, Sequence[str], None] = "a3c5e7f9b1d2"
+down_revision: Union[str, Sequence[str], None] = "4b6d8f0a2c13"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

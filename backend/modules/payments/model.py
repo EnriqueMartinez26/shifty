@@ -44,7 +44,7 @@ ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
 )
 
 # Cobro VIVO: el cobro del turno sigue abierto y su link se puede pagar (o
-# el panel lo puede volver a generar sin tocar el turno). Decision del dueno
+# el panel lo puede volver a generar sin tocar el turno). Decision de Mateo
 # (2026-09-25, D1): un turno con cobro vivo no lo cancela ni lo reprograma el
 # cliente, y cancelarlo desde el panel vence el cobro en la misma transaccion.
 # Unica fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL

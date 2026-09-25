@@ -185,7 +185,7 @@ async def test_el_admin_reserva_para_un_cliente_nuevo_confirmado_y_sin_cobro(
 async def test_sin_antelacion_minima_y_con_turnos_ya_pasados(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    """Decision del dueno (2026-09-25): la TIENDA puede cargar un horario que
+    """Decision de Mateo (2026-09-25): la TIENDA puede cargar un horario que
     ya paso (un walk-in que se registra despues), hasta el piso contra el
     desborde (2 anios). Sin mail de "turno confirmado" para un turno que ya
     empezo; el cliente final nunca reserva en el pasado."""
@@ -622,13 +622,15 @@ async def test_inicio_lejano_422_y_no_500(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_email_de_otra_tienda_409_neutro(
+async def test_email_de_otra_tienda_entra_y_el_de_la_misma_tienda_es_409_neutro(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
-    """El email es unico GLOBAL (CLAUDE.md §5): un cliente nuevo con el email
-    de un usuario de otra tienda choca con el indice unico. Tiene que ser el
-    409 neutro de siempre, como en el portal, sin nombrar a la otra tienda
-    ni confirmar que el email existe."""
+    """PV-01 (2026-09-25, decision de Mateo): el email de un cliente es unico
+    POR TIENDA. Hasta ese dia era unico global y un cliente nuevo con el email
+    de un usuario de otra tienda chocaba (409): el mismo cliente no podia
+    reservar en dos tiendas y el 409 confirmaba que el email existia. Ahora
+    entra. Dentro de la tienda, un telefono nuevo con el email de otro cliente
+    sigue siendo el 409 neutro de siempre, sin nombrar nada."""
     ajena = await _agenda(client, "ff04-email-ajena")
     agenda = await _agenda(client, "ff04-email")
     primera = await _reservar(
@@ -639,19 +641,28 @@ async def test_email_de_otra_tienda_409_neutro(
     )
     assert primera.status_code == 201, primera.text
 
-    res = await _reservar(
+    otra_tienda = await _reservar(
         client,
         agenda,
         client_phone="+5491155550707",
         client_email="Compartido@Example.com",
         idempotency_key="ff04-email-1",
     )
+    assert otra_tienda.status_code == 201, otra_tienda.text
 
+    res = await _reservar(
+        client,
+        agenda,
+        client_phone="+5491155550708",
+        client_email="compartido@example.com",
+        starts_at=(agenda.slot + timedelta(hours=1)).isoformat(),
+        idempotency_key="ff04-email-2",
+    )
     assert res.status_code == 409, res.text
     cuerpo = res.json()
     assert cuerpo["error_code"] == "RESOURCE_CONFLICT"
     texto = res.text.lower()
-    for dato in ("ff04-email-ajena", "tienda ff04", "compartido", ajena.store.lower()):
+    for dato in ("ff04-email", "tienda ff04", "compartido", agenda.store.lower()):
         assert dato not in texto, (dato, res.text)
     turnos = (await test_session.execute(select(Appointment))).scalars().all()
-    assert len(turnos) == 1
+    assert len(turnos) == 2
