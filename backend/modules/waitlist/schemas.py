@@ -6,7 +6,12 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.utils import now_utc, within_booking_horizon
+from core.utils import (
+    MAX_BOOKING_AHEAD,
+    now_utc,
+    within_booking_horizon,
+    within_max_ahead,
+)
 from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
 
 
@@ -100,10 +105,11 @@ class WaitlistEntryResponse(BaseModel):
 class WaitlistBookRequest(BaseModel):
     """El dueno reserva a mano para alguien de la lista (sin antelacion minima).
 
-    Mismas cotas que el alta del panel para un cliente (FF-04): hasta 5
-    minutos en el pasado y el horizonte del portal. Sin ellas un 9999-12-31
-    o un 0001-01-01 desbordaban ``starts_at + duracion`` (500; revision de
-    perf/f4-back).
+    Cota ancha, solo contra el desborde: entre hace 2 anios y dentro de 2
+    anios (``MAX_BOOKING_AHEAD``). Sin ella un 9999-12-31 o un 0001-01-01
+    desbordaban ``starts_at + duracion`` (500; revision de perf/f4-back). No
+    hay piso en "ahora": el dueno carga despues a quien ya atendio, y
+    rechazar reservas en el pasado es decision del dueno.
     """
 
     starts_at: datetime
@@ -114,11 +120,9 @@ class WaitlistBookRequest(BaseModel):
     @field_validator("starts_at")
     @classmethod
     def within_booking_range(cls, value: datetime) -> datetime:
-        from modules.appointments.schemas import PANEL_BOOKING_PAST_GRACE
-
         aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-        if aware <= now_utc() - PANEL_BOOKING_PAST_GRACE:
-            raise ValueError("No se puede agendar un turno en el pasado")
-        if not within_booking_horizon(aware):
+        if aware < now_utc() - MAX_BOOKING_AHEAD or not within_max_ahead(
+            aware, MAX_BOOKING_AHEAD
+        ):
             raise ValueError("La fecha esta fuera del rango de reservas")
         return value
