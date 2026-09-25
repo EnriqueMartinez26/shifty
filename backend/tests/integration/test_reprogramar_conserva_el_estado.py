@@ -10,7 +10,7 @@ lo levanta a la hora de inicio (`expires_at = new_starts_at`).
 Decision (2026-09-20): el turno movido conserva el estado del original. Puede
 hacerlo sin riesgo porque a esta altura no hay sena de por medio: en el portal
 un turno en `pending_payment` lo frena `client_reschedule_denial` (en el panel,
-desde 2026-09-25, el cobro vivo se vence y el nuevo nace `pending` sin cobro)
+409 `DEPOSIT_PENDING_RESCHEDULE_DENIED`: decision del dueno 2026-09-25, opcion A)
 y uno con pago acreditado lo frena
 `client_reschedule_denial` (antes `_reject_paid_reschedule`). O sea, lo unico que se
 conserva es un `confirmed` sin cobro, y con el se va el `expires_at`: no hay

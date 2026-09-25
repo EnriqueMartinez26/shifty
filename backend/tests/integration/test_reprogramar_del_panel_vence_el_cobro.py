@@ -10,22 +10,30 @@ liberacion del admin.
 Ahora la reprogramacion vence el cobro vivo del original en la MISMA
 transaccion (``expire_live_charge``: pago ``expired`` por la entidad,
 ``payment.preference.expire`` al outbox, sin llamada a MP) antes de
-cancelarlo. El turno nuevo nace sin cobro: un confirmado sigue confirmado y
-un ``pending_payment`` pasa a ``pending`` (el grafo permite
-``pending_payment -> cancelled`` para el original; el nuevo es un alta).
+cancelarlo. El turno nuevo nace sin cobro y un confirmado sigue confirmado.
+
+Un turno en ``pending_payment`` (sena REQUERIDA pendiente) no se reprograma
+desde el panel: 409 ``DEPOSIT_PENDING_RESCHEDULE_DENIED`` ("Cobrá la seña o
+cancelá el turno antes de moverlo"), sin tocar nada (decision del dueno
+2026-09-25: opcion A). Reprogramarlo como ``pending`` sin cobro, lo que se
+hizo mientras tanto, perdia la sena requerida. El personal lo puede cancelar
+(D2 vence el cobro) o cobrar la sena y despues moverlo. El link del panel de
+un turno CONFIRMADO no es una sena requerida: ese sigue reprogramandose y
+vence el link.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from modules.appointments.model import Appointment
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus
 from tests.integration.test_cancelar_desde_el_panel_vence_el_cobro import (
     PREFERENCIA,
     _cobro,
@@ -115,22 +123,64 @@ async def test_reprogramar_un_confirmado_con_link_vence_el_link(
 
 
 @pytest.mark.asyncio
-async def test_reprogramar_un_pendiente_de_pago_vence_el_cobro_y_queda_pendiente(
-    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("rol", ["admin", "staff"])
+async def test_reprogramar_un_pendiente_de_pago_es_409_y_no_toca_nada(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    rol: str,
 ) -> None:
-    t = await _tienda(client, monkeypatch, "rp-sena", sena=True)
-    token = await _personal(client, t, "staff", "rp-sena")
+    t = await _tienda(client, monkeypatch, f"rp-sena-{rol}", sena=True)
+    token = t.admin if rol == "admin" else await _personal(client, t, rol, "rp-sena")
     turno = await _con_sena(client, t, 12)
+    cobro = await _cobro(test_session, turno)
+    antes = (cobro.status, cobro.preference_id, cobro.version, cobro.amount)
+    turnos_antes = await _cantidad(test_session, Appointment)
+    eventos_antes = await _cantidad(test_session, OutboxMessage)
+    invalidados = _espiar_invalidacion(monkeypatch)
+    llamadas_antes = len(t.llamadas_mp)
 
-    await _reprogramar_y_verificar(
-        client,
-        test_session,
-        monkeypatch,
-        t,
-        turno,
-        token,
-        estado_nuevo="pending",
-        hora=16,
+    res = await client.patch(
+        f"/appointments/{turno}/reschedule",
+        headers=auth_headers(token),
+        json={
+            "new_starts_at": t.dia.replace(
+                hour=16, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "idempotency_key": f"reprograma-sena-{rol}",
+        },
+    )
+
+    assert res.status_code == 409, res.text
+    assert res.json()["error_code"] == "DEPOSIT_PENDING_RESCHEDULE_DENIED"
+    assert res.json()["message"] == "Cobrá la seña o cancelá el turno antes de moverlo"
+    # Nada cambio: la sena sigue pendiente con su link, el turno igual.
+    cobro = await _cobro(test_session, turno)
+    assert (cobro.status, cobro.preference_id, cobro.version, cobro.amount) == antes
+    assert antes[0] == PaymentStatus.PENDING.value
+    test_session.expire_all()
+    original = (
+        await test_session.execute(select(Appointment).where(Appointment.id == turno))
+    ).scalar_one()
+    assert original.status == "pending_payment"
+    assert await _cantidad(test_session, Appointment) == turnos_antes
+    assert await _cantidad(test_session, OutboxMessage) == eventos_antes
+    assert await _vencimientos(test_session, turno) == []
+    assert invalidados == []
+    assert t.llamadas_mp[llamadas_antes:] == []
+
+    # Cancelar sigue permitido y vence el cobro (D2).
+    cancelado = await client.patch(
+        f"/appointments/{turno}/cancel", headers=auth_headers(token)
+    )
+    assert cancelado.status_code == 200, cancelado.text
+    assert (await _cobro(test_session, turno)).status == PaymentStatus.EXPIRED.value
+
+
+async def _cantidad(session: AsyncSession, modelo: Any) -> int:
+    session.expire_all()
+    return int(
+        (await session.execute(select(func.count()).select_from(modelo))).scalar_one()
     )
 
 
