@@ -264,7 +264,7 @@ describe('rehidratacion ante un 401', () => {
 
     const primero = errorHandler({ config: { url: '/a' }, response: respuesta401 })
     const segundo = errorHandler({ config: { url: '/b' }, response: respuesta401 })
-    resolverRefresh({ data: { access_token: 'acceso-compartido' } })
+    resolverRefresh({ data: { access_token: 'compartido' } })
     await Promise.all([primero, segundo])
 
     expect(mockAxiosPost).toHaveBeenCalledTimes(1)
