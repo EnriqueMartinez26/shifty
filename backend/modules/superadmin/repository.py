@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password_async
 from infrastructure.persistence.patch import apply_patch
-from modules.auth.service import normalize_email, revoke_sessions_for_user
+from modules.auth.service import (
+    login_account_email,
+    normalize_email,
+    revoke_sessions_for_user,
+)
 from modules.audit.model import AuditAction, AuditLog
 from modules.billing.model import CouponRedemption, Plan, SaaSCoupon, StoreSubscription
 from modules.billing.subscription_rules import apply_subscription_transition
@@ -468,10 +472,11 @@ class UserAdminRepository(_BaseAdminRepository):
         # mensaje amable (regla 16). Con limit(1) no puede dar 500 aunque la
         # base traiga duplicados heredados, y no se atrapa la IntegrityError:
         # en la carrera entre el SELECT y el INSERT decide el indice y main.py
-        # responde 409 neutro (regla 20).
+        # responde 409 neutro (regla 20). Solo cuentas que inician sesion: un
+        # cliente de cualquier tienda puede tener el mismo email (PV-01).
         data["email"] = normalize_email(str(data["email"]))
         existing = await self.db.execute(
-            select(User.id).where(User.email == data["email"]).limit(1)
+            select(User.id).where(login_account_email(data["email"])).limit(1)
         )
         if existing.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")

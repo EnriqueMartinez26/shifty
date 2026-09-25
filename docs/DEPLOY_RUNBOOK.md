@@ -103,6 +103,16 @@ UPDATE services SET image_url = NULL WHERE image_url LIKE '%/stores/media/%';
 
 The rows stay in `store_media` (the downgrade never deletes images). A later upgrade links each one back to the service whose `image_url` still ends in `/stores/media/{id}`; if the links were cleared with the `UPDATE` above, those images have no service left and the upgrade stops with their count. Deleting them is a human decision: `DELETE FROM store_media WHERE kind = 'service' AND id NOT IN (SELECT substring(image_url FROM '/stores/media/([A-Za-z0-9_-]+)$') FROM services WHERE image_url IS NOT NULL);`
 
+Rolling back **below** the release that ships `4b6d8f0a2c13` (PV-01, 2026-09-25: a client's email is unique per store, a login account's email stays globally unique): the migration drops the global unique on `users.email` in the same release, because the looser constraints are exactly what the new code needs and the older code never relied on the unique for correctness, only for the 409. After a `make rollback` without migrating, the older code still books and creates accounts, and now also lets the same client email into two stores. The one thing it gets wrong: its login and forgot-password look the account up by `email` alone, so a staff or admin account whose email a client also left (in any store) gets a 500 at login until the new release is back. Before the rollback, list those accounts with the migration role and warn them:
+
+```sql
+SELECT u.email, u.store_id, u.role FROM users u
+WHERE u.role <> 'client'
+  AND EXISTS (SELECT 1 FROM users c WHERE c.email = u.email AND c.role = 'client');
+```
+
+`alembic downgrade` past `4b6d8f0a2c13` restores the global unique only if no email is in two rows; otherwise it stops with the count and changes nothing (it never picks which row keeps the email). The rows to fix by hand: `SELECT email, count(*) FROM users GROUP BY email HAVING count(*) > 1;`
+
 ## 5. Migrations: expand/contract
 
 - A release only **adds** (expand): new nullable columns, new tables, new indexes. Code that stops using a column ships first; the migration that drops it (contract) ships in a **later** release.

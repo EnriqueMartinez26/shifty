@@ -503,7 +503,14 @@ async def ensure_user(
     phone: str | None = None,
     is_global_admin: bool = False,
 ) -> User:
-    user = await get_by(session, User, User.email == email)
+    # PV-01: el email de un cliente es unico por tienda; el de las cuentas que
+    # inician sesion, global.
+    alcance = (
+        (User.store_id == store_id, User.role == role)
+        if role == UserRole.CLIENT.value
+        else (User.role != UserRole.CLIENT.value,)
+    )
+    user = await get_by(session, User, User.email == email, *alcance)
     attrs = {
         "email": email,
         "hashed_password": hash_password(password),
