@@ -370,7 +370,8 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
-        reject_cancellation_while_awaiting_payment(appointment)
+        # El panel sigue mirando solo el estado del turno (D1 es del cliente).
+        reject_cancellation_while_awaiting_payment(appointment, live_payment=False)
 
         payload_before = {"status": appointment.status}
 
@@ -665,7 +666,10 @@ class AppointmentService:
             raise AppointmentNotFoundException(public_id)
         # Reprogramar cancela el turno original: le corresponde el mismo guard
         # que a cancel(). Sin esto la preferencia de pago quedaba viva.
-        reject_cancellation_while_awaiting_payment(original)
+        # Solo el estado del turno: el link del panel sobre un confirmado no
+        # frena la reprogramacion del panel (fuera de D1/D2, 2026-09-25; queda
+        # como decision pendiente del dueno en el reporte de perf/f4-pay).
+        reject_cancellation_while_awaiting_payment(original, live_payment=False)
 
         service = await self.uow.appointments.get_service_by_id(
             original.service_id, actor.store_id

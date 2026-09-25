@@ -70,6 +70,7 @@ from modules.payments.deposit_rules import (
     decide_deposit,
 )
 from modules.payments.model import JsonValue, OutboxMessage, Payment
+from modules.payments.repository import PaymentRepository
 from modules.payments.service import (
     MercadoPagoAPIError,
     PaymentGatewayNotConnectedError,
@@ -250,6 +251,7 @@ def client_cancel_denial(
     appointment: Appointment,
     *,
     cancellation_hours: int,
+    live_payment: bool,
     now: datetime | None = None,
 ) -> AppException | None:
     """Por que el cliente NO puede cancelar este turno; ``None`` si puede.
@@ -260,8 +262,13 @@ def client_cancel_denial(
     El orden es el de la accion: cobro vivo (``awaits_payment``, la condicion
     de la guarda del panel, con un mensaje para el cliente) y despues la
     ventana de la tienda.
+
+    ``live_payment``: el turno tiene un ``Payment`` vivo (un link generado
+    desde el panel sobre un turno confirmado, D1 2026-09-25). Lo calcula el
+    llamador con ``live_charge_of``: la accion con
+    ``PaymentRepository.has_live_charge``, el historial en su mismo SELECT.
     """
-    if awaits_payment(appointment):
+    if awaits_payment(appointment, live_payment=live_payment):
         return AppException(
             message=_CLIENT_PAYMENT_IN_PROGRESS,
             http_status=status.HTTP_409_CONFLICT,
@@ -283,6 +290,7 @@ def client_reschedule_denial(
     *,
     cancellation_hours: int,
     paid: bool,
+    live_payment: bool,
     now: datetime | None = None,
 ) -> AppException | None:
     """Por que el cliente NO puede reprogramar este turno; ``None`` si puede.
@@ -294,7 +302,10 @@ def client_reschedule_denial(
     ``PublicRepository.accredited_appointment_ids``.
     """
     denial = client_cancel_denial(
-        appointment, cancellation_hours=cancellation_hours, now=now
+        appointment,
+        cancellation_hours=cancellation_hours,
+        live_payment=live_payment,
+        now=now,
     )
     if denial is not None:
         return denial
@@ -934,6 +945,7 @@ class PublicBookingService:
         denial = client_cancel_denial(
             appointment,
             cancellation_hours=await self._cancellation_hours(appointment.store_id),
+            live_payment=await self._has_live_charge(appointment),
         )
         if denial is not None:
             raise denial
@@ -983,6 +995,7 @@ class PublicBookingService:
             original,
             cancellation_hours=await self._cancellation_hours(original.store_id),
             paid=bool(await self.repo.accredited_appointment_ids([original.id])),
+            live_payment=await self._has_live_charge(original),
         )
         if denial is not None:
             raise denial
@@ -1052,6 +1065,12 @@ class PublicBookingService:
         """Ventana de cancelacion de la tienda (2 h si no se encuentra)."""
         store = await self.repo.get_store_by_id(store_id)
         return getattr(store, "cancellation_hours", 2) if store else 2
+
+    async def _has_live_charge(self, appointment: Appointment) -> bool:
+        """El turno (ya lockeado) tiene un cobro vivo: un link del panel (D1)."""
+        return await PaymentRepository(self.db).has_live_charge(
+            appointment.id, appointment.store_id
+        )
 
     async def _notify_owner_of_cancellation(
         self, appointment: Appointment, client: User, reason: str | None
@@ -1160,8 +1179,8 @@ def _rescheduled_copy(
     # nacia siempre con el default de la columna, asi que un turno confirmado
     # volvia a "pendiente de confirmar" sin que nadie se enterara y el job de
     # expiracion lo levantaba a la hora de inicio. A esta altura no hay sena
-    # de por medio -``client_reschedule_denial`` frena el ``pending_payment``
-    # y el pago acreditado-,
+    # de por medio -``client_reschedule_denial`` frena el ``pending_payment``,
+    # el cobro vivo (link del panel, D1) y el pago acreditado-,
     # asi que lo unico que se conserva es un ``confirmed`` sin cobro, y con el
     # se va el ``expires_at``: no hay retencion que vencer.
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value

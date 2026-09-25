@@ -15,17 +15,24 @@ from core.exceptions import AppException
 from modules.appointments.model import Appointment, AppointmentStatus
 
 
-def awaits_payment(appointment: Appointment) -> bool:
-    """El turno tiene un cobro vivo: solo lo suelta ``release()``.
+def awaits_payment(appointment: Appointment, *, live_payment: bool) -> bool:
+    """El turno tiene un cobro vivo.
 
-    Unica condicion de la regla: la usan la guarda del panel (abajo) y la del
-    cliente (``public_api.service.client_cancel_denial``), que responde el
-    mismo codigo con un mensaje para el cliente.
+    Unica condicion de la regla: el turno espera su sena (``pending_payment``)
+    O tiene un ``Payment`` vivo (``live_payment``: un link generado desde el
+    panel sobre un turno confirmado, decision del dueno D1, 2026-09-25). La
+    guarda es pura: ``live_payment`` lo calcula el repositorio
+    (``payments.repository.live_charge_of``) antes de llamarla.
+
+    La usan la guarda del cliente (``public_api.service.client_cancel_denial``,
+    con un mensaje para el cliente) y la de la reprogramacion del panel (abajo).
     """
-    return appointment.status == AppointmentStatus.PENDING_PAYMENT.value
+    return appointment.status == AppointmentStatus.PENDING_PAYMENT.value or live_payment
 
 
-def reject_cancellation_while_awaiting_payment(appointment: Appointment) -> None:
+def reject_cancellation_while_awaiting_payment(
+    appointment: Appointment, *, live_payment: bool
+) -> None:
     """Bloquea la cancelacion iniciada por una persona sobre un turno con cobro vivo.
 
     Liberar uno de estos turnos exige pasar por ``release()``, que vence la
@@ -33,7 +40,7 @@ def reject_cancellation_while_awaiting_payment(appointment: Appointment) -> None
     via dejaria el link de pago activo y el cliente podria pagar un turno que ya
     no existe.
     """
-    if awaits_payment(appointment):
+    if awaits_payment(appointment, live_payment=live_payment):
         raise AppException(
             message=(
                 "Los turnos con un pago pendiente deben liberarse desde "

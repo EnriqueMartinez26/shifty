@@ -602,7 +602,7 @@ CLIENT_HISTORY_MAX_LIMIT = 200
 
 
 def _client_item(
-    appt: Appointment, cancellation_hours: int, *, paid: bool
+    appt: Appointment, cancellation_hours: int, *, paid: bool, live_payment: bool
 ) -> ClientAppointmentItem:
     """Un turno del historial con lo que el cliente puede hacer con el.
 
@@ -623,10 +623,16 @@ def _client_item(
         notes=appt.notes,
         custom_fields=appt.intake_answers or {},
         can_cancel=vigente
-        and client_cancel_denial(appt, cancellation_hours=cancellation_hours) is None,
+        and client_cancel_denial(
+            appt, cancellation_hours=cancellation_hours, live_payment=live_payment
+        )
+        is None,
         can_reschedule=vigente
         and client_reschedule_denial(
-            appt, cancellation_hours=cancellation_hours, paid=paid
+            appt,
+            cancellation_hours=cancellation_hours,
+            paid=paid,
+            live_payment=live_payment,
         )
         is None,
     )
@@ -670,11 +676,11 @@ async def get_client_appointments(
                 error_code="CLIENT_APPOINTMENTS_NOT_FOUND",
             )
 
-        # Con el pago acreditado de cada turno en el mismo SELECT.
+        # Con el pago acreditado y el cobro vivo de cada turno en el mismo SELECT.
         filas = await repo.get_client_appointments(client.id, store.id, limit=limit)
         items = [
-            _client_item(appt, store.cancellation_hours, paid=paid)
-            for appt, paid in filas
+            _client_item(appt, store.cancellation_hours, paid=paid, live_payment=vivo)
+            for appt, paid, vivo in filas
         ]
 
         return ClientAppointmentsResponse(

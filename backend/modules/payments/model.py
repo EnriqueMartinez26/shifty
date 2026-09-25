@@ -43,6 +43,17 @@ ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 )
 
+# Cobro VIVO: el cobro del turno sigue abierto y su link se puede pagar (o
+# el panel lo puede volver a generar sin tocar el turno). Decision del dueno
+# (2026-09-25, D1): un turno con cobro vivo no lo cancela ni lo reprograma el
+# cliente, y cancelarlo desde el panel vence el cobro en la misma transaccion.
+# Unica fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
+# (``payments.repository.live_charge_filter``). ``expired`` no es vivo (lo
+# vencio Shifty y el outbox vence el link en MP); ``rejected`` tampoco hoy,
+# aunque MP permite reintentar sobre la misma preferencia (ver el reporte de
+# perf/f4-pay).
+LIVE_CHARGE_PAYMENT_STATUSES: frozenset[str] = frozenset({PaymentStatus.PENDING.value})
+
 
 # Unica fuente de verdad del grafo de la region de facturacion.
 #
@@ -170,6 +181,11 @@ class Payment(BaseEntity):
         """La plata efectivamente entro (aprobada o confirmada manual)."""
         return self.status in ACCREDITED_PAYMENT_STATUSES
 
+    @property
+    def is_live_charge(self) -> bool:
+        """El cobro sigue abierto: su link se puede pagar (D1, 2026-09-25)."""
+        return self.status in LIVE_CHARGE_PAYMENT_STATUSES
+
     def apply_status(
         self, new_status: str, *, payload: dict[str, JsonValue] | None = None
     ) -> bool:
@@ -283,6 +299,7 @@ class OutboxMessage(BaseEntity):
 
 __all__ = [
     "ALLOWED_PAYMENT_TRANSITIONS",
+    "LIVE_CHARGE_PAYMENT_STATUSES",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
     "JsonPrimitive",
