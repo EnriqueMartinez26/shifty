@@ -1,6 +1,5 @@
 import asyncio
 from collections.abc import Iterable
-from datetime import date
 
 from fastapi import Depends, Query
 from core.router import CanonicalAPIRouter
@@ -34,7 +33,7 @@ from modules.reports.service import (
     ReportService,
 )
 from modules.users.model import User
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, LocalDay
 
 router = CanonicalAPIRouter(prefix="/reports", tags=["Reports"])
 
@@ -61,8 +60,8 @@ def _report_scope_for(
 
 @router.get("/summary", response_model=ReportSummaryResponse)
 async def get_report_summary(
-    from_date: date | None = None,
-    to_date: date | None = None,
+    from_date: LocalDay | None = None,
+    to_date: LocalDay | None = None,
     # B5-15: el detalle `appointments` se pagina; totales y top-5 no. Default
     # 2000: el panel pide 7 dias y un mes de 40 turnos/dia son ~1.240, asi que
     # la respuesta de hoy no cambia para rangos normales. Ambas cotas (regla 9).
@@ -90,8 +89,8 @@ async def get_report_summary(
 
 @router.get("/professionals", response_model=ProfessionalReportsResponse)
 async def get_professional_reports(
-    from_date: date | None = None,
-    to_date: date | None = None,
+    from_date: LocalDay | None = None,
+    to_date: LocalDay | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ProfessionalReportsResponse:

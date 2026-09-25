@@ -31,7 +31,7 @@ from core.roles import (
     has_any_role,
     require_roles,
 )
-from core.validation import PUBLIC_ID_PATTERN
+from core.validation import PUBLIC_ID_PATTERN, LocalDay
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.appointments.repository import AppointmentSearchRow
@@ -114,7 +114,7 @@ def _to_appointment_response(appointment: Appointment) -> AppointmentResponse:
 
 @router.get("/", response_model=list[AppointmentListItem])
 async def list_appointments_by_date(
-    date: date_type,
+    date: LocalDay,
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
 ) -> list[AppointmentListItem]:
@@ -499,12 +499,10 @@ async def search_appointments(
         max_length=10,
         description="Estados: pending, confirmed, cancelled, completed",
     ),
-    from_date: Optional[date_type] = Query(
+    from_date: Optional[LocalDay] = Query(
         default=None, description="Desde (YYYY-MM-DD)"
     ),
-    to_date: Optional[date_type] = Query(
-        default=None, description="Hasta (YYYY-MM-DD)"
-    ),
+    to_date: Optional[LocalDay] = Query(default=None, description="Hasta (YYYY-MM-DD)"),
     # ge Y le (regla 9): sin tope, (page - 1) * page_size desbordaba el entero
     # de la base en el OFFSET y salia 500 (B1-03).
     page: int = Query(default=1, ge=1, le=10_000),
