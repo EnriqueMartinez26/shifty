@@ -18,7 +18,7 @@ from core.exceptions import ResourceNotFoundException, ValidationException
 from modules.appointments.model import Appointment
 from modules.ledger.model import CustomerLedger
 from modules.users.model import User, UserRole
-from modules.users.repository import UserRepository
+from modules.users.repository import UserRepository, _valor_de_rol
 
 
 async def _lock_client_ledger(db: AsyncSession, store_id: str, client_id: str) -> None:
@@ -82,11 +82,6 @@ async def ensure_store_client(
     cliente = await UserRepository(db).get_by_public_id(client_id, store_id)
     if cliente is None or _valor_de_rol(cliente.role) != UserRole.CLIENT.value:
         raise ResourceNotFoundException("Cliente", client_id)
-
-
-def _valor_de_rol(rol: object) -> str:
-    """El rol puede llegar como ``UserRole`` o como texto (columna String)."""
-    return str(getattr(rol, "value", rol))
 
 
 async def search_store_clients(
@@ -178,6 +173,13 @@ async def reverse_movement(
     movimiento de ajuste que compensa su efecto y deja el saldo como si el
     movimiento erroneo nunca hubiera existido. Cada movimiento se puede
     revertir una sola vez.
+
+    NO llama a ``ensure_store_client`` a proposito (decision del coordinador,
+    revision de perf/f4-pay 2026-09-25): los movimientos que quedaron
+    cargados a una cuenta del personal antes de que el fiado se cerrara a
+    clientes se pueden revertir (limpieza). El movimiento igual tiene que ser
+    de esta tienda y de esa cuenta. Lo fija
+    ``test_un_movimiento_viejo_sobre_el_personal_se_puede_revertir``.
     """
     await _lock_client_ledger(db, store_id, client_id)
 

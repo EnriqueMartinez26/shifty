@@ -17,8 +17,15 @@ from __future__ import annotations
 
 from typing import Any
 
+from decimal import Decimal
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from modules.ledger.model import CustomerLedger
+from modules.users.model import User
 
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
@@ -238,3 +245,38 @@ async def test_el_fiado_es_solo_de_clientes_no_del_personal(
         for res in (carga, cuenta):
             assert res.status_code == 404, res.text
             assert res.json()["error_code"] == "RESOURCE_NOT_FOUND", res.text
+
+
+@pytest.mark.asyncio
+async def test_un_movimiento_viejo_sobre_el_personal_se_puede_revertir(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Revision de perf/f4-pay (2026-09-25, #7): decision del coordinador.
+    ``ensure_store_client`` cierra leer y cargar fiado sobre el personal, pero
+    ``reverse_movement`` NO lo llama a proposito: los movimientos que quedaron
+    cargados a una cuenta del personal antes de ese cierre se pueden revertir
+    (limpieza). Se sigue exigiendo que el movimiento sea de la tienda y de esa
+    cuenta."""
+    t = await _tienda(client, "fiado-revierte-legado")
+    del_personal = sorted(t.personal)[0]
+    usuario = (
+        await test_session.execute(select(User).where(User.id == del_personal))
+    ).scalar_one()
+    legado = CustomerLedger(
+        store_id=usuario.store_id,
+        client_id=del_personal,
+        movement_type="charge",
+        amount=Decimal("10.00"),
+        balance_after=Decimal("10.00"),
+        notes="Cargado antes del cierre",
+    )
+    test_session.add(legado)
+    await test_session.commit()
+
+    res = await client.post(
+        f"/ledger/customers/{del_personal}/movements/{legado.id}/reverse",
+        headers=t.profesional,
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["balance_after"] == "0.00"
