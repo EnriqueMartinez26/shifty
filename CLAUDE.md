@@ -177,7 +177,8 @@ Una instrucción en lenguaje natural no es una garantía.
    `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`). El personal que puede cancelar
    (admin, recepción, profesional) sí, sin pasar por el admin (decisión del
    dueño, 2026-09-25): `AppointmentService.cancel`, `reschedule` (el turno
-   nuevo nace sin cobro) y `release_pending` (solo admin) comparten
+   nuevo nace sin cobro; un `pending_payment` queda `pending` sin seña y con
+   `expires_at` = nuevo inicio, no conserva la retención: pendiente del dueño) y `release_pending` (solo admin) comparten
    `_expire_live_charge`, que vence el pago por la entidad y publica
    `payment.preference.expire` en la misma transacción, con locks turno →
    pago; el link de MP lo anula después el outbox. Cancelar no toca un pago

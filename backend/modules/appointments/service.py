@@ -1090,8 +1090,11 @@ def _rescheduled_copy(
     # esta altura el cobro vivo del original ya se vencio (``_swap_for_new_slot``)
     # y el nuevo nace sin cobro: un ``confirmed`` sigue confirmado sin
     # retencion y cualquier otro (``pending`` o ``pending_payment``) queda
-    # ``pending``, conservando la retencion que TENIA: la del portal pasa al
-    # horario nuevo; el alta del panel no retiene y moverlo tampoco.
+    # ``pending`` SIN cobro ni sena requerida. Si el original tenia retencion,
+    # el nuevo NO la conserva: nace con ``expires_at = new_starts_at`` (vence
+    # al inicio si nadie lo confirma); el alta del panel no retiene y moverlo
+    # tampoco. Para un ``pending_payment`` eso pierde la sena requerida:
+    # decision pendiente del dueno (revision de perf/f4-pay, 2026-09-25).
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
     retenido = not confirmado and original.expires_at is not None
     return Appointment(
