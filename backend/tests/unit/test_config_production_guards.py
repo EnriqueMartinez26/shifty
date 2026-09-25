@@ -65,6 +65,11 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
         ({"FIELD_ENCRYPTION_KEY": "corta"}, "FIELD_ENCRYPTION_KEY"),
         ({"FRONTEND_URL": "http://localhost:3000"}, "FRONTEND_URL"),
         ({"PUBLIC_API_URL": "http://127.0.0.1:8000"}, "PUBLIC_API_URL"),
+        # L3-05 (2026-09-25): el link de privacidad del pie de los mails.
+        (
+            {"PUBLIC_PRIVACY_URL": "http://localhost:3000/legal/privacidad"},
+            "PUBLIC_PRIVACY_URL",
+        ),
         ({"COOKIE_SAMESITE": "invalido"}, "COOKIE_SAMESITE"),
         ({"CORS_ORIGINS": "*"}, "CORS_ORIGINS"),
         ({"RATE_LIMIT_FAIL_CLOSED": False}, "RATE_LIMIT_FAIL_CLOSED"),

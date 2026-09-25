@@ -381,6 +381,10 @@ class Settings(BaseSettings):
 
     FRONTEND_URL: str = "http://localhost:3000"
     FRONTEND_RESET_PASSWORD_PATH: str = "/reset-password"
+    # Link a la politica de privacidad del pie de los mails al cliente (L3-05,
+    # 2026-09-25). Vacio = ``{FRONTEND_URL}/legal/privacidad``, la ruta del
+    # front (``Legal.tsx``; ``/legal`` redirige a los terminos).
+    PUBLIC_PRIVACY_URL: str | None = None
     PUBLIC_API_URL: str = "http://localhost:8000"
 
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
@@ -448,6 +452,12 @@ class Settings(BaseSettings):
         if self.PUBLIC_API_URL.startswith(_PREFIJOS_LOCALES):
             raise ValueError(
                 "PUBLIC_API_URL no puede apuntar a localhost en produccion"
+            )
+        if self.PUBLIC_PRIVACY_URL and self.PUBLIC_PRIVACY_URL.startswith(
+            _PREFIJOS_LOCALES
+        ):
+            raise ValueError(
+                "PUBLIC_PRIVACY_URL no puede apuntar a localhost en produccion"
             )
 
     def _validate_production_hardening(self) -> None:

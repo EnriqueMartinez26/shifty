@@ -18,7 +18,7 @@ from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.security import hash_otp_code
-from modules.notifications.tasks import is_deliverable_email
+from modules.notifications.tasks import client_mail_footer, is_deliverable_email
 from modules.otp.model import OtpVerification
 from modules.users.model import User, UserRole
 
@@ -113,6 +113,11 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
             raise OTPRateLimitedException() from exc
 
 
+# Mismo motivo en el codigo y en el aviso sin codigo: el cuerpo no puede
+# decir mas de lo que ya dice (AUD2-B4-05).
+_OTP_REASON = "se pidio un codigo de verificacion con esta direccion"
+
+
 def _otp_subject(store_name: str) -> str:
     """Mismo asunto para el codigo y para el aviso sin codigo: el asunto
     tampoco puede discriminar (AUD2-B4-05)."""
@@ -126,7 +131,7 @@ def _code_body(code: str, store_name: str) -> str:
         f"Tu codigo para {tienda} es: {code}\n\n"
         f"Vence en {settings.OTP_CODE_EXPIRE_MINUTES} minutos. "
         "Si no pediste este codigo, ignora este mensaje.\n\n"
-        "- El equipo de Shifty"
+        f"{client_mail_footer(store_name, _OTP_REASON)}"
     )
 
 
@@ -155,7 +160,7 @@ def _notice_body(store_name: str) -> str:
         "Si el telefono es tuyo, el codigo fue a la direccion de correo que "
         "tenes registrada. Si no reconoces este pedido, ignora este mensaje: "
         "no hace falta que hagas nada.\n\n"
-        "- El equipo de Shifty"
+        f"{client_mail_footer(store_name, _OTP_REASON)}"
     )
 
 

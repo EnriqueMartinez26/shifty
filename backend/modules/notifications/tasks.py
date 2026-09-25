@@ -424,6 +424,34 @@ def _contacto(details: dict[str, Any]) -> str:
     return " ".join(partes) + "."
 
 
+def privacy_url() -> str:
+    """Link a la politica de privacidad para el pie de los mails (L3-05)."""
+    return settings.PUBLIC_PRIVACY_URL or (
+        f"{settings.FRONTEND_URL.rstrip('/')}/legal/privacidad"
+    )
+
+
+def client_mail_footer(store_name: str | None, reason: str) -> str:
+    """Pie de TODO mail al cliente (L3-05, L1 O-7; 2026-09-25).
+
+    La responsable del dato es la tienda y Shifty escribe por ella: el mail
+    lo dice, dice por que llega (``reason`` completa "Recibis este mail
+    porque ...") y enlaza la politica de privacidad. Reemplaza la firma "El
+    equipo de Shifty", que presentaba a Shifty como remitente propio.
+    """
+    tienda = (store_name or "").strip() or "la tienda"
+    return (
+        f"Te escribimos en nombre de {tienda} a traves de Shifty, la plataforma "
+        f"de turnos que usa {tienda}. Recibis este mail porque {reason}.\n"
+        f"Politica de privacidad: {privacy_url()}"
+    )
+
+
+def _pie(details: dict[str, Any], reason: str) -> str:
+    tienda = str(details.get("store_name") or "").strip() or "la tienda"
+    return client_mail_footer(tienda, reason.format(tienda=tienda))
+
+
 def _cuando(details: dict[str, Any]) -> str:
     fecha, hora = format_local_datetime(details.get("starts_at") or details.get("date"))
     return f"{fecha} a las {hora} hs" if hora else fecha
@@ -439,8 +467,7 @@ def _registration_body(details: dict[str, Any]) -> str:
         f'Tu reserva para "{details.get("service")}" {_con_quien(details)} '
         f"quedo registrada para el {_cuando(details)}.\n\n"
         "Te vamos a avisar cuando este confirmada.\n\n"
-        f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+        f"{_contacto(details)}\n\n" + _pie(details, "reservaste un turno en {tienda}")
     )
 
 
@@ -453,8 +480,7 @@ def _confirmation_body(details: dict[str, Any]) -> str:
         f"{_saludo(details)}\n\n"
         f'Tu turno para "{details.get("service")}" {_con_quien(details)} '
         f"esta confirmado para el {_cuando(details)}.\n\n"
-        f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+        f"{_contacto(details)}\n\n" + _pie(details, "tenes un turno en {tienda}")
     )
 
 
@@ -468,8 +494,7 @@ def _rescheduled_body(details: dict[str, Any]) -> str:
         f'La tienda movio tu turno de "{details.get("service")}" '
         f"{_con_quien(details)}: ahora es el {_cuando(details)}.\n\n"
         "Si ese horario no te sirve, avisanos.\n\n"
-        f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+        f"{_contacto(details)}\n\n" + _pie(details, "tenes un turno en {tienda}")
     )
 
 
@@ -518,8 +543,7 @@ def _cancellation_body(details: dict[str, Any]) -> str:
         f"{_con_quien(details)} del {_cuando(details)} fue cancelado por la "
         f"tienda.{linea_motivo}\n\n"
         "Podes elegir otro horario cuando quieras.\n\n"
-        f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+        f"{_contacto(details)}\n\n" + _pie(details, "tenias un turno en {tienda}")
     )
 
 
@@ -544,11 +568,8 @@ def _reminder_body(details: dict[str, Any]) -> str:
             f'Te recordamos que tenes turno para "{details.get("service")}" '
             f"{_con_quien(details)}, el {_cuando(details)}."
         )
-    return (
-        f"{_saludo(details)}\n\n"
-        f"{aviso}\n\n"
-        f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+    return f"{_saludo(details)}\n\n{aviso}\n\n{_contacto(details)}\n\n" + _pie(
+        details, "tenes un turno en {tienda}"
     )
 
 
@@ -565,8 +586,7 @@ def _rebook_body(details: dict[str, Any]) -> str:
         f"{_saludo(details)}\n\n"
         f'Gracias por venir a {tienda}. Esperamos que "{details.get("service")}" '
         f"{_con_quien(details)} haya salido bien.{linea_link}\n\n"
-        f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+        f"{_contacto(details)}\n\n" + _pie(details, "tuviste un turno en {tienda}")
     )
 
 
@@ -735,7 +755,7 @@ def _waitlist_offer_body(details: dict[str, Any]) -> str:
         f"Te lo reservamos durante {minutos} minutos; despues se lo ofrecemos a la "
         "siguiente persona de la lista.\n\n"
         f"{_contacto(details)}\n\n"
-        "- El equipo de Shifty"
+        + _pie(details, "te anotaste en la lista de espera de {tienda}")
     )
 
 
