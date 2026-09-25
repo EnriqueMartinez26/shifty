@@ -1658,8 +1658,10 @@ async def _fetch_remote_payment(
             )
         if primero is None or _es_aprobado(primero):
             return primero
-        # La consulta por id ocupa uno de los lugares del tope.
-        retirados_en_tope -= 1
+        # La consulta por id ocupa uno de los lugares del tope; nunca por
+        # debajo de 0: ``retiradas[:-1]`` buscaria casi todos (revision de
+        # 6c84d46..79a64e4, #3).
+        retirados_en_tope = max(0, retirados_en_tope - 1)
     referencias = (
         payment.current_external_reference,
         *retiradas[:retirados_en_tope],

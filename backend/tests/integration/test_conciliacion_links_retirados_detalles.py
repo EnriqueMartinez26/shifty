@@ -402,3 +402,46 @@ async def test_si_la_marca_falla_se_loguea_y_lo_conciliado_queda(
     cobro_id = cobro.id
     assert cobro.status == PaymentStatus.APPROVED.value
     assert (await _marcas(test_session, [cobro_id]))[cobro_id] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("con_id", [True, False])
+async def test_con_tope_cero_no_se_busca_ningun_link_retirado(
+    monkeypatch: pytest.MonkeyPatch, con_id: bool
+) -> None:
+    """Revision de 6c84d46..79a64e4 (#3). Con ``RETIRED_LINK_SEARCH_MAX = 0``
+    la rama del id restaba uno y cortaba ``retiradas[:-1]``: buscaba casi
+    todos los links retirados, sin tope. Ahora el tope se acota en 0."""
+    monkeypatch.setattr(jobs, "RETIRED_LINK_SEARCH_MAX", 0)
+    cobro = Payment(
+        id="cobro-cero",
+        store_id="tienda-d",
+        appointment_id="turno-cero",
+        amount=Decimal("100"),
+        link_ref="vigente",
+        provider="mercadopago",
+        external_payment_id="mp-rechazado" if con_id else None,
+    )
+    busquedas: list[str] = []
+
+    async def por_id(_db: Any, *, payment_id: str, **_kwargs: Any) -> dict[str, Any]:
+        return {"id": payment_id, "status": "rejected"}
+
+    async def buscar(
+        _db: Any, *, external_reference: str, **_kwargs: Any
+    ) -> list[dict[str, Any]]:
+        busquedas.append(external_reference)
+        return []
+
+    monkeypatch.setattr(jobs, "fetch_mercadopago_payment", por_id)
+    monkeypatch.setattr(jobs, "search_mercadopago_payments", buscar)
+
+    await jobs._fetch_remote_payment(
+        None,  # type: ignore[arg-type]
+        cobro,
+        {},
+        None,
+        [f"turno-cero:retirado-{i}" for i in range(5)],
+    )
+
+    assert busquedas == ["turno-cero:vigente"], busquedas
