@@ -451,7 +451,7 @@ def test_el_drill_consulta_la_base_restaurada_y_lo_deja_en_la_evidencia(
     for tabla in ("stores", "appointments", "payments"):
         assert f"count(*) from {tabla}" in sql
     # La consulta va contra el DESTINO del drill, no contra el origen.
-    assert "drill.example.com" in consulta
+    assert consulta[consulta.index("--host") + 1] == "drill.example.com"
 
     evidencia = _evidencia(tmp_path)
     assert evidencia["status"] == "ok"
@@ -711,7 +711,7 @@ def test_el_drill_verifica_los_permisos_del_rol_de_la_app(
         c for c in lanzados if c[0] == "psql" and "has_table_privilege" in c[-1]
     )
     sql = consulta[-1]
-    assert "drill.example.com" in consulta
+    assert consulta[consulta.index("--host") + 1] == "drill.example.com"
     assert "has_schema_privilege('shifty_app', 'public', 'USAGE')" in sql
     # has_table_privilege con varios privilegios separados por coma da true si
     # tiene CUALQUIERA: cada uno se pregunta por separado.
@@ -900,7 +900,7 @@ def test_restore_se_niega_si_el_rol_de_la_app_no_existe(
     )
     consulta = next(c for c in comandos if c[0] == "psql")
     assert "rolname = 'shifty_app'" in consulta[-1]
-    assert "drill.example.com" in consulta
+    assert consulta[consulta.index("--host") + 1] == "drill.example.com"
     assert "dueno_secret" not in mensaje
 
 

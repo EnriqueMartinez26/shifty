@@ -19,6 +19,7 @@ import hmac
 import itertools
 import os
 import random
+import re
 import secrets
 import socket
 import threading
@@ -29,7 +30,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 import uvicorn
@@ -38,6 +39,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 Json = dict[str, Any]
+
+# Origenes (esquema, host y puerto, sin ruta) a los que el emulador entrega
+# webhooks si nadie configura otros: solo loopback. El stack local de Docker
+# publica la API en http://localhost/api (README.md de esta carpeta).
+DEFAULT_WEBHOOK_ORIGINS: tuple[str, ...] = ("http://localhost", "http://127.0.0.1")
+# Lo que puede seguir a un origen permitido: ruta y query sin userinfo,
+# fragmento, espacios ni barras invertidas, nada que cambie el destino.
+_WEBHOOK_TAIL = r"(/[A-Za-z0-9._~%/-]*)?(\?[A-Za-z0-9._~%=&-]*)?"
 
 
 @dataclass
@@ -55,6 +64,9 @@ class Faults:
 class EmulatorState:
     collector_id: str = "123456789"
     webhook_secret: str | None = None
+    # Unicos destinos de ``/_emu/send_webhook`` con ``deliver``: el emulador
+    # no hace requests a una URL que decide quien llama a ``/_emu``.
+    webhook_origins: tuple[str, ...] = DEFAULT_WEBHOOK_ORIGINS
     preferences: dict[str, Json] = field(default_factory=dict)
     payments: dict[str, Json] = field(default_factory=dict)
     refunds: list[Json] = field(default_factory=list)
@@ -70,7 +82,9 @@ class EmulatorState:
 
     def reset(self) -> None:
         fresh = EmulatorState(
-            collector_id=self.collector_id, webhook_secret=self.webhook_secret
+            collector_id=self.collector_id,
+            webhook_secret=self.webhook_secret,
+            webhook_origins=self.webhook_origins,
         )
         self.__dict__.update(fresh.__dict__)
 
@@ -105,6 +119,45 @@ def preference_expired(pref: Json) -> bool:
         # MP interpreta sin offset como hora local de la cuenta; aca, UTC.
         vence = vence.replace(tzinfo=timezone.utc)
     return vence <= _now()
+
+
+def _origin_key(url: str) -> tuple[str, str | None, int | None] | None:
+    try:
+        parts = urlsplit(url)
+        return (parts.scheme, parts.hostname, parts.port)
+    except ValueError:  # puerto invalido
+        return None
+
+
+def webhook_delivery_base(target: str, origins: tuple[str, ...]) -> str | None:
+    """Destino de entrega de un webhook, o ``None`` si no esta permitido.
+
+    El resultado arranca con el origen CONFIGURADO (no con el del pedido) y
+    sigue con la ruta y la query del destino, validadas. Un destino con
+    credenciales, fragmento u otro esquema, host o puerto no se entrega.
+    """
+    key = _origin_key(target)
+    if key is None:
+        return None
+    parts = urlsplit(target)
+    if parts.username is not None or parts.fragment:
+        return None
+    base: str | None = None
+    for origin in origins:
+        allowed = urlsplit(origin)
+        if _origin_key(origin) == key:
+            base = f"{allowed.scheme}://{allowed.netloc}"
+            break
+    if base is None:
+        return None
+    tail = parts.path + (f"?{parts.query}" if parts.query else "")
+    if re.fullmatch(_WEBHOOK_TAIL, tail):
+        return base + tail
+    return None
+
+
+def _with_query(url: str, query: str) -> str:
+    return f"{url}{'&' if '?' in url else '?'}{query}"
 
 
 def sign_webhook(
@@ -367,12 +420,22 @@ def create_app(state: EmulatorState | None = None) -> FastAPI:
         target = data.target_url or payment.get("_notification_url")
         if not isinstance(target, str) or not target:
             return _error(400, "bad_request", "no notification_url")
-        query = urlencode({"data.id": data.payment_id, "type": "payment"})
-        url = f"{target}{'&' if '?' in target else '?'}{query}"
+        delivery_base: str | None = None
+        if data.deliver:
+            # Se rechaza antes de firmar y de salir a la red.
+            delivery_base = webhook_delivery_base(target, st.webhook_origins)
+            if delivery_base is None:
+                return _error(
+                    400, "target_not_allowed", "webhook target is not an allowed origin"
+                )
+        # El id que emitio el emulador (la clave del pago), no el del pedido.
+        payment_ref = str(payment["id"])
+        query = urlencode({"data.id": payment_ref, "type": "payment"})
+        url = _with_query(target, query)
         ts = (data.ts or int(time.time())) + data.ts_offset_seconds
         request_id = data.request_id or secrets.token_hex(16)
         headers = sign_webhook(
-            secret=secret, data_id=data.payment_id, request_id=request_id, ts=ts
+            secret=secret, data_id=payment_ref, request_id=request_id, ts=ts
         )
         if data.tamper:
             headers["x-signature"] = headers["x-signature"][:-4] + "0000"
@@ -381,16 +444,17 @@ def create_app(state: EmulatorState | None = None) -> FastAPI:
             "action": data.action,
             "api_version": "v1",
             "type": "payment",
-            "data": {"id": data.payment_id},
+            "data": {"id": payment_ref},
             "date_created": _stamp(),
             "live_mode": False,
             "user_id": st.collector_id,
         }
         delivered: Json | None = None
-        if data.deliver:
+        if delivery_base is not None:
+            delivery_url = _with_query(delivery_base, query)
             try:
                 async with httpx.AsyncClient(timeout=10.0) as http:
-                    res = await http.post(url, json=body, headers=headers)
+                    res = await http.post(delivery_url, json=body, headers=headers)
                 delivered = {"status_code": res.status_code, "body": res.text[:2000]}
             except httpx.HTTPError as exc:
                 delivered = {"status_code": None, "error": type(exc).__name__}
@@ -455,6 +519,18 @@ def run_in_thread(state: EmulatorState | None = None) -> Iterator[RunningEmulato
         sock.close()
 
 
+def _origins_from_env() -> tuple[str, ...]:
+    raw = os.getenv("MP_EMU_WEBHOOK_ORIGINS", "")
+    origins = tuple(o.strip() for o in raw.split(",") if o.strip())
+    return origins or DEFAULT_WEBHOOK_ORIGINS
+
+
 # Para `uvicorn tests.e2e.mp_emulator:app`: el secreto de los webhooks sale
-# del entorno (el mismo webhook_secret que tiene la tienda en su gateway).
-app = create_app(EmulatorState(webhook_secret=os.getenv("MP_EMU_WEBHOOK_SECRET")))
+# del entorno (el mismo webhook_secret que tiene la tienda en su gateway), y
+# los origenes a los que entrega webhooks tambien (por defecto, loopback).
+app = create_app(
+    EmulatorState(
+        webhook_secret=os.getenv("MP_EMU_WEBHOOK_SECRET"),
+        webhook_origins=_origins_from_env(),
+    )
+)
