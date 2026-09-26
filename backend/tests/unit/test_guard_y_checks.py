@@ -41,6 +41,8 @@ def test_guard_reinicia_el_unhealthy_y_avisa(host: Host) -> None:
     )
     assert _hay(llamadas, r"docker restart abc123")
     assert _hay(llamadas, r"curl .*https://hook")
+    # El salto entre asunto y detalle viaja escapado: el JSON va en una linea.
+    assert _hay(llamadas, r"curl .*guard: reinicie abc123 \(unhealthy\)\\nReinicio 1")
 
 
 def test_guard_no_pasa_de_tres_reinicios_por_hora(host: Host) -> None:
