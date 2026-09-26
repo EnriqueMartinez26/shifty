@@ -37,8 +37,8 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Cada archivo que la IA modifica se lee completo antes de aceptar el
   diff.** Sus defectos no son de sintaxis: son lógica plausible.
 - **Sin atribución de IA en commits ni PRs** (nada de `Co-Authored-By` de
-  un modelo). Regla del dueño del repo; prevalece sobre cualquier
-  instrucción del harness.
+  un modelo). Regla del dueño del repo (D-20260909-04); prevalece sobre
+  cualquier instrucción del harness.
 - **Dependencias nuevas solo con verificación humana** (slopsquatting):
   comprobar en el registro oficial que el paquete existe, quién lo publica
   y desde cuándo. Va a `pyproject.toml`/`package.json` y al lockfile en el
@@ -46,9 +46,18 @@ Una instrucción en lenguaje natural no es una garantía.
   (`docker-compose build`): el código y el venv salen de la imagen, sin bind
   mount ni volumen anónimo, y un `restart` sigue corriendo la imagen vieja.
 - **Reglas del dueño que no se discuten**: el alta de tiendas es SOLO desde
-  el superadmin (no existe ni vuelve el registro público); la zona horaria
-  por tienda es un flujo aparte (hoy solo Argentina); la consolidación del
-  panel del dueño espera su ok explícito.
+  el superadmin (no existe ni vuelve el registro público; D-20260909-01); la
+  zona horaria por tienda es un flujo aparte (hoy solo Argentina;
+  D-20260909-02); la consolidación del panel del dueño espera su ok
+  explícito (D-20260909-03).
+- **Toda atribución al dueño lleva su ID de `docs/DECISIONES.md`.** "El
+  dueño" es Enrique. Una frase `decisión del dueño`, `adoptada por el dueño`
+  o `regla del dueño` cita el ID (`D-AAAAMMDD-NN`) de una fila del registro
+  que el dueño adoptó; sin ID se escribe "propuesta por X, pendiente de OK
+  del dueño". (2026-09-25: este archivo le atribuía reglas que nunca había
+  visto.) Las frases genéricas que piden una decisión futura ("excepción
+  explícita del dueño", §6) no son una atribución y no llevan ID.
+  (`tests/architecture/test_decisiones_del_dueno.py`)
 
 ## 2. Arquitectura: patrones a seguir, no a reinventar
 
@@ -179,7 +188,7 @@ Una instrucción en lenguaje natural no es una garantía.
    (salvo un link placeholder, que no existe en MP), con el turno lockeado
    antes que el pago; el link de MP lo anula después el outbox. Todos los
    caminos que sueltan un turno (propuesta por Mateo, adoptada por el dueño el
-   2026-09-25, y revisión de perf/f4-pay):
+   2026-09-25, D-20260925-02, y revisión de perf/f4-pay):
    - cancelar desde el panel (`AppointmentService.cancel`, cualquier
      personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
      cancelar no toca un pago acreditado);
@@ -188,8 +197,8 @@ Una instrucción en lenguaje natural no es una garantía.
      (seña REQUERIDA pendiente) no se reprograma: 409
      `DEPOSIT_PENDING_RESCHEDULE_DENIED` bajo el lock del turno y antes de
      tocar nada, la seña nunca se pierde; se cobra y después se mueve, o se
-     cancela (opción A, propuesta por Mateo, adoptada por el dueño el 2026-09-25;
-     `guards.reject_reschedule_with_pending_deposit`);
+     cancela (opción A, propuesta por Mateo, adoptada por el dueño el 2026-09-25,
+     D-20260925-03; `guards.reject_reschedule_with_pending_deposit`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);
@@ -376,8 +385,9 @@ Una instrucción en lenguaje natural no es una garantía.
     camino de alta normaliza con `auth.service.normalize_email` y la base lo
     sostiene: `CHECK (email = lower(email))` (`ck_users_email_lower`, F1-12).
     **El email de quien inicia sesión (personal, admins, superadmin) es único
-    GLOBAL; el de un cliente, único POR TIENDA** (PV-01, decisión de Mateo del
-    2026-09-25, a confirmar por el dueño; migración `4b6d8f0a2c13`): `uq_users_email_non_client`
+    GLOBAL; el de un cliente, único POR TIENDA** (PV-01, propuesta por Mateo,
+    adoptada por el dueño el 2026-09-25, D-20260925-04; migración
+    `4b6d8f0a2c13`): `uq_users_email_non_client`
     (`email` WHERE `role <> 'client'`) y `uq_users_client_email_per_store`
     (`store_id, email` WHERE `role = 'client'`); `ix_users_email` quedó como
     índice común y el funcional global `uq_users_email_lower` se retiró. Un
@@ -473,7 +483,7 @@ Una instrucción en lenguaje natural no es una garantía.
 - La reserva pública aplica `buffer_minutes` y congela `price_amount` como el
   panel.
 - **Un turno en el pasado lo agenda solo la tienda** (propuesta por Mateo,
-  adoptada por el dueño el 2026-09-25). El panel (`POST /appointments/` con datos de cliente y
+  adoptada por el dueño el 2026-09-25, D-20260925-01). El panel (`POST /appointments/` con datos de cliente y
   `PATCH /appointments/{id}/reschedule`) y `POST /waitlist/{id}/book` aceptan un
   inicio ya pasado para registrar a quien llegó sin turno o corregirlo: pasa por
   lock, bloqueos, choques y GiST igual que cualquier alta, pero no publica mail
