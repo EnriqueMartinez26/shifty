@@ -1,4 +1,4 @@
-FROM python:3.14.6-slim-trixie
+FROM python:3.14.7-slim-trixie
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -6,6 +6,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Sin el pip del sistema: la app corre del .venv de uv (que no trae pip) y nada
+# lo usa en runtime. pip 26.2.1 publica un SBOM (pip/_vendor/bom.cdx.json) con
+# msgpack 1.1.2 y setuptools 70.3.0 vendorizados (GHSA-6v7p-g79w-8964,
+# CVE-2025-47273) y al 2026-09-26 no hay pip que los actualice.
+RUN python -m pip uninstall --yes pip
 
 # Install uv for fast package management
 COPY --from=ghcr.io/astral-sh/uv:0.11.29 /uv /uvx /bin/

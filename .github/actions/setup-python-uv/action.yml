@@ -9,7 +9,7 @@ inputs:
   python-version:
     description: Version de Python.
     required: false
-    default: "3.14.6"
+    default: "3.14.7"
   uv-version:
     description: Version de uv.
     required: false
