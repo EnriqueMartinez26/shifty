@@ -66,7 +66,7 @@ acepte (por ejemplo, el formato de `expiration_date_to`).
 | --- | --- |
 | `POST /_emu/pay/{preference_id}` | Paga el link. Body opcional: `amount`, `collector_id`, `currency_id`, `status` (default `approved`). Un link vencido da 409. |
 | `POST /_emu/payment/{id}/status` | Cambia el estado (`in_mediation`, `refunded`, `rejected`, `charged_back`...). |
-| `POST /_emu/send_webhook` | Firma el webhook de un pago (`x-signature` con `ts` y `v1`, `x-request-id`) y lo manda al `notification_url` de la preferencia o a `target_url`. `deliver: false` solo lo devuelve. Opciones: `event_id`, `secret`, `ts_offset_seconds`, `tamper`. |
+| `POST /_emu/send_webhook` | Firma el webhook de un pago (`x-signature` con `ts` y `v1`, `x-request-id`) y lo manda al `notification_url` de la preferencia o a `target_url`, solo si su origen (esquema, host y puerto) esta en `webhook_origins` (por defecto `http://localhost` y `http://127.0.0.1`; si no, 400 `target_not_allowed` sin salir a la red). `deliver: false` solo lo devuelve. Opciones: `event_id`, `secret`, `ts_offset_seconds`, `tamper`. |
 | `POST /_emu/fault` | `latency_ms`, `error_rate` (0 a 1), `error_status`, `unauthorized_once`, `down`. |
 | `GET /_emu/state` | Preferencias, pagos, reembolsos, llamadas recibidas y fallas activas. |
 | `POST /_emu/reset` | Vacia el estado. |
@@ -117,6 +117,9 @@ acepte (por ejemplo, el formato de `expiration_date_to`).
 
    El webhook va al `notification_url` que armo Shifty con `PUBLIC_API_URL`
    (en el compose, `http://localhost/api/...`, alcanzable desde el host).
+   Si `PUBLIC_API_URL` apunta a otro origen, agregarlo al levantar el
+   emulador: `MP_EMU_WEBHOOK_ORIGINS=http://otro-host:8000` (lista separada
+   por comas; reemplaza a la de loopback).
 
 Fuera de desarrollo (staging y produccion) se rechaza cualquier
 `MERCADOPAGO_API_BASE_URL` que no sea `https://api.mercadopago.com` (regla 17,
