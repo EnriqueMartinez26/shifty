@@ -46,9 +46,15 @@ requiere_bash = pytest.mark.skipif(BASH is None, reason="hace falta bash")
 
 
 # --- binarios falsos --------------------------------------------------------
+#
+# Los falsos anotan sus argumentos con `printf '%s\n'`, nunca con `echo`: en
+# Linux `/bin/sh` es dash, cuyo `echo` interpreta `\n` y compania. El JSON de
+# una alerta lleva `\n` escapado; con `echo` la llamada a curl quedaba partida
+# en dos lineas de `calls` y el test del guard fallaba solo en CI (2026-09-26).
+# En Git Bash `sh` es bash, que no interpreta: por eso pasaba en Windows.
 
 _DOCKER = r"""#!/bin/sh
-echo "docker $*" >> "$FAKE_DIR/calls"
+printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
 ids_backend="$FAKE_DIR/backend_ids"
 if [ "$1" = compose ]; then
   # docker-compose.prod.yml interpola ${APP_VERSION:?...}: sin la variable,
@@ -88,7 +94,7 @@ if [ "$1" = compose ]; then
     pull) exit "${FAKE_PULL_EXIT:-0}" ;;
     run) exit "${FAKE_MIGRATE_EXIT:-0}" ;;
     up)
-      escala=$(echo "$*" | sed -n 's/.*--scale backend=\([0-9]*\).*/\1/p')
+      escala=$(printf '%s\n' "$*" | sed -n 's/.*--scale backend=\([0-9]*\).*/\1/p')
       if [ -n "$escala" ]; then
         actuales=$(grep -c . "$ids_backend" 2>/dev/null || true)
         n=${actuales:-0}
@@ -161,7 +167,7 @@ exit 0
 """
 
 _REGISTRA = r"""#!/bin/sh
-echo "{nombre} $*" >> "$FAKE_DIR/calls"
+printf '%s\n' "{nombre} $*" >> "$FAKE_DIR/calls"
 exit "${{{variable}:-0}}"
 """
 
