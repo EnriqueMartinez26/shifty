@@ -580,7 +580,7 @@ Una instrucción en lenguaje natural no es una garantía.
     `backend` construye; después se recrean los cuatro juntos (recrear solo
     `backend` dejó a Celery con la imagen vieja, como root). Producción nunca
     construye (`build: !reset null` en `docker-compose.prod.yml`: la imagen
-    sale de GHCR) y su borde es `nginx:1.27.5-alpine` con la config montada,
+    sale de GHCR) y su borde es `nginx:1.30.5-alpine` con la config montada,
     no una imagen propia. Ningún servicio de la app monta el código del
     host sobre `/app`: corre la imagen, también en producción, donde un
     `volumes: []` del override no cancelaba el montaje porque compose fusiona

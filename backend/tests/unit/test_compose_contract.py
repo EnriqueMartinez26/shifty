@@ -1387,7 +1387,7 @@ def test_produccion_no_construye_ninguna_imagen() -> None:
 
 def test_el_borde_de_produccion_corre_la_imagen_oficial_de_nginx() -> None:
     nginx = _servicios_de_produccion()["nginx"]
-    assert nginx.get("image") == "nginx:1.27.5-alpine", nginx.get("image")
+    assert nginx.get("image") == "nginx:1.30.5-alpine", nginx.get("image")
     montajes = [str(v) for v in nginx.get("volumes") or []]  # type: ignore[attr-defined]
     assert any(m.endswith(":/etc/nginx/conf.d/default.conf:ro") for m in montajes), (
         montajes

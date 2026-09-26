@@ -225,7 +225,10 @@ services:
     # El borde corre la imagen OFICIAL con la configuracion montada: no depende
     # del release y no se recrea en cada deploy (se recarga con nginx -s
     # reload). Desarrollo sigue construyendo nginx/Dockerfile.
-    image: nginx:1.27.5-alpine
+    # Mismo tag que nginx/Dockerfile (test_nginx_contract). La imagen oficial no
+    # lleva su `apk upgrade`: un parche de Alpine posterior al tag llega cuando
+    # Docker vuelve a publicar el tag, con `make deploy-edge`.
+    image: nginx:1.30.5-alpine
     build: !reset null
     ports:
       - "80:80"

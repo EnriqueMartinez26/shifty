@@ -218,6 +218,28 @@ def test_la_imagen_del_edge_fija_una_version_con_resolve_en_upstream() -> None:
     assert version >= (1, 27, 3)
 
 
+def test_los_tres_nginx_corren_la_misma_imagen_base() -> None:
+    # 2026-09-26 (image-scan de Trivy en rojo): el edge de dev y el de prod
+    # estaban en nginx:1.27.5-alpine y la SPA en el flotante 1.27-alpine, los
+    # tres con OpenSSL 3.3.3 (CVE-2026-31789). Bumpear uno solo deja a los otros
+    # con el hueco; el borde de produccion no pasa por el scan de CI (corre la
+    # imagen oficial, no un build), asi que su unica garantia es este test.
+    def from_nginx(ruta: Path) -> str:
+        tags = re.findall(r"^FROM (nginx:\S+)", ruta.read_text(encoding="utf-8"), re.M)
+        assert len(tags) == 1, f"{ruta}: {tags}"
+        return str(tags[0])
+
+    compose_prod = (RAIZ / "docker-compose.prod.yml").read_text(encoding="utf-8")
+    borde_prod = re.findall(r"^\s+image: (nginx:\S+)\s*$", compose_prod, re.M)
+    assert len(borde_prod) == 1, borde_prod
+    imagenes = {
+        "nginx/Dockerfile": from_nginx(EDGE_DOCKERFILE),
+        "frontend/Dockerfile": from_nginx(RAIZ / "frontend" / "Dockerfile"),
+        "docker-compose.prod.yml": borde_prod[0],
+    }
+    assert len(set(imagenes.values())) == 1, imagenes
+
+
 @EDGES
 def test_resuelve_con_el_dns_de_docker_y_ttl_corto(ruta: Path) -> None:
     resolver = una(leer(ruta), "resolver")
