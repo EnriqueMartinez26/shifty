@@ -77,7 +77,7 @@ if [ "$1" = compose ]; then
         shift 2
         for s in "$@"; do
           case "$s" in
-            nginx) echo "${FAKE_NGINX_IMAGE:-nginx:1.27.5-alpine}" ;;
+            nginx) echo "${FAKE_NGINX_IMAGE:-nginx:1.30.5-alpine}" ;;
             *) echo "ghcr.io/x/shifty-$s:$APP_VERSION" ;;
           esac
         done

@@ -4,7 +4,7 @@ This guide explains how to set up the development environment for Shifty on Wind
 
 ## 📋 Prerequisites
 
-- **Python 3.14.6**
+- **Python 3.14.7**
 - **Node.js 26.5.0**
 - **npm 11.17.0**
 - **uv 0.11.29**
