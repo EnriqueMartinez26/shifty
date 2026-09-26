@@ -150,10 +150,15 @@ async def test_email_distinto_respuesta_neutra_y_el_codigo_solo_va_a_la_ficha(
     assert EMAIL_CLIENTE not in str(neutra)
     # El CODIGO va solo al email de la ficha (quien pide no elige el buzon);
     # al email tipeado le llega el aviso sin codigo de AUD2-B4-05.
-    assert [destino for destino, _, _ in cola.enviados] == [
-        EMAIL_CLIENTE,
-        "atacante@example.com",
-    ]
+    # 2026-09-26: se comparan los destinatarios sin orden (y sin perder
+    # repetidos). El orden no esta garantizado: F1-03 publica codigo y aviso a
+    # la vez con gather + to_thread, y el hilo que llega primero lo decide el
+    # sistema (en Linux el aviso ganaba seguido, en CI). Garantizarlo en serie
+    # abriria un oraculo de tiempos con el broker lento. La seguridad la fijan
+    # las dos aserciones de abajo: el codigo solo a la ficha, el resto sin codigo.
+    assert sorted(destino for destino, _, _ in cola.enviados) == sorted(
+        [EMAIL_CLIENTE, "atacante@example.com"]
+    )
     con_codigo = [d for d, _, cuerpo in cola.enviados if _CODIGO.search(cuerpo)]
     assert con_codigo == [EMAIL_CLIENTE]
     assert _sin_codigo([m for m in cola.enviados if m[0] != EMAIL_CLIENTE])

@@ -591,10 +591,15 @@ async def test_el_email_del_request_se_ignora_cuando_hay_ficha_con_contacto(
     # Al email tipeado le llega el aviso SIN codigo (AUD2-B4-05): que llegue
     # algo no dice si el telefono es cliente, y el titular legitimo que tipeo
     # otra casilla sabe donde buscar el codigo.
-    assert [d for d, _a, _c in cola.enviados] == [
-        "duenio@example.com",
-        "atacante@evil.com",
-    ]
+    # 2026-09-26: se comparan los destinatarios sin orden (y sin perder
+    # repetidos). El orden no esta garantizado: F1-03 publica codigo y aviso a
+    # la vez con gather + to_thread, y el hilo que llega primero lo decide el
+    # sistema (en Linux el aviso ganaba seguido, en CI). Garantizarlo en serie
+    # abriria un oraculo de tiempos con el broker lento. La seguridad la fija
+    # _destinos_del_codigo de arriba: el codigo solo va al email de la ficha.
+    assert sorted(d for d, _a, _c in cola.enviados) == sorted(
+        ["duenio@example.com", "atacante@evil.com"]
+    )
 
 
 @pytest.mark.asyncio
