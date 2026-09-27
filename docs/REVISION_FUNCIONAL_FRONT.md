@@ -102,10 +102,10 @@ Lo más urgente:
 - **Propuesta:** un período por día (ocultar "+ Bloque"); validar `open < close`; `key={`${day.id}-${idx}`}`.
 
 ### FF-09 · Media · Usuarios
-**Estado: Vigente.** El admin de tienda ve "Administrador" y recibe 403 `PERMISSION_DENIED` (`presentation/components/organisms/UserFormModal.tsx:190`; back `core/roles.py:84-117`, `users/router.py:31,105`). Mostrar `admin` solo si `is_global_admin` o si el editado ya es admin.
+**Estado: Resuelto en 45ccf8a** (rama `tanda/c-usuarios`). `presentation/lib/userAccessRules.ts` decide desde quien mira (`useAuth`, no el User de dominio): "Administrador" solo si es superadmin o si el editado ya es admin; rol y clave bloqueados al editarse a uno mismo y sobre otro admin sin ser superadmin; "Eliminar" oculto sobre uno mismo, otro admin e inactivos. 409 y 403 muestran textos neutros y la baja fallida se avisa. Hallazgo original: el admin de tienda ve "Administrador" y recibe 403 `PERMISSION_DENIED` (`presentation/components/organisms/UserFormModal.tsx:190`; back `core/roles.py:84-117`, `users/router.py:31,105`). Mostrar `admin` solo si `is_global_admin` o si el editado ya es admin.
 
 ### FF-10 · Alta · Usuarios
-**Estado: Vigente.** 2e2b218 reemplazó el cast snake_case del alta por un mapeo explícito, pero sigue pasando `''` tal cual.
+**Estado: Resuelto en 84d54e7** (rama `tanda/c-usuarios`). `presentation/lib/userFormPayload.ts` recorta los campos antes de la validacion zod: en el alta lo vacio no viaja y en la edicion solo viaja lo cambiado (vaciar un campo con valor manda `null`). El schema zod ya no admite `''`. Hallazgo original: 2e2b218 reemplazó el cast snake_case del alta por un mapeo explícito, pero sigue pasando `''` tal cual.
 - **Síntoma:** crear sin nombre o apellido → 422; editar un usuario al que le falte nombre (para cambiar el rol) → 422; vaciar el teléfono guarda `''`.
 - **Front:** `presentation/components/organisms/UserFormModal.tsx:42-44` (`|| ''`); `presentation/containers/UserManagementContainer.tsx:54-75`; `infrastructure/repositories/HttpUserRepository.ts:79-86,96-98`; `application/validators/user.validators.ts:8-9`; `domain/use-cases/user/CreateUserUseCase.ts:29-31` (`'' ?? null` sigue siendo `''`).
 - **Back:** `users/schemas.py:25-26,43-44` (`min_length=1`); `users/router.py:113-118` (`exclude_unset`: `null` borra).

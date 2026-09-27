@@ -1,6 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { User } from '@domain/entities/User'
+import type { UserListQuery } from '@domain/repositories/IUserRepository'
 
 import { userService, UserService } from '@application/services/UserService'
 
@@ -15,13 +16,19 @@ type UpdateManagedUserInput = Parameters<UserService['updateUser']>[1]
  */
 const managedUsersKeys = {
   all: ['managed-users'] as const,
+  list: (query: UserListQuery) => ['managed-users', 'list', query] as const,
   clients: ['managed-users', 'clients'] as const
 }
 
-export const useManagedDomainUsers = () => {
+/**
+ * Busqueda en el servidor. `keepPreviousData` deja la lista anterior a la
+ * vista mientras llega la nueva, en vez de parpadear al cargando.
+ */
+export const useManagedDomainUsers = (query: UserListQuery) => {
   return useQuery<User[]>({
-    queryKey: managedUsersKeys.all,
-    queryFn: () => userService.listUsers(true)
+    queryKey: managedUsersKeys.list(query),
+    queryFn: () => userService.listUsers(query),
+    placeholderData: keepPreviousData
   })
 }
 

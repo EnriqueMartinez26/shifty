@@ -5,9 +5,12 @@ export const createUserSchema = z.object({
   // Mismo piso que `UserCreate` en el backend (min_length=12). La fuerza
   // (letra, numero, denylist) la decide el backend; aca solo el largo.
   password: z.string().min(12, 'La contraseña debe tener al menos 12 caracteres'),
-  first_name: z.string().min(2, 'Nombre muy corto').optional().or(z.literal('')),
-  last_name: z.string().min(2, 'Apellido muy corto').optional().or(z.literal('')),
-  phone: z.string().optional().or(z.literal('')),
+  // Mismos topes que `UserCreate` (min_length=1, max_length=100/50). Un campo
+  // en blanco NO llega aca: `presentation/lib/userFormPayload` lo recorta y lo
+  // vuelve ausente antes; `''` era un 422 del backend (FF-10).
+  first_name: z.string().min(1).max(100, 'Nombre muy largo').optional(),
+  last_name: z.string().min(1).max(100, 'Apellido muy largo').optional(),
+  phone: z.string().min(1).max(50, 'Teléfono muy largo').optional(),
   role: z.enum(['admin', 'staff', 'receptionist', 'client'])
 })
 

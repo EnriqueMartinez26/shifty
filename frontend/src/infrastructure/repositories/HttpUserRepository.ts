@@ -5,7 +5,7 @@ import { UserResponseDTO } from '../../application/dtos/UserDTO'
 import { UserMapper } from '../../application/mappers/UserMapper'
 import { User, type UserWriteInput } from '../../domain/entities/User'
 import { QueryOptions } from '../../domain/repositories/IRepository'
-import { IUserRepository } from '../../domain/repositories/IUserRepository'
+import type { IUserRepository, UserListQuery } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
 
@@ -72,6 +72,23 @@ export class HttpUserRepository
       return data.map(UserMapper.toDomain)
     } catch (error) {
       this.handleRepositoryError('findByRole', error)
+    }
+  }
+
+  public async list(query: UserListQuery): Promise<User[]> {
+    try {
+      // axios omite los params undefined: sin termino no viaja `q` ni `email`.
+      const { data } = await this.client.get<UserResponseDTO[]>('/users/', {
+        params: {
+          include_inactive: query.includeInactive ?? false,
+          q: query.q,
+          email: query.email,
+          limit: query.limit
+        }
+      })
+      return data.map(UserMapper.toDomain)
+    } catch (error) {
+      this.handleRepositoryError('list', error)
     }
   }
 
