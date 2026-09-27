@@ -3,6 +3,8 @@ import { MemoryRouter } from 'react-router'
 
 import type { StoreSettings } from '@application/services/StoreSettingsService'
 
+import { ConflictError } from '@shared/errors/ConflictError'
+
 import SettingsPage from './Settings'
 
 const store: StoreSettings = {
@@ -141,5 +143,117 @@ describe('SettingsPage - error de carga (N2)', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('No se pudo cargar la configuración.')
     expect(screen.queryByText('Cargando configuración...')).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage - horarios (FF-08)', () => {
+  beforeEach(() => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Horarios' }))
+  })
+
+  it('no hay "+ Bloque": un dia cerrado se abre con un solo periodo', () => {
+    expect(screen.queryByText('Bloque')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Martes' }))
+
+    expect(screen.getByLabelText<HTMLInputElement>('Apertura Martes').value).toBe('09:00')
+    expect(screen.getByLabelText<HTMLInputElement>('Cierre Martes').value).toBe('18:00')
+    expect(screen.queryByRole('button', { name: 'Abrir Martes' })).not.toBeInTheDocument()
+  })
+
+  it('tipear una hora no remonta el input (no se pierde el foco)', () => {
+    const apertura = screen.getByLabelText<HTMLInputElement>('Apertura Lunes')
+
+    fireEvent.change(apertura, { target: { value: '08:00' } })
+
+    expect(screen.getByLabelText('Apertura Lunes')).toBe(apertura)
+    expect(apertura.value).toBe('08:00')
+  })
+
+  it('apertura igual o posterior al cierre apaga Guardar y dice por que', () => {
+    fireEvent.change(screen.getByLabelText('Cierre Lunes'), { target: { value: '09:00' } })
+
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).toBeDisabled()
+    expect(screen.getByText(/No se puede guardar/)).toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage - logo', () => {
+  it('rechaza en el cliente un PNG de 1,5 MB (el backend admite 1 MB)', () => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    idleMutation.mutateAsync.mockReset()
+    const { container } = renderSettings()
+    const png = new File([new Uint8Array(1.5 * 1024 * 1024)], 'logo.png', { type: 'image/png' })
+
+    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [png] }
+    })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('La imagen supera el máximo de 1 MB.')
+    expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsPage - slug repetido (409)', () => {
+  const SLUG_TOMADO = 'Ese enlace ya lo usa otro negocio. Elegí otro.'
+  const conflicto = () => new ConflictError('conflict', { errorCode: 'RESOURCE_CONFLICT' })
+
+  beforeEach(() => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    updateStore.mockReset()
+    updateStore.mockRejectedValue(conflicto())
+  })
+
+  it('si solo cambio el slug, el 409 se atribuye al slug y se marca el campo', async () => {
+    renderSettings()
+    fireEvent.change(screen.getByLabelText('Slug de la URL'), { target: { value: 'otro-local' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+    // Una vez en el cartel de error y otra debajo del campo.
+    expect(await screen.findAllByText(SLUG_TOMADO)).toHaveLength(2)
+  })
+
+  it('si tambien cambiaron los horarios, el 409 queda con el texto neutro', async () => {
+    renderSettings()
+    fireEvent.change(screen.getByLabelText('Slug de la URL'), { target: { value: 'otro-local' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Horarios' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Martes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+    expect(
+      await screen.findByText(/Los datos chocan con un registro existente/)
+    ).toBeInTheDocument()
+    expect(screen.queryByText(SLUG_TOMADO)).not.toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage - dia legado con varios periodos', () => {
+  const partido = {
+    ...store,
+    business_hours: {
+      mon: [
+        { open: '09:00', close: '13:00' },
+        { open: '16:00', close: '20:00' }
+      ]
+    }
+  }
+
+  it('muestra los dos, frena el guardado con el motivo y "Conservar este" deja uno', () => {
+    storeQuery = { data: partido, isLoading: false, error: null }
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Horarios' }))
+    expect(screen.getByText('09:00 A 13:00')).toBeInTheDocument()
+    expect(screen.getByText('16:00 A 20:00')).toBeInTheDocument()
+
+    // Tocar OTRO dia reenvia el lunes legado: el guardado se frena.
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Martes' }))
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).toBeDisabled()
+    expect(screen.getByText(/El Lunes tiene 2 horarios guardados/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conservar 16:00 a 20:00 el Lunes' }))
+    expect(screen.getByLabelText<HTMLInputElement>('Apertura Lunes').value).toBe('16:00')
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).not.toBeDisabled()
   })
 })

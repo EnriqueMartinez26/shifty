@@ -96,7 +96,7 @@ Lo más urgente:
 **Estado: Vigente.** `presentation/containers/ClientAppointmentsContainer.tsx:62-71,182-194`: un toque cancela. Agregar confirmación.
 
 ### FF-08 · Media · Configuración, Horarios
-**Estado: Vigente.**
+**Estado: Resuelto** (tanda/d-settings: c1fe7d1 horarios; f10e046 validación de slug y rangos; 79ac6b2 logo 1 MB; 8775bec 409 del slug). Un período por día con "Abrir"/papelera, fila con `key={day.id}`, `open < close` marcado en la fila y Guardar apagado con el motivo visible. La página sigue grande (regla 29): se extrajo solo `BusinessHoursDayRow`, sin partir pestañas.
 - "+ Bloque" deja cargar dos franjas por día y el guardado falla con un 422 técnico ("Por ahora cada dia admite un solo periodo de apertura"); no valida apertura < cierre; cada cambio remonta la fila y el input pierde el foco.
 - **Front:** `presentation/pages/Settings.tsx:1025-1039` ("+ Bloque"), `:972` (key con `open`/`close`). **Back:** `stores/schemas.py:41-57` (`open < close`), `:147-161` (un período por día); `stores/router.py:88-111`.
 - **Propuesta:** un período por día (ocultar "+ Bloque"); validar `open < close`; `key={`${day.id}-${idx}`}`.
