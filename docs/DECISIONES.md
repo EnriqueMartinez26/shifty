@@ -34,10 +34,10 @@ en CLAUDE.md.
 
 | ID | Fecha | Decisión | Propuesta por | Adoptada por | Referencia |
 |----|-------|----------|---------------|--------------|------------|
-| D-20260909-01 | 2026-09-09 | El alta de tiendas es solo desde el superadmin; no existe ni vuelve el registro público. | dueño (Enrique) | dueño (Enrique) | `7445ac9` (primera aparición en CLAUDE.md); implementada en `33f4b25` |
+| D-20260909-01 | 2026-09-09 | El alta de tiendas es solo desde el superadmin; no existe ni vuelve el registro público. | Mateo | dueño (Enrique) | `7445ac9` (primera aparición en CLAUDE.md); implementada en `33f4b25` |
 | D-20260909-02 | 2026-09-09 | La zona horaria por tienda es un flujo aparte; hoy solo Argentina. | dueño (Enrique) | dueño (Enrique) | `7445ac9` (primera aparición en CLAUDE.md) |
 | D-20260909-03 | 2026-09-09 | La consolidación del panel del dueño espera su OK explícito. | dueño (Enrique) | dueño (Enrique) | `800101c` (primera aparición en CLAUDE.md) |
-| D-20260909-04 | 2026-09-09 | Sin atribución de IA en commits ni PRs (nada de `Co-Authored-By` de un modelo). | dueño (Enrique) | dueño (Enrique) | `7445ac9` (primera aparición en CLAUDE.md) |
+| D-20260909-04 | 2026-09-09 | Sin atribución de IA en commits ni PRs (nada de `Co-Authored-By` de un modelo). | Mateo | dueño (Enrique) | `7445ac9` (primera aparición en CLAUDE.md) |
 | D-20260925-01 | 2026-09-25 | Un turno en el pasado lo agenda solo la tienda (panel y lista de espera); el cliente final nunca. | Mateo | dueño (Enrique) | `13f4820`, `ff381f1`; PR [#2](https://github.com/EnriqueMartinez26/shifty/pull/2) |
 | D-20260925-02 | 2026-09-25 | Todo camino que suelta un turno vence su cobro vivo (cancelar, reprogramar y liberar desde el panel, bloqueo, webhook, job de retenciones); el cliente no suelta un turno con cobro vivo. | Mateo | dueño (Enrique) | `d317e3f`, `62d2312`, `6e47bb9` (merge `d9f19e4`); PR [#2](https://github.com/EnriqueMartinez26/shifty/pull/2) |
 | D-20260925-03 | 2026-09-25 | Opción A de la seña pendiente: un `pending_payment` no se reprograma desde el panel (409 `DEPOSIT_PENDING_RESCHEDULE_DENIED`); se cobra y después se mueve, o se cancela. | Mateo | dueño (Enrique) | `38a7059` (merge `623a755`); PR [#2](https://github.com/EnriqueMartinez26/shifty/pull/2) |
