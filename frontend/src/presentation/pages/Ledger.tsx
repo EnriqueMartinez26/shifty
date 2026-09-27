@@ -2,14 +2,20 @@ import React, { useState } from 'react'
 
 import { WalletCards } from 'lucide-react'
 
+import type { LedgerClient } from '@application/services/LedgerService'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
-import { useAddLedgerMovement, useCustomerLedger, useLedgerSummary } from '../hooks/useLedger'
-import { useStoreClients } from '../hooks/useManagedDomainUsers'
+import {
+  useAddLedgerMovement,
+  useCustomerLedger,
+  useLedgerClients,
+  useLedgerSummary
+} from '../hooks/useLedger'
 import {
   currencyFmtEsAr as currencyFmt,
   formatDateEsAr,
@@ -32,22 +38,33 @@ const inputStyle = create2000sInputStyle()
 const cardStyle = create2000sPanelStyle()
 
 const LedgerPage: React.FC = () => {
-  const clientsQuery = useStoreClients()
+  // /ledger/clients y no /users/: este sirve tambien al profesional (403 en
+  // /users/) y solo trae clientes, filtrados en el backend (FF-20).
+  // La busqueda viaja al enviarla (Enter o "Buscar"), no por tecla.
+  const [clientSearch, setClientSearch] = useState('')
+  const [submittedSearch, setSubmittedSearch] = useState('')
+  const clientsQuery = useLedgerClients(submittedSearch)
   const summaryQuery = useLedgerSummary()
   const addMovement = useAddLedgerMovement()
   const clients = clientsQuery.data ?? []
-  const [selectedClientId, setSelectedClientId] = useState<string | null>(null)
-  // Sin eleccion (o si el elegido ya no esta) se usa el primero: derivado en
-  // el render, sin un efecto que lo escriba (regla 27).
-  const selectedClient = clients.find((client) => client.id === selectedClientId) ?? clients[0]
-  const effectiveClientId = selectedClient?.id ?? null
+  // Una eleccion explicita se guarda entera y se sostiene aunque la busqueda
+  // ya no la traiga: caer al primero de otra busqueda mandaba el movimiento
+  // a otro cliente. Sin eleccion se usa el primero, derivado (regla 27).
+  const [pickedClient, setPickedClient] = useState<LedgerClient | null>(null)
+  const selectedClient = pickedClient ?? clients[0]
+  const clientOptions =
+    selectedClient && !clients.some((c) => c.public_id === selectedClient.public_id)
+      ? [selectedClient, ...clients]
+      : clients
+  const effectiveClientId = selectedClient?.public_id ?? null
   const ledgerQuery = useCustomerLedger(effectiveClientId)
-  const [movementForm, setMovementForm] = useState({
+  const emptyMovementForm = {
     movement_type: 'charge' as 'charge' | 'payment' | 'adjustment' | 'refund',
     amount: '',
     appointment_id: '',
     notes: ''
-  })
+  }
+  const [movementForm, setMovementForm] = useState(emptyMovementForm)
   const [message, setMessage] = useState('')
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -63,7 +80,7 @@ const LedgerPage: React.FC = () => {
           notes: movementForm.notes || undefined
         }
       })
-      setMovementForm({ movement_type: 'charge', amount: '', appointment_id: '', notes: '' })
+      setMovementForm(emptyMovementForm)
       setMessage('Movimiento registrado')
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo registrar el movimiento'))
@@ -144,15 +161,44 @@ const LedgerPage: React.FC = () => {
               Cliente
             </h3>
           </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              setSubmittedSearch(clientSearch)
+              // Sin eleccion explicita el cliente activo puede cambiar.
+              if (!pickedClient) setMovementForm(emptyMovementForm)
+            }}
+            className="flex gap-2"
+          >
+            <input
+              value={clientSearch}
+              onChange={(e) => setClientSearch(e.target.value)}
+              maxLength={80}
+              aria-label="Buscar cliente"
+              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
+              style={inputStyle}
+              placeholder="Buscar por nombre o telefono"
+            />
+            <button
+              type="submit"
+              className="px-4 rounded-2xl text-xs font-black uppercase"
+              style={buttonStyles2000s.default}
+            >
+              Buscar
+            </button>
+          </form>
           <select
             value={effectiveClientId ?? ''}
-            onChange={(e) => setSelectedClientId(e.target.value)}
+            onChange={(e) => {
+              setPickedClient(clientOptions.find((c) => c.public_id === e.target.value) ?? null)
+              setMovementForm(emptyMovementForm)
+            }}
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
             style={inputStyle}
           >
-            {clients.map((client) => (
-              <option key={client.id} value={client.id}>
-                {client.firstName || client.email.getValue()} {client.lastName || ''}
+            {clientOptions.map((client) => (
+              <option key={client.public_id} value={client.public_id}>
+                {client.name}
               </option>
             ))}
           </select>
@@ -224,7 +270,7 @@ const LedgerPage: React.FC = () => {
                 Estado de cuenta
               </h3>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                Cliente seleccionado: {selectedClient?.email.getValue() ?? '-'}
+                Cliente seleccionado: {selectedClient?.email ?? selectedClient?.name ?? '-'}
               </p>
             </div>
             <div className="text-right">
@@ -235,13 +281,13 @@ const LedgerPage: React.FC = () => {
                 Saldo actual
               </p>
               <p className="text-3xl font-black" style={{ color: colors2000s.orange.accent }}>
-                {currencyFmt.format(Number(ledgerQuery.data?.balance ?? 0))}
+                {currencyFmt.format(Number(ledgerQuery.balance ?? 0))}
               </p>
             </div>
           </div>
 
           <div className="space-y-3">
-            {ledgerQuery.data?.movements.map((movement) => (
+            {ledgerQuery.movements.map((movement) => (
               <div
                 key={movement.public_id}
                 className="rounded-2xl p-4 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3"
@@ -275,13 +321,31 @@ const LedgerPage: React.FC = () => {
                 </div>
               </div>
             ))}
-            {!ledgerQuery.data?.movements.length && !ledgerQuery.isLoading && (
+            {!ledgerQuery.movements.length && !ledgerQuery.isLoading && (
               <div
                 className="rounded-2xl p-6 bg-white text-sm font-bold"
                 style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
                 Este cliente todavia no tiene movimientos registrados.
               </div>
+            )}
+            {ledgerQuery.movements.length > 0 && (
+              <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+                Mostrando {ledgerQuery.movements.length} de {ledgerQuery.total}
+              </p>
+            )}
+            {ledgerQuery.hasNextPage && (
+              <button
+                type="button"
+                onClick={() => {
+                  void ledgerQuery.fetchNextPage()
+                }}
+                disabled={ledgerQuery.isFetchingNextPage}
+                className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+                style={buttonStyles2000s.default}
+              >
+                {ledgerQuery.isFetchingNextPage ? 'Cargando...' : 'Ver mas'}
+              </button>
             )}
           </div>
         </div>
