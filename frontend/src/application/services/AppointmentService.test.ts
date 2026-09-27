@@ -64,25 +64,14 @@ describe('AppointmentService', () => {
         starts_at: '2026-05-18T10:00:00Z',
         client_name: 'Bob Ross',
         client_phone: '+5491112345678',
-        notes: 'Happy little trees'
+        notes: 'Happy little trees',
+        idempotency_key: 'clave-del-formulario-1'
       }
-
-      const mockAppt = Appointment.fromPrimitives({
-        public_id: 'appt-2',
-        service_id: input.service_id,
-        service_name: 'Haircut',
-        staff_id: input.staff_id,
-        client_name: input.client_name,
-        starts_at: input.starts_at,
-        ends_at: '2026-05-18T10:30:00Z',
-        status: 'pending',
-        notes: input.notes ?? null
-      })
-      mockRepository.create.mockResolvedValue(mockAppt)
+      mockRepository.create.mockResolvedValue('appt-2')
 
       const result = await service.bookAppointment(input)
 
-      expect(result).toBe(mockAppt)
+      expect(result).toBe('appt-2')
       expect(mockRepository.create).toHaveBeenCalledWith(input)
     })
   })

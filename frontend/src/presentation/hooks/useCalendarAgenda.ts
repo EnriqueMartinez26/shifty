@@ -30,6 +30,7 @@ export const useCreateAppointment = () => {
     mutationFn: (data: CreateBookingInput) => appointmentService.bookAppointment(data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['calendar-agenda'] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] })
     }
   })
 }
