@@ -84,8 +84,12 @@ describe('HttpBookingRepository.create', () => {
     const post = jest.fn().mockRejectedValue(new Error('socket hang up'))
     const repository = new HttpBookingRepository({ post } as unknown as AxiosInstance)
 
-    await expect(repository.create(payload)).rejects.toThrow(
-      "Database operation 'create' failed: socket hang up"
-    )
+    await expect(repository.create(payload)).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'create',
+        technicalMessage: "Database operation 'create' failed: socket hang up"
+      }
+    })
   })
 })

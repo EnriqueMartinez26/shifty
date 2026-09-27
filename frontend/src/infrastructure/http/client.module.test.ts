@@ -360,3 +360,55 @@ describe('rehidratacion ante un 401', () => {
     expect(requestInterceptor({}).headers).toBeUndefined()
   })
 })
+
+describe('cuerpo de error en Blob (exportar reportes)', () => {
+  beforeEach(() => {
+    jest.resetModules()
+    mockResponseUse.mockClear()
+  })
+
+  const cargarErrorHandler = async () => {
+    await import('./client')
+    return mockResponseUse.mock.calls[0][1] as ErrorHandler
+  }
+
+  it('el codigo y el mensaje del JSON dentro del Blob llegan a quien llamo', async () => {
+    const { ValidationError } = await import('@shared/errors')
+    const errorHandler = await cargarErrorHandler()
+    const cuerpo = JSON.stringify({
+      success: false,
+      error_code: 'EXPORT_TOO_LARGE',
+      message: 'El reporte tiene mas de 5000 turnos'
+    })
+
+    const error = await errorHandler({
+      config: { url: '/reports/export', responseType: 'blob' },
+      response: { status: 422, data: new Blob([cuerpo], { type: 'application/json' }) },
+      message: 'HTTP 422'
+    }).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ValidationError)
+    expect(error).toMatchObject({
+      message: 'El reporte tiene mas de 5000 turnos',
+      context: { errorCode: 'EXPORT_TOO_LARGE', statusCode: 422 }
+    })
+  })
+
+  it('un Blob que no es JSON (HTML de un 502) se normaliza sin romper', async () => {
+    const { ServiceUnavailableError } = await import('@shared/errors')
+    const errorHandler = await cargarErrorHandler()
+
+    const error = await errorHandler({
+      config: { url: '/reports/export', responseType: 'blob' },
+      response: {
+        status: 502,
+        data: new Blob(['<html>Bad Gateway</html>'], { type: 'text/html' })
+      },
+      message: 'Request failed with status code 502'
+    }).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ServiceUnavailableError)
+    expect(error).toMatchObject({ context: { statusCode: 502 } })
+    expect((error as { context: { errorCode?: string } }).context.errorCode).toBeUndefined()
+  })
+})

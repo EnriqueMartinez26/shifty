@@ -1,49 +1,102 @@
-type ApiErrorLike = {
-  message?: unknown
-  response?: {
-    data?: {
-      detail?: unknown
-      message?: unknown
-      error_code?: unknown
-    }
-  }
-}
+import { ApplicationError } from './ApplicationError'
+import { ERROR_CODE_MESSAGES } from './errorCodes'
+import { NetworkError } from './NetworkError'
+
+type CodeCarrier = { context?: { errorCode?: unknown } }
+type WrappedError = CodeCarrier & { originalError?: unknown }
 
 /**
- * Errores de estado que necesitan una explicacion accionable.
- *
- * Ambos significan que la vista quedo desactualizada respecto del servidor:
- * el dato esta a salvo (el backend rechazo la operacion), pero el usuario
- * necesita saber que tiene que recargar en vez de ver un error crudo.
+ * Errores de estado: la vista quedo desactualizada respecto del servidor. El
+ * dato esta a salvo (el backend rechazo la operacion), pero conviene recargar.
  */
-const STATE_CONFLICT_MESSAGES: Record<string, string> = {
-  INVALID_STATUS_TRANSITION:
-    'El turno ya cambió de estado. Actualizá la agenda para ver cómo está ahora.',
-  CONCURRENT_MODIFICATION:
-    'Alguien más modificó este turno mientras lo editabas. Actualizá y volvé a intentar.',
-  PAYMENT_APPOINTMENT_REQUIRES_RELEASE:
-    'Este turno tiene un pago pendiente. Usá "Liberar" para soltarlo: así vence primero el link de pago.'
+const STATE_CONFLICT_CODES: ReadonlySet<string> = new Set([
+  'INVALID_STATUS_TRANSITION',
+  'CONCURRENT_MODIFICATION',
+  'PAYMENT_APPOINTMENT_REQUIRES_RELEASE'
+])
+
+/**
+ * Codigos cuyo `message` del servidor NO llega al usuario aunque sea un 4xx:
+ * VALIDATION_ERROR trae el texto crudo de Pydantic ("body -> email: value is
+ * not a valid email address"), los otros dos son genericos de framework.
+ */
+const SERVER_TEXT_DENYLIST: ReadonlySet<string> = new Set([
+  'VALIDATION_ERROR',
+  'HTTP_ERROR',
+  'INTERNAL_SERVER_ERROR'
+])
+
+const readCode = (value: unknown): string | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const code = (value as CodeCarrier).context?.errorCode
+  return typeof code === 'string' && code ? code : undefined
 }
+
+const originalOf = (error: unknown): unknown =>
+  typeof error === 'object' && error !== null ? (error as WrappedError).originalError : undefined
+
+/**
+ * El `error_code` del backend. El cliente HTTP lo deja en `context.errorCode`;
+ * BaseService envuelve lo que no es ApplicationError en un Error plano con el
+ * original en `originalError`, asi que tambien se busca ahi.
+ */
+export const getErrorCode = (error: unknown): string | undefined =>
+  readCode(error) ?? readCode(originalOf(error))
 
 /** Indica si el error viene de un desfasaje de estado y conviene recargar. */
 export const isStateConflictError = (error: unknown): boolean => {
-  const code = (error as ApiErrorLike | undefined)?.response?.data?.error_code
-  return typeof code === 'string' && code in STATE_CONFLICT_MESSAGES
+  const code = getErrorCode(error)
+  return code !== undefined && STATE_CONFLICT_CODES.has(code)
 }
 
-export const getErrorMessage = (error: unknown, fallback: string): string => {
-  const maybeError = error as ApiErrorLike | undefined
-  const data = maybeError?.response?.data
-  const code = data?.error_code
+const asApplicationError = (error: unknown): ApplicationError | undefined => {
+  if (error instanceof ApplicationError) return error
+  const original = originalOf(error)
+  return original instanceof ApplicationError ? original : undefined
+}
 
-  if (typeof code === 'string' && STATE_CONFLICT_MESSAGES[code]) {
-    return STATE_CONFLICT_MESSAGES[code]
+/**
+ * Status HTTP real del error (0 = sin respuesta), o undefined si no es un
+ * ApplicationError. Las clases fijan uno (ValidationError = 400 aun para un
+ * 422); el que vino del servidor esta en `context.statusCode`.
+ */
+export const getHttpStatus = (error: unknown): number | undefined => {
+  const appError = asApplicationError(error)
+  if (!appError) return undefined
+  const status = appError.context?.statusCode
+  return typeof status === 'number' ? status : appError.statusCode
+}
+
+const serverMessageFor = (error: unknown, code: string | undefined): string | undefined => {
+  const appError = asApplicationError(error)
+  if (!appError || !appError.message.trim()) return undefined
+  // Texto armado en el front ("No se pudo conectar con el servidor.").
+  if (appError instanceof NetworkError) return appError.message
+  const status = getHttpStatus(appError) ?? 0
+  const isClientError = status >= 400 && status < 500
+  if (!appError.isOperational || !isClientError) return undefined
+  if (code !== undefined && SERVER_TEXT_DENYLIST.has(code)) return undefined
+  return appError.message
+}
+
+/**
+ * Texto para mostrarle al usuario, en este orden:
+ * 1. `overrides[code]`: la pantalla sabe decirlo mejor.
+ * 2. La tabla de codigos (errorCodes.ts).
+ * 3. El mensaje del servidor, solo si es un 4xx operacional y su codigo no
+ *    esta en la lista negra (regla 20: nada crudo ni tecnico).
+ * 4. `fallback`.
+ */
+export const getErrorMessage = (
+  error: unknown,
+  fallback: string,
+  overrides: Partial<Record<string, string>> = {}
+): string => {
+  const code = getErrorCode(error)
+  if (code !== undefined) {
+    const override = Object.hasOwn(overrides, code) ? overrides[code] : undefined
+    const known = override ?? ERROR_CODE_MESSAGES.get(code)
+    if (known) return known
   }
-
-  const detail = data?.detail
-  const message = data?.message ?? maybeError?.message
-
-  if (typeof detail === 'string' && detail.trim()) return detail
-  if (typeof message === 'string' && message.trim()) return message
-  return fallback
+  return serverMessageFor(error, code) ?? fallback
 }

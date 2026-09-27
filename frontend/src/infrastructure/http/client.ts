@@ -111,6 +111,30 @@ const isAuthPath = (url: string | undefined) =>
  */
 const isLoginPath = (url: string | undefined) => Boolean(url && url.includes('/auth/login'))
 
+const readBlobText = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(blob)
+  })
+
+/**
+ * Con `responseType: 'blob'` (exportar reportes) el cuerpo del error tambien
+ * llega como Blob y normalizeApiError no veia ni el `error_code` ni el
+ * mensaje. Si el texto es JSON se reemplaza por el objeto; si no (el HTML de
+ * un 502 de nginx), queda como vino.
+ */
+const parseBlobErrorBody = async (error: { response?: { data?: unknown } }) => {
+  const data = error.response?.data
+  if (!error.response || !(data instanceof Blob)) return
+  try {
+    error.response.data = JSON.parse(await readBlobText(data)) as unknown
+  } catch {
+    /* cuerpo ilegible: se normaliza como error sin sobre */
+  }
+}
+
 apiClient.interceptors.response.use(
   (response) => {
     response.data = unwrapApiEnvelope(response.data, response.status)
@@ -136,6 +160,7 @@ apiClient.interceptors.response.use(
       }
     }
 
+    await parseBlobErrorBody(error)
     const normalizedError = normalizeApiError(error)
     const payload = error.response?.data
 

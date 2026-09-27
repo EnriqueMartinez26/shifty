@@ -4,6 +4,9 @@ import {
   InternalServerError,
   NetworkError,
   NotFoundError,
+  PaymentRequiredError,
+  RateLimitError,
+  ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
 } from '@shared/errors'
@@ -157,6 +160,88 @@ describe('normalizeApiError', () => {
         statusCode: 500
       }
     })
+  })
+})
+
+describe('normalizeApiError: 402, 429 y 502/503 ya no son un 500', () => {
+  const envelope = (errorCode: string, message: string, detail?: unknown) => ({
+    success: false,
+    error_code: errorCode,
+    message,
+    detail
+  })
+
+  it('un 402 es PaymentRequiredError operacional con su codigo', () => {
+    const error = normalizeApiError({
+      response: {
+        status: 402,
+        data: envelope('SUBSCRIPTION_SUSPENDED', 'Tu suscripcion esta suspendida')
+      }
+    })
+
+    expect(error).toBeInstanceOf(PaymentRequiredError)
+    expect(error).toMatchObject({
+      isOperational: true,
+      context: { errorCode: 'SUBSCRIPTION_SUSPENDED', statusCode: 402 }
+    })
+  })
+
+  it('un 429 es RateLimitError y conserva el Retry-After en segundos', () => {
+    const error = normalizeApiError({
+      response: {
+        status: 429,
+        headers: { 'retry-after': '42' },
+        data: envelope('RATE_LIMITED', 'Demasiadas solicitudes')
+      }
+    })
+
+    expect(error).toBeInstanceOf(RateLimitError)
+    expect(error).toMatchObject({
+      isOperational: true,
+      context: { errorCode: 'RATE_LIMITED', statusCode: 429, retryAfter: 42 }
+    })
+  })
+
+  it('sin header, toma el retry_after del detail de RateLimitException', () => {
+    const error = normalizeApiError({
+      response: { status: 429, data: envelope('RATE_LIMITED', 'Espera', { retry_after: 30 }) }
+    })
+
+    expect(error.context).toMatchObject({ retryAfter: 30 })
+  })
+
+  it('un Retry-After que no son segundos se descarta', () => {
+    const error = normalizeApiError({
+      response: {
+        status: 429,
+        headers: { 'retry-after': 'Wed, 21 Oct 2026 07:28:00 GMT' },
+        data: envelope('RATE_LIMITED', 'Espera')
+      }
+    })
+
+    expect(error.context?.retryAfter).toBeUndefined()
+  })
+
+  it.each([502, 503])('un %i es ServiceUnavailableError con el status real', (status) => {
+    const error = normalizeApiError({
+      response: {
+        status,
+        headers: { 'retry-after': '5' },
+        data: envelope('RATE_LIMIT_UNAVAILABLE', 'Limitador caido')
+      }
+    })
+
+    expect(error).toBeInstanceOf(ServiceUnavailableError)
+    expect(error).toMatchObject({
+      isOperational: true,
+      context: { statusCode: status, retryAfter: 5 }
+    })
+  })
+
+  it('un error ya normalizado pasa tal cual, tambien las clases nuevas', () => {
+    const original = new RateLimitError('ya normalizado', { retryAfter: 3 })
+
+    expect(normalizeApiError(original)).toBe(original)
   })
 })
 

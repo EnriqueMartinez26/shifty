@@ -144,9 +144,14 @@ describe('HttpUserRepository lecturas', () => {
     const { get, repository } = createReadRepository()
     get.mockRejectedValue(new Error('Network Error'))
 
-    await expect(repository.findAll()).rejects.toThrow(
-      new InternalServerError("Database operation 'findAll' failed: Network Error")
-    )
+    await expect(repository.findAll()).rejects.toThrow(InternalServerError)
+    await expect(repository.findAll()).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'findAll',
+        technicalMessage: "Database operation 'findAll' failed: Network Error"
+      }
+    })
   })
 
   it('findById devuelve el usuario mapeado', async () => {
@@ -191,9 +196,13 @@ describe('HttpUserRepository lecturas', () => {
     const { get, repository } = createReadRepository()
     get.mockRejectedValue(new Error('caido'))
 
-    await expect(repository.findByEmail(Email.create('ana@example.com'))).rejects.toThrow(
-      "Database operation 'findByEmail' failed: caido"
-    )
+    await expect(repository.findByEmail(Email.create('ana@example.com'))).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'findByEmail',
+        technicalMessage: "Database operation 'findByEmail' failed: caido"
+      }
+    })
   })
 
   it('findByRole filtra por el rol y mapea cada usuario', async () => {
@@ -229,9 +238,13 @@ describe('HttpUserRepository.delete', () => {
     const { remove, repository } = createReadRepository()
     remove.mockRejectedValue(new Error('caido'))
 
-    await expect(repository.delete('usr-1')).rejects.toThrow(
-      "Database operation 'delete' failed: caido"
-    )
+    await expect(repository.delete('usr-1')).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'delete',
+        technicalMessage: "Database operation 'delete' failed: caido"
+      }
+    })
   })
 })
 
@@ -241,8 +254,15 @@ describe('HttpUserRepository escrituras que fallan', () => {
     patch.mockRejectedValue('respuesta rara')
 
     await expect(repository.update('usr-1', { firstName: 'Ana' })).rejects.toThrow(
-      new InternalServerError("Database operation 'update' failed: Unknown repository error")
+      InternalServerError
     )
+    await expect(repository.update('usr-1', { firstName: 'Ana' })).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'update',
+        technicalMessage: "Database operation 'update' failed: Unknown repository error"
+      }
+    })
   })
 
   it('create deja pasar un error de aplicacion sin envolverlo', async () => {

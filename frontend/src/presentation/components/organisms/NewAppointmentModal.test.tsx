@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import { ConflictError } from '@shared/errors'
+import { ConflictError, ValidationError } from '@shared/errors'
 import { argentinaLocalToUtcIso } from '@shared/utils/argentinaTime'
 
 import { NewAppointmentModal } from './NewAppointmentModal'
@@ -194,7 +194,9 @@ describe('NewAppointmentModal', () => {
 
   it('un error que no es de conflicto muestra su mensaje', async () => {
     conOtp(false)
-    mockCrearTurno.mockRejectedValue(new Error('El servicio no esta disponible'))
+    mockCrearTurno.mockRejectedValue(
+      new ValidationError('El servicio no esta disponible', { statusCode: 400 })
+    )
     const { container } = render(<NewAppointmentModal isOpen onClose={jest.fn()} />)
 
     completarFormulario(container)

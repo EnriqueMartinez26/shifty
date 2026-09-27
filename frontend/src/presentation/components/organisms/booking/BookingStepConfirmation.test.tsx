@@ -4,6 +4,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
+import { ConflictError, ValidationError } from '@shared/errors'
+
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
 
@@ -305,7 +307,9 @@ describe('BookingStepConfirmation', () => {
     })
 
     it('un codigo rechazado muestra el motivo y no queda aplicado', async () => {
-      mockPreviewPromotion.mockRejectedValue(new Error('El codigo vencio'))
+      mockPreviewPromotion.mockRejectedValue(
+        new ValidationError('El codigo vencio', { statusCode: 400 })
+      )
       const onPromotionCodeChange = jest.fn()
       render(<BookingStepConfirmation {...props({ onPromotionCodeChange })} />)
 
@@ -468,7 +472,9 @@ describe('BookingStepConfirmation', () => {
 
     it('si la reserva falla vuelve al formulario con el aviso de horario ocupado', async () => {
       const base = completo()
-      base.onConfirm = jest.fn().mockRejectedValue(new Error('Horario ocupado'))
+      base.onConfirm = jest
+        .fn()
+        .mockRejectedValue(new ConflictError('Horario ocupado', { statusCode: 409 }))
       render(<BookingStepConfirmation {...base} />)
       aceptarTerminos()
       fireEvent.click(botonReservar())

@@ -14,9 +14,14 @@ import {
   ForbiddenErrorHandler,
   ConflictErrorHandler,
   InternalServerErrorHandler,
-  NetworkErrorHandler
+  NetworkErrorHandler,
+  TransientErrorHandler
 } from './infrastructure/setup/SpecificHandlers'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
+import {
+  refreshSubscriptionOnSuspension,
+  shouldRetryQuery
+} from './presentation/lib/queryClientPolicies'
 import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
 import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
 
@@ -35,6 +40,7 @@ globalErrorHandler.registerHandler(new ForbiddenErrorHandler())
 globalErrorHandler.registerHandler(new ConflictErrorHandler())
 globalErrorHandler.registerHandler(new InternalServerErrorHandler())
 globalErrorHandler.registerHandler(new NetworkErrorHandler())
+globalErrorHandler.registerHandler(new TransientErrorHandler())
 
 // Listen for global window runtime errors
 window.addEventListener('error', (event) => {
@@ -55,12 +61,14 @@ const queryClient = new QueryClient({
   }),
   mutationCache: new MutationCache({
     onError: (error: unknown) => {
+      refreshSubscriptionOnSuspension(error, queryClient)
       void globalErrorHandler.handle(error)
     }
   }),
   defaultOptions: {
     queries: {
-      retry: 1,
+      // Un reintento, y solo ante red o 5xx: un 4xx no cambia por repetirlo.
+      retry: shouldRetryQuery,
       refetchOnWindowFocus: false,
       // Sin esto (default 0) cada navegacion re-dispara TODAS las queries de la
       // pantalla. 30s de frescura corta el refetch redundante sin mostrar datos
