@@ -106,6 +106,7 @@ async def test_dos_workers_del_outbox_no_duplican_la_oferta(
             "starts_at": slot.isoformat(),
             "client_name": "Titular",
             "client_phone": "+5491155559999",
+            "accepts_terms": True,
             "idempotency_key": "espera-doble-000001",
         },
     )
@@ -118,7 +119,7 @@ async def test_dos_workers_del_outbox_no_duplican_la_oferta(
 
     enviados: list[tuple[str, str, str]] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append((to, subject, body))
         return True
 

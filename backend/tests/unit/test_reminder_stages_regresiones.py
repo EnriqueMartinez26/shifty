@@ -46,18 +46,13 @@ async def test_el_recordatorio_no_se_manda_al_email_tecnico_noreply(
 ) -> None:
     enviados: list[str] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append(to)
         return True
 
-    async def sin_whatsapp(*args: Any, **kwargs: Any) -> bool:
-        return False
-
     monkeypatch.setattr(tasks, "_send_email", buzon)
-    monkeypatch.setattr(tasks, "_send_whatsapp", sin_whatsapp)
 
     resultado = await tasks.notify_client_reminder(
-        phone="5491155550000",
         email="5491155550000@storeABC.noreply",
         details={"public_id": "appt-1", "service": "Corte", "staff": "Ana"},
     )

@@ -1,0 +1,16 @@
+# /etc/cron.d/shifty-guard -- guard y chequeos del host (F0-21, F0-23, F0-20).
+#
+# Instalar: install -m 0644 deploy/cron/shifty-guard /etc/cron.d/shifty-guard
+# El nombre no lleva punto: cron.d ignora esos archivos. Las rutas asumen el
+# clon en /opt/shifty; ajustarlas si vive en otro lado. La configuracion
+# (DOMAIN, alertas, BACKUP_DIR) sale de /etc/shifty/ops.env.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+# Cada minuto: reinicia los contenedores unhealthy (tope 3 por hora y aviso).
+* * * * * root /bin/bash /opt/shifty/scripts/guard.sh >> /var/log/shifty/guard.log 2>&1
+# Cada hora: NTP, certificado, disco, memoria de contenedores y docker stats.
+7 * * * * root /bin/bash /opt/shifty/scripts/checks.sh >> /var/log/shifty/checks.log 2>&1
+# Cada hora: el ultimo backup exitoso no puede tener mas de 26 h.
+17 * * * * root /bin/bash /opt/shifty/scripts/backup-check.sh >> /var/log/shifty/backup-check.log 2>&1

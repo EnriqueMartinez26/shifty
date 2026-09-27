@@ -1,0 +1,15 @@
+# /etc/cron.d/shifty-pg-top -- top 20 de consultas de pg_stat_statements (F5-03).
+#
+# Instalar: install -m 0644 deploy/cron/shifty-pg-top /etc/cron.d/shifty-pg-top
+# Corre dentro del contenedor del backend (psycopg2 y MIGRATION_DATABASE_URL,
+# el rol dueno, estan ahi). El compose de produccion exige APP_VERSION: se toma
+# del deploy en curso (.deploy/current). La salida queda en pg-top.log, que
+# rota deploy/logrotate/shifty (/var/log/shifty/*.log). Sin --reset: los
+# acumulados se comparan semana a semana; reiniciar es decision del dueno.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=""
+
+# Lunes 06:23 en la zona horaria del host: cron.d no fija UTC (el timer de
+# systemd del backup si). En un VPS en UTC son las 03:23 de Argentina.
+23 6 * * 1 root cd /opt/shifty && APP_VERSION="$(head -n 1 .deploy/current)" docker compose exec -T backend python scripts/pg_top_queries.py >> /var/log/shifty/pg-top.log 2>&1

@@ -8,6 +8,13 @@ triggers ni constraints) para simular un bug o un acceso directo a la base:
 - La exclusion GiST ``ex_appointments_no_active_overlap`` rechaza un segundo
   turno activo que se superponga para el mismo profesional, y deja pasar el
   mismo turno si esta cancelado (el WHERE de la constraint).
+- La base rechaza un segundo usuario cuyo email difiera del existente solo
+  en mayusculas, aunque el camino de escritura se olvide de normalizar
+  (auditoria B3-01, 2026-09-16). Desde F1-12 (2026-09-24) lo frena primero
+  ``ck_users_email_lower`` (el email se guarda en minusculas). El indice
+  funcional ``uq_users_email_lower`` se retiro con PV-01 (2026-09-25,
+  ``4b6d8f0a2c13``): la unicidad la llevan ``uq_users_email_non_client``
+  (global) y ``uq_users_client_email_per_store`` (por tienda).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -24,7 +31,11 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
     create_staff,
 )
-from tests.postgres.conftest import auth_headers, register_and_login
+from tests.postgres.conftest import (
+    auth_headers,
+    register_and_login,
+    seed_store_and_admin,
+)
 
 pytestmark = pytest.mark.postgres
 
@@ -138,3 +149,54 @@ async def test_la_exclusion_gist_frena_la_doble_reserva_aunque_el_codigo_falle(
 
     # Y un turno activo que NO se superpone entra sin problema.
     await _copiar_turno(owner_engine, turno, minutos=30, status="confirmed")
+
+
+async def _copiar_usuario(
+    owner_engine: AsyncEngine, email: str, *, nuevo_email: str
+) -> None:
+    """Inserta una copia del usuario con otro email, saltando la aplicacion."""
+    nuevo = str(ulid.ULID())
+    async with owner_engine.begin() as conn:
+        columnas = [
+            r[0]
+            for r in (
+                await conn.execute(
+                    text(
+                        "select column_name from information_schema.columns "
+                        "where table_schema='public' and table_name='users' "
+                        "order by ordinal_position"
+                    )
+                )
+            ).all()
+        ]
+        reemplazos = {"id": ":nuevo", "email": ":nuevo_email"}
+        seleccion = ", ".join(reemplazos.get(c, c) for c in columnas)
+        await conn.execute(
+            text(
+                f"insert into users ({', '.join(columnas)}) "
+                f"select {seleccion} from users where email = :email"
+            ),
+            {"nuevo": nuevo, "nuevo_email": nuevo_email, "email": email},
+        )
+
+
+@pytest.mark.asyncio
+async def test_la_base_frena_la_colision_de_mayusculas_del_email(
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    # Auditoria B3-01 (2026-09-16): POST /users/ insertaba "COLISION@x.com"
+    # junto a "colision@x.com" y el login de ambos pasaba a 500. La columna
+    # email es unica case-sensitive, asi que esa segunda fila entraba. Hoy la
+    # rechaza ck_users_email_lower (F1-12: el email se guarda en minusculas),
+    # sin importar por donde se escriba. El funcional uq_users_email_lower ya
+    # no existe (PV-01, 4b6d8f0a2c13).
+    await seed_store_and_admin(app_sessions, slug="email-idx", email="dueno@demo.com")
+
+    with pytest.raises(IntegrityError, match="ck_users_email_lower"):
+        await _copiar_usuario(
+            owner_engine, "dueno@demo.com", nuevo_email="DUENO@demo.com"
+        )
+
+    # Un email distinto de verdad entra sin problema: el indice no estorba.
+    await _copiar_usuario(owner_engine, "dueno@demo.com", nuevo_email="socio@demo.com")

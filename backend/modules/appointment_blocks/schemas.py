@@ -1,6 +1,55 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field, model_validator
+
+from core.utils import ensure_utc_aware, now_utc
+from core.validation import reject_payload_control_chars
+
+# Tope de duracion de UN rango de bloqueo (AUD2-B1-10). Regla 9 aplicada a
+# una duracion: sin cota superior, un bloqueo de 2026 a 2036 era valido y la
+# invalidacion del cache recorria ~3650 dias con un INCR + EXPIRE por cada
+# uno, sobre el mismo Redis que sostiene el rate limit y la idempotencia de
+# cobros. Un anio entero (con bisiesto) cubre una licencia larga.
+MAX_BLOCK_DURATION = timedelta(days=366)
+
+# Ventana de los instantes que puede mandar un request (revision de
+# perf/f4-back, 2026-09-24): 9999-12-31 o 0001-01-01 hacian 500 despues del
+# commit, en la invalidacion del cache, y el bloqueo imposible quedaba en la
+# agenda. Hasta 2 anios hacia atras (cargar una ausencia pasada) y 2 anios
+# hacia adelante mas la duracion maxima de un bloqueo.
+BLOCK_WINDOW = timedelta(days=730)
+
+
+def block_instants_error(*instants: datetime | None) -> str | None:
+    """Motivo si algun instante mandado cae fuera de ``BLOCK_WINDOW``.
+
+    Solo para los valores que trae el request: el PATCH no revalida el
+    extremo que no cambia (editar el motivo de un bloqueo viejo sigue).
+    """
+    ahora = now_utc()
+    desde = ahora - BLOCK_WINDOW
+    hasta = ahora + BLOCK_WINDOW + MAX_BLOCK_DURATION
+    for instante in instants:
+        if instante is not None and not desde <= ensure_utc_aware(instante) <= hasta:
+            return "La fecha del bloqueo esta fuera del rango permitido"
+    return None
+
+
+def block_range_error(starts_at: datetime, ends_at: datetime) -> str | None:
+    """Motivo por el que un rango de bloqueo no vale, o None si vale.
+
+    Una sola regla para los schemas de entrada y para el PATCH del service,
+    que decide sobre el rango que dejaria el cambio (puede venir un solo
+    extremo). Un instante naive se toma como UTC, igual que en el resto del
+    modulo.
+    """
+    inicio = ensure_utc_aware(starts_at)
+    fin = ensure_utc_aware(ends_at)
+    if inicio >= fin:
+        return "El inicio debe ser anterior al fin"
+    if fin - inicio > MAX_BLOCK_DURATION:
+        return f"Un bloqueo no puede durar mas de {MAX_BLOCK_DURATION.days} dias"
+    return None
 
 
 class AppointmentBlockBase(BaseModel):
@@ -11,8 +60,22 @@ class AppointmentBlockBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "AppointmentBlockBase":
-        if self.starts_at >= self.ends_at:
-            raise ValueError("El inicio debe ser anterior al fin")
+        error = block_instants_error(self.starts_at, self.ends_at) or block_range_error(
+            self.starts_at, self.ends_at
+        )
+        if error:
+            raise ValueError(error)
+        return self
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "AppointmentBlockBase":
+        # El motivo lo tipea un admin, pero se PUBLICA: sale como motivo del
+        # slot en la disponibilidad, en el listado del panel y en el cuerpo
+        # del mail de cancelacion en bloque (regla 19: "texto que se publica",
+        # sin importar quien lo tipeo). Se valida al escribir, igual que la
+        # tienda y el personal: una fila legada con un invisible se sigue
+        # leyendo.
+        self.reason = reject_payload_control_chars(self.reason) or ""
         return self
 
 
@@ -33,8 +96,16 @@ class StoreWideBlockCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self) -> "StoreWideBlockCreate":
-        if self.starts_at >= self.ends_at:
-            raise ValueError("El inicio debe ser anterior al fin")
+        error = block_instants_error(self.starts_at, self.ends_at) or block_range_error(
+            self.starts_at, self.ends_at
+        )
+        if error:
+            raise ValueError(error)
+        return self
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "StoreWideBlockCreate":
+        self.reason = reject_payload_control_chars(self.reason) or ""
         return self
 
 
@@ -73,6 +144,16 @@ class AppointmentBlockUpdate(BaseModel):
     ends_at: datetime | None = None
     reason: str | None = Field(None, max_length=255)
     is_active: bool | None = None
+    # Si el bloqueo pasa a cubrir turnos reservados (moverlo, agrandarlo,
+    # reactivarlo), sin este flag el PATCH responde 409 con la cantidad; con
+    # el flag (solo administradores) se cancelan los que se pueden y se avisa
+    # al cliente. Mismo contrato que el alta (AUD2-B1-01).
+    cancel_affected: bool = False
+
+    @model_validator(mode="after")
+    def reject_control_chars_in_reason(self) -> "AppointmentBlockUpdate":
+        self.reason = reject_payload_control_chars(self.reason)
+        return self
 
 
 class AppointmentBlockResponse(BaseModel):
@@ -113,8 +194,11 @@ class BlockPreviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "BlockPreviewRequest":
-        if self.starts_at >= self.ends_at:
-            raise ValueError("El inicio debe ser anterior al fin")
+        error = block_instants_error(self.starts_at, self.ends_at) or block_range_error(
+            self.starts_at, self.ends_at
+        )
+        if error:
+            raise ValueError(error)
         if self.recurrence != "none" and self.recurrence_until is None:
             raise ValueError(
                 "recurrence_until es obligatorio cuando recurrence no es none"
@@ -135,7 +219,7 @@ class AffectedAppointmentResponse(BaseModel):
     status: str
     # None = se cancela con cancel_affected; "pending_payment" = esperando la
     # sena en Mercado Pago (liberar a mano); "has_deposit" = sena acreditada
-    # (decision del dueno).
+    # (decision de Mateo).
     blocker: str | None = None
     cancellable: bool
 

@@ -1,25 +1,16 @@
-import struct
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from core.exceptions import AppException
 from core.responses import is_canonical_payload
 from core.validation import reject_control_chars, reject_payload_control_chars
 from modules.appointments.schemas import (
     AppointmentCreate,
     AppointmentNotesStaffUpdate,
 )
-from modules.stores.media import exceeds_pixel_budget
-
-
-def _png_with_dims(width: int, height: int) -> bytes:
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + b"\x00\x00\x00\x0d"
-        + b"IHDR"
-        + struct.pack(">II", width, height)
-        + b"\x00" * 32
-    )
+from modules.stores.media import validate_image
+from tests.unit.imagenes_sinteticas import png
 
 
 def test_reject_control_chars_bloquea_bidi_y_zero_width() -> None:
@@ -37,12 +28,17 @@ def test_reject_control_chars_bloquea_bidi_y_zero_width() -> None:
     assert reject_control_chars("Juan Pérez\nnota") == "Juan Pérez\nnota"
 
 
-def test_exceeds_pixel_budget_detecta_bomba_de_pixeles() -> None:
-    assert exceeds_pixel_budget(_png_with_dims(30000, 30000), "image/png") is True
-    assert exceeds_pixel_budget(_png_with_dims(512, 512), "image/png") is False
-    # Sin dimensiones determinables no bloquea (best-effort; el cap de 2MB acota).
+def test_la_bomba_de_pixeles_se_rechaza_y_sin_dimensiones_tambien() -> None:
+    assert validate_image(png(512, 512), "cover") == "image/png"
+    with pytest.raises(AppException) as bomba:
+        validate_image(png(30000, 30000), "cover")
+    assert bomba.value.error_code == "IMAGE_TOO_LARGE_DIMENSIONS"
+    # F1-26: fail-closed. Antes una imagen sin dimensiones legibles pasaba
+    # ("best effort"); los topes por tipo viven en tests/unit/test_topes_de_imagen.py.
     sin_ihdr = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-    assert exceeds_pixel_budget(sin_ihdr, "image/png") is False
+    with pytest.raises(AppException) as ilegible:
+        validate_image(sin_ihdr, "cover")
+    assert ilegible.value.error_code == "INVALID_IMAGE"
 
 
 def test_is_canonical_payload_requires_complete_envelope() -> None:
@@ -83,3 +79,38 @@ def test_appointment_create_rejects_control_chars_in_notes() -> None:
 def test_appointment_notes_staff_update_rejects_control_chars_in_notes() -> None:
     with pytest.raises(ValueError, match="caracteres de control"):
         AppointmentNotesStaffUpdate(notes_staff="Nota mala\x0e")
+
+
+def test_montos_de_promocion_tienen_techo_de_negocio() -> None:
+    """Regla 9: todo numero de la API lleva ge Y le.
+
+    2026-09-17, hallazgo B2-15: ``value`` y ``min_service_amount`` de
+    promotions/schemas.py tenian cota inferior y no superior. Un cupon
+    "fixed" de mil millones se aceptaba y despues se recortaba en silencio en
+    ``_calculate_discount``. El techo es el mismo 10_000_000 que ya usan
+    payments/schemas.py y ledger/schemas.py.
+    """
+    from decimal import Decimal
+
+    from pydantic import ValidationError
+
+    from modules.promotions.schemas import PromotionCreate, PromotionUpdate
+
+    base: dict[str, object] = {
+        "code": "TOPE10",
+        "title": "Tope",
+        "promotion_type": "fixed",
+    }
+    PromotionCreate.model_validate({**base, "value": Decimal("10000000")})
+    PromotionCreate.model_validate(
+        {**base, "value": Decimal("1"), "min_service_amount": Decimal("10000000")}
+    )
+
+    excedido = Decimal("10000000.01")
+    for campo in ("value", "min_service_amount"):
+        with pytest.raises(ValidationError):
+            PromotionCreate.model_validate(
+                {**base, "value": Decimal("1"), campo: excedido}
+            )
+        with pytest.raises(ValidationError):
+            PromotionUpdate.model_validate({campo: excedido})

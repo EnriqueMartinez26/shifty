@@ -1,11 +1,14 @@
+import logging
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase
 
 from core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # ContextVars para aislamiento multi-tenant
 _current_store_id: ContextVar[str | None] = ContextVar("current_store_id", default=None)
@@ -16,6 +19,11 @@ def set_tenant_context(store_id: str | None, is_admin: bool = False) -> None:
     """Establece el contexto del tenant para la sesión actual."""
     _current_store_id.set(store_id)
     _is_global_admin.set(is_admin)
+
+
+def current_tenant_context() -> tuple[str | None, bool]:
+    """Contexto de tenant vigente (``store_id``, ``is_global_admin``)."""
+    return _current_store_id.get(), _is_global_admin.get()
 
 
 class TenantSession(AsyncSession):
@@ -66,9 +74,51 @@ async def _apply_tenant_context(session: AsyncSession) -> None:
     )
 
 
+@asynccontextmanager
+async def tenant_bypass(session: AsyncSession) -> AsyncIterator[None]:
+    """Bypass de RLS acotado a un bloque, con el reset garantizado en la conexion.
+
+    Nueve bloques hacian ``set_tenant_context(None, True)`` + apply a la entrada
+    y, en el ``finally``, solo ``set_tenant_context(None, False)``: el ContextVar
+    volvia a cero pero la CONEXION seguia con
+    ``set_config('app.is_global_admin','true')``. El motivo es ``commit()`` de
+    arriba, que reaplica el contexto vigente AL MOMENTO del commit -- dentro del
+    bloque, el de bypass --, asi que la transaccion recien abierta nacia con el
+    bypass puesto y el ``finally`` no la alcanzaba. Un ``execute`` agregado
+    despues del bloque leia todas las tiendas, y en SQLite ningun test lo veia
+    (B3-13, 2026-09-17).
+
+    Con excepcion adentro NO se reaplica a la salida: tras un ``flush`` o
+    ``commit`` fallido ``session.connection()`` levanta ``PendingRollbackError``
+    (en Postgres, ``InFailedSQLTransaction``) y ese error secundario tapaba al
+    original: un ``IntegrityError`` que ``main.py`` mapea a 409 salia como 500
+    (revision V-diff, 2026-09-18). En ese camino se resetean los ContextVars y
+    se hace ``rollback``: termina la transaccion, y con ella el ``set_config``
+    local del bypass, y ``TenantSession.rollback`` reaplica ``(None, False)``.
+    Si el rollback tambien falla se descarta ese error secundario; la
+    excepcion que sale es siempre la del bloque.
+    """
+    set_tenant_context(None, True)
+    try:
+        await _apply_tenant_context(session)
+        yield
+    except BaseException:
+        set_tenant_context(None, False)
+        try:
+            await session.rollback()
+        except Exception:
+            logger.warning("tenant_bypass_rollback_fallo", exc_info=True)
+        raise
+    set_tenant_context(None, False)
+    await _apply_tenant_context(session)
+
+
 # El pool solo se dimensiona para PostgreSQL. SQLite (tests) usa StaticPool,
 # que no acepta pool_size ni max_overflow.
-_engine_kwargs: dict[str, object] = {"pool_pre_ping": True}
+# hide_parameters (PV-08): sin esto el texto de todo DBAPIError terminaba en
+# "[parameters: (...)]" con emails y telefonos, y de ahi al log db_error y a
+# Sentry.
+_engine_kwargs: dict[str, object] = {"pool_pre_ping": True, "hide_parameters": True}
 if settings.DATABASE_URL.startswith("postgresql"):
     _engine_kwargs.update(
         pool_size=settings.DB_POOL_SIZE,
@@ -87,10 +137,6 @@ SessionLocal = async_sessionmaker(
 )
 
 
-class Base(DeclarativeBase):
-    pass
-
-
 async def get_db() -> AsyncIterator[AsyncSession]:
     """Dependency para FastAPI"""
     async with SessionLocal() as session:
@@ -101,3 +147,41 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 # Alias para uso fuera de FastAPI (Celery tasks, scripts, etc.)
 # Las tareas de Celery usan esto con "async with AsyncSessionFactory() as db:"
 AsyncSessionFactory = SessionLocal
+
+
+class RlsBypassError(RuntimeError):
+    """El rol con el que se conecta el proceso puede saltar RLS."""
+
+
+async def assert_rls_capable_role(bind: Any) -> None:
+    """Levanta si el proceso se conecta con un rol que saltea RLS.
+
+    Todo el aislamiento multi-tenant depende de que ``DATABASE_URL`` use un rol
+    NOSUPERUSER/NOBYPASSRLS (shifty_app). Un superusuario ignora FORCE ROW LEVEL
+    SECURITY y desactiva el aislamiento en silencio.
+
+    Vive aca y no en ``main.py`` porque la API no es el unico proceso que se
+    conecta: el worker y beat usan la MISMA ``DATABASE_URL`` -del mismo bloque
+    de compose que ``MIGRATION_DATABASE_URL``, con la que se la confunde por un
+    typo de una palabra- y tocan turnos, pagos y outbox de todas las tiendas.
+    Que el chequeo existiera solo en el lifespan dejaba a Celery trabajando sin
+    aislamiento, en silencio (AUD2-B7-08, 2026-09-20).
+
+    ``bind`` es el engine y se pasa explicito para poder doblarlo en tests.
+    """
+    async with bind.connect() as conn:
+        if conn.dialect.name != "postgresql":
+            return
+        row = (
+            await conn.execute(
+                text(
+                    "SELECT rolsuper, rolbypassrls FROM pg_roles "
+                    "WHERE rolname = current_user"
+                )
+            )
+        ).one_or_none()
+    if row is not None and (row[0] or row[1]):
+        raise RlsBypassError(
+            "La app NO puede conectarse con un rol superusuario o con BYPASSRLS: "
+            "eso desactiva el aislamiento multi-tenant (RLS). Usa el rol shifty_app."
+        )

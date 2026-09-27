@@ -25,6 +25,10 @@ class AuditAction(str, enum.Enum):
     UPDATE = "update"
     DELETE = "delete"  # Soft delete (is_active = False)
     STATUS_CHANGE = "status_change"
+    # Derechos del titular (PV-05, 2026-09-25): exportar y anonimizar a un
+    # cliente. La fila no lleva datos personales, solo el hecho.
+    EXPORT = "export"
+    ANONYMIZE = "anonymize"
 
 
 # ---------------------------------------------------------------------------
@@ -44,12 +48,17 @@ class AuditLog(Base):
 
     __tablename__ = "audit_logs"
 
-    # PK simple, sin ULID para máxima performance de inserción
+    # PK simple, sin ULID para máxima performance de inserción. Es un contador
+    # GLOBAL: nunca sale tal cual hacia afuera, ni siquiera al superadmin; las
+    # respuestas usan ``modules.audit.public_id.opaque_audit_log_id``
+    # (AUD2-B3-14).
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
 
-    # Cuándo ocurrió la acción (server-side, no confiar en el cliente)
+    # Cuándo ocurrió la acción (server-side, no confiar en el cliente).
+    # timestamptz como el resto del esquema (regla 24, B5-13): naive, now()
+    # quedaba en la hora de pared de la sesion y el front no podia convertirlo.
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), index=True
+        DateTime(timezone=True), server_default=func.now(), index=True
     )
 
     # Quién realizó la acción (nullable para acciones del sistema / Celery)
@@ -66,6 +75,12 @@ class AuditLog(Base):
     resource_id: Mapped[str] = mapped_column(
         String(26), index=True
     )  # public_id del recurso
+
+    # Tienda a la que pertenece la accion (B3-11, 2026-09-18). NULL para lo
+    # global (planes, cupones) y para filas cuyo recurso no permitio derivarla.
+    # Sin FK a proposito: un log es inmutable y sobrevive a su recurso. La
+    # tabla sigue fuera de RLS (c3d4e5f6a7b8_rls_efectivo).
+    store_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
     # Qué acción se realizó
     action: Mapped[str] = mapped_column(String(50))  # AuditAction value

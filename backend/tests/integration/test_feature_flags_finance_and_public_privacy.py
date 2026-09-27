@@ -27,7 +27,6 @@ from main import app
 import modules.appointments.model
 import modules.audit.model
 import modules.auth.session_model
-import modules.budget.model
 import modules.ledger.model
 import modules.otp.model
 import modules.payments.model
@@ -210,8 +209,9 @@ async def create_staff(
     *,
     email: str = "pro-demo@test.com",
 ) -> str:
-    # El email es unico global (falta unique(store_id, email)): con mas de una
-    # tienda en el mismo test hay que pasarlo distinto o choca con 409.
+    # El email del personal es unico global (PV-01: solo el de los clientes es
+    # por tienda): con mas de una tienda en el mismo test hay que pasarlo
+    # distinto o choca.
     res = await client.post(
         "/staff/",
         headers=auth_headers(token),
@@ -355,7 +355,7 @@ async def test_mercadopago_oauth_start_and_callback_store_credentials(
         }
 
     monkeypatch.setattr(
-        "modules.payments.router.exchange_mercadopago_oauth_code", fake_exchange
+        "modules.payments.service.exchange_mercadopago_oauth_code", fake_exchange
     )
 
     callback = await client.get(
@@ -468,12 +468,51 @@ async def test_outbox_stats_and_manual_process(
     assert stats_after.json()["pending"] == 0
 
 
+async def _cliente_de_la_tienda(client: AsyncClient, token: str, store: str) -> str:
+    """Un cliente real de la tienda, nacido de una reserva publica.
+
+    El fiado se carga contra un usuario de la tienda (B2-11): un id inventado
+    como "CLIENTE-001" pasaba solo porque SQLite no aplica la FK a users.
+    """
+    service = await create_service(client, token)
+    staff = await create_staff(client, token, service)
+    dia = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+    booking = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store,
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": dia.replace(
+                hour=15, minute=0, second=0, microsecond=0
+            ).isoformat(),
+            "client_name": "Cliente Fiado",
+            "client_phone": "+5491100022233",
+            "accepts_terms": True,
+            "idempotency_key": "ledger-cliente-real",
+        },
+    )
+    assert booking.status_code == 201, booking.text
+    search = await client.get(
+        "/appointments/search?page=1&page_size=10", headers=auth_headers(token)
+    )
+    return cast(
+        str,
+        next(
+            item
+            for item in search.json()["results"]
+            if item["public_id"] == booking.json()["public_id"]
+        )["client_id"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_ledger_feature_flag_and_running_balance(client: AsyncClient) -> None:
-    _, token = await register_and_login(
+    store, token = await register_and_login(
         client, slug="tienda-ledger", email="ledger@test.com"
     )
-    client_id = "CLIENTE-001"
+    client_id = await _cliente_de_la_tienda(client, token, store)
 
     blocked = await client.post(
         f"/ledger/customers/{client_id}/movements",
@@ -614,6 +653,7 @@ async def test_public_booking_requires_otp_when_feature_enabled(
         ).isoformat(),
         "client_name": "Cliente OTP",
         "client_phone": "+5491123456789",
+        "accepts_terms": True,
         "client_email": "cliente-otp@example.com",
         "idempotency_key": "otp-booking-test-001",
     }
@@ -680,6 +720,7 @@ async def test_public_client_self_service_requires_recent_otp_and_releases_faile
             ).isoformat(),
             "client_name": "Cliente Autogestion",
             "client_phone": phone,
+            "accepts_terms": True,
             # La autogestion exige que el OTP se haya verificado contra el email
             # ENTREGABLE de la ficha; sin email propio la ficha queda con el
             # tecnico `.noreply` y no hay contra que comparar. 2026-09-20.
@@ -766,6 +807,7 @@ async def test_public_booking_allows_missing_email_and_any_professional(
             ).isoformat(),
             "client_name": "Cliente Any",
             "client_phone": "+5491166667777",
+            "accepts_terms": True,
             "idempotency_key": "any-professional-booking-001",
         },
     )
@@ -846,6 +888,7 @@ async def test_create_payment_preference_uses_real_mercadopago_payload_when_gate
             ).isoformat(),
             "client_name": "Cliente Pago Real",
             "client_phone": "+5491155511111",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "real-link-booking-001",
         },
@@ -864,6 +907,10 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
     import modules.payments.processing as payments_processing
     import modules.payments.service as payments_service
 
+    # Como MP: el pago lleva la external_reference de su preferencia (con el
+    # nonce del link desde perf/f4-pay).
+    referencias: list[str] = []
+
     async def fake_create_preference(
         access_token: str,
         *,
@@ -871,13 +918,22 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
         path: str,
         json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        assert json_body is not None
+        referencias.append(str(json_body["external_reference"]))
         return {
             "id": "pref-webhook-fetch",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=fetch",
         }
 
     async def fake_fetch_payment(
-        db: AsyncSession, *, store_id: str, payment_id: str
+        db: AsyncSession,
+        *,
+        store_id: str,
+        payment_id: str,
+        configs: Any = None,  # config del gateway ya resuelta por el lote (B2-13)
+        # Como persistir un refresh OAuth sin dejar transaccion abierta: lo pasa
+        # el lote del inbox desde AUD2-B2-02; el handler HTTP no lo usa.
+        persist_refresh: Any = None,
     ) -> dict[str, Any]:
         assert payment_id == "mp-pay-minimal-123"
         assert store_id
@@ -885,7 +941,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
         return {
             "id": payment_id,
             "status": "approved",
-            "external_reference": booking_public_id,
+            "external_reference": referencias[-1],
             "metadata": {"appointment_id": booking_public_id},
             "date_approved": datetime.now(timezone.utc).isoformat(),
         }
@@ -936,6 +992,7 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
             ).isoformat(),
             "client_name": "Cliente Webhook Fetch",
             "client_phone": "+5491144499999",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "webhook-fetch-booking-001",
         },
@@ -1038,6 +1095,7 @@ async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amoun
             ).isoformat(),
             "client_name": "Cliente Promo",
             "client_phone": "+5491166600000",
+            "accepts_terms": True,
             "promotion_code": "BIENVENIDA20",
             "idempotency_key": "promotion-booking-001",
         },
@@ -1108,6 +1166,7 @@ async def test_public_booking_persists_configured_custom_fields(
             ).isoformat(),
             "client_name": "Cliente Intake",
             "client_phone": "+5491170010020",
+            "accepts_terms": True,
             "custom_fields": {
                 "motivo_consulta": "Control anual",
                 "tipo_visita": "control",
@@ -1161,6 +1220,7 @@ async def test_manual_refund_and_reconciliation_summary(
             ).isoformat(),
             "client_name": "Cliente Refund",
             "client_phone": "+5491188877766",
+            "accepts_terms": True,
             "idempotency_key": "refund-booking-001",
         },
     )
@@ -1229,6 +1289,7 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
             ).isoformat(),
             "client_name": "Cliente Manual",
             "client_phone": "+5491133344455",
+            "accepts_terms": True,
             "idempotency_key": "manual-confirm-booking-001",
         },
     )
@@ -1323,6 +1384,7 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
             ).isoformat(),
             "client_name": "Cliente Webhook",
             "client_phone": "+5491122200011",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "webhook-booking-001",
         },
@@ -1341,6 +1403,8 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
         "data": {
             "id": "mp-pay-123",
             "status": "approved",
+            # Como MP: la referencia del link (con su nonce, perf/f4-pay).
+            "external_reference": payment.current_external_reference,
             "preference_id": payment.preference_id,
             "metadata": {"appointment_id": booking.json()["public_id"]},
         },
@@ -1462,6 +1526,7 @@ async def test_public_booking_releases_idempotency_and_rolls_back_when_payment_p
         ).isoformat(),
         "client_name": "Cliente Retry",
         "client_phone": "+5491122299988",
+        "accepts_terms": True,
         "payment_method": "mercadopago",
         "idempotency_key": "provider-failure-booking-001",
     }
@@ -1530,6 +1595,7 @@ async def test_professional_can_access_own_reports_only(
             ).isoformat(),
             "client_name": "Cliente Reportes",
             "client_phone": "+5491199988877",
+            "accepts_terms": True,
             "idempotency_key": "professional-reports-booking-001",
         },
     )
@@ -1585,6 +1651,7 @@ async def test_report_summary_includes_client_service_and_debt_metrics(
             ).isoformat(),
             "client_name": "Cliente Reporte Full",
             "client_phone": "+5491199980011",
+            "accepts_terms": True,
             "idempotency_key": "report-full-booking-001",
         },
     )
@@ -1657,6 +1724,7 @@ async def test_pending_whatsapp_booking_expires_when_hold_deadline_passes(
             ).isoformat(),
             "client_name": "Cliente WhatsApp",
             "client_phone": "+5491112345678",
+            "accepts_terms": True,
             "payment_method": "manual",
             "idempotency_key": "whatsapp-expiry-booking-001",
         },
@@ -1750,6 +1818,7 @@ async def test_store_owner_can_release_pending_mercadopago_booking(
             ).isoformat(),
             "client_name": "Cliente Release",
             "client_phone": "+5491188877766",
+            "accepts_terms": True,
             "payment_method": "mercadopago",
             "idempotency_key": "owner-release-booking-001",
         },
@@ -1763,6 +1832,12 @@ async def test_store_owner_can_release_pending_mercadopago_booking(
     )
     assert release.status_code == 200, release.text
     assert release.json()["status"] == "expired"
+    # B1-04 (2026-09-18): el link ya no se vence dentro del request que
+    # sostiene los locks; lo vence el outbox despues del commit.
+    assert [call[0] for call in calls] == ["POST"]
+    from modules.payments.jobs import process_outbox_batch
+
+    await process_outbox_batch(test_session)
     assert [call[0] for call in calls] == ["POST", "PUT"]
 
     payment_result = await test_session.execute(

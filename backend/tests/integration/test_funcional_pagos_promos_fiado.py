@@ -573,6 +573,7 @@ async def _client_id_de_una_reserva(client: AsyncClient, token: str, store: str)
             "starts_at": _at(dia, 15),
             "client_name": "Cliente Fiado",
             "client_phone": "+5491100011122",
+            "accepts_terms": True,
             "idempotency_key": "fiado-cliente-1",
         },
     )

@@ -144,7 +144,7 @@ async def _preparar_reservable(
 
 def _reserva(
     store: str, svc: str, stf: str, slot: str, key: str, i: int
-) -> dict[str, str]:
+) -> dict[str, Any]:
     return {
         "store_public_id": store,
         "service_id": svc,
@@ -152,6 +152,7 @@ def _reserva(
         "starts_at": slot,
         "client_name": f"Cliente {i}",
         "client_phone": f"+54911555{i:05d}",
+        "accepts_terms": True,
         "idempotency_key": key,
     }
 

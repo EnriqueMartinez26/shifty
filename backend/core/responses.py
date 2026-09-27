@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from typing import Any, Generic, TypeVar, cast
 
 from fastapi.encoders import jsonable_encoder
@@ -11,6 +11,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from core.config import Environment, settings
+
 T = TypeVar("T")
 
 
@@ -18,13 +20,6 @@ class ApiSuccess(BaseModel, Generic[T]):
     success: bool = True
     data: T
     meta: dict[str, Any] | None = None
-
-
-class ApiError(BaseModel):
-    success: bool = False
-    error_code: str
-    message: str
-    detail: Any | None = None
 
 
 def success_payload(data: Any, meta: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -77,20 +72,52 @@ def is_canonical_payload(payload: Any) -> bool:
     return "error_code" in payload and "message" in payload
 
 
+# Clave del scope ASGI con la que ``CanonicalRoute`` avisa que el cuerpo ya
+# salio envuelto y validado contra ``ApiSuccess`` (F1-02). Vive en el scope y
+# no en un header: no puede llegar al cliente ni la puede mandar el cliente.
+_CANONICAL_BODY_SCOPE_KEY = "shifty.canonical_body"
+
+
+def mark_canonical_body(scope: MutableMapping[str, Any]) -> None:
+    scope[_CANONICAL_BODY_SCOPE_KEY] = True
+
+
+def raw_response_requested(request: Request) -> bool:
+    """Unico lugar que decide si la respuesta sale sin el sobre canonico.
+
+    `x-raw-response: true` es un interruptor para los tests de integracion
+    (piden el recurso pelado en vez de `{success, data}`). En produccion se
+    ignora: el contrato con los clientes no puede depender de un header que
+    manda cualquiera (B7-08, 2026-09-19). Los errores nunca se desenvuelven.
+    """
+    if settings.ENV == Environment.PRODUCTION:
+        return False
+    return request.headers.get("x-raw-response") == "true"
+
+
 class CanonicalJsonMiddleware(BaseHTTPMiddleware):
+    """Una sola capa decide el sobre de las respuestas exitosas.
+
+    Envuelve en `{success, data}` lo que no venga envuelto y, si
+    `raw_response_requested`, desenvuelve lo que `CanonicalRoute` ya envolvio.
+    Antes el handler de `CanonicalRoute` tomaba la misma decision por su
+    cuenta, con otras reglas.
+
+    Lo que `CanonicalRoute` ya envolvio sale tal cual (F1-02, plan de
+    rendimiento): leerlo, decodificarlo y volver a codificarlo producia los
+    mismos bytes y costaba 7-13 % del request, mas en payloads grandes.
+    """
+
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
     ) -> Response:
         response: Any = await call_next(request)
-        # NOTA: Allow clients (like integration tests) to request the raw
-        # unwrapped response to maintain backwards compatibility without breaking
-        # strict typing or requiring massive test rewrites.
-        if request.headers.get("x-raw-response") == "true":
-            return cast(Response, response)
-
         if not _should_wrap_response(response):
             return cast(Response, response)
 
+        raw = raw_response_requested(request)
+        if not raw and request.scope.get(_CANONICAL_BODY_SCOPE_KEY):
+            return cast(Response, response)
         body = b""
         async for chunk in response.body_iterator:
             body += chunk
@@ -103,6 +130,11 @@ class CanonicalJsonMiddleware(BaseHTTPMiddleware):
         except json.JSONDecodeError:
             return _clone_response(response, body)
 
+        if raw:
+            if is_canonical_payload(payload) and payload["success"] is True:
+                return _clone_response(response, _render_json(payload["data"]))
+            return _clone_response(response, body)
+
         if is_canonical_payload(payload):
             wrapped_body = json.dumps(
                 jsonable_encoder(payload), separators=(",", ":")
@@ -113,6 +145,17 @@ class CanonicalJsonMiddleware(BaseHTTPMiddleware):
             ).encode("utf-8")
 
         return _clone_response(response, wrapped_body)
+
+
+def _render_json(content: Any) -> bytes:
+    """Mismo render que `JSONResponse`."""
+    return json.dumps(
+        jsonable_encoder(content),
+        ensure_ascii=False,
+        allow_nan=False,
+        indent=None,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 def _should_wrap_response(response: Response) -> bool:

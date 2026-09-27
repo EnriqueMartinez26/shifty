@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.availability_cache import AvailabilityCacheClient
 from core.database import get_db
-from core.redis import get_redis
+from core.redis import get_availability_cache
 from core.roles import STORE_MANAGERS, has_any_role, require_roles
 from core.router import CanonicalAPIRouter
 from core.validation import PUBLIC_ID_PATTERN
@@ -64,7 +64,7 @@ async def book_from_waitlist(
     data: WaitlistBookRequest,
     user: User = Depends(get_current_staff),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> AppointmentResponse:
     """El dueno reserva el turno para alguien de la lista (queda confirmado)."""
     require_roles(user, STORE_MANAGERS, "Solo un administrador puede reservar")
@@ -78,7 +78,7 @@ async def book_from_waitlist(
         entry=entry,
         starts_at=data.starts_at,
         staff_public_id=data.staff_id,
-        cache=cast(AvailabilityCacheClient, redis),
+        cache=cast(AvailabilityCacheClient, availability_cache),
     )
     return AppointmentResponse(
         public_id=appointment.public_id,

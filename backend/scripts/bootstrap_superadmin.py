@@ -24,10 +24,17 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
+from core.model_registry import load_all_models
 from core.validation import validate_password_strength
 from core.security import hash_password
+from modules.auth.service import login_account_email
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
+
+# Fuera de la API nadie importa todos los routers: sin esto SQLAlchemy no
+# puede resolver las relaciones declaradas por nombre y la primera query muere
+# con "expression '<Modelo>' failed to locate a name" (core/model_registry.py).
+load_all_models()
 
 
 def _required_env(name: str) -> str:
@@ -87,7 +94,10 @@ async def bootstrap() -> None:
     async with AsyncSessionFactory() as db:
         await _apply_tenant_context(db)
 
-        result = await db.execute(select(User).where(User.email == email))
+        # Solo cuentas que inician sesion: clientes de varias tiendas pueden
+        # tener este mismo email (PV-01) y nunca se promueve una ficha de
+        # cliente a superadmin.
+        result = await db.execute(select(User).where(login_account_email(email)))
         user = result.scalar_one_or_none()
 
         if user:

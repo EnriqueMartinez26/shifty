@@ -46,11 +46,46 @@ USING (
 """
 
 
+def _literal_sql(valor: str) -> str:
+    """Literal SQL con la semantica de quote_literal de Postgres.
+
+    El DDL no acepta parametros ligados, asi que la contrasena va como literal:
+    la comilla simple se duplica y, si hay barras invertidas, se usa E'' con la
+    barra duplicada. Asi el resultado no depende de standard_conforming_strings.
+    """
+    escapado = valor.replace("'", "''")
+    if "\\" in valor:
+        literal = "E'" + escapado.replace("\\", "\\\\") + "'"
+    else:
+        literal = "'" + escapado + "'"
+    # op.execute(str) pasa por sqlalchemy.text(), que toma `:palabra` como
+    # parametro ligado y desescapa `\:`. Escapar cada `:` hace que Postgres
+    # reciba exactamente el literal de arriba. (`%` ya lo maneja text().)
+    return literal.replace(":", "\\:")
+
+
 def upgrade() -> None:
     if op.get_bind().dialect.name != "postgresql":
         return
 
-    password = os.getenv("APP_DB_PASSWORD", "shifty_app_password")
+    # Sin default (C-02, 2026-09-19): antes caia en una contrasena publicada en
+    # el repo y un despliegue sin la variable creaba el rol con ella. Falla
+    # cerrada, antes de emitir DDL (reglas 17 y 21).
+    password = os.environ.get("APP_DB_PASSWORD", "").strip()
+    if not password:
+        raise RuntimeError(
+            "Falta APP_DB_PASSWORD: es la contrasena con la que se crea el rol "
+            f"{APP_ROLE}. Definila en el entorno de la migracion (en desarrollo, "
+            "en el .env de la raiz; generala con `openssl rand -hex 32`)."
+        )
+    # NUL y caracteres de control no tienen representacion segura en el
+    # literal; "$$" cerraria el bloque DO de abajo antes de tiempo.
+    if any(ord(c) < 32 or ord(c) == 127 for c in password) or "$$" in password:
+        raise RuntimeError(
+            'APP_DB_PASSWORD contiene caracteres de control o "$$": no se puede '
+            f"usar como contrasena del rol {APP_ROLE}. Genera otra con "
+            "`openssl rand -hex 32`."
+        )
 
     # El rol se crea solo si no existe, para que la migracion sea reejecutable.
     op.execute(
@@ -58,7 +93,7 @@ def upgrade() -> None:
         DO $$
         BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{APP_ROLE}') THEN
-                CREATE ROLE {APP_ROLE} LOGIN PASSWORD '{password}'
+                CREATE ROLE {APP_ROLE} LOGIN PASSWORD {_literal_sql(password)}
                     NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
             END IF;
         END

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
+from modules.payments.jobs import process_outbox_batch
 from modules.payments.model import Payment
 from modules.waitlist.model import WaitlistEntry
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -92,6 +93,7 @@ async def test_el_link_del_panel_no_pisa_la_sena_calculada_por_la_regla(
             "starts_at": slot.isoformat(),
             "client_name": "Cliente",
             "client_phone": "+5491155550777",
+            "accepts_terms": True,
             "payment_method": "auto",
             "idempotency_key": "link-panel-000001",
         },
@@ -156,7 +158,7 @@ async def test_borrar_un_bloqueo_no_ofrece_por_mail_un_horario_fuera_de_grilla(
 
 @pytest.mark.asyncio
 async def test_reprogramar_desde_el_panel_le_avisa_al_cliente(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """La fila nueva nace despues de starts_at-24h, asi que ya no le toca el
     recordatorio de 24 horas: sin este mail el cliente no se enteraba."""
@@ -174,6 +176,8 @@ async def test_reprogramar_desde_el_panel_le_avisa_al_cliente(
         },
     )
     assert mover.status_code == 200, mover.text
+    # F2-02: el aviso va por el outbox; lo manda el lote.
+    await process_outbox_batch(test_session)
 
     aviso = next(e for e in buzon.enviados if e[1].startswith("Te movimos el turno"))
     assert aviso[0] == "titular@example.com"

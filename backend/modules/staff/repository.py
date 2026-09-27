@@ -1,20 +1,84 @@
 from datetime import time
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, exists, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.interfaces import LoaderOption
+from sqlalchemy.sql import Select
 
 from core.security import hash_password
+from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.services.model import Service
 from infrastructure.persistence.models.staff import (
     STAFF_KIND_PERSON,
     STAFF_KIND_RESOURCE,
 )
 from modules.staff.model import Schedule, Staff
-from modules.auth.service import revoke_sessions_for_user
+from modules.auth.service import (
+    login_account_email,
+    normalize_email,
+    revoke_sessions_for_user,
+)
 from modules.users.model import User, UserRole
 import ulid
+
+# La cuenta del profesional nace sin clave usable hasta que se le asigna una.
+# Hashear un ULID al azar en cada alta era
+# bcrypt sincrono (~250 ms) con el loop congelado (F1-06, R8-03). Se calcula
+# UNA vez al importar, igual que el de los clientes del portal
+# (public_api/repository.py): sigue siendo un bcrypt valido que no verifica
+# contra nada tipeable.
+_UNUSABLE_STAFF_PASSWORD_HASH = hash_password(str(ulid.ULID()))
+
+
+def _active_services(store_id: str) -> LoaderOption:
+    """Carga de la relacion con SOLO los servicios activos de ESA tienda.
+
+    El filtro va en el JOIN y no re-asignando la coleccion: re-asignar una
+    relacion `secondary` marca las filas sobrantes de `staff_services` para
+    DELETE, asi que una lectura borraba la asignacion (y su `rating`) del
+    servicio desactivado (AUD2-B6-01 / AUD2-B6-02).
+
+    El predicado `store_id` no es redundante con `Staff.store_id`: es uno de
+    los filtros de tienda que CLAUDE.md §2 pide no quitar, defensa en
+    profundidad sobre RLS para una fila cruzada de `staff_services`. Se
+    construye por llamada porque el `store_id` es del request, igual que en
+    `modules/public_api/repository.get_staff`.
+
+    CUIDADO: la garantia depende de que nadie cargue la coleccion del mismo
+    `Staff` sin este filtro antes en el MISMO request. `Staff.services` es
+    `lazy="raise"` (F3-01), asi que un `select(Staff)` sin opciones ya no la
+    trae; pero un `selectinload(Staff.services)` sin filtro si la trae
+    COMPLETA, y la sesion no refresca una coleccion ya cargada salvo con
+    `populate_existing()`: el objeto del identity map se quedaria con los
+    servicios inactivos adentro y la proxima escritura volveria a marcarlos
+    para DELETE.
+    """
+    return selectinload(
+        Staff.services.and_(
+            Service.is_active == True,
+            Service.store_id == store_id,
+        )
+    )
+
+
+def _visible_para_el_panel(
+    query: Select[tuple[Staff]], include_global_admins: bool
+) -> Select[tuple[Staff]]:
+    """Esconde al profesional cuya cuenta de login es superadmin.
+
+    Misma regla que ``UserRepository`` (S-15): para un admin de tienda la
+    cuenta global no existe, y eso vale tambien para las lecturas de
+    ``/staff/`` (AUD2-B3-11). Sin esto el panel listaba con su email a un
+    profesional ascendido a superadmin mientras ``GET /users/`` lo ocultaba
+    y ``PUT /staff/{id}`` sobre el daba 404. Un recurso (cancha, sala) no
+    tiene usuario y nunca cae en el filtro.
+    """
+    if include_global_admins:
+        return query
+    es_global = exists().where(User.id == Staff.id, User.is_global_admin.is_(True))
+    return query.where(~es_global)
 
 
 class StaffRepository:
@@ -37,18 +101,9 @@ class StaffRepository:
         services = list(result.scalars().all())
         if len(services) != len(set(service_public_ids)):
             raise ValueError(
-                "Uno o m?s servicios no existen o no pertenecen al negocio"
+                "Uno o más servicios no existen o no pertenecen al negocio"
             )
         return services
-
-    async def _hydrate_services(self, member: Staff) -> None:
-        if member.service_ids:
-            member.services = await self._get_services_for_store(
-                member.service_ids,
-                member.store_id,
-            )
-        else:
-            member.services = []
 
     async def create(
         self, data: dict[str, Any], store_id: str, service_public_ids: list[str]
@@ -74,19 +129,23 @@ class StaffRepository:
             await self.db.flush()
             return resource
 
-        # Normalizamos el email igual que el login (lower). Sin esto, "Pro@x.com"
-        # y "pro@x.com" conviven como dos usuarios y el login case-insensitive
-        # encuentra ambos y explota con MultipleResultsFound.
-        email = str(data["email"]).strip().lower()
+        # El email se guarda y se busca normalizado (regla 16): la base exige
+        # minusculas (ck_users_email_lower) y la igualdad usa ix_users_email
+        # bajo RLS (F1-12). Este pre-chequeo es el mensaje amable, con limit(1)
+        # para no dar 500 ante duplicados heredados. En la carrera
+        # SELECT/INSERT decide el indice unico: la IntegrityError sube hasta
+        # main.py y sale como 409. Solo cuentas que inician sesion: un cliente
+        # (de esta u otra tienda) puede tener el mismo email (PV-01).
+        email = normalize_email(str(data["email"]))
         user_res = await self.db.execute(
-            select(User).where(func.lower(User.email) == email)
+            select(User.id).where(login_account_email(email)).limit(1)
         )
-        if user_res.scalar_one_or_none():
+        if user_res.first() is not None:
             raise ValueError("Ya existe un usuario con ese email")
 
         user = User(
             email=email,
-            hashed_password=hash_password(str(ulid.ULID())),
+            hashed_password=_UNUSABLE_STAFF_PASSWORD_HASH,
             first_name=data["first_name"],
             last_name=data["last_name"],
             role=UserRole.STAFF,
@@ -110,8 +169,10 @@ class StaffRepository:
         await self.db.flush()
         return new_staff
 
-    async def get_all(self, store_id: str) -> list[Staff]:
-        result = await self.db.execute(
+    async def get_all(
+        self, store_id: str, *, include_global_admins: bool = False
+    ) -> list[Staff]:
+        query = (
             select(Staff)
             .where(
                 Staff.store_id == store_id,
@@ -119,19 +180,20 @@ class StaffRepository:
             )
             .options(
                 selectinload(Staff.schedules),
-                selectinload(Staff.services),
+                _active_services(store_id),
             )
         )
-        staff_members = list(result.scalars().all())
-        # ``services`` ya viene cargado por selectinload en una sola query.
-        # Antes esto re-consultaba por cada miembro (N+1); ahora se filtra en
-        # memoria a los activos, que es lo unico que agregaba la re-consulta.
-        for member in staff_members:
-            member.services = [s for s in member.services if s.is_active]
-        return staff_members
-
-    async def get_by_id(self, public_id: str, store_id: str) -> Staff | None:
         result = await self.db.execute(
+            _visible_para_el_panel(query, include_global_admins)
+        )
+        # La carga ya trae solo los activos de la tienda: no se filtra ni se
+        # re-asigna nada (ver `_active_services`).
+        return list(result.scalars().all())
+
+    async def get_by_id(
+        self, public_id: str, store_id: str, *, include_global_admins: bool = False
+    ) -> Staff | None:
+        query = (
             select(Staff)
             .where(
                 Staff.id == public_id,
@@ -139,13 +201,16 @@ class StaffRepository:
             )
             .options(
                 selectinload(Staff.schedules),
-                selectinload(Staff.services),
+                _active_services(store_id),
             )
         )
-        member = result.scalar_one_or_none()
-        if member:
-            await self._hydrate_services(member)
-        return member
+        result = await self.db.execute(
+            _visible_para_el_panel(query, include_global_admins)
+        )
+        # Antes esto re-consultaba con `_get_services_for_store`, que exige que
+        # TODOS los ids existan y esten activos: un servicio borrado dejaba en
+        # 500 la ficha del profesional y todo lo que la usa (AUD2-B6-01).
+        return result.scalar_one_or_none()
 
     async def _assert_no_overlap(
         self,
@@ -187,8 +252,7 @@ class StaffRepository:
         )
         new_schedule = Schedule(**schedule_data, staff_id=staff.id, store_id=store_id)
         self.db.add(new_schedule)
-        await self.db.commit()
-        await self.db.refresh(new_schedule)
+        await self.db.flush()
         return new_schedule
 
     async def get_schedule(self, staff: Staff, schedule_id: str) -> Schedule | None:
@@ -215,13 +279,46 @@ class StaffRepository:
         schedule.day_of_week = day
         schedule.start_time = start
         schedule.end_time = end
-        await self.db.commit()
-        await self.db.refresh(schedule)
+        await self.db.flush()
         return schedule
 
     async def delete_schedule(self, schedule: Schedule) -> None:
         await self.db.delete(schedule)
-        await self.db.commit()
+        await self.db.flush()
+
+    async def _set_services(self, staff: Staff, services_list: list[Service]) -> None:
+        """Deja al profesional con EXACTAMENTE los servicios de la lista.
+
+        La coleccion cargada solo trae los activos de la tienda, asi que
+        SQLAlchemy por si solo no puede borrar la asignacion a un servicio
+        desactivado: el PATCH respondia 200 y la fila sobrevivia, y al
+        reactivar el servicio volvia a la ficha sin que nadie lo pidiera.
+        Se borra dirigido lo que no esta en la lista nueva.
+
+        Esto NO reabre AUD2-B6-02: ahi el problema era que una LECTURA del
+        portal borraba. Aca el borrado es la lista explicita del dueno.
+
+        Precondicion: `staff` viene de `get_by_id`, que carga `services` con
+        `_active_services`. Reasignar una coleccion `lazy="raise"` sin cargar
+        necesitaria leer la vieja para el diff; se corta aca con un mensaje
+        claro en vez de dentro de SQLAlchemy.
+        """
+        if "services" in inspect(staff).unloaded:
+            raise RuntimeError(
+                "_set_services necesita el Staff con `services` cargado "
+                "(StaffRepository.get_by_id)"
+            )
+        staff.service_ids = [service.public_id for service in services_list]
+        staff.services = services_list
+        await self.db.flush()
+
+        sobrantes = delete(StaffServiceModel).where(
+            StaffServiceModel.staff_id == staff.id
+        )
+        conservar = [service.id for service in services_list]
+        if conservar:
+            sobrantes = sobrantes.where(StaffServiceModel.service_id.not_in(conservar))
+        await self.db.execute(sobrantes)
 
     async def update_services(
         self, staff: Staff, service_public_ids: list[str]
@@ -230,10 +327,7 @@ class StaffRepository:
             service_public_ids,
             staff.store_id,
         )
-        staff.service_ids = [service.public_id for service in services_list]
-        staff.services = services_list
-        await self.db.commit()
-        await self.db.refresh(staff)
+        await self._set_services(staff, services_list)
         return staff
 
     async def update_profile(
@@ -248,12 +342,15 @@ class StaffRepository:
         is_active: bool | None = None,
     ) -> Staff:
         if email is not None:
-            email = email.strip().lower()
+            email = normalize_email(email)
         if email is not None and email != staff.email:
+            # Mensaje amable; la garantia es el indice unico (ver create).
             existing_res = await self.db.execute(
-                select(User).where(func.lower(User.email) == email, User.id != staff.id)
+                select(User.id)
+                .where(login_account_email(email), User.id != staff.id)
+                .limit(1)
             )
-            if existing_res.scalar_one_or_none():
+            if existing_res.first() is not None:
                 raise ValueError("Ya existe un usuario con ese email")
 
         if first_name is not None:
@@ -267,12 +364,13 @@ class StaffRepository:
         if is_active is not None:
             staff.is_active = is_active
         if service_public_ids is not None:
+            # `PATCH /staff/{id}` con `service_ids` es la misma lista explicita
+            # que `PATCH /staff/{id}/services`: mismo borrado dirigido.
             services_list = await self._get_services_for_store(
                 service_public_ids,
                 staff.store_id,
             )
-            staff.service_ids = [service.public_id for service in services_list]
-            staff.services = services_list
+            await self._set_services(staff, services_list)
 
         # Solo una persona tiene usuario que sincronizar; un recurso no.
         user = None
@@ -295,6 +393,13 @@ class StaffRepository:
 
         await self.db.flush()
         return staff
+
+    async def get_linked_user(self, staff: Staff) -> User | None:
+        """Cuenta de login del profesional (Staff.id == User.id). Un recurso no tiene."""
+        if getattr(staff, "kind", STAFF_KIND_PERSON) != STAFF_KIND_PERSON:
+            return None
+        result = await self.db.execute(select(User).where(User.id == staff.id))
+        return result.scalar_one_or_none()
 
     async def soft_delete(self, staff: Staff) -> None:
         """Baja sin commit (lo hace StaffService)."""

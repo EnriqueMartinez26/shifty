@@ -26,7 +26,6 @@ _TEST_ENV = {
     "PAYMENTS_CIRCUIT_BREAKER_RECOVERY_SECONDS": "30",
     "TWILIO_ACCOUNT_SID": "",
     "TWILIO_AUTH_TOKEN": "",
-    "TWILIO_SMS_FROM": "",
     "TWILIO_WHATSAPP_FROM": "",
     "EXPOSE_API_DOCS": "true",
     "MAX_REQUEST_BODY_BYTES": "32768",
@@ -49,7 +48,6 @@ _TEST_ENV = {
     "SLO_MAX_FAILED_WEBHOOKS": "20",
     "SLO_MAX_PENDING_OUTBOX": "200",
     "MERCADOPAGO_WEBHOOK_SECRET": "",
-    "RUN_RUNTIME_CONTRACTS_ON_STARTUP": "false",
     "DATABASE_URL": "sqlite+aiosqlite:///:memory:",
     "REDIS_URL": "redis://localhost:6379/15",
     "CELERY_BROKER_URL": "memory://",
@@ -76,7 +74,8 @@ os.environ.update(_TEST_ENV)
 # Test configuration must exist before importing modules that instantiate Settings.
 from core.config import settings  # noqa: E402
 from main import app  # noqa: E402
-from core.redis import get_redis  # noqa: E402
+from core.redis import get_availability_cache, get_redis  # noqa: E402
+from tests.redis_pipeline_double import PipelineDouble  # noqa: E402
 
 # Disable rate limit globally during tests
 settings.RATE_LIMIT_ENABLED = False
@@ -88,6 +87,10 @@ class MockRedis:
         self.store: dict[str, str] = {}
 
     async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def getex(self, key: str, ex: int | None = None) -> str | None:
+        # Sin reloj: el TTL no se simula aca (ver test_version_de_cache_expira).
         return self.store.get(key)
 
     async def set(
@@ -127,6 +130,9 @@ class MockRedis:
     async def expire(self, key: str, seconds: int) -> bool:
         return True
 
+    def pipeline(self, transaction: bool = True) -> PipelineDouble:
+        return PipelineDouble(self)
+
 
 @pytest.fixture(autouse=True)
 def override_redis_dependency() -> Generator[None, None, None]:
@@ -135,7 +141,11 @@ def override_redis_dependency() -> Generator[None, None, None]:
     async def fake_get_redis() -> MockRedis:
         return mock_redis
 
+    # El cache de disponibilidad tiene su propio Redis en produccion (F0-15);
+    # en tests comparte el doble para que las pruebas de cache vean las claves.
+    # tests/integration/test_redis_de_cache_separado.py los separa.
     app.dependency_overrides[get_redis] = fake_get_redis
+    app.dependency_overrides[get_availability_cache] = fake_get_redis
     yield
-    if get_redis in app.dependency_overrides:
-        del app.dependency_overrides[get_redis]
+    for dependencia in (get_redis, get_availability_cache):
+        app.dependency_overrides.pop(dependencia, None)

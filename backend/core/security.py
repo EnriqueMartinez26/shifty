@@ -131,3 +131,25 @@ def hash_otp_code(store_id: str, phone: str, code: str) -> str:
     return hmac.new(
         settings.SECRET_KEY.encode("utf-8"), material, hashlib.sha256
     ).hexdigest()
+
+
+def derive_key(purpose: str) -> bytes:
+    """Clave propia de un uso, derivada de ``SECRET_KEY`` (HMAC-SHA256).
+
+    Cada uso (hash de IP, link de baja de mails) firma con su clave: un valor
+    firmado para uno no sirve para el otro, y ninguno expone ``SECRET_KEY``.
+    """
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"),
+        f"shifty:{purpose}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+
+
+def hash_ip(ip: str) -> str:
+    """HMAC de la IP con clave derivada: el espacio de IPv4 es chico (2^32) y
+    un SHA-256 pelado se invierte con fuerza bruta. Sirve para comparar dos
+    registros de la misma IP sin guardarla en claro."""
+    return hmac.new(
+        derive_key("ip-hash"), ip.encode("utf-8"), hashlib.sha256
+    ).hexdigest()

@@ -12,8 +12,6 @@ env:
   NPM_VERSION: "11.17.0"
   NODE_COMPAT_VERSION: "24.18.0"
   NPM_COMPAT_VERSION: "11.16.0"
-  PYTHON_VERSION: "3.14.6"
-  UV_VERSION: "0.11.29"
 
 jobs:
   frontend-quality:
@@ -87,14 +85,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
         run: uv sync --frozen
       - name: Check formatting
@@ -114,20 +106,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
         run: uv sync --frozen
       - name: Import FastAPI app and generate OpenAPI
         run: uv run python -c "from main import app; app.openapi()"
       - name: Validate Alembic migration graph
-        run: uv run alembic heads
+        # `alembic heads` lista y sale con 0 aunque haya varias cabezas; el
+        # test compara la cantidad y falla con dos (C-07, 2026-09-17).
+        run: uv run pytest tests/architecture/test_migrations.py
 
   backend-integration:
     runs-on: ubuntu-latest
@@ -138,14 +126,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
         run: uv sync --frozen
       - name: Run integration tests
@@ -176,21 +158,18 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      # La migracion de RLS crea el rol shifty_app con esta contrasena.
-      APP_DB_PASSWORD: shifty_app_password
-      TEST_POSTGRES_MIGRATION_URL: postgresql+asyncpg://shifty_user:shifty_password@localhost:5432/shifty_test
-      TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:shifty_app_password@localhost:5432/shifty_test
+      # La migracion de RLS crea el rol shifty_app con esta contrasena. Es un
+      # valor de prueba de este job, no un secreto de produccion (C-02).
+      APP_DB_PASSWORD: ci_solo_prueba_app_password
+      # El Postgres del job no tiene TLS y las migraciones exigen TLS si la URL
+      # no dice nada (core.config.parse_db_url, B7-11): `ssl=disable` explicito.
+      TEST_POSTGRES_MIGRATION_URL: postgresql+asyncpg://shifty_user:shifty_password@localhost:5432/shifty_test?ssl=disable
+      TEST_POSTGRES_URL: postgresql+asyncpg://shifty_app:ci_solo_prueba_app_password@localhost:5432/shifty_test?ssl=disable
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
       - name: Install dependencies
         run: uv sync --frozen
       - name: Run Postgres-only tests (RLS, GiST, triggers, migrations)
@@ -226,14 +205,8 @@ jobs:
       - name: Setup npm
         working-directory: frontend
         run: npm install --global "npm@${NPM_VERSION}"
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -262,14 +235,8 @@ jobs:
       - name: Setup npm
         working-directory: frontend
         run: npm install --global "npm@${NPM_VERSION}"
-      - name: Setup Python
-        uses: actions/setup-python@v6.2.0
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          version: ${{ env.UV_VERSION }}
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci

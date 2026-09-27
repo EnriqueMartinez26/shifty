@@ -5,8 +5,8 @@ este test es la guarda de CI para que no derive: compara el cuerpo commiteado
 (todo menos la linea de pie con fecha y commit) contra lo que el script
 generaria hoy.
 
-En el contenedor local solo esta montado backend/, asi que docs/ no existe y
-el test se salta. En CI (variable CI definida) no se salta nunca: si el
+Un contenedor corre la imagen, que no trae docs/, asi que ahi el test se
+salta. En CI (variable CI definida) no se salta nunca: si el
 archivo no se encuentra, falla. API_CONTRACT_DOC permite apuntar a otra copia
 del documento (por ejemplo, una copiada al contenedor para verificar).
 """
@@ -22,12 +22,13 @@ from scripts.gen_api_contract import FOOTER_PREFIX, render_contract, split_foote
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DOC = REPO_ROOT / "docs" / "API_CONTRACT.md"
 REGENERATE = (
-    "Regenerar desde la raiz del repo:\n"
-    "  MSYS_NO_PATHCONV=1 docker compose exec -T backend "
-    "python scripts/gen_api_contract.py --stdout "
-    "--commit $(git rev-parse --short HEAD) > docs/API_CONTRACT.md\n"
-    "(o, con deps en el host, desde backend/: "
-    "uv run python scripts/gen_api_contract.py)"
+    "Regenerar desde el working tree (nunca con `exec`: el contenedor corre "
+    "la imagen del ultimo build).\n"
+    "  Con uv, desde backend/: uv run python scripts/gen_api_contract.py\n"
+    "  Sin uv, desde la raiz: MSYS_NO_PATHCONV=1 docker compose run --rm "
+    "--no-deps -v ./backend:/src -w /src backend /app/.venv/bin/python "
+    "scripts/gen_api_contract.py --stdout "
+    "--commit $(git rev-parse --short HEAD) > docs/API_CONTRACT.md"
 )
 
 
@@ -35,7 +36,7 @@ def _contract_doc() -> Path:
     override = os.environ.get("API_CONTRACT_DOC")
     if override:
         return Path(override)
-    # Sin docs/ es el contenedor (solo backend/ montado). En CI el repo entero
+    # Sin docs/ es un contenedor (corre la imagen). En CI el repo entero
     # esta en disco, asi que ahi no se tolera la ausencia.
     if not DEFAULT_DOC.parent.is_dir() and not os.environ.get("CI"):
         pytest.skip(
@@ -57,3 +58,24 @@ def test_api_contract_doc_matches_openapi() -> None:
         f"{doc} no coincide con app.openapi(): la API cambio y el contrato "
         f"no se regenero (diff: gen_api_contract.py --check).\n{REGENERATE}"
     )
+
+
+def test_operation_ids_son_unicos() -> None:
+    """Cada operacion del esquema tiene su propio operationId.
+
+    Un generador de cliente (TypeScript, SDK) usa el operationId como nombre
+    de funcion: dos iguales se pisan. Paso con el GET y el HEAD de
+    /stores/media/{media_id} registrados con un solo api_route (2026-09-25).
+    """
+    vistos: dict[str, str] = {}
+    repetidos: list[str] = []
+    for path, item in app.openapi()["paths"].items():
+        for method, operation in item.items():
+            if not isinstance(operation, dict) or "operationId" not in operation:
+                continue
+            op_id = operation["operationId"]
+            donde = f"{method.upper()} {path}"
+            if op_id in vistos:
+                repetidos.append(f"{op_id}: {vistos[op_id]} y {donde}")
+            vistos[op_id] = donde
+    assert not repetidos, "operationId repetidos:\n" + "\n".join(repetidos)

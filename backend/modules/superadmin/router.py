@@ -1,6 +1,7 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
-from fastapi import Depends, Path, Query, status
+from fastapi import Depends, Path, Query, Response, status
+from core.roles import assert_global_admin_keeps_login_role
 from core.router import CanonicalAPIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,7 @@ from core.exceptions import (
     UserNotFoundException,
 )
 from core.validation import PUBLIC_ID_PATTERN
+from modules.audit.public_id import opaque_audit_log_id
 from modules.auth.dependencies import get_current_global_admin
 from modules.superadmin.repository import SuperAdminRepository
 from modules.superadmin.schemas import (
@@ -39,6 +41,7 @@ from modules.superadmin.schemas import (
     UserGlobalResponse,
     UserGlobalUpdate,
 )
+from modules.stores.media import resolve_image_link
 from modules.stores.model import Store
 from modules.users.model import User
 
@@ -84,18 +87,29 @@ def _user_response(user: User) -> UserGlobalResponse:
 
 @router.get("/stores", response_model=list[StoreTableResponse])
 async def list_stores(
+    response: Response,
     search: str | None = Query(None, max_length=100),
-    is_active: bool | None = Query(True),
+    # FF-24 (aditivo): "all" no filtra por estado ("Todas" en el panel). Sin
+    # el parametro, solo activas, como siempre.
+    is_active: bool | Literal["all"] = Query(True),
     has_subscription: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    # Tope superior (regla 9: ge Y le): sin el, un offset por encima del bigint
+    # de Postgres (2^63-1) desbordaba la query y salia 500, el mismo incidente
+    # que ya se cerro en /users/ el 2026-09-04.
+    offset: int = Query(0, ge=0, le=1_000_000),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[StoreTableResponse]:
     repo = SuperAdminRepository(db)
+    estado = None if is_active == "all" else bool(is_active)
     stores = await repo.stores.list_stores(
-        search, is_active, has_subscription, limit, offset
+        search, estado, has_subscription, limit, offset
     )
+    # FF-24: el total viaja en un header para no cambiar la forma (lista) de
+    # la respuesta; mismos filtros, sin paginar.
+    total = await repo.stores.count_stores(search, estado, has_subscription)
+    response.headers["X-Total-Count"] = str(total)
     return [StoreTableResponse.model_validate(store) for store in stores]
 
 
@@ -208,7 +222,9 @@ async def list_store_audit_logs(
     logs = await repo.stores.list_store_audit_logs(store, limit)
     return [
         AuditLogResponse(
-            public_id=str(log.id),
+            # Opaco, no el autoincremental global (AUD2-B3-14): el entero
+            # contaba las acciones de toda la plataforma.
+            public_id=opaque_audit_log_id(log.id),
             created_at=log.created_at,
             actor_email=log.actor_email,
             resource_type=log.resource_type,
@@ -232,9 +248,17 @@ async def update_store(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
+    payload = data.model_dump(exclude_unset=True)
+    # Misma regla que PATCH /stores/me (F1-30, decision 21): el logo subido se
+    # conserva por id, otra URL de medios es 422 y desvincularlo borra la fila.
+    unlinked_media_id = None
+    if "logo_url" in payload:
+        payload["logo_url"], unlinked_media_id = resolve_image_link(
+            "logo_url", store.logo_url, payload["logo_url"]
+        )
     try:
         updated = await repo.stores.update_store(
-            store, data.model_dump(exclude_unset=True), actor
+            store, payload, actor, unlinked_media_id=unlinked_media_id
         )
         return _store_response(updated)
     except ValueError as exc:
@@ -267,6 +291,11 @@ async def create_store_admin(
 async def list_store_users(
     store_public_id: PublicIdPath,
     include_inactive: bool = Query(False),
+    # Regla 9 (ge Y le) y techo real: la tabla de usuarios de una tienda crece
+    # con cada reserva publica, asi que sin paginar este endpoint devolvia
+    # decenas de miles de filas (AUD2-B3-03). Mismos topes que /superadmin/stores.
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=1_000_000),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserGlobalResponse]:
@@ -274,7 +303,7 @@ async def list_store_users(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    users = await repo.users.list_store_users(store.id, include_inactive)
+    users = await repo.users.list_store_users(store.id, include_inactive, limit, offset)
     return [_user_response(user) for user in users]
 
 
@@ -289,6 +318,8 @@ async def update_user(
     user = await repo.users.get_user(user_public_id)
     if not user:
         raise UserNotFoundException(identifier=user_public_id)
+    # PV-01: un superadmin con rol de cliente quedaba afuera del login.
+    assert_global_admin_keeps_login_role(user, data.role)
     try:
         updated = await repo.users.update_user(
             user, data.model_dump(exclude_unset=True), actor
@@ -507,6 +538,9 @@ async def redeem_store_coupon(
 )
 async def list_store_redemptions(
     store_public_id: PublicIdPath,
+    # El repositorio ya aceptaba ``limit``; el router lo llamaba sin el y el
+    # listado no tenia techo (AUD2-B3-03, regla 9).
+    limit: int = Query(50, ge=1, le=200),
     actor: User = Depends(get_current_global_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[CouponRedemptionResponse]:
@@ -514,7 +548,7 @@ async def list_store_redemptions(
     store = await repo.stores.get_store(store_public_id)
     if not store:
         raise StoreNotFoundException(identifier=store_public_id)
-    redemptions = await repo.coupons.list_store_redemptions(store.id)
+    redemptions = await repo.coupons.list_store_redemptions(store.id, limit=limit)
     return [
         CouponRedemptionResponse.model_validate(redemption)
         for redemption in redemptions

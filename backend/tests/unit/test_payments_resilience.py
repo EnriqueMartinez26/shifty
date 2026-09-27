@@ -133,7 +133,10 @@ async def test_store_request_refreshes_oauth_token_after_401(
         return {"status": "ok", "path": path}
 
     async def fake_refresh(
-        db: AsyncSession, *, config: PaymentGatewayConfig
+        db: AsyncSession,
+        *,
+        config: PaymentGatewayConfig,
+        persist: object = None,  # hook de persistencia del job (S-02)
     ) -> PaymentGatewayConfig:
         config.encrypted_access_token = encrypt_secret("fresh-token") or "fresh-token"
         config.encrypted_refresh_token = (
@@ -165,3 +168,81 @@ async def test_store_request_refreshes_oauth_token_after_401(
 
     assert result == {"status": "ok", "path": "/v1/payments/123"}
     assert decrypt_secret(config.encrypted_access_token) == "fresh-token"
+
+
+@pytest.mark.asyncio
+async def test_el_lock_del_job_invalida_la_conexion_si_no_puede_soltarlo() -> None:
+    """S-02: si pg_advisory_unlock falla, la conexion no vuelve al pool con el
+    lock de sesion tomado: se invalida y Postgres suelta el lock al cerrarla."""
+    from modules.payments.jobs import JOB_LOCK_NAMESPACE, _release_job_lock
+
+    class ConexionQueFalla:
+        def __init__(self) -> None:
+            self.invalidada = False
+
+        async def execute(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("unlock fallo")
+
+        async def invalidate(self) -> None:
+            self.invalidada = True
+
+    conexion = ConexionQueFalla()
+    await _release_job_lock(
+        cast(Any, conexion),
+        {"namespace": JOB_LOCK_NAMESPACE, "clave": "job:prueba"},
+    )
+    assert conexion.invalidada
+
+
+def test_el_lock_del_job_usa_la_forma_de_dos_int4() -> None:
+    """S-02: (namespace, id) no comparte espacio con los locks de un bigint
+    (pg_advisory_xact_lock(hashtext('ledger:...')) del fiado)."""
+    import inspect
+
+    from modules.payments import jobs
+
+    fuente = inspect.getsource(jobs._exclusive_job) + inspect.getsource(
+        jobs._release_job_lock
+    )
+    assert "pg_try_advisory_lock(:namespace, hashtext(:clave))" in fuente
+    assert "pg_advisory_unlock(:namespace, hashtext(:clave))" in fuente
+    assert -(2**31) <= jobs.JOB_LOCK_NAMESPACE < 2**31
+
+
+@pytest.mark.asyncio
+async def test_el_presupuesto_agotado_antes_de_llamar_no_cuenta_como_falla_de_mp(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """Revision de F1-04 (2026-09-24): si el presupuesto del request ya se
+    agoto, no sale ninguna request a MP, asi que no es evidencia de que MP
+    este caido y el breaker no lo cuenta. Antes el corte ocurria adentro de
+    la operacion del breaker y cada reserva que llegaba tarde sumaba una
+    falla."""
+    breaker = AsyncCircuitBreaker(
+        name="mercadopago-test",
+        failure_threshold=1,
+        recovery_timeout_seconds=30,
+        clock=FakeClock(),
+    )
+    monkeypatch.setattr(payments_service, "_mercadopago_breaker", breaker)
+    enviadas: list[str] = []
+
+    async def no_deberia_salir(*args: Any, **kwargs: Any) -> object:
+        enviadas.append("request")
+        return {}
+
+    monkeypatch.setattr(
+        payments_service, "_perform_mercadopago_request", no_deberia_salir
+    )
+
+    with payments_service.mercadopago_budget(0):
+        with pytest.raises(payments_service.MercadoPagoAPIError) as exc:
+            await payments_service._mercadopago_api_request(
+                "token", method="POST", path="/checkout/preferences"
+            )
+
+    assert exc.value.transient is True
+    assert enviadas == []
+    snapshot = await breaker.snapshot()
+    assert snapshot["state"] == "closed"
+    assert snapshot["consecutive_failures"] == 0

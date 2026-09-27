@@ -1,10 +1,22 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from core.business_types import BusinessType, DEFAULT_BUSINESS_TYPE
-from core.validation import SLUG_PATTERN, reject_unsafe_url
+from core.validation import (
+    SLUG_PATTERN,
+    reject_control_chars,
+    reject_payload_control_chars,
+    reject_unsafe_url,
+)
+from modules.stores.media import validate_image_url
 
 # Techos de los enteros expuestos por la API.
 #
@@ -18,12 +30,31 @@ MAX_USOS_CUPON = 1_000_000
 
 
 CUSTOM_FIELD_KEY_PATTERN = r"^[a-z][a-z0-9_]{1,39}$"
+# El color del negocio sale al tema del portal publico como valor CSS: es
+# texto publicado (regla 19). Vive aca, junto al schema que es dueno del
+# campo, y lo importa el de superadmin para que no haya dos versiones del
+# mismo contrato (AUD2-B3-13).
+HEX_COLOR_PATTERN = r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
 CustomClientFieldType = Literal["text", "textarea", "tel", "email", "date", "select"]
 
 
 class BusinessHourPeriod(BaseModel):
-    open: str = Field(..., pattern=r"^\d{2}:\d{2}$")
-    close: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    # La hora del local es una hora, no una cadena: "99:99" cumplia el patron
+    # ^\d{2}:\d{2}$ y reventaba en time.fromisoformat del router (500). Con
+    # `time` la validacion la hace Pydantic (422), igual que ScheduleBase en
+    # staff. El contrato de salida no cambia: se serializa como "HH:MM".
+    open: time
+    close: time
+
+    @field_serializer("open", "close", when_used="json")
+    def _hh_mm(self, value: time) -> str:
+        return value.strftime("%H:%M")
+
+    @model_validator(mode="after")
+    def validate_time_order(self) -> "BusinessHourPeriod":
+        if self.open >= self.close:
+            raise ValueError("open debe ser anterior a close")
+        return self
 
 
 class StoreCustomFieldOption(BaseModel):
@@ -52,9 +83,7 @@ class StoreUpdate(BaseModel):
     slug: Optional[str] = Field(None, max_length=100, pattern=SLUG_PATTERN)
     business_type: Optional[BusinessType] = None
     logo_url: Optional[str] = Field(None, max_length=500)
-    primary_color: Optional[str] = Field(
-        None, pattern=r"^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$"
-    )
+    primary_color: Optional[str] = Field(None, pattern=HEX_COLOR_PATTERN)
     cover_url: Optional[str] = Field(None, max_length=500)
     description: Optional[str] = Field(None, max_length=2000)
     whatsapp_number: Optional[str] = Field(None, max_length=50)
@@ -82,12 +111,55 @@ class StoreUpdate(BaseModel):
     send_email_confirmation: Optional[bool] = None
     send_email_reminders: Optional[bool] = None
 
-    @field_validator(
-        "logo_url", "cover_url", "instagram_url", "facebook_url", "website_url"
-    )
+    @field_validator("instagram_url", "facebook_url", "website_url")
     @classmethod
     def validate_logo_url(cls, value: str | None) -> str | None:
         return reject_unsafe_url(value)
+
+    @field_validator("logo_url", "cover_url")
+    @classmethod
+    def validate_image_url(cls, value: str | None) -> str | None:
+        # La imagen subida (/api/stores/media/{id}) o una URL http(s). Que la
+        # subida sea la de la tienda lo chequea el router (F1-30).
+        return validate_image_url(value)
+
+    @field_validator("name", "description", "whatsapp_number", "deposit_policy")
+    @classmethod
+    def reject_control_chars_in_text(cls, value: str | None) -> str | None:
+        # Regla 19 leida como "texto que se publica" (B3-15): sale al portal
+        # publico. Va en el schema de entrada, no en una base que herede la
+        # respuesta: una fila legada con un invisible se sigue leyendo.
+        return reject_control_chars(value)
+
+    @field_validator("custom_client_fields")
+    @classmethod
+    def reject_control_chars_in_custom_fields(
+        cls, value: Optional[List[StoreCustomField]]
+    ) -> Optional[List[StoreCustomField]]:
+        # Etiquetas, ayudas y opciones del formulario de reserva: tambien se
+        # publican. StoreCustomField no se toca porque la respuesta lo reusa.
+        if value is not None:
+            reject_payload_control_chars([campo.model_dump() for campo in value])
+        return value
+
+    @field_validator("business_hours")
+    @classmethod
+    def reject_extra_periods(
+        cls, value: Optional[Dict[str, List[BusinessHourPeriod]]]
+    ) -> Optional[Dict[str, List[BusinessHourPeriod]]]:
+        """Un dia, un periodo: lo que no se persiste se rechaza (AUD2-B3-07).
+
+        El router guarda ``periods[0]`` y descartaba el resto en silencio, asi
+        que un local con corte de mediodia recibia 200 y quedaba abierto medio
+        dia. Soportar horario partido es decision de producto y esta pendiente;
+        hasta entonces un 200 que guarda menos de lo enviado es una mentira de
+        contrato, y esto la convierte en un 422 con mensaje neutro.
+        """
+        if value is None:
+            return value
+        if any(len(periodos) > 1 for periodos in value.values()):
+            raise ValueError("Por ahora cada dia admite un solo periodo de apertura")
+        return value
 
 
 class StoreMediaUploadResponse(BaseModel):

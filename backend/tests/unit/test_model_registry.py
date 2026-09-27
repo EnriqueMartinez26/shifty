@@ -63,3 +63,32 @@ def test_el_worker_puede_configurar_los_mappers_en_un_proceso_limpio() -> None:
     )
     assert resultado.returncode == 0, resultado.stderr[-1500:]
     assert "mappers-ok" in resultado.stdout
+
+
+def test_la_suite_de_integracion_no_mantiene_su_propia_lista_de_modelos() -> None:
+    """Defecto real (2026-09-17, C-13): lista paralela en el conftest.
+
+    `tests/integration/conftest.py` poblaba Base.metadata con trece
+    `import modules.*.model  # noqa: F401` escritos a mano -- sin billing ni
+    waitlist -- y despues corria `create_all`. Es exactamente la duplicacion
+    que este modulo existe para evitar (`core/model_registry.py`: "worker,
+    beat, alembic, scripts" deben llamar a load_all_models()). Hoy no se nota
+    porque el conftest tambien hace `from main import app` y la app importa
+    todos los routers; el dia que un modelo no cuelgue de un router, la suite
+    de integracion crea las tablas a medias y nadie lo ve.
+    """
+    conftest = BACKEND_ROOT / "tests" / "integration" / "conftest.py"
+    fuente = conftest.read_text(encoding="utf-8")
+
+    importados_a_mano = [
+        linea.strip()
+        for linea in fuente.splitlines()
+        if linea.startswith("import modules.") or linea.startswith("from modules.")
+    ]
+    assert not importados_a_mano, (
+        "el conftest de integracion vuelve a listar modelos a mano en vez de "
+        f"usar load_all_models(): {importados_a_mano}"
+    )
+    assert "load_all_models()" in fuente, (
+        "el conftest de integracion debe poblar Base.metadata desde el registro"
+    )

@@ -3,7 +3,8 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 import ulid
-from sqlalchemy import Boolean, CheckConstraint, DateTime, String
+from sqlalchemy import Boolean, CheckConstraint, DateTime, String, inspect
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from infrastructure.persistence.models.base import Base
@@ -20,7 +21,7 @@ class StaffModel(Base):
     )
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     # "person": profesional con usuario de login. "resource": cancha, sala,
     # box... un calendario reservable sin email ni usuario (2026-09-10).
@@ -42,16 +43,19 @@ class StaffModel(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # Sin carga implicita (F3-01): quien lee franjas o servicios los pide con
+    # `selectinload`; un acceso sin cargar revienta en vez de ser una consulta
+    # escondida. Con "selectin" cada `select(Staff)` sumaba dos SELECT.
     schedules: Mapped[list["ScheduleModel"]] = relationship(
         "ScheduleModel",
         primaryjoin="StaffModel.id == ScheduleModel.staff_id",
-        lazy="selectin",
+        lazy="raise",
         cascade="all, delete-orphan",
     )
     services: Mapped[list["Service"]] = relationship(
         "Service",
         secondary="staff_services",
-        lazy="selectin",
+        lazy="raise",
     )
 
     def __init__(self, **kwargs: Any) -> None:
@@ -66,15 +70,28 @@ class StaffModel(Base):
 
     @property
     def service_ids(self) -> list[str]:
-        services = self.__dict__.get("services") or []
+        """Servicios del profesional: la coleccion cargada o la lista explicita.
+
+        `services` es `lazy="raise"` (F3-01): sin coleccion ni lista explicita,
+        un Staff que ya existe en la base falla fuerte en lugar de decir que no
+        tiene servicios. Uno nuevo (sin identidad) todavia no tiene ninguno.
+        """
+        services = self.__dict__.get("services")
         if services:
             return [
                 service.public_id
                 for service in services
                 if getattr(service, "public_id", None)
             ]
-        override = getattr(self, "_service_ids_override", None)
-        return list(override) if override is not None else []
+        override = self.__dict__.get("_service_ids_override")
+        if override is not None:
+            return list(override)
+        if services is None and inspect(self).has_identity:
+            raise InvalidRequestError(
+                "StaffModel.service_ids necesita `services` cargado: la "
+                "relacion es lazy='raise', pedila con selectinload(Staff.services)"
+            )
+        return []
 
     @service_ids.setter
     def service_ids(self, value: list[str] | None) -> None:

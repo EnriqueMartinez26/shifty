@@ -55,3 +55,58 @@ def test_un_hijo_forkeado_no_hereda_el_loop_del_padre(
     monkeypatch.setattr(os, "getpid", lambda: -1)
     child_loop = run_in_worker_loop(which_loop())
     assert child_loop is not parent_loop
+
+
+def test_un_corte_a_mitad_de_tarea_no_deja_la_corrutina_viva_en_el_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F1-24 (plan de rendimiento, R9, 2026-09-24): corrutina zombi.
+
+    ``SoftTimeLimitExceeded`` lo levanta un handler de senal, y un job pasa
+    casi todo su tiempo esperando I/O: la excepcion sale del ``select`` del
+    loop, no de adentro de la corrutina. ``run_until_complete`` la propaga
+    pero deja la Task PENDIENTE en el loop persistente del proceso, y la
+    tarea siguiente del mismo hijo la reanudaba: seguia escribiendo con su
+    sesion y su advisory lock de sesion tomado, fuera de todo time limit.
+
+    Se simula el corte haciendo que el ``select`` del loop levante (es donde
+    cae la senal). La corrutina cortada tiene que terminar cancelada, con
+    sus ``finally`` corridos, y la tarea siguiente no puede reanudarla.
+    """
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    loop = run_in_worker_loop(_loop_actual())
+    reanudada: list[str] = []
+    limpiada: list[str] = []
+
+    async def job_que_espera_io() -> None:
+        try:
+            await asyncio.sleep(0.05)
+            reanudada.append("siguio despues del corte")
+        finally:
+            limpiada.append("finally")
+
+    select_original = loop._selector.select  # type: ignore[attr-defined]
+
+    def select_con_senal(timeout: float | None = None) -> object:
+        if timeout is None or timeout > 0:
+            # Una sola vez: el loop vuelve a su select normal.
+            monkeypatch.setattr(loop._selector, "select", select_original)  # type: ignore[attr-defined]
+            raise SoftTimeLimitExceeded()
+        return select_original(timeout)
+
+    monkeypatch.setattr(loop._selector, "select", select_con_senal)  # type: ignore[attr-defined]
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        run_in_worker_loop(job_que_espera_io())
+
+    # La tarea siguiente del mismo proceso, en el mismo loop.
+    run_in_worker_loop(asyncio.sleep(0.2))
+
+    assert reanudada == [], "la tarea siguiente reanudo la corrutina cortada"
+    assert limpiada == ["finally"], "la corrutina cortada no corrio sus finally"
+    assert not [t for t in asyncio.all_tasks(loop) if not t.done()]
+
+
+async def _loop_actual() -> asyncio.AbstractEventLoop:
+    return asyncio.get_running_loop()

@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from dotenv import load_dotenv
 from sqlalchemy import delete, insert, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
@@ -19,10 +20,11 @@ if str(backend_dir) not in sys.path:
 
 load_dotenv(backend_dir.parent / ".env")
 
+from core.database import TenantSession, _apply_tenant_context, set_tenant_context
+from core.model_registry import load_all_models
 from core.security import hash_password
 from modules.appointments.model import Appointment
 from modules.audit.model import AuditAction, AuditLog
-from modules.budget.model import Budget
 from modules.billing.model import (
     CouponRedemption,
     SaaSCoupon,
@@ -42,6 +44,10 @@ from modules.stores.model import Store, StoreSchedule
 from modules.users.model import User, UserRole
 from modules.auth.session_model import AuthSession
 
+# Los imports de arriba son los modelos que este script USA; el registro es
+# el que garantiza que esten TODOS para configurar los mappers.
+load_all_models()
+
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
@@ -49,16 +55,32 @@ if not DATABASE_URL:
 DATABASE_URL = str(DATABASE_URL)
 
 
+# Roles cuya contrasena vino de SEED_PASSWORD_*: esa nunca se imprime.
+PASSWORDS_DEL_ENTORNO: set[str] = set()
+
+
 def _seed_password(role: str) -> str:
     """Sin credenciales quemadas en el repo: o vienen por env, o se generan
-    aleatorias y se imprimen una unica vez. Un seed con 'admin123' que toque
-    staging es una cuenta admin publica."""
+    aleatorias y se imprimen una unica vez, aca. Un seed con 'admin123' que
+    toque staging es una cuenta admin publica."""
     env_value = os.environ.get(f"SEED_PASSWORD_{role.upper()}")
     if env_value:
+        PASSWORDS_DEL_ENTORNO.add(role)
         return env_value
     generated = secrets.token_urlsafe(12) + "9a"
     print(f"[seed] password {role}: {generated}")
     return generated
+
+
+def _credencial(role: str) -> str:
+    """Lo que el resumen final muestra en lugar de la contrasena.
+
+    Nunca el valor: la del entorno no debe llegar a un log (misma clase de fuga
+    que cerro C-04) y la generada ya se imprimio una vez en `_seed_password`.
+    """
+    if role in PASSWORDS_DEL_ENTORNO:
+        return f"(SEED_PASSWORD_{role.upper()})"
+    return f"(generada: ver '[seed] password {role}' arriba)"
 
 
 PASSWORDS = {
@@ -219,24 +241,6 @@ STORE_SCENARIOS = [
                 "phone": "+54 11 6000-3004",
             },
         ],
-        "budgets": [
-            {
-                "title": "Campana Invierno Barberia",
-                "improvement_description": "Landing de promos, automatizacion de recordatorios y ajuste de agenda.",
-                "estimated_hours": 18,
-                "hourly_rate": 22000,
-                "status": "approved",
-                "notes": "Prioridad alta por temporada de invierno.",
-            },
-            {
-                "title": "Optimizacion de Checkout",
-                "improvement_description": "Reserva publica con menos pasos y mejor recupero de pagos.",
-                "estimated_hours": 24,
-                "hourly_rate": 24000,
-                "status": "draft",
-                "notes": "Esperando feedback del admin del local.",
-            },
-        ],
     },
     {
         "slug": "salon-sentinel",
@@ -345,16 +349,6 @@ STORE_SCENARIOS = [
                 "first_name": "Romina",
                 "last_name": "Paz",
                 "phone": "+54 11 6000-4003",
-            },
-        ],
-        "budgets": [
-            {
-                "title": "Programa Fidelizacion Salon",
-                "improvement_description": "Bonos por recurrencia, gift cards y referidos.",
-                "estimated_hours": 20,
-                "hourly_rate": 23000,
-                "status": "approved",
-                "notes": "Se implementa en dos etapas.",
             },
         ],
     },
@@ -473,7 +467,6 @@ async def cleanup_seed(session: AsyncSession) -> None:
     await session.execute(
         delete(StoreSchedule).where(StoreSchedule.store_id.in_(store_ids))
     )
-    await session.execute(delete(Budget).where(Budget.store_id.in_(store_ids)))
     await session.execute(
         delete(PaymentGatewayConfig).where(PaymentGatewayConfig.store_id.in_(store_ids))
     )
@@ -510,7 +503,14 @@ async def ensure_user(
     phone: str | None = None,
     is_global_admin: bool = False,
 ) -> User:
-    user = await get_by(session, User, User.email == email)
+    # PV-01: el email de un cliente es unico por tienda; el de las cuentas que
+    # inician sesion, global.
+    alcance = (
+        (User.store_id == store_id, User.role == role)
+        if role == UserRole.CLIENT.value
+        else (User.role != UserRole.CLIENT.value,)
+    )
+    user = await get_by(session, User, User.email == email, *alcance)
     attrs = {
         "email": email,
         "hashed_password": hash_password(password),
@@ -781,25 +781,6 @@ async def ensure_block(
     return block
 
 
-async def ensure_budget(
-    session: AsyncSession, store_id: str, budget_data: dict[str, Any]
-) -> Budget:
-    budget = await get_by(
-        session,
-        Budget,
-        Budget.store_id == store_id,
-        Budget.title == budget_data["title"],
-    )
-    attrs = {"store_id": store_id, **budget_data}
-    if budget is None:
-        budget = Budget(**attrs)
-        session.add(budget)
-        await session.flush()
-    else:
-        apply_attrs(budget, **attrs)
-    return budget
-
-
 async def ensure_audit_log(
     session: AsyncSession,
     *,
@@ -964,9 +945,6 @@ async def seed_store(session: AsyncSession, scenario: dict[str, Any]) -> dict[st
             notes_staff="Chequeado por el admin." if extra_index % 2 == 0 else None,
         )
 
-    for budget_data in scenario["budgets"]:
-        await ensure_budget(session, store.id, budget_data)
-
     await ensure_audit_log(
         session,
         actor=admin_user,
@@ -1031,7 +1009,6 @@ async def summarize_counts(session: AsyncSession) -> dict[str, int]:
         ("schedules", Schedule),
         ("appointments", Appointment),
         ("appointment_blocks", StaffBlock),
-        ("budgets", Budget),
         ("audit_logs", AuditLog),
         ("users", User),
     ]
@@ -1046,11 +1023,23 @@ async def summarize_counts(session: AsyncSession) -> dict[str, int]:
 
 
 async def seed_simulation() -> None:
-    print(f"[CONN] Seeding database at: {DATABASE_URL}")
-    engine = create_async_engine(cast(str, DATABASE_URL), echo=False)
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    # Solo host, puerto y base: la URL completa lleva usuario y contrasena, y la
+    # salida del seed queda en logs (C-04, 2026-09-16).
+    url = make_url(cast(str, DATABASE_URL))
+    print(f"[CONN] Seeding database at: {url.host}:{url.port or 5432}/{url.database}")
+    engine = create_async_engine(url, echo=False)
+    # TenantSession reaplica el contexto tras cada commit: set_config(..., true)
+    # es local a la transaccion y el resumen posterior al commit lo necesita.
+    async_session = async_sessionmaker(
+        engine, class_=TenantSession, expire_on_commit=False
+    )
 
+    # Bypass explicito de RLS, como los jobs de Celery y bootstrap_superadmin.
+    # Sin esto el script solo escribia con un superusuario (BYPASSRLS): con el
+    # rol shifty_app cada INSERT caia por el WITH CHECK (C-04, 2026-09-16).
+    set_tenant_context(None, True)
     async with async_session() as session:
+        await _apply_tenant_context(session)
         await cleanup_seed(session)
         reports = []
         for scenario in STORE_SCENARIOS:
@@ -1070,12 +1059,16 @@ async def seed_simulation() -> None:
         print("[COUNTS]")
         for key in sorted(summary):
             print(f"  - {key}: {summary[key]}")
+        # Antes imprimia literales que ninguna cuenta tiene ('admin123'...) y
+        # confundia al operador (C-05, 2026-09-17). Ahora dice de DONDE sale cada
+        # contrasena, sin repetir el valor: la del entorno no se imprime nunca y
+        # la generada sale una unica vez, en `_seed_password`.
         print("[CREDENTIALS]")
-        print("  - global-admin@shifty.com / global123")
-        print("  - admin@barberia-sentinel.com / admin123")
-        print("  - admin@salon-sentinel.com / admin123")
-        print("  - Any staff email seeded / staff123")
-        print("  - Any client email seeded / client123")
+        print(f"  - global-admin@shifty.com / {_credencial('global_admin')}")
+        print(f"  - admin@barberia-sentinel.com / {_credencial('admin')}")
+        print(f"  - admin@salon-sentinel.com / {_credencial('admin')}")
+        print(f"  - Any staff email seeded / {_credencial('staff')}")
+        print(f"  - Any client email seeded / {_credencial('client')}")
 
     await engine.dispose()
 

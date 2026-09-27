@@ -1,0 +1,12 @@
+# Vulnerabilidades aceptadas por Trivy en las imagenes
+# (.github/workflows/security-scan.yml, job image-scan).
+#
+# Un ID por linea (CVE-... o GHSA-...). Cada ID lleva, en la linea de
+# comentario inmediatamente anterior, el motivo, quien lo acepto y la fecha de
+# revision. Trivy admite `exp:AAAA-MM-DD` despues del ID para que la excepcion
+# venza sola. Aceptar una vulnerabilidad es una decision del dueno, no de la IA
+# (CLAUDE.md §1).
+#
+# Ejemplo:
+#   # libfoo del sistema base, no alcanzable desde la app (ok de <dueno>)
+#   CVE-2026-00000 exp:2026-12-01

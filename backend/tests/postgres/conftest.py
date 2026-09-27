@@ -16,8 +16,12 @@ Si las variables no estan definidas, todo el paquete se salta (asi
 ``uv run pytest`` a secas sigue verde). CI las define en el job
 ``backend-postgres``. Local, con el docker-compose levantado:
 
-    TEST_POSTGRES_MIGRATION_URL=postgresql+asyncpg://shifty_user:shifty_password@127.0.0.1:5432/shifty_test
-    TEST_POSTGRES_URL=postgresql+asyncpg://shifty_app:shifty_app_password@127.0.0.1:5432/shifty_test
+    TEST_POSTGRES_MIGRATION_URL=postgresql+asyncpg://shifty_user:shifty_password@127.0.0.1:5432/shifty_test?ssl=disable
+    TEST_POSTGRES_URL=postgresql+asyncpg://shifty_app:shifty_app_password@127.0.0.1:5432/shifty_test?ssl=disable
+
+``?ssl=disable`` es obligatorio: el Postgres local y el de CI no tienen TLS y
+las migraciones exigen TLS cuando la URL no dice nada
+(``core.config.parse_db_url``, B7-11).
 
 Los engines son de alcance de funcion a proposito: pytest-asyncio cierra el
 loop por test y un pool de asyncpg atado a un loop cerrado falla en el test
@@ -47,6 +51,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from core.config import parse_db_url
 from core.database import (
     TenantSession,
     _apply_tenant_context,
@@ -84,7 +89,13 @@ def pytest_collection_modifyitems(
 
 
 def _sync_dsn(url: str) -> str:
-    return url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    """DSN de libpq para psycopg2 a partir de la URL de asyncpg.
+
+    `ssl` es el parametro de asyncpg y libpq lo rechaza ("invalid URI query
+    parameter"); se traduce a `sslmode` con el helper unico del repo (B7-11).
+    """
+    params = parse_db_url(url, label="TEST_POSTGRES_MIGRATION_URL")
+    return str(psycopg2.extensions.make_dsn(**params))
 
 
 def _app_password(url: str) -> str:

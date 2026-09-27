@@ -200,6 +200,33 @@ async def test_la_busqueda_de_turnos_no_cruza_tiendas(
 
 
 @pytest.mark.asyncio
+async def test_la_agenda_diaria_no_cruza_tiendas(
+    client: AsyncClient, dos_tiendas: tuple[Tienda, Tienda]
+) -> None:
+    """B1-09 (2026-09-18): ``GET /appointments/?date=`` no filtraba por tienda.
+
+    ``get_by_date`` solo acotaba por el rango del dia y quedaba apoyado en RLS
+    como unica capa (CLAUDE.md §2 exige RLS MAS filtro ``store_id``). En
+    SQLite, sin RLS, la agenda de B devolvia el turno de A del mismo dia.
+    """
+    a, b = dos_tiendas
+    turno_a = await _turno(client, a, hora=10, clave="agenda-aislada-001")
+    fecha = (datetime.now(timezone.utc) + timedelta(days=4)).strftime("%Y-%m-%d")
+
+    propia = await client.get(
+        "/appointments/", headers=auth_headers(a.token), params={"date": fecha}
+    )
+    assert propia.status_code == 200, propia.text
+    assert [t["public_id"] for t in propia.json()] == [turno_a]
+
+    ajena = await client.get(
+        "/appointments/", headers=auth_headers(b.token), params={"date": fecha}
+    )
+    assert ajena.status_code == 200, ajena.text
+    assert ajena.json() == [], "la agenda diaria devolvio turnos de otra tienda"
+
+
+@pytest.mark.asyncio
 async def test_los_listados_solo_muestran_lo_propio(
     client: AsyncClient, dos_tiendas: tuple[Tienda, Tienda]
 ) -> None:

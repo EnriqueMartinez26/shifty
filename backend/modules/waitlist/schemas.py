@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.utils import (
+    MAX_BOOKING_AHEAD,
+    now_utc,
+    within_booking_horizon,
+    within_max_ahead,
+)
 from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from modules.legal.versions import LegalVersion
 
 
 def _normalize_phone(value: str) -> str:
@@ -33,6 +40,13 @@ class WaitlistJoinRequest(BaseModel):
     client_phone: str = Field(..., min_length=6, max_length=30)
     client_email: Optional[EmailStr] = Field(default=None, max_length=255)
     notes: Optional[str] = Field(default=None, max_length=300)
+    # Consentimiento (PV-09, 2026-09-25). Opcional mientras
+    # ``LEGAL_WAITLIST_CONSENT_REQUIRED`` este apagado (el front actual no lo
+    # manda); ``false`` es 422 siempre. Versiones: las de
+    # ``GET /public/legal/versions``.
+    accepts_terms: Optional[bool] = None
+    terms_version: Optional[LegalVersion] = None
+    privacy_version: Optional[LegalVersion] = None
 
     @field_validator("client_phone")
     @classmethod
@@ -55,6 +69,12 @@ class WaitlistJoinRequest(BaseModel):
             raise ValueError("La ventana termina antes de empezar")
         if (self.window_ends_at - self.window_starts_at).days > 60:
             raise ValueError("La ventana no puede superar los 60 dias")
+        # Una ventana que empieza despues del horizonte del portal (120 dias)
+        # no llega a una oferta aprovechable: el cliente reserva desde la
+        # grilla publica, que no pasa de ahi (revision de perf/f4-back).
+        # Mensaje neutro, como el del alta publica.
+        if not within_booking_horizon(self.window_starts_at):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return self
 
 
@@ -92,9 +112,26 @@ class WaitlistEntryResponse(BaseModel):
 
 
 class WaitlistBookRequest(BaseModel):
-    """El dueno reserva a mano para alguien de la lista (sin antelacion minima)."""
+    """El dueno reserva a mano para alguien de la lista (sin antelacion minima).
+
+    Cota ancha, solo contra el desborde: entre hace 2 anios y dentro de 2
+    anios (``MAX_BOOKING_AHEAD``). Sin ella un 9999-12-31 o un 0001-01-01
+    desbordaban ``starts_at + duracion`` (500; revision de perf/f4-back). No
+    hay piso en "ahora": la tienda carga despues a quien ya atendio (decision
+    de Mateo, 2026-09-25).
+    """
 
     starts_at: datetime
     staff_id: Optional[str] = Field(
         default=None, max_length=64, pattern=PUBLIC_ID_PATTERN
     )
+
+    @field_validator("starts_at")
+    @classmethod
+    def within_booking_range(cls, value: datetime) -> datetime:
+        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if aware < now_utc() - MAX_BOOKING_AHEAD or not within_max_ahead(
+            aware, MAX_BOOKING_AHEAD
+        ):
+            raise ValueError("La fecha esta fuera del rango de reservas")
+        return value

@@ -49,6 +49,7 @@ async def _turno_para_manana(
             "client_name": "Cliente Recordado",
             "client_email": "recordado@demo.com",
             "client_phone": "+5491155550777",
+            "accepts_terms": True,
             "idempotency_key": "recordatorio-pg-000001",
         },
     )

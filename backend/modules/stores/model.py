@@ -8,11 +8,13 @@ from sqlalchemy import (
     Integer,
     Boolean,
     ForeignKey,
+    Index,
     LargeBinary,
     Text,
     Time,
     UniqueConstraint,
     CheckConstraint,
+    text,
 )
 
 from core.business_types import BusinessType, normalize_business_type
@@ -30,7 +32,7 @@ CustomClientFieldData = dict[str, Any]
 class StoreSchedule(BaseEntity):
     __tablename__ = "store_schedules"
 
-    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
+    store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"))
     day_of_week: Mapped[int] = mapped_column(Integer)
     open_time: Mapped[time] = mapped_column(Time)
     close_time: Mapped[time] = mapped_column(Time)
@@ -82,8 +84,11 @@ class Store(BaseEntity):
         Integer, default=0, server_default="0"
     )
 
+    # Sin carga implicita (F3-01): solo la ficha del panel lee el horario
+    # comercial, con `selectinload` explicito. Con "selectin" cada
+    # `select(Store)` del sistema sumaba un SELECT.
     schedules: Mapped[list["StoreSchedule"]] = relationship(
-        back_populates="store", cascade="all, delete-orphan", lazy="selectin"
+        back_populates="store", cascade="all, delete-orphan", lazy="raise"
     )
 
     send_email_confirmation: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -113,6 +118,12 @@ class Store(BaseEntity):
 
     @property
     def business_hours(self) -> BusinessHours:
+        """Horario comercial por dia. Exige ``schedules`` cargado.
+
+        ``schedules`` es ``lazy="raise"``: sin ``selectinload(Store.schedules)``
+        esto levanta ``InvalidRequestError`` en lugar de devolver un horario
+        vacio que la ficha mostraria como si fuera el real.
+        """
         hours: BusinessHours = {
             "mon": [],
             "tue": [],
@@ -181,7 +192,7 @@ class Store(BaseEntity):
 
 
 class StoreMedia(BaseEntity):
-    """Imagenes subidas por la tienda (logo/portada), guardadas en la DB.
+    """Imagenes subidas por la tienda (logo, portada e imagen de servicio).
 
     Se guardan en bytea (no en disco) para no depender de un volumen compartido
     ni de object storage en esta etapa: persisten con el backup de la DB y viven
@@ -192,8 +203,32 @@ class StoreMedia(BaseEntity):
     __tablename__ = "store_media"
 
     store_id: Mapped[str] = mapped_column(ForeignKey("stores.id"), index=True)
-    # 'logo' | 'cover'.
+    # 'logo' | 'cover' | 'service' (ck_store_media_kind).
     kind: Mapped[str] = mapped_column(String(20))
+    # Solo la imagen de servicio (F1-28): una por servicio, y se va con el
+    # servicio si alguna vez se borra de verdad (hoy la baja es logica).
+    service_id: Mapped[str | None] = mapped_column(
+        ForeignKey("services.id", ondelete="CASCADE", name="fk_store_media_service_id"),
+        nullable=True,
+    )
     content_type: Mapped[str] = mapped_column(String(50))
     byte_size: Mapped[int] = mapped_column(Integer)
     data: Mapped[bytes] = mapped_column(LargeBinary)
+
+    # Migracion e7a9c1d3f5b8.
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('logo', 'cover', 'service')", name="ck_store_media_kind"
+        ),
+        CheckConstraint(
+            "(kind = 'service') = (service_id IS NOT NULL)",
+            name="ck_store_media_service_id",
+        ),
+        Index(
+            "uq_store_media_service_id",
+            "service_id",
+            unique=True,
+            postgresql_where=text("service_id IS NOT NULL"),
+            sqlite_where=text("service_id IS NOT NULL"),
+        ),
+    )

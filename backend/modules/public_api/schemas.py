@@ -1,11 +1,31 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import re
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
-from core.validation import PUBLIC_ID_PATTERN, reject_payload_control_chars
+from core.utils import MAX_BOOKING_AHEAD, now_utc, within_max_ahead
+from modules.legal.versions import LegalVersion
+from core.validation import (
+    PUBLIC_ID_PATTERN,
+    normalize_client_phone,
+    reject_control_chars,
+    reject_payload_control_chars,
+)
 from modules.stores.schemas import StoreCustomField
+
+
+class PublicStoreRefResponse(BaseModel):
+    """Referencia minima de la tienda para "Mis turnos" (FF-16).
+
+    Sale tambien con la suscripcion suspendida: el cliente tiene que poder
+    cancelar o reprogramar lo que ya reservo. De la suscripcion solo expone
+    si la tienda toma reservas nuevas.
+    """
+
+    store_public_id: str
+    name: str
+    accepts_new_bookings: bool
 
 
 class PublicStoreResponse(BaseModel):
@@ -60,14 +80,6 @@ class PublicStaffResponse(BaseModel):
         from_attributes = True
 
 
-class AvailabilitySlot(BaseModel):
-    staff_id: str
-    staff_name: str
-    starts_at: str
-    ends_at: str
-    status: str
-
-
 class PublicBookingCreate(BaseModel):
     store_public_id: Optional[str] = Field(
         None, min_length=1, max_length=64, pattern=PUBLIC_ID_PATTERN
@@ -90,27 +102,43 @@ class PublicBookingCreate(BaseModel):
         default="manual", pattern=r"^(auto|manual|mercadopago)$"
     )
     # Aceptacion de los terminos de Shifty y de la politica de seña de la tienda.
+    # Obligatoria en el servidor (PV-09): antes solo la exigia el checkbox del
+    # front y un POST directo reservaba sin consentimiento registrado.
     accepts_terms: bool = False
+    # Versiones aceptadas, tal como las dio ``GET /public/legal/versions``
+    # (PV-09, 2026-09-25). Opcionales para no romper el front actual; si
+    # vienen tienen que ser las vigentes (409 LEGAL_VERSION_MISMATCH).
+    terms_version: LegalVersion | None = None
+    privacy_version: LegalVersion | None = None
 
     @field_validator("client_phone")
     @classmethod
     def phone_must_be_numeric(cls, value: str) -> str:
-        cleaned = re.sub(r"[\s\-\(\)\+]", "", value)
-        if not cleaned.isdigit():
-            raise ValueError(
-                "El telefono solo puede contener digitos, espacios o los caracteres: + - ( )"
-            )
-        if len(cleaned) < 6:
-            raise ValueError("El telefono debe tener al menos 6 digitos")
-        return cleaned
+        return normalize_client_phone(value)
 
     @field_validator("starts_at")
     @classmethod
     def must_be_future(cls, value: datetime) -> datetime:
-        now = datetime.now(value.tzinfo) if value.tzinfo else datetime.now()
-        if value <= now:
+        # Sin offset se asume UTC, una sola vez y aca (regla 24, B1-11): antes
+        # se comparaba contra la hora local del proceso.
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        if value <= now_utc():
             raise ValueError("No se puede agendar un turno en el pasado")
+        # Tope ancho (2 anios): 9999-12-31 desbordaba ``starts_at + duracion``
+        # (500). No el horizonte de 120 dias: el "Nuevo turno" del panel
+        # reserva por aca con fecha libre; al cliente lo acota la grilla.
+        if not within_max_ahead(value, MAX_BOOKING_AHEAD):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return value
+
+    @model_validator(mode="after")
+    def require_terms(self) -> "PublicBookingCreate":
+        if self.accepts_terms is not True:
+            raise ValueError(
+                "Para reservar hay que aceptar los terminos y la politica de sena"
+            )
+        return self
 
     @model_validator(mode="after")
     def reject_control_chars_in_text(self) -> "PublicBookingCreate":
@@ -207,6 +235,13 @@ class ClientCancelRequest(BaseModel):
     def normalize_phone(cls, value: str) -> str:
         return re.sub(r"[\s\-\(\)\+]", "", value)
 
+    @field_validator("reason")
+    @classmethod
+    def reject_control_chars_in_reason(cls, value: str | None) -> str | None:
+        # Texto libre de un anonimo que termina en el aviso al duenio
+        # (regla 19, B1-23): sin NUL, bidi ni zero-width.
+        return reject_control_chars(value)
+
 
 class ClientRescheduleRequest(BaseModel):
     phone: str = Field(..., min_length=6, max_length=30)
@@ -221,9 +256,15 @@ class ClientRescheduleRequest(BaseModel):
     @field_validator("new_starts_at")
     @classmethod
     def validate_new_starts_at(cls, value: datetime) -> datetime:
-        now = datetime.now(value.tzinfo) if value.tzinfo else datetime.now()
-        if value <= now:
+        # Mismo criterio que PublicBookingCreate.starts_at (B1-11).
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        if value <= now_utc():
             raise ValueError("La nueva fecha debe ser en el futuro")
+        # Mismo tope ancho: "Mis turnos" reprograma con fecha libre y un turno
+        # que ya esta mas alla de +120 dias se tiene que poder mover.
+        if not within_max_ahead(value, MAX_BOOKING_AHEAD):
+            raise ValueError("La fecha esta fuera del rango de reservas")
         return value
 
 

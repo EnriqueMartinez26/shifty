@@ -71,3 +71,36 @@ async def test_circuit_breaker_recovers_after_cooldown_and_successful_probe() ->
     snapshot = await breaker.snapshot()
     assert snapshot["state"] == "closed"
     assert snapshot["consecutive_failures"] == 0
+
+
+@pytest.mark.asyncio
+async def test_el_soft_time_limit_no_cuenta_como_falla_del_proveedor() -> None:
+    """Revision de perf/f2b (2026-09-24): SoftTimeLimitExceeded es Exception y
+    el breaker lo contaba como falla de Mercado Pago. Tampoco es un exito: una
+    sonda cortada en half_open suelta la sonda sin cerrar ni abrir."""
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    clock = FakeClock()
+    breaker = AsyncCircuitBreaker(
+        name="corte", failure_threshold=1, recovery_timeout_seconds=30, clock=clock
+    )
+
+    async def cortada() -> None:
+        raise SoftTimeLimitExceeded()
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        await breaker.call(cortada)
+    cerrado = await breaker.snapshot()
+    assert (cerrado["state"], cerrado["consecutive_failures"]) == ("closed", 0)
+
+    async def fail() -> None:
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        await breaker.call(fail)
+    clock.advance(31)
+    with pytest.raises(SoftTimeLimitExceeded):
+        await breaker.call(cortada)
+    sonda = await breaker.snapshot()
+    assert sonda["state"] == "half_open"
+    assert sonda["probe_in_flight"] is False

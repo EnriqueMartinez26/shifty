@@ -3,26 +3,37 @@ import json
 from typing import Any, cast
 
 from redis.asyncio import Redis
-from redis.exceptions import RedisError
 
 import structlog
 
 from core.exceptions import IdempotencyInProgressException
+from core.redis import REDIS_UNAVAILABLE_ERRORS
 
 PROCESSING_VALUE = "PROCESSING"
-PROCESSING_TTL_MS = 30_000
+# La marca PROCESSING tiene que durar mas que el request que la toma: si vence
+# antes, un reintento la gana y choca 409 contra la reserva que sigue en curso
+# (R8-01). La reserva publica suma el presupuesto de MP
+# (MERCADOPAGO_REQUEST_BUDGET_SECONDS: 8 s por defecto, < 25 s por validacion),
+# la base y el mail en linea. El timeout del SMTP (10 s) es POR OPERACION de
+# socket (conexion, STARTTLS, login, envio), no por mail: 60 s cubren el
+# presupuesto maximo mas UN cuelgue del SMTP y la base, pero no un servidor
+# que se cuelgue en varias operaciones seguidas; eso lo cierra mandar los
+# mails por Celery (Fase 2). El costo de subirlo: un proceso que muere a mitad
+# deja la clave tomada hasta un minuto (F1-04).
+PROCESSING_TTL_MS = 60_000
 RESULT_TTL_SECONDS = 86_400
 MAX_WAIT_SECONDS = 10
 logger = structlog.get_logger()
 
 
 def _log_redis_fallback(operation: str, key: str, exc: Exception) -> None:
+    # PV-22: solo el tipo; el texto de un error de redis-py puede repetir la
+    # URL de conexion con la clave.
     logger.warning(
         "idempotency_redis_unavailable",
         operation=operation,
         key=key,
         error_type=type(exc).__name__,
-        error=str(exc),
     )
 
 
@@ -49,7 +60,7 @@ async def idempotency_guard(key: str, redis: Redis) -> dict[str, Any] | None:
                 )
                 if acquired:
                     return None
-        except RedisError as exc:
+        except REDIS_UNAVAILABLE_ERRORS as exc:
             _log_redis_fallback("guard", cache_key, exc)
             return None
 
@@ -64,7 +75,7 @@ async def idempotency_save(key: str, result: Any, redis: Redis) -> None:
     cache_key = f"idempotency:{key}"
     try:
         await redis.setex(cache_key, RESULT_TTL_SECONDS, json.dumps(result))
-    except RedisError as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         _log_redis_fallback("save", cache_key, exc)
 
 
@@ -75,5 +86,5 @@ async def idempotency_release(key: str, redis: Redis) -> None:
         cached = await redis.get(cache_key)
         if cached in (PROCESSING_VALUE, PROCESSING_VALUE.encode("utf-8")):
             await redis.delete(cache_key)
-    except RedisError as exc:
+    except REDIS_UNAVAILABLE_ERRORS as exc:
         _log_redis_fallback("release", cache_key, exc)

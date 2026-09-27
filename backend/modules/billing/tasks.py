@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 
 from core.celery_app import celery_app
 from core.database import AsyncSessionFactory, _apply_tenant_context, set_tenant_context
@@ -53,6 +54,8 @@ async def run_subscription_lifecycle(*, now: datetime | None = None) -> dict[str
 def process_subscription_lifecycle(self: Any) -> dict[str, int]:
     try:
         return run_in_worker_loop(run_subscription_lifecycle())
+    except SoftTimeLimitExceeded:
+        raise
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2**self.request.retries))
 

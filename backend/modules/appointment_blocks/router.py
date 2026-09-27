@@ -1,17 +1,18 @@
 from collections.abc import AsyncGenerator
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, cast
 
-from fastapi import Depends, Path, status
+from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
 from core.router import CanonicalAPIRouter
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.availability_cache import AvailabilityCacheClient
 from core.database import get_db
-from core.redis import get_redis
-from core.exceptions import PermissionDeniedException
-from core.roles import STORE_MANAGERS, has_any_role
+from core.redis import get_availability_cache
+from core.exceptions import PermissionDeniedException, ValidationException
+from core.roles import ROLE_RECEPTIONIST, STORE_MANAGERS, canonical_role, has_any_role
 from core.uow import AsyncSqlAlchemyUnitOfWork
+from core.utils import ensure_utc_aware, local_day_start
 from core.validation import PUBLIC_ID_PATTERN
 from modules.appointment_blocks.schemas import (
     AffectedAppointmentResponse,
@@ -31,6 +32,7 @@ from modules.appointment_blocks.service import (
     AppointmentBlockService,
     expand_ranges,
 )
+from modules.appointments.repository import AppointmentRepository
 from modules.auth.dependencies import get_current_user
 from modules.staff.model import StaffBlock
 from modules.users.model import User, UserRole
@@ -45,6 +47,17 @@ def _can_manage_blocks(user: User) -> bool:
     return user.role in (UserRole.ADMIN, UserRole.STAFF) or user.is_global_admin
 
 
+def _can_read_blocks(user: User) -> bool:
+    """Leer los bloqueos: quien los gestiona y, ademas, la recepcion (FF-14).
+
+    La agenda de la recepcion los muestra para no ofrecer un horario
+    bloqueado; crear, editar y borrar siguen en ``_can_manage_blocks``. El
+    profesional no se acota a su agenda: ``GET /appointments/`` tampoco lo
+    acota.
+    """
+    return _can_manage_blocks(user) or canonical_role(user) == ROLE_RECEPTIONIST
+
+
 def _require_manage(user: User, action: str) -> None:
     if not _can_manage_blocks(user):
         raise PermissionDeniedException(action=f"No tenés permiso para {action}")
@@ -53,21 +66,24 @@ def _require_manage(user: User, action: str) -> None:
 async def get_block_service(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> AsyncGenerator[AppointmentBlockService, None]:
     uow = AsyncSqlAlchemyUnitOfWork(db)
     async with uow:
         yield AppointmentBlockService(
-            uow=uow, cache=cast(AvailabilityCacheClient, redis), actor=user
+            uow=uow, cache=cast(AvailabilityCacheClient, availability_cache), actor=user
         )
 
 
 def _to_response(block: StaffBlock) -> AppointmentBlockResponse:
+    # Siempre UTC con zona: desde que el alta no hace refresh por bloqueo
+    # (B1-14) el objeto conserva el offset que mando el cliente, y SQLite
+    # devuelve naive. La base guarda UTC; la respuesta tambien.
     return AppointmentBlockResponse(
         public_id=block.id,
         staff_id=block.staff_id,
-        starts_at=block.starts_at,
-        ends_at=block.ends_at,
+        starts_at=ensure_utc_aware(block.starts_at).astimezone(timezone.utc),
+        ends_at=ensure_utc_aware(block.ends_at).astimezone(timezone.utc),
         reason=block.reason,
         is_active=block.is_active,
     )
@@ -91,19 +107,56 @@ def _to_affected(item: AffectedAppointment, user: User) -> AffectedAppointmentRe
     )
 
 
+# F4-07: el rango de la agenda, en dias locales incluidos, tiene tope (regla 9).
+MAX_BLOCK_LIST_DAYS = 400
+
+
+def _block_window(
+    from_date: date | None, to_date: date | None
+) -> tuple[datetime, datetime] | None:
+    """``[inicio del primer dia, inicio del dia siguiente al ultimo)`` en UTC.
+
+    Dias LOCALES cortados con ``local_day_start`` (regla 24). Los dos o
+    ninguno; ``None`` es "sin rango" (la respuesta de siempre).
+    """
+    if from_date is None and to_date is None:
+        return None
+    if from_date is None or to_date is None:
+        raise ValidationException("from_date y to_date van juntos")
+    if to_date < from_date:
+        raise ValidationException("to_date no puede ser anterior a from_date")
+    # Dias INCLUIDOS: from_date y to_date cuentan los dos.
+    if (to_date - from_date).days + 1 > MAX_BLOCK_LIST_DAYS:
+        raise ValidationException(
+            f"El rango no puede superar {MAX_BLOCK_LIST_DAYS} dias"
+        )
+    try:
+        return local_day_start(from_date), local_day_start(to_date + timedelta(days=1))
+    except OverflowError:
+        # 9999-12-31 no tiene dia siguiente: era un 500 por el handler
+        # generico (mismo criterio que ``core.keyset.decode_cursor``).
+        raise ValidationException("Fecha fuera de rango") from None
+
+
 @router.get("/", response_model=list[AppointmentBlockResponse])
 async def list_blocks(
+    # F4-07 (aditivo): sin ninguno de los tres, todos los bloqueos de la
+    # tienda, activos e inactivos, como siempre. ``include_inactive`` ausente
+    # conserva ese default; ``false`` saca los desactivados.
+    from_date: date | None = Query(default=None, description="Dia local (YYYY-MM-DD)"),
+    to_date: date | None = Query(default=None, description="Dia local (YYYY-MM-DD)"),
+    include_inactive: bool | None = Query(default=None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[AppointmentBlockResponse]:
-    if not _can_manage_blocks(user):
+    if not _can_read_blocks(user):
         raise PermissionDeniedException(action="No tenés permiso para ver bloqueos")
-    result = await db.execute(
-        select(StaffBlock)
-        .where(StaffBlock.store_id == user.store_id)
-        .order_by(StaffBlock.start_time.asc())
+    blocks = await AppointmentRepository(db).list_store_blocks(
+        str(user.store_id),
+        window=_block_window(from_date, to_date),
+        include_inactive=include_inactive is not False,
     )
-    return [_to_response(block) for block in result.scalars().all()]
+    return [_to_response(block) for block in blocks]
 
 
 @router.post(
@@ -231,7 +284,11 @@ async def update_block(
     service: AppointmentBlockService = Depends(get_block_service),
 ) -> AppointmentBlockResponse:
     _require_manage(user, "editar bloqueos")
-    block = await service.update_block(public_id, data.model_dump(exclude_unset=True))
+    changes = data.model_dump(exclude_unset=True)
+    cancel_affected = bool(changes.pop("cancel_affected", False))
+    block = await service.update_block(
+        public_id, changes, cancel_affected=cancel_affected
+    )
     return _to_response(block)
 
 

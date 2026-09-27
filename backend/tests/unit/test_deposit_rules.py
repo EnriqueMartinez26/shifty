@@ -161,3 +161,40 @@ def test_historial_desconocido_no_dispara_recargos_por_historial() -> None:
     assert d.reasons == ["base", "far_notice"]
     assert d.amount == Decimal("5000.00")
     assert UNKNOWN_HISTORY.is_new is False
+
+
+def test_un_porcentaje_heredado_mayor_a_100_no_cobra_mas_que_el_precio() -> None:
+    """AUD2-B6-03 (2026-09-20): `percent` sin tope cobraba 5 veces el precio.
+
+    Sintoma: una fila vieja con `deposit_type='percent'` y `deposit_amount=500`
+    -el caso que motivo la validacion de entrada de B6-02- calculaba
+    500% del precio y se lo cobraba al cliente por adelantado. `fixed` ya
+    hacia `min(configured, price)` y `decide_deposit` solo acotaba cuando
+    habia recargos, asi que con recargo 0 el importe salia sin acotar.
+    """
+    assert base_deposit(_servicio(tipo="percent", monto=500), Decimal("10000")) == (
+        Decimal("10000.00")
+    )
+
+    d = decide_deposit(
+        _servicio(tipo="percent", monto=500),
+        price=Decimal("10000"),
+        notice=timedelta(days=1),
+        rules=SIN_RECARGOS,
+        history=HABITUAL,
+    )
+    assert d.amount == Decimal("10000.00")
+    assert d.base_amount == Decimal("10000.00")
+
+
+def test_un_porcentaje_valido_sigue_saliendo_igual() -> None:
+    """El tope no cambia el calculo de ninguna sena bien configurada."""
+    assert base_deposit(_servicio(tipo="percent", monto=30), Decimal("10000")) == (
+        Decimal("3000.00")
+    )
+    assert base_deposit(_servicio(tipo="percent", monto=100), Decimal("10000")) == (
+        Decimal("10000.00")
+    )
+    assert base_deposit(_servicio(tipo="percent", monto=0.5), Decimal("999.99")) == (
+        Decimal("5.00")
+    )

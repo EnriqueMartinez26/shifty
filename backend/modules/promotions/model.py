@@ -8,11 +8,13 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -47,8 +49,21 @@ class StorePromotion(BaseEntity):
         DateTime(timezone=True), nullable=True
     )
 
+    # Un codigo VIGENTE identifica a una promocion por tienda; uno historico
+    # no. El borrado es logico (is_active=False) y la restriccion vieja sobre
+    # (store_id, code) dejaba el codigo inutilizable para siempre despues de
+    # dar la promocion de baja (2026-09-17, B2-14). Los canjes conservan
+    # code_snapshot y promotion_id, asi que la trazabilidad no depende del
+    # codigo vivo. Mismo patron que uq_users_client_phone_per_store.
     __table_args__ = (
-        UniqueConstraint("store_id", "code", name="uq_store_promotions_store_code"),
+        Index(
+            "uq_store_promotions_active_code",
+            "store_id",
+            "code",
+            unique=True,
+            postgresql_where=text("is_active"),
+            sqlite_where=text("is_active"),
+        ),
         CheckConstraint(
             "promotion_type IN ('percent', 'fixed')", name="ck_store_promotions_type"
         ),

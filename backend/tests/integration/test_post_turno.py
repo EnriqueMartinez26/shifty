@@ -2,6 +2,8 @@
 telefono del cliente en la agenda solo para administradores.
 """
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -10,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import modules.notifications.tasks as tasks
 from core.security import hash_password
 from modules.users.model import User
+from modules.payments.jobs import process_outbox_batch
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
 )
@@ -35,7 +38,7 @@ async def _turno_confirmado(
 
 @pytest.mark.asyncio
 async def test_completar_manda_el_mail_de_reserva_de_nuevo_con_deep_link(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
@@ -46,6 +49,8 @@ async def test_completar_manda_el_mail_de_reserva_de_nuevo_con_deep_link(
     )
     assert completar.status_code == 200, completar.text
     assert completar.json()["status"] == "completed"
+    # F2-02: el mail lo manda el lote del outbox.
+    await process_outbox_batch(test_session)
 
     destino, asunto, cuerpo = buzon.enviados[-1]
     assert destino == "carla@example.com"
@@ -58,7 +63,7 @@ async def test_completar_manda_el_mail_de_reserva_de_nuevo_con_deep_link(
 async def test_smtp_caido_no_impide_completar(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def explota(to: str, subject: str, body: str) -> bool:
+    async def explota(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         raise ConnectionError("smtp down")
 
     _store, token, _service, _staff, pid = await _turno_confirmado(client, "smtp-caido")
@@ -80,7 +85,7 @@ async def test_smtp_caido_no_impide_completar(
 
 @pytest.mark.asyncio
 async def test_con_recordatorios_apagados_no_sale_el_mail_de_reserva_de_nuevo(
-    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     buzon = Buzon()
     monkeypatch.setattr(tasks, "_send_email", buzon)
@@ -91,12 +96,14 @@ async def test_con_recordatorios_apagados_no_sale_el_mail_de_reserva_de_nuevo(
         json={"send_email_reminders": False},
     )
     assert apagar.status_code == 200, apagar.text
+    await process_outbox_batch(test_session)
     antes = len(buzon.enviados)
 
     completar = await client.patch(
         f"/appointments/{pid}/complete", headers=auth_headers(token)
     )
     assert completar.status_code == 200, completar.text
+    await process_outbox_batch(test_session)
     assert len(buzon.enviados) == antes
 
 

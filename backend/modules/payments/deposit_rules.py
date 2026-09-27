@@ -117,7 +117,13 @@ def base_deposit(service: Any, price: Decimal) -> Decimal:
     if payment_type == "fixed":
         return min(configured, price)
     if payment_type == "percent":
-        return _money(price * configured / Decimal("100"))
+        # El tope va aca y no solo en `decide_deposit` (que acota recien al
+        # sumar recargos): una fila vieja con `percent` = 500 cobraba 5 veces
+        # el precio por adelantado, porque con recargo 0 el importe salia sin
+        # acotar (AUD2-B6-03, 2026-09-20). `fixed` ya hacia lo mismo. La
+        # garantia contra que esa fila exista es el CHECK
+        # `ck_services_deposit_percent_max`; esto protege a las que ya estan.
+        return min(price, _money(price * configured / Decimal("100")))
     return Decimal("0.00")
 
 

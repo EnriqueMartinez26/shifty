@@ -9,6 +9,8 @@ listan para decision humana, y el cliente recibe un mail por el outbox.
 
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -65,6 +67,7 @@ async def _tienda_con_turnos(
                 "client_name": f"Cliente {i}",
                 "client_email": f"cliente{i}-{slug}@example.com",
                 "client_phone": f"+54911555{i:05d}",
+                "accepts_terms": True,
                 "idempotency_key": f"bloqueo-{slug}-{i:03d}",
             },
         )
@@ -124,7 +127,7 @@ async def test_confirmar_cancela_en_bloque_audita_y_avisa_por_mail(
 ) -> None:
     enviados: list[tuple[str, str, str]] = []
 
-    async def buzon(to: str, subject: str, body: str) -> bool:
+    async def buzon(to: str, subject: str, body: str, smtp: Any = None) -> bool:
         enviados.append((to, subject, body))
         return True
 

@@ -24,7 +24,11 @@ ENV VITE_SENTRY_TUNNEL=${VITE_SENTRY_TUNNEL}
 
 RUN npm run build
 
-FROM nginx:1.27-alpine
+# Mismo nginx que el borde (nginx/Dockerfile, docker-compose.prod.yml).
+FROM nginx:1.30.5-alpine
+
+# Paquetes de Alpine al ultimo parche de la rama, como nginx/Dockerfile.
+RUN apk upgrade --no-cache
 
 # El mismo DSN del build decide el tunel: sin DSN, /sentry-tunnel es un 404.
 ARG VITE_SENTRY_DSN=

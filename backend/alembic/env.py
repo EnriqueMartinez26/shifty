@@ -5,15 +5,17 @@ Usa psycopg2 (sync) en lugar de asyncpg para evitar el bug WinError 64
 con el ProactorEventLoop de Python 3.13 en Windows.
 """
 
-from urllib.parse import parse_qs, unquote, urlparse
 from logging.config import fileConfig
-from typing import Any
 from sqlalchemy import Engine, create_engine, pool
+from sqlalchemy.engine import URL
 from alembic import context
 
 # Base + TODOS los modelos, desde el registro unico: una lista parcial hace
 # que autogenerate proponga borrar las tablas que no vio.
-from core.config import settings
+# Unica lectura de la URL del repo (B7-11): lee `ssl`, acepta `sslmode` y
+# usa `require` cuando falta. Antes esta copia tenia `disable` por defecto
+# y no leia `ssl`: la URL de produccion `?ssl=require` migraba sin TLS.
+from core.config import parse_db_url, settings
 from core.model_registry import load_all_models
 from core.models import Base
 
@@ -28,25 +30,19 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-
-def parse_db_url(url: str) -> dict[str, Any]:
-    """
-    Parsea la DATABASE_URL y extrae los componentes.
-    Soporta formato: postgresql+asyncpg://user:pass@host:port/db
-    """
-    parsed = urlparse(url.replace("postgresql+asyncpg://", "postgresql://", 1))
-    if parsed.scheme != "postgresql" or not parsed.hostname or not parsed.path:
-        raise ValueError(f"No se pudo parsear DATABASE_URL: {url}")
-
-    query = parse_qs(parsed.query)
-    return {
-        "user": unquote(parsed.username or ""),
-        "password": unquote(parsed.password or ""),
-        "host": parsed.hostname,
-        "port": int(parsed.port or 5432),
-        "dbname": parsed.path.lstrip("/"),
-        "sslmode": query.get("sslmode", ["disable"])[0],
-    }
+# F0-06 (plan de rendimiento): una migracion que espera un lock fuerte encola
+# detras de ella TODAS las consultas de la app sobre esa tabla, asi que el
+# deploy tumbaba la API sin que la migracion hiciera nada. Con este tope aborta
+# a los 3 s y el deploy falla a la vista, con el codigo viejo sirviendo; se
+# reintenta con la tabla tranquila. `statement_timeout` en 0: un backfill por
+# lotes legitimo no puede cortarse por un timeout heredado de la sesion.
+# Solo en modo ONLINE: el SQL que genera `alembic upgrade --sql` (offline) NO
+# lleva estos SET. Quien aplique ese script a mano (DBA) tiene que fijar
+# `SET lock_timeout = '3s'` en su sesion antes de correrlo.
+MIGRATION_SESSION_SETTINGS = (
+    "SET lock_timeout = '3s'",
+    "SET statement_timeout = 0",
+)
 
 
 def get_sync_engine() -> Engine:
@@ -54,7 +50,10 @@ def get_sync_engine() -> Engine:
     Crea un engine síncrono con psycopg2 usando parámetros explícitos.
     Evita el UnicodeDecodeError al no construir un DSN string.
     """
-    params = parse_db_url(settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL)
+    params = parse_db_url(
+        settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL,
+        label="MIGRATION_DATABASE_URL",
+    )
 
     engine = create_engine(
         "postgresql+psycopg2://",
@@ -74,16 +73,30 @@ def get_sync_engine() -> Engine:
 
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    params = parse_db_url(settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL)
-    url = (
-        f"postgresql+psycopg2://{params['user']}:{params['password']}"
-        f"@{params['host']}:{params['port']}/{params['dbname']}"
+    params = parse_db_url(
+        settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL,
+        label="MIGRATION_DATABASE_URL",
+    )
+    # `parse_db_url` devuelve usuario y password ya des-escapados (`unquote`).
+    # Rearmar la URL con un f-string los dejaba crudos: una password con `@`,
+    # `/`, `:`, `?` o `#` producia una URL que SQLAlchemy leia como otro
+    # usuario, otro host y otra base, y el error resultante podia llevarla
+    # entera (regla 20). `URL.create` re-escapa cada componente
+    # (AUD2-B7-10). El modo online no pasa por aca: usa `connect_args`.
+    url = URL.create(
+        "postgresql+psycopg2",
+        username=params["user"],
+        password=params["password"],
+        host=params["host"],
+        port=params["port"],
+        database=params["dbname"],
     )
     context.configure(
-        url=url,
+        url=url.render_as_string(hide_password=False),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -94,9 +107,19 @@ def run_migrations_online() -> None:
     connectable = get_sync_engine()
 
     with connectable.connect() as connection:
+        for sentencia in MIGRATION_SESSION_SETTINGS:
+            connection.exec_driver_sql(sentencia)
+        # Los SET abren una transaccion (autobegin de SQLAlchemy 2). Abierta al
+        # configurar, Alembic la toma como externa: no abre una por migracion y
+        # no commitea nada. Los SET son de sesion y sobreviven al commit.
+        connection.commit()
+        # Cada revision en su transaccion: una cadena larga no retiene los
+        # locks de la primera hasta la ultima, y un fallo en la sexta deja
+        # aplicadas y registradas las cinco anteriores.
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            transaction_per_migration=True,
         )
         with context.begin_transaction():
             context.run_migrations()

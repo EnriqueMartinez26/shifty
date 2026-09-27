@@ -23,7 +23,11 @@ def canonical_role(user: User | str, is_global_admin: bool | None = None) -> str
         role = user
         global_admin = bool(is_global_admin)
     else:
-        role = str(getattr(user, "role", "") or "")
+        # La columna es String, pero un User armado en el mismo proceso puede
+        # traer el enum UserRole: str(UserRole.ADMIN) es "UserRole.ADMIN" y el
+        # rol no se reconocia (S-15). Se lee el valor del enum si lo hay.
+        crudo = getattr(user, "role", "") or ""
+        role = str(getattr(crudo, "value", crudo))
         global_admin = bool(getattr(user, "is_global_admin", False))
 
     if global_admin:
@@ -42,19 +46,140 @@ APPOINTMENT_MANAGERS = {
     ROLE_PROFESSIONAL,
     ROLE_RECEPTIONIST,
 }
-FINANCIAL_OPERATORS = {
-    ROLE_SUPER_ADMIN,
-    ROLE_STORE_ADMIN,
-    ROLE_PROFESSIONAL,
-    ROLE_RECEPTIONIST,
-}
-FINANCIAL_ADMINS = {ROLE_SUPER_ADMIN, ROLE_STORE_ADMIN}
+# Aca NO hay matriz financiera a proposito (AUD2-B3-06, 2026-09-20). Existian
+# FINANCIAL_OPERATORS y FINANCIAL_ADMINS con cero llamadores, y declaraban una
+# politica que el codigo vivo contradice: quien decide quien opera cobros y
+# fiado son _require_payment_manager / _require_payment_admin
+# (modules/payments/router.py) y _require_financial_access
+# (modules/ledger/router.py). Si se vuelve a escribir la matriz aca, esas tres
+# funciones se cablean a ella en el MISMO commit: una constante sin llamador no
+# es una politica, es una afirmacion falsa en el archivo que CLAUDE.md senala
+# como fuente de la matriz de roles.
 REPORT_VIEWERS = {ROLE_SUPER_ADMIN, ROLE_STORE_ADMIN, ROLE_PROFESSIONAL}
 REPORT_EXPORTERS = {ROLE_SUPER_ADMIN, ROLE_STORE_ADMIN}
 
 
 def has_any_role(user: User, allowed_roles: Iterable[str]) -> bool:
     return canonical_role(user) in set(allowed_roles)
+
+
+def store_scope_for(user: User) -> str:
+    """Tienda que acota TODAS las consultas de reportes y panel de este usuario.
+
+    Es la capa de defensa en profundidad de CLAUDE.md §2: el predicado
+    ``store_id`` viaja en la query aunque la politica RLS falle (en SQLite ni
+    siquiera existe). Tambien para el superadmin (B5-02): la politica RLS se
+    abre con ``app.is_global_admin`` y antes esto devolvia ``None``, asi que
+    ``/reports`` y ``/dashboard`` le sumaban la plata, la deuda y los turnos de
+    todas las tiendas. Decision: no hay consolidado (CLAUDE.md §1, espera el ok
+    explicito del dueno); el superadmin ve su propia tienda. Nunca ``None``:
+    no hay forma de pedir "sin filtro" desde aca.
+    """
+    return str(user.store_id)
+
+
+# Roles (valores de ``users.role``) que cada actor puede otorgar por /users/.
+# Regla 16 de CLAUDE.md: el alta de admins es exclusiva del superadmin. Un admin
+# de tienda da de alta y reasigna solo roles no-admin (B3-02, 2026-09-18).
+GRANTABLE_BY_STORE_ADMIN = frozenset(
+    {LEGACY_ROLE_STAFF, ROLE_RECEPTIONIST, ROLE_CLIENT}
+)
+GRANTABLE_BY_SUPER_ADMIN = GRANTABLE_BY_STORE_ADMIN | {LEGACY_ROLE_ADMIN}
+
+
+def grantable_roles(actor: User) -> frozenset[str]:
+    if bool(getattr(actor, "is_global_admin", False)):
+        return GRANTABLE_BY_SUPER_ADMIN
+    if has_any_role(actor, STORE_MANAGERS):
+        return GRANTABLE_BY_STORE_ADMIN
+    return frozenset()
+
+
+def assert_can_grant_role(
+    actor: User, requested: str | None, current: str | None = None
+) -> None:
+    """Rechaza (403) otorgar un rol que el actor no puede dar.
+
+    ``current`` es el rol que el usuario ya tiene: reenviar el mismo rol no es
+    otorgarlo (el formulario del panel manda el ``role`` actual en cada
+    edicion), asi que un admin de tienda puede seguir editando a otro admin.
+    """
+    if requested is None:
+        return
+    pedido = str(getattr(requested, "value", requested))
+    actual = str(getattr(current, "value", current)) if current is not None else None
+    if pedido == actual or pedido in grantable_roles(actor):
+        return
+    raise AppException(
+        message="Solo el soporte global puede otorgar ese rol",
+        http_status=status.HTTP_403_FORBIDDEN,
+        error_code="PERMISSION_DENIED",
+    )
+
+
+def _valor(dato: object) -> str | None:
+    return None if dato is None else str(getattr(dato, "value", dato))
+
+
+def assert_can_change_access(
+    actor: User,
+    target: User,
+    *,
+    password: str | None = None,
+    is_active: bool | None = None,
+    role: object = None,
+    email: str | None = None,
+) -> None:
+    """Un admin de tienda no cambia el acceso de OTRO admin de tienda (S-15).
+
+    Acceso es la clave, el estado (activo/baja), el rol y el email de login
+    (quien lo cambia recibe el "olvide mi contrasena"): con cualquiera se toma
+    o se anula la cuenta. Nombre y telefono si se editan.
+    Reenviar el valor que ya tiene no es cambiarlo (el formulario del panel
+    manda el role actual). El superadmin puede todo; la edicion de uno mismo
+    va por sus propios caminos (cambio de clave en auth). Reglas 14 y 16.
+    """
+    if bool(getattr(actor, "is_global_admin", False)) or actor.id == target.id:
+        return
+    if canonical_role(target) not in STORE_MANAGERS:
+        return
+    cambia = (
+        bool(password)
+        or (is_active is not None and is_active != target.is_active)
+        or (role is not None and _valor(role) != _valor(target.role))
+        or (
+            email is not None
+            and email.strip().lower() != str(target.email or "").lower()
+        )
+    )
+    if cambia:
+        raise AppException(
+            message="Solo el soporte global puede cambiar el acceso de otro administrador",
+            http_status=status.HTTP_403_FORBIDDEN,
+            error_code="PERMISSION_DENIED",
+        )
+
+
+def assert_global_admin_keeps_login_role(target: User, role: object) -> None:
+    """Un superadmin no pasa a ``role = client`` (409).
+
+    PV-01 (2026-09-25): el login y el olvido de clave excluyen a los clientes
+    (``auth.service.login_account_email``), porque el email de un cliente se
+    repite entre tiendas. Un superadmin con ``role = client`` quedaba afuera
+    del login sin pasar por la guarda de la regla 14 (nunca el ultimo
+    superadmin activo). Primero se le quita el flag global
+    (``/superadmin/users/{id}/global-admin``, que si aplica la regla 14) y
+    despues se le cambia el rol.
+    """
+    if not bool(getattr(target, "is_global_admin", False)):
+        return
+    if _valor(role) != ROLE_CLIENT:
+        return
+    raise AppException(
+        message="Esta cuenta no puede pasar a cliente",
+        http_status=status.HTTP_409_CONFLICT,
+        error_code="GLOBAL_ADMIN_ROLE_LOCKED",
+    )
 
 
 def require_roles(user: User, allowed_roles: Iterable[str], detail: str) -> None:

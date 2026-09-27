@@ -10,18 +10,23 @@ de la comparacion.
 tests/architecture/test_api_contract_doc.py falla en CI si el cuerpo del
 documento commiteado deja de coincidir con `render_contract(app.openapi())`.
 
-Regenerar (desde la raiz del repo, con el docker-compose levantado; en el
-contenedor solo esta montado backend/, asi que docs/ no se ve desde adentro y
-la salida se redirige en el host):
-
-    MSYS_NO_PATHCONV=1 docker compose exec -T backend \
-        python scripts/gen_api_contract.py --stdout \
-        --commit $(git rev-parse --short HEAD) > docs/API_CONTRACT.md
+Regenerar desde el codigo del working tree, nunca desde una imagen: los
+contenedores corren la imagen construida, sin bind mount, y un `exec`
+generaria el contrato del ultimo build, no del codigo que se commitea.
 
 Con las dependencias del backend en el host (desde backend/):
 
     uv run python scripts/gen_api_contract.py           # escribe el archivo
     uv run python scripts/gen_api_contract.py --check   # sale 1 si hay deriva
+
+Sin uv en el host (desde la raiz del repo): se monta el codigo en /src y se
+usa el Python de la imagen. Montarlo sobre /app tapa el .venv de la imagen
+(/app/.venv) y falla con "No module named 'fastapi'".
+
+    MSYS_NO_PATHCONV=1 docker compose run --rm --no-deps \
+        -v ./backend:/src -w /src backend \
+        /app/.venv/bin/python scripts/gen_api_contract.py --stdout \
+        --commit $(git rev-parse --short HEAD) > docs/API_CONTRACT.md
 """
 
 from __future__ import annotations
@@ -396,8 +401,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if not doc.parent.is_dir():
         print(
-            f"No existe {doc.parent} (en el contenedor solo esta montado "
-            "backend/): usar --stdout y redirigir en el host.",
+            f"No existe {doc.parent} (el contenedor corre la imagen, sin "
+            "docs/): usar --stdout y redirigir en el host.",
             file=sys.stderr,
         )
         return 1

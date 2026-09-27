@@ -1,21 +1,53 @@
+# F0-22 (decision 26): todos los servicios rotan sus logs, 20 MB x 5. El driver
+# json-file por defecto no rota y un contenedor ruidoso llenaba el disco del
+# host, que es el de la base. Un solo ancla: el contrato exige que todos lo usen.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 # Entorno compartido por la API y los procesos de Celery (worker y beat).
 # Los tres construyen Settings() con las MISMAS variables: si Celery recibe
 # menos, Settings() falla, cae al respaldo y los jobs no procesan nada.
 x-app-environment: &app_environment
   ENV: ${ENV:-development}
+  # F0-02: la version desplegada (tag de la imagen). Alimenta Settings.VERSION,
+  # que es el release de Sentry y la version de la API.
+  VERSION: ${APP_VERSION:-dev}
+  # Nivel de los logs JSON de la app (core/logging.py).
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
   SENTRY_DSN: ${SENTRY_DSN:-}
   # Sin default: un secreto de firma publicado en el repo permite forjar
   # tokens. Genera uno con: openssl rand -hex 32 (ver .env.example).
   SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
   # La app usa un rol sin superusuario para que RLS la alcance.
-  DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:-shifty_app_password}@db:5432/${POSTGRES_DB:-shifty_db}
+  # `ssl` (parametro de asyncpg): las migraciones exigen TLS si la URL no dice
+  # nada (core.config.parse_db_url). El `db` de este compose no tiene TLS, asi
+  # que el default aca es `disable`; POSTGRES_SSL=require solo si esa base tiene
+  # TLS configurado (B7-11, 2026-09-19).
+  # Sin default (C-02): la contrasena del rol shifty_app viene del .env local.
+  DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-shifty_app}:${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
   # Las migraciones necesitan DDL: van con el dueno de la base.
-  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:-shifty_password}@db:5432/${POSTGRES_DB:-shifty_db}
-  APP_DB_PASSWORD: ${APP_DB_PASSWORD:-shifty_app_password}
-  REDIS_URL: redis://redis:6379/0
-  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:-shifty_password}@rabbitmq:5672//
-  CELERY_RESULT_BACKEND_URL: redis://redis:6379/1
+  MIGRATION_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shifty_user}:${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}@db:5432/${POSTGRES_DB:-shifty_db}?ssl=${POSTGRES_SSL:-disable}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
+  # F2-04: pool de 5 + 5 conexiones por proceso (antes 10 + 5). Los mails y
+  # Mercado Pago ya no retienen una conexion: el SMTP sale del worker o del
+  # lote del outbox despues de su commit y MP corre sin transaccion abierta.
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+  # F0-15: dos Redis. El de ESTADO (rate limit, idempotencia, lockout, OTP,
+  # resultados de Celery) no desaloja; el de CACHE (solo disponibilidad)
+  # desaloja y no persiste.
+  REDIS_URL: redis://redis_state:6379/0
+  REDIS_CACHE_URL: redis://redis_cache:6379/0
+  # 2 s x 2 intentos por operacion retenian un request hasta ~24 s con Redis
+  # caido; con 0,5 s el peor caso baja a ~6 s (minimo del validador: 0.1).
+  REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-0.5}
+  REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS: ${REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS:-0.5}
+  CELERY_BROKER_URL: amqp://${RABBITMQ_DEFAULT_USER:-shifty}:${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}@rabbitmq:5672//
+  CELERY_RESULT_BACKEND_URL: redis://redis_state:6379/1
   FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
   PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost/api}
   MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:-}
@@ -41,17 +73,40 @@ x-app-environment: &app_environment
 
 services:
   db:
-    image: postgres:16-alpine
-    container_name: shifty_db
+    # F0-05: version menor fija. Subirla es un commit, no un efecto de `pull`.
+    image: postgres:16.14-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_db
     restart: always
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-shifty_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shifty_password}
+      # Sin default (AUD2-C-02): es el rol DUENO, con DDL y sin RLS.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env (openssl rand -hex 32)}
       POSTGRES_DB: ${POSTGRES_DB:-shifty_db}
+    # F0-14: pg_stat_statements y slow log (250 ms) tambien en desarrollo,
+    # para medir con los mismos instrumentos que produccion. La extension se
+    # crea por migracion; aca solo se precarga. El dimensionamiento de memoria
+    # vive en docker-compose.prod.yml (su `command` reemplaza a este entero).
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=250
+    shm_size: 256m
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
+    # Los tres procesos de la app esperan este healthcheck: con `depends_on`
+    # corto solo se ordenaba el arranque y, con restart: always, el primer
+    # `up` en frio era un ciclo de reinicios contra una base que no escuchaba.
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shifty_user} -d ${POSTGRES_DB:-shifty_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - shifty_network
     deploy:
@@ -59,54 +114,166 @@ services:
         limits:
           memory: 256M
 
-  redis:
-    image: redis:7-alpine
-    container_name: shifty_redis
+  # F0-15 (decision 5): dos Redis. Uno con desalojo expulsaba lockout,
+  # idempotencia y rate limit bajo presion de memoria; uno sin desalojo se
+  # llenaba de cache y hacia fallar TODA escritura.
+  #
+  # CACHE: solo la disponibilidad (core/redis.py::get_availability_cache).
+  # No persiste: perderlo es recalcular. Desaloja por `volatile-ttl`: toda
+  # clave tiene TTL y se va primero la que vence antes, asi los slots (300 s)
+  # salen antes que las versiones y generaciones (7 dias) y se sostiene el
+  # invariante de core/availability_cache.py (una version no desaparece
+  # mientras viva un slot escrito bajo ella). allkeys-lru podia romperlo.
+  redis_cache:
+    image: redis:7.4-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_redis_cache
     restart: always
+    logging: *logging
+    command:
+      - redis-server
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - volatile-ttl
+      - --save
+      - ""
+      - --appendonly
+      - "no"
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - shifty_network
     deploy:
       resources:
         limits:
-          memory: 128M
+          # maxmemory no cuenta fragmentacion ni buffers de clientes.
+          memory: 192M
+
+  # ESTADO: rate limit, idempotencia, lockout, OTP, OAuth y resultados de
+  # Celery. Nunca desaloja: sin memoria, la escritura falla a la vista (y el
+  # rate limit decide segun RATE_LIMIT_FAIL_CLOSED) en vez de aflojar una
+  # proteccion en silencio. RDB cada 60 s si hubo un cambio: un reinicio no
+  # borra lockouts ni el replay de idempotencia de un cobro.
+  redis_state:
+    image: redis:7.4-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_redis_state
+    restart: always
+    logging: *logging
+    command:
+      - redis-server
+      - --maxmemory
+      - 48mb
+      - --maxmemory-policy
+      - noeviction
+      - --save
+      - "60"
+      - "1"
+      - --appendonly
+      - "no"
+    volumes:
+      - redis_state_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 96M
 
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    container_name: shifty_rabbitmq
+    # Desarrollo conserva la consola de management (127.0.0.1:15672);
+    # produccion corre la imagen sin el plugin (docker-compose.prod.yml).
+    image: rabbitmq:3.13.7-management-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_rabbitmq
+    # Nombre de nodo estable (rabbit@rabbitmq): con el id del contenedor como
+    # hostname, un contenedor recreado arrancaba con otro directorio de mnesia
+    # dentro del volumen, sin las colas ni los mensajes que habia.
+    hostname: rabbitmq
     restart: always
+    logging: *logging
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shifty}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-shifty_password}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?Falta RABBITMQ_DEFAULT_PASS en .env (openssl rand -hex 32)}
+      # Dos schedulers de Erlang (uno por nucleo del HOST por defecto): baja la
+      # memoria base del broker. Con 16 nucleos, un broker recien arrancado ya
+      # rozaba la alarma de 180 MiB (decision de Mateo, 2026-09-24).
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2"
     ports:
       - "127.0.0.1:5672:5672"
       - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      # F0-16: alarma de memoria absoluta (280 MiB, debajo del limite de 384M)
+      # y piso de disco libre. Ver deploy/rabbitmq/rabbitmq.conf.
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/conf.d/10-shifty.conf:ro
+    # check_running es del CLI base: no depende del plugin de management.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
     networks:
       - shifty_network
     deploy:
       resources:
         limits:
-          memory: 256M
+          # 280 MiB de alarma + margen para Erlang (decision de Mateo,
+          # 2026-09-24; reemplaza los 256M/180MiB de la decision 6).
+          memory: 384M
 
   backend:
+    # F0-02: UNA imagen para la API, el worker y beat. Solo backend la construye
+    # (`docker compose build`); los procesos de Celery reutilizan el mismo tag,
+    # asi que nunca corren un codigo distinto del de la API (regla 22). En
+    # produccion el tag lo fija APP_VERSION y la imagen sale de GHCR (pull).
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: shifty_backend
+    # Sin container_name (F0-04): en produccion corren tres replicas de un
+    # proceso (docker-compose.prod.yml) y un nombre fijo impide mas de una.
+    # Sin bind mount del codigo (2026-09-24): el contenedor corre lo que trae
+    # la imagen. Un cambio en backend/ exige `docker compose build` (construye
+    # la imagen una vez) y recrear backend, celery_worker y celery_beat juntos
+    # (regla 22).
     restart: always
+    logging: *logging
+    # F0-21: uvicorn se rinde a los 30 s (--timeout-graceful-shutdown en el
+    # Dockerfile); docker espera 35 antes del SIGKILL.
+    stop_grace_period: 35s
     environment: *app_environment
-    volumes:
-      - ./backend:/app
-      - /app/.venv
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+      redis_state:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # Readiness real (B5-17): /ops/health/ready responde 503 si Postgres o
+    # Redis no contestan, y curl -f convierte ese 503 en un chequeo fallido.
+    # El liveness (/ops/health/live) no se usa aca: no mira dependencias.
+    healthcheck:
+      test:
+        ["CMD", "curl", "-fsS", "-o", "/dev/null", "--max-time", "4", "http://127.0.0.1:8000/ops/health/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - shifty_network
     deploy:
@@ -115,42 +282,138 @@ services:
           memory: 512M
 
   celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uv run celery -A core.celery_app worker --loglevel=info
-    container_name: shifty_celery
+    # Misma imagen que backend, sin `build` propio (F0-02).
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
+    # Consume SOLO la cola `celery`: el OTP va a `interactive`, que atiende
+    # celery_worker_interactive (F0-18, decision 7).
+    # Sin --concurrency se abria un hijo por CPU del host y llenaba el limite;
+    # los jobs ya se serializan por advisory lock y SKIP LOCKED.
+    # --max-memory-per-child va en KB: recicla el hijo que pasa 150 MB.
+    command: celery -A core.celery_app worker --loglevel=info -Q celery --concurrency=${CELERY_WORKER_CONCURRENCY:-2} --max-memory-per-child=150000
+    # Un worker vivo que dejo de consumir se veia igual que uno sano
+    # (AUD2-C-09; es el incidente de 2026-09-08). F0-18: la prueba es el
+    # archivo que el worker toca en cada latido de eventos (heartbeat_sent,
+    # cada 2 s; core/celery_app.py). Ese latido lo emite el consumidor sobre
+    # su conexion al broker: con la conexion caida o el consumidor trabado,
+    # el archivo envejece y a los 120 s el contenedor queda unhealthy. Antes
+    # era `celery inspect ping`, que levantaba un Python entero (~120 MB)
+    # dentro de este cgroup. Lo que no prueba es que la configuracion sea la
+    # correcta: eso lo cubre la regla 21 (con settings de respaldo, Celery
+    # no arranca).
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /var/lib/shifty -maxdepth 1 -name 'worker-heartbeat' -newermt '-120 seconds' | grep -q .",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_celery
     restart: always
+    logging: *logging
+    # F0-21: la tarea en curso termina (acks_late); si no llega, SIGKILL y el
+    # broker la reentrega (task_reject_on_worker_lost).
+    stop_grace_period: 60s
     environment: *app_environment
-    volumes:
-      - ./backend:/app
-      - /app/.venv
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+      redis_state:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - shifty_network
     deploy:
       resources:
         limits:
-          memory: 512M
+          # F0-18/F0-19: dos hijos de hasta 150 MB, el padre y margen.
+          memory: 768M
+          cpus: "1.5"
+
+  # F0-18 (decision 7): worker aparte para la cola `interactive` (el mail del
+  # OTP). Un solo hijo: su latencia no depende de que termine un lote del
+  # outbox en el worker general. Misma imagen y mismo entorno (regla 22).
+  celery_worker_interactive:
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
+    command: celery -A core.celery_app worker --loglevel=info -Q interactive --concurrency=1 --max-memory-per-child=150000
+    # Mismo latido que celery_worker: cada contenedor tiene su archivo.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /var/lib/shifty -maxdepth 1 -name 'worker-heartbeat' -newermt '-120 seconds' | grep -q .",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_celery_interactive
+    restart: always
+    logging: *logging
+    # Un mail de OTP dura segundos (timeout SMTP de 10 s).
+    stop_grace_period: 30s
+    environment: *app_environment
+    depends_on:
+      db:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+      redis_state:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shifty_network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    command: uv run celery -A core.celery_app beat --loglevel=info
-    container_name: shifty_celery_beat
+    # Misma imagen que backend, sin `build` propio (F0-02).
+    image: ghcr.io/enriquemartinez26/shifty-backend:${APP_VERSION:-dev}
+    command: celery -A core.celery_app beat --loglevel=info
+    # beat no es un worker: no responde `inspect ping`. Lo que prueba que
+    # sigue agendando es que su archivo de schedule se siga sincronizando;
+    # las tareas del beat corren cada minuto, asi que 15 minutos sin tocarlo
+    # es que dejo de trabajar. La ventana es amplia a proposito.
+    # La ruta y el nombre salen de core/celery_app.py (BEAT_SCHEDULE_FILE:
+    # /var/lib/shifty/beat/shifty-celerybeat-schedule); el sufijo lo pone el
+    # backend de shelve, por eso el comodin. El contrato del compose lo
+    # verifica contra la config real.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "find /var/lib/shifty/beat -maxdepth 1 -name 'shifty-celerybeat-schedule*' -newermt '-15 minutes' | grep -q .",
+        ]
+      interval: 300s
+      timeout: 15s
+      retries: 2
+      start_period: 120s
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_celery_beat
     restart: always
+    logging: *logging
     environment: *app_environment
+    # F0-17: el schedule sobrevive a la recreacion del contenedor (antes en
+    # /tmp). Un volumen nuevo copia el dueno del directorio de la imagen
+    # (appuser, backend/Dockerfile).
     volumes:
-      - ./backend:/app
-      - /app/.venv
+      - beat_schedule:/var/lib/shifty/beat
     depends_on:
-      - db
-      - redis
-      - rabbitmq
+      db:
+        condition: service_healthy
+      redis_cache:
+        condition: service_healthy
+      redis_state:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - shifty_network
     deploy:
@@ -159,6 +422,7 @@ services:
           memory: 256M
 
   frontend:
+    image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:-dev}
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -167,26 +431,27 @@ services:
         # Vacio = Sentry apagado y /sentry-tunnel en 404. Prenderlo es setear
         # la variable y reconstruir la imagen (ver frontend/sentry-tunnel.sh).
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
-    container_name: shifty_frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_frontend
     restart: always
+    logging: *logging
     ports:
       - "127.0.0.1:3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     networks:
       - shifty_network
     deploy:
       resources:
         limits:
-          memory: 512M
+          # F0-19: sirve estaticos con nginx (~7 MB medidos en uso).
+          memory: 64M
 
   nginx:
+    image: ghcr.io/enriquemartinez26/shifty-nginx:${APP_VERSION:-dev}
     build:
       context: ./nginx
       dockerfile: Dockerfile
-    container_name: shifty_nginx
+    container_name: ${COMPOSE_PROJECT_NAME:-shifty}_nginx
     restart: always
+    logging: *logging
     ports:
       - "80:80"
       # 443 se publica desde el override de produccion, junto con los
@@ -197,10 +462,16 @@ services:
       - frontend
     networks:
       - shifty_network
+    # F0-19: el borde abre una conexion hacia el cliente y otra hacia el
+    # upstream por request; el default de 1024 descriptores corta la ventana.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     deploy:
       resources:
         limits:
-          memory: 128M
+          memory: 256M
 
 networks:
   shifty_network:
@@ -209,3 +480,5 @@ networks:
 volumes:
   postgres_data:
   rabbitmq_data:
+  redis_state_data:
+  beat_schedule:

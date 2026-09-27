@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Boolean, String, ForeignKey, DateTime
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, synonym
 from infrastructure.persistence.models.base import Base
 import ulid
@@ -7,9 +7,17 @@ import ulid
 
 class AppointmentBlockModel(Base):
     __tablename__ = "appointment_blocks"
+    # Cota inferior del solapamiento de bloqueos (F1-13, migracion
+    # a1b3d5f7c9e2): un bloqueo dura hasta 366 dias, asi que la consulta acota
+    # con ``end_time > inicio`` sobre este indice y no lee los ya terminados.
+    __table_args__ = (
+        Index(
+            "ix_appointment_blocks_store_staff_end", "store_id", "staff_id", "end_time"
+        ),
+    )
 
     id: Mapped[str] = mapped_column(
-        String, primary_key=True, index=True, default=lambda: str(ulid.ULID())
+        String, primary_key=True, default=lambda: str(ulid.ULID())
     )
     staff_id: Mapped[str] = mapped_column(String, ForeignKey("staff.id"), index=True)
     store_id: Mapped[str] = mapped_column(String, index=True)

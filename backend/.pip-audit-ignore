@@ -1,0 +1,13 @@
+# Vulnerabilidades aceptadas por pip-audit (.github/workflows/security-scan.yml).
+#
+# Un ID por linea (PYSEC-..., GHSA-... o CVE-...). Cada ID lleva, en la linea
+# de comentario inmediatamente anterior, el motivo, quien lo acepto y la fecha
+# de revision. Aceptar una vulnerabilidad es una decision del dueno, no de la IA
+# (CLAUDE.md §1): se agrega con su motivo y se saca cuando haya fix.
+#
+# Ejemplo:
+#   # ecdsa sin fix upstream; no se usa para firmar (ok de <dueno>, revisar 2026-12-01)
+#   PYSEC-2026-0000
+
+# ecdsa 0.19.2 (alias GHSA-wj6h-64fc-37mp, CVE-2024-23342, timing Minerva en P-256): sin correccion disponible; llega directo por python-jose (no via rsa); aceptado 2026-09-24 por el dueno; reemplazar python-jose por PyJWT es la salida definitiva
+PYSEC-2026-1325

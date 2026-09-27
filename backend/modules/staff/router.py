@@ -1,7 +1,8 @@
 from typing import Annotated
 
-from fastapi import Depends, Path, Response, status
+from fastapi import Body, Depends, Path, Response, status
 from core.router import CanonicalAPIRouter
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
@@ -11,13 +12,18 @@ from core.exceptions import (
     StaffNotFoundException,
     ValidationException,
 )
+from core.redis import get_availability_cache
+from core.roles import assert_can_change_access
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
 from modules.staff.mappers import to_schedule_response, to_staff_response
+from modules.staff.model import Staff
 from modules.staff.repository import StaffRepository
 from modules.staff.service import StaffService
 from modules.staff.schemas import (
+    MAX_SERVICE_IDS,
+    PublicId,
     ScheduleCreate,
     ScheduleUpdate,
     ScheduleResponse,
@@ -45,7 +51,11 @@ async def create_staff(
         created = await service.create(
             data.model_dump(exclude={"service_ids"}), admin.store_id, data.service_ids
         )
-        loaded = await repo.get_by_id(created.public_id, admin.store_id)
+        loaded = await repo.get_by_id(
+            created.public_id,
+            admin.store_id,
+            include_global_admins=admin.is_global_admin,
+        )
         if not loaded:
             raise AppException(
                 message="No se pudo recargar el staff creado",
@@ -62,7 +72,11 @@ async def list_staff(
     user: User = Depends(get_current_staff), db: AsyncSession = Depends(get_db)
 ) -> list[StaffResponse]:
     repo = StaffRepository(db)
-    members = await repo.get_all(user.store_id)
+    # La cuenta global no existe para el panel de la tienda, tampoco en las
+    # lecturas (S-15, AUD2-B3-11); solo el superadmin la ve.
+    members = await repo.get_all(
+        user.store_id, include_global_admins=user.is_global_admin
+    )
     return [to_staff_response(member) for member in members]
 
 
@@ -73,7 +87,9 @@ async def get_staff(
     db: AsyncSession = Depends(get_db),
 ) -> StaffResponse:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, user.store_id)
+    staff = await repo.get_by_id(
+        public_id, user.store_id, include_global_admins=user.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
     return to_staff_response(staff)
@@ -85,14 +101,19 @@ async def add_staff_schedule(
     data: ScheduleCreate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> ScheduleResponse:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        schedule = await repo.add_schedule(staff, data.model_dump(), admin.store_id)
+        schedule = await StaffService(db, availability_cache).add_schedule(
+            staff, data.model_dump(), admin.store_id
+        )
     except ValueError as exc:
         raise ValidationException(str(exc))
     return to_schedule_response(schedule)
@@ -105,10 +126,13 @@ async def update_staff_schedule(
     data: ScheduleUpdate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> ScheduleResponse:
     """Corrige una franja horaria mal cargada."""
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
@@ -117,7 +141,7 @@ async def update_staff_schedule(
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
 
     try:
-        actualizado = await repo.update_schedule(
+        actualizado = await StaffService(db, availability_cache).update_schedule(
             staff, schedule, data.model_dump(exclude_unset=True)
         )
     except ValueError as exc:
@@ -133,6 +157,7 @@ async def delete_staff_schedule(
     schedule_id: PublicIdPath,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> None:
     """Elimina una franja horaria.
 
@@ -140,7 +165,9 @@ async def delete_staff_schedule(
     reservables que la tienda no podia atender.
     """
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
@@ -148,26 +175,57 @@ async def delete_staff_schedule(
     if not schedule:
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
 
-    await repo.delete_schedule(schedule)
+    await StaffService(db, availability_cache).delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")
 async def update_staff_services(
     public_id: PublicIdPath,
-    service_ids: list[str],
+    # Mismo tipo y tope que el alta (StaffCreate.service_ids). Antes era
+    # list[str] sin patron ni tope: un array de 100.000 strings llegaba al
+    # in_() del repositorio (B3-14, 2026-09-17). El body sigue siendo un
+    # array JSON crudo: el contrato con el panel no cambia.
+    service_ids: Annotated[list[PublicId], Body(max_length=MAX_SERVICE_IDS)],
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> dict[str, str]:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
     try:
-        await repo.update_services(staff, service_ids)
+        await StaffService(db, availability_cache).update_services(staff, service_ids)
     except ValueError as exc:
         raise ValidationException(str(exc))
     return {"message": "Servicios actualizados correctamente"}
+
+
+async def _guardar_cuenta_vinculada(
+    repo: StaffRepository,
+    staff: Staff,
+    admin: User,
+    public_id: str,
+    *,
+    email: str | None = None,
+    is_active: bool | None = None,
+) -> None:
+    """Misma regla que /users/ para la cuenta de login del profesional (S-15).
+
+    Staff.id es el User.id y la edicion sincroniza email e is_active en el User:
+    sin esto, un profesional ascendido a admin o a superadmin quedaba expuesto
+    por /staff/ aunque /users/ lo protegiera. La cuenta global no existe para un
+    admin de tienda (404); email de login y estado de otro admin, 403.
+    """
+    cuenta = await repo.get_linked_user(staff)
+    if cuenta is None:
+        return
+    if cuenta.is_global_admin and not admin.is_global_admin:
+        raise StaffNotFoundException(identifier=public_id)
+    assert_can_change_access(admin, cuenta, email=email, is_active=is_active)
 
 
 @router.put("/{public_id}", response_model=StaffResponse)
@@ -177,14 +235,20 @@ async def update_staff(
     data: StaffUpdate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> StaffResponse:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
+    await _guardar_cuenta_vinculada(
+        repo, staff, admin, public_id, email=data.email, is_active=data.is_active
+    )
 
     try:
-        updated = await StaffService(db).update_profile(
+        updated = await StaffService(db, availability_cache).update_profile(
             staff,
             first_name=data.first_name,
             last_name=data.last_name,
@@ -196,7 +260,9 @@ async def update_staff(
     except ValueError as exc:
         raise ValidationException(str(exc))
 
-    loaded = await repo.get_by_id(updated.public_id, admin.store_id)
+    loaded = await repo.get_by_id(
+        updated.public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not loaded:
         raise AppException(
             message="No se pudo recargar el staff actualizado",
@@ -211,10 +277,15 @@ async def delete_staff(
     public_id: PublicIdPath,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> Response:
     repo = StaffRepository(db)
-    staff = await repo.get_by_id(public_id, admin.store_id)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
-    await StaffService(db).soft_delete(staff)
+    # La baja desactiva la cuenta de login vinculada.
+    await _guardar_cuenta_vinculada(repo, staff, admin, public_id, is_active=False)
+    await StaffService(db, availability_cache).soft_delete(staff)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

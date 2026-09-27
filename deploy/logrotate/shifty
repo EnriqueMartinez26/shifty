@@ -1,0 +1,14 @@
+# /etc/logrotate.d/shifty -- logs de los scripts de operacion del host.
+# Instalar: install -m 0644 deploy/logrotate/shifty /etc/logrotate.d/shifty
+# copytruncate: cron escribe con >> y no reabre el archivo.
+/var/log/shifty/*.log {
+    daily
+    rotate 14
+    maxsize 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}

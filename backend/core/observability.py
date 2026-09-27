@@ -4,14 +4,16 @@ Sin esto, un webhook que falla o una tarea de Celery que revienta en produccion
 pasan en silencio: nadie se entera hasta que un cliente reclama.
 """
 
+import re
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import structlog
 
 from core.config import Environment, settings
 
 if TYPE_CHECKING:
-    from sentry_sdk.types import Event, Hint
+    from sentry_sdk.types import Event, Hint, SamplingContext
 
 logger = structlog.get_logger()
 
@@ -19,6 +21,82 @@ _initialized = False
 
 # Rutas de chequeo que no aportan nada como transaccion y solo generan ruido.
 _IGNORED_TRANSACTIONS = {"/ops/health/live", "/ops/health/ready"}
+
+# F5-02 (R11-13): tasas de trazas por ruta en produccion. Health y SLO los
+# consultan el compose, el uptime externo y el cron de latencia cada pocos
+# segundos: como transaccion no dicen nada y agotaban la cuota. Pagos y el
+# webhook de Mercado Pago se trazan enteros porque son lo que hay que poder
+# reconstruir ante un reclamo.
+_RATE_NEVER = 0.0
+_RATE_PAYMENTS = 1.0
+_RATE_PUBLIC_READ = 0.02
+_RATE_WRITE = 0.2
+_RATE_PANEL_READ = 0.1
+# Beat dispara varias tareas por minuto; si corren o no lo cubren Sentry Crons
+# (un solo monitor, ver abajo), ``/ops/slo`` y el latido del worker, no la
+# traza.
+_RATE_TASK = 0.02
+
+# Sentry Crons en el plan gratuito: UN monitor (decision de Mateo,
+# 2026-09-25). ``monitor_beat_tasks`` crea uno por cada tarea de beat con
+# crontab (8); se monitorea solo el vencimiento de retenciones sin pagar
+# (``core/celery_app.py``): si deja de correr, los turnos con sena pendiente no
+# se liberan y la agenda queda tomada. El resto lo cubren ``/ops/slo`` y el
+# latido del worker. ``exclude_beat_tasks`` es una lista de regex que el SDK
+# evalua con ``re.search`` agregando ``$`` al final (sentry-sdk 2.68.1,
+# ``utils.match_regex_list``): esta excluye todo nombre que no sea el
+# monitoreado, asi una tarea nueva nace sin monitor y no consume cuota.
+SENTRY_CRONS_MONITORED_BEAT_TASK = "expire-unpaid-appointment-holds-every-minute"
+SENTRY_CRONS_EXCLUDED_BEAT_TASKS = [
+    rf"^(?!{re.escape(SENTRY_CRONS_MONITORED_BEAT_TASK)}$).*"
+]
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_UNTRACED_PREFIXES = ("/ops/health/",)
+_UNTRACED_PATHS = frozenset({"/ops/health", "/ops/slo"})
+
+
+def _request_path(asgi_scope: dict[str, Any]) -> str:
+    """Ruta de la app sin el prefijo del proxy (``root_path``) ni ``/api``."""
+    path = str(asgi_scope.get("path") or "/")
+    root_path = str(asgi_scope.get("root_path") or "")
+    if root_path and path.startswith(root_path):
+        path = path[len(root_path) :] or "/"
+    if path == "/api" or path.startswith("/api/"):
+        path = path[len("/api") :] or "/"
+    return path
+
+
+def _request_rate(method: str, path: str, *, production: bool) -> float:
+    if path in _UNTRACED_PATHS or path.startswith(_UNTRACED_PREFIXES):
+        return _RATE_NEVER
+    if not production:
+        return 1.0
+    if path == "/payments" or path.startswith("/payments/"):
+        return _RATE_PAYMENTS
+    if method not in _READ_METHODS:
+        return _RATE_WRITE
+    if path.startswith("/public/"):
+        return _RATE_PUBLIC_READ
+    return _RATE_PANEL_READ
+
+
+def _traces_sampler(sampling_context: "SamplingContext") -> float:
+    """Tasa de muestreo de una transaccion (F5-02).
+
+    Un request se decide SOLO por su ruta y metodo: el header ``sentry-trace``
+    lo manda el cliente y respetarlo dejaria que cualquiera fuerce el 100 %.
+    Una tarea de Celery, en cambio, hereda la decision del request que la
+    encolo (el padre es nuestro), y sin padre usa la tasa de tareas.
+    """
+    production = settings.ENV == Environment.PRODUCTION
+    asgi_scope = sampling_context.get("asgi_scope")
+    if isinstance(asgi_scope, dict):
+        method = str(asgi_scope.get("method") or "GET").upper()
+        return _request_rate(method, _request_path(asgi_scope), production=production)
+    parent = sampling_context.get("parent_sampled")
+    if parent is not None:
+        return 1.0 if parent else 0.0
+    return _RATE_TASK if production else 1.0
 
 
 def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
@@ -32,6 +110,12 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
         # El body puede traer passwords, tokens OAuth o datos personales.
         request.pop("data", None)
         request.pop("cookies", None)
+        # PV-02: la query lleva telefonos (``deposit/preview?client_phone=``)
+        # y la ruta tambien (``/public/client/{store}/{phone}/...``).
+        request.pop("query_string", None)
+        url = request.get("url")
+        if isinstance(url, str):
+            request["url"] = _mask_url(url)
         headers = request.get("headers")
         if isinstance(headers, dict):
             for header in ("authorization", "cookie", "x-signature"):
@@ -40,10 +124,63 @@ def _scrub_event(event: "Event", _hint: "Hint") -> "Event | None":
 
     # extra/contexts pueden traer PII o secretos si algun logger los adjunta.
     # Se recortan por clave sensible en vez de confiar en que nadie los ponga.
-    _scrub_mapping(event.get("extra"))
+    extra: Any = event.get("extra")
+    if isinstance(extra, dict):
+        # PV-02: la integracion de Celery adjunta los argumentos de la tarea
+        # que fallo; los de ``send_otp_email`` son email, asunto y el cuerpo
+        # CON el codigo. El nombre de la tarea queda.
+        job = extra.get("celery-job")
+        if isinstance(job, dict):
+            for key in ("args", "kwargs"):
+                if key in job:
+                    job[key] = "[redacted]"
+    _scrub_mapping(extra)
     for context in (event.get("contexts") or {}).values():
         _scrub_mapping(context)
+    _mask_breadcrumb_urls(event)
+    _drop_frame_vars(event)
     return event
+
+
+# Un segmento de ruta que, decodificado, es un telefono: 8 o mas digitos con
+# los separadores habituales y un ``+`` opcional. Un ULID o un slug tienen
+# letras y no entran.
+_PHONE_SEGMENT = re.compile(r"\+?[\d\s\-().]{8,}")
+
+
+def _mask_url(url: str) -> str:
+    """URL sin query ni fragmento y con los segmentos-telefono tapados."""
+    parts = urlsplit(url)
+    segments = [
+        "[phone]"
+        if _PHONE_SEGMENT.fullmatch(unquote(segment))
+        and sum(ch.isdigit() for ch in unquote(segment)) >= 8
+        else segment
+        for segment in parts.path.split("/")
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, "/".join(segments), "", ""))
+
+
+def _mask_breadcrumb_urls(event: "Event") -> None:
+    """Las migas HTTP (``data.url``) pasan por la misma mascara que la URL."""
+    breadcrumbs: Any = event.get("breadcrumbs")
+    values = breadcrumbs.get("values") if isinstance(breadcrumbs, dict) else None
+    for crumb in values or []:
+        data = crumb.get("data") if isinstance(crumb, dict) else None
+        if isinstance(data, dict) and isinstance(data.get("url"), str):
+            data["url"] = _mask_url(data["url"])
+
+
+def _drop_frame_vars(event: "Event") -> None:
+    """Defensa en profundidad de ``include_local_variables=False`` (PV-02)."""
+    exception: Any = event.get("exception")
+    values = exception.get("values") if isinstance(exception, dict) else None
+    for value in values or []:
+        stacktrace = value.get("stacktrace") if isinstance(value, dict) else None
+        frames = stacktrace.get("frames") if isinstance(stacktrace, dict) else None
+        for frame in frames or []:
+            if isinstance(frame, dict):
+                frame.pop("vars", None)
 
 
 _SENSITIVE_KEYS = (
@@ -85,17 +222,37 @@ def init_observability(component: str) -> bool:
         logger.warning("sentry_sdk_missing", component=component)
         return False
 
-    is_production = settings.ENV == Environment.PRODUCTION
+    from sentry_sdk.integrations.celery import CeleryIntegration
+
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         environment=str(getattr(settings.ENV, "value", settings.ENV)),
+        # ``VERSION`` sale de ``APP_VERSION`` (compose, bloque
+        # ``x-app-environment``): el tag de la imagen desplegada, no el 0.1.0
+        # fijo del default. Asi un error se ata al release que lo introdujo.
         release=settings.VERSION,
-        # En produccion se muestrea para no saturar la cuota; fuera de ella
-        # conviene ver todo mientras se depura.
-        traces_sample_rate=0.1 if is_production else 1.0,
+        # F5-02: tasa por ruta; fuera de produccion se ve todo menos health.
+        traces_sampler=_traces_sampler,
+        # Sentry Crons: la tarea monitoreada reporta inicio y fin, y si deja
+        # de correr (beat caido, worker trabado) avisa sola. Un solo monitor
+        # por la cuota del plan gratuito (``SENTRY_CRONS_*`` arriba); el
+        # outbox (cada 20 s) y las demas tareas los cubren ``/ops/slo``
+        # (``oldest_pending_*``) y el latido del worker.
+        integrations=[
+            CeleryIntegration(
+                monitor_beat_tasks=True,
+                exclude_beat_tasks=SENTRY_CRONS_EXCLUDED_BEAT_TASKS,
+            )
+        ],
         # Nunca mandamos PII: los turnos llevan nombre, telefono y email.
         send_default_pii=False,
+        # PV-02: sin esto cada frame viajaba con sus variables locales (p. ej.
+        # el payload de la reserva con nombre, telefono y email).
+        include_local_variables=False,
         before_send=_scrub_event,
+        # ``before_send`` no corre sobre transacciones: sin esto el 10 %
+        # muestreado salia con ``request.url``, la query y las migas crudas.
+        before_send_transaction=_scrub_event,
     )
     sentry_sdk.set_tag("component", component)
     _initialized = True
@@ -103,4 +260,28 @@ def init_observability(component: str) -> bool:
     return True
 
 
-__all__ = ["init_observability"]
+def report_exception(exc: BaseException, **context: Any) -> None:
+    """Manda una excepcion tragada a Sentry, con contexto y sin poder romper.
+
+    Para los caminos best-effort: lo que se decide seguir pese al error igual
+    tiene que dejar un evento investigable, porque el log estructurado del
+    contenedor se rota y nadie lo mira (AUD2-B7-03, 2026-09-20). Si Sentry no
+    esta inicializado, ``capture_exception`` no hace nada; si el reporte
+    mismo falla, se registra y se sigue: reportar un problema no puede
+    convertirse en uno.
+    """
+    try:
+        import sentry_sdk
+    except ImportError:  # pragma: no cover - dependencia opcional
+        return
+    try:
+        # Scope propio: el contexto extra no se pega a los eventos siguientes.
+        with sentry_sdk.new_scope() as scope:
+            if context:
+                scope.set_context("shifty", dict(context))
+            sentry_sdk.capture_exception(exc)
+    except Exception:  # pragma: no cover - Sentry nunca rompe el camino
+        logger.warning("sentry_capture_failed", exc_info=True)
+
+
+__all__ = ["init_observability", "report_exception"]

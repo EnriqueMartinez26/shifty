@@ -2,6 +2,8 @@
 
 Escenarios incluidos:
 
+- `locust_aceptacion.py`: prueba de aceptacion de capacidad (150 clientes + 45 duenos + 5 superadmin, rampa de 5 min y 20 de meseta, rafaga sobre el mismo slot). Se juzga con `scripts/perf_acceptance_check.py`; como correrla y leerla: `docs/PERF_ACCEPTANCE.md`.
+
 - `PublicAvailabilityUser`: carga sobre disponibilidad publica y reservas.
 - `PublicAbuseUser`: spam controlado sobre OTP y autogestion sin OTP.
 - `PaymentsWebhookUser`: carga sobre endpoint de webhook.

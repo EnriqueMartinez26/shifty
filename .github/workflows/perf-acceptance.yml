@@ -1,0 +1,114 @@
+name: Perf Acceptance
+
+# Prueba de aceptacion de capacidad (plan de correccion §9, plan-capacidad §5):
+# 150 clientes + 45 duenos + 5 superadmin contra STAGING, rampa de 5 min y 20
+# de meseta, con una rafaga sobre el mismo slot cada 5 min. Locust deja el CSV
+# y scripts/perf_acceptance_check.py decide: p95 < 500 ms por ruta, 0 5xx,
+# 0 429, rafagas 1 x 201 + 409, outbox al dia. docs/PERF_ACCEPTANCE.md.
+#
+# Staging comparte el VPS con produccion (docs/DEPLOY_RUNBOOK.md §6): 200
+# usuarios de noche le pegan a los clientes reales. El nocturno queda APAGADO
+# hasta que el dueno fije la variable del repo PERF_NIGHTLY=true; a mano
+# (workflow_dispatch) corre siempre.
+#
+# Donde corre: un runner de GitHub esta en EE.UU. y suma 120-150 ms de ida y
+# vuelta a Argentina a cada request. Para juzgar el servidor y no la red,
+# usar un runner self-hosted cerca (variable PERF_RUNNER, p. ej. la etiqueta
+# de un runner en AR/BR) o compensar con PERF_NETWORK_OFFSET_MS (ms que se
+# suman a los umbrales). Desde una sola IP el borde limita por cliente
+# (limit_req): staging necesita los limites de prueba del runbook.
+
+on:
+  schedule:
+    # 06:30 UTC = 03:30 ART, fuera del horario de reservas.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      network_offset_ms:
+        description: "Latencia de red del runner a sumar a los umbrales (ms)"
+        required: false
+        default: ""
+
+# El token de GitHub solo lee el repo: el job maneja secretos de staging.
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-acceptance
+  cancel-in-progress: false
+
+jobs:
+  acceptance:
+    if: github.event_name == 'workflow_dispatch' || vars.PERF_NIGHTLY == 'true'
+    runs-on: ${{ vars.PERF_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 50
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      NETWORK_OFFSET_MS: ${{ inputs.network_offset_ms || vars.PERF_NETWORK_OFFSET_MS || '0' }}
+    steps:
+      - name: Verificar secretos de la prueba
+        working-directory: .
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+          SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
+          SHIFTY_SUPERADMIN_EMAIL: ${{ secrets.SHIFTY_SUPERADMIN_EMAIL }}
+          SHIFTY_SUPERADMIN_PASSWORD: ${{ secrets.SHIFTY_SUPERADMIN_PASSWORD }}
+        run: |
+          faltan=""
+          [ -n "$STAGING_URL" ] || faltan="$faltan STAGING_URL"
+          [ -n "$SEED_OWNER_PASSWORD" ] || faltan="$faltan SEED_OWNER_PASSWORD"
+          [ -n "$SHIFTY_SUPERADMIN_EMAIL" ] || faltan="$faltan SHIFTY_SUPERADMIN_EMAIL"
+          [ -n "$SHIFTY_SUPERADMIN_PASSWORD" ] || faltan="$faltan SHIFTY_SUPERADMIN_PASSWORD"
+          if [ -n "$faltan" ]; then
+            echo "::error title=Prueba de aceptacion sin configurar::Faltan los secretos del repo:$faltan. STAGING_URL = URL de la API de STAGING con /api (nunca produccion); SEED_OWNER_PASSWORD = la clave con la que se corrio scripts/seed_capacidad.py; SHIFTY_SUPERADMIN_* = un superadmin de staging (muestrea /ops/slo). Ver docs/PERF_ACCEPTANCE.md."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7.0.0
+
+      - name: Setup Python y uv
+        uses: ./.github/actions/setup-python-uv
+
+      - name: Install dependencies
+        # Locust ya esta en el grupo dev del lock: no es dependencia nueva.
+        run: uv sync --frozen
+
+      - name: Manifiesto de tiendas desde staging
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/perf"
+          uv run python loadtests/aceptacion.py \
+            --host "$STAGING_URL" --stores 200 --out "$RUNNER_TEMP/perf/manifiesto.json"
+
+      - name: Locust (rampa 5 min + meseta 20 min)
+        env:
+          STAGING_URL: ${{ secrets.STAGING_URL }}
+          SEED_OWNER_PASSWORD: ${{ secrets.SEED_OWNER_PASSWORD }}
+          SHIFTY_SUPERADMIN_EMAIL: ${{ secrets.SHIFTY_SUPERADMIN_EMAIL }}
+          SHIFTY_SUPERADMIN_PASSWORD: ${{ secrets.SHIFTY_SUPERADMIN_PASSWORD }}
+          SHIFTY_MANIFEST: ${{ runner.temp }}/perf/manifiesto.json
+        # Locust sale distinto de cero con cualquier falla de request; el
+        # veredicto lo da el paso siguiente sobre el CSV, que igual falla si
+        # Locust no dejo archivos.
+        run: |
+          set +e
+          uv run locust -f loadtests/locust_aceptacion.py --headless \
+            --host "$STAGING_URL" --csv "$RUNNER_TEMP/perf/aceptacion" --only-summary
+          echo "locust termino con codigo $?"
+
+      - name: Veredicto
+        run: |
+          uv run python scripts/perf_acceptance_check.py \
+            --csv-prefix "$RUNNER_TEMP/perf/aceptacion" \
+            --network-offset-ms "$NETWORK_OFFSET_MS"
+
+      - name: Subir resultados
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-acceptance
+          path: ${{ runner.temp }}/perf/

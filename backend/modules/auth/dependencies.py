@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
@@ -7,7 +7,12 @@ from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.database import _apply_tenant_context, get_db, set_tenant_context
+from core.database import (
+    _apply_tenant_context,
+    current_tenant_context,
+    get_db,
+    set_tenant_context,
+)
 from core.exceptions import AuthenticationException, PermissionDeniedException
 from core.roles import (
     APPOINTMENT_MANAGERS,
@@ -42,6 +47,11 @@ def _token_from_request(request: Request) -> str | None:
     return None
 
 
+# Clave en ``request.state`` del usuario ya autenticado en ESTE request, junto
+# con la sesion de base sobre la que se aplico su contexto RLS.
+_RESOLVED_USER_STATE = "shifty_resolved_user"
+
+
 async def get_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -57,7 +67,32 @@ async def get_current_user(
     - El token esta atado a una sesion del servidor (claim ``sid``): si la
       sesion fue revocada (logout, cambio de password, boton de panico), el
       access token muere con ella en vez de sobrevivir hasta su exp.
+
+    Una sola vez por request (F1-01, plan de rendimiento, 2026-09-24): un GET
+    del panel llegaba aca dos veces -la guarda de suspension a nivel router y
+    la dependencia del handler- y pagaba 8 sentencias de identidad. La segunda
+    pasada reutiliza el usuario resuelto por la primera si es la MISMA sesion
+    de base (el contexto RLS ya quedo aplicado en esa conexion). No es un
+    cache entre requests: ``request.state`` nace vacio en cada uno, asi que la
+    regla 1 sigue intacta.
     """
+    resolved = getattr(request.state, _RESOLVED_USER_STATE, None)
+    if resolved is not None and resolved[0] is db:
+        user = cast(User, resolved[1])
+        # Si algo entre las dos pasadas cambio el contexto (un bypass acotado
+        # que termina en (None, False)), se restituye el del usuario leido.
+        expected = (user.store_id, user.is_global_admin)
+        if current_tenant_context() != expected:
+            set_tenant_context(*expected)
+            await _apply_tenant_context(db)
+        return user
+
+    user = await _authenticate(request, db)
+    setattr(request.state, _RESOLVED_USER_STATE, (db, user))
+    return user
+
+
+async def _authenticate(request: Request, db: AsyncSession) -> User:
     credentials_exception = AuthenticationException(
         message="No se pudo validar las credenciales"
     )
@@ -79,21 +114,24 @@ async def get_current_user(
     try:
         await _apply_tenant_context(db)
 
-        session_result = await db.execute(
-            select(AuthSession).where(AuthSession.id == session_id)
-        )
-        session = session_result.scalar_one_or_none()
+        # Sesion + usuario en UN solo SELECT (F1-01). ``session.user_id ==
+        # user.id`` es condicion del JOIN: una sesion ajena, inexistente o un
+        # usuario inexistente no devuelven fila, igual que antes.
+        row = (
+            await db.execute(
+                select(User, AuthSession.revoked_at, AuthSession.expires_at)
+                .join(AuthSession, AuthSession.user_id == User.id)
+                .where(AuthSession.id == session_id, User.id == user_id)
+            )
+        ).one_or_none()
         now = datetime.now(timezone.utc)
-        if (
-            session is None
-            or session.revoked_at is not None
-            or _aware(session.expires_at) <= now
-        ):
+        if row is None:
             raise credentials_exception
-
-        result = await db.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one_or_none()
-        if user is None or not user.is_active or session.user_id != user.id:
+        user = cast(User, row[0])
+        revoked_at, expires_at = row[1], row[2]
+        if revoked_at is not None or _aware(expires_at) <= now:
+            raise credentials_exception
+        if not user.is_active:
             raise credentials_exception
     except Exception:
         # Camino de error: el request sigue sin ningun privilegio.
@@ -112,6 +150,11 @@ async def get_optional_current_user(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User | None:
+    """Usuario del request si trae token; ``None`` si es anonimo.
+
+    Delega en ``get_current_user``, que deja el usuario en ``request.state``:
+    la dependencia del handler que corre despues lo reutiliza (F1-01).
+    """
     token = _token_from_request(request)
     if token is None:
         return None

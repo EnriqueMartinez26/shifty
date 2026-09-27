@@ -323,4 +323,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    pass
+    # Irreversible por datos, no por olvido (C-03, 2026-09-18). Antes era
+    # `pass`: `alembic downgrade` salia con 0 sin revertir nada. El error va
+    # antes de cualquier operacion para no dejar un downgrade a medias.
+    raise NotImplementedError(
+        "d5ec116d06a3 convierte ids bigint a ULID (varchar) y borra columnas con "
+        "datos (users.hashed_password, users.is_global_admin, staff_blocks...): no "
+        "tiene inverso. Restaurar desde backup (docs/BACKUP_RESTORE_RUNBOOK.md)."
+    )

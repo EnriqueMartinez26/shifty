@@ -49,6 +49,7 @@ async def test_oversized_public_booking_fields_are_rejected_not_500(
             "starts_at": (datetime.now(timezone.utc) + timedelta(days=2)).isoformat(),
             "client_name": "A" * 5000,
             "client_phone": "+5491155500000",
+            "accepts_terms": True,
             "notes": "N" * 5000,
             "idempotency_key": "oversize-booking-001",
         },

@@ -1,4 +1,4 @@
-﻿# Scaling And Hardening Playbook
+# Scaling And Hardening Playbook
 
 ## Objetivo
 
@@ -23,10 +23,18 @@ Escalar Shifty de forma segura para crecimiento multi-tenant sin degradar agenda
 
 ## 3) PostgreSQL y pooling
 
-- PgBouncer en modo `transaction` para reducir consumo de conexiones.
-- Objetivo inicial:
-  - `default_pool_size=30`
-  - `max_client_conn=300`
+- **Sin PgBouncer** (descartado en `plan-correccion-rendimiento.md` §8): en
+  modo `transaction` rompe el advisory lock de sesion que usan los jobs de
+  Celery (el contexto de RLS no es el problema: `set_config(..., true)` es
+  local a la transaccion, `core/database.py`).
+  `deploy/pgbouncer/pgbouncer.ini.example` es un resto de esa recomendacion y
+  no se usa.
+- El pool lo da SQLAlchemy en cada proceso: con 3 replicas del backend de un
+  proceso cada una (F0-04), las conexiones son `3 x (pool_size + max_overflow)`
+  mas los workers de Celery; `max_connections` de Postgres se dimensiona con
+  esa cuenta (F0-14: 100-150).
+- Camino cuando haya mas de un host: Postgres administrado (plan §7, decision
+  3), no un pooler delante del de hoy.
 - Indices compuestos de agenda ya aplicados:
   - `store_id + staff_id + starts_at`
   - `store_id + status + starts_at`
@@ -49,6 +57,9 @@ Escalar Shifty de forma segura para crecimiento multi-tenant sin degradar agenda
 
 ## 6) SLO operativos recomendados
 
+Umbrales de alerta del plan (§6) y donde se miden: `docs/DEPLOY_RUNBOOK.md` §8.
+
+- p95 < 500 ms por ruta y 5xx < 0,1 % (`scripts/latency-check.sh`)
 - Error rate API < 1%
 - Webhooks pendientes bajo umbral
 - Outbox pendiente bajo umbral

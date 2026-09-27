@@ -2,9 +2,9 @@
 
 Regla de encaje (decision de producto, 2026-09-10): mismo profesional (o
 "cualquiera") y que el servicio pedido quepa en el hueco, siempre que ese
-profesional de ese servicio. No hace falta que sea el mismo servicio del
-turno cancelado: un hueco de 30 minutos sirve para cualquier servicio de
-hasta 30 minutos.
+profesional de ese servicio y que el servicio siga activo. No hace falta que
+sea el mismo servicio del turno cancelado: un hueco de 30 minutos sirve para
+cualquier servicio de hasta 30 minutos.
 
 Se ofrece a UNA persona por vez, por orden de llegada, durante
 ``WAITLIST_OFFER_MINUTES``. Los cupos dentro de la antelacion minima de la
@@ -26,6 +26,10 @@ from core.config import settings
 from core.utils import ARGENTINA_TZ, ensure_utc_aware
 from infrastructure.persistence.models.staff_service import StaffServiceModel
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.appointments.repository import (
+    AppointmentRepository,
+    appointment_overlap,
+)
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
     format_local_datetime,
@@ -49,6 +53,10 @@ logger = structlog.get_logger()
 # ofrecerlo por mail manda a la gente a un horario que no existe. Para ese
 # origen solo se le avisa al duenio, que reserva a mano desde el panel.
 RANGOS_SIN_GRILLA = frozenset({"block_deleted"})
+
+# Ofertas vencidas que procesa cada corrida del beat (B1-16). Mismo tope por
+# defecto que los lotes del outbox de pagos; el resto espera a la siguiente.
+LAPSED_OFFERS_BATCH = 100
 
 
 @dataclass(frozen=True)
@@ -99,26 +107,24 @@ class OfferResult:
 async def matching_entries(
     db: AsyncSession, slot: ReleasedSlot
 ) -> list[tuple[WaitlistEntry, Service]]:
-    """Entradas en espera a las que les sirve este hueco, por orden de llegada."""
-    servicios_del_staff = set(
-        (
-            await db.execute(
-                select(StaffServiceModel.service_id).where(
-                    StaffServiceModel.staff_id == slot.staff_id
-                )
-            )
-        )
-        .scalars()
-        .all()
+    """Entradas en espera a las que les sirve este hueco, por orden de llegada.
+
+    Una consulta (F3-07): los servicios del profesional entran como
+    subconsulta ``IN`` en vez de una lectura aparte antes de las entradas.
+    """
+    servicios_del_staff = select(StaffServiceModel.service_id).where(
+        StaffServiceModel.staff_id == slot.staff_id
     )
-    if not servicios_del_staff:
-        return []
     rows = await db.execute(
         select(WaitlistEntry, Service)
         .join(Service, WaitlistEntry.service_id == Service.id)
         .where(
             WaitlistEntry.store_id == slot.store_id,
             WaitlistEntry.is_active.is_(True),
+            # Un servicio dado de baja no se puede reservar por el portal
+            # (``get_service_by_public_id`` exige ``is_active``): ofrecerlo
+            # manda al cliente a un 404 y encima le gasta una de sus ofertas.
+            Service.is_active.is_(True),
             WaitlistEntry.status == WaitlistStatus.WAITING.value,
             # Quien ya dejo pasar MAX_LAPSED_OFFERS ofertas no recibe mas.
             WaitlistEntry.lapsed_offers < MAX_LAPSED_OFFERS,
@@ -149,7 +155,22 @@ async def matching_entries(
 
 
 async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
-    result = await db.execute(
+    """Que el cupo se pueda reservar: sin turno activo Y sin bloqueo encima.
+
+    El bloqueo tambien cuenta (AUD2-B1-08): entre que se publica
+    ``slot_released`` y que corre el beat, el dueno puede bloquear esa franja.
+    Ofrecerla igual manda al cliente al 409 ``SCHEDULE_BLOCKED`` del portal y
+    encima le gasta una de sus ofertas (``lapsed_offers``, tope
+    ``MAX_LAPSED_OFFERS``) por algo que no hizo. El predicado de solapamiento
+    es el MISMO que usa el alta (``AppointmentRepository.get_overlapping_block``,
+    AUD2-POST-03), con el filtro de tienda porque este camino corre con bypass
+    de RLS.
+
+    El turno encima se busca con ``appointment_overlap`` (F1-13): la tienda,
+    que este camino no filtraba aunque lo decia y que con bypass de RLS es la
+    unica capa de aislamiento, y las dos cotas sobre ``starts_at``.
+    """
+    ocupado = await db.execute(
         select(Appointment.id)
         .where(
             Appointment.staff_id == slot.staff_id,
@@ -160,14 +181,16 @@ async def slot_still_free(db: AsyncSession, slot: ReleasedSlot) -> bool:
                     AppointmentStatus.CONFIRMED.value,
                 ]
             ),
-            and_(
-                Appointment.starts_at < slot.ends_at,
-                Appointment.ends_at > slot.starts_at,
-            ),
+            appointment_overlap(slot.store_id, slot.starts_at, slot.ends_at),
         )
         .limit(1)
     )
-    return result.scalar_one_or_none() is None
+    if ocupado.scalar_one_or_none() is not None:
+        return False
+    bloqueado = await AppointmentRepository(db).get_overlapping_block(
+        slot.staff_id, slot.starts_at, slot.ends_at, store_id=slot.store_id
+    )
+    return bloqueado is None
 
 
 def _owner_notification(
@@ -231,8 +254,7 @@ async def offer_released_slot(
     if not encajan:
         return OfferResult(candidates=0, offered_entry_id=None, owner_notified=False)
 
-    store = await db.get(Store, slot.store_id)
-    staff = await db.get(Staff, slot.staff_id)
+    store, staff = await _store_and_staff(db, slot)
     staff_name = getattr(staff, "display_name", None) or "el profesional"
     # Solo la primera vez que se libera el hueco: una re-oferta a la persona
     # siguiente no es una novedad para el duenio.
@@ -258,28 +280,7 @@ async def offer_released_slot(
         minutes=int(service.duration_minutes)
     )
 
-    pendiente: PendingOfferEmail | None = None
-    if is_deliverable_email(entry.client_email) and entry.client_email:
-        base = settings.FRONTEND_URL.rstrip("/")
-        slug = getattr(store, "slug", None)
-        fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
-        link = rebook_url(base, slug, service, staff)
-        pendiente = PendingOfferEmail(
-            email=entry.client_email,
-            details={
-                "public_id": entry.id,
-                "client_name": entry.client_name,
-                "service": service.name,
-                "staff": staff_name,
-                "staff_kind": getattr(staff, "kind", None) or "person",
-                "starts_at": slot.starts_at.isoformat(),
-                "store_name": getattr(store, "name", "") or "",
-                "store_phone": getattr(store, "whatsapp_number", None) or "",
-                "booking_url": f"{base}/b/{slug}" if slug else "",
-                "offer_url": f"{link}&date={fecha_iso}" if link else "",
-                "offer_minutes": settings.WAITLIST_OFFER_MINUTES,
-            },
-        )
+    pendiente = _offer_email(entry, service, staff, store, slot, staff_name)
     logger.info(
         "waitlist_slot_offered",
         store_id=slot.store_id,
@@ -291,6 +292,108 @@ async def offer_released_slot(
         offered_entry_id=entry.id,
         owner_notified=notify_owner,
         pending_email=pendiente,
+    )
+
+
+@dataclass(frozen=True)
+class _StoreInfo:
+    """Las columnas de la tienda que usan la oferta y su mail."""
+
+    min_booking_notice_hours: int | None
+    slug: str | None
+    name: str | None
+    whatsapp_number: str | None
+
+
+@dataclass(frozen=True)
+class _StaffInfo:
+    """Las columnas del profesional que usan la oferta y su mail."""
+
+    id: str
+    display_name: str | None
+    kind: str | None
+
+    @property
+    def public_id(self) -> str:
+        # Mismo valor que ``Staff.public_id`` (el id); lo lee ``rebook_url``.
+        return self.id
+
+
+async def _store_and_staff(
+    db: AsyncSession, slot: ReleasedSlot
+) -> tuple[_StoreInfo | None, _StaffInfo | None]:
+    """Tienda y profesional del cupo en UNA consulta de columnas (F3-07).
+
+    Antes eran ``db.get(Store)`` y ``db.get(Staff)``: las dos entidades
+    enteras, con sus horarios (y los servicios del profesional) en cascada,
+    para leer unas pocas columnas. El profesional va por LEFT JOIN y con la tienda
+    del cupo: este camino corre con bypass de RLS.
+    """
+    row = (
+        await db.execute(
+            select(
+                Store.min_booking_notice_hours,
+                Store.slug,
+                Store.name,
+                # ``Store.whatsapp_number`` es una propiedad sobre theme_config.
+                Store.theme_config,
+                Staff.id,
+                Staff.display_name,
+                Staff.kind,
+            )
+            .select_from(Store)
+            .outerjoin(
+                Staff, and_(Staff.id == slot.staff_id, Staff.store_id == Store.id)
+            )
+            .where(Store.id == slot.store_id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None, None
+    store = _StoreInfo(
+        min_booking_notice_hours=row.min_booking_notice_hours,
+        slug=row.slug,
+        name=row.name,
+        whatsapp_number=(row.theme_config or {}).get("whatsapp_number"),
+    )
+    staff = (
+        _StaffInfo(id=row.id, display_name=row.display_name, kind=row.kind)
+        if row.id is not None
+        else None
+    )
+    return store, staff
+
+
+def _offer_email(
+    entry: WaitlistEntry,
+    service: Service,
+    staff: _StaffInfo | None,
+    store: _StoreInfo | None,
+    slot: ReleasedSlot,
+    staff_name: str,
+) -> PendingOfferEmail | None:
+    """Arma (no manda) el mail de la oferta; None si no hay a donde mandarlo."""
+    if not (is_deliverable_email(entry.client_email) and entry.client_email):
+        return None
+    base = settings.FRONTEND_URL.rstrip("/")
+    slug = getattr(store, "slug", None)
+    fecha_iso = slot.starts_at.astimezone(ARGENTINA_TZ).date().isoformat()
+    link = rebook_url(base, slug, service, staff)
+    return PendingOfferEmail(
+        email=entry.client_email,
+        details={
+            "public_id": entry.id,
+            "client_name": entry.client_name,
+            "service": service.name,
+            "staff": staff_name,
+            "staff_kind": getattr(staff, "kind", None) or "person",
+            "starts_at": slot.starts_at.isoformat(),
+            "store_name": getattr(store, "name", "") or "",
+            "store_phone": getattr(store, "whatsapp_number", None) or "",
+            "booking_url": f"{base}/b/{slug}" if slug else "",
+            "offer_url": f"{link}&date={fecha_iso}" if link else "",
+            "offer_minutes": settings.WAITLIST_OFFER_MINUTES,
+        },
     )
 
 
@@ -309,12 +412,21 @@ class LapseResult:
         }
 
 
-async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResult:
+async def expire_lapsed_offers(
+    db: AsyncSession, *, now: datetime, limit: int = LAPSED_OFFERS_BATCH
+) -> LapseResult:
     """Ofertas vencidas vuelven a la cola; si el cupo sigue libre, va al siguiente.
 
     Toma las filas con ``FOR UPDATE SKIP LOCKED``: sin eso, dos corridas
     solapadas del beat re-ofrecian el mismo cupo a dos personas. Los mails
     vuelven en ``pending_emails`` y los manda la tarea despues del commit.
+
+    El lote tiene tope (``limit``) y orden por vencimiento (B1-16): cada
+    vencida cuesta varias consultas para re-ofrecer su cupo, todas con las
+    filas tomadas; sin tope, una cola grande acercaba la corrida al time
+    limit de Celery. Lo que no entra se procesa en la corrida siguiente. El
+    mismo ``limit`` acota las ventanas vencidas de la segunda consulta
+    (AUD2-B1-12), asi que una corrida toca a lo sumo ``2 * limit`` filas.
     """
     rows = await db.execute(
         select(WaitlistEntry)
@@ -324,6 +436,8 @@ async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResul
             WaitlistEntry.offer_expires_at.is_not(None),
             WaitlistEntry.offer_expires_at <= now,
         )
+        .order_by(WaitlistEntry.offer_expires_at.asc())
+        .limit(limit)
         .with_for_update(skip_locked=True)
     )
     lapsed = list(rows.scalars().all())
@@ -353,6 +467,10 @@ async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResul
             if oferta.pending_email:
                 resultado.pending_emails.append(oferta.pending_email)
 
+    # Mismo tope y mismo orden que el lote de arriba (AUD2-B1-12): sin ellos
+    # esta consulta barria todas las tiendas de la instalacion de una, con
+    # FOR UPDATE SKIP LOCKED sobre cada fila. En regimen son pocas, pero un
+    # backlog (beat caido unos dias) hacia una sola transaccion enorme.
     vencidas = await db.execute(
         select(WaitlistEntry)
         .where(
@@ -362,6 +480,8 @@ async def expire_lapsed_offers(db: AsyncSession, *, now: datetime) -> LapseResul
             ),
             WaitlistEntry.window_ends_at <= now,
         )
+        .order_by(WaitlistEntry.window_ends_at.asc())
+        .limit(limit)
         .with_for_update(skip_locked=True)
     )
     for entry in vencidas.scalars().all():
