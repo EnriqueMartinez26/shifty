@@ -1,5 +1,3 @@
-import { setAuthToken } from '@infrastructure/http/client'
-
 import {
   ValidationError,
   NotFoundError,
@@ -49,12 +47,17 @@ export class UnauthorizedErrorHandler extends ErrorHandler {
     return error instanceof UnauthorizedError
   }
 
+  /**
+   * Solo avisa. Antes limpiaba el token y recargaba a /login con
+   * `window.location.href`: esa recarga completa era lo unico que borraba el
+   * cache de react-query al vencer la sesion, y ademas mandaba a /login a
+   * cualquiera que viera un 401, tambien en el portal publico. Hoy el cliente
+   * HTTP avisa `SESSION_EXPIRED_EVENT` y `AuthContext.resetSession()` limpia
+   * perfil, token y TODO el cache (FF-26, D-20260928-05); `ProtectedRoute`
+   * manda a /login recordando la ruta (FF-36).
+   */
   public async handle(_error: UnauthorizedError): Promise<void> {
-    showToast('Sesión expirada. Redirigiendo...', 'info')
-    // Limpieza real de la sesion local (la clave vieja 'token' no existia).
-    setAuthToken(null)
-    localStorage.removeItem('shifty_user')
-    window.location.href = '/login' // Redireccionar
+    showToast('Sesión expirada. Volvé a iniciar sesión.', 'info')
   }
 }
 

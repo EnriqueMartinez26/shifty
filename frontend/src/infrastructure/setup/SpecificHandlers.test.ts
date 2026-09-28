@@ -1,10 +1,16 @@
-import { PaymentRequiredError, RateLimitError, ServiceUnavailableError } from '@shared/errors'
+import {
+  PaymentRequiredError,
+  RateLimitError,
+  ServiceUnavailableError,
+  UnauthorizedError
+} from '@shared/errors'
 import { ForbiddenError } from '@shared/errors/ForbiddenError'
 
-import { ForbiddenErrorHandler, TransientErrorHandler } from './SpecificHandlers'
-
-// Solo lo usa el handler de 401; el cliente real arrastra `import.meta`.
-jest.mock('@infrastructure/http/client', () => ({ setAuthToken: jest.fn() }))
+import {
+  ForbiddenErrorHandler,
+  TransientErrorHandler,
+  UnauthorizedErrorHandler
+} from './SpecificHandlers'
 
 describe('ForbiddenErrorHandler', () => {
   let warn: jest.SpyInstance
@@ -66,5 +72,29 @@ describe('TransientErrorHandler (402, 429, 502/503)', () => {
     expect(avisos[0]).toContain('Tu suscripción está suspendida')
     expect(avisos.join()).not.toContain(crudo)
     warn.mockRestore()
+  })
+})
+
+/**
+ * 2026-09-28 (FF-26, FF-36). El handler limpiaba el token y recargaba a /login
+ * con `window.location.href`: perdia la ruta y, en el portal publico, mandaba
+ * a /login a quien no tenia sesion. La limpieza de sesion y cache ahora vive
+ * en AuthContext.resetSession (ver AuthContext.test.tsx); aca solo se avisa.
+ */
+describe('UnauthorizedErrorHandler', () => {
+  it('solo avisa: no toca el perfil guardado ni recarga la pagina', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    localStorage.setItem('shifty_user', '{"public_id":"usr-a"}')
+    const antes = window.location.href
+    const handler = new UnauthorizedErrorHandler()
+
+    expect(handler.canHandle(new UnauthorizedError('x'))).toBe(true)
+    await handler.handle(new UnauthorizedError('x'))
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Sesión expirada'))
+    expect(localStorage.getItem('shifty_user')).not.toBeNull()
+    expect(window.location.href).toBe(antes)
+    warn.mockRestore()
+    localStorage.clear()
   })
 })

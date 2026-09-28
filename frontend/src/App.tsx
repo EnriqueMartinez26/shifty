@@ -1,6 +1,6 @@
 import React, { Suspense, lazy } from 'react'
 
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 
 import { Sentry } from './infrastructure/observability/sentry'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
@@ -49,6 +49,28 @@ const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title:
   </Sentry.ErrorBoundary>
 )
 
+const Loading = () => (
+  <div role="status" aria-live="polite">
+    Cargando...
+  </div>
+)
+
+/**
+ * La sesion no se pudo validar por una falla transitoria (red, 429, 503):
+ * no es un logout, asi que no se manda a /login (D-20260928-03).
+ */
+const SessionUnavailable = () => {
+  const { retrySession } = useAuth()
+  return (
+    <div role="alert" className="min-h-screen flex flex-col items-center justify-center gap-4">
+      <p>No pudimos conectar con el servidor. Tu sesión sigue abierta.</p>
+      <button type="button" onClick={retrySession} className="underline">
+        Reintentar
+      </button>
+    </div>
+  )
+}
+
 const ProtectedRoute = ({
   children,
   allowedRoles
@@ -56,16 +78,13 @@ const ProtectedRoute = ({
   children: React.ReactNode
   allowedRoles?: string[]
 }) => {
-  const { token, isLoading, user } = useAuth()
+  const { token, isLoading, user, sessionUnavailable } = useAuth()
+  const { pathname, search } = useLocation()
 
-  if (isLoading) {
-    return (
-      <div role="status" aria-live="polite">
-        Cargando...
-      </div>
-    )
-  }
-  if (!token) return <Navigate to="/login" replace />
+  if (isLoading) return <Loading />
+  if (!token && sessionUnavailable) return <SessionUnavailable />
+  // Se recuerda adonde iba: el login vuelve ahi si es segura (FF-36).
+  if (!token) return <Navigate to="/login" replace state={{ from: pathname + search }} />
   if (allowedRoles && user && !hasAnyRole(user.role, allowedRoles, user.is_global_admin)) {
     return <Navigate to={getDefaultAppRoute(user.role, user.is_global_admin)} replace />
   }
@@ -74,41 +93,56 @@ const ProtectedRoute = ({
 }
 
 const RootRedirect = () => {
-  const { token, isLoading, user } = useAuth()
+  const { token, isLoading, user, sessionUnavailable } = useAuth()
 
-  if (isLoading) {
-    return (
-      <div role="status" aria-live="polite">
-        Cargando...
-      </div>
-    )
-  }
+  if (isLoading) return <Loading />
+  if (!token && sessionUnavailable) return <SessionUnavailable />
   if (!token) return <Navigate to="/login" replace />
 
   return <Navigate to={getDefaultAppRoute(user?.role, user?.is_global_admin)} replace />
 }
 
+const ReconnectingBanner = () => {
+  const { isReconnecting } = useAuth()
+  if (!isReconnecting) return null
+  return (
+    <div role="status" aria-live="polite" className="fixed top-0 inset-x-0 z-50 text-center">
+      Reconectando...
+    </div>
+  )
+}
+
+/**
+ * Sesion solo en el arbol autenticado (D-20260928-04): el portal publico
+ * (/booking, /b, /legal) no monta AuthProvider y no hace un POST /auth/refresh
+ * inutil en cada visita.
+ */
+const AuthLayout = () => (
+  <AuthProvider>
+    <ReconnectingBanner />
+    <Outlet />
+  </AuthProvider>
+)
+
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Suspense
-          fallback={
-            <div
-              className="min-h-screen flex items-center justify-center"
-              role="status"
-              aria-live="polite"
-            >
-              Cargando...
-            </div>
-          }
-        >
-          <Routes>
+    <BrowserRouter>
+      <Suspense
+        fallback={
+          <div
+            className="min-h-screen flex items-center justify-center"
+            role="status"
+            aria-live="polite"
+          >
+            Cargando...
+          </div>
+        }
+      >
+        <Routes>
+          <Route element={<AuthLayout />}>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/legal/:document" element={<LegalPage />} />
-            <Route path="/legal" element={<Navigate to="/legal/terminos" replace />} />
             <Route
               path="/dashboard"
               element={
@@ -215,24 +249,6 @@ function App() {
               />
             </Route>
             <Route
-              path="/booking/:slug"
-              element={
-                <ModuleBoundary title="Booking is temporarily unavailable">
-                  <PublicBookingPage />
-                </ModuleBoundary>
-              }
-            />
-            <Route path="/b/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
-            <Route path="/booking/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
-            <Route
-              path="/b/:slug"
-              element={
-                <ModuleBoundary title="Booking is temporarily unavailable">
-                  <PublicBookingPage />
-                </ModuleBoundary>
-              }
-            />
-            <Route
               path="/control-global"
               element={
                 <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
@@ -248,10 +264,31 @@ function App() {
             {/* Cualquier ruta desconocida (p.ej. el viejo /register) vuelve al
                 inicio: sin sesion va al login, con sesion a su panel. */}
             <Route path="*" element={<RootRedirect />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
-    </AuthProvider>
+          </Route>
+          {/* Portal publico: sin AuthProvider (D-20260928-04). */}
+          <Route path="/legal/:document" element={<LegalPage />} />
+          <Route path="/legal" element={<Navigate to="/legal/terminos" replace />} />
+          <Route
+            path="/booking/:slug"
+            element={
+              <ModuleBoundary title="Booking is temporarily unavailable">
+                <PublicBookingPage />
+              </ModuleBoundary>
+            }
+          />
+          <Route path="/b/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
+          <Route path="/booking/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
+          <Route
+            path="/b/:slug"
+            element={
+              <ModuleBoundary title="Booking is temporarily unavailable">
+                <PublicBookingPage />
+              </ModuleBoundary>
+            }
+          />
+        </Routes>
+      </Suspense>
+    </BrowserRouter>
   )
 }
 
