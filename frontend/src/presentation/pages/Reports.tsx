@@ -1,28 +1,19 @@
 import React, { useState } from 'react'
 
 import { subDays } from 'date-fns'
-import {
-  Download,
-  FileSpreadsheet,
-  FileText,
-  Loader2,
-  Table2,
-  TrendingUp,
-  Users,
-  Wallet
-} from 'lucide-react'
+import { FileSpreadsheet, FileText, Loader2, Table2, TrendingUp, Users, Wallet } from 'lucide-react'
+
+import type { ReportSummary } from '@application/services/ReportsService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import {
-  formatArgentinaDate,
-  formatArgentinaDateDisplay,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { ReportAppointmentsTable } from '../components/organisms/ReportAppointmentsTable'
+import { useAuth } from '../context/AuthContext'
+import { hasAnyRole, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
-import { bookingStatusLabel } from '../lib/bookingStatusLabel'
 import { currencyFmtEsAr as currencyFmt } from '../lib/formatters'
 import {
   create2000sInputStyle,
@@ -33,16 +24,52 @@ import {
 /** El rango del reporte es un dia de negocio argentino, no el del navegador. */
 const toInputDate = (date: Date) => formatArgentinaDate(date.toISOString())
 
+/** Turnos por pagina del detalle (el backend acepta hasta 5000). */
+const REPORT_PAGE_SIZE = 100
+
 const ReportsPage: React.FC = () => {
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
+  const [offset, setOffset] = useState(0)
+  const { user } = useAuth()
+  // El backend exporta solo para admins (REPORT_EXPORTERS): el profesional
+  // veia los botones y recibia un 403 (FF-18).
+  const canExport = hasAnyRole(
+    user?.role,
+    [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN],
+    user?.is_global_admin
+  )
 
-  const summaryQuery = useReportSummary(fromDate, toDate)
+  const summaryQuery = useReportSummary(fromDate, toDate, true, {
+    limit: REPORT_PAGE_SIZE,
+    offset
+  })
   const professionalsQuery = useProfessionalReports(fromDate, toDate)
   const exportMutation = useExportReport()
   const [exportError, setExportError] = useState<string | null>(null)
 
-  const summary = summaryQuery.data
+  // Ultimo resumen bueno del rango: si falla una pagina posterior, la
+  // pantalla queda y el error va junto a la paginacion. Estado ajustado en
+  // el render (sin efecto, regla 27).
+  const rangeKey = `${fromDate}|${toDate}`
+  const [lastGood, setLastGood] = useState<{
+    key: string
+    offset: number
+    data: ReportSummary
+  } | null>(null)
+  if (
+    summaryQuery.data &&
+    summaryQuery.data !== lastGood?.data &&
+    !summaryQuery.isPlaceholderData
+  ) {
+    setLastGood({ key: rangeKey, offset, data: summaryQuery.data })
+  }
+  const fallback = !summaryQuery.data && lastGood?.key === rangeKey ? lastGood : null
+  const summary = summaryQuery.data ?? fallback?.data
+  // Filas y rotulo salen de la misma pagina: la ultima buena si la pedida
+  // fallo o todavia no llego (placeholder).
+  const shown = summaryQuery.isPlaceholderData && lastGood?.key === rangeKey ? lastGood : fallback
+  const shownOffset = shown?.offset ?? offset
   const stats = summary?.stats
   const clientStats = summary?.client_stats
   const debtSummary = summary?.debt_summary
@@ -85,7 +112,7 @@ const ReportsPage: React.FC = () => {
     )
   }
 
-  if (summaryQuery.isError) {
+  if (summaryQuery.isError && !summary) {
     return (
       <div className="space-y-8 animate-in fade-in duration-500">
         <div
@@ -152,7 +179,10 @@ const ReportsPage: React.FC = () => {
             <input
               type="date"
               value={fromDate}
-              onChange={(e) => setFromDate(e.target.value)}
+              onChange={(e) => {
+                setFromDate(e.target.value)
+                setOffset(0)
+              }}
               className="rounded-xl px-3 py-2 text-xs font-black outline-none"
               style={inputStyle}
             />
@@ -167,7 +197,10 @@ const ReportsPage: React.FC = () => {
             <input
               type="date"
               value={toDate}
-              onChange={(e) => setToDate(e.target.value)}
+              onChange={(e) => {
+                setToDate(e.target.value)
+                setOffset(0)
+              }}
               className="rounded-xl px-3 py-2 text-xs font-black outline-none"
               style={inputStyle}
             />
@@ -266,49 +299,51 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={() => {
-            void downloadFile('csv')
-          }}
-          disabled={exportMutation.isPending}
-          className="px-5 py-3 text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
-          style={buttonStyles2000s.default}
-        >
-          <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            void downloadFile('excel')
-          }}
-          disabled={exportMutation.isPending}
-          className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
-          style={{
-            ...buttonStyles2000s.selected,
-            background: 'linear-gradient(180deg, #10b981 0%, #059669 100%)',
-            border: '1px solid #059669'
-          }}
-        >
-          <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            void downloadFile('pdf')
-          }}
-          disabled={exportMutation.isPending}
-          className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
-          style={{
-            ...buttonStyles2000s.selected,
-            background: 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)',
-            border: '1px solid #2563eb'
-          }}
-        >
-          <FileText className="w-4 h-4 mr-2" /> Exportar PDF
-        </button>
-      </div>
+      {canExport && (
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              void downloadFile('csv')
+            }}
+            disabled={exportMutation.isPending}
+            className="px-5 py-3 text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={buttonStyles2000s.default}
+          >
+            <Table2 className="w-4 h-4 mr-2" /> Exportar CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void downloadFile('excel')
+            }}
+            disabled={exportMutation.isPending}
+            className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={{
+              ...buttonStyles2000s.selected,
+              background: 'linear-gradient(180deg, #10b981 0%, #059669 100%)',
+              border: '1px solid #059669'
+            }}
+          >
+            <FileSpreadsheet className="w-4 h-4 mr-2" /> Exportar Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void downloadFile('pdf')
+            }}
+            disabled={exportMutation.isPending}
+            className="px-5 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
+            style={{
+              ...buttonStyles2000s.selected,
+              background: 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)',
+              border: '1px solid #2563eb'
+            }}
+          >
+            <FileText className="w-4 h-4 mr-2" /> Exportar PDF
+          </button>
+        </div>
+      )}
 
       {exportError && (
         <div
@@ -471,92 +506,17 @@ const ReportsPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="rounded-lg overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
-        <div
-          className="px-6 py-4 flex items-center gap-2 font-black uppercase tracking-tight text-sm"
-          style={{
-            background: colors2000s.bg.disabled,
-            color: colors2000s.text.primary
-          }}
-        >
-          <Download className="w-4 h-4" /> Detalle de turnos
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-xs">
-            <thead
-              style={{
-                background: colors2000s.bg.disabledBottom,
-                color: colors2000s.text.secondary
-              }}
-            >
-              <tr>
-                <th className="text-left px-6 py-4 font-black uppercase tracking-widest">Fecha</th>
-                <th className="text-left px-6 py-4 font-black uppercase tracking-widest">Estado</th>
-                <th className="text-left px-6 py-4 font-black uppercase tracking-widest">
-                  Servicio
-                </th>
-                <th className="text-left px-6 py-4 font-black uppercase tracking-widest">Staff</th>
-                <th className="text-left px-6 py-4 font-black uppercase tracking-widest">
-                  Cliente
-                </th>
-                <th className="text-right px-6 py-4 font-black uppercase tracking-widest">
-                  Precio
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y" style={{ borderColor: colors2000s.border.light }}>
-              {summary?.appointments.map((item) => (
-                <tr key={item.public_id} className="hover:bg-zinc-50 transition-colors">
-                  <td className="px-6 py-4 font-bold" style={{ color: colors2000s.text.primary }}>
-                    {formatArgentinaDateDisplay(item.starts_at)}{' '}
-                    {formatArgentinaTime(item.starts_at)}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span
-                      className="px-2 py-1 rounded font-black text-[10px] uppercase"
-                      style={{
-                        background: colors2000s.bg.disabled,
-                        color: colors2000s.text.secondary
-                      }}
-                    >
-                      {bookingStatusLabel(item.status)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 font-black" style={{ color: colors2000s.orange.accent }}>
-                    {item.service_name}
-                  </td>
-                  <td className="px-6 py-4 font-bold" style={{ color: colors2000s.text.primary }}>
-                    {item.staff_name}
-                  </td>
-                  <td
-                    className="px-6 py-4 font-medium"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    {item.client_name}
-                  </td>
-                  <td
-                    className="px-6 py-4 font-black text-right"
-                    style={{ color: colors2000s.text.primary }}
-                  >
-                    {currencyFmt.format(item.service_price)}
-                  </td>
-                </tr>
-              ))}
-              {(summary?.appointments.length ?? 0) === 0 && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-6 py-12 text-center font-bold italic"
-                    style={{ color: colors2000s.text.disabled }}
-                  >
-                    No hay turnos en el rango seleccionado.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <ReportAppointmentsTable
+        appointments={summary?.appointments ?? []}
+        total={stats?.total_appointments ?? 0}
+        offset={shownOffset}
+        pageSize={REPORT_PAGE_SIZE}
+        hasMore={summary?.has_more ?? false}
+        isStale={summaryQuery.isPlaceholderData}
+        pageFailed={summaryQuery.isError}
+        onRetry={() => void summaryQuery.refetch()}
+        onOffsetChange={setOffset}
+      />
 
       <div className="rounded-lg overflow-hidden shadow-xl" style={create2000sListCardStyle()}>
         <div
