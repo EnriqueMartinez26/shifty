@@ -225,6 +225,20 @@ describe('HttpUserRepository lecturas', () => {
   })
 })
 
+describe('HttpUserRepository.list', () => {
+  it('manda la busqueda como params de GET /users/ y omite lo ausente', async () => {
+    const get = jest.fn().mockResolvedValue({ data: [respuesta] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+
+    const users = await repository.list({ q: 'ana', limit: 200, includeInactive: true })
+
+    expect(get).toHaveBeenCalledWith('/users/', {
+      params: { include_inactive: true, q: 'ana', email: undefined, limit: 200 }
+    })
+    expect(users[0]?.id).toBe('usr-1')
+  })
+})
+
 describe('HttpUserRepository.delete', () => {
   it('manda el DELETE a la ruta del usuario', async () => {
     const { remove, repository } = createReadRepository()

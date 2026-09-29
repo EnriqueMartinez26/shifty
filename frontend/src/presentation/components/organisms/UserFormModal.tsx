@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 
 import { X, Loader2 } from 'lucide-react'
 
@@ -8,56 +8,48 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
+import type { UserFormRules } from '../../lib/userAccessRules'
 import type { UserFormValues } from '../../types/forms'
 
 interface UserFormModalProps {
-  isOpen: boolean
   onClose: () => void
   onSubmit: (data: UserFormValues) => Promise<void>
   editingUser?: User | null
+  /** Que puede tocar quien mira (FF-09); lo calcula el contenedor. */
+  rules: UserFormRules
+}
+
+/**
+ * Textos propios de esta pantalla. Neutros a proposito (regla 20): el 409 no
+ * dice si el email o el telefono ya existen en OTRA tienda.
+ */
+const USER_FORM_ERRORS = {
+  RESOURCE_CONFLICT: 'Ya existe una cuenta con ese email o teléfono.',
+  PERMISSION_DENIED:
+    'Solo el soporte global puede otorgar ese rol o cambiar el acceso de otro administrador.'
 }
 
 export const UserFormModal: React.FC<UserFormModalProps> = ({
-  isOpen,
   onClose,
   onSubmit,
-  editingUser
+  editingUser,
+  rules
 }) => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [formData, setFormData] = useState({
-    email: '',
-    password: '',
-    first_name: '',
-    last_name: '',
-    phone: '',
-    role: 'staff' as 'admin' | 'staff' | 'receptionist' | 'client'
-  })
-
-  useEffect(() => {
-    if (editingUser) {
-      const p = editingUser.toPrimitives()
-      setFormData({
-        email: p.email,
-        password: '',
-        first_name: p.firstName || '',
-        last_name: p.lastName || '',
-        phone: p.phone || '',
-        role: p.role
-      })
-    } else {
-      setFormData({
-        email: '',
-        password: '',
-        first_name: '',
-        last_name: '',
-        phone: '',
-        role: 'staff'
-      })
+  // Se monta al abrir y se desmonta al cerrar (con `key` por usuario), asi el
+  // estado inicial sale del usuario editado sin un efecto que lo resincronice.
+  const [formData, setFormData] = useState<UserFormValues>(() => {
+    const p = editingUser?.toPrimitives()
+    return {
+      email: p?.email ?? '',
+      password: '',
+      first_name: p?.firstName ?? '',
+      last_name: p?.lastName ?? '',
+      phone: p?.phone ?? '',
+      role: p?.role ?? 'staff'
     }
-  }, [editingUser, isOpen])
-
-  if (!isOpen) return null
+  })
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -69,7 +61,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
     } catch (err) {
       // Antes el error solo iba a console y el modal quedaba sin feedback: el
       // usuario no sabia si guardo. Ahora se muestra y el modal no se cierra.
-      setError(getErrorMessage(err, 'No se pudo guardar el usuario'))
+      setError(getErrorMessage(err, 'No se pudo guardar el usuario', USER_FORM_ERRORS))
     } finally {
       setLoading(false)
     }
@@ -184,10 +176,11 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
                     role: e.target.value as UserFormValues['role']
                   })
                 }
-                className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all appearance-none cursor-pointer"
+                disabled={!rules.canChangeRole}
+                className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all appearance-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
                 style={create2000sModalInputStyle()}
               >
-                <option value="admin">Administrador</option>
+                {rules.showAdminOption && <option value="admin">Administrador</option>}
                 <option value="staff">Staff / Profesional</option>
                 <option value="receptionist">Recepción</option>
                 <option value="client">Cliente</option>
@@ -206,19 +199,23 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
-              {editingUser ? 'Cambiar Contraseña (opcional)' : 'Contraseña'}
-            </label>
-            <input
-              type="password"
-              value={formData.password}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
-              style={create2000sModalInputStyle()}
-              required={!editingUser}
-            />
-          </div>
+          {/* Oculto (no deshabilitado) cuando no se puede: un campo de clave
+          vacio y gris no dice nada. La propia va por /auth/change-password. */}
+          {rules.canChangePassword && (
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
+                {editingUser ? 'Cambiar Contraseña (opcional)' : 'Contraseña'}
+              </label>
+              <input
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
+                style={create2000sModalInputStyle()}
+                required={!editingUser}
+              />
+            </div>
+          )}
 
           <div className="flex gap-4 pt-4">
             <button

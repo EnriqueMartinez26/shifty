@@ -1,6 +1,6 @@
 import { BaseService } from './BaseService'
 import { User, type UserWriteInput } from '../../domain/entities/User'
-import type { IUserRepository } from '../../domain/repositories/IUserRepository'
+import type { IUserRepository, UserListQuery } from '../../domain/repositories/IUserRepository'
 import { CreateUserUseCase } from '../../domain/use-cases/user/CreateUserUseCase'
 import type { CreateUserInput } from '../../domain/use-cases/user/CreateUserUseCase'
 import { UserRole } from '../../domain/value-objects/UserRole'
@@ -54,15 +54,14 @@ export class UserService extends BaseService<User> {
   }
 
   /**
-   * Lists all users in the system.
+   * Searches the store's users on the server (name/phone `q`, exact `email`,
+   * capped by `limit`).
    *
-   * @param includeInactive Whether to include deactivated users.
-   * @returns A promise that resolves to an array of User entities.
+   * @param query Search filters; see `UserListQuery`.
+   * @returns A promise that resolves to at most `query.limit` users.
    */
-  async listUsers(includeInactive?: boolean): Promise<User[]> {
-    return await this.execute(async () => {
-      return await this.repository.findAll(includeInactive)
-    }, 'listUsers')
+  async listUsers(query: UserListQuery): Promise<User[]> {
+    return await this.execute(() => this.repository.list(query), 'listUsers')
   }
 
   /**
@@ -77,9 +76,10 @@ export class UserService extends BaseService<User> {
   }
 
   /**
-   * Hard-deletes a user from the system by ID.
+   * Deactivates a user (DELETE /users/{id} is a soft delete on the backend:
+   * the row stays, `is_active` goes false and the sessions are revoked).
    *
-   * @param id The unique identifier of the user to delete.
+   * @param id The unique identifier of the user to deactivate.
    * @returns A promise resolving to void.
    */
   async deleteUser(id: string): Promise<void> {
