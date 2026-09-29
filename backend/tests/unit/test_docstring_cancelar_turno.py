@@ -22,5 +22,10 @@ def test_la_descripcion_no_promete_acceso_del_cliente() -> None:
     assert "/public/client/appointments" in texto, texto
 
 
-def test_la_descripcion_declara_que_no_verifica_titularidad() -> None:
-    assert "titularidad" in _descripcion().lower()
+def test_la_descripcion_declara_la_regla_de_titularidad() -> None:
+    """Desde D-20260929-03 el endpoint SI verifica rol y titularidad: la
+    descripcion tiene que decir quien cancela que (antes declaraba que no la
+    verificaba, que era lo cierto hasta el 2026-09-29)."""
+    texto = _descripcion().lower()
+    assert "titularidad" in texto, texto
+    assert "profesional" in texto, texto

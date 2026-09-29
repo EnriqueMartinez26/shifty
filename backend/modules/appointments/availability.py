@@ -3,7 +3,8 @@ AvailabilityService — Cálculo de slots disponibles.
 
 Incluye bloqueos de agenda (StaffBlock) en el cálculo:
 un slot es libre solo si:
-  - Está dentro del Schedule del staff ese día.
+  - Está dentro del horario efectivo del staff ese día (sus franjas o, sin
+    ninguna, el horario del local: ``working_hours``, D-20260929-01/02).
   - No solapa con ningún Appointment activo.
   - No solapa con ningún StaffBlock activo.
 """
@@ -31,7 +32,8 @@ from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
 from modules.appointments.model import Appointment
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.services.model import Service
-from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
+from modules.appointments.working_hours import load_effective_hours
+from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
 
 
@@ -461,19 +463,16 @@ class AvailabilityService:
         # despues se rechazan.
         buffer = timedelta(minutes=store_rules.buffer_minutes)
 
-        schedules_res = await self.db.execute(
-            select(Schedule.staff_id, Schedule.start_time, Schedule.end_time)
-            .join(Staff, Staff.id == Schedule.staff_id)
-            .where(
-                Staff.store_id == store_id,
-                Staff.is_active.is_(True),
-                Schedule.day_of_week == search_date.weekday(),
-            )
-            .order_by(Schedule.staff_id, Schedule.start_time, Schedule.id)
-        )
-        schedules: dict[str, list[tuple[time, time]]] = {}
-        for staff_id, start_time, end_time in schedules_res.all():
-            schedules.setdefault(staff_id, []).append((start_time, end_time))
+        # Horario EFECTIVO de cada profesional activo (D-20260929-01/02): el
+        # suyo o, si no cargo ninguna franja, el del local. Solo quedan los
+        # que atienden ese dia, como antes.
+        schedules: dict[str, list[tuple[time, time]]] = {
+            staff_id: franjas
+            for staff_id, franjas in (
+                await load_effective_hours(self.db, store_id, search_date)
+            ).items()
+            if franjas
+        }
 
         booked: dict[str, list[Range]] = {}
         blocks: dict[str, list[_Block]] = {}

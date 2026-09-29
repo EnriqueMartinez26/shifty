@@ -96,21 +96,26 @@ class _MercadoPago:
         return {}
 
 
-async def _profesional(client: AsyncClient, admin: str) -> str:
-    alta = await client.post(
-        "/users/",
-        headers=auth_headers(admin),
-        json={
-            "email": "pro-d2-pg@demo.com",
-            "password": PASSWORD,
-            "first_name": "Pro",
-            "last_name": "Rafaga",
-            "role": "staff",
-        },
+async def _profesional(client: AsyncClient, admin: str, email: str) -> str:
+    """Token del profesional DUENIO de los turnos (el de ``create_staff``).
+
+    Desde D-20260929-03 un profesional solo cancela los turnos de su propia
+    agenda: otra cuenta con rol ``staff`` recibe 403. El que crea /staff/
+    nace sin clave usable; el admin le pone una.
+    """
+    encontrado = await client.get(
+        "/users/", headers=auth_headers(admin), params={"email": email}
     )
-    assert alta.status_code == 201, alta.text
+    assert encontrado.status_code == 200, encontrado.text
+    (usuario,) = encontrado.json()
+    clave = await client.patch(
+        f"/users/{usuario['public_id']}",
+        headers=auth_headers(admin),
+        json={"password": PASSWORD},
+    )
+    assert clave.status_code == 200, clave.text
     login = await client.post(
-        "/auth/login", json={"email": "pro-d2-pg@demo.com", "password": PASSWORD}
+        "/auth/login", json={"email": email, "password": PASSWORD}
     )
     assert login.status_code == 200, login.text
     return str(login.json()["access_token"])
@@ -182,7 +187,7 @@ async def test_cancelar_con_cobro_vivo_contra_el_pago_aprobado_queda_consistente
     staff = await create_staff(client, admin, service, email="staff-d2-pg@demo.com")
     dia = datetime.now(timezone.utc) + timedelta(days=4)
     await add_staff_schedule(client, admin, staff, target_date=dia)
-    profesional = await _profesional(client, admin)
+    profesional = await _profesional(client, admin, "staff-d2-pg@demo.com")
 
     turnos: list[str] = []
     for i in range(TURNOS):
@@ -462,7 +467,7 @@ async def test_link_del_panel_contra_cancelar_nunca_deja_un_link_vivo_cancelado(
             )
 
     else:
-        profesional = await _profesional(client, admin)
+        profesional = await _profesional(client, admin, f"staff-{slug}@demo.com")
 
         def cancelar(turno: str) -> Any:
             return client.patch(
@@ -807,7 +812,7 @@ async def test_confirmacion_manual_contra_la_cancelacion_del_personal(
     staff = await create_staff(client, admin, service, email="staff-manual-pg@demo.com")
     dia = datetime.now(timezone.utc) + timedelta(days=4)
     await add_staff_schedule(client, admin, staff, target_date=dia)
-    profesional = await _profesional(client, admin)
+    profesional = await _profesional(client, admin, "staff-manual-pg@demo.com")
 
     turnos: list[str] = []
     for i in range(CARRERAS):
@@ -930,7 +935,7 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
     staff = await create_staff(client, admin, service, email=f"staff-{slug}@demo.com")
     dia = datetime.now(timezone.utc) + timedelta(days=4)
     await add_staff_schedule(client, admin, staff, target_date=dia)
-    profesional = await _profesional(client, admin)
+    profesional = await _profesional(client, admin, f"staff-{slug}@demo.com")
 
     turnos: list[str] = []
     for i in range(TURNOS):

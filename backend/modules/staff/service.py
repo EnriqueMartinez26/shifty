@@ -37,9 +37,10 @@ class StaffService:
     revierte lo ya guardado; en el peor caso el portal muestra lo viejo hasta
     que vencen los slots (``SLOTS_TTL_SECONDS``, 300 s).
 
-    ``create`` es el unico camino que no invalida: un profesional recien
-    creado no tiene franjas, asi que no aporta ni un horario a la grilla hasta
-    que pasa por ``add_schedule``, que si invalida.
+    ``create`` tambien invalida desde el 2026-09-29: un profesional recien
+    creado no tiene franjas y por eso atiende en el horario del local
+    (D-20260929-01/02, ``appointments.working_hours``); con los servicios que
+    ya trae aporta horarios a la grilla desde el alta.
     """
 
     def __init__(
@@ -67,6 +68,7 @@ class StaffService:
         staff = await self.repo.create(data, store_id, service_public_ids)
         await self.db.commit()
         await self.db.refresh(staff)
+        await self._invalidar_agenda(store_id)
         return staff
 
     async def update_profile(self, staff: Staff, **changes: Any) -> Staff:
