@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 
 import {
   addDays,
@@ -16,23 +16,20 @@ import {
   ChevronRight,
   Clock,
   Loader2,
-  Plus,
-  ShieldBan
+  Plus
 } from 'lucide-react'
 
 import { isBookingStatus } from '@domain/value-objects/BookingStatus'
 
-import type { BlockPreviewResult } from '@application/services/AppointmentBlocksService'
-
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
 import {
-  argentinaLocalToUtcIso,
   formatArgentinaDate,
   formatArgentinaDayMonth,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 
+import { BlocksPanel, type EditableBlock } from './BlocksPanel'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
@@ -40,19 +37,16 @@ import {
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
-import { BlockPreviewModal } from '../components/organisms/BlockPreviewModal'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { useAuth } from '../context/AuthContext'
-import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN } from '../context/roles'
 import {
-  useAppointmentBlocks,
-  useBlockPreview,
-  useBlockTemplates,
-  useCreateAppointmentBlock,
-  useCreateRecurringAppointmentBlock,
-  useDeleteAppointmentBlock,
-  useUpdateAppointmentBlock
-} from '../hooks/useAppointmentBlocks'
+  ROLE_PROFESSIONAL,
+  ROLE_STORE_ADMIN,
+  ROLE_SUPER_ADMIN,
+  canonicalRole,
+  hasAnyRole
+} from '../context/roles'
+import { useAppointmentBlocks, useDeleteAppointmentBlock } from '../hooks/useAppointmentBlocks'
 import {
   useCalendarAgenda,
   useCompleteAppointment,
@@ -140,9 +134,6 @@ const fieldStyle = {
  */
 const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.toISOString())
 
-const toDateInput = (date: Date) => formatArgentinaDate(toInstantIso(date))
-const toTimeInput = (date: Date) => formatArgentinaTime(toInstantIso(date))
-
 const eventPriority = (event: UnifiedCalendarEvent) => {
   if (event.type === 'block') return 0
   if (event.type === 'absence') return 1
@@ -188,26 +179,27 @@ const statusStyle = (status: string) => {
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
   const { user } = useAuth()
-  const canReleaseAppointments = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
+  // Roles canonicos (legacy 'admin'/'staff' incluidos), como el backend (FF-14).
+  const canReleaseAppointments = hasAnyRole(
+    user?.role,
+    [ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN],
+    user?.is_global_admin
+  )
   // Confirmar, completar y ausente: admin o personal (mismo criterio que la API).
-  const canManageAppointments = canReleaseAppointments || user?.role === ROLE_PROFESSIONAL
+  const canManageAppointments =
+    canReleaseAppointments || canonicalRole(user?.role) === ROLE_PROFESSIONAL
+  // Bloqueos: admin y profesional (este, para cualquier profesional,
+  // D-20260929-08); recepcion los ve sin gestionarlos (D-20260929-09).
+  // Cancelar turnos en bloque es solo de administradores (FF-34).
+  const canManageBlocks = canManageAppointments
+  const canCancelAffected = canReleaseAppointments
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView] = useState<CalendarView>('day')
-  const [editingBlockId, setEditingBlockId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [isNewAppointmentOpen, setIsNewAppointmentOpen] = useState(false)
-  const [blockForm, setBlockForm] = useState({
-    staff_id: '',
-    // null = el bloqueo nuevo sigue al dia que muestra el calendario. Una fecha
-    // la fija quien edita un bloqueo o la tipea (F11c-05).
-    date: null as string | null,
-    starts_at: '10:00',
-    ends_at: '11:00',
-    reason: 'No atender',
-    recurrence: 'none' as 'none' | 'daily' | 'weekly',
-    recurrence_until: toDateInput(addDays(new Date(), 7)),
-    max_occurrences: 5
-  })
+  // El panel de bloqueos se remonta con `key` al elegir otro bloqueo: sin
+  // efecto que copie el bloqueo al formulario (regla 27).
+  const [blockToEdit, setBlockToEdit] = useState<EditableBlock | null>(null)
 
   const rangeStart = useMemo(() => {
     if (view === 'day' || view === 'list') return selectedDate
@@ -225,10 +217,6 @@ export const CalendarContainer: React.FC = () => {
   const rangeKeyFrom = format(rangeStart, 'yyyy-MM-dd')
   const rangeKeyTo = format(rangeEnd, 'yyyy-MM-dd')
   const dateStr = format(selectedDate, 'yyyy-MM-dd')
-  // Antes un efecto copiaba dateStr a blockForm.date en cada navegacion, tambien
-  // mientras se editaba un bloqueo: "Editar" el del 20, flecha ">" y "Actualizar
-  // bloqueo" lo movia al 21 sin que nadie tocara la fecha.
-  const blockDate = blockForm.date ?? dateStr
 
   const { data: staffMembers, isLoading: loadingStaff, error: staffError } = useManagedStaff()
   // Nombre y slug de la tienda para el texto de WhatsApp y el deep-link.
@@ -241,15 +229,9 @@ export const CalendarContainer: React.FC = () => {
     agendaRange && agendaRange.total > agendaRange.appointments.length
       ? { shown: agendaRange.appointments.length, total: agendaRange.total }
       : null
-  const blocksQuery = useAppointmentBlocks()
-  const templatesQuery = useBlockTemplates()
-  const createBlock = useCreateAppointmentBlock()
-  const createRecurringBlock = useCreateRecurringAppointmentBlock()
-  const updateBlock = useUpdateAppointmentBlock()
+  const blocksQuery = useAppointmentBlocks(rangeKeyFrom, rangeKeyTo)
   const deleteBlock = useDeleteAppointmentBlock()
   const releaseAppointment = useReleaseAppointment()
-  const previewBlock = useBlockPreview()
-  const [blockPreview, setBlockPreview] = useState<BlockPreviewResult | null>(null)
   /** Huecos de la jornada partida que el dueno decidio ver a escala real. */
   const [expandedGaps, setExpandedGaps] = useState<ReadonlySet<string>>(() => new Set())
 
@@ -268,15 +250,11 @@ export const CalendarContainer: React.FC = () => {
     completeAppointment.isPending ||
     markAbsentAppointment.isPending
 
-  useEffect(() => {
-    const firstStaff = staffMembers?.[0]
-    if (firstStaff && !blockForm.staff_id) {
-      setBlockForm((prev) => ({ ...prev, staff_id: firstStaff.id }))
-    }
-  }, [blockForm.staff_id, staffMembers])
-
   const blocksInRange = useMemo(() => {
+    // El servidor ya manda solo los activos del rango (F4-07); el filtro de
+    // is_active queda por si llega uno igual (FF-12).
     return (blocksQuery.data || []).filter((block) => {
+      if (!block.is_active) return false
       const startsAt = new Date(block.starts_at)
       return startsAt >= startOfDay(rangeStart) && startsAt <= addDays(startOfDay(rangeEnd), 1)
     })
@@ -402,130 +380,6 @@ export const CalendarContainer: React.FC = () => {
     }
     return days
   }, [rangeEnd, rangeStart])
-
-  const handleEditBlock = (block: {
-    public_id: string
-    staff_id: string
-    starts_at: string
-    ends_at: string
-    reason: string
-  }) => {
-    const startsAt = new Date(block.starts_at)
-    const endsAt = new Date(block.ends_at)
-    setEditingBlockId(block.public_id)
-    setBlockForm({
-      staff_id: block.staff_id,
-      date: toDateInput(startsAt),
-      starts_at: toTimeInput(startsAt),
-      ends_at: toTimeInput(endsAt),
-      reason: block.reason,
-      recurrence: 'none',
-      recurrence_until: toDateInput(addDays(startsAt, 7)),
-      max_occurrences: 5
-    })
-  }
-
-  const handleResetBlockForm = () => {
-    setEditingBlockId(null)
-    setBlockForm((prev) => ({
-      ...prev,
-      date: null,
-      starts_at: '10:00',
-      ends_at: '11:00',
-      reason: 'No atender',
-      recurrence: 'none',
-      recurrence_until: toDateInput(addDays(selectedDate, 7)),
-      max_occurrences: 5
-    }))
-  }
-
-  const blockPayloadFromForm = () => {
-    // La hora tipeada es hora argentina; antes se mandaba como si fuera UTC
-    // (el bloqueo quedaba corrido 3 horas respecto de lo que el dueno veia).
-    const startsAt = argentinaLocalToUtcIso(blockDate, blockForm.starts_at)
-    const endsAt = argentinaLocalToUtcIso(blockDate, blockForm.ends_at)
-    const recurrenceUntil =
-      blockForm.recurrence === 'none'
-        ? undefined
-        : argentinaLocalToUtcIso(blockForm.recurrence_until, blockForm.ends_at)
-    return { startsAt, endsAt, recurrenceUntil }
-  }
-
-  const submitBlock = async (cancelAffected: boolean) => {
-    const { startsAt, endsAt, recurrenceUntil } = blockPayloadFromForm()
-    if (blockForm.recurrence === 'none') {
-      await createBlock.mutateAsync({
-        staff_id: blockForm.staff_id,
-        starts_at: startsAt,
-        ends_at: endsAt,
-        reason: blockForm.reason,
-        cancel_affected: cancelAffected
-      })
-      setMessage(cancelAffected ? 'Bloqueo creado y turnos cancelados' : 'Bloqueo creado')
-    } else {
-      await createRecurringBlock.mutateAsync({
-        staff_id: blockForm.staff_id,
-        starts_at: startsAt,
-        ends_at: endsAt,
-        reason: blockForm.reason,
-        recurrence: blockForm.recurrence,
-        recurrence_until: recurrenceUntil,
-        max_occurrences: blockForm.max_occurrences,
-        cancel_affected: cancelAffected
-      })
-      setMessage(
-        cancelAffected ? 'Serie de bloqueos creada y turnos cancelados' : 'Serie de bloqueos creada'
-      )
-    }
-    handleResetBlockForm()
-  }
-
-  const handleSaveBlock = async () => {
-    const { startsAt, endsAt, recurrenceUntil } = blockPayloadFromForm()
-
-    try {
-      if (editingBlockId) {
-        await updateBlock.mutateAsync({
-          publicId: editingBlockId,
-          payload: {
-            staff_id: blockForm.staff_id,
-            starts_at: startsAt,
-            ends_at: endsAt,
-            reason: blockForm.reason
-          }
-        })
-        setMessage('Bloqueo actualizado')
-        handleResetBlockForm()
-        return
-      }
-      // Antes de bloquear: que turnos quedan adentro. Si hay, el dueno los ve
-      // y confirma la cancelacion en bloque; el backend responde 409 sin eso.
-      const preview = await previewBlock.mutateAsync({
-        staff_id: blockForm.staff_id,
-        starts_at: startsAt,
-        ends_at: endsAt,
-        recurrence: blockForm.recurrence,
-        recurrence_until: recurrenceUntil,
-        max_occurrences: blockForm.max_occurrences
-      })
-      if (preview.affected.length > 0) {
-        setBlockPreview(preview)
-        return
-      }
-      await submitBlock(false)
-    } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
-    }
-  }
-
-  const handleConfirmBlockWithCancellations = async () => {
-    try {
-      await submitBlock(true)
-      setBlockPreview(null)
-    } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo guardar el bloqueo'))
-    }
-  }
 
   const handleReleaseAppointment = async (event: UnifiedCalendarEvent) => {
     if (event.type === 'block') return
@@ -795,7 +649,7 @@ export const CalendarContainer: React.FC = () => {
                     )}
 
                     {blocksForSelectedDate
-                      .filter((block) => block.staff_id === staff.id && block.is_active)
+                      .filter((block) => block.staff_id === staff.id)
                       .flatMap((block) => {
                         const placement = gridPlacement(dayGrid, block.starts_at, block.ends_at)
                         if (!placement) return []
@@ -803,7 +657,8 @@ export const CalendarContainer: React.FC = () => {
                           <button
                             key={block.public_id}
                             type="button"
-                            onClick={() => handleEditBlock(block)}
+                            disabled={!canManageBlocks}
+                            onClick={() => setBlockToEdit(block)}
                             className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] text-left"
                             style={{
                               ...placement,
@@ -1079,143 +934,17 @@ export const CalendarContainer: React.FC = () => {
         </div>
       )}
 
-      <div className="grid xl:grid-cols-[1.05fr_0.95fr] gap-6">
-        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
-          <div className="flex items-center gap-3">
-            <ShieldBan className="w-5 h-5" style={{ color: colors2000s.orange.accent }} />
-            <h3
-              className="text-lg font-black uppercase tracking-tight"
-              style={{ color: colors2000s.text.primary }}
-            >
-              Bloqueos de agenda
-            </h3>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {templatesQuery.data?.map((template) => (
-              <button
-                key={template.key}
-                type="button"
-                onClick={() => setBlockForm((prev) => ({ ...prev, reason: template.reason }))}
-                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
-                style={buttonStyles2000s.default}
-              >
-                {template.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <select
-              value={blockForm.staff_id}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, staff_id: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            >
-              {staffMembers?.map((staff) => (
-                <option key={staff.id} value={staff.id}>
-                  {staff.displayName}
-                </option>
-              ))}
-            </select>
-            <input
-              value={blockForm.reason}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, reason: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-              placeholder="Motivo interno"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input
-              type="date"
-              value={blockDate}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, date: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            />
-            <input
-              type="time"
-              value={blockForm.starts_at}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, starts_at: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            />
-            <input
-              type="time"
-              value={blockForm.ends_at}
-              onChange={(e) => setBlockForm((prev) => ({ ...prev, ends_at: e.target.value }))}
-              className="rounded-[6px] px-4 py-3 font-bold outline-none"
-              style={fieldStyle}
-            />
-          </div>
-
-          {!editingBlockId && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <select
-                value={blockForm.recurrence}
-                onChange={(e) =>
-                  setBlockForm((prev) => ({
-                    ...prev,
-                    recurrence: e.target.value as 'none' | 'daily' | 'weekly'
-                  }))
-                }
-                className="rounded-[6px] px-4 py-3 font-bold outline-none"
-                style={fieldStyle}
-              >
-                <option value="none">Sin recurrencia</option>
-                <option value="daily">Diaria</option>
-                <option value="weekly">Semanal</option>
-              </select>
-              <input
-                type="date"
-                value={blockForm.recurrence_until}
-                onChange={(e) =>
-                  setBlockForm((prev) => ({ ...prev, recurrence_until: e.target.value }))
-                }
-                className="rounded-[6px] px-4 py-3 font-bold outline-none"
-                style={fieldStyle}
-              />
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={blockForm.max_occurrences}
-                onChange={(e) =>
-                  setBlockForm((prev) => ({
-                    ...prev,
-                    max_occurrences: Number(e.target.value) || 1
-                  }))
-                }
-                className="rounded-[6px] px-4 py-3 font-bold outline-none"
-                style={fieldStyle}
-              />
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                void handleSaveBlock()
-              }}
-              disabled={!blockForm.staff_id}
-              className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
-              style={buttonStyles2000s.selected}
-            >
-              {editingBlockId ? 'Actualizar bloqueo' : 'Guardar bloqueo'}
-            </button>
-            <button
-              type="button"
-              onClick={handleResetBlockForm}
-              className="px-4 py-3 text-xs font-black uppercase tracking-widest"
-              style={buttonStyles2000s.default}
-            >
-              Limpiar
-            </button>
-          </div>
-        </div>
+      <div className={`grid gap-6 ${canManageBlocks ? 'xl:grid-cols-[1.05fr_0.95fr]' : ''}`}>
+        <BlocksPanel
+          key={blockToEdit?.public_id ?? 'new'}
+          staffMembers={staffMembers}
+          dateStr={dateStr}
+          canManageBlocks={canManageBlocks}
+          canCancelAffected={canCancelAffected}
+          editTarget={blockToEdit}
+          onDoneEditing={() => setBlockToEdit(null)}
+          onMessage={setMessage}
+        />
 
         <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
           <h3
@@ -1255,16 +984,16 @@ export const CalendarContainer: React.FC = () => {
                     {event.type === 'block' ? 'Bloqueo' : 'Ausencia'}
                   </span>
                 </div>
-                {event.type === 'block' && (
+                {event.type === 'block' && canManageBlocks && (
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() =>
-                        handleEditBlock({
+                        setBlockToEdit({
                           public_id: event.id,
                           staff_id: event.staffId,
-                          starts_at: event.startsAt.toISOString(),
-                          ends_at: event.endsAt.toISOString(),
+                          starts_at: toInstantIso(event.startsAt),
+                          ends_at: toInstantIso(event.endsAt),
                           reason: event.title
                         })
                       }
@@ -1305,18 +1034,6 @@ export const CalendarContainer: React.FC = () => {
           </div>
         </div>
       </div>
-      {blockPreview && (
-        <BlockPreviewModal
-          preview={blockPreview}
-          reason={blockForm.reason}
-          busy={createBlock.isPending || createRecurringBlock.isPending}
-          onCancel={() => setBlockPreview(null)}
-          onConfirm={() => {
-            void handleConfirmBlockWithCancellations()
-          }}
-        />
-      )}
-
       {isNewAppointmentOpen && (
         <NewAppointmentModal
           onClose={() => setIsNewAppointmentOpen(false)}

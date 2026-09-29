@@ -41,6 +41,7 @@ describe('BlockPreviewModal', () => {
         preview={preview}
         reason="Vacaciones"
         busy={false}
+        canCancel
         onConfirm={() => undefined}
         onCancel={() => undefined}
       />
@@ -63,6 +64,7 @@ describe('BlockPreviewModal', () => {
         preview={preview}
         reason="Vacaciones"
         busy={false}
+        canCancel
         onConfirm={() => undefined}
         onCancel={() => undefined}
       />
@@ -83,6 +85,7 @@ describe('BlockPreviewModal', () => {
         preview={preview}
         reason="Vacaciones"
         busy={false}
+        canCancel
         onConfirm={onConfirm}
         onCancel={onCancel}
       />
@@ -90,6 +93,27 @@ describe('BlockPreviewModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancelar 1 turno y bloquear' }))
     fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
     expect(onConfirm).toHaveBeenCalledTimes(1)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  // FF-34: el backend responde 403 a quien no es administrador cuando hay
+  // turnos afectados; ofrecerle "Cancelar y bloquear" era un boton a un error.
+  it('sin permiso de cancelar muestra la lista y solo deja volver', () => {
+    const onCancel = jest.fn()
+    render(
+      <BlockPreviewModal
+        preview={preview}
+        reason="Vacaciones"
+        busy={false}
+        canCancel={false}
+        onConfirm={() => undefined}
+        onCancel={onCancel}
+      />
+    )
+    expect(screen.getByText('Carla Ruiz')).toBeInTheDocument()
+    expect(screen.getByText(/Pedile a un administrador que confirme/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /bloquear/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
