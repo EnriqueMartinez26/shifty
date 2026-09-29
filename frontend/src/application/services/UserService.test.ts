@@ -25,7 +25,8 @@ describe('UserService', () => {
       update: jest.fn(),
       delete: jest.fn(),
       findByEmail: jest.fn(),
-      findByRole: jest.fn()
+      findByRole: jest.fn(),
+      list: jest.fn()
     } as unknown as jest.Mocked<IUserRepository>
 
     service = new UserService(mockRepository)
@@ -114,7 +115,7 @@ describe('UserService', () => {
   })
 
   describe('listUsers', () => {
-    it('should call repository findAll with correct parameters', async () => {
+    it('delega la busqueda al repositorio con el query tal cual', async () => {
       const users = [
         User.fromPrimitives({
           id: '1',
@@ -127,12 +128,13 @@ describe('UserService', () => {
           createdAt: new Date().toISOString()
         })
       ]
-      mockRepository.findAll.mockResolvedValue(users)
+      mockRepository.list.mockResolvedValue(users)
+      const query = { q: 'ana', limit: 200, includeInactive: true }
 
-      const result = await service.listUsers(true)
+      const result = await service.listUsers(query)
 
       expect(result).toEqual(users)
-      expect(mockRepository.findAll).toHaveBeenCalledWith(true)
+      expect(mockRepository.list).toHaveBeenCalledWith(query)
     })
   })
 

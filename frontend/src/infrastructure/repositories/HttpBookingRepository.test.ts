@@ -67,25 +67,31 @@ describe('HttpBookingRepository.create', () => {
     service_id: 'service-1',
     starts_at: '2026-09-10T12:00:00Z',
     client_name: 'Ana',
-    client_phone: '1155550101'
+    client_phone: '1155550101',
+    idempotency_key: 'clave-del-formulario-1'
   }
 
-  it('publica el turno y devuelve la entidad', async () => {
-    const post = jest.fn().mockResolvedValue({ data: appointmentDto(1) })
+  it('crea por el alta del panel con la clave del llamador y devuelve el id (FF-04)', async () => {
+    // Iba a /public/appointments, que exige accepts_terms: el panel recibia 422.
+    const post = jest.fn().mockResolvedValue({ data: { public_id: 'appt-1' } })
     const repository = new HttpBookingRepository({ post } as unknown as AxiosInstance)
 
-    const created = await repository.create(payload)
+    const createdId = await repository.create(payload)
 
-    expect(post).toHaveBeenCalledWith('/public/appointments', payload)
-    expect(created.id).toBe('appt-1')
+    expect(post).toHaveBeenCalledWith('/appointments/', payload)
+    expect(createdId).toBe('appt-1')
   })
 
   it('traduce un error imprevisto a InternalServerError con la operacion', async () => {
     const post = jest.fn().mockRejectedValue(new Error('socket hang up'))
     const repository = new HttpBookingRepository({ post } as unknown as AxiosInstance)
 
-    await expect(repository.create(payload)).rejects.toThrow(
-      "Database operation 'create' failed: socket hang up"
-    )
+    await expect(repository.create(payload)).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'create',
+        technicalMessage: "Database operation 'create' failed: socket hang up"
+      }
+    })
   })
 })

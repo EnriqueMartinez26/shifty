@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 
+import { ValidationError } from '@shared/errors'
+
 import ForgotPasswordPage from './ForgotPassword'
 
 const mockMutateAsync = jest.fn()
@@ -43,7 +45,9 @@ describe('ForgotPasswordPage', () => {
   })
 
   it('shows the error message when the request fails', async () => {
-    mockMutateAsync.mockRejectedValueOnce(new Error('Servicio caído'))
+    mockMutateAsync.mockRejectedValueOnce(
+      new ValidationError('Servicio caído', { statusCode: 400 })
+    )
 
     render(
       <MemoryRouter>

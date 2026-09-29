@@ -1,14 +1,12 @@
 import type { AxiosInstance } from 'axios'
 
 import { translateRepositoryError } from './BaseRepository'
-import type {
-  AppointmentResponseDTO,
-  CreateBookingRequestDTO
-} from '../../application/dtos/BookingDTO'
+import type { AppointmentResponseDTO } from '../../application/dtos/BookingDTO'
 import { BookingMapper } from '../../application/mappers/BookingMapper'
 import { Appointment } from '../../domain/entities/Appointment'
 import type {
   AppointmentRange,
+  CreateBookingInput,
   IBookingRepository
 } from '../../domain/repositories/IBookingRepository'
 import { createUuid } from '../../shared/utils/uuid'
@@ -77,13 +75,16 @@ export class HttpBookingRepository implements IBookingRepository {
     }
   }
 
-  async create(payload: CreateBookingRequestDTO): Promise<Appointment> {
+  /**
+   * Alta del panel para un cliente (FF-04). Iba a `/public/appointments`, que
+   * es la reserva del cliente y exige `accepts_terms`: el panel recibia 422.
+   * La respuesta no trae nombres (no alcanza para una entidad), asi que solo
+   * se devuelve el id; la agenda se refresca por invalidacion.
+   */
+  async create(payload: CreateBookingInput): Promise<string> {
     try {
-      const { data } = await this.client.post<AppointmentResponseDTO>(
-        '/public/appointments',
-        payload
-      )
-      return BookingMapper.toDomain(data)
+      const { data } = await this.client.post<{ public_id: string }>('/appointments/', payload)
+      return data.public_id
     } catch (error) {
       translateRepositoryError('create', error)
     }

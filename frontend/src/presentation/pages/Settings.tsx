@@ -24,7 +24,7 @@ import type {
   StoreCustomFieldOption
 } from '@application/services/StoreSettingsService'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
 import type { BusinessType } from '@shared/types/business'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
@@ -49,6 +49,14 @@ import {
 } from '../hooks/useStores'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
 import { planSave, type BusinessHoursPeriod } from '../lib/settingsDraft'
+import {
+  DAYS,
+  isValidPeriod,
+  normalizeSlugInput,
+  numberInRange,
+  SETTINGS_LIMITS,
+  validateSettingsDraft
+} from '../lib/settingsValidation'
 import { create2000sPanelStyle, createSettingsInputStyle } from '../lib/surfaceStyles'
 
 const TABS = [
@@ -59,16 +67,6 @@ const TABS = [
   { id: 'features', label: 'Funciones', icon: <SlidersHorizontal className="w-4 h-4" /> },
   { id: 'payments', label: 'Mercado Pago', icon: <CreditCard className="w-4 h-4" /> },
   { id: 'security', label: 'Seguridad', icon: <Lock className="w-4 h-4" /> }
-]
-
-const DAYS = [
-  { id: 'mon', label: 'Lunes' },
-  { id: 'tue', label: 'Martes' },
-  { id: 'wed', label: 'Miércoles' },
-  { id: 'thu', label: 'Jueves' },
-  { id: 'fri', label: 'Viernes' },
-  { id: 'sat', label: 'Sábado' },
-  { id: 'sun', label: 'Domingo' }
 ]
 
 const FEATURE_LABELS = [
@@ -108,6 +106,10 @@ const CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: 'select', label: 'Lista' }
 ] as const
 
+// IMAGE_CAPS["logo"] en backend/modules/stores/media.py. Las dimensiones las
+// valida solo el backend.
+const MAX_LOGO_BYTES = 1024 * 1024
+
 const createEmptyCustomField = (index: number): StoreCustomField => ({
   key: `campo_${index}`,
   label: '',
@@ -146,7 +148,10 @@ type SaveHalf = {
   label: string
   fallback: string
   run: (() => Promise<unknown>) | null
+  overrides?: Partial<Record<string, string>>
 }
+
+const SLUG_TAKEN_MESSAGE = 'Ese enlace ya lo usa otro negocio. Elegí otro.'
 
 const SettingsPage: React.FC = () => {
   const [searchParams] = useSearchParams()
@@ -173,8 +178,29 @@ const SettingsPage: React.FC = () => {
   const [passwordForm, setPasswordForm] = useState({ current: '', new: '', confirm: '' })
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
   const [errorMessage, setErrorMessage] = useState('')
+  // El slug que el backend rechazo por repetido. El error del campo se deriva
+  // en el render: se ve mientras el campo siga diciendo eso mismo.
+  const [slugConflict, setSlugConflict] = useState<string | null>(null)
 
   const labels = getBusinessLabels(formData?.business_type)
+  // Calculado en el render: el borrador ES el estado, no hay nada que
+  // sincronizar (regla 27).
+  const draftErrors = validateSettingsDraft(draft)
+  const blockingReasons = Object.values(draftErrors)
+  const slugError =
+    draftErrors.slug ??
+    (slugConflict !== null && formData?.slug === slugConflict ? SLUG_TAKEN_MESSAGE : undefined)
+  // Con errores el boton se apaga (el backend respondería 422) y dice por qué.
+  const saveDisabled = !hasChanges || blockingReasons.length > 0 || saveStatus === 'saving'
+  const saveBlockedNotice =
+    blockingReasons.length > 0 ? (
+      <p
+        className="basis-full text-[11px] font-bold"
+        style={{ color: colors2000s.status.danger.text }}
+      >
+        No se puede guardar: {blockingReasons.join(' ')}
+      </p>
+    ) : null
 
   const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -187,8 +213,8 @@ const SettingsPage: React.FC = () => {
       setLogoError('Formato no permitido. Usá PNG, JPEG o WebP.')
       return
     }
-    if (file.size > 2 * 1024 * 1024) {
-      setLogoError('La imagen supera el máximo de 2 MB.')
+    if (file.size > MAX_LOGO_BYTES) {
+      setLogoError('La imagen supera el máximo de 1 MB.')
       return
     }
     try {
@@ -206,10 +232,16 @@ const SettingsPage: React.FC = () => {
     setErrorMessage('')
     const storePayload = plan.store
     const flagsPayload = plan.flags
+    // El backend responde el mismo 409 RESOURCE_CONFLICT neutro ante cualquier
+    // IntegrityError. Solo se le atribuye al slug si el guardado lo llevaba y
+    // no llevaba los horarios, el otro campo de la mitad que puede chocar.
+    const conflictIsSlug =
+      storePayload?.slug !== undefined && storePayload.business_hours === undefined
     const storeHalf: SaveHalf = {
       label: 'la configuración del negocio',
       fallback: 'No se pudo guardar la configuración del negocio',
-      run: storePayload ? () => updateStore.mutateAsync(storePayload) : null
+      run: storePayload ? () => updateStore.mutateAsync(storePayload) : null,
+      overrides: conflictIsSlug ? { RESOURCE_CONFLICT: SLUG_TAKEN_MESSAGE } : undefined
     }
     const flagsHalf: SaveHalf = {
       label: 'las funciones',
@@ -229,7 +261,10 @@ const SettingsPage: React.FC = () => {
         saved.push(half.label)
       } catch (error: unknown) {
         setSaveStatus('error')
-        const detail = getErrorMessage(error, half.fallback)
+        const detail = getErrorMessage(error, half.fallback, half.overrides)
+        if (half === storeHalf && conflictIsSlug && getErrorCode(error) === 'RESOURCE_CONFLICT') {
+          setSlugConflict(storePayload?.slug ?? null)
+        }
         // Decir que mitad SI quedo guardada: sin eso el admin no distingue
         // "no paso nada" de "una mitad ya esta en el servidor" y reintenta a
         // ciegas sobre un estado que ya cambio.
@@ -341,7 +376,7 @@ const SettingsPage: React.FC = () => {
             }}
             // Sin nada editado no hay nada que guardar: el boton se apaga en
             // vez de decir "Guardado" sin haber llamado a ningun endpoint.
-            disabled={!hasChanges || saveStatus === 'saving'}
+            disabled={saveDisabled}
             className="flex items-center gap-2 px-6 py-3 font-black uppercase tracking-widest text-xs rounded-xl transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.selected}
           >
@@ -359,6 +394,7 @@ const SettingsPage: React.FC = () => {
                 : 'Guardar Cambios'}
           </button>
         )}
+        {!['security', 'payments'].includes(activeTab) && saveBlockedNotice}
       </div>
 
       {/* Tabs Navigation */}
@@ -474,13 +510,23 @@ const SettingsPage: React.FC = () => {
                     onChange={(e) =>
                       setFormData({
                         ...formData,
-                        slug: e.target.value.toLowerCase().replace(/\s+/g, '-')
+                        slug: normalizeSlugInput(e.target.value)
                       })
                     }
                     className="flex-1 bg-transparent font-black outline-none"
                     placeholder={labels.slugPlaceholder}
+                    aria-label="Slug de la URL"
+                    aria-invalid={slugError !== undefined}
                   />
                 </div>
+                {slugError && (
+                  <p
+                    className="text-[10px] font-bold"
+                    style={{ color: colors2000s.status.danger.text }}
+                  >
+                    {slugError}
+                  </p>
+                )}
                 <ShareLinksPanel slug={formData.slug} />
               </div>
               <div className="space-y-3">
@@ -530,7 +576,7 @@ const SettingsPage: React.FC = () => {
                       className="text-[10px] font-bold"
                       style={{ color: colors2000s.text.secondary }}
                     >
-                      PNG, JPEG o WebP · máx 2 MB
+                      PNG, JPEG o WebP · máx 1 MB
                     </p>
                   </div>
                 </div>
@@ -940,109 +986,22 @@ const SettingsPage: React.FC = () => {
               Horarios de Atención
             </h3>
             <div className="space-y-3">
-              {DAYS.map((day) => {
-                const dayHours = formData.business_hours[day.id] || []
-                return (
-                  <div
-                    key={day.id}
-                    className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-md transition-all"
-                    style={{
-                      background: 'white',
-                      border: `1px solid ${colors2000s.border.light}`,
-                      boxShadow: colors2000s.shadows.outer
-                    }}
-                  >
-                    <div
-                      className="w-24 font-black uppercase tracking-widest text-[10px]"
-                      style={{ color: colors2000s.text.primary }}
-                    >
-                      {day.label}
-                    </div>
-
-                    <div className="flex-1 space-y-2">
-                      {dayHours.length === 0 ? (
-                        <span
-                          className="text-[10px] font-black uppercase italic"
-                          style={{ color: colors2000s.text.disabled }}
-                        >
-                          Cerrado
-                        </span>
-                      ) : (
-                        dayHours.map((period: BusinessHoursPeriod, idx: number) => (
-                          <div
-                            key={`${day.id}-${idx}-${period.open}-${period.close}`}
-                            className="flex flex-wrap items-center gap-2"
-                          >
-                            <input
-                              type="time"
-                              value={period.open}
-                              onChange={(e) => {
-                                const newHours = { ...formData.business_hours }
-                                newHours[day.id] = (newHours[day.id] ?? []).map((p, i) =>
-                                  i === idx ? { ...p, open: e.target.value } : p
-                                )
-                                setFormData({ ...formData, business_hours: newHours })
-                              }}
-                              className="rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none"
-                              style={createSettingsInputStyle()}
-                            />
-                            <span
-                              className="text-[10px] font-bold"
-                              style={{ color: colors2000s.text.disabled }}
-                            >
-                              A
-                            </span>
-                            <input
-                              type="time"
-                              value={period.close}
-                              onChange={(e) => {
-                                const newHours = { ...formData.business_hours }
-                                newHours[day.id] = (newHours[day.id] ?? []).map((p, i) =>
-                                  i === idx ? { ...p, close: e.target.value } : p
-                                )
-                                setFormData({ ...formData, business_hours: newHours })
-                              }}
-                              className="rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none"
-                              style={createSettingsInputStyle()}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const newHours = { ...formData.business_hours }
-                                newHours[day.id] = (newHours[day.id] ?? []).filter(
-                                  (_, i) => i !== idx
-                                )
-                                setFormData({ ...formData, business_hours: newHours })
-                              }}
-                              className="p-1.5 transition-all"
-                              style={{ color: colors2000s.status.danger.light }}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const newHours = { ...formData.business_hours }
-                        newHours[day.id] = [
-                          ...(newHours[day.id] ?? []),
-                          { open: '09:00', close: '18:00' }
-                        ]
-                        setFormData({ ...formData, business_hours: newHours })
-                      }}
-                      className="px-3 py-2 text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"
-                      style={buttonStyles2000s.default}
-                    >
-                      <Plus className="w-3 h-3 mr-1" />
-                      Bloque
-                    </button>
-                  </div>
-                )
-              })}
+              {DAYS.map((day) => (
+                // La fila se identifica por el dia, nunca por las horas: con
+                // las horas en la key cada tecla remontaba el input y se
+                // perdia el foco (FF-08).
+                <BusinessHoursDayRow
+                  key={day.id}
+                  label={day.label}
+                  periods={formData.business_hours[day.id] ?? []}
+                  onChange={(periods) =>
+                    setFormData({
+                      ...formData,
+                      business_hours: { ...formData.business_hours, [day.id]: periods }
+                    })
+                  }
+                />
+              ))}
             </div>
           </div>
         )}
@@ -1059,9 +1018,18 @@ const SettingsPage: React.FC = () => {
                 </label>
                 <input
                   type="number"
+                  min={SETTINGS_LIMITS.cancellation_hours.min}
+                  max={SETTINGS_LIMITS.cancellation_hours.max}
                   value={formData.cancellation_hours}
                   onChange={(e) =>
-                    setFormData({ ...formData, cancellation_hours: parseInt(e.target.value) || 0 })
+                    setFormData({
+                      ...formData,
+                      cancellation_hours: numberInRange(
+                        e.target.value,
+                        SETTINGS_LIMITS.cancellation_hours.min,
+                        SETTINGS_LIMITS.cancellation_hours.max
+                      )
+                    })
                   }
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
                   style={createSettingsInputStyle()}
@@ -1083,9 +1051,18 @@ const SettingsPage: React.FC = () => {
                 </label>
                 <input
                   type="number"
+                  min={SETTINGS_LIMITS.buffer_minutes.min}
+                  max={SETTINGS_LIMITS.buffer_minutes.max}
                   value={formData.buffer_minutes}
                   onChange={(e) =>
-                    setFormData({ ...formData, buffer_minutes: parseInt(e.target.value) || 0 })
+                    setFormData({
+                      ...formData,
+                      buffer_minutes: numberInRange(
+                        e.target.value,
+                        SETTINGS_LIMITS.buffer_minutes.min,
+                        SETTINGS_LIMITS.buffer_minutes.max
+                      )
+                    })
                   }
                   className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
                   style={createSettingsInputStyle()}
@@ -1465,7 +1442,7 @@ const SettingsPage: React.FC = () => {
                 onClick={() => {
                   void handleSave()
                 }}
-                disabled={!hasChanges || saveStatus === 'saving'}
+                disabled={saveDisabled}
                 className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
@@ -1485,6 +1462,7 @@ const SettingsPage: React.FC = () => {
                     ? 'Guardado'
                     : 'Guardar condiciones'}
               </button>
+              {saveBlockedNotice}
             </div>
           </div>
         )}
@@ -1605,10 +1583,118 @@ const SettingsPage: React.FC = () => {
   )
 }
 
-const numberInRange = (raw: string, min: number, max: number): number => {
-  const parsed = parseInt(raw, 10)
-  if (Number.isNaN(parsed)) return min
-  return Math.min(max, Math.max(min, parsed))
+const TIME_INPUT_CLASS = 'rounded-lg px-2 py-1 text-[11px] font-black uppercase outline-none'
+
+/**
+ * Un dia de la semana: cerrado o UN periodo. El backend guarda un solo periodo
+ * por dia y rechaza el resto con 422 (`reject_extra_periods` en
+ * `backend/modules/stores/schemas.py`); el horario partido es decision de
+ * producto pendiente, asi que no hay "+ Bloque".
+ */
+const BusinessHoursDayRow: React.FC<{
+  label: string
+  periods: BusinessHoursPeriod[]
+  onChange: (periods: BusinessHoursPeriod[]) => void
+}> = ({ label, periods, onChange }) => {
+  // Un periodo solo se edita cuando es el unico: con varios (dia legado) no
+  // se trunca nada en silencio, el admin elige cual conservar.
+  const period = periods.length === 1 ? periods[0] : undefined
+  return (
+    <div
+      className="flex flex-col md:flex-row md:items-center gap-4 p-4 rounded-md transition-all"
+      style={{
+        background: 'white',
+        border: `1px solid ${colors2000s.border.light}`,
+        boxShadow: colors2000s.shadows.outer
+      }}
+    >
+      <div
+        className="w-24 font-black uppercase tracking-widest text-[10px]"
+        style={{ color: colors2000s.text.primary }}
+      >
+        {label}
+      </div>
+      {period ? (
+        <div className="flex-1 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="time"
+              aria-label={`Apertura ${label}`}
+              value={period.open}
+              onChange={(e) => onChange([{ ...period, open: e.target.value }])}
+              className={TIME_INPUT_CLASS}
+              style={createSettingsInputStyle()}
+            />
+            <span className="text-[10px] font-bold" style={{ color: colors2000s.text.disabled }}>
+              A
+            </span>
+            <input
+              type="time"
+              aria-label={`Cierre ${label}`}
+              value={period.close}
+              onChange={(e) => onChange([{ ...period, close: e.target.value }])}
+              className={TIME_INPUT_CLASS}
+              style={createSettingsInputStyle()}
+            />
+            <button
+              type="button"
+              aria-label={`Cerrar ${label}`}
+              onClick={() => onChange([])}
+              className="p-1.5 transition-all"
+              style={{ color: colors2000s.status.danger.light }}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {!isValidPeriod(period) && (
+            <p className="text-[10px] font-bold" style={{ color: colors2000s.status.danger.text }}>
+              La apertura tiene que ser antes del cierre.
+            </p>
+          )}
+        </div>
+      ) : periods.length > 1 ? (
+        <div className="flex-1 space-y-1">
+          <p className="text-[10px] font-bold" style={{ color: colors2000s.status.danger.text }}>
+            Hay {periods.length} horarios guardados; por ahora se admite uno. Elegí cuál conservar.
+          </p>
+          {periods.map((p) => (
+            <div key={`${p.open}-${p.close}`} className="flex items-center gap-2 text-[11px]">
+              <span className="font-black">
+                {p.open} A {p.close}
+              </span>
+              <button
+                type="button"
+                aria-label={`Conservar ${p.open} a ${p.close} el ${label}`}
+                onClick={() => onChange([p])}
+                className="px-2 py-1 text-[9px] font-black uppercase"
+                style={buttonStyles2000s.default}
+              >
+                Conservar este
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <>
+          <span
+            className="flex-1 text-[10px] font-black uppercase italic"
+            style={{ color: colors2000s.text.disabled }}
+          >
+            Cerrado
+          </span>
+          <button
+            type="button"
+            aria-label={`Abrir ${label}`}
+            onClick={() => onChange([{ open: '09:00', close: '18:00' }])}
+            className="px-3 py-2 text-[9px] font-black uppercase tracking-widest transition-all active:scale-95"
+            style={buttonStyles2000s.default}
+          >
+            Abrir
+          </button>
+        </>
+      )}
+    </div>
+  )
 }
 
 const DepositRuleInput: React.FC<{

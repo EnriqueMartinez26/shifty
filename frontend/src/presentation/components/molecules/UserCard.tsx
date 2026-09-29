@@ -10,9 +10,11 @@ interface UserCardProps {
   user: User
   onEdit: (user: User) => void
   onDelete: (id: string) => void
+  /** Mostrar "Eliminar" (baja logica); lo decide `canDeactivateUser`. */
+  canDelete: boolean
 }
 
-export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) => {
+export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete, canDelete }) => {
   const isAdmin = user.role.isAdmin()
 
   const getInitials = (name: string) => {
@@ -126,7 +128,7 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
       </div>
 
       {/* Outlined Action Buttons in Footer */}
-      <div className="grid grid-cols-2 gap-3 pt-4 mt-4">
+      <div className={`grid ${canDelete ? 'grid-cols-2' : 'grid-cols-1'} gap-3 pt-4 mt-4`}>
         <button
           onClick={() => onEdit(user)}
           className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
@@ -134,13 +136,15 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete }) =>
         >
           <Edit2 size={14} /> Editar
         </button>
-        <button
-          onClick={() => onDelete(user.id)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-          style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
-        >
-          <Trash2 size={14} /> Eliminar
-        </button>
+        {canDelete && (
+          <button
+            onClick={() => onDelete(user.id)}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+          >
+            <Trash2 size={14} /> Eliminar
+          </button>
+        )}
       </div>
     </div>
   )

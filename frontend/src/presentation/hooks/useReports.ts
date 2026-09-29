@@ -4,6 +4,7 @@ import {
   reportsService,
   type ExportedReport,
   type ProfessionalReports,
+  type ReportDetailPage,
   type ReportExportFormat,
   type ReportSummary,
   type ReportTrend
@@ -11,11 +12,25 @@ import {
 
 export type { ReportExportFormat }
 
-export const useReportSummary = (fromDate: string, toDate: string, enabled = true) => {
+/**
+ * Sin `page` el backend usa su default (el Dashboard). La clave lleva SIEMPRE
+ * limit y offset: sin eso, la pagina de Reportes y el Dashboard compartirian
+ * cache con detalles de distinto largo para el mismo rango.
+ */
+export const useReportSummary = (
+  fromDate: string,
+  toDate: string,
+  enabled = true,
+  page?: ReportDetailPage
+) => {
   return useQuery({
-    queryKey: ['reports-summary', fromDate, toDate],
+    queryKey: ['reports-summary', fromDate, toDate, page?.limit ?? null, page?.offset ?? 0],
     enabled: Boolean(fromDate && toDate && enabled),
-    queryFn: (): Promise<ReportSummary> => reportsService.getSummary(fromDate, toDate)
+    // Solo entre paginas del MISMO rango: con otro rango, los datos viejos
+    // pasaban por actuales sin spinner.
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[1] === fromDate && prevQuery.queryKey[2] === toDate ? prev : undefined,
+    queryFn: (): Promise<ReportSummary> => reportsService.getSummary(fromDate, toDate, page)
   })
 }
 
