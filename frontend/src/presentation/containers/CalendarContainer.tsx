@@ -1317,11 +1317,13 @@ export const CalendarContainer: React.FC = () => {
         />
       )}
 
-      <NewAppointmentModal
-        isOpen={isNewAppointmentOpen}
-        onClose={() => setIsNewAppointmentOpen(false)}
-        defaultDate={selectedDate}
-      />
+      {isNewAppointmentOpen && (
+        <NewAppointmentModal
+          onClose={() => setIsNewAppointmentOpen(false)}
+          defaultDate={selectedDate}
+          isProfessional={user?.role === ROLE_PROFESSIONAL}
+        />
+      )}
     </div>
   )
 }

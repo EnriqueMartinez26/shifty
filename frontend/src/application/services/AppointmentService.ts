@@ -2,11 +2,11 @@ import { BaseService } from './BaseService'
 import type { Appointment } from '../../domain/entities/Appointment'
 import type {
   AppointmentRange,
+  CreateBookingInput,
   IBookingRepository
 } from '../../domain/repositories/IBookingRepository'
 import apiClient from '../../infrastructure/http/client'
 import { HttpBookingRepository } from '../../infrastructure/repositories/HttpBookingRepository'
-import type { CreateBookingRequestDTO } from '../dtos/BookingDTO'
 
 /**
  * Service to manage internal Appointment operations.
@@ -39,14 +39,10 @@ export class AppointmentService extends BaseService<Appointment> {
    * Books a new appointment from the internal administrative panel.
    *
    * @param data Raw booking parameters.
-   * @returns A promise that resolves to the booked Appointment entity.
+   * @returns A promise that resolves to the public_id of the new appointment.
    */
-  async bookAppointment(data: CreateBookingRequestDTO): Promise<Appointment> {
-    return await this.execute(async () => {
-      return await this.repository.create({
-        ...data
-      })
-    }, 'bookAppointment')
+  async bookAppointment(data: CreateBookingInput): Promise<string> {
+    return await this.execute(() => this.repository.create(data), 'bookAppointment')
   }
 
   /**

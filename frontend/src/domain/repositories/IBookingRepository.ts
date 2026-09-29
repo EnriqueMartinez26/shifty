@@ -1,13 +1,12 @@
 import { Appointment } from '../entities/Appointment'
 
 /**
- * Datos para crear un turno. Vive en el dominio (no en application) para que el
- * puerto IBookingRepository no dependa de una capa externa: la regla de
- * dependencias apunta hacia adentro. La capa de aplicacion lo reexporta como
- * CreateBookingRequestDTO por compatibilidad.
+ * Alta de un turno para un cliente desde el panel (POST /appointments/, FF-04).
+ * Vive en el dominio para que el puerto no dependa de una capa externa.
+ * `idempotency_key` es obligatoria: la genera quien arma el formulario, que es
+ * el unico que sabe si un envio es un reintento del mismo turno.
  */
 export interface CreateBookingInput {
-  store_public_id?: string
   service_id: string
   staff_id?: string
   starts_at: string
@@ -15,7 +14,7 @@ export interface CreateBookingInput {
   client_email?: string
   client_phone: string
   notes?: string
-  idempotency_key?: string
+  idempotency_key: string
 }
 
 /**
@@ -30,7 +29,8 @@ export interface AppointmentRange {
 
 export interface IBookingRepository {
   searchByDateRange(fromDate: string, toDate: string, pageSize?: number): Promise<AppointmentRange>
-  create(payload: CreateBookingInput): Promise<Appointment>
+  /** Devuelve el `public_id` del turno creado. */
+  create(payload: CreateBookingInput): Promise<string>
   confirm(id: string): Promise<void>
   complete(id: string): Promise<void>
   cancel(id: string): Promise<void>
