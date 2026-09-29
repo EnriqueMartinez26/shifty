@@ -1,4 +1,5 @@
-import apiClient from '@infrastructure/http/client'
+import apiClient, { refreshSession as refreshCoordinated } from '@infrastructure/http/client'
+import type { RefreshResult } from '@infrastructure/http/sessionSync'
 
 export interface AuthenticatedUser {
   email: string
@@ -52,10 +53,15 @@ class AuthService {
     return data
   }
 
-  /** Rehidrata el access token desde la cookie HttpOnly de refresh. */
-  async refreshSession(): Promise<LoginResponse> {
-    const { data } = await apiClient.post<LoginResponse>('/auth/refresh')
-    return data
+  /**
+   * Rehidrata el access token desde la cookie HttpOnly de refresh. Pasa por el
+   * refresh coordinado del cliente HTTP (POST `/auth/refresh` en client.ts):
+   * uno por vez en todas las pestanas y sin cerrar la sesion por una falla
+   * transitoria (F4-01, F4-02; D-20260928-02/03). Antes hacia su propio POST y
+   * con `StrictMode` salian dos, que el backend toma como reuso.
+   */
+  refreshSession(): Promise<RefreshResult> {
+    return refreshCoordinated()
   }
 
   /** Revoca la sesion en el servidor y limpia la cookie de refresh. */

@@ -1,8 +1,19 @@
 const mockRequestUse = jest.fn()
 const mockResponseUse = jest.fn()
 const mockApiRequest = jest.fn()
+// El refresh sale por apiClient.post('/auth/refresh') (sessionSync.ts). En
+// estos tests no hay sesion: por defecto responde 401, sesion terminada.
+const respuestaRefresh401 = {
+  response: {
+    status: 401,
+    data: { success: false, error_code: 'AUTH_REQUIRED', message: 'Sin sesion' }
+  },
+  message: 'HTTP 401'
+}
+const mockApiPost = jest.fn((): Promise<unknown> => Promise.reject(respuestaRefresh401))
 const mockAxiosCreate = jest.fn(() => ({
   request: mockApiRequest,
+  post: mockApiPost,
   interceptors: {
     request: {
       use: mockRequestUse
@@ -12,16 +23,10 @@ const mockAxiosCreate = jest.fn(() => ({
     }
   }
 }))
-// El interceptor de 401 intenta una rehidratacion via POST /auth/refresh; en
-// estos tests no hay sesion, asi que el refresh "falla" y el flujo debe caer
-// al error normalizado original.
-const mockAxiosPost = jest.fn((): Promise<unknown> => Promise.reject(new Error('sin sesion')))
-
 jest.mock('axios', () => ({
   __esModule: true,
   default: {
-    create: mockAxiosCreate,
-    post: mockAxiosPost
+    create: mockAxiosCreate
   }
 }))
 
@@ -73,7 +78,7 @@ describe('api client module wiring', () => {
     mockRequestUse.mockClear()
     mockResponseUse.mockClear()
     mockAxiosCreate.mockClear()
-    mockAxiosPost.mockClear()
+    mockApiPost.mockClear()
   })
 
   it('registers axios interceptors, attaches the auth token, and normalizes auth failures', async () => {
@@ -114,8 +119,10 @@ describe('api client module wiring', () => {
       data: { ok: true }
     })
 
+    // El request salio con el token vigente: el 401 obliga a refrescar.
     await expect(
       errorHandler({
+        config: { headers: { Authorization: 'Bearer token-123' } },
         response: {
           status: 401,
           data: {
@@ -204,13 +211,14 @@ describe('rehidratacion ante un 401', () => {
   beforeEach(() => {
     jest.resetModules()
     mockResponseUse.mockClear()
-    mockAxiosPost.mockReset()
+    mockApiPost.mockReset()
+    mockApiPost.mockImplementation(() => Promise.reject(respuestaRefresh401))
     mockApiRequest.mockReset()
   })
 
   it('refresca una vez y reintenta el request original con el token nuevo', async () => {
     const nuevoAcceso = 'acceso-rehidratado'
-    mockAxiosPost.mockResolvedValue({ data: { access_token: nuevoAcceso } })
+    mockApiPost.mockResolvedValue({ data: { access_token: nuevoAcceso } })
     mockApiRequest.mockResolvedValue({ data: { ok: true } })
     const { clientModule, errorHandler } = await cargarCliente()
 
@@ -221,9 +229,7 @@ describe('rehidratacion ante un 401', () => {
     })
 
     expect(resultado).toEqual({ data: { ok: true } })
-    expect(mockAxiosPost).toHaveBeenCalledWith('http://test-api/auth/refresh', undefined, {
-      withCredentials: true
-    })
+    expect(mockApiPost).toHaveBeenCalledWith('/auth/refresh')
     expect(mockApiRequest).toHaveBeenCalledWith({
       url: '/appointments',
       __shiftyRetried: true,
@@ -234,7 +240,7 @@ describe('rehidratacion ante un 401', () => {
 
   it('acepta el token dentro del envelope data de la respuesta de refresh', async () => {
     const nuevoAcceso = 'acceso-en-envelope'
-    mockAxiosPost.mockResolvedValue({ data: { data: { access_token: nuevoAcceso } } })
+    mockApiPost.mockResolvedValue({ data: { data: { access_token: nuevoAcceso } } })
     mockApiRequest.mockResolvedValue({ data: {} })
     const { clientModule, errorHandler } = await cargarCliente()
 
@@ -254,7 +260,7 @@ describe('rehidratacion ante un 401', () => {
 
   it('varios 401 a la vez comparten un solo refresh (single-flight)', async () => {
     let resolverRefresh: (value: unknown) => void = () => undefined
-    mockAxiosPost.mockReturnValue(
+    mockApiPost.mockReturnValue(
       new Promise((resolve) => {
         resolverRefresh = resolve
       })
@@ -267,33 +273,12 @@ describe('rehidratacion ante un 401', () => {
     resolverRefresh({ data: { access_token: 'compartido' } })
     await Promise.all([primero, segundo])
 
-    expect(mockAxiosPost).toHaveBeenCalledTimes(1)
+    expect(mockApiPost).toHaveBeenCalledTimes(1)
     expect(mockApiRequest).toHaveBeenCalledTimes(2)
   })
 
   it('un refresh sin token no reintenta y avisa sesion expirada', async () => {
-    mockAxiosPost.mockResolvedValue({ data: {} })
-    const { clientModule, errorHandler } = await cargarCliente()
-    clientModule.setAuthToken('acceso-viejo')
-    const avisos: Event[] = []
-    const escucha = (evento: Event) => avisos.push(evento)
-    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
-
-    try {
-      await expect(
-        errorHandler({ config: { url: '/appointments' }, response: respuesta401 })
-      ).rejects.toBeTruthy()
-
-      expect(mockApiRequest).not.toHaveBeenCalled()
-      expect(avisos).toHaveLength(1)
-      expect(clientModule.getAuthToken()).toBeNull()
-    } finally {
-      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
-    }
-  })
-
-  it('un refresh que falla limpia el token y un 401 crudo tambien avisa', async () => {
-    mockAxiosPost.mockRejectedValue(new Error('cookie vencida'))
+    mockApiPost.mockResolvedValue({ data: {} })
     const { clientModule, errorHandler } = await cargarCliente()
     clientModule.setAuthToken('acceso-viejo')
     const avisos: Event[] = []
@@ -303,9 +288,8 @@ describe('rehidratacion ante un 401', () => {
     try {
       await expect(
         errorHandler({
-          config: { url: '/appointments' },
-          response: { status: 401, data: 'Unauthorized' },
-          message: 'HTTP 401'
+          config: { url: '/appointments', headers: { Authorization: 'Bearer acceso-viejo' } },
+          response: respuesta401
         })
       ).rejects.toBeTruthy()
 
@@ -317,14 +301,106 @@ describe('rehidratacion ante un 401', () => {
     }
   })
 
-  it('el 401 del propio refresh no dispara otro refresh', async () => {
-    const { errorHandler } = await cargarCliente()
+  // 2026-09-28 (F4-02): cualquier falla del refresh limpiaba el token y
+  // cerraba la sesion, tambien un 503 o un corte de red. Ahora solo un
+  // 401/403 del refresh la termina; lo transitorio la conserva.
+  it('un refresh con 401 limpia el token y un 401 crudo tambien avisa', async () => {
+    const { clientModule, errorHandler } = await cargarCliente()
+    clientModule.setAuthToken('acceso-viejo')
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
 
-    await expect(
-      errorHandler({ config: { url: 'http://test-api/auth/refresh' }, response: respuesta401 })
-    ).rejects.toBeTruthy()
+    try {
+      await expect(
+        errorHandler({
+          config: { url: '/appointments', headers: { Authorization: 'Bearer acceso-viejo' } },
+          response: { status: 401, data: 'Unauthorized' },
+          message: 'HTTP 401'
+        })
+      ).rejects.toBeTruthy()
 
-    expect(mockAxiosPost).not.toHaveBeenCalled()
+      expect(mockApiPost).toHaveBeenCalledTimes(1)
+      expect(mockApiRequest).not.toHaveBeenCalled()
+      expect(avisos).toHaveLength(1)
+      expect(clientModule.getAuthToken()).toBeNull()
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
+  })
+
+  it('un refresh con 503 conserva el token, no avisa sesion expirada y devuelve el 503', async () => {
+    const { ServiceUnavailableError } = await import('@shared/errors')
+    mockApiPost.mockImplementation(() =>
+      Promise.reject({
+        response: {
+          status: 503,
+          headers: { 'retry-after': '0' },
+          data: { success: false, error_code: 'RATE_LIMIT_UNAVAILABLE', message: 'x' }
+        },
+        message: 'HTTP 503'
+      })
+    )
+    const { clientModule, errorHandler } = await cargarCliente()
+    clientModule.setAuthToken('acceso-viejo')
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+
+    try {
+      const error = await errorHandler({
+        config: { url: '/appointments', headers: { Authorization: 'Bearer acceso-viejo' } },
+        response: respuesta401,
+        message: 'HTTP 401'
+      }).catch((e: unknown) => e)
+
+      expect(error).toBeInstanceOf(ServiceUnavailableError)
+      expect(mockApiPost).toHaveBeenCalledTimes(4)
+      expect(mockApiRequest).not.toHaveBeenCalled()
+      expect(avisos).toHaveLength(0)
+      expect(clientModule.getAuthToken()).toBe('acceso-viejo')
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
+  })
+
+  it('si el token ya se renovo (otra pestana) reintenta con ese, sin otro refresh', async () => {
+    mockApiRequest.mockResolvedValue({ data: {} })
+    const { clientModule, errorHandler } = await cargarCliente()
+    clientModule.setAuthToken('acceso-nuevo')
+
+    await errorHandler({
+      config: { url: '/services', headers: { Authorization: 'Bearer acceso-viejo' } },
+      response: respuesta401
+    })
+
+    expect(mockApiPost).not.toHaveBeenCalled()
+    expect(mockApiRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { Authorization: 'Bearer acceso-nuevo' } })
+    )
+  })
+
+  // 4R 2026-09-28: el 401 del refresh avisaba sesion expirada dos veces (el
+  // request anidado de /auth/refresh y el 401 original). Ahora el anidado calla
+  // y el aviso sale una sola vez, del request original.
+  it('el 401 del propio refresh no dispara otro refresh ni avisa por su cuenta', async () => {
+    const { clientModule, errorHandler } = await cargarCliente()
+    clientModule.setAuthToken('acceso-vigente')
+    const avisos: Event[] = []
+    const escucha = (evento: Event) => avisos.push(evento)
+    window.addEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+
+    try {
+      await expect(
+        errorHandler({ config: { url: 'http://test-api/auth/refresh' }, response: respuesta401 })
+      ).rejects.toBeTruthy()
+
+      expect(mockApiPost).not.toHaveBeenCalled()
+      expect(avisos).toHaveLength(0)
+      expect(clientModule.getAuthToken()).toBe('acceso-vigente')
+    } finally {
+      window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)
+    }
   })
 
   it('un error que no es 401 se rechaza sin refrescar ni avisar', async () => {
@@ -344,7 +420,7 @@ describe('rehidratacion ante un 401', () => {
         })
       ).rejects.toBeTruthy()
 
-      expect(mockAxiosPost).not.toHaveBeenCalled()
+      expect(mockApiPost).not.toHaveBeenCalled()
       expect(avisos).toHaveLength(0)
     } finally {
       window.removeEventListener(clientModule.SESSION_EXPIRED_EVENT, escucha)

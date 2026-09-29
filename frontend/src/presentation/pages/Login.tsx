@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 
 import { mdiShieldAlert, mdiStore } from '@mdi/js'
 import { ArrowRight } from 'lucide-react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useLocation, useNavigate } from 'react-router'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
@@ -10,15 +10,21 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { Icon2000s } from '../components/legacy/Icon2000s'
 import { getDefaultAppRoute } from '../context/roles'
 import { useLogin } from '../hooks/useLogin'
+import { safeReturnPath } from '../lib/returnPath'
 import { create2000sInputStyle } from '../lib/surfaceStyles'
 
 const inputStyle = create2000sInputStyle()
+
+/** `from` que deja `ProtectedRoute` al mandar a login (FF-36). */
+const readFrom = (state: unknown): unknown =>
+  state && typeof state === 'object' ? Reflect.get(state, 'from') : undefined
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
+  const location = useLocation()
   const loginMutation = useLogin()
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -31,9 +37,12 @@ const LoginPage: React.FC = () => {
         email: normalizedEmail,
         password
       })
-      void navigate(getDefaultAppRoute(currentUser.role, currentUser.is_global_admin), {
-        replace: true
-      })
+      // Vuelve adonde estaba solo si es interna y el rol la puede abrir;
+      // si no, a la ruta por defecto del rol (D-20260928-06).
+      const target =
+        safeReturnPath(readFrom(location.state), currentUser.role, currentUser.is_global_admin) ??
+        getDefaultAppRoute(currentUser.role, currentUser.is_global_admin)
+      void navigate(target, { replace: true })
     } catch (error: unknown) {
       setError(getErrorMessage(error, 'Error al iniciar sesión'))
     }
