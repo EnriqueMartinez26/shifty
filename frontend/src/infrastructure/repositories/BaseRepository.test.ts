@@ -37,16 +37,20 @@ describe('BaseRepository', () => {
     expect(repository.mockFindAll).toHaveBeenCalledTimes(1)
   })
 
-  it('should wrap unhandled errors into an InternalServerError', async () => {
+  it('envuelve lo imprevisto en InternalServerError con mensaje neutro y el detalle en context', async () => {
     repository.mockFindAll.mockRejectedValue(new Error('Connection timed out'))
 
     await expect(repository.findAll()).rejects.toThrow(InternalServerError)
-    await expect(repository.findAll()).rejects.toThrow(
-      "Database operation 'findAll' failed: Connection timed out"
-    )
+    await expect(repository.findAll()).rejects.toMatchObject({
+      message: 'No se pudo completar la operación.',
+      context: {
+        operation: 'findAll',
+        technicalMessage: "Database operation 'findAll' failed: Connection timed out"
+      }
+    })
   })
 
-  it('traduce un error de dominio a ValidationError con su code, sin cambiar el mensaje', async () => {
+  it('traduce un error de dominio a ValidationError con su code y su propio mensaje', async () => {
     repository.mockFindAll.mockRejectedValue(
       new InvalidValueError('INVALID_EMAIL', 'Email inválido: x')
     )
@@ -55,8 +59,12 @@ describe('BaseRepository', () => {
 
     expect(error).toBeInstanceOf(ValidationError)
     expect(error).toMatchObject({
-      message: "Database operation 'findAll' failed: Email inválido: x",
-      context: { code: 'INVALID_EMAIL', operation: 'findAll' }
+      message: 'Email inválido: x',
+      context: {
+        code: 'INVALID_EMAIL',
+        operation: 'findAll',
+        technicalMessage: "Database operation 'findAll' failed: Email inválido: x"
+      }
     })
   })
 })

@@ -66,21 +66,26 @@ export abstract class BaseRepository<
   }
 }
 
+const UNEXPECTED_FAILURE_MESSAGE = 'No se pudo completar la operación.'
+
 /**
  * Traduce lo que falle abajo a un ApplicationError tipado. Un DomainError (un
  * value object que rechazo un dato) sale como ValidationError con su `code`
- * en el contexto; el mensaje es el mismo que antes para no cambiar lo que ve
- * el usuario. Lo demas imprevisto queda como InternalServerError. Exportada
- * para los repositorios que no son CRUD generico (HttpBookingRepository).
+ * y su propio mensaje, que es texto del front pensado para el usuario. Lo
+ * demas imprevisto queda como InternalServerError con un mensaje neutro. El
+ * detalle tecnico ("Database operation 'x' failed: ...") viaja en
+ * `context.technicalMessage` para depurar, nunca como `message` (regla 20).
+ * Exportada para los repositorios que no son CRUD generico
+ * (HttpBookingRepository).
  */
 export function translateRepositoryError(operation: string, error: unknown): never {
   if (error instanceof ApplicationError) {
     throw error
   }
   const msg = error instanceof Error ? error.message : 'Unknown repository error'
-  const message = `Database operation '${operation}' failed: ${msg}`
+  const technicalMessage = `Database operation '${operation}' failed: ${msg}`
   if (error instanceof DomainError) {
-    throw new ValidationError(message, { code: error.code, operation })
+    throw new ValidationError(error.message, { code: error.code, operation, technicalMessage })
   }
-  throw new InternalServerError(message)
+  throw new InternalServerError(UNEXPECTED_FAILURE_MESSAGE, { operation, technicalMessage })
 }

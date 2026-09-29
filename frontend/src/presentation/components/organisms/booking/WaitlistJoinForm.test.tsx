@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { ConflictError } from '@shared/errors'
+
 import { dayWindow, WaitlistJoinForm } from './WaitlistJoinForm'
 
 const mockJoin = jest.fn()
@@ -54,7 +56,12 @@ describe('WaitlistJoinForm', () => {
   })
 
   it('muestra el error del backend (por ejemplo, ya anotado)', async () => {
-    mockJoin.mockRejectedValue(new Error('Ya estas anotado en la lista de espera'))
+    mockJoin.mockRejectedValue(
+      new ConflictError('Ya estas anotado en la lista de espera', {
+        errorCode: 'WAITLIST_DUPLICATE',
+        statusCode: 409
+      })
+    )
     render(
       <WaitlistJoinForm
         storePublicId="store-1"

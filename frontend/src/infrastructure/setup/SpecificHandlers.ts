@@ -7,9 +7,15 @@ import {
   ForbiddenError,
   ConflictError,
   InternalServerError,
-  NetworkError
+  NetworkError,
+  PaymentRequiredError,
+  RateLimitError,
+  ServiceUnavailableError,
+  type ApplicationError
 } from '@shared/errors'
+import { ERROR_CODE_MESSAGES } from '@shared/errors/errorCodes'
 import { ErrorHandler } from '@shared/errors/ErrorHandler'
+import { getErrorCode } from '@shared/errors/getErrorMessage'
 
 // Helper simulado para Toasts/Notificaciones en UI
 const showToast = (message: string, type: 'error' | 'warning' | 'info') => {
@@ -96,5 +102,21 @@ export class NetworkErrorHandler extends ErrorHandler {
 
   public async handle(_error: NetworkError): Promise<void> {
     showToast('Sin conexión a Internet. Verifica tu conectividad.', 'warning')
+  }
+}
+
+/** 402, 429 y 502/503: texto de la tabla de codigos o uno neutro, nunca el del servidor. */
+export class TransientErrorHandler extends ErrorHandler {
+  public canHandle(error: unknown): boolean {
+    return (
+      error instanceof PaymentRequiredError ||
+      error instanceof RateLimitError ||
+      error instanceof ServiceUnavailableError
+    )
+  }
+
+  public async handle(error: ApplicationError): Promise<void> {
+    const fallback = 'No se pudo completar la acción. Probá de nuevo en unos minutos.'
+    showToast(ERROR_CODE_MESSAGES.get(getErrorCode(error) ?? '') ?? fallback, 'warning')
   }
 }

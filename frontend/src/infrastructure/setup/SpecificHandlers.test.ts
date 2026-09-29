@@ -1,6 +1,7 @@
+import { PaymentRequiredError, RateLimitError, ServiceUnavailableError } from '@shared/errors'
 import { ForbiddenError } from '@shared/errors/ForbiddenError'
 
-import { ForbiddenErrorHandler } from './SpecificHandlers'
+import { ForbiddenErrorHandler, TransientErrorHandler } from './SpecificHandlers'
 
 // Solo lo usa el handler de 401; el cliente real arrastra `import.meta`.
 jest.mock('@infrastructure/http/client', () => ({ setAuthToken: jest.fn() }))
@@ -42,5 +43,28 @@ describe('ForbiddenErrorHandler', () => {
     expect(warn).toHaveBeenCalledWith(
       '[Toast ERROR]: No tienes permisos suficientes para realizar esta acción.'
     )
+  })
+})
+
+describe('TransientErrorHandler (402, 429, 502/503)', () => {
+  it('avisa con el texto neutro, nunca con el del servidor', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {})
+    const crudo = 'upstream: pool exhausted'
+    const handler = new TransientErrorHandler()
+    const errores = [
+      new PaymentRequiredError(crudo, { errorCode: 'SUBSCRIPTION_SUSPENDED' }),
+      new RateLimitError(crudo),
+      new ServiceUnavailableError(crudo)
+    ]
+
+    for (const error of errores) {
+      expect(handler.canHandle(error)).toBe(true)
+      await handler.handle(error)
+    }
+
+    const avisos = warn.mock.calls.map(([texto]) => String(texto))
+    expect(avisos[0]).toContain('Tu suscripción está suspendida')
+    expect(avisos.join()).not.toContain(crudo)
+    warn.mockRestore()
   })
 })
