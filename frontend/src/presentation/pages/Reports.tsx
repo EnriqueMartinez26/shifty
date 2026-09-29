@@ -27,6 +27,83 @@ const toInputDate = (date: Date) => formatArgentinaDate(date.toISOString())
 /** Turnos por pagina del detalle (el backend acepta hasta 5000). */
 const REPORT_PAGE_SIZE = 100
 
+interface ReportRangeHeaderProps {
+  fromDate: string
+  toDate: string
+  onFromChange: (value: string) => void
+  onToChange: (value: string) => void
+}
+
+/**
+ * Titulo y rango del reporte. Se muestra tambien cuando el rango falla: la
+ * pantalla de error lo escondia y con un rango invalido (400, mas de 370 dias
+ * o desde > hasta) no habia forma de corregirlo (FF-19).
+ */
+const ReportRangeHeader: React.FC<ReportRangeHeaderProps> = ({
+  fromDate,
+  toDate,
+  onFromChange,
+  onToChange
+}) => (
+  <div
+    className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-lg"
+    style={{
+      background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
+      border: `1px solid ${colors2000s.border.default}`,
+      boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
+    }}
+  >
+    <div>
+      <h2
+        className="text-2xl font-black uppercase tracking-tight"
+        style={{ color: colors2000s.text.primary }}
+      >
+        Reportes
+      </h2>
+      <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
+        Analiza turnos, clientes, servicios y deuda.
+      </p>
+    </div>
+
+    <div className="flex flex-wrap gap-3 items-end">
+      <div>
+        <label
+          htmlFor="reports-from-date"
+          className="block text-[10px] font-black uppercase tracking-widest mb-1"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Desde
+        </label>
+        <input
+          id="reports-from-date"
+          type="date"
+          value={fromDate}
+          onChange={(e) => onFromChange(e.target.value)}
+          className="rounded-xl px-3 py-2 text-xs font-black outline-none"
+          style={create2000sInputStyle()}
+        />
+      </div>
+      <div>
+        <label
+          htmlFor="reports-to-date"
+          className="block text-[10px] font-black uppercase tracking-widest mb-1"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Hasta
+        </label>
+        <input
+          id="reports-to-date"
+          type="date"
+          value={toDate}
+          onChange={(e) => onToChange(e.target.value)}
+          className="rounded-xl px-3 py-2 text-xs font-black outline-none"
+          style={create2000sInputStyle()}
+        />
+      </div>
+    </div>
+  </div>
+)
+
 const ReportsPage: React.FC = () => {
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
@@ -97,7 +174,6 @@ const ReportsPage: React.FC = () => {
     }
   }
 
-  const inputStyle = create2000sInputStyle()
   const cardStyle = create2000sPanelStyle()
 
   if (summaryQuery.isLoading) {
@@ -112,26 +188,27 @@ const ReportsPage: React.FC = () => {
     )
   }
 
+  const rangeHeader = (
+    <ReportRangeHeader
+      fromDate={fromDate}
+      toDate={toDate}
+      onFromChange={(value) => {
+        setFromDate(value)
+        setOffset(0)
+      }}
+      onToChange={(value) => {
+        setToDate(value)
+        setOffset(0)
+      }}
+    />
+  )
+
   if (summaryQuery.isError && !summary) {
     return (
       <div className="space-y-8 animate-in fade-in duration-500">
+        {rangeHeader}
         <div
-          className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-lg"
-          style={cardStyle}
-        >
-          <div>
-            <h2
-              className="text-2xl font-black uppercase tracking-tight"
-              style={{ color: colors2000s.text.primary }}
-            >
-              Reportes
-            </h2>
-            <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-              Analiza turnos e ingresos y exporta resultados.
-            </p>
-          </div>
-        </div>
-        <div
+          role="alert"
           className="text-sm p-4 rounded-lg font-bold"
           style={{
             background: colors2000s.status.danger.bg,
@@ -140,7 +217,8 @@ const ReportsPage: React.FC = () => {
             boxShadow: colors2000s.shadows.insetDark
           }}
         >
-          No se pudo cargar el reporte para el rango seleccionado.
+          No se pudo cargar el reporte para el rango seleccionado. Revisá que &quot;Desde&quot; sea
+          anterior a &quot;Hasta&quot; o probá con un rango más corto.
         </div>
       </div>
     )
@@ -148,65 +226,7 @@ const ReportsPage: React.FC = () => {
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
-      <div
-        className="flex flex-wrap gap-4 items-end justify-between p-6 rounded-lg"
-        style={{
-          background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerMedium}`
-        }}
-      >
-        <div>
-          <h2
-            className="text-2xl font-black uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
-          >
-            Reportes
-          </h2>
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Analiza turnos, clientes, servicios y deuda.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-3 items-end">
-          <div>
-            <label
-              className="block text-[10px] font-black uppercase tracking-widest mb-1"
-              style={{ color: colors2000s.text.secondary }}
-            >
-              Desde
-            </label>
-            <input
-              type="date"
-              value={fromDate}
-              onChange={(e) => {
-                setFromDate(e.target.value)
-                setOffset(0)
-              }}
-              className="rounded-xl px-3 py-2 text-xs font-black outline-none"
-              style={inputStyle}
-            />
-          </div>
-          <div>
-            <label
-              className="block text-[10px] font-black uppercase tracking-widest mb-1"
-              style={{ color: colors2000s.text.secondary }}
-            >
-              Hasta
-            </label>
-            <input
-              type="date"
-              value={toDate}
-              onChange={(e) => {
-                setToDate(e.target.value)
-                setOffset(0)
-              }}
-              className="rounded-xl px-3 py-2 text-xs font-black outline-none"
-              style={inputStyle}
-            />
-          </div>
-        </div>
-      </div>
+      {rangeHeader}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-6">
         <div className="p-5 rounded-md" style={cardStyle}>

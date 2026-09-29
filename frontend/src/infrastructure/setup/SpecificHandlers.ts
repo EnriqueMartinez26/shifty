@@ -13,11 +13,43 @@ import {
 } from '@shared/errors'
 import { ERROR_CODE_MESSAGES } from '@shared/errors/errorCodes'
 import { ErrorHandler } from '@shared/errors/ErrorHandler'
-import { getErrorCode } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
 
-// Helper simulado para Toasts/Notificaciones en UI
-const showToast = (message: string, type: 'error' | 'warning' | 'info') => {
-  console.warn(`[Toast ${type.toUpperCase()}]: ${message}`)
+export type ToastKind = 'error' | 'warning' | 'info'
+type ToastSink = (message: string, kind: ToastKind) => void
+
+// Sin renderer conectado (tests, arranque) el aviso queda en consola.
+let toastSink: ToastSink = (message, kind) => {
+  console.warn(`[Toast ${kind.toUpperCase()}]: ${message}`)
+}
+
+/**
+ * Puerto de avisos: main.tsx lo conecta a sonner (FF-17, D-20260928-07).
+ * Infrastructure no importa presentation ni React (regla 25).
+ */
+export const setToastSink = (sink: ToastSink): void => {
+  toastSink = sink
+}
+
+const showToast = (message: string, kind: ToastKind) => toastSink(message, kind)
+
+/**
+ * Texto de la tabla de codigos o el neutro de la pantalla. Un handler global
+ * no sabe en que contexto aparece el error: nunca muestra el texto del
+ * servidor, ni siquiera el de un 4xx (regla 20).
+ */
+const tableMessage = (error: unknown, fallback: string): string =>
+  ERROR_CODE_MESSAGES.get(getErrorCode(error) ?? '') ?? fallback
+
+const SECONDS_PER_MINUTE = 60
+
+/** "Probá de nuevo en 12 s." / "en 10 min." a partir de Retry-After (F4-04). */
+const retryHint = (error: unknown): string => {
+  const seconds = getRetryAfterSeconds(error)
+  if (seconds === undefined) return ''
+  const wait =
+    seconds <= 90 ? `${Math.ceil(seconds)} s` : `${Math.ceil(seconds / SECONDS_PER_MINUTE)} min`
+  return ` Probá de nuevo en ${wait}.`
 }
 
 export class ValidationErrorHandler extends ErrorHandler {
@@ -26,8 +58,7 @@ export class ValidationErrorHandler extends ErrorHandler {
   }
 
   public async handle(error: ValidationError): Promise<void> {
-    const fields = error.context?.fields ? JSON.stringify(error.context.fields) : ''
-    showToast(`Datos incorrectos: ${error.message} ${fields}`, 'error')
+    showToast(tableMessage(error, 'Hay datos incorrectos. Revisalos y volvé a intentar.'), 'error')
   }
 }
 
@@ -37,8 +68,7 @@ export class NotFoundErrorHandler extends ErrorHandler {
   }
 
   public async handle(error: NotFoundError): Promise<void> {
-    console.warn(`[Recurso No Encontrado]: ${error.message}`)
-    showToast(error.message || 'El recurso solicitado no existe.', 'warning')
+    showToast(tableMessage(error, 'Lo que buscabas ya no existe. Actualizá la página.'), 'warning')
   }
 }
 
@@ -83,7 +113,10 @@ export class ConflictErrorHandler extends ErrorHandler {
   }
 
   public async handle(error: ConflictError): Promise<void> {
-    showToast(`Conflicto de datos: ${error.message}`, 'warning')
+    showToast(
+      tableMessage(error, 'Los datos cambiaron mientras trabajabas. Actualizá y volvé a intentar.'),
+      'warning'
+    )
   }
 }
 
@@ -120,6 +153,6 @@ export class TransientErrorHandler extends ErrorHandler {
 
   public async handle(error: ApplicationError): Promise<void> {
     const fallback = 'No se pudo completar la acción. Probá de nuevo en unos minutos.'
-    showToast(ERROR_CODE_MESSAGES.get(getErrorCode(error) ?? '') ?? fallback, 'warning')
+    showToast(`${tableMessage(error, fallback)}${retryHint(error)}`, 'warning')
   }
 }

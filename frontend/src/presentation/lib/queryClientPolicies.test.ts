@@ -12,7 +12,12 @@ import {
   ValidationError
 } from '@shared/errors'
 
-import { refreshSubscriptionOnSuspension, shouldRetryQuery } from './queryClientPolicies'
+import {
+  queryRetryDelay,
+  refreshSubscriptionOnSuspension,
+  shouldNotifyQueryError,
+  shouldRetryQuery
+} from './queryClientPolicies'
 import { STORE_SUBSCRIPTION_QUERY_KEY } from '../hooks/useStores'
 
 // useStores, que define la query key, importa el servicio real, que arrastra el
@@ -39,6 +44,39 @@ describe('shouldRetryQuery', () => {
   ])('reintenta una vez %s', (_caso, error) => {
     expect(shouldRetryQuery(0, error)).toBe(true)
     expect(shouldRetryQuery(1, error)).toBe(false)
+  })
+})
+
+describe('queryRetryDelay (F4-04)', () => {
+  it('respeta el Retry-After del servidor cuando llega', () => {
+    const error = new ServiceUnavailableError('x', { statusCode: 503, retryAfter: 5 })
+
+    expect(queryRetryDelay(0, error)).toBe(5_000)
+  })
+
+  it('acota un Retry-After desmedido', () => {
+    const error = new ServiceUnavailableError('x', { statusCode: 503, retryAfter: 3_600 })
+
+    expect(queryRetryDelay(0, error)).toBe(30_000)
+  })
+
+  it.each([
+    ['sin Retry-After', new ServiceUnavailableError('x', { statusCode: 503 })],
+    ['con un Retry-After ilegible', new ServiceUnavailableError('x', { retryAfter: 'pronto' })],
+    ['ante un error que no vino del cliente HTTP', new Error('x')]
+  ])('%s usa la espera por defecto de react-query', (_caso, error) => {
+    expect(queryRetryDelay(0, error)).toBe(1_000)
+    expect(queryRetryDelay(1, error)).toBe(2_000)
+  })
+})
+
+describe('shouldNotifyQueryError', () => {
+  it('avisa si fallo un refresco con datos ya en pantalla', () => {
+    expect(shouldNotifyQueryError({ state: { data: [] } })).toBe(true)
+  })
+
+  it('no avisa la primera carga: la pantalla ya muestra su propio error', () => {
+    expect(shouldNotifyQueryError({ state: { data: undefined } })).toBe(false)
   })
 })
 

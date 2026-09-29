@@ -6,6 +6,7 @@ import { ServiceMapper } from '../../application/mappers/ServiceMapper'
 import { Service, type ServiceWriteInput } from '../../domain/entities/Service'
 import { QueryOptions } from '../../domain/repositories/IRepository'
 import type { IServiceRepository } from '../../domain/repositories/IServiceRepository'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 export class HttpServiceRepository
   extends BaseRepository<Service, Service, ServiceWriteInput>
@@ -28,10 +29,8 @@ export class HttpServiceRepository
       const { data } = await this.client.get<ServiceResponseDTO>(`/services/${id}`)
       return ServiceMapper.toDomain(data)
     } catch (error: unknown) {
-      const maybeError = error as { response?: { status?: number } }
-      if (maybeError.response?.status === 404) {
-        return null
-      }
+      // El cliente HTTP ya normalizo el 404 (FF-35): no trae `response`.
+      if (error instanceof NotFoundError) return null
       throw error
     }
   }

@@ -8,6 +8,7 @@ import { QueryOptions } from '../../domain/repositories/IRepository'
 import type { IUserRepository, UserListQuery } from '../../domain/repositories/IUserRepository'
 import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 type UserPayloadInput = {
   [K in keyof UserWriteInput]?: UserWriteInput[K] | null
@@ -113,10 +114,8 @@ export class HttpUserRepository
       const { data } = await this.client.get<UserResponseDTO>(`/users/${id}`)
       return UserMapper.toDomain(data)
     } catch (error: unknown) {
-      const maybeError = error as { response?: { status?: number } }
-      if (maybeError.response?.status === 404) {
-        return null
-      }
+      // El cliente HTTP ya normalizo el 404 (FF-35): no trae `response`.
+      if (error instanceof NotFoundError) return null
       throw error
     }
   }

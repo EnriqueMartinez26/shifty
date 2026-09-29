@@ -1,28 +1,82 @@
 import {
+  type ApplicationError,
+  ConflictError,
+  InternalServerError,
+  NetworkError,
+  NotFoundError,
   PaymentRequiredError,
   RateLimitError,
   ServiceUnavailableError,
-  UnauthorizedError
+  UnauthorizedError,
+  ValidationError
 } from '@shared/errors'
+import type { ErrorHandler } from '@shared/errors/ErrorHandler'
 import { ForbiddenError } from '@shared/errors/ForbiddenError'
 
 import {
+  ConflictErrorHandler,
   ForbiddenErrorHandler,
+  InternalServerErrorHandler,
+  NetworkErrorHandler,
+  NotFoundErrorHandler,
+  setToastSink,
   TransientErrorHandler,
-  UnauthorizedErrorHandler
+  UnauthorizedErrorHandler,
+  ValidationErrorHandler
 } from './SpecificHandlers'
 
+/**
+ * 2026-09-28 (FF-17). `showToast` era un `console.warn`: el usuario no veia
+ * ningun aviso de los handlers globales. Ahora escriben en un puerto que
+ * main.tsx conecta a sonner; aca el puerto es un doble.
+ */
+const sink = jest.fn()
+
+beforeEach(() => {
+  sink.mockReset()
+  setToastSink(sink)
+})
+
+const CRUDO = 'sqlalchemy: duplicate key value violates "uq_users_email"'
+
+describe('handlers globales: avisan por el puerto, nunca con el texto del servidor', () => {
+  it.each<[string, ErrorHandler, ApplicationError]>([
+    [
+      'ValidationError',
+      new ValidationErrorHandler(),
+      new ValidationError(CRUDO, {
+        statusCode: 422,
+        errorCode: 'VALIDATION_ERROR',
+        fields: { email: CRUDO }
+      })
+    ],
+    ['NotFoundError', new NotFoundErrorHandler(), new NotFoundError(CRUDO, { statusCode: 404 })],
+    ['ConflictError', new ConflictErrorHandler(), new ConflictError(CRUDO, { statusCode: 409 })],
+    ['InternalServerError', new InternalServerErrorHandler(), new InternalServerError(CRUDO)],
+    ['NetworkError', new NetworkErrorHandler(), new NetworkError(CRUDO)]
+  ])('%s', async (_nombre, handler, error) => {
+    jest.spyOn(console, 'error').mockImplementation(() => {})
+
+    expect(handler.canHandle(error)).toBe(true)
+    await handler.handle(error)
+
+    expect(sink).toHaveBeenCalledTimes(1)
+    const [texto] = sink.mock.calls[0] as [string, string]
+    expect(texto.trim()).not.toBe('')
+    expect(texto).not.toContain('sqlalchemy')
+    jest.restoreAllMocks()
+  })
+
+  it('un codigo conocido usa el texto de la tabla', async () => {
+    await new ConflictErrorHandler().handle(
+      new ConflictError(CRUDO, { errorCode: 'APPOINTMENT_CONFLICT', statusCode: 409 })
+    )
+
+    expect(sink).toHaveBeenCalledWith('Ese horario ya no está disponible. Elegí otro.', 'warning')
+  })
+})
+
 describe('ForbiddenErrorHandler', () => {
-  let warn: jest.SpyInstance
-
-  beforeEach(() => {
-    warn = jest.spyOn(console, 'warn').mockImplementation(() => {})
-  })
-
-  afterEach(() => {
-    warn.mockRestore()
-  })
-
   it('una funcion apagada por feature flag no se anuncia como falta de permisos', async () => {
     // Forma real: FeatureDisabledException -> 403 con error_code FEATURE_DISABLED,
     // que normalizeApiError deja en context.errorCode.
@@ -33,9 +87,7 @@ describe('ForbiddenErrorHandler', () => {
 
     await new ForbiddenErrorHandler().handle(error)
 
-    expect(warn).toHaveBeenCalledWith(
-      '[Toast INFO]: Esta función no está habilitada para tu negocio.'
-    )
+    expect(sink).toHaveBeenCalledWith('Esta función no está habilitada para tu negocio.', 'info')
   })
 
   it('cualquier otro 403 sigue diciendo que faltan permisos', async () => {
@@ -46,15 +98,15 @@ describe('ForbiddenErrorHandler', () => {
 
     await new ForbiddenErrorHandler().handle(error)
 
-    expect(warn).toHaveBeenCalledWith(
-      '[Toast ERROR]: No tienes permisos suficientes para realizar esta acción.'
+    expect(sink).toHaveBeenCalledWith(
+      'No tienes permisos suficientes para realizar esta acción.',
+      'error'
     )
   })
 })
 
 describe('TransientErrorHandler (402, 429, 502/503)', () => {
   it('avisa con el texto neutro, nunca con el del servidor', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {})
     const crudo = 'upstream: pool exhausted'
     const handler = new TransientErrorHandler()
     const errores = [
@@ -68,10 +120,32 @@ describe('TransientErrorHandler (402, 429, 502/503)', () => {
       await handler.handle(error)
     }
 
-    const avisos = warn.mock.calls.map(([texto]) => String(texto))
+    const avisos = sink.mock.calls.map(([texto]) => String(texto))
     expect(avisos[0]).toContain('Tu suscripción está suspendida')
     expect(avisos.join()).not.toContain(crudo)
-    warn.mockRestore()
+  })
+
+  it('con Retry-After dice en cuanto probar de nuevo (F4-04)', async () => {
+    await new TransientErrorHandler().handle(
+      new RateLimitError('x', { errorCode: 'RATE_LIMITED', retryAfter: 12 })
+    )
+
+    expect(sink).toHaveBeenCalledWith(expect.stringContaining('Probá de nuevo en 12 s.'), 'warning')
+  })
+
+  it('un Retry-After largo se dice en minutos', async () => {
+    await new TransientErrorHandler().handle(new ServiceUnavailableError('x', { retryAfter: 600 }))
+
+    expect(sink).toHaveBeenCalledWith(
+      expect.stringContaining('Probá de nuevo en 10 min.'),
+      'warning'
+    )
+  })
+
+  it('sin Retry-After no inventa una espera', async () => {
+    await new TransientErrorHandler().handle(new RateLimitError('x'))
+
+    expect(sink).toHaveBeenCalledWith(expect.not.stringContaining(' s.'), 'warning')
   })
 })
 
@@ -83,7 +157,6 @@ describe('TransientErrorHandler (402, 429, 502/503)', () => {
  */
 describe('UnauthorizedErrorHandler', () => {
   it('solo avisa: no toca el perfil guardado ni recarga la pagina', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {})
     localStorage.setItem('shifty_user', '{"public_id":"usr-a"}')
     const antes = window.location.href
     const handler = new UnauthorizedErrorHandler()
@@ -91,10 +164,9 @@ describe('UnauthorizedErrorHandler', () => {
     expect(handler.canHandle(new UnauthorizedError('x'))).toBe(true)
     await handler.handle(new UnauthorizedError('x'))
 
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('Sesión expirada'))
+    expect(sink).toHaveBeenCalledWith(expect.stringContaining('Sesión expirada'), 'info')
     expect(localStorage.getItem('shifty_user')).not.toBeNull()
     expect(window.location.href).toBe(antes)
-    warn.mockRestore()
     localStorage.clear()
   })
 })

@@ -1,6 +1,8 @@
 import type { AxiosInstance } from 'axios'
 
 import { HttpStaffRepository } from './HttpStaffRepository'
+import { ConflictError } from '../../shared/errors/ConflictError'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 const staffDto = {
   public_id: 'staff-1',
@@ -28,5 +30,33 @@ describe('HttpStaffRepository.update', () => {
       service_ids: ['s1']
     })
     expect(updated.id).toBe('staff-1')
+  })
+})
+
+/**
+ * FF-35 (2026-09-28): el cliente HTTP ya entrega un 404 como NotFoundError, sin
+ * `response`; la rama `response?.status === 404` nunca corria y el 404 salia
+ * como error en vez de `null`.
+ */
+describe('HttpStaffRepository.findById ante un 404', () => {
+  const setup = () => {
+    const get = jest.fn()
+    const client = { get, post: jest.fn(), patch: jest.fn(), put: jest.fn(), delete: jest.fn() }
+    return { get, repository: new HttpStaffRepository(client as unknown as AxiosInstance) }
+  }
+
+  it('devuelve null, no un error', async () => {
+    const { get, repository } = setup()
+    get.mockRejectedValue(new NotFoundError('x', { statusCode: 404 }))
+
+    await expect(repository.findById('staff-x')).resolves.toBeNull()
+  })
+
+  it('deja pasar tal cual cualquier otro error de aplicacion', async () => {
+    const { get, repository } = setup()
+    const conflicto = new ConflictError('choque')
+    get.mockRejectedValue(conflicto)
+
+    await expect(repository.findById('staff-x')).rejects.toBe(conflicto)
   })
 })
