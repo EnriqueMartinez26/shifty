@@ -15,6 +15,7 @@ import {
   useManagedStaff,
   useUpdateManagedStaff
 } from '../hooks/useManagedStaff'
+import { notifyError } from '../lib/notify'
 
 export const StaffManagementContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
@@ -34,8 +35,12 @@ export const StaffManagementContainer: React.FC = () => {
   )
 
   const handleDelete = async (id: string) => {
-    if (await confirm('¿Estás seguro de eliminar a este profesional?')) {
-      deleteMutation.mutate(id)
+    if (!(await confirm('¿Estás seguro de eliminar a este profesional?'))) return
+    // Sin este catch un borrado rechazado no decia nada (FF-17).
+    try {
+      await deleteMutation.mutateAsync(id)
+    } catch (error: unknown) {
+      notifyError(error, 'No se pudo eliminar al profesional.')
     }
   }
 

@@ -48,9 +48,12 @@ const mockSummary: ReportSummary = {
 let mockSummaryData: ReportSummary = mockSummary
 let mockFailLaterPages = false
 let mockPendingLaterPages = false
+// Rango (fecha "desde") cuyo resumen responde con error, p. ej. el 400 de mas
+// de 370 dias.
+let mockFailingFrom: string | null = null
 const mockUseReportSummary = jest.fn((...args: unknown[]) => {
   const later = (args[3] as { offset: number }).offset > 0
-  const failed = mockFailLaterPages && later
+  const failed = (mockFailLaterPages && later) || args[0] === mockFailingFrom
   return {
     data: failed ? undefined : mockSummaryData,
     isLoading: false,
@@ -86,6 +89,7 @@ describe('ReportsPage', () => {
     mockSummaryData = mockSummary
     mockFailLaterPages = false
     mockPendingLaterPages = false
+    mockFailingFrom = null
     mockAuthUser = { role: 'store_admin' }
     mockUseReportSummary.mockClear()
   })
@@ -141,6 +145,21 @@ describe('ReportsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
     expect(mockRefetch).toHaveBeenCalled()
     expect(screen.queryByText(/No se pudo cargar el reporte/)).not.toBeInTheDocument()
+  })
+
+  it('si falla un rango nuevo, las fechas siguen a mano para corregirlo (FF-19)', () => {
+    // 2026-09-28: la pantalla de error reemplazaba la pagina entera y escondia
+    // los selectores; con un rango invalido no habia forma de salir.
+    mockFailingFrom = '2025-01-01'
+    render(<ReportsPage />)
+
+    fireEvent.change(screen.getByLabelText('Desde'), { target: { value: '2025-01-01' } })
+
+    expect(screen.getByRole('alert')).toHaveTextContent('No se pudo cargar el reporte')
+    fireEvent.change(screen.getByLabelText('Desde'), { target: { value: '2026-09-01' } })
+    expect(mockUseReportSummary.mock.calls.at(-1)?.[0]).toBe('2026-09-01')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByText('Total turnos')).toBeInTheDocument()
   })
 
   it('mientras llega la pagina 2, rotulo y filas son de la pagina que se ve', () => {

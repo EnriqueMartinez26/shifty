@@ -67,6 +67,15 @@ export const getHttpStatus = (error: unknown): number | undefined => {
   return typeof status === 'number' ? status : appError.statusCode
 }
 
+/**
+ * Segundos de `Retry-After` que el cliente HTTP dejo en `context.retryAfter`
+ * (429, 502/503), o undefined si no llegaron o no son un numero positivo.
+ */
+export const getRetryAfterSeconds = (error: unknown): number | undefined => {
+  const value = asApplicationError(error)?.context?.retryAfter
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 const serverMessageFor = (error: unknown, code: string | undefined): string | undefined => {
   const appError = asApplicationError(error)
   if (!appError || !appError.message.trim()) return undefined

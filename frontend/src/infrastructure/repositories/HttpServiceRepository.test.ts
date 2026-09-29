@@ -4,6 +4,8 @@ import { HttpServiceRepository } from './HttpServiceRepository'
 import type { ServiceResponseDTO } from '../../application/dtos/ServiceDTO'
 import { ServiceMapper } from '../../application/mappers/ServiceMapper'
 import type { ServiceWriteInput } from '../../domain/entities/Service'
+import { ConflictError } from '../../shared/errors/ConflictError'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 const serviceConSena: ServiceResponseDTO = {
   public_id: 'svc-1',
@@ -160,5 +162,33 @@ describe('HttpServiceRepository — politica de sena (F10-03 / F9-06)', () => {
       deposit_type: 'percent',
       deposit_amount: null
     })
+  })
+})
+
+/**
+ * FF-35 (2026-09-28): el cliente HTTP ya entrega un 404 como NotFoundError, sin
+ * `response`; la rama `response?.status === 404` nunca corria y el 404 salia
+ * como error en vez de `null`.
+ */
+describe('HttpServiceRepository.findById ante un 404', () => {
+  const setup = () => {
+    const get = jest.fn()
+    const client = { get, post: jest.fn(), patch: jest.fn(), put: jest.fn(), delete: jest.fn() }
+    return { get, repository: new HttpServiceRepository(client as unknown as AxiosInstance) }
+  }
+
+  it('devuelve null, no un error', async () => {
+    const { get, repository } = setup()
+    get.mockRejectedValue(new NotFoundError('x', { statusCode: 404 }))
+
+    await expect(repository.findById('svc-x')).resolves.toBeNull()
+  })
+
+  it('deja pasar tal cual cualquier otro error de aplicacion', async () => {
+    const { get, repository } = setup()
+    const conflicto = new ConflictError('choque')
+    get.mockRejectedValue(conflicto)
+
+    await expect(repository.findById('svc-x')).rejects.toBe(conflicto)
   })
 })

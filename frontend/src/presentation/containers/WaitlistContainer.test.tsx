@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 
+import { InternalServerError } from '@shared/errors'
+
 import { WaitlistContainer } from './WaitlistContainer'
 
 const mockWaitlist = jest.fn()
@@ -92,6 +94,23 @@ describe('WaitlistContainer', () => {
     expect(screen.queryByRole('button', { name: /Reservar/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Quitar/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'WhatsApp' })).not.toBeInTheDocument()
+  })
+
+  it('si quitar una entrada falla, lo dice con el texto neutro (FF-17)', async () => {
+    // 2026-09-28: `void removeEntry.mutateAsync(...)` sin catch; el rechazo no
+    // se veia en ningun lado.
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    mockRemove.mockRejectedValue(
+      new InternalServerError('psycopg: deadlock detected', { statusCode: 500 })
+    )
+
+    render(<WaitlistContainer />)
+    fireEvent.click(screen.getByRole('button', { name: /Quitar/ }))
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'No se pudo quitar de la lista de espera'
+    )
+    expect(mockRemove).toHaveBeenCalledWith('wl-1')
   })
 
   it('sin entradas explica de donde salen', () => {

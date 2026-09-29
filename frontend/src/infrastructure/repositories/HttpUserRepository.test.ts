@@ -7,6 +7,7 @@ import { Email } from '../../domain/value-objects/Email'
 import { UserRole } from '../../domain/value-objects/UserRole'
 import { ConflictError } from '../../shared/errors/ConflictError'
 import { InternalServerError } from '../../shared/errors/InternalServerError'
+import { NotFoundError } from '../../shared/errors/NotFoundError'
 
 const respuesta: UserResponseDTO = {
   public_id: 'usr-1',
@@ -166,7 +167,8 @@ describe('HttpUserRepository lecturas', () => {
 
   it('findById devuelve null ante un 404, no un error', async () => {
     const { get, repository } = createReadRepository()
-    get.mockRejectedValue({ response: { status: 404 } })
+    // Forma real: el cliente HTTP normaliza el 404 (FF-35).
+    get.mockRejectedValue(new NotFoundError('x', { statusCode: 404 }))
 
     await expect(repository.findById('usr-x')).resolves.toBeNull()
   })

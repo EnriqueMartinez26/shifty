@@ -71,6 +71,16 @@ export const WaitlistContainer: React.FC = () => {
     }
   }
 
+  // Sin este catch un rechazo del backend no se veia en ningun lado (FF-17).
+  const removeFromWaitlist = async (entry: WaitlistEntry) => {
+    setMessage('')
+    try {
+      await removeEntry.mutateAsync(entry.public_id)
+    } catch (error: unknown) {
+      setMessage(getErrorMessage(error, 'No se pudo quitar de la lista de espera'))
+    }
+  }
+
   const whatsappHref = (entry: WaitlistEntry): string | null => {
     if (!entry.client_phone) return null
     const bookingUrl = storeSettings?.slug
@@ -246,7 +256,7 @@ export const WaitlistContainer: React.FC = () => {
                         type="button"
                         disabled={removeEntry.isPending}
                         onClick={() => {
-                          void removeEntry.mutateAsync(entry.public_id)
+                          void removeFromWaitlist(entry)
                         }}
                         className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest border text-red-700 border-red-200 disabled:opacity-50"
                       >

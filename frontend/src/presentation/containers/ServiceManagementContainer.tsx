@@ -15,6 +15,7 @@ import {
   useManagedServices,
   useUpdateManagedService
 } from '../hooks/useManagedServices'
+import { notifyError } from '../lib/notify'
 import type { ServiceFormValues } from '../types/forms'
 
 export const ServiceManagementContainer: React.FC = () => {
@@ -34,9 +35,17 @@ export const ServiceManagementContainer: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     if (
-      await confirm('¿Estás seguro de eliminar este servicio? Esto no afectará turnos ya creados.')
+      !(await confirm(
+        '¿Estás seguro de eliminar este servicio? Esto no afectará turnos ya creados.'
+      ))
     ) {
-      deleteMutation.mutate(id)
+      return
+    }
+    // Sin este catch un borrado rechazado no decia nada (FF-17).
+    try {
+      await deleteMutation.mutateAsync(id)
+    } catch (error: unknown) {
+      notifyError(error, 'No se pudo eliminar el servicio.')
     }
   }
 

@@ -8,6 +8,7 @@ import {
   useMarkNotificationRead,
   useNotifications
 } from '../../hooks/useNotifications'
+import { notifyError } from '../../lib/notify'
 
 const formatRelative = (isoDate: string): string => {
   const created = new Date(isoDate).getTime()
@@ -25,6 +26,21 @@ const NotificationsBell: React.FC = () => {
   const { data } = useNotifications()
   const markRead = useMarkNotificationRead()
   const markAllRead = useMarkAllNotificationsRead()
+
+  // Sin catch, un rechazo quedaba en nada: la campana seguia igual (FF-17).
+  const markAllAsRead = () => {
+    void markAllRead
+      .mutateAsync()
+      .catch((error: unknown) => notifyError(error, 'No se pudieron marcar las notificaciones.'))
+  }
+
+  const markAsRead = (publicId: string) => {
+    void markRead
+      .mutateAsync(publicId)
+      .catch((error: unknown) =>
+        notifyError(error, 'No se pudo marcar la notificación como leída.')
+      )
+  }
 
   const items = data?.items ?? []
   const unreadCount = data?.unread_count ?? 0
@@ -94,7 +110,7 @@ const NotificationsBell: React.FC = () => {
             {unreadCount > 0 && (
               <button
                 type="button"
-                onClick={() => void markAllRead.mutateAsync()}
+                onClick={markAllAsRead}
                 disabled={markAllRead.isPending}
                 className="text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
                 style={{ color: colors2000s.text.secondary }}
@@ -119,7 +135,7 @@ const NotificationsBell: React.FC = () => {
                 key={item.public_id}
                 type="button"
                 onClick={() => {
-                  if (!item.read_at) void markRead.mutateAsync(item.public_id)
+                  if (!item.read_at) markAsRead(item.public_id)
                 }}
                 className="w-full text-left px-4 py-3 transition-all cursor-pointer"
                 style={{
