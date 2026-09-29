@@ -21,7 +21,7 @@ from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import core.rate_limit
@@ -29,6 +29,8 @@ import modules.auth.service
 import modules.otp.service
 from core.config import settings
 from modules.auth.router import REFRESH_COOKIE
+from modules.auth.service import REFRESH_REUSE_GRACE_SECONDS, hash_token
+from modules.auth.session_model import AuthSession
 from modules.payments.model import Payment, WebhookInbox
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
@@ -243,7 +245,7 @@ async def test_login_bloquea_la_cuenta_tras_n_fallos_con_respuesta_neutra(
 
 
 async def test_reuso_de_refresh_revoca_todas_las_sesiones_del_usuario(
-    client: AsyncClient,
+    client: AsyncClient, test_session: AsyncSession
 ) -> None:
     email = "familia@abuso.com"
     await seed_store_and_admin(slug="abuso-refresh", email=email)
@@ -267,6 +269,22 @@ async def test_reuso_de_refresh_revoca_todas_las_sesiones_del_usuario(
     assert rotacion.status_code == 200, rotacion.text
     nuevo_1 = rotacion.cookies.get(REFRESH_COOKIE)
     assert nuevo_1 and nuevo_1 != viejo_1
+
+    # 2026-09-28, D-20260928-01: el reuso dentro de los
+    # REFRESH_REUSE_GRACE_SECONDS posteriores a la rotacion es la carrera de dos
+    # pestanas y responde 401 sin revocar nada (cubierto en
+    # tests/integration/test_reuso_de_refresh.py y
+    # tests/postgres/test_pg_rafaga_refresh.py). Aca se prueba la senal de robo,
+    # asi que la rotacion se corre hacia atras hasta quedar fuera de la ventana.
+    hace_rato = datetime.now(timezone.utc) - timedelta(
+        seconds=REFRESH_REUSE_GRACE_SECONDS + 5
+    )
+    await test_session.execute(
+        update(AuthSession)
+        .where(AuthSession.refresh_token_hash == hash_token(viejo_1))
+        .values(revoked_at=hace_rato)
+    )
+    await test_session.commit()
 
     # Senal de robo: el refresh ya rotado vuelve a aparecer.
     client.cookies.clear()

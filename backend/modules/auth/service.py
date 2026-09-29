@@ -56,6 +56,8 @@ __all__ = [
     "MessageResult",
     "PasswordResetEmail",
     "PasswordResetOutcome",
+    "REFRESH_REUSE_GRACE_SECONDS",
+    "REVOKED_BY_ROTATION",
     "RevokedSessionsResult",
     "SessionClientContext",
     "access_token_for_user",
@@ -142,6 +144,13 @@ def login_account_email(email: str) -> ColumnElement[bool]:
 _DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(24))
 
 logger = structlog.get_logger()
+
+# D-20260928-01: segundos durante los que reusar un refresh revocado POR
+# ROTACION se toma como carrera propia (dos pestanas, reintento tras una
+# respuesta perdida) y no como robo.
+REFRESH_REUSE_GRACE_SECONDS = 10
+# Valor de ``auth_sessions.revoked_reason`` que escribe la rotacion.
+REVOKED_BY_ROTATION = "rotated"
 
 # "Redis no esta" es el criterio unico de core.redis (AUD2-B7-14); ValueError
 # suma el contador ilegible, que se trata igual que no poder leerlo.
@@ -375,24 +384,59 @@ async def login_user(
         return AuthTokenPair(access_token=access_token, refresh_token=refresh_token)
 
 
-async def _handle_refresh_reuse(
-    db: AsyncSession, user_id: str, ip: str | None
-) -> NoReturn:
-    """Reuso de un refresh ya rotado: se revoca la familia entera y se deja rastro.
+async def _rotated_moments_ago(db: AsyncSession, session_id: str) -> bool:
+    """La sesion la revoco la ROTACION hace menos de la ventana de gracia.
 
-    Lo detectan dos ramas de ``refresh_session`` -- el token llega ya revocado,
-    y el UPDATE condicional de la rotacion que pierde la carrera -- y cada una
-    tenia su copia LITERAL de este bloque (B3-09, 2026-09-17): una metrica o un
-    cambio de politica agregado en una se olvidaba en la otra. Devuelve
-    ``NoReturn`` para que mypy impida el ``return`` donde va un ``raise``.
-
-    Regla 15: la revocacion de la familia no cambia; solo vive en un lugar.
+    Lee de la base y no del objeto cargado: el perdedor de la carrera lo cargo
+    vivo y la rotacion ganadora recien se hizo visible despues de su UPDATE.
     """
-    revoked = await revoke_sessions_for_user(db, user_id)
+    fila = (
+        await db.execute(
+            select(AuthSession.revoked_at, AuthSession.revoked_reason).where(
+                AuthSession.id == session_id
+            )
+        )
+    ).one_or_none()
+    if fila is None or fila.revoked_at is None:
+        return False
+    if fila.revoked_reason != REVOKED_BY_ROTATION:
+        return False
+    revoked_at: datetime = fila.revoked_at
+    if revoked_at.tzinfo is None:
+        # SQLite (tests) devuelve naive; Postgres aware.
+        revoked_at = revoked_at.replace(tzinfo=timezone.utc)
+    ventana = timedelta(seconds=REFRESH_REUSE_GRACE_SECONDS)
+    return datetime.now(timezone.utc) - revoked_at < ventana
+
+
+async def _handle_refresh_reuse(
+    db: AsyncSession, session: AuthSession, ip: str | None
+) -> NoReturn:
+    """Reuso de un refresh ya revocado: 401, y segun el caso se revoca la familia.
+
+    Lo detectan dos ramas de ``refresh_session`` -- el token llega ya
+    revocado, y el UPDATE condicional de la rotacion que pierde la carrera -- y
+    cada una tenia su copia LITERAL de este bloque (B3-09, 2026-09-17): una
+    metrica o un cambio de politica agregado en una se olvidaba en la otra.
+    Devuelve ``NoReturn`` para que mypy impida el ``return`` donde va un
+    ``raise``.
+
+    D-20260928-01 (2026-09-28): si la sesion la revoco la ROTACION hace menos
+    de ``REFRESH_REUSE_GRACE_SECONDS``, es la carrera de dos pestanas o el
+    reintento tras una respuesta perdida: 401 sin tocar las demas sesiones y
+    sin emitir tokens. Revocar la familia ahi deslogueaba al usuario en todos
+    sus dispositivos. Fuera de la ventana, o si la revoco otra cosa (logout,
+    admin, cambio de clave), sigue siendo la senal de robo y la regla 15 no
+    cambia: se revoca la familia entera.
+    """
+    if await _rotated_moments_ago(db, session.id):
+        logger.info("refresh_token_reuse_within_grace", user_id=session.user_id, ip=ip)
+        raise AuthenticationException(message="Sesion expirada")
+    revoked = await revoke_sessions_for_user(db, session.user_id)
     await db.commit()
     logger.warning(
         "refresh_token_reuse_detected",
-        user_id=user_id,
+        user_id=session.user_id,
         revoked_sessions=revoked,
         ip=ip,
     )
@@ -414,10 +458,10 @@ async def refresh_session(
         session = result.scalar_one_or_none()
 
         if session and session.revoked_at is not None:
-            # Reuso de un refresh ya rotado: la señal clasica de robo (el
+            # Reuso de un refresh ya revocado: la señal clasica de robo (el
             # atacante y la victima tienen el mismo token; el segundo en llegar
-            # cae aca). Se revoca la familia entera y se deja rastro.
-            await _handle_refresh_reuse(db, session.user_id, context.ip_address)
+            # cae aca), salvo la rotacion reciente (D-20260928-01).
+            await _handle_refresh_reuse(db, session, context.ip_address)
 
         expires_at = session.expires_at if session else None
         if expires_at is not None and expires_at.tzinfo is None:
@@ -440,8 +484,8 @@ async def refresh_session(
         # Rotacion ATOMICA: revocar la sesion condicionado a que siga viva. Si
         # dos requests concurrentes traen el mismo refresh, solo uno logra el
         # UPDATE (rowcount==1); el otro ve rowcount==0 y se trata como reuso
-        # (revoca la familia). Sin esto, ambos rotaban y quedaban dos sesiones
-        # vivas de un mismo refresh.
+        # (dentro de la ventana de gracia, 401 sin revocar nada). Sin esto,
+        # ambos rotaban y quedaban dos sesiones vivas de un mismo refresh.
         now = datetime.now(timezone.utc)
         claim = await db.execute(
             update(AuthSession)
@@ -449,10 +493,10 @@ async def refresh_session(
                 AuthSession.id == session.id,
                 AuthSession.revoked_at.is_(None),
             )
-            .values(revoked_at=now)
+            .values(revoked_at=now, revoked_reason=REVOKED_BY_ROTATION)
         )
         if (getattr(claim, "rowcount", 0) or 0) != 1:
-            await _handle_refresh_reuse(db, session.user_id, context.ip_address)
+            await _handle_refresh_reuse(db, session, context.ip_address)
 
         new_refresh_token = generate_refresh_token()
         new_session = _new_auth_session(user, new_refresh_token, context)
