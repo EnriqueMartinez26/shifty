@@ -10,6 +10,7 @@ describe('AppointmentActions', () => {
         hasStarted
         canRelease
         canManage
+        canCancelOrReschedule={false}
         busy={false}
         onAction={() => undefined}
       />
@@ -24,6 +25,7 @@ describe('AppointmentActions', () => {
         hasStarted={false}
         canRelease
         canManage
+        canCancelOrReschedule={false}
         busy={false}
         onAction={() => undefined}
       />
@@ -44,6 +46,7 @@ describe('AppointmentActions', () => {
           hasStarted
           canRelease
           canManage
+          canCancelOrReschedule={false}
           busy={false}
           onAction={onAction}
         />
@@ -54,6 +57,28 @@ describe('AppointmentActions', () => {
     expect(onCard).not.toHaveBeenCalled()
   })
 
+  // FF-31: cancelar y reprogramar un confirmado que todavia no empezo.
+  it('ofrece cancelar y reprogramar a quien puede, y emite la accion elegida', () => {
+    const onAction = jest.fn()
+    render(
+      <AppointmentActions
+        status="confirmed"
+        hasStarted={false}
+        canRelease={false}
+        canManage
+        canCancelOrReschedule
+        busy={false}
+        onAction={onAction}
+      />
+    )
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Cancelar turno',
+      'Reprogramar turno'
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Reprogramar turno' }))
+    expect(onAction).toHaveBeenCalledWith('reschedule')
+  })
+
   it('no renderiza nada cuando no hay acciones', () => {
     const { container } = render(
       <AppointmentActions
@@ -61,6 +86,7 @@ describe('AppointmentActions', () => {
         hasStarted
         canRelease
         canManage
+        canCancelOrReschedule={false}
         busy={false}
         onAction={() => undefined}
       />

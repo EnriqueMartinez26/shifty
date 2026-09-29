@@ -3,7 +3,8 @@ import type { Appointment } from '../../domain/entities/Appointment'
 import type {
   AppointmentRange,
   CreateBookingInput,
-  IBookingRepository
+  IBookingRepository,
+  RescheduleInput
 } from '../../domain/repositories/IBookingRepository'
 import apiClient from '../../infrastructure/http/client'
 import { HttpBookingRepository } from '../../infrastructure/repositories/HttpBookingRepository'
@@ -100,17 +101,16 @@ export class AppointmentService extends BaseService<Appointment> {
   }
 
   /**
-   * Reschedules an appointment to a new start time slot.
+   * Moves an appointment to a new start time (the backend derives the end
+   * from the service duration).
    *
    * @param id The unique identifier of the appointment.
-   * @param newStartTime New start time ISO string.
-   * @param newEndTime Optional new end time (the backend derives it from the
-   *   service duration, so it is not sent).
-   * @returns A promise resolving to void.
+   * @param input New start, idempotency key and the admin-only
+   *   `allowOutsideSchedule` flag.
    */
-  async reschedule(id: string, newStartTime: string, newEndTime?: string): Promise<void> {
+  async reschedule(id: string, input: RescheduleInput): Promise<void> {
     await this.execute(async () => {
-      await this.repository.reschedule(id, newStartTime, newEndTime)
+      await this.repository.reschedule(id, input)
     }, 'reschedule')
   }
 }

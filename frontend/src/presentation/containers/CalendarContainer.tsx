@@ -30,6 +30,10 @@ import {
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 
 import { BlocksPanel, type EditableBlock } from './BlocksPanel'
+import {
+  RescheduleAppointmentDialog,
+  type ReschedulableAppointment
+} from './RescheduleAppointmentDialog'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
@@ -38,9 +42,11 @@ import {
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
+import { StaffColumn } from '../components/organisms/StaffColumn'
 import { useAuth } from '../context/AuthContext'
 import {
   ROLE_PROFESSIONAL,
+  ROLE_RECEPTIONIST,
   ROLE_STORE_ADMIN,
   ROLE_SUPER_ADMIN,
   canonicalRole,
@@ -49,6 +55,7 @@ import {
 import { useAppointmentBlocks, useDeleteAppointmentBlock } from '../hooks/useAppointmentBlocks'
 import {
   useCalendarAgenda,
+  useCancelAppointment,
   useCompleteAppointment,
   useConfirmAppointment,
   useMarkAbsentAppointment,
@@ -57,15 +64,21 @@ import {
 import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
+import { statusStyle } from '../lib/appointmentStatusStyle'
 import {
   MIN_APPOINTMENT_MINUTES,
   SLOT_HEIGHT_PX,
   buildDayGrid,
   gridPlacement,
-  parseHhMm,
   rangeFromInstants
 } from '../lib/calendarGrid'
 import { reportUnknownStatus } from '../lib/reportUnreadableInstant'
+import {
+  mondayBasedWeekday,
+  offHoursSegments,
+  storeRangesFor,
+  workingRangesFor
+} from '../lib/staffHours'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
@@ -96,9 +109,6 @@ type UnifiedCalendarEvent =
       endsAt: Date
       status: 'blocked'
     }
-
-/** Claves de `business_hours`, en el orden de `Date.getDay()` (0 = domingo). */
-const BUSINESS_HOURS_DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const
 
 const VIEW_LABELS: Record<CalendarView, string> = {
   day: 'Dia',
@@ -134,46 +144,13 @@ const fieldStyle = {
  */
 const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.toISOString())
 
+/** Un dia sin eventos: la misma referencia siempre, para que la grilla no se recalcule. */
+const NO_EVENTS: readonly UnifiedCalendarEvent[] = []
+
 const eventPriority = (event: UnifiedCalendarEvent) => {
   if (event.type === 'block') return 0
   if (event.type === 'absence') return 1
   return 2
-}
-
-const statusStyle = (status: string) => {
-  if (status === 'absent') {
-    return {
-      accent: '#b91c1c',
-      background: 'linear-gradient(180deg, #fef2f2 0%, #fecaca 100%)',
-      text: '#7f1d1d'
-    }
-  }
-  if (status === 'pending_payment') {
-    return {
-      accent: '#d97706',
-      background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-      text: '#9a3412'
-    }
-  }
-  if (status === 'confirmed') {
-    return {
-      accent: '#2563eb',
-      background: 'linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%)',
-      text: '#1d4ed8'
-    }
-  }
-  if (status === 'completed') {
-    return {
-      accent: '#15803d',
-      background: 'linear-gradient(180deg, #ecfdf5 0%, #dcfce7 100%)',
-      text: '#166534'
-    }
-  }
-  return {
-    accent: colors2000s.orange.accent,
-    background: 'linear-gradient(180deg, #ffffff 0%, #f6f8f9 100%)',
-    text: colors2000s.text.primary
-  }
 }
 
 export const CalendarContainer: React.FC = () => {
@@ -193,6 +170,14 @@ export const CalendarContainer: React.FC = () => {
   // Cancelar turnos en bloque es solo de administradores (FF-34).
   const canManageBlocks = canManageAppointments
   const canCancelAffected = canReleaseAppointments
+  // Cancelar o reprogramar (D-20260929-03): administracion y recepcion,
+  // cualquier turno; el profesional, solo los de su agenda (su ficha comparte
+  // id con su usuario). Es solo lo que se ofrece: la guarda es el backend (403).
+  const currentRole = canonicalRole(user?.role, user?.is_global_admin)
+  const cancelsAnyAppointment = canReleaseAppointments || currentRole === ROLE_RECEPTIONIST
+  const canCancelOrRescheduleOf = (staffId: string) =>
+    cancelsAnyAppointment ||
+    (currentRole === ROLE_PROFESSIONAL && Boolean(user?.public_id) && staffId === user?.public_id)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView] = useState<CalendarView>('day')
   const [message, setMessage] = useState('')
@@ -200,6 +185,7 @@ export const CalendarContainer: React.FC = () => {
   // El panel de bloqueos se remonta con `key` al elegir otro bloqueo: sin
   // efecto que copie el bloqueo al formulario (regla 27).
   const [blockToEdit, setBlockToEdit] = useState<EditableBlock | null>(null)
+  const [rescheduleTarget, setRescheduleTarget] = useState<ReschedulableAppointment | null>(null)
 
   const rangeStart = useMemo(() => {
     if (view === 'day' || view === 'list') return selectedDate
@@ -244,8 +230,10 @@ export const CalendarContainer: React.FC = () => {
   const confirmAppointment = useConfirmAppointment()
   const completeAppointment = useCompleteAppointment()
   const markAbsentAppointment = useMarkAbsentAppointment()
+  const cancelAppointment = useCancelAppointment()
   const transitionBusy =
     releaseAppointment.isPending ||
+    cancelAppointment.isPending ||
     confirmAppointment.isPending ||
     completeAppointment.isPending ||
     markAbsentAppointment.isPending
@@ -319,27 +307,47 @@ export const CalendarContainer: React.FC = () => {
     })
   }, [agendaQuery.data, blocksInRange, staffMembers])
 
-  const eventsForSelectedDate = useMemo(
-    () =>
-      unifiedEvents.filter(
-        (event) => formatArgentinaDate(toInstantIso(event.startsAt)) === dateStr
-      ),
-    [dateStr, unifiedEvents]
-  )
+  // Dia argentino de cada evento, calculado UNA vez por lista (F4-08): la vista
+  // mes lo recalculaba dias x eventos veces en cada render.
+  const eventsByDay = useMemo(() => {
+    const byDay = new Map<string, UnifiedCalendarEvent[]>()
+    for (const event of unifiedEvents) {
+      const key = formatArgentinaDate(toInstantIso(event.startsAt))
+      const bucket = byDay.get(key)
+      if (bucket) bucket.push(event)
+      else byDay.set(key, [event])
+    }
+    return byDay
+  }, [unifiedEvents])
+
+  const eventsForSelectedDate = eventsByDay.get(dateStr) ?? NO_EVENTS
+
+  // Horario efectivo de cada profesional el dia elegido (FF-03): el suyo o,
+  // sin ninguna franja cargada, el del local (D-20260929-01). `null` = todavia
+  // no se sabe (la ficha del local no cargo): no se pinta nada.
+  const weekday = mondayBasedWeekday(selectedDate)
+  const hoursOfDay = useMemo(() => {
+    const storeRanges = storeRangesFor(storeSettings?.business_hours, weekday)
+    const byStaff = new Map(
+      (staffMembers ?? []).map((staff) => [
+        staff.id,
+        workingRangesFor(staff.schedules, weekday, storeRanges)
+      ])
+    )
+    return { storeRanges, byStaff }
+  }, [staffMembers, storeSettings?.business_hours, weekday])
 
   /**
-   * El rango visible es la union de los horarios de atencion y los eventos del
-   * dia. Acotar la grilla solo con los horarios volveria a esconder lo que
-   * queda afuera: un turno movido a mano, uno heredado de un horario viejo, un
-   * bloqueo cargado fuera de hora.
+   * El rango visible es la union de los horarios de atencion (del local y de
+   * cada profesional) y los eventos del dia. Acotar la grilla solo con los
+   * horarios volveria a esconder lo que queda afuera: un turno movido a mano,
+   * uno heredado de un horario viejo, un bloqueo cargado fuera de hora.
    */
   const dayGrid = useMemo(() => {
-    const dayKey = BUSINESS_HOURS_DAY_KEYS[selectedDate.getDay()]
-    const openRanges = (storeSettings?.business_hours?.[dayKey ?? ''] ?? []).flatMap((period) => {
-      const startMinutes = parseHhMm(period.open)
-      const endMinutes = parseHhMm(period.close)
-      return startMinutes === null || endMinutes === null ? [] : [{ startMinutes, endMinutes }]
-    })
+    const openRanges = [
+      ...(hoursOfDay.storeRanges ?? []),
+      ...[...hoursOfDay.byStaff.values()].flatMap((ranges) => ranges ?? [])
+    ]
 
     const eventRanges = eventsForSelectedDate.flatMap((event) => {
       const eventRange = rangeFromInstants(toInstantIso(event.startsAt), toInstantIso(event.endsAt))
@@ -347,7 +355,7 @@ export const CalendarContainer: React.FC = () => {
     })
 
     return buildDayGrid([...openRanges, ...eventRanges], expandedGaps)
-  }, [eventsForSelectedDate, expandedGaps, selectedDate, storeSettings?.business_hours])
+  }, [eventsForSelectedDate, expandedGaps, hoursOfDay])
 
   const appointmentCards = useMemo(() => {
     return eventsForSelectedDate
@@ -400,6 +408,29 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const handleCancelAppointment = async (event: UnifiedCalendarEvent) => {
+    if (event.type === 'block') return
+    // Siempre se confirma; si hay un cobro vivo, se avisa que vence (D-20260929-07).
+    const liveChargeWarning =
+      event.status === 'pending_payment'
+        ? ' El cobro pendiente se va a vencer y su link de pago deja de servir.'
+        : ''
+    if (!(await confirm(`¿Cancelar el turno de ${event.title}?${liveChargeWarning}`))) return
+    try {
+      await cancelAppointment.mutateAsync(event.id)
+      setMessage('Turno cancelado')
+    } catch (error: unknown) {
+      setMessage(
+        getErrorMessage(error, 'No se pudo cancelar el turno', {
+          PERMISSION_DENIED: 'Solo podés cancelar los turnos de tu agenda.'
+        })
+      )
+      if (isStateConflictError(error)) {
+        void agendaQuery.refetch()
+      }
+    }
+  }
+
   const handleAppointmentAction = async (
     event: UnifiedCalendarEvent,
     action: AppointmentAction
@@ -409,7 +440,24 @@ export const CalendarContainer: React.FC = () => {
       await handleReleaseAppointment(event)
       return
     }
-    const textos: Record<Exclude<AppointmentAction, 'release'>, [string, string, string]> = {
+    if (action === 'cancel') {
+      await handleCancelAppointment(event)
+      return
+    }
+    if (action === 'reschedule') {
+      setRescheduleTarget({
+        id: event.id,
+        clientName: event.title,
+        serviceName: event.subtitle,
+        staffName: event.staffName,
+        startsAt: toInstantIso(event.startsAt)
+      })
+      return
+    }
+    const textos: Record<
+      Exclude<AppointmentAction, 'release' | 'cancel' | 'reschedule'>,
+      [string, string, string]
+    > = {
       confirm: ['¿Confirmar el turno de', 'Turno confirmado', 'No se pudo confirmar el turno'],
       complete: [
         '¿Marcar como completado el turno de',
@@ -445,6 +493,7 @@ export const CalendarContainer: React.FC = () => {
         hasStarted={event.startsAt <= new Date()}
         canRelease={canReleaseAppointments}
         canManage={canManageAppointments}
+        canCancelOrReschedule={canCancelOrRescheduleOf(event.staffId)}
         busy={transitionBusy}
         compact={compact}
         onAction={(action) => {
@@ -617,119 +666,36 @@ export const CalendarContainer: React.FC = () => {
               </div>
 
               <div className="flex flex-1">
-                {staffMembers?.map((staff) => (
-                  <div
-                    key={staff.id}
-                    className="flex-1 min-w-[150px] relative border-r border-gray-50"
-                  >
-                    {dayGrid.bands.map((band) =>
-                      band.kind === 'open' ? (
-                        band.labels.map((label) => (
-                          <div
-                            key={label.text}
-                            className="absolute inset-x-0 border-b border-gray-50/50"
-                            style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
-                          />
-                        ))
-                      ) : (
-                        <div
-                          key={band.key}
-                          className="absolute inset-x-0 border-y border-dashed flex items-center justify-center text-[9px] font-black uppercase tracking-widest"
-                          style={{
-                            top: band.topPx,
-                            height: band.heightPx,
-                            background: colors2000s.bg.disabled,
-                            borderColor: colors2000s.border.default,
-                            color: colors2000s.text.secondary
-                          }}
-                        >
-                          {band.label}
-                        </div>
-                      )
-                    )}
-
-                    {blocksForSelectedDate
-                      .filter((block) => block.staff_id === staff.id)
-                      .flatMap((block) => {
-                        const placement = gridPlacement(dayGrid, block.starts_at, block.ends_at)
-                        if (!placement) return []
-                        return (
-                          <button
-                            key={block.public_id}
-                            type="button"
-                            disabled={!canManageBlocks}
-                            onClick={() => setBlockToEdit(block)}
-                            className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] text-left"
-                            style={{
-                              ...placement,
-                              background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-                              borderColor: '#fb923c',
-                              borderLeftColor: '#c2410c',
-                              boxShadow: '0 3px 6px rgba(0,0,0,0.05)'
-                            }}
-                          >
-                            <p className="text-[8px] font-black uppercase tracking-widest text-orange-700 mb-1">
-                              {block.reason}
-                            </p>
-                            <p className="text-[10px] font-black text-orange-900">
-                              {formatArgentinaTime(block.starts_at)} -{' '}
-                              {formatArgentinaTime(block.ends_at)}
-                            </p>
-                          </button>
-                        )
-                      })}
-
-                    {appointmentCards
-                      .filter((event) => event.staffId === staff.id)
-                      .map((event) => {
-                        const style = statusStyle(event.status)
-                        return (
-                          <div
-                            key={event.id}
-                            className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between"
-                            style={{
-                              top: event.top,
-                              height: event.height,
-                              background: style.background,
-                              borderColor: colors2000s.border.default,
-                              borderLeftColor: style.accent,
-                              boxShadow:
-                                'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
-                            }}
-                          >
-                            <div className="absolute top-1 right-1 z-10 flex items-center gap-1">
+                {staffMembers?.map((staff) => {
+                  const working = hoursOfDay.byStaff.get(staff.id) ?? null
+                  return (
+                    <StaffColumn
+                      key={staff.id}
+                      grid={dayGrid}
+                      offHours={working ? offHoursSegments(dayGrid, working) : []}
+                      blocks={blocksForSelectedDate.filter((block) => block.staff_id === staff.id)}
+                      cards={appointmentCards
+                        .filter((event) => event.staffId === staff.id)
+                        .map((event) => ({
+                          id: event.id,
+                          title: event.title,
+                          subtitle: event.subtitle,
+                          status: event.status,
+                          top: event.top,
+                          height: event.height,
+                          timeLabel: event.timeLabel,
+                          controls: (
+                            <>
                               {renderActions(event, true)}
                               {renderClientWhatsApp(event, true)}
-                            </div>
-                            <div>
-                              <p
-                                className="text-[8px] font-black uppercase tracking-widest mb-0.5"
-                                style={{ color: style.text }}
-                              >
-                                {event.subtitle}
-                              </p>
-                              <h4
-                                className="text-[11px] font-black uppercase truncate leading-tight"
-                                style={{ color: colors2000s.text.primary }}
-                              >
-                                {event.title}
-                              </h4>
-                            </div>
-                            <span
-                              className="self-start px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-widest uppercase"
-                              style={{
-                                background: 'white',
-                                boxShadow: colors2000s.shadows.insetDark,
-                                color: style.text
-                              }}
-                            >
-                              {event.timeLabel} - {event.status}
-                            </span>
-                          </div>
-                        )
-                      })}
-                  </div>
-                ))}
+                            </>
+                          )
+                        }))}
+                      canManageBlocks={canManageBlocks}
+                      onEditBlock={setBlockToEdit}
+                    />
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -744,10 +710,7 @@ export const CalendarContainer: React.FC = () => {
         className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
       >
         {daysInRange.map((day) => {
-          const dayKey = format(day, 'yyyy-MM-dd')
-          const dayEvents = unifiedEvents.filter(
-            (event) => formatArgentinaDate(toInstantIso(event.startsAt)) === dayKey
-          )
+          const dayEvents = eventsByDay.get(format(day, 'yyyy-MM-dd')) ?? NO_EVENTS
           return (
             <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
               <div className="mb-3">
@@ -1039,6 +1002,20 @@ export const CalendarContainer: React.FC = () => {
           onClose={() => setIsNewAppointmentOpen(false)}
           defaultDate={selectedDate}
           isProfessional={user?.role === ROLE_PROFESSIONAL}
+        />
+      )}
+      {rescheduleTarget && (
+        <RescheduleAppointmentDialog
+          appointment={rescheduleTarget}
+          isAdmin={canReleaseAppointments}
+          onClose={() => setRescheduleTarget(null)}
+          onDone={(text) => {
+            setRescheduleTarget(null)
+            setMessage(text)
+          }}
+          onStateConflict={() => {
+            void agendaQuery.refetch()
+          }}
         />
       )}
     </div>

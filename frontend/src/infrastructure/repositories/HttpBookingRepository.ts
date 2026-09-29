@@ -7,9 +7,9 @@ import { Appointment } from '../../domain/entities/Appointment'
 import type {
   AppointmentRange,
   CreateBookingInput,
-  IBookingRepository
+  IBookingRepository,
+  RescheduleInput
 } from '../../domain/repositories/IBookingRepository'
-import { createUuid } from '../../shared/utils/uuid'
 
 /** Tope de `page_size` que acepta GET /appointments/search en el backend. */
 const MAX_PAGE_SIZE = 100
@@ -39,10 +39,10 @@ export class HttpBookingRepository implements IBookingRepository {
    * El backend tope `page_size` en 100. Antes esta firma tenia un `page`
    * tercero que la interfaz no declara, asi que el `pageSize` del llamador
    * caia en `page` y salia `page=500&page_size=500`: la agenda respondia 422
-   * y no cargaba nunca. Ahora la firma coincide con IBookingRepository y se
-   * recorren las paginas hasta agotar el rango. El `total` de la primera
-   * pagina dice cuantas hay; con mas de MAX_PAGES se corta y el llamador lo
-   * ve porque `appointments.length < total`.
+   * y no cargaba nunca. El `total` de la primera pagina dice cuantas hay; el
+   * resto se pide en paralelo (F4-07: en serie, una semana cargada esperaba
+   * una ida y vuelta por pagina). Con mas de MAX_PAGES se corta y el llamador
+   * lo ve porque `appointments.length < total`.
    */
   async searchByDateRange(
     fromDate: string,
@@ -51,23 +51,22 @@ export class HttpBookingRepository implements IBookingRepository {
   ): Promise<AppointmentRange> {
     try {
       const limit = Math.min(Math.max(pageSize, 1), MAX_PAGE_SIZE)
-      const appointments: Appointment[] = []
-      let total = 0
-
-      for (let page = 1; page <= MAX_PAGES; page += 1) {
+      const fetchPage = async (page: number): Promise<{ total: unknown; batch: Appointment[] }> => {
         const { data } = await this.client.get('/appointments/search', {
-          params: {
-            from_date: fromDate,
-            to_date: toDate,
-            page,
-            page_size: limit
-          }
+          params: { from_date: fromDate, to_date: toDate, page, page_size: limit }
         })
-        const batch: AppointmentResponseDTO[] = data.results || []
-        appointments.push(...batch.map(BookingMapper.toDomain))
-        if (page === 1) total = typeof data.total === 'number' ? data.total : batch.length
-        if (batch.length < limit || appointments.length >= total) break
+        const results: AppointmentResponseDTO[] = data.results || []
+        return { total: data.total, batch: results.map(BookingMapper.toDomain) }
       }
+
+      const first = await fetchPage(1)
+      const total = typeof first.total === 'number' ? first.total : first.batch.length
+      const pageCount =
+        first.batch.length < limit ? 1 : Math.min(Math.ceil(total / limit), MAX_PAGES)
+      const rest = await Promise.all(
+        Array.from({ length: Math.max(pageCount - 1, 0) }, (_, index) => fetchPage(index + 2))
+      )
+      const appointments = [first, ...rest].flatMap((page) => page.batch)
 
       return { appointments, total: Math.max(total, appointments.length) }
     } catch (error) {
@@ -130,13 +129,15 @@ export class HttpBookingRepository implements IBookingRepository {
     }
   }
 
-  async reschedule(id: string, newStartTime: string): Promise<void> {
+  async reschedule(id: string, input: RescheduleInput): Promise<void> {
     try {
-      // El backend recalcula el fin a partir de la duracion del servicio, asi
-      // que solo manda el nuevo inicio + una clave de idempotencia.
+      // El backend recalcula el fin con la duracion del servicio. El flag de
+      // fuera de horario viaja solo cuando se pide: su default es false y el
+      // backend responde 403 si lo manda alguien que no es administrador.
       await this.client.patch(`/appointments/${id}/reschedule`, {
-        new_starts_at: newStartTime,
-        idempotency_key: createUuid()
+        new_starts_at: input.newStartsAt,
+        idempotency_key: input.idempotencyKey,
+        ...(input.allowOutsideSchedule ? { allow_outside_schedule: true } : {})
       })
     } catch (error) {
       translateRepositoryError('reschedule', error)
