@@ -8,8 +8,8 @@ CONFIRMADO con un link generado desde el panel se cancelaba dejando el link
 de Mercado Pago vivo.
 
 Ahora cualquier rol del personal que ya podia cancelar (admin, recepcion,
-profesional: ``PATCH /appointments/{id}/cancel`` pide solo sesion de la
-tienda) cancela un turno con cobro vivo y, en la MISMA transaccion, vence el
+profesional; desde D-20260929-03 el profesional solo los turnos de su propia
+agenda) cancela un turno con cobro vivo y, en la MISMA transaccion, vence el
 cobro por la entidad (``Payment.apply_status``) y publica
 ``payment.preference.expire`` para que el outbox venza el link en MP despues,
 sin lock (regla 5). Orden de locks turno -> pago (regla 7). La
@@ -100,21 +100,45 @@ async def _tienda(
     return t
 
 
-async def _personal(client: AsyncClient, t: _Tienda, rol: str, slug: str) -> str:
-    """Token de un usuario del personal con ``rol`` (staff = profesional)."""
-    email = f"{rol}-{slug}@example.com"
-    alta = await client.post(
-        "/users/",
-        headers=auth_headers(t.admin),
-        json={
-            "email": email,
-            "password": "Password123!",
-            "first_name": "Persona",
-            "last_name": rol.title(),
-            "role": rol,
-        },
+async def _dar_clave(client: AsyncClient, t: _Tienda, email: str) -> None:
+    """El profesional que crea /staff/ nace sin clave usable: el admin le pone una."""
+    encontrado = await client.get(
+        "/users/", headers=auth_headers(t.admin), params={"email": email}
     )
-    assert alta.status_code == 201, alta.text
+    assert encontrado.status_code == 200, encontrado.text
+    (usuario,) = encontrado.json()
+    clave = await client.patch(
+        f"/users/{usuario['public_id']}",
+        headers=auth_headers(t.admin),
+        json={"password": "Password123!"},
+    )
+    assert clave.status_code == 200, clave.text
+
+
+async def _personal(client: AsyncClient, t: _Tienda, rol: str, slug: str) -> str:
+    """Token de un usuario del personal con ``rol``.
+
+    ``staff`` es EL profesional de los turnos de la tienda (``t.staff``): desde
+    D-20260929-03 un profesional solo cancela los turnos de su propia agenda,
+    y el de otra cuenta con rol ``staff`` recibe 403.
+    """
+    if rol == "staff":
+        email = f"pro-{slug}@example.com"
+        await _dar_clave(client, t, email)
+    else:
+        email = f"{rol}-{slug}@example.com"
+        alta = await client.post(
+            "/users/",
+            headers=auth_headers(t.admin),
+            json={
+                "email": email,
+                "password": "Password123!",
+                "first_name": "Persona",
+                "last_name": rol.title(),
+                "role": rol,
+            },
+        )
+        assert alta.status_code == 201, alta.text
     login = await client.post(
         "/auth/login", json={"email": email, "password": "Password123!"}
     )

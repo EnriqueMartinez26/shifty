@@ -1,4 +1,8 @@
-"""Guarda del cobro vivo, compartida por los caminos que sueltan un turno.
+"""Guardas de los caminos del panel que sueltan o mueven un turno.
+
+Rol y duenio del turno (``require_can_manage_appointment``, D-20260929-03) y
+turno ya empezado (``reject_already_started``, D-20260929-05); abajo, la
+guarda del cobro vivo, compartida por los caminos que sueltan un turno.
 
 El grafo permite ``pending_payment -> cancelled`` porque un reembolso legitimo
 lo necesita (``sync_appointment_with_payment``). Lo que no puede pasar es que
@@ -22,8 +26,58 @@ from __future__ import annotations
 
 from http import HTTPStatus
 
-from core.exceptions import AppException
+from core.exceptions import AppException, PermissionDeniedException
+from core.roles import (
+    ROLE_PROFESSIONAL,
+    ROLE_RECEPTIONIST,
+    STORE_MANAGERS,
+    canonical_role,
+)
+from core.utils import ensure_utc_aware, now_utc
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.users.model import User
+
+# Quienes sueltan o mueven CUALQUIER turno de la tienda desde el panel
+# (D-20260929-03). El profesional, solo los de su agenda.
+_ANY_APPOINTMENT_OF_THE_STORE = STORE_MANAGERS | {ROLE_RECEPTIONIST}
+
+
+def require_can_manage_appointment(
+    appointment: Appointment, actor: User, action: str
+) -> None:
+    """Cancelar o reprogramar desde el panel: rol y duenio del turno (403 neutro).
+
+    Decision del duenio D-20260929-03: el admin de la tienda (y el
+    superadmin) y la recepcion, cualquier turno de la tienda; el profesional,
+    solo los asignados a su ficha (``Staff.id == User.id``, como el alta del
+    panel). Cualquier otro rol, nada. Antes cualquier usuario autenticado de
+    la tienda cancelaba o movia el turno de cualquier profesional
+    (2026-09-29). El rol sale del ``User`` releido de la base por request
+    (regla 1), nunca del JWT. Se llama con el turno ya lockeado y leido.
+    """
+    role = canonical_role(actor)
+    if role in _ANY_APPOINTMENT_OF_THE_STORE:
+        return
+    if role == ROLE_PROFESSIONAL and appointment.staff_id == actor.id:
+        return
+    raise PermissionDeniedException(action)
+
+
+def reject_already_started(appointment: Appointment) -> None:
+    """Un turno que ya empezo no se cancela desde el panel: 409 neutro.
+
+    Decision del duenio D-20260929-05: lo que corresponde es completarlo o
+    marcar la ausencia. Cancelarlo publicaba un cupo "liberado" que ya paso y
+    borraba el rastro de si el cliente vino. Comparacion en UTC (regla 24).
+    Un turno terminal no llega aca con este motivo: sigue respondiendo lo de
+    siempre (``APPOINTMENT_ALREADY_CANCELLED`` o la transicion invalida).
+    """
+    if is_active(appointment) and ensure_utc_aware(appointment.starts_at) <= now_utc():
+        raise AppException(
+            message="El turno ya empezo: completalo o marcá la ausencia",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="APPOINTMENT_ALREADY_STARTED",
+        )
 
 
 def awaits_payment(appointment: Appointment, *, live_payment: bool) -> bool:
@@ -104,6 +158,8 @@ __all__ = [
     "awaits_payment",
     "is_active",
     "reject_already_cancelled",
+    "reject_already_started",
     "reject_reschedule_with_pending_deposit",
     "reject_inactive",
+    "require_can_manage_appointment",
 ]

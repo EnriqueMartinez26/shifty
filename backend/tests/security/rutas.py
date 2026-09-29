@@ -82,6 +82,12 @@ ADMINS = frozenset({ADMIN_TIENDA, SUPERADMIN})
 # global: la recepcionista queda afuera (docs/ROLE_MATRIX.md, "Diferencias").
 OPERATIVOS = frozenset({PROFESIONAL, ADMIN_TIENDA, SUPERADMIN})
 LECTORES_DE_REPORTES = OPERATIVOS  # core/roles.py::REPORT_VIEWERS
+# Cancelar y reprogramar desde el panel (D-20260929-03): admin, superadmin y
+# recepcion, cualquier turno; el profesional solo los de SU agenda. El actor
+# profesional de la matriz no tiene ficha de staff (el turno es de
+# ``tienda.staff``), asi que aca recibe 403; el caso del profesional duenio
+# del turno lo prueba tests/integration/test_agenda_rol_duenio_y_horario.py.
+GESTORES_DE_CUALQUIER_TURNO = frozenset({RECEPCIONISTA, ADMIN_TIENDA, SUPERADMIN})
 SOLO_SUPER = frozenset({SUPERADMIN})
 SOLO_OTP = frozenset({CLIENTE_OTP})
 
@@ -1170,7 +1176,7 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "PATCH",
         "/appointments/{public_id}/cancel",
-        PERSONAL,
+        GESTORES_DE_CUALQUIER_TURNO,
         A.RECURSO,
         _transicion("cancel"),
         idor=IDOR_POR_ID,
@@ -1210,7 +1216,7 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "PATCH",
         "/appointments/{public_id}/reschedule",
-        PERSONAL,
+        GESTORES_DE_CUALQUIER_TURNO,
         A.RECURSO,
         _reprogramar,
         idor=IDOR_POR_ID,

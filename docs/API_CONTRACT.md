@@ -3058,6 +3058,7 @@ Responses:
 |---|---|---|---|
 | `new_starts_at` | string | yes | format="date-time" |
 | `idempotency_key` | string | yes | minLength=10, maxLength=128 |
+| `allow_outside_schedule` | boolean | no | default=false |
 
 ### AppointmentResponse
 
@@ -4679,4 +4680,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-25, commit 7448c6f
+Generado desde app.openapi() el 2026-09-29, commit cf38280

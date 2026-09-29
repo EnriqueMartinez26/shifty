@@ -10,8 +10,7 @@ Responsabilidades:
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from core.utils import ARGENTINA_TZ, ensure_utc_aware, local_to_utc
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,12 +26,13 @@ from modules.appointments.repository import (
     active_block_overlap,
     appointment_overlap,
 )
+from modules.appointments.working_hours import staff_ids_working_range
 from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
 from modules.payments.repository import live_charge_of
 from modules.services.model import Service
-from modules.staff.model import Schedule, Staff, StaffBlock, StaffServiceModel
+from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 
@@ -43,22 +43,6 @@ from modules.users.model import User, UserRole
 # siendo un hash bcrypt valido, asi que un verify eventual devuelve False sin
 # romper (no un formato invalido que lance excepcion).
 _UNUSABLE_CLIENT_PASSWORD_HASH = hash_password(str(ulid.ULID()))
-
-
-def _schedule_covers(
-    local_day: date, schedule: Schedule, starts_at: datetime, ends_at: datetime
-) -> bool:
-    """La jornada de ese dia local, contiene el rango COMPLETO? (AUD2-B1-03)
-
-    Se comparan INSTANTES, no la hora del dia suelta. Con ``time`` un turno
-    que termina despues de la medianoche local "daba la vuelta" (23:30 + 60
-    min queda en 00:30) y la condicion ``cierre >= fin`` se cumplia sola: un
-    POST directo agendaba a las 23:30 contra una jornada de 09:00 a 18:00.
-    De paso queda cubierto el caso de que el fin caiga en otro dia local.
-    """
-    apertura = local_to_utc(local_day, schedule.start_time)
-    cierre = local_to_utc(local_day, schedule.end_time)
-    return apertura <= starts_at and ends_at <= cierre
 
 
 @dataclass(frozen=True)
@@ -281,6 +265,7 @@ class PublicRepository:
         starts_at: datetime,
         ends_at: datetime,
         *,
+        store_id: str,
         buffer_minutes: int,
         exclude_appointment_id: str | None = None,
         require_schedule: bool = True,
@@ -293,16 +278,16 @@ class PublicRepository:
         (B1-05 orden del lock, B1-07 buffer). Si devuelve ``None`` el
         profesional queda lockeado hasta el commit.
 
+        La jornada es el horario EFECTIVO (``working_hours``): sin franjas
+        propias, la del local (D-20260929-01/02). ``store_id`` es la tienda
+        del profesional, de donde sale ese respaldo.
+
         ``require_schedule=False``: el admin carga desde el panel un turno
         fuera de la jornada del profesional (FF-04). Bloqueos, choques y
         buffer siguen valiendo.
         """
-        if (
-            require_schedule
-            and staff_id
-            not in await self._staff_ids_with_schedule_for_slot(
-                [staff_id], starts_at, ends_at
-            )
+        if require_schedule and staff_id not in await staff_ids_working_range(
+            self.db, store_id, [staff_id], starts_at, ends_at
         ):
             return RangeRejection.OUT_OF_SCHEDULE
         return await self._lock_and_recheck(
@@ -343,33 +328,6 @@ class PublicRepository:
         if conflict is not None:
             return RangeRejection.TAKEN
         return None
-
-    async def _staff_ids_with_schedule_for_slot(
-        self, staff_ids: list[str], starts_at: datetime, ends_at: datetime
-    ) -> set[str]:
-        """Profesionales (de ``staff_ids``) cuya agenda cubre el rango. Una consulta.
-
-        El horario del profesional esta cargado en hora ARGENTINA (09:00 a
-        18:00); el turno llega como instante UTC. Comparar en UTC rechazaba
-        las ultimas 3 horas de cada jornada y todo turno posterior a las
-        21:00 (cae en el dia UTC siguiente). 2026-09-10.
-        """
-        if not staff_ids:
-            return set()
-        starts_utc = ensure_utc_aware(starts_at)
-        ends_utc = ensure_utc_aware(ends_at)
-        local_start = starts_utc.astimezone(ARGENTINA_TZ)
-        schedules_result = await self.db.execute(
-            select(Schedule).where(
-                Schedule.staff_id.in_(staff_ids),
-                Schedule.day_of_week == local_start.weekday(),
-            )
-        )
-        return {
-            schedule.staff_id
-            for schedule in schedules_result.scalars().all()
-            if _schedule_covers(local_start.date(), schedule, starts_utc, ends_utc)
-        }
 
     async def _staff_ids_with_overlapping_block(
         self,
@@ -466,8 +424,9 @@ class PublicRepository:
         ids = [member.id for member in candidates]
         # Sin exigir jornada (alta del panel con ``allow_outside_schedule``,
         # FF-04) todos los candidatos "atienden"; el resto no cambia.
+        # Horario efectivo (D-20260929-01/02): sin franjas, el del local.
         with_schedule = (
-            await self._staff_ids_with_schedule_for_slot(ids, starts_at, ends_at)
+            await staff_ids_working_range(self.db, store_id, ids, starts_at, ends_at)
             if require_schedule
             else set(ids)
         )

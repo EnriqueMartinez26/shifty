@@ -336,12 +336,13 @@ async def cancel_appointment(
     user: User = Depends(get_current_user),
     svc: AppointmentService = Depends(get_appointment_service),
 ) -> AppointmentResponse:
-    """Cancela un turno de la tienda. Lo usan el staff y el admin.
+    """Cancela un turno de la tienda desde el panel.
 
     El rol cliente no inicia sesión: cancela por
-    ``/public/client/appointments/{id}/cancel``. No verifica titularidad:
-    cualquier usuario autenticado de la tienda puede cancelar cualquier turno
-    de esa tienda.
+    ``/public/client/appointments/{id}/cancel``. Verifica rol y titularidad
+    (D-20260929-03): admin y recepcion cancelan cualquier turno de la tienda;
+    el profesional, solo los de su agenda (403 si no). Un turno que ya empezo
+    no se cancela: 409 ``APPOINTMENT_ALREADY_STARTED`` (D-20260929-05).
     """
     appointment = await svc.cancel(public_id=public_id, actor=user)
     return _to_appointment_response(appointment)
@@ -424,6 +425,8 @@ async def reschedule_appointment(
     - Cancela el original de forma atómica (con timestamp cancelled_at).
     - Crea uno nuevo con los mismos servicio/staff/cliente.
     - Ambas operaciones quedan registradas en audit_logs.
+    - Rol, duenio del turno y jornada del profesional los valida el servicio
+      (D-20260929-03/04); ``allow_outside_schedule`` es solo del admin.
     """
     cache_key = _panel_cache_key(
         "panel-reschedule", user.store_id, data.idempotency_key
@@ -438,6 +441,7 @@ async def reschedule_appointment(
             new_starts_at=data.new_starts_at,
             idempotency_key=data.idempotency_key,
             actor=user,
+            allow_outside_schedule=data.allow_outside_schedule,
         )
     except Exception:
         await idempotency_release(cache_key, redis)

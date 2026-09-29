@@ -1195,6 +1195,7 @@ class PublicBookingService:
             staff.id,
             new_starts_at,
             new_ends_at,
+            store_id=original.store_id,
             buffer_minutes=getattr(store, "buffer_minutes", 0) or 0,
             exclude_appointment_id=original.id,
         )

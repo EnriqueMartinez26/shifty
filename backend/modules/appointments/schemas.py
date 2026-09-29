@@ -173,6 +173,10 @@ class AppointmentReschedule(BaseModel):
 
     new_starts_at: datetime
     idempotency_key: str = Field(..., min_length=10, max_length=128)
+    # D-20260929-04 (aditivo): mover fuera de la jornada del profesional, solo
+    # el admin y explicito (mismo nombre que en el alta del panel). Sin el,
+    # fuera de horario es 409 OUT_OF_SCHEDULE; con el y sin ser admin, 403.
+    allow_outside_schedule: bool = False
 
     @model_validator(mode="after")
     def new_date_within_range(self) -> "AppointmentReschedule":

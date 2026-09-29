@@ -44,9 +44,11 @@ async def create_staff(
     data: StaffCreate,
     admin: User = Depends(get_current_admin),
     db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
 ) -> StaffResponse:
     repo = StaffRepository(db)
-    service = StaffService(db)
+    # Con cache: el alta invalida la agenda (sin franjas, horario del local).
+    service = StaffService(db, availability_cache)
     try:
         created = await service.create(
             data.model_dump(exclude={"service_ids"}), admin.store_id, data.service_ids
