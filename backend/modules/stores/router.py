@@ -92,17 +92,29 @@ def _replace_business_hours(
         return
 
     days_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-    store.schedules.clear()
-
+    wanted: dict[int, dict[str, time]] = {}
     for day_key, periods in business_hours.items():
         day_of_week = days_map.get(day_key)
         if day_of_week is None or not periods:
             continue
-
         # Un solo periodo por dia: ``StoreUpdate.reject_extra_periods`` da 422
         # ante un segundo, asi que aca ya no se pierde nada en silencio
         # (AUD2-B3-07). Soportar horario partido es producto, y esta pendiente.
-        period = periods[0]
+        wanted[day_of_week] = periods[0]
+
+    # Se actualiza en su lugar la fila del dia que ya existe, no se borra y se
+    # reinserta: el flush de SQLAlchemy emite los INSERT antes que los DELETE
+    # de huerfanos, y con ``uq_store_day_schedule`` el dia re-guardado chocaba
+    # consigo mismo (409). Ver tests/integration/test_horario_comercial_reemplazo.py.
+    for schedule in list(store.schedules):
+        period = wanted.pop(schedule.day_of_week, None)
+        if period is None:
+            store.schedules.remove(schedule)
+            continue
+        schedule.open_time = period["open"]
+        schedule.close_time = period["close"]
+
+    for day_of_week, period in wanted.items():
         store.schedules.append(
             StoreSchedule(
                 store_id=store.id,
