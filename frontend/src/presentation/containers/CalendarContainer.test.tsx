@@ -15,8 +15,18 @@ const mockBlock = {
   is_active: true
 }
 
+// FF-12: el servidor ya filtra los inactivos, pero la agenda tampoco los
+// muestra si llegan (otra version del backend, cache vieja).
+const mockInactiveBlock = {
+  ...mockBlock,
+  public_id: 'blk-2',
+  reason: 'Desactivado',
+  is_active: false
+}
+
+const mockBlocksHook = jest.fn()
 jest.mock('../hooks/useAppointmentBlocks', () => ({
-  useAppointmentBlocks: () => ({ data: [mockBlock], isLoading: false, error: null }),
+  useAppointmentBlocks: (...args: unknown[]) => mockBlocksHook(...args),
   useBlockTemplates: () => ({ data: [], isLoading: false, error: null }),
   useBlockPreview: () => idleMutation,
   useCreateAppointmentBlock: () => idleMutation,
@@ -63,6 +73,12 @@ describe('CalendarContainer - formulario de bloqueo (F11c-05)', () => {
     jest.useFakeTimers({ now: new Date('2026-09-20T15:30:00.000Z') })
     mockUpdateBlock.mockReset()
     mockUpdateBlock.mockResolvedValue(mockBlock)
+    mockBlocksHook.mockReset()
+    mockBlocksHook.mockReturnValue({
+      data: [mockBlock, mockInactiveBlock],
+      isLoading: false,
+      error: null
+    })
   })
 
   afterEach(() => {
@@ -83,8 +99,8 @@ describe('CalendarContainer - formulario de bloqueo (F11c-05)', () => {
     await waitFor(() => expect(mockUpdateBlock).toHaveBeenCalled())
     expect(mockUpdateBlock).toHaveBeenCalledWith({
       publicId: 'blk-1',
+      // Sin staff_id: el PATCH no lo acepta (FF-11, D-20260929-11).
       payload: {
-        staff_id: 'st-1',
         starts_at: '2026-09-20T15:00:00.000Z',
         ends_at: '2026-09-20T16:00:00.000Z',
         reason: 'Tramite'
@@ -101,5 +117,28 @@ describe('CalendarContainer - formulario de bloqueo (F11c-05)', () => {
     if (!next) throw new Error('No encontre la flecha para avanzar el dia')
     fireEvent.click(next)
     expect(dateInput.value).toBe('2026-09-21')
+  })
+
+  it('pide los bloqueos del rango visible y no lista los desactivados (FF-12)', () => {
+    render(<CalendarContainer />)
+
+    expect(mockBlocksHook).toHaveBeenCalledWith('2026-09-20', '2026-09-20')
+    expect(screen.getAllByText('Tramite').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Desactivado')).not.toBeInTheDocument()
+  })
+
+  // FF-14 / D-20260929-09: recepcion ve los bloqueos, pero no los gestiona.
+  it('recepcion ve el bloqueo sin formulario ni acciones', () => {
+    mockUser.role = 'receptionist'
+    try {
+      render(<CalendarContainer />)
+
+      expect(screen.getAllByText('Tramite').length).toBeGreaterThan(0)
+      expect(screen.queryByRole('button', { name: 'Editar' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Desactivar' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Guardar bloqueo' })).not.toBeInTheDocument()
+    } finally {
+      mockUser.role = 'store_admin'
+    }
   })
 })
