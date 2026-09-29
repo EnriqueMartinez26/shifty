@@ -41,15 +41,17 @@ jest.mock('../hooks/useCalendarAgenda', () => ({
     error: null,
     refetch: mockRefetch
   }),
+  useCancelAppointment: () => idleMutation,
   useCompleteAppointment: () => idleMutation,
   useConfirmAppointment: () => ({ mutateAsync: mockConfirm, isPending: false }),
   useMarkAbsentAppointment: () => idleMutation,
-  useReleaseAppointment: () => idleMutation
+  useReleaseAppointment: () => idleMutation,
+  useRescheduleAppointment: () => idleMutation
 }))
 
 jest.mock('../hooks/useManagedStaff', () => ({
   useManagedStaff: () => ({
-    data: [{ id: 'st-1', displayName: 'Ana Gomez', isActive: true }],
+    data: [{ id: 'st-1', displayName: 'Ana Gomez', isActive: true, schedules: [] }],
     isLoading: false,
     error: null
   })

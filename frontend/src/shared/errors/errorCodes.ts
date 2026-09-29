@@ -24,6 +24,17 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
     'Este turno tiene un pago en curso. Para cancelarlo o cambiarlo, comunicate con el negocio.'
   ],
   ['DEPOSIT_PENDING_RESCHEDULE_DENIED', 'Cobrá la seña o cancelá el turno antes de moverlo.'],
+  // Cancelar desde el panel (D-20260929-05): lo que empezo se completa o se
+  // marca ausente, no se cancela.
+  [
+    'APPOINTMENT_ALREADY_STARTED',
+    'El turno ya empezó: no se puede cancelar. Completalo o marcá la ausencia.'
+  ],
+  ['APPOINTMENT_ALREADY_CANCELLED', 'El turno ya estaba cancelado. Actualizá la agenda.'],
+  [
+    'APPOINTMENT_NOT_ACTIVE',
+    'El turno ya terminó o fue cancelado: no se puede mover. Actualizá la agenda.'
+  ],
   // Reserva y reprogramacion.
   ['APPOINTMENT_CONFLICT', 'Ese horario ya no está disponible. Elegí otro.'],
   ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],

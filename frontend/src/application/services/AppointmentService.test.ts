@@ -10,6 +10,8 @@ jest.mock('../../infrastructure/http/client', () => ({
 import { AppointmentService } from './AppointmentService'
 import { Appointment } from '../../domain/entities/Appointment'
 import type { IBookingRepository } from '../../domain/repositories/IBookingRepository'
+import { ValidationError } from '../../shared/errors'
+import { getErrorCode } from '../../shared/errors/getErrorMessage'
 
 describe('AppointmentService', () => {
   let mockRepository: jest.Mocked<IBookingRepository>
@@ -119,14 +121,30 @@ describe('AppointmentService', () => {
   describe('reschedule', () => {
     it('should delegate rescheduling to the repository', async () => {
       mockRepository.reschedule.mockResolvedValue(undefined)
+      const input = {
+        newStartsAt: '2026-05-18T12:00:00Z',
+        idempotencyKey: 'clave-del-formulario-1',
+        allowOutsideSchedule: true
+      }
 
-      await service.reschedule('appt-id', '2026-05-18T12:00:00Z', '2026-05-18T13:00:00Z')
+      await service.reschedule('appt-id', input)
 
-      expect(mockRepository.reschedule).toHaveBeenCalledWith(
-        'appt-id',
-        '2026-05-18T12:00:00Z',
-        '2026-05-18T13:00:00Z'
+      expect(mockRepository.reschedule).toHaveBeenCalledWith('appt-id', input)
+    })
+
+    it('keeps the backend error code (OUT_OF_SCHEDULE) for the screen', async () => {
+      mockRepository.reschedule.mockRejectedValue(
+        new ValidationError('Fuera de horario', { errorCode: 'OUT_OF_SCHEDULE', statusCode: 409 })
       )
+
+      const failure = await service
+        .reschedule('appt-id', {
+          newStartsAt: '2026-05-18T12:00:00Z',
+          idempotencyKey: 'clave-del-formulario-1'
+        })
+        .catch((error: unknown) => error)
+
+      expect(getErrorCode(failure)).toBe('OUT_OF_SCHEDULE')
     })
   })
 })

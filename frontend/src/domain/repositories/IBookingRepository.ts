@@ -18,6 +18,19 @@ export interface CreateBookingInput {
 }
 
 /**
+ * Reprogramacion desde el panel. El backend recalcula el fin con la duracion
+ * del servicio, asi que solo viaja el nuevo inicio. La clave de idempotencia
+ * la genera el formulario (un reintento del mismo pedido reusa la suya).
+ * `allowOutsideSchedule` es solo del administrador (D-20260929-04): para el
+ * resto el backend responde 403.
+ */
+export interface RescheduleInput {
+  newStartsAt: string
+  idempotencyKey: string
+  allowOutsideSchedule?: boolean
+}
+
+/**
  * Turnos de un rango. `total` es lo que el servidor dice que hay; si supera
  * `appointments.length`, la lista vino recortada por el tope de paginas y el
  * llamador tiene que avisarlo en vez de mostrarla como completa.
@@ -36,5 +49,5 @@ export interface IBookingRepository {
   cancel(id: string): Promise<void>
   release(id: string): Promise<void>
   markAbsent(id: string): Promise<void>
-  reschedule(id: string, newStartTime: string, newEndTime?: string): Promise<void>
+  reschedule(id: string, input: RescheduleInput): Promise<void>
 }

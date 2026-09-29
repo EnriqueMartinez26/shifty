@@ -46,7 +46,7 @@ const isTerminalStatus = (value: string): boolean =>
 export const isCollectibleStatus = (value: string): boolean =>
   isBookingStatus(value) && !isTerminalStatus(value)
 
-export type BookingAction = 'confirm' | 'release' | 'complete' | 'absent'
+export type BookingAction = 'confirm' | 'release' | 'cancel' | 'complete' | 'absent' | 'reschedule'
 
 interface BookingActionContext {
   /** El turno ya empezo o termino: solo entonces se puede completar o marcar ausente. */
@@ -55,21 +55,41 @@ interface BookingActionContext {
   canRelease: boolean
   /** Puede confirmar, completar o marcar ausente. */
   canManage: boolean
+  /**
+   * Puede cancelar o reprogramar ESTE turno (D-20260929-03): administracion y
+   * recepcion, cualquiera; el profesional, solo los de su agenda.
+   */
+  canCancelOrReschedule: boolean
 }
+
+const isPendingStatus = (status: string): boolean =>
+  status === 'pending' || status === 'pending_payment'
 
 /**
  * Transiciones que la agenda ofrece para un turno, segun el grafo del backend:
- * pendiente -> confirmar o liberar; pendiente de pago -> solo liberar (se
- * confirma con el pago); confirmado y ya empezado -> completar o ausente. Un
- * estado terminal o desconocido no ofrece nada.
+ * - pendiente -> confirmar; pendiente o pendiente de pago -> "Liberar" para
+ *   quien puede liberar y, si no, "Cancelar" (D-20260929-06);
+ * - confirmado que no empezo -> cancelar; ya empezado -> completar o ausente
+ *   (uno que empezo no se cancela, D-20260929-05);
+ * - pendiente o confirmado -> reprogramar (un pendiente de pago no se mueve:
+ *   409 DEPOSIT_PENDING_RESCHEDULE_DENIED).
+ * Un estado terminal o desconocido no ofrece nada.
  */
 export const bookingActionsFor = (
   status: string,
-  { hasStarted, canRelease, canManage }: BookingActionContext
+  { hasStarted, canRelease, canManage, canCancelOrReschedule }: BookingActionContext
 ): BookingAction[] => {
   const actions: BookingAction[] = []
+  const canCancelNow = canCancelOrReschedule && !hasStarted
   if (status === 'pending' && canManage) actions.push('confirm')
-  if ((status === 'pending' || status === 'pending_payment') && canRelease) actions.push('release')
+  if (isPendingStatus(status)) {
+    if (canRelease) actions.push('release')
+    else if (canCancelNow) actions.push('cancel')
+  }
+  if (status === 'confirmed' && canCancelNow) actions.push('cancel')
   if (status === 'confirmed' && hasStarted && canManage) actions.push('complete', 'absent')
+  if ((status === 'pending' || status === 'confirmed') && canCancelOrReschedule) {
+    actions.push('reschedule')
+  }
   return actions
 }

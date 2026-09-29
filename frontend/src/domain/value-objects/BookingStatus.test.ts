@@ -24,7 +24,12 @@ describe('predicados de estado del turno', () => {
 })
 
 describe('bookingActionsFor', () => {
-  const all = { hasStarted: true, canRelease: true, canManage: true }
+  const all = {
+    hasStarted: true,
+    canRelease: true,
+    canManage: true,
+    canCancelOrReschedule: false
+  }
 
   it.each<[string, Partial<typeof all>, BookingAction[]]>([
     ['pending', { hasStarted: false }, ['confirm', 'release']],
@@ -42,5 +47,36 @@ describe('bookingActionsFor', () => {
     ['on_hold', {}, []]
   ])('%s %o -> %o', (status, overrides, expected) => {
     expect(bookingActionsFor(status, { ...all, ...overrides })).toEqual(expected)
+  })
+
+  // FF-31, D-20260929-05/06: cancelar y reprogramar desde la agenda.
+  const owner = {
+    hasStarted: false,
+    canRelease: false,
+    canManage: true,
+    canCancelOrReschedule: true
+  }
+
+  it.each<[string, Partial<typeof owner>, BookingAction[]]>([
+    // Confirmado: cancela cualquiera que pueda, mientras no empezo.
+    ['confirmed', {}, ['cancel', 'reschedule']],
+    ['confirmed', { canRelease: true }, ['cancel', 'reschedule']],
+    // Ya empezado: se completa o se marca ausente, no se cancela.
+    ['confirmed', { hasStarted: true }, ['complete', 'absent', 'reschedule']],
+    // Pendiente: el admin libera, el resto cancela.
+    ['pending', {}, ['confirm', 'cancel', 'reschedule']],
+    ['pending', { canRelease: true }, ['confirm', 'release', 'reschedule']],
+    ['pending', { hasStarted: true }, ['confirm', 'reschedule']],
+    // Pendiente de pago: no se reprograma (409 DEPOSIT_PENDING_RESCHEDULE_DENIED).
+    ['pending_payment', {}, ['cancel']],
+    ['pending_payment', { canRelease: true }, ['release']],
+    // Turno de otro profesional: ni cancelar ni reprogramar.
+    ['confirmed', { canCancelOrReschedule: false }, []],
+    ['pending', { canCancelOrReschedule: false }, ['confirm']],
+    ['cancelled', {}, []],
+    ['completed', {}, []],
+    ['on_hold', {}, []]
+  ])('con permiso de cancelar: %s %o -> %o', (status, overrides, expected) => {
+    expect(bookingActionsFor(status, { ...owner, ...overrides })).toEqual(expected)
   })
 })

@@ -62,6 +62,73 @@ describe('HttpBookingRepository.searchByDateRange', () => {
   })
 })
 
+describe('HttpBookingRepository.reschedule', () => {
+  it('manda el nuevo inicio y la clave del llamador, sin el flag si no se pidio', async () => {
+    const patch = jest.fn().mockResolvedValue({ data: {} })
+    const repository = new HttpBookingRepository({ patch } as unknown as AxiosInstance)
+
+    await repository.reschedule('appt-1', {
+      newStartsAt: '2026-09-10T12:00:00Z',
+      idempotencyKey: 'clave-del-formulario-1',
+      allowOutsideSchedule: false
+    })
+
+    expect(patch).toHaveBeenCalledWith('/appointments/appt-1/reschedule', {
+      new_starts_at: '2026-09-10T12:00:00Z',
+      idempotency_key: 'clave-del-formulario-1'
+    })
+  })
+
+  it('manda allow_outside_schedule solo cuando el administrador lo pide (D-20260929-04)', async () => {
+    const patch = jest.fn().mockResolvedValue({ data: {} })
+    const repository = new HttpBookingRepository({ patch } as unknown as AxiosInstance)
+
+    await repository.reschedule('appt-1', {
+      newStartsAt: '2026-09-10T12:00:00Z',
+      idempotencyKey: 'clave-del-formulario-1',
+      allowOutsideSchedule: true
+    })
+
+    expect(patch).toHaveBeenCalledWith('/appointments/appt-1/reschedule', {
+      new_starts_at: '2026-09-10T12:00:00Z',
+      idempotency_key: 'clave-del-formulario-1',
+      allow_outside_schedule: true
+    })
+  })
+})
+
+describe('HttpBookingRepository.searchByDateRange en paralelo (F4-07)', () => {
+  it('pide la primera pagina y despues todas las demas juntas', async () => {
+    let pending = 0
+    let maxPending = 0
+    const get = jest.fn().mockImplementation(async () => {
+      pending += 1
+      maxPending = Math.max(maxPending, pending)
+      await Promise.resolve()
+      pending -= 1
+      return page(100, 300)
+    })
+    const repository = new HttpBookingRepository({ get } as unknown as AxiosInstance)
+
+    const range = await repository.searchByDateRange('2026-09-01', '2026-09-30')
+
+    expect(get).toHaveBeenCalledTimes(3)
+    expect(get.mock.calls.map(([, config]) => config.params.page)).toEqual([1, 2, 3])
+    expect(maxPending).toBe(2)
+    expect(range.appointments).toHaveLength(300)
+  })
+
+  it('una primera pagina corta no pide ninguna otra', async () => {
+    const get = jest.fn().mockResolvedValue(page(30, 30))
+    const repository = new HttpBookingRepository({ get } as unknown as AxiosInstance)
+
+    const range = await repository.searchByDateRange('2026-09-01', '2026-09-30')
+
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(range).toMatchObject({ total: 30 })
+  })
+})
+
 describe('HttpBookingRepository.create', () => {
   const payload = {
     service_id: 'service-1',

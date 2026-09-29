@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Check, CheckCheck, LockOpen, UserX } from 'lucide-react'
+import { CalendarClock, Check, CheckCheck, CircleX, LockOpen, UserX } from 'lucide-react'
 
 import { bookingActionsFor, type BookingAction } from '@domain/value-objects/BookingStatus'
 
@@ -12,6 +12,8 @@ interface AppointmentActionsProps {
   hasStarted: boolean
   canRelease: boolean
   canManage: boolean
+  /** Puede cancelar o reprogramar este turno (D-20260929-03). */
+  canCancelOrReschedule: boolean
   busy: boolean
   compact?: boolean
   onAction: (action: AppointmentAction) => void
@@ -41,6 +43,12 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
     icon: <LockOpen className="w-3 h-3" />,
     tone: 'text-red-700 border-red-200'
   },
+  cancel: {
+    label: 'Cancelar',
+    title: 'Cancelar turno',
+    icon: <CircleX className="w-3 h-3" />,
+    tone: 'text-red-700 border-red-200'
+  },
   complete: {
     label: 'Completar',
     title: 'Marcar turno como completado',
@@ -52,6 +60,12 @@ const ACTION_VIEWS: Record<AppointmentAction, ActionView> = {
     title: 'El cliente no vino',
     icon: <UserX className="w-3 h-3" />,
     tone: 'text-amber-700 border-amber-200'
+  },
+  reschedule: {
+    label: 'Reprogramar',
+    title: 'Reprogramar turno',
+    icon: <CalendarClock className="w-3 h-3" />,
+    tone: 'text-slate-700 border-slate-200'
   }
 }
 
@@ -60,11 +74,17 @@ export const AppointmentActions: React.FC<AppointmentActionsProps> = ({
   hasStarted,
   canRelease,
   canManage,
+  canCancelOrReschedule,
   busy,
   compact = false,
   onAction
 }) => {
-  const actions = bookingActionsFor(status, { hasStarted, canRelease, canManage })
+  const actions = bookingActionsFor(status, {
+    hasStarted,
+    canRelease,
+    canManage,
+    canCancelOrReschedule
+  })
   if (actions.length === 0) return null
   return (
     <div className={`flex flex-wrap gap-1 ${compact ? 'mt-1' : 'mt-2'}`}>
