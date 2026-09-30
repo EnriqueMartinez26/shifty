@@ -70,7 +70,7 @@ export const SESSION_ROUTES: AppRoute[] = [
       {
         path: 'payments',
         page: PaymentsPage,
-        access: ROLES_ADMIN_SUPER_PRO,
+        access: ROLES_ADMIN_SUPER,
         boundary: 'Payments are temporarily unavailable'
       },
       { path: 'collections', page: CollectionsPage, access: ROLES_ADMIN_SUPER_PRO },
