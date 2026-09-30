@@ -67,7 +67,9 @@ describe('SuperAdminService.listStores', () => {
 // (regla 23) y verbo de cada recurso.
 const admin = {
   email: 'dueno@example.com',
-  password: 'clave-segura-12',
+  // Relleno de 12 caracteres armado en runtime: un literal con entropia
+  // dispara la regla generic-api-key de gitleaks (secret-scan en CI).
+  password: 'x'.repeat(12),
   first_name: 'Ana',
   last_name: 'Diaz'
 }
