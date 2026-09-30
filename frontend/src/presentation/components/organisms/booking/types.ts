@@ -27,7 +27,6 @@ export interface BookingOtpState {
   email: string
   verified: boolean
   verifiedPhone: string
-  debugCode: string
   expiresAt: string
   error: string
 }

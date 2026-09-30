@@ -58,6 +58,8 @@ interface BookingStepConfirmationProps {
   requiresOtp: boolean
   otpState: BookingOtpState
   isRequestingOtp: boolean
+  /** Segundos que faltan para poder pedir otro codigo (0: se puede). */
+  otpResendSeconds: number
   isVerifyingOtp: boolean
   onRequestOtp: () => void
   onVerifyOtp: () => void
@@ -106,6 +108,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   requiresOtp,
   otpState,
   isRequestingOtp,
+  otpResendSeconds,
   isVerifyingOtp,
   onRequestOtp,
   onVerifyOtp,
@@ -308,6 +311,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           <input
             type="text"
             required
+            autoComplete="name"
             value={client.name}
             onChange={(e) => updateClient({ name: e.target.value })}
             className="w-full pl-12 pr-4 py-3.5 font-bold"
@@ -326,6 +330,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <Mail size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
               type="email"
+              autoComplete="email"
               value={client.email}
               onChange={(e) => updateClient({ email: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold"
@@ -344,6 +349,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <input
               type="tel"
               required
+              autoComplete="tel"
               value={client.phone}
               onChange={(e) => updateClient({ phone: e.target.value })}
               className="w-full pl-12 pr-4 py-3.5 font-bold"
@@ -429,6 +435,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         <input
           type="email"
           inputMode="email"
+          autoComplete="email"
           aria-label="Email para el codigo"
           value={otpState.email}
           onChange={(e) => onOtpEmailChange(e.target.value)}
@@ -438,36 +445,30 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         />
         <button
           type="button"
-          disabled={isRequestingOtp || !otpState.email.trim()}
+          disabled={isRequestingOtp || !otpState.email.trim() || otpResendSeconds > 0}
           onClick={onRequestOtp}
           className="px-4 py-3 text-xs font-black uppercase tracking-widest"
           style={{ ...buttonStyles2000s.default, borderRadius: 6 }}
         >
-          {isRequestingOtp ? 'Enviando...' : 'Enviar codigo'}
+          {isRequestingOtp
+            ? 'Enviando...'
+            : otpResendSeconds > 0
+              ? `Reenviar en ${otpResendSeconds} s`
+              : 'Enviar codigo'}
         </button>
       </div>
 
       <div className="space-y-3">
         <input
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          maxLength={6}
           value={otpState.code}
           onChange={(e) => onOtpCodeChange(e.target.value)}
           className="w-full px-4 py-3 font-bold outline-none"
           style={clientInputStyle}
           placeholder="Codigo que te llego por email"
         />
-
-        {otpState.debugCode && (
-          <div
-            className="p-3 text-xs font-black uppercase tracking-widest"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.info.bg,
-              colors2000s.status.info.border,
-              colors2000s.status.info.text
-            )}
-          >
-            Codigo debug: {otpState.debugCode}
-          </div>
-        )}
 
         {otpState.error && (
           <div

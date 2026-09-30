@@ -47,7 +47,6 @@ const otpInicial = (patch: Partial<BookingOtpState> = {}): BookingOtpState => ({
   email: '',
   verified: false,
   verifiedPhone: '',
-  debugCode: '',
   expiresAt: '',
   error: '',
   ...patch
@@ -84,6 +83,7 @@ const props = (patch: Partial<Props> = {}): Props => ({
   requiresOtp: false,
   otpState: otpInicial(),
   isRequestingOtp: false,
+  otpResendSeconds: 0,
   isVerifyingOtp: false,
   onRequestOtp: jest.fn(),
   onVerifyOtp: jest.fn(),
@@ -423,6 +423,36 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
       expect(botonReservar()).not.toBeDisabled()
+    })
+  })
+
+  describe('en el celular (F4-11)', () => {
+    // 2026-09-30, F4-11: en el celular el codigo abria el teclado de letras,
+    // no se ofrecia desde el mail y aceptaba cualquier largo; nombre, email y
+    // telefono no se autocompletaban.
+    it('nombre, email y telefono se autocompletan', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByPlaceholderText('Ej: Juan Perez')).toHaveAttribute('autocomplete', 'name')
+      expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('autocomplete', 'email')
+      expect(screen.getByPlaceholderText('PREFIJO + NUM')).toHaveAttribute('autocomplete', 'tel')
+    })
+
+    it('el codigo usa teclado numerico, autocompletado de codigo y 6 digitos', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      const codigo = screen.getByPlaceholderText('Codigo que te llego por email')
+      expect(codigo).toHaveAttribute('inputmode', 'numeric')
+      expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
+      expect(codigo).toHaveAttribute('maxlength', '6')
+      expect(screen.getByLabelText('Email para el codigo')).toHaveAttribute('autocomplete', 'email')
     })
   })
 

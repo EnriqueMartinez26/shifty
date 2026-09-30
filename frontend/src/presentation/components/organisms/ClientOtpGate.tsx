@@ -11,6 +11,7 @@ import {
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { useRequestPublicOtp, useVerifyPublicOtp } from '../../hooks/usePublic'
+import { useResendCooldown } from '../../hooks/useResendCooldown'
 import { createBookingInputStyle, createBookingSurfaceStyle } from '../../lib/surfaceStyles'
 
 interface ClientOtpGateProps {
@@ -49,6 +50,9 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
   const [form, setForm] = useState({ phone: initialPhone, email: '', code: '' })
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
+  const cooldown = useResendCooldown()
+  // Un telefono ya verificado no gasta un codigo: la espera no lo frena.
+  const esperando = cooldown.remainingSeconds > 0 && !isOtpStillValid(storeSlug, form.phone)
 
   const continuarSiYaVerificado = (): boolean => {
     if (!form.phone.trim() || !isOtpStillValid(storeSlug, form.phone)) return false
@@ -75,6 +79,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
         email: form.email.trim()
       })
       setSent(true)
+      cooldown.start()
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'No pudimos enviar el código'))
     }
@@ -128,6 +133,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
       <input
         type="tel"
         inputMode="tel"
+        autoComplete="tel"
         value={form.phone}
         onChange={(e) => setForm({ ...form, phone: e.target.value })}
         placeholder="Tu teléfono (ej: 11 5555 0000)"
@@ -141,6 +147,7 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
           <input
             type="email"
             inputMode="email"
+            autoComplete="email"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
             placeholder="tu@email.com"
@@ -150,14 +157,18 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
           />
           <button
             type="button"
-            disabled={requestOtp.isPending || !form.phone.trim()}
+            disabled={requestOtp.isPending || !form.phone.trim() || esperando}
             onClick={() => {
               void pedirCodigo()
             }}
             className="w-full py-3 rounded-2xl text-white text-xs font-black uppercase tracking-widest disabled:opacity-60"
             style={buttonStyles2000s.selected}
           >
-            {requestOtp.isPending ? 'Enviando...' : 'Enviarme el código'}
+            {requestOtp.isPending
+              ? 'Enviando...'
+              : esperando
+                ? `Reenviar en ${cooldown.remainingSeconds} s`
+                : 'Enviarme el código'}
           </button>
         </>
       )}
@@ -165,6 +176,9 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
       {sent && (
         <>
           <input
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            maxLength={6}
             value={form.code}
             onChange={(e) => setForm({ ...form, code: e.target.value })}
             placeholder="Código que te llegó por email"

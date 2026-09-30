@@ -20,6 +20,7 @@ import {
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
+import { useResendCooldown } from '../../../hooks/useResendCooldown'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
@@ -51,7 +52,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     email: '',
     verified: false,
     verifiedPhone: '',
-    debugCode: '',
     expiresAt: '',
     error: ''
   })
@@ -88,6 +88,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const createBooking = useCreatePublicBooking()
   const requestOtp = useRequestPublicOtp()
   const verifyOtp = useVerifyPublicOtp()
+  const resendCooldown = useResendCooldown()
   const { data: services } = usePublicServices(store.public_id)
 
   // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
@@ -132,7 +133,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         return { ...prev, email, verified: true, verifiedPhone: client.phone, error: '' }
       }
       return prev.verified
-        ? { ...prev, email, verified: false, code: '', debugCode: '', error: '' }
+        ? { ...prev, email, verified: false, code: '', error: '' }
         : { ...prev, email }
     })
   }
@@ -150,12 +151,10 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         channel: otpState.channel,
         email
       })
-      setOtpState((prev) => ({
-        ...prev,
-        debugCode: response.debug_code || '',
-        expiresAt: response.expires_at,
-        error: ''
-      }))
+      // debug_code no se muestra (J7, 2026-09-30): con OTP_DEBUG_EXPOSE_CODE
+      // es un senuelo cuando el codigo fue a otro buzon que el tipeado.
+      setOtpState((prev) => ({ ...prev, expiresAt: response.expires_at, error: '' }))
+      resendCooldown.start()
     } catch (error: unknown) {
       setOtpState((prev) => ({
         ...prev,
@@ -320,6 +319,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             requiresOtp={requiresOtp}
             otpState={otpState}
             isRequestingOtp={requestOtp.isPending}
+            otpResendSeconds={resendCooldown.remainingSeconds}
             isVerifyingOtp={verifyOtp.isPending}
             onRequestOtp={() => {
               void handleRequestOtp()

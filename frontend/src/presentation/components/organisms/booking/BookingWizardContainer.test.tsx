@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
 import type { PublicStore } from '../../../hooks/usePublic'
@@ -201,5 +201,69 @@ describe('BookingWizardContainer', () => {
       getItem.mockRestore()
       setItem.mockRestore()
     }
+  })
+
+  describe('pedir el codigo desde el celular (F4-11, J7)', () => {
+    // 2026-09-30, F4-11: sin espera para reenviar, cada toque de "Enviar
+    // codigo" mientras el mail tardaba gastaba uno de los 5 pedidos por hora
+    // (OTP_MAX_REQUESTS_PER_HOUR) y el cliente quedaba bloqueado una hora.
+    beforeEach(() => jest.useFakeTimers())
+    afterEach(() => jest.useRealTimers())
+
+    const hastaPedirElCodigo = async () => {
+      mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
+      render(<BookingWizardContainer store={tienda(true)} />)
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
+        target: { value: 'lucia@example.com' }
+      })
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '+5491155550101' }
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Enviar codigo' }))
+      })
+    }
+
+    it('despues de un pedido exitoso espera 60 s para reenviar y muestra los segundos', async () => {
+      mockRequestOtp.mockResolvedValue({ ok: true, expires_at: '2026-09-30T13:00:00Z' })
+      await hastaPedirElCodigo()
+
+      expect(screen.getByRole('button', { name: 'Reenviar en 60 s' })).toBeDisabled()
+      act(() => {
+        jest.advanceTimersByTime(30_000)
+      })
+      expect(screen.getByRole('button', { name: 'Reenviar en 30 s' })).toBeDisabled()
+      act(() => {
+        jest.advanceTimersByTime(30_000)
+      })
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+      expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+    })
+
+    it('un pedido fallido no arranca la espera', async () => {
+      mockRequestOtp.mockRejectedValue(new Error('Demasiados pedidos'))
+      await hastaPedirElCodigo()
+
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+      expect(screen.queryByText(/Reenviar en/)).not.toBeInTheDocument()
+    })
+
+    it('no muestra el debug_code aunque la API lo devuelva', async () => {
+      // 2026-09-30, J7: con OTP_DEBUG_EXPOSE_CODE el backend devuelve un
+      // senuelo cuando el codigo fue a un buzon distinto del tipeado; la
+      // pantalla lo mostraba como "Codigo debug" y no verificaba.
+      mockRequestOtp.mockResolvedValue({
+        ok: true,
+        expires_at: '2026-09-30T13:00:00Z',
+        debug_code: '424242'
+      })
+      await hastaPedirElCodigo()
+
+      expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText(/424242/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Codigo debug/i)).not.toBeInTheDocument()
+    })
   })
 })
