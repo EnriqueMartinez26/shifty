@@ -39,6 +39,9 @@ export type UnifiedCalendarEvent =
       status: 'blocked'
     }
 
+/** Un dia sin eventos: la misma referencia siempre, para que la grilla no se recalcule. */
+export const NO_EVENTS: readonly UnifiedCalendarEvent[] = []
+
 /**
  * `toISOString()` de un `Date` invalido no devuelve vacio: lanza `RangeError`.
  * En un camino de render eso tumba la agenda entera por un solo turno con
