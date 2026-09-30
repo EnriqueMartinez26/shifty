@@ -19,8 +19,6 @@ import {
   Plus
 } from 'lucide-react'
 
-import { isBookingStatus } from '@domain/value-objects/BookingStatus'
-
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
 import {
   formatArgentinaDate,
@@ -66,13 +64,18 @@ import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
 import { statusStyle } from '../lib/appointmentStatusStyle'
 import {
+  buildUnifiedEvents,
+  groupEventsByDay,
+  toInstantIso,
+  type UnifiedCalendarEvent
+} from '../lib/calendarEvents'
+import {
   MIN_APPOINTMENT_MINUTES,
   SLOT_HEIGHT_PX,
   buildDayGrid,
   gridPlacement,
   rangeFromInstants
 } from '../lib/calendarGrid'
-import { reportUnknownStatus } from '../lib/reportUnreadableInstant'
 import {
   mondayBasedWeekday,
   offHoursSegments,
@@ -82,33 +85,6 @@ import {
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 type CalendarView = 'day' | 'week' | 'month' | 'list'
-
-type UnifiedCalendarEvent =
-  | {
-      id: string
-      type: 'appointment' | 'absence'
-      staffId: string
-      staffName: string
-      title: string
-      subtitle: string
-      startsAt: Date
-      endsAt: Date
-      status: string
-      /** Solo llega para administradores (dato personal). */
-      clientPhone: string | null
-      serviceId: string
-    }
-  | {
-      id: string
-      type: 'block'
-      staffId: string
-      staffName: string
-      title: string
-      subtitle: string
-      startsAt: Date
-      endsAt: Date
-      status: 'blocked'
-    }
 
 const VIEW_LABELS: Record<CalendarView, string> = {
   day: 'Dia',
@@ -136,22 +112,8 @@ const fieldStyle = {
   color: colors2000s.text.primary
 }
 
-/**
- * `toISOString()` de un `Date` invalido no devuelve vacio: lanza `RangeError`.
- * En un camino de render eso tumba la agenda entera por un solo turno con
- * fecha corrupta, asi que la cadena vacia entra a los formateadores de
- * `argentinaTime`, que ya la resuelven como "sin dato".
- */
-const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.toISOString())
-
 /** Un dia sin eventos: la misma referencia siempre, para que la grilla no se recalcule. */
 const NO_EVENTS: readonly UnifiedCalendarEvent[] = []
-
-const eventPriority = (event: UnifiedCalendarEvent) => {
-  if (event.type === 'block') return 0
-  if (event.type === 'absence') return 1
-  return 2
-}
 
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
@@ -254,71 +216,17 @@ export const CalendarContainer: React.FC = () => {
     return blocksInRange.filter((block) => formatArgentinaDate(block.starts_at) === dateStr)
   }, [blocksInRange, dateStr])
 
-  const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
-    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data?.appointments ?? []).map(
-      (appointment) => {
-        // Un estado nuevo del backend se muestra crudo y sin acciones; esto
-        // deja la senal en vez de pasar inadvertido (F8-03).
-        if (!isBookingStatus(appointment.status)) {
-          reportUnknownStatus('agenda', appointment.status)
-        }
-        return {
-          id: appointment.id,
-          type: appointment.status === 'absent' ? 'absence' : 'appointment',
-          staffId: appointment.staffId,
-          // Primero el nombre autoritativo que manda el backend (del join, vale
-          // aunque el profesional este dado de baja o el listado de staff no
-          // haya cargado); el cruce por id queda como respaldo.
-          staffName:
-            appointment.staffName ||
-            staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
-            'Profesional',
-          title: appointment.clientName,
-          subtitle: appointment.serviceName,
-          startsAt: appointment.timeSpan.getStartsAt(),
-          endsAt: appointment.timeSpan.getEndsAt(),
-          status: appointment.status,
-          clientPhone: appointment.clientPhone,
-          serviceId: appointment.serviceId
-        }
-      }
-    )
+  const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(
+    () =>
+      buildUnifiedEvents({
+        appointments: agendaQuery.data?.appointments ?? [],
+        blocks: blocksInRange,
+        staffMembers
+      }),
+    [agendaQuery.data, blocksInRange, staffMembers]
+  )
 
-    const blockEvents: UnifiedCalendarEvent[] = blocksInRange.map((block) => {
-      const staffName =
-        staffMembers?.find((staff) => staff.id === block.staff_id)?.displayName || 'Profesional'
-      return {
-        id: block.public_id,
-        type: 'block',
-        staffId: block.staff_id,
-        staffName,
-        title: block.reason,
-        subtitle: 'Bloqueo de agenda',
-        startsAt: new Date(block.starts_at),
-        endsAt: new Date(block.ends_at),
-        status: 'blocked'
-      }
-    })
-
-    return [...blockEvents, ...appointmentEvents].sort((a, b) => {
-      const startDiff = a.startsAt.getTime() - b.startsAt.getTime()
-      if (startDiff !== 0) return startDiff
-      return eventPriority(a) - eventPriority(b)
-    })
-  }, [agendaQuery.data, blocksInRange, staffMembers])
-
-  // Dia argentino de cada evento, calculado UNA vez por lista (F4-08): la vista
-  // mes lo recalculaba dias x eventos veces en cada render.
-  const eventsByDay = useMemo(() => {
-    const byDay = new Map<string, UnifiedCalendarEvent[]>()
-    for (const event of unifiedEvents) {
-      const key = formatArgentinaDate(toInstantIso(event.startsAt))
-      const bucket = byDay.get(key)
-      if (bucket) bucket.push(event)
-      else byDay.set(key, [event])
-    }
-    return byDay
-  }, [unifiedEvents])
+  const eventsByDay = useMemo(() => groupEventsByDay(unifiedEvents), [unifiedEvents])
 
   const eventsForSelectedDate = eventsByDay.get(dateStr) ?? NO_EVENTS
 
