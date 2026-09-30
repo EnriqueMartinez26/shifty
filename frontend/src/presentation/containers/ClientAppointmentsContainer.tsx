@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 
 import { CalendarClock, Loader2, XCircle } from 'lucide-react'
 
@@ -6,13 +6,14 @@ import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/
 
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
   formatArgentinaDateDisplay,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
+import { forgetOtpVerification } from '@shared/utils/otpSession'
 import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -53,12 +54,36 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     time: string
   } | null>(null)
   const appointments = usePublicClientAppointments(store.public_id, phone ?? '', Boolean(phone))
+  // FF-05: la verificacion recordada (la del wizard, 30 min) no alcanza si la
+  // ficha no tiene ese email o ya vencio en el backend: el GET responde 403 y
+  // el atajo de la puerta volvia a entrar con ella, en bucle. Se olvida y se
+  // vuelve a pedir el codigo.
+  const verificacionRechazada = getErrorCode(appointments.error) === 'OTP_VERIFICATION_REQUIRED'
+  useEffect(() => {
+    if (verificacionRechazada) forgetOtpVerification(store.slug)
+  }, [verificacionRechazada, store.slug])
+
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()
 
-  if (!phone) {
+  if (!phone || verificacionRechazada) {
+    // Mismo telefono que el rechazado: la consulta sigue en error con la misma
+    // clave y setPhone no cambia nada, hay que volver a pedirla.
+    const entrar = (verificado: string) => {
+      if (verificado === phone) void appointments.refetch()
+      else setPhone(verificado)
+    }
     return (
-      <ClientOtpGate storePublicId={store.public_id} storeSlug={store.slug} onVerified={setPhone} />
+      <ClientOtpGate
+        storePublicId={store.public_id}
+        storeSlug={store.slug}
+        onVerified={entrar}
+        notice={
+          verificacionRechazada
+            ? 'Necesitamos verificar tu teléfono de nuevo. Pedí un código para ver tus turnos.'
+            : undefined
+        }
+      />
     )
   }
 
@@ -124,7 +149,14 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
       {appointments.isError && (
         <p role="alert" className="text-xs font-bold text-red-600">
-          No encontramos turnos para ese teléfono en {store.name}.
+          {/* FF-05: 404, 429 y 5xx decian todos "No encontramos turnos". */}
+          {getErrorMessage(
+            appointments.error,
+            'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.',
+            {
+              CLIENT_APPOINTMENTS_NOT_FOUND: `No encontramos turnos para ese teléfono en ${store.name}.`
+            }
+          )}
         </p>
       )}
 

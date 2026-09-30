@@ -14,17 +14,21 @@ interface ClientOtpGateProps {
   storeSlug: string
   /** Se llama con el telefono normalizado cuando queda verificado. */
   onVerified: (phone: string) => void
+  /** Por que se vuelve a pedir el codigo (el backend rechazo la verificacion). */
+  notice?: string
 }
 
 /**
  * Puerta de "Mis turnos": telefono + codigo por email. Si el telefono ya se
  * verifico en este dispositivo dentro de la ventana que acepta el backend
- * (30 min), entra directo sin gastar un codigo.
+ * (30 min), entra directo sin gastar un codigo. Si el backend igual la
+ * rechaza, el contenedor la olvida y vuelve a mostrar la puerta con `notice`.
  */
 export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
   storePublicId,
   storeSlug,
-  onVerified
+  onVerified,
+  notice
 }) => {
   const requestOtp = useRequestPublicOtp()
   const verifyOtp = useVerifyPublicOtp()
@@ -96,6 +100,12 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
           </p>
         </div>
       </div>
+
+      {notice && (
+        <p role="status" className="text-xs font-bold text-red-600">
+          {notice}
+        </p>
+      )}
 
       <input
         type="tel"
