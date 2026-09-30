@@ -89,4 +89,36 @@ describe('useConfirm + ConfirmDialog', () => {
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
     expect(screen.getByRole('button', { name: 'Cancelar' })).toHaveFocus()
   })
+
+  it('usa las etiquetas propias cuando se las pasan, con el foco en la que no destruye', async () => {
+    const HostConEtiquetas = () => {
+      const { confirm, confirmDialog } = useConfirm()
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              answer = confirm('¿Cancelar tu turno?', {
+                confirmLabel: 'Sí, cancelar el turno',
+                cancelLabel: 'Volver'
+              })
+            }}
+          >
+            Pedir
+          </button>
+          {confirmDialog}
+        </>
+      )
+    }
+    render(<HostConEtiquetas />)
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir' }))
+
+    expect(screen.getByRole('button', { name: 'Volver' })).toHaveFocus()
+    expect(screen.queryByRole('button', { name: 'Confirmar' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Sí, cancelar el turno' }))
+
+    await act(async () => {
+      await expect(answer).resolves.toBe(true)
+    })
+  })
 })

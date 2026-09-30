@@ -62,10 +62,18 @@ export const usePublicAvailability = (
     staleTime: 1000 * 30
   })
 
-export const useCreatePublicBooking = () =>
-  useMutation<BookingConfirmation, Error, PublicBookingPayload>({
-    mutationFn: (payload) => publicBookingService.createBooking(payload)
+export const useCreatePublicBooking = () => {
+  const queryClient = useQueryClient()
+  return useMutation<BookingConfirmation, Error, PublicBookingPayload>({
+    mutationFn: (payload) => publicBookingService.createBooking(payload),
+    // Una reserva fallida (409 por horario tomado, entre otros) deja la grilla
+    // vieja: con staleTime de 30 s el horario ocupado seguia libre al volver
+    // al paso 2 (FF-33).
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-availability'] })
+    }
   })
+}
 
 /** La seña real (con recargos por antelación e historial) antes de confirmar. */
 export const usePublicDepositPreview = (params: {
@@ -85,6 +93,15 @@ export const usePublicDepositPreview = (params: {
       params.promotionCode
     ],
     enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
+    // Al completar el telefono o aplicar un codigo cambia la clave: sin la seña
+    // anterior mientras carga, el boton de Mercado Pago parpadeaba (FF-32). Solo
+    // para el MISMO turno: con otro horario la seña vieja pasaba por actual.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === params.storePublicId &&
+      previousQuery.queryKey[2] === params.serviceId &&
+      previousQuery.queryKey[3] === params.startsAt
+        ? previous
+        : undefined,
     queryFn: () =>
       publicBookingService.previewDeposit({
         storePublicId: params.storePublicId,

@@ -17,6 +17,7 @@ import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { ClientOtpGate } from '../components/organisms/ClientOtpGate'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCancelClientAppointment,
   usePublicClientAppointments,
@@ -55,6 +56,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
   const appointments = usePublicClientAppointments(store.public_id, phone ?? '', Boolean(phone))
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()
+  const { confirm, confirmDialog } = useConfirm()
 
   if (!phone) {
     return (
@@ -62,7 +64,18 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     )
   }
 
+  // Un toque cancelaba sin preguntar (FF-07): se confirma con el dialogo propio.
   const cancelar = async (item: ClientAppointmentItem) => {
+    const question = `¿Cancelar tu turno de ${item.service_name} del ${formatArgentinaDateDisplay(
+      item.starts_at
+    )} a las ${formatArgentinaTime(item.starts_at)} hs?`
+    // "Cancelar" en el dialogo seria NO cancelar el turno: los botones dicen
+    // lo que hacen.
+    const confirmed = await confirm(question, {
+      confirmLabel: 'Sí, cancelar el turno',
+      cancelLabel: 'Volver'
+    })
+    if (!confirmed) return
     setMessage('')
     try {
       await cancelAppointment.mutateAsync({ publicId: item.public_id, phone })
@@ -93,6 +106,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
   return (
     <section className="max-w-2xl mx-auto space-y-4">
+      {confirmDialog}
       <div className="flex items-center justify-between gap-3">
         <h2
           className="text-lg font-black uppercase tracking-tight"

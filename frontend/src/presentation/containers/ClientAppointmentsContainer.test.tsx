@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import type { PublicStore } from '@application/services/PublicBookingService'
 
@@ -90,22 +90,58 @@ describe('ClientAppointmentsContainer', () => {
     expect(screen.getByText('Confirmado')).toBeInTheDocument()
   })
 
-  it('cancela y avisa que la tienda se entero', async () => {
-    mockAppointments.mockReturnValue({
-      data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
-      isLoading: false,
-      isError: false
+  describe('cancelar pide confirmacion (FF-07)', () => {
+    // FF-07 (2026-09-29): un toque en "Cancelar" cancelaba el turno sin
+    // preguntar; un dedo que rozaba el boton perdia el turno.
+    const pregunta = '¿Cancelar tu turno de Corte del 15/09/2026 a las 10:00 hs?'
+
+    const pedirCancelar = async () => {
+      mockAppointments.mockReturnValue({
+        data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
+        isLoading: false,
+        isError: false
+      })
+      mockCancel.mockResolvedValue(undefined)
+      render(<ClientAppointmentsContainer store={store} />)
+      await entrar()
+      fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }))
+      return screen.findByRole('alertdialog', { name: pregunta })
+    }
+
+    it('cancela recien al confirmar y avisa que la tienda se entero', async () => {
+      const dialogo = await pedirCancelar()
+      expect(mockCancel).not.toHaveBeenCalled()
+
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, cancelar el turno' }))
+
+      await waitFor(() =>
+        expect(mockCancel).toHaveBeenCalledWith({ publicId: 'appt-1', phone: '1155550101' })
+      )
+      expect(await screen.findByText(/le avisamos a la tienda/)).toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
-    mockCancel.mockResolvedValue(undefined)
 
-    render(<ClientAppointmentsContainer store={store} />)
-    await entrar()
-    fireEvent.click(screen.getByRole('button', { name: /Cancelar/ }))
+    it('descartar el dialogo no cancela el turno', async () => {
+      const dialogo = await pedirCancelar()
+      // Los botones dicen lo que hacen: ninguno se llama "Cancelar", que en
+      // este dialogo se leeria como cancelar el turno.
+      expect(within(dialogo).queryByRole('button', { name: 'Cancelar' })).not.toBeInTheDocument()
 
-    await waitFor(() =>
-      expect(mockCancel).toHaveBeenCalledWith({ publicId: 'appt-1', phone: '1155550101' })
-    )
-    expect(await screen.findByText(/le avisamos a la tienda/)).toBeInTheDocument()
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Volver' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      expect(mockCancel).not.toHaveBeenCalled()
+      expect(screen.queryByText(/le avisamos a la tienda/)).not.toBeInTheDocument()
+    })
+
+    it('Escape cierra el dialogo sin cancelar', async () => {
+      const dialogo = await pedirCancelar()
+
+      fireEvent.keyDown(dialogo, { key: 'Escape' })
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      expect(mockCancel).not.toHaveBeenCalled()
+    })
   })
 
   it('reprograma mandando el instante UTC del dia y hora argentinos', async () => {
