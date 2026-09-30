@@ -10,12 +10,15 @@ import {
   DollarSign,
   Check,
   Wallet,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Trash2,
+  Upload
 } from 'lucide-react'
 
 import { Service, type ServiceDepositMode, type ServiceDepositType } from '@domain/entities/Service'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { validateServiceImage } from '@shared/utils/imageFile'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
@@ -26,6 +29,9 @@ interface ServiceFormModalProps {
   onClose: () => void
   onSubmit: (data: ServiceFormValues) => Promise<void>
   editingService?: Service | null
+  // Subir y quitar la imagen persisten al instante, sin pasar por Guardar.
+  onUploadImage: (id: string, file: File) => Promise<Service>
+  onRemoveImage: (id: string) => Promise<Service>
 }
 
 const PRESET_COLORS = [
@@ -69,13 +75,18 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
-  editingService
+  editingService,
+  onUploadImage,
+  onRemoveImage
 }) => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<ServiceFormValues>(EMPTY_FORM)
+  const [imageBusy, setImageBusy] = useState(false)
+  const [imageError, setImageError] = useState<string | null>(null)
 
   useEffect(() => {
+    setImageError(null)
     if (editingService) {
       const p = editingService.toPrimitives()
       setFormData({
@@ -118,9 +129,56 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     }
   }
 
+  // Con una subida en curso no se cierra: su resultado caeria en el formulario
+  // del proximo servicio que se abra.
+  const closeIfIdle = () => {
+    if (!imageBusy) onClose()
+  }
+
+  // Tras subir o quitar, el formulario toma la URL que devolvio el backend. Con
+  // la vieja, un Guardar posterior daria 422 (URL de medios de otro id) o
+  // desvincularia y borraria la imagen recien subida
+  // (modules/stores/media.py::resolve_image_link).
+  const runImageChange = async (change: () => Promise<string>, fallback: string) => {
+    setImageError(null)
+    setImageBusy(true)
+    try {
+      const imageUrl = await change()
+      setFormData((f) => ({ ...f, imageUrl }))
+    } catch (err) {
+      setImageError(getErrorMessage(err, fallback))
+    } finally {
+      setImageBusy(false)
+    }
+  }
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = '' // permite volver a elegir el mismo archivo
+    if (!file || !editingService) return
+    // Feedback rapido sin tocar la API; el backend valida igual y manda.
+    const invalid = await validateServiceImage(file).catch(() => 'No se pudo leer el archivo.')
+    if (invalid) {
+      setImageError(invalid)
+      return
+    }
+    await runImageChange(async () => {
+      const updated = await onUploadImage(editingService.id, file)
+      return updated.imageUrl ?? ''
+    }, 'No se pudo subir la imagen')
+  }
+
+  const handleImageRemove = async () => {
+    if (!editingService) return
+    await runImageChange(async () => {
+      await onRemoveImage(editingService.id)
+      return ''
+    }, 'No se pudo quitar la imagen')
+  }
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={closeIfIdle} />
       <div
         className="relative w-full max-w-5xl rounded-md animate-in zoom-in-95 duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
         style={create2000sModalSurfaceStyle()}
@@ -143,7 +201,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               </p>
             </div>
             <button
-              onClick={onClose}
+              onClick={closeIfIdle}
               className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
               style={buttonStyles2000s.default}
             >
@@ -341,6 +399,60 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 flex items-center gap-2">
                 <ImageIcon size={14} /> Imagen del servicio
               </label>
+              {editingService ? (
+                <div className="flex flex-wrap items-center gap-3">
+                  <label
+                    className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
+                    style={buttonStyles2000s.default}
+                  >
+                    {imageBusy ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Upload className="w-4 h-4" />
+                    )}
+                    {imageBusy ? 'Guardando...' : 'Subir imagen'}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      disabled={imageBusy}
+                      onChange={(e) => void handleImageUpload(e)}
+                    />
+                  </label>
+                  {formData.imageUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleImageRemove()}
+                      disabled={imageBusy}
+                      className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 disabled:opacity-50"
+                      style={buttonStyles2000s.default}
+                    >
+                      <Trash2 className="w-4 h-4" /> Quitar imagen
+                    </button>
+                  ) : null}
+                  <p className="w-full text-[10px] font-bold text-gray-400 ml-1">
+                    PNG, JPEG o WebP · máx 1 MB. Subir o quitar la imagen se guarda al instante:
+                    cerrar sin guardar no la deshace.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[10px] font-bold text-gray-400 ml-1">
+                  Guardá el servicio para poder subir una imagen. Mientras tanto podés pegar una
+                  URL.
+                </p>
+              )}
+              {imageError && (
+                <div
+                  role="alert"
+                  className="rounded-2xl px-4 py-2.5 text-xs font-bold"
+                  style={{
+                    background: colors2000s.status.danger.bg,
+                    color: colors2000s.status.danger.text
+                  }}
+                >
+                  {imageError}
+                </div>
+              )}
               <input
                 value={formData.imageUrl}
                 onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
@@ -390,7 +502,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             <div className="flex gap-4 pt-6">
               <button
                 type="button"
-                onClick={onClose}
+                onClick={closeIfIdle}
                 className="px-6 py-4 font-black uppercase tracking-widest text-xs transition-all active:scale-95"
                 style={buttonStyles2000s.default}
               >
@@ -398,7 +510,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || imageBusy}
                 className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
                 style={buttonStyles2000s.selected}
               >

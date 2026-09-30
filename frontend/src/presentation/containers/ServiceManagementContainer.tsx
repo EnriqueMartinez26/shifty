@@ -13,7 +13,9 @@ import {
   useCreateManagedService,
   useDeleteManagedService,
   useManagedServiceCatalog,
-  useUpdateManagedService
+  useRemoveServiceImage,
+  useUpdateManagedService,
+  useUploadServiceImage
 } from '../hooks/useManagedServices'
 import { notifyError } from '../lib/notify'
 import type { ServiceFormValues } from '../types/forms'
@@ -30,6 +32,8 @@ export const ServiceManagementContainer: React.FC = () => {
   const createMutation = useCreateManagedService()
   const updateMutation = useUpdateManagedService()
   const deleteMutation = useDeleteManagedService()
+  const uploadImageMutation = useUploadServiceImage()
+  const removeImageMutation = useRemoveServiceImage()
 
   const filteredServices = services?.filter((service) =>
     service.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -165,6 +169,8 @@ export const ServiceManagementContainer: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleFormSubmit}
         editingService={editingService}
+        onUploadImage={(id, file) => uploadImageMutation.mutateAsync({ id, file })}
+        onRemoveImage={(id) => removeImageMutation.mutateAsync(id)}
       />
     </div>
   )
