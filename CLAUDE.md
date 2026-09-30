@@ -155,10 +155,20 @@ Una instrucción en lenguaje natural no es una garantía.
   `PublicBookingService.ts`) e importan directo donde se consumen, p. ej.
   `presentation/hooks/useManagedDomainUsers.ts`.
 - `presentation/` separa contenedores (estado + hooks de react-query) de
-  componentes de render. Los errores suben como `ApplicationError` tipado
-  (`code`, `statusCode`, `isOperational`).
+  componentes de render. Es el destino, no el estado de todos: al
+  2026-09-30, 10 de los 39 `.tsx` (sin tests) de `components/` llaman
+  hooks de react-query (`ClientOtpGate`, `NewAppointmentModal`,
+  `StaffFormModal`, `ShareLinksPanel`, `NotificationsBell`,
+  `BookingWizardContainer`, `BookingStepService`, `BookingStepDateTime`,
+  `BookingStepConfirmation`, `WaitlistJoinForm`), incluido
+  `BookingWizardContainer`, que es un contenedor por función pero vive en
+  `organisms/booking/`. Un componente nuevo recibe datos y callbacks por
+  props; no suma llamadas a hooks de react-query. Los errores suben como
+  `ApplicationError` tipado (`code`, `statusCode`, `isOperational`).
 - Existen `molecules/` y `organisms/` pero no `atoms/`: la jerarquía
-  atómica está incompleta; no asumirla.
+  atómica está incompleta; no asumirla. Los primitivos del panel de
+  SuperAdmin viven en `presentation/pages/SuperAdminUi.tsx` (7 exports, 11
+  consumidores en `pages/superadmin/`), fuera de la jerarquía atómica.
 - Toda llamada a la API vive en `application/services` para que el test de
   contrato de rutas la vea.
 
