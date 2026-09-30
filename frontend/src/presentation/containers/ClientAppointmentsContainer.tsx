@@ -57,11 +57,15 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
   // FF-05: la verificacion recordada (la del wizard, 30 min) no alcanza si la
   // ficha no tiene ese email o ya vencio en el backend: el GET responde 403 y
   // el atajo de la puerta volvia a entrar con ella, en bucle. Se olvida y se
-  // vuelve a pedir el codigo.
+  // vuelve a pedir el codigo. El efecto depende del error y no del booleano:
+  // cada 403 es un error nuevo y tambien olvida la verificacion que se guardo
+  // con un codigo nuevo si el reintento vuelve a dar 403.
   const verificacionRechazada = getErrorCode(appointments.error) === 'OTP_VERIFICATION_REQUIRED'
   useEffect(() => {
-    if (verificacionRechazada) forgetOtpVerification(store.slug)
-  }, [verificacionRechazada, store.slug])
+    if (getErrorCode(appointments.error) === 'OTP_VERIFICATION_REQUIRED') {
+      forgetOtpVerification(store.slug)
+    }
+  }, [appointments.error, store.slug])
 
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()

@@ -228,6 +228,36 @@ describe('ClientAppointmentsContainer', () => {
       expect(mockRequestOtp).toHaveBeenCalledTimes(1)
     })
 
+    it('si el 403 se repite tras un codigo nuevo, tambien olvida esa verificacion', async () => {
+      // FF-05 (2026-09-29): con la ficha sin email entregable, el codigo nuevo
+      // se guardaba, el reintento volvia a dar 403 y, como el rechazo ya
+      // estaba marcado, la verificacion nueva no se olvidaba: "Enviarme el
+      // código" entraba por el atajo al mismo 403 sin mandar ningun codigo.
+      let rechazoActual = rechazo
+      mockAppointments.mockImplementation((storeId: unknown, phone: unknown, enabled: unknown) =>
+        fallaCon(rechazoActual)(storeId, phone, enabled)
+      )
+      // El reintento responde otro 403 (un error nuevo, como el de react-query).
+      mockRefetch.mockImplementation(() => {
+        rechazoActual = new ForbiddenError(rechazo.message, rechazo.context)
+      })
+
+      const { rerender } = render(<ClientAppointmentsContainer store={store} />)
+      entrarPorElAtajo()
+      await screen.findByText(aviso)
+      await entrar()
+      await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1))
+      expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+      rerender(<ClientAppointmentsContainer store={store} />)
+
+      expect(isOtpStillValid('sol', '1155550101')).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+
+      await waitFor(() => expect(mockRequestOtp).toHaveBeenCalledTimes(2))
+      expect(mockRefetch).toHaveBeenCalledTimes(1)
+    })
+
     it.each([
       [
         '404',
