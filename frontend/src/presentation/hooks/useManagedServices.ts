@@ -51,6 +51,32 @@ export const useUpdateManagedService = () => {
   })
 }
 
+/**
+ * Subir y quitar la imagen persisten al instante (sin pasar por Guardar), asi
+ * que refrescan el prefijo `['services']` como las otras mutaciones.
+ */
+export const useUploadServiceImage = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: Blob }) => serviceService.uploadImage(id, file),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['services'] })
+    }
+  })
+}
+
+export const useRemoveServiceImage = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => serviceService.removeImage(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['services'] })
+    }
+  })
+}
+
 export const useDeleteManagedService = () => {
   const queryClient = useQueryClient()
 
