@@ -107,6 +107,24 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
           placeholder="Codigo que te llego por email"
         />
 
+        {/* J7 (2026-09-30): debug_code tal cual lo devolvio la API, solo si
+            vino. Si el codigo fue al email de la ficha y no al tipeado, el
+            backend devuelve un senuelo (AUD2-SYNC-01): por eso el aviso. */}
+        {otpState.debugCode && (
+          <div
+            role="status"
+            className="p-3 text-xs font-bold"
+            style={createBookingAccentBoxStyle(
+              colors2000s.status.info.bg,
+              colors2000s.status.info.border,
+              colors2000s.status.info.text
+            )}
+          >
+            Codigo debug (solo desarrollo): {otpState.debugCode}. Si el telefono ya tiene ficha con
+            email, el codigo real fue a ese buzon y este puede no servir.
+          </div>
+        )}
+
         {otpState.error && (
           <div
             role="alert"

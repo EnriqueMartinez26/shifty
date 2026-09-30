@@ -14,6 +14,7 @@ const otpInicial = (patch: Partial<BookingOtpState> = {}): BookingOtpState => ({
   expiresAt: '',
   error: '',
   rateLimited: false,
+  debugCode: '',
   ...patch
 })
 
@@ -179,16 +180,30 @@ describe('BookingOtpSection', () => {
     })
   })
 
-  it('no muestra el debug_code aunque llegue en el estado (J7)', () => {
-    // J7 (2026-09-30): con OTP_DEBUG_EXPOSE_CODE el backend puede devolver el
-    // codigo; la seccion no tiene donde mostrarlo y no lo muestra.
-    const conDebug = { ...otpInicial({ email: 'lucia@example.com' }), debug_code: '424242' }
-    render(<BookingOtpSection {...props({ otpState: conDebug })} />)
+  describe('codigo debug (J7)', () => {
+    // 2026-09-30, J7: mostrar el codigo debug con aviso de que puede no servir.
+    // Con OTP_DEBUG_EXPOSE_CODE el backend devuelve el codigo real solo si fue
+    // al email tipeado; si fue al email de la ficha devuelve un senuelo
+    // (AUD2-SYNC-01). La seccion muestra el valor tal cual y lo avisa.
+    it('con debugCode muestra el codigo con el aviso exacto', () => {
+      render(
+        <BookingOtpSection
+          {...props({ otpState: otpInicial({ email: 'lucia@example.com', debugCode: '424242' }) })}
+        />
+      )
 
-    expect(screen.queryByText(/424242/)).not.toBeInTheDocument()
-    expect((screen.getByPlaceholderText(CODIGO) as HTMLInputElement).value).toBe('')
-    expect((screen.getByLabelText('Email para el codigo') as HTMLInputElement).value).toBe(
-      'lucia@example.com'
-    )
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'Codigo debug (solo desarrollo): 424242. Si el telefono ya tiene ficha con email, el codigo real fue a ese buzon y este puede no servir.'
+      )
+      // Se muestra, no se autocompleta: el codigo lo tipea la persona.
+      expect((screen.getByPlaceholderText(CODIGO) as HTMLInputElement).value).toBe('')
+    })
+
+    it('sin debugCode no muestra nada', () => {
+      render(<BookingOtpSection {...props()} />)
+
+      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Codigo debug/)).not.toBeInTheDocument()
+    })
   })
 })

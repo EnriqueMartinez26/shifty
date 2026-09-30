@@ -54,7 +54,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     verifiedPhone: '',
     expiresAt: '',
     error: '',
-    rateLimited: false
+    rateLimited: false,
+    debugCode: ''
   })
   const [bookingState, setBookingState] = useState<BookingWizardState>({
     serviceId: preselect.serviceId,
@@ -135,7 +136,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         return { ...prev, email, verified: true, verifiedPhone: client.phone, error: '' }
       }
       return prev.verified
-        ? { ...prev, email, verified: false, code: '', error: '' }
+        ? { ...prev, email, verified: false, code: '', debugCode: '', error: '' }
         : { ...prev, email }
     })
   }
@@ -153,9 +154,14 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         channel: otpState.channel,
         email
       })
-      // debug_code no se muestra (J7, 2026-09-30): con OTP_DEBUG_EXPOSE_CODE
-      // es un senuelo cuando el codigo fue a otro buzon que el tipeado.
-      setOtpState((prev) => ({ ...prev, expiresAt: response.expires_at, error: '' }))
+      // J7 (2026-09-30): debug_code se guarda tal cual vino y se muestra con
+      // el aviso de que puede ser un senuelo (AUD2-SYNC-01); sin el, vacio.
+      setOtpState((prev) => ({
+        ...prev,
+        expiresAt: response.expires_at,
+        error: '',
+        debugCode: response.debug_code || ''
+      }))
       resendCooldown.start()
     } catch (error: unknown) {
       // OTP_RATE_LIMITED: se agotaron los codigos del telefono y la ventana
