@@ -10,21 +10,10 @@ import {
   startOfWeek,
   subDays
 } from 'date-fns'
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Loader2,
-  Plus
-} from 'lucide-react'
+import { Clock, Loader2 } from 'lucide-react'
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
-import {
-  formatArgentinaDate,
-  formatArgentinaDayMonth,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 
 import { BlocksPanel, type EditableBlock } from './BlocksPanel'
@@ -32,13 +21,15 @@ import {
   RescheduleAppointmentDialog,
   type ReschedulableAppointment
 } from './RescheduleAppointmentDialog'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
+import { AbsencesTimeline } from '../components/organisms/calendar/AbsencesTimeline'
+import { AgendaToolbar, type CalendarView } from '../components/organisms/calendar/AgendaToolbar'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { StaffColumn } from '../components/organisms/StaffColumn'
 import { useAuth } from '../context/AuthContext'
@@ -76,41 +67,13 @@ import {
   gridPlacement,
   rangeFromInstants
 } from '../lib/calendarGrid'
+import { canvasStyle, cardStyle, panelStyle } from '../lib/calendarStyles'
 import {
   mondayBasedWeekday,
   offHoursSegments,
   storeRangesFor,
   workingRangesFor
 } from '../lib/staffHours'
-import { create2000sPanelStyle } from '../lib/surfaceStyles'
-
-type CalendarView = 'day' | 'week' | 'month' | 'list'
-
-const VIEW_LABELS: Record<CalendarView, string> = {
-  day: 'Dia',
-  week: 'Semana',
-  month: 'Mes',
-  list: 'Lista'
-}
-
-const panelStyle = create2000sPanelStyle()
-
-const canvasStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.default}`,
-  boxShadow: colors2000s.shadows.outerMedium
-}
-
-const cardStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.light}`,
-  boxShadow: colors2000s.shadows.insetDark
-}
-
-const fieldStyle = {
-  ...cardStyle,
-  color: colors2000s.text.primary
-}
 
 /** Un dia sin eventos: la misma referencia siempre, para que la grilla no se recalcule. */
 const NO_EVENTS: readonly UnifiedCalendarEvent[] = []
@@ -393,6 +356,22 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const goPrev = () =>
+    setSelectedDate((prev) => subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+  const goNext = () =>
+    setSelectedDate((prev) => addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+
+  const handleDeactivateBlock = (blockId: string) => {
+    void (async () => {
+      try {
+        await deleteBlock.mutateAsync(blockId)
+        setMessage('Bloqueo desactivado')
+      } catch (error: unknown) {
+        setMessage(getErrorMessage(error, 'No se pudo desactivar'))
+      }
+    })()
+  }
+
   const renderActions = (event: UnifiedCalendarEvent, compact: boolean) => {
     if (event.type !== 'appointment') return null
     return (
@@ -663,102 +642,14 @@ export const CalendarContainer: React.FC = () => {
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
       {confirmDialog}
-      <div
-        className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
-        style={panelStyle}
-      >
-        <div className="flex items-center gap-4">
-          <div
-            className="w-12 h-12 rounded-[6px] text-white flex items-center justify-center flex-shrink-0"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-            }}
-          >
-            <CalendarIcon size={24} />
-          </div>
-          <div>
-            <h2
-              className="text-2xl font-black uppercase tracking-tight leading-none mb-1"
-              style={{ color: colors2000s.text.primary }}
-            >
-              Agenda
-            </h2>
-            <p
-              className="text-[10px] font-black uppercase tracking-widest"
-              style={{ color: colors2000s.text.secondary }}
-            >
-              Vistas dia, semana, mes y lista
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 p-2 rounded-[6px] border"
-          style={fieldStyle}
-        >
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedDate((prev) =>
-                subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
-              )
-            }
-            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
-            style={buttonStyles2000s.default}
-          >
-            <ChevronLeft size={20} className="text-gray-600" />
-          </button>
-          <div className="px-4 sm:px-6 text-center min-w-[140px] sm:min-w-[200px]">
-            <p
-              className="text-[9px] font-black uppercase tracking-widest mb-0.5"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              {VIEW_LABELS[view]}
-            </p>
-            <p
-              className="text-base font-black uppercase tracking-tight"
-              style={{ color: colors2000s.text.primary }}
-            >
-              {format(selectedDate, "dd 'de' MMMM")}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedDate((prev) =>
-                addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
-              )
-            }
-            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
-            style={buttonStyles2000s.default}
-          >
-            <ChevronRight size={20} className="text-gray-600" />
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {(Object.keys(VIEW_LABELS) as CalendarView[]).map((viewKey) => (
-            <button
-              key={viewKey}
-              type="button"
-              onClick={() => setView(viewKey)}
-              className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-              style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
-            >
-              {VIEW_LABELS[viewKey]}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setIsNewAppointmentOpen(true)}
-            className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs"
-            style={buttonStyles2000s.selected}
-          >
-            <Plus size={18} /> Nuevo turno
-          </button>
-        </div>
-      </div>
+      <AgendaToolbar
+        view={view}
+        selectedDate={selectedDate}
+        onPrev={goPrev}
+        onNext={goNext}
+        onViewChange={setView}
+        onNewAppointment={() => setIsNewAppointmentOpen(true)}
+      />
 
       <QueryErrorNotice
         error={agendaQuery.error ?? staffError ?? blocksQuery.error}
@@ -817,93 +708,12 @@ export const CalendarContainer: React.FC = () => {
           onMessage={setMessage}
         />
 
-        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
-          <h3
-            className="text-lg font-black uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
-          >
-            Bloqueos y ausencias
-          </h3>
-          <div className="space-y-3">
-            {timelineEvents.map((event) => (
-              <div
-                key={`${event.type}-${event.id}`}
-                className="rounded-[6px] p-4 bg-white flex flex-col gap-3"
-                style={cardStyle}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-                      {event.title}
-                    </p>
-                    <p
-                      className="text-[11px] font-bold"
-                      style={{ color: colors2000s.text.secondary }}
-                    >
-                      {formatArgentinaDayMonth(toInstantIso(event.startsAt))}{' '}
-                      {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
-                      {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
-                    </p>
-                  </div>
-                  <span
-                    className="px-2 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest"
-                    style={{
-                      background: event.type === 'block' ? '#ffedd5' : '#fee2e2',
-                      color: event.type === 'block' ? '#c2410c' : '#b91c1c'
-                    }}
-                  >
-                    {event.type === 'block' ? 'Bloqueo' : 'Ausencia'}
-                  </span>
-                </div>
-                {event.type === 'block' && canManageBlocks && (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setBlockToEdit({
-                          public_id: event.id,
-                          staff_id: event.staffId,
-                          starts_at: toInstantIso(event.startsAt),
-                          ends_at: toInstantIso(event.endsAt),
-                          reason: event.title
-                        })
-                      }
-                      className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
-                      style={buttonStyles2000s.default}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void (async () => {
-                          try {
-                            await deleteBlock.mutateAsync(event.id)
-                            setMessage('Bloqueo desactivado')
-                          } catch (error: unknown) {
-                            setMessage(getErrorMessage(error, 'No se pudo desactivar'))
-                          }
-                        })()
-                      }}
-                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-                      style={buttonStyles2000s.selected}
-                    >
-                      Desactivar
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-            {!timelineEvents.length && (
-              <div
-                className="rounded-[6px] p-6 bg-white text-sm font-bold"
-                style={{ ...cardStyle, color: colors2000s.text.secondary }}
-              >
-                No hay bloqueos ni ausencias en el rango actual.
-              </div>
-            )}
-          </div>
-        </div>
+        <AbsencesTimeline
+          events={timelineEvents}
+          canManageBlocks={canManageBlocks}
+          onEdit={setBlockToEdit}
+          onDeactivate={handleDeactivateBlock}
+        />
       </div>
       {isNewAppointmentOpen && (
         <NewAppointmentModal
