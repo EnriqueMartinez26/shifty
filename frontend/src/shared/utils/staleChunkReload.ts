@@ -8,8 +8,11 @@
  *
  * La marca en sessionStorage evita el bucle: si ya se recargo hace menos de
  * 60 s, el error sigue su curso y lo muestra el error boundary. Si el storage
- * no existe o tira, un flag en memoria limita la recarga a una por vida de la
- * pagina. Vive en `shared/` (y no en `main.tsx`) para que la mida la cobertura.
+ * no existe o tira (al leer o al guardar la marca), NO se recarga: sin storage
+ * nada sobrevive a la recarga, un flag en memoria se reinicia en cada una y un
+ * deploy roto (chunks nuevos que tambien dan 404) recargaria para siempre. En
+ * ese caso el error llega al error boundary, como antes de F4-12.
+ * Vive en `shared/` (y no en `main.tsx`) para que la mida la cobertura.
  */
 
 const RELOAD_MARK_KEY = 'shifty:chunk-reload'
@@ -33,8 +36,6 @@ export const installStaleChunkReload = (
   reload: () => void = () => win.location.reload(),
   now: () => number = Date.now
 ): (() => void) => {
-  let reloadedWithoutStorage = false
-
   const onPreloadError = (event: Event): void => {
     const current = now()
     try {
@@ -42,9 +43,9 @@ export const installStaleChunkReload = (
       if (hasRecentMark(storage, current)) return
       storage.setItem(RELOAD_MARK_KEY, String(current))
     } catch {
-      // sin storage (privado, bloqueado): una recarga por vida de la pagina
-      if (reloadedWithoutStorage) return
-      reloadedWithoutStorage = true
+      // sin storage (privado, bloqueado) no hay forma de evitar el bucle: el
+      // error sigue su curso hasta el error boundary
+      return
     }
     event.preventDefault()
     reload()

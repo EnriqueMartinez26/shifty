@@ -65,7 +65,21 @@ describe('installStaleChunkReload', () => {
     expect(window.sessionStorage.getItem(MARK_KEY)).toBe(String(T0))
   })
 
-  it('sin storage recarga una sola vez por vida de la pagina', () => {
+  it('una marca ilegible cuenta como sin marca y recarga', () => {
+    window.sessionStorage.setItem(MARK_KEY, 'no es un numero')
+    const reload = jest.fn()
+    uninstall = installStaleChunkReload(window, reload, () => T0)
+
+    const event = dispatchPreloadError()
+
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(event.defaultPrevented).toBe(true)
+    expect(window.sessionStorage.getItem(MARK_KEY)).toBe(String(T0))
+  })
+
+  // Sin storage nada sobrevive a la recarga: si el deploy nuevo tambien esta
+  // roto, recargar "una vez por vida de la pagina" se repetiria para siempre.
+  it('sin storage no recarga ni cancela el error, para no entrar en bucle', () => {
     jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
       throw new Error('storage bloqueado')
     })
@@ -78,8 +92,21 @@ describe('installStaleChunkReload', () => {
     const first = dispatchPreloadError()
     const second = dispatchPreloadError()
 
-    expect(reload).toHaveBeenCalledTimes(1)
-    expect(first.defaultPrevented).toBe(true)
+    expect(reload).not.toHaveBeenCalled()
+    expect(first.defaultPrevented).toBe(false)
     expect(second.defaultPrevented).toBe(false)
+  })
+
+  it('si la marca no se puede guardar tampoco recarga', () => {
+    jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('cuota llena')
+    })
+    const reload = jest.fn()
+    uninstall = installStaleChunkReload(window, reload, () => T0)
+
+    const event = dispatchPreloadError()
+
+    expect(reload).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
   })
 })
