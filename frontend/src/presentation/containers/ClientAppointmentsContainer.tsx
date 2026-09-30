@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useState } from 'react'
 
 import { CalendarClock, Loader2, XCircle } from 'lucide-react'
 
@@ -6,14 +6,13 @@ import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/
 
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
-import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getErrorMessage, getHttpStatus } from '@shared/errors/getErrorMessage'
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
   formatArgentinaDateDisplay,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
-import { forgetOtpVerification } from '@shared/utils/otpSession'
 import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -54,42 +53,42 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     time: string
   } | null>(null)
   const appointments = usePublicClientAppointments(store.public_id, phone ?? '', Boolean(phone))
-  // FF-05: la verificacion recordada (la del wizard, 30 min) no alcanza si la
-  // ficha no tiene ese email o ya vencio en el backend: el GET responde 403 y
-  // el atajo de la puerta volvia a entrar con ella, en bucle. Se olvida y se
-  // vuelve a pedir el codigo. El efecto depende del error y no del booleano:
-  // cada 403 es un error nuevo y tambien olvida la verificacion que se guardo
-  // con un codigo nuevo si el reintento vuelve a dar 403.
-  const verificacionRechazada = getErrorCode(appointments.error) === 'OTP_VERIFICATION_REQUIRED'
-  useEffect(() => {
-    if (getErrorCode(appointments.error) === 'OTP_VERIFICATION_REQUIRED') {
-      forgetOtpVerification(store.slug)
-    }
-  }, [appointments.error, store.slug])
+  const code = getErrorCode(appointments.error)
+  const status = getHttpStatus(appointments.error)
 
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()
 
-  if (!phone || verificacionRechazada) {
-    // Mismo telefono que el rechazado: la consulta sigue en error con la misma
-    // clave y setPhone no cambia nada, hay que volver a pedirla.
-    const entrar = (verificado: string) => {
-      if (verificado === phone) void appointments.refetch()
-      else setPhone(verificado)
-    }
+  if (!phone) {
+    return (
+      <ClientOtpGate storePublicId={store.public_id} storeSlug={store.slug} onVerified={setPhone} />
+    )
+  }
+
+  if (code === 'OTP_VERIFICATION_REQUIRED') {
+    // FF-05 (2026-09-30): la verificacion recordada (la del wizard, 30 min)
+    // no alcanza si la ficha no tiene ese email o ya vencio en el backend: el
+    // GET respondia 403 y el atajo de la puerta volvia a entrar con ella, en
+    // bucle. Con skipRemembered la puerta la olvida al pedir el codigo y
+    // siempre manda uno nuevo; tras verificar se vuelve a pedir la lista (con
+    // el mismo telefono la clave de la consulta no cambia).
     return (
       <ClientOtpGate
         storePublicId={store.public_id}
         storeSlug={store.slug}
-        onVerified={entrar}
-        notice={
-          verificacionRechazada
-            ? 'Necesitamos verificar tu teléfono de nuevo. Pedí un código para ver tus turnos.'
-            : undefined
-        }
+        skipRemembered
+        notice={`Para ver tus turnos verificá el email que tenés registrado en ${store.name}. Pedí un código nuevo.`}
+        initialPhone={phone}
+        onVerified={(p) => {
+          setPhone(p)
+          void appointments.refetch()
+        }}
       />
     )
   }
+
+  // 403 y 404 no se arreglan reintentando; 429, 503 y el resto quiza si.
+  const reintentable = status !== 403 && status !== 404
 
   const cancelar = async (item: ClientAppointmentItem) => {
     setMessage('')
@@ -152,16 +151,30 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       )}
 
       {appointments.isError && (
-        <p role="alert" className="text-xs font-bold text-red-600">
-          {/* FF-05: 404, 429 y 5xx decian todos "No encontramos turnos". */}
-          {getErrorMessage(
-            appointments.error,
-            'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.',
-            {
-              CLIENT_APPOINTMENTS_NOT_FOUND: `No encontramos turnos para ese teléfono en ${store.name}.`
-            }
+        <div className="space-y-2">
+          <p role="alert" className="text-xs font-bold text-red-600">
+            {/* FF-05: 404, 429 y 5xx decian todos "No encontramos turnos". */}
+            {getErrorMessage(
+              appointments.error,
+              'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.',
+              {
+                CLIENT_APPOINTMENTS_NOT_FOUND: `No encontramos turnos para ese teléfono en ${store.name}.`
+              }
+            )}
+          </p>
+          {reintentable && (
+            <button
+              type="button"
+              onClick={() => {
+                void appointments.refetch()
+              }}
+              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+              style={buttonStyles2000s.default}
+            >
+              Reintentar
+            </button>
           )}
-        </p>
+        </div>
       )}
 
       {!appointments.isLoading && !appointments.isError && items.length === 0 && (

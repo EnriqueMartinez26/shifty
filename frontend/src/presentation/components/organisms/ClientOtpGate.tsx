@@ -3,7 +3,11 @@ import React, { useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
+import {
+  forgetOtpVerification,
+  isOtpStillValid,
+  rememberOtpVerification
+} from '@shared/utils/otpSession'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { useRequestPublicOtp, useVerifyPublicOtp } from '../../hooks/usePublic'
@@ -16,23 +20,33 @@ interface ClientOtpGateProps {
   onVerified: (phone: string) => void
   /** Por que se vuelve a pedir el codigo (el backend rechazo la verificacion). */
   notice?: string
+  /**
+   * El backend ya rechazo la verificacion recordada: "Enviarme el código" la
+   * olvida y siempre pide un codigo nuevo, sin entrar por el atajo.
+   */
+  skipRemembered?: boolean
+  /** Telefono con el que arranca el campo (el que el backend rechazo). */
+  initialPhone?: string
 }
 
 /**
  * Puerta de "Mis turnos": telefono + codigo por email. Si el telefono ya se
  * verifico en este dispositivo dentro de la ventana que acepta el backend
  * (30 min), entra directo sin gastar un codigo. Si el backend igual la
- * rechaza, el contenedor la olvida y vuelve a mostrar la puerta con `notice`.
+ * rechaza, el contenedor vuelve a mostrar la puerta con `skipRemembered` y
+ * `notice`: pedir el codigo olvida esa verificacion y manda uno nuevo.
  */
 export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
   storePublicId,
   storeSlug,
   onVerified,
-  notice
+  notice,
+  skipRemembered = false,
+  initialPhone = ''
 }) => {
   const requestOtp = useRequestPublicOtp()
   const verifyOtp = useVerifyPublicOtp()
-  const [form, setForm] = useState({ phone: '', email: '', code: '' })
+  const [form, setForm] = useState({ phone: initialPhone, email: '', code: '' })
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
 
@@ -44,7 +58,11 @@ export const ClientOtpGate: React.FC<ClientOtpGateProps> = ({
 
   const pedirCodigo = async () => {
     setError('')
-    if (continuarSiYaVerificado()) return
+    // FF-05 (2026-09-30): el backend respondio 403 OTP_VERIFICATION_REQUIRED
+    // con una verificacion que el front daba por vigente; entrar por el atajo
+    // repetia el 403 sin mandar ningun codigo. Se olvida y se pide uno nuevo.
+    if (skipRemembered) forgetOtpVerification(storeSlug)
+    else if (continuarSiYaVerificado()) return
     if (!form.email.trim()) {
       setError('Ingresá tu email para poder buscarte')
       return

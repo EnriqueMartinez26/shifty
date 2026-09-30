@@ -6,11 +6,13 @@ import { ForbiddenError } from '@shared/errors/ForbiddenError'
 import { InternalServerError } from '@shared/errors/InternalServerError'
 import { NotFoundError } from '@shared/errors/NotFoundError'
 import { RateLimitError } from '@shared/errors/RateLimitError'
+import { ServiceUnavailableError } from '@shared/errors/ServiceUnavailableError'
 import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { ClientAppointmentsContainer } from './ClientAppointmentsContainer'
 
 const mockAppointments = jest.fn()
+const mockRefetch = jest.fn()
 const mockCancel = jest.fn()
 const mockReschedule = jest.fn()
 const mockRequestOtp = jest.fn()
@@ -59,13 +61,20 @@ const entrar = async () => {
 describe('ClientAppointmentsContainer', () => {
   beforeEach(() => {
     mockAppointments.mockReset()
+    mockRefetch.mockReset()
     mockCancel.mockReset()
     mockReschedule.mockReset()
     mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
     mockVerifyOtp
       .mockReset()
       .mockResolvedValue({ ok: true, phone: '1155550101', verified_at: new Date().toISOString() })
-    mockAppointments.mockReturnValue({ data: undefined, isLoading: false, isError: false })
+    mockAppointments.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: mockRefetch
+    })
     try {
       window.sessionStorage.clear()
     } catch {
@@ -160,12 +169,14 @@ describe('ClientAppointmentsContainer', () => {
     // encontramos turnos". "Salir" y volver entraba por el mismo atajo: el
     // cliente quedaba 30 minutos en un bucle. Lo mismo con una ficha sin email
     // entregable. Y 404, 429 y 503 mostraban el mismo texto.
-    const aviso = /Necesitamos verificar tu teléfono de nuevo/
+    // 2026-09-30: sin efecto; el 403 muestra la puerta con skipRemembered y
+    // "Enviarme el código" siempre pide un codigo nuevo.
+    const aviso =
+      'Para ver tus turnos verificá el email que tenés registrado en Peluqueria Sol. Pedí un código nuevo.'
     const rechazo = new ForbiddenError('Se requiere validar OTP antes de autogestionar turnos', {
       errorCode: 'OTP_VERIFICATION_REQUIRED',
       statusCode: 403
     })
-    const mockRefetch = jest.fn()
 
     // El GET solo falla cuando la consulta esta habilitada (hay telefono).
     const fallaCon = (error: unknown) => (_storeId: unknown, _phone: unknown, enabled: unknown) =>
@@ -180,11 +191,7 @@ describe('ClientAppointmentsContainer', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
     }
 
-    beforeEach(() => {
-      mockRefetch.mockReset()
-    })
-
-    it('un 403 OTP_VERIFICATION_REQUIRED olvida la verificacion y vuelve a pedir el codigo', async () => {
+    it('un 403 OTP_VERIFICATION_REQUIRED muestra la puerta con el aviso y no entra por el atajo', async () => {
       mockAppointments.mockImplementation(fallaCon(rechazo))
 
       render(<ClientAppointmentsContainer store={store} />)
@@ -193,27 +200,18 @@ describe('ClientAppointmentsContainer', () => {
       expect(await screen.findByText(aviso)).toBeInTheDocument()
       expect(screen.queryByText(/No encontramos turnos/)).not.toBeInTheDocument()
       expect(screen.queryByRole('button', { name: 'Salir' })).not.toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Enviarme el código' })).toBeInTheDocument()
-      expect(isOtpStillValid('sol', '1155550101')).toBe(false)
-    })
+      expect((screen.getByLabelText('Teléfono') as HTMLInputElement).value).toBe('1155550101')
 
-    it('salir y volver no entra de nuevo por el atajo', async () => {
-      mockAppointments.mockImplementation(fallaCon(rechazo))
-
-      const { unmount } = render(<ClientAppointmentsContainer store={store} />)
-      entrarPorElAtajo()
-      expect(mockAppointments).toHaveBeenCalledWith('store-1', '1155550101', true)
-      unmount()
-      mockAppointments.mockClear()
-
-      render(<ClientAppointmentsContainer store={store} />)
-      fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
+      // Aunque la marca del dispositivo siga vigente, pedir el codigo no entra
+      // por el atajo: la olvida y manda uno nuevo.
+      rememberOtpVerification('sol', '1155550101', new Date().toISOString())
       fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
 
       expect(await screen.findByLabelText('Código')).toBeInTheDocument()
       expect(mockRequestOtp).toHaveBeenCalledTimes(1)
-      expect(mockAppointments).not.toHaveBeenCalledWith('store-1', '1155550101', true)
+      expect(isOtpStillValid('sol', '1155550101')).toBe(false)
+      expect(mockRefetch).not.toHaveBeenCalled()
     })
 
     it('verificar de nuevo el mismo telefono vuelve a pedir los turnos', async () => {
@@ -228,62 +226,81 @@ describe('ClientAppointmentsContainer', () => {
       expect(mockRequestOtp).toHaveBeenCalledTimes(1)
     })
 
-    it('si el 403 se repite tras un codigo nuevo, tambien olvida esa verificacion', async () => {
+    it('si el 403 se repite tras un codigo nuevo, pedir el codigo manda otro de verdad', async () => {
       // FF-05 (2026-09-29): con la ficha sin email entregable, el codigo nuevo
-      // se guardaba, el reintento volvia a dar 403 y, como el rechazo ya
-      // estaba marcado, la verificacion nueva no se olvidaba: "Enviarme el
-      // código" entraba por el atajo al mismo 403 sin mandar ningun codigo.
-      let rechazoActual = rechazo
-      mockAppointments.mockImplementation((storeId: unknown, phone: unknown, enabled: unknown) =>
-        fallaCon(rechazoActual)(storeId, phone, enabled)
-      )
-      // El reintento responde otro 403 (un error nuevo, como el de react-query).
-      mockRefetch.mockImplementation(() => {
-        rechazoActual = new ForbiddenError(rechazo.message, rechazo.context)
-      })
+      // se guardaba, el reintento volvia a dar 403 y "Enviarme el código"
+      // entraba por el atajo al mismo 403 sin mandar ningun codigo.
+      mockAppointments.mockImplementation(fallaCon(rechazo))
 
-      const { rerender } = render(<ClientAppointmentsContainer store={store} />)
+      render(<ClientAppointmentsContainer store={store} />)
       entrarPorElAtajo()
       await screen.findByText(aviso)
       await entrar()
       await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1))
+      // El codigo nuevo quedo guardado y el reintento sigue en 403.
       expect(isOtpStillValid('sol', '1155550101')).toBe(true)
-      rerender(<ClientAppointmentsContainer store={store} />)
+      expect(screen.getByText(aviso)).toBeInTheDocument()
 
-      expect(isOtpStillValid('sol', '1155550101')).toBe(false)
       fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
       fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
 
       await waitFor(() => expect(mockRequestOtp).toHaveBeenCalledTimes(2))
+      expect(isOtpStillValid('sol', '1155550101')).toBe(false)
       expect(mockRefetch).toHaveBeenCalledTimes(1)
     })
 
-    it.each([
-      [
-        '404',
-        new NotFoundError('No se encontraron turnos para ese número de teléfono', {
-          errorCode: 'CLIENT_APPOINTMENTS_NOT_FOUND',
-          statusCode: 404
-        }),
+    it('un 404 dice que no hay turnos para ese telefono, sin reintentar', async () => {
+      mockAppointments.mockImplementation(
+        fallaCon(
+          new NotFoundError('No se encontraron turnos para ese número de teléfono', {
+            errorCode: 'CLIENT_APPOINTMENTS_NOT_FOUND',
+            statusCode: 404
+          })
+        )
+      )
+
+      render(<ClientAppointmentsContainer store={store} />)
+      await entrar()
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
         'No encontramos turnos para ese teléfono en Peluqueria Sol.'
-      ],
+      )
+      expect(screen.queryByRole('button', { name: 'Reintentar' })).not.toBeInTheDocument()
+    })
+
+    it.each([
       [
         '429',
         new RateLimitError('Too many requests', { errorCode: 'RATE_LIMITED', statusCode: 429 }),
         'Hiciste demasiados intentos seguidos. Esperá un momento y volvé a intentar.'
       ],
       [
+        '503',
+        new ServiceUnavailableError('Service Unavailable', { statusCode: 503 }),
+        'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.'
+      ],
+      [
+        '503 del rate limit',
+        new ServiceUnavailableError('Service Unavailable', {
+          errorCode: 'RATE_LIMIT_UNAVAILABLE',
+          statusCode: 503
+        }),
+        'El servicio no está disponible en este momento. Probá de nuevo en unos minutos.'
+      ],
+      [
         '500',
         new InternalServerError('Internal Server Error', { statusCode: 500 }),
         'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.'
       ]
-    ])('un %s muestra su propio mensaje', async (_status, error, mensaje) => {
+    ])('un %s muestra su mensaje y deja reintentar', async (_status, error, mensaje) => {
       mockAppointments.mockImplementation(fallaCon(error))
 
       render(<ClientAppointmentsContainer store={store} />)
       await entrar()
 
       expect(screen.getByRole('alert')).toHaveTextContent(mensaje)
+      fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+      expect(mockRefetch).toHaveBeenCalledTimes(1)
     })
   })
 })
