@@ -445,7 +445,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         />
         <button
           type="button"
-          disabled={isRequestingOtp || !otpState.email.trim() || otpResendSeconds > 0}
+          disabled={
+            isRequestingOtp ||
+            !otpState.email.trim() ||
+            otpResendSeconds > 0 ||
+            otpState.rateLimited
+          }
           onClick={onRequestOtp}
           className="px-4 py-3 text-xs font-black uppercase tracking-widest"
           style={{ ...buttonStyles2000s.default, borderRadius: 6 }}
@@ -464,7 +469,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           autoComplete="one-time-code"
           maxLength={6}
           value={otpState.code}
-          onChange={(e) => onOtpCodeChange(e.target.value)}
+          // Solo digitos: inputMode no impide tipear letras en un teclado fisico.
+          onChange={(e) => onOtpCodeChange(e.target.value.replace(/\D/g, ''))}
           className="w-full px-4 py-3 font-bold outline-none"
           style={clientInputStyle}
           placeholder="Codigo que te llego por email"

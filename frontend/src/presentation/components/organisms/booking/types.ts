@@ -29,4 +29,10 @@ export interface BookingOtpState {
   verifiedPhone: string
   expiresAt: string
   error: string
+  /**
+   * El backend respondio OTP_RATE_LIMITED: no se ofrece pedir otro codigo
+   * hasta recargar. Sin cuenta regresiva: la ventana del backend es
+   * deslizante y cualquier numero seria una promesa falsa (F4-11).
+   */
+  rateLimited: boolean
 }

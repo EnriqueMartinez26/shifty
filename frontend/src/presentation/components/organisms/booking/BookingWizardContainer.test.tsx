@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { RateLimitError } from '@shared/errors'
+
 import { BookingWizardContainer } from './BookingWizardContainer'
 import type { PublicStore } from '../../../hooks/usePublic'
 
@@ -242,12 +244,71 @@ describe('BookingWizardContainer', () => {
       expect(mockRequestOtp).toHaveBeenCalledTimes(1)
     })
 
-    it('un pedido fallido no arranca la espera', async () => {
+    it('un pedido fallido sin Retry-After no arranca la espera', async () => {
       mockRequestOtp.mockRejectedValue(new Error('Demasiados pedidos'))
       await hastaPedirElCodigo()
 
       expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
       expect(screen.queryByText(/Reenviar en/)).not.toBeInTheDocument()
+    })
+
+    it('un error con Retry-After espera lo que pide el servidor', async () => {
+      // 2026-09-30, F4-11: el 429 del rate limit traia Retry-After y el boton
+      // quedaba habilitado para volver a chocar contra el limite.
+      mockRequestOtp.mockRejectedValue(
+        new RateLimitError('Espera', { errorCode: 'RATE_LIMITED', statusCode: 429, retryAfter: 20 })
+      )
+      await hastaPedirElCodigo()
+
+      expect(screen.getByRole('button', { name: 'Reenviar en 20 s' })).toBeDisabled()
+      act(() => {
+        jest.advanceTimersByTime(20_000)
+      })
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+    })
+
+    it('OTP_RATE_LIMITED bloquea el pedido sin cuenta regresiva y lo explica', async () => {
+      // 2026-09-30, F4-11: agotados los codigos del telefono, el boton seguia
+      // habilitado; la ventana del backend es deslizante, asi que no hay un
+      // numero honesto de segundos para mostrar.
+      mockRequestOtp.mockRejectedValue(
+        new RateLimitError('Demasiados intentos.', {
+          errorCode: 'OTP_RATE_LIMITED',
+          statusCode: 429,
+          detail: { retry_after_seconds: 60 }
+        })
+      )
+      await hastaPedirElCodigo()
+
+      const aviso =
+        'Pediste demasiados códigos para este teléfono. Esperá un rato antes de pedir otro.'
+      expect(screen.getByRole('alert')).toHaveTextContent(aviso)
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.queryByText(/Reenviar en/)).not.toBeInTheDocument()
+
+      act(() => {
+        jest.advanceTimersByTime(10 * 60_000)
+      })
+      fireEvent.change(screen.getByLabelText('Email para el codigo'), {
+        target: { value: 'otra@example.com' }
+      })
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.getByRole('alert')).toHaveTextContent(aviso)
+      expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+    })
+
+    it('cambiar el telefono libera la espera', async () => {
+      // 2026-09-30, F4-11: la espera es del telefono pedido; corregir un
+      // numero mal tipeado no tiene por que esperar el minuto del anterior.
+      mockRequestOtp.mockResolvedValue({ ok: true, expires_at: '2026-09-30T13:00:00Z' })
+      await hastaPedirElCodigo()
+      expect(screen.getByRole('button', { name: 'Reenviar en 60 s' })).toBeDisabled()
+
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '+5491155550202' }
+      })
+
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
     })
 
     it('no muestra el debug_code aunque la API lo devuelva', async () => {

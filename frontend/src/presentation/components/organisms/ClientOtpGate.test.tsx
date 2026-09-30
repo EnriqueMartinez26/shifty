@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
+import { RateLimitError } from '@shared/errors'
 import { isOtpStillValid, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { ClientOtpGate } from './ClientOtpGate'
@@ -139,10 +140,7 @@ describe('ClientOtpGate en el celular (F4-11, J7)', () => {
     const onVerified = renderGate()
     await pedirCodigo('1155550101')
     fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
-    window.sessionStorage.setItem(
-      'shifty:otp:sol',
-      JSON.stringify({ phone: '1155550202', verifiedAt: new Date().toISOString() })
-    )
+    rememberOtpVerification('sol', '1155550202', new Date().toISOString())
     fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550202' } })
 
     fireEvent.click(screen.getByRole('button', { name: PEDIR }))
@@ -175,5 +173,131 @@ describe('ClientOtpGate en el celular (F4-11, J7)', () => {
 
     expect(screen.getByLabelText('Código')).toBeInTheDocument()
     expect(screen.queryByText(/424242/)).not.toBeInTheDocument()
+  })
+
+  it('el codigo descarta lo que no es un digito', async () => {
+    // 2026-09-30, F4-11: inputMode numeric no impide tipear letras o guiones
+    // en un teclado fisico y el backend rechazaba el codigo como invalido.
+    renderGate()
+    await pedirCodigo()
+
+    const codigo = screen.getByLabelText('Código') as HTMLInputElement
+    fireEvent.change(codigo, { target: { value: '12a-3 4' } })
+
+    expect(codigo.value).toBe('1234')
+  })
+
+  it('en la pantalla del codigo, "Reenviar código" respeta la espera y vuelve a pedir', async () => {
+    // 2026-09-30, F4-11: para reenviar habia que volver al formulario; sin
+    // espera, cada toque gastaba uno de los 5 codigos por hora.
+    renderGate()
+    await pedirCodigo()
+
+    expect(screen.getByRole('button', { name: 'Reenviar en 60 s' })).toBeDisabled()
+    act(() => {
+      jest.advanceTimersByTime(60_000)
+    })
+    const reenviar = screen.getByRole('button', { name: 'Reenviar código' })
+    expect(reenviar).not.toBeDisabled()
+
+    await act(async () => {
+      fireEvent.click(reenviar)
+    })
+
+    expect(mockRequestOtp).toHaveBeenCalledTimes(2)
+    expect(mockRequestOtp).toHaveBeenLastCalledWith({
+      store_public_id: 'store-1',
+      phone: '1155550101',
+      channel: 'email',
+      email: 'yo@example.com'
+    })
+    expect(screen.getByRole('button', { name: 'Reenviar en 60 s' })).toBeDisabled()
+  })
+
+  it('con skipRemembered, "Reenviar código" olvida la verificacion y pide de verdad', async () => {
+    // 2026-09-30, F4-11 + FF-05: el backend ya rechazo la verificacion
+    // recordada; reenviar no puede volver a entrar por el atajo.
+    const onVerified = jest.fn()
+    render(
+      <ClientOtpGate
+        storePublicId="store-1"
+        storeSlug="sol"
+        onVerified={onVerified}
+        initialPhone="1155550101"
+        skipRemembered
+      />
+    )
+    fireEvent.change(screen.getByLabelText('Tu email'), { target: { value: 'yo@example.com' } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: PEDIR }))
+    })
+
+    rememberOtpVerification('sol', '1155550101', new Date().toISOString())
+    act(() => {
+      jest.advanceTimersByTime(60_000)
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reenviar código' }))
+    })
+
+    expect(mockRequestOtp).toHaveBeenCalledTimes(2)
+    expect(isOtpStillValid('sol', '1155550101')).toBe(false)
+    expect(onVerified).not.toHaveBeenCalled()
+  })
+
+  it('un error con Retry-After espera lo que pide el servidor', async () => {
+    // 2026-09-30, F4-11: el 429 del rate limit traia Retry-After y el boton
+    // quedaba habilitado para volver a chocar contra el limite.
+    mockRequestOtp.mockRejectedValue(
+      new RateLimitError('Espera', { errorCode: 'RATE_LIMITED', statusCode: 429, retryAfter: 20 })
+    )
+    renderGate()
+    await pedirCodigo()
+
+    expect(screen.getByRole('button', { name: 'Reenviar en 20 s' })).toBeDisabled()
+    act(() => {
+      jest.advanceTimersByTime(20_000)
+    })
+    expect(screen.getByRole('button', { name: PEDIR })).not.toBeDisabled()
+  })
+
+  it('OTP_RATE_LIMITED bloquea el pedido sin cuenta regresiva y lo explica', async () => {
+    // 2026-09-30, F4-11: agotados los codigos del telefono, el boton seguia
+    // habilitado; la ventana del backend es deslizante, asi que no hay un
+    // numero honesto de segundos para mostrar.
+    mockRequestOtp.mockRejectedValue(
+      new RateLimitError('Demasiados intentos.', {
+        errorCode: 'OTP_RATE_LIMITED',
+        statusCode: 429,
+        detail: { retry_after_seconds: 60 }
+      })
+    )
+    renderGate()
+    await pedirCodigo()
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Pediste demasiados códigos para este teléfono. Esperá un rato antes de pedir otro.'
+    )
+    expect(screen.getByRole('button', { name: PEDIR })).toBeDisabled()
+    expect(screen.queryByText(/Reenviar en/)).not.toBeInTheDocument()
+
+    act(() => {
+      jest.advanceTimersByTime(10 * 60_000)
+    })
+    expect(screen.getByRole('button', { name: PEDIR })).toBeDisabled()
+    expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+  })
+
+  it('cambiar el telefono libera la espera', async () => {
+    // 2026-09-30, F4-11: la espera es del telefono pedido; corregir un
+    // numero mal tipeado no tiene por que esperar el minuto del anterior.
+    renderGate()
+    await pedirCodigo('1155550101')
+    fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
+    expect(screen.getByRole('button', { name: 'Reenviar en 60 s' })).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550202' } })
+
+    expect(screen.getByRole('button', { name: PEDIR })).not.toBeDisabled()
   })
 })

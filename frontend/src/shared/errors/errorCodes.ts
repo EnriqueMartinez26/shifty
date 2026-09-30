@@ -52,6 +52,12 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['FEATURE_DISABLED', 'Esta función no está habilitada para tu negocio.'],
   ['PERMISSION_DENIED', 'No tenés permiso para hacer esto.'],
   ['RATE_LIMITED', 'Hiciste demasiados intentos seguidos. Esperá un momento y volvé a intentar.'],
+  // Tope de codigos por telefono (OTP_MAX_REQUESTS_PER_HOUR): la ventana es
+  // deslizante, asi que no se promete una espera concreta (F4-11).
+  [
+    'OTP_RATE_LIMITED',
+    'Pediste demasiados códigos para este teléfono. Esperá un rato antes de pedir otro.'
+  ],
   [
     'RATE_LIMIT_UNAVAILABLE',
     'El servicio no está disponible en este momento. Probá de nuevo en unos minutos.'
