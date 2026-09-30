@@ -4,17 +4,24 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-import { ConflictError } from '@shared/errors'
+import { ConflictError, RateLimitError } from '@shared/errors'
 
-import { useCreatePublicBooking, usePublicDepositPreview } from './usePublic'
+import {
+  useCreatePublicBooking,
+  usePublicDepositPreview,
+  usePublicPaymentStatus
+} from './usePublic'
+import { PAYMENT_POLL_MAX_MS } from '../lib/paymentPolling'
 
 const mockCreateBooking = jest.fn()
 const mockPreviewDeposit = jest.fn()
+const mockGetPaymentStatus = jest.fn()
 
 jest.mock('@application/services/PublicBookingService', () => ({
   publicBookingService: {
     createBooking: (...args: unknown[]) => mockCreateBooking(...args),
-    previewDeposit: (...args: unknown[]) => mockPreviewDeposit(...args)
+    previewDeposit: (...args: unknown[]) => mockPreviewDeposit(...args),
+    getPaymentStatus: (...args: unknown[]) => mockGetPaymentStatus(...args)
   }
 }))
 
@@ -144,5 +151,80 @@ describe('usePublicDepositPreview', () => {
     rerender({ startsAt: '2026-10-02T12:00:00Z' })
 
     expect(result.current.data).toBeUndefined()
+  })
+})
+
+describe('usePublicPaymentStatus', () => {
+  const pendiente = { payment_status: 'pending', appointment_status: 'pending_payment' }
+
+  beforeEach(() => {
+    mockGetPaymentStatus.mockReset()
+    jest.useFakeTimers()
+  })
+
+  afterEach(() => jest.useRealTimers())
+
+  const avanzar = (ms: number) => act(() => jest.advanceTimersByTimeAsync(ms))
+
+  it('baja el ritmo y deja de sondear a los 30 minutos, avisando que corto (F4-05)', async () => {
+    // F4-05 (2026-09-30): sondeo fijo de 2 s sin corte, unas 900 requests en
+    // 30 min por cada cliente que volvia de Mercado Pago con el pago pendiente.
+    mockGetPaymentStatus.mockResolvedValue(pendiente)
+    const { result } = renderHook(() => usePublicPaymentStatus('store-1', 'pay-1'), {
+      wrapper: envoltorio(nuevoCliente())
+    })
+
+    await avanzar(30_000)
+    // Cada 2 s el primer medio minuto: 0, 2, ..., 30 s.
+    expect(mockGetPaymentStatus).toHaveBeenCalledTimes(16)
+    expect(result.current.pollingStopped).toBe(false)
+
+    await avanzar(PAYMENT_POLL_MAX_MS - 30_000 - 1)
+    expect(mockGetPaymentStatus).toHaveBeenCalledTimes(145)
+    expect(result.current.pollingStopped).toBe(false)
+
+    // La ultima consulta sale justo en el corte y su respuesta vuelve a
+    // renderizar: sin eso la pantalla seguia diciendo "no cierres esta
+    // pantalla" aunque nadie consultaba mas.
+    await avanzar(1)
+    await waitFor(() => expect(result.current.pollingStopped).toBe(true))
+    // 16 a 2 s, 18 a 5 s hasta los 2 min y 112 a 15 s hasta los 30 min.
+    expect(mockGetPaymentStatus).toHaveBeenCalledTimes(146)
+
+    await avanzar(10 * 60_000)
+    expect(mockGetPaymentStatus).toHaveBeenCalledTimes(146)
+    expect(result.current.pollingStopped).toBe(true)
+    // Recorrer 30 min de reloj falso con 146 consultas lleva unos 4 s reales.
+  }, 20_000)
+
+  it('un pago aprobado deja de sondear sin marcar el corte', async () => {
+    mockGetPaymentStatus
+      .mockResolvedValueOnce(pendiente)
+      .mockResolvedValue({ payment_status: 'approved', appointment_status: 'confirmed' })
+    const { result } = renderHook(() => usePublicPaymentStatus('store-1', 'pay-1'), {
+      wrapper: envoltorio(nuevoCliente())
+    })
+
+    await avanzar(PAYMENT_POLL_MAX_MS + 60_000)
+
+    expect(mockGetPaymentStatus).toHaveBeenCalledTimes(2)
+    expect(result.current.data?.payment_status).toBe('approved')
+    expect(result.current.pollingStopped).toBe(false)
+  })
+
+  it('no pisa la politica global de reintentos: un 429 no se repite (F4-05)', async () => {
+    // F4-05 (2026-09-30): el `retry: 2` propio reintentaba tambien los 429 y
+    // sumaba carga justo cuando el servidor pedia esperar.
+    mockGetPaymentStatus.mockRejectedValue(
+      new RateLimitError('Demasiadas consultas', { statusCode: 429, retryAfter: 20 })
+    )
+    const { result } = renderHook(() => usePublicPaymentStatus('store-1', 'pay-1'), {
+      wrapper: envoltorio(nuevoCliente())
+    })
+
+    await avanzar(10_000)
+
+    expect(mockGetPaymentStatus).toHaveBeenCalledTimes(1)
+    expect(result.current.isError).toBe(true)
   })
 })
