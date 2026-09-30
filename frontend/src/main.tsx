@@ -29,8 +29,13 @@ import {
 } from './presentation/lib/queryClientPolicies'
 import { setUnreadableInstantReporter } from './presentation/lib/reportUnreadableInstant'
 import { GlobalErrorHandler } from './shared/errors/GlobalErrorHandler'
+import { installStaleChunkReload } from './shared/utils/staleChunkReload'
 
 initSentry()
+
+// Tras un deploy el chunk viejo da 404: se recarga una vez para traer el
+// index.html nuevo en vez de dejar la pestana en blanco (F4-12).
+installStaleChunkReload()
 
 // Una fecha ilegible degrada a texto de respaldo en vez de tumbar la pantalla;
 // esto evita que ademas se pierda la senal de que llego un dato corrupto.
