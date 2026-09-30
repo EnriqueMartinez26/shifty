@@ -66,11 +66,11 @@ export const useCreatePublicBooking = () => {
   const queryClient = useQueryClient()
   return useMutation<BookingConfirmation, Error, PublicBookingPayload>({
     mutationFn: (payload) => publicBookingService.createBooking(payload),
-    // Una reserva fallida (409 por horario tomado, entre otros) deja la grilla
-    // vieja: con staleTime de 30 s el horario ocupado seguia libre al volver
-    // al paso 2 (FF-33).
-    onError: () => {
-      void queryClient.invalidateQueries({ queryKey: ['public-availability'] })
+    // Con o sin exito la grilla quedo vieja: con staleTime de 30 s el horario
+    // tomado seguia libre al volver al paso 2 (FF-33). El paso 2 esta
+    // desmontado y su consulta inactiva: sin `refetchType: 'all'` no se pedia.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })
 }

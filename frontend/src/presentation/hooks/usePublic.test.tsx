@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 
+import { ConflictError } from '@shared/errors'
+
 import { useCreatePublicBooking, usePublicDepositPreview } from './usePublic'
 
 const mockCreateBooking = jest.fn()
@@ -27,13 +29,28 @@ const envoltorio = (queryClient: QueryClient) => {
 }
 
 describe('useCreatePublicBooking', () => {
+  const claveDelPaso2 = ['public-availability', 's', 'svc', '2026-09-25', false]
+
+  // Mientras se confirma, el paso 2 del wizard esta desmontado: su consulta de
+  // disponibilidad queda inactiva y solo `refetchType: 'all'` la vuelve a pedir.
+  const clienteConGrillaDelPaso2 = () => {
+    const queryClient = nuevoCliente()
+    const refetchGrilla = jest.fn().mockResolvedValue([])
+    queryClient.setQueryDefaults(['public-availability'], { queryFn: refetchGrilla })
+    queryClient.setQueryData(claveDelPaso2, [{ start_time: '10:00' }])
+    return { queryClient, refetchGrilla }
+  }
+
   beforeEach(() => mockCreateBooking.mockReset())
 
-  it('una reserva fallida invalida la disponibilidad publica (FF-33)', async () => {
-    // FF-33 (2026-09-29): tras un 409 por horario ocupado, al volver al paso 2
-    // la grilla seguia mostrando libre ese horario por el staleTime de 30 s.
-    mockCreateBooking.mockRejectedValue(new Error('Horario ocupado'))
-    const queryClient = nuevoCliente()
+  it('un 409 por horario tomado vuelve a pedir la grilla inactiva del paso 2 (FF-33)', async () => {
+    // FF-33 (2026-09-30): tras un 409 por horario ocupado, al volver al paso 2
+    // la grilla seguia mostrando libre ese horario: la invalidacion solo
+    // refrescaba consultas activas y la del paso 2 esta desmontada.
+    mockCreateBooking.mockRejectedValue(
+      new ConflictError('Horario ocupado', { errorCode: 'SLOT_TAKEN', statusCode: 409 })
+    )
+    const { queryClient, refetchGrilla } = clienteConGrillaDelPaso2()
     const invalidate = jest.spyOn(queryClient, 'invalidateQueries')
 
     const { result } = renderHook(() => useCreatePublicBooking(), {
@@ -45,12 +62,18 @@ describe('useCreatePublicBooking', () => {
       ).rejects.toThrow('Horario ocupado')
     })
 
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['public-availability'] })
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['public-availability'],
+      refetchType: 'all'
+    })
+    await waitFor(() => expect(refetchGrilla).toHaveBeenCalledTimes(1))
   })
 
-  it('una reserva exitosa no invalida la disponibilidad', async () => {
+  it('una reserva exitosa tambien vuelve a pedir la grilla (FF-33)', async () => {
+    // FF-33 (2026-09-30): con la reserva hecha, "Hacer otra reserva" podia
+    // mostrar libre el horario recien tomado durante los 30 s de staleTime.
     mockCreateBooking.mockResolvedValue({ public_id: 'appt-1' })
-    const queryClient = nuevoCliente()
+    const { queryClient, refetchGrilla } = clienteConGrillaDelPaso2()
     const invalidate = jest.spyOn(queryClient, 'invalidateQueries')
 
     const { result } = renderHook(() => useCreatePublicBooking(), {
@@ -60,7 +83,11 @@ describe('useCreatePublicBooking', () => {
       result.current.mutateAsync({} as Parameters<typeof result.current.mutateAsync>[0])
     )
 
-    expect(invalidate).not.toHaveBeenCalled()
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['public-availability'],
+      refetchType: 'all'
+    })
+    await waitFor(() => expect(refetchGrilla).toHaveBeenCalledTimes(1))
   })
 })
 

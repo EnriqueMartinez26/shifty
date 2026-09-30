@@ -6,7 +6,7 @@ import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/
 
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
@@ -68,12 +68,12 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
   const cancelar = async (item: ClientAppointmentItem) => {
     const question = `¿Cancelar tu turno de ${item.service_name} del ${formatArgentinaDateDisplay(
       item.starts_at
-    )} a las ${formatArgentinaTime(item.starts_at)} hs?`
+    )} a las ${formatArgentinaTime(item.starts_at)} hs? No se puede deshacer.`
     // "Cancelar" en el dialogo seria NO cancelar el turno: los botones dicen
     // lo que hacen.
     const confirmed = await confirm(question, {
-      confirmLabel: 'Sí, cancelar el turno',
-      cancelLabel: 'Volver'
+      confirmLabel: 'Sí, cancelar turno',
+      cancelLabel: 'Conservar turno'
     })
     if (!confirmed) return
     setMessage('')
@@ -82,6 +82,9 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       setMessage('Cancelamos tu turno y le avisamos a la tienda.')
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No pudimos cancelar el turno'))
+      // La lista quedo vieja (la tienda ya lo cancelo, o tiene un cobro vivo):
+      // se recarga para no seguir ofreciendo la accion.
+      if (isStateConflictError(error)) void appointments.refetch()
     }
   }
 

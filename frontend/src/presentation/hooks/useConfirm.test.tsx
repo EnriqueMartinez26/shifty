@@ -99,8 +99,8 @@ describe('useConfirm + ConfirmDialog', () => {
             type="button"
             onClick={() => {
               answer = confirm('¿Cancelar tu turno?', {
-                confirmLabel: 'Sí, cancelar el turno',
-                cancelLabel: 'Volver'
+                confirmLabel: 'Sí, cancelar turno',
+                cancelLabel: 'Conservar turno'
               })
             }}
           >
@@ -113,9 +113,9 @@ describe('useConfirm + ConfirmDialog', () => {
     render(<HostConEtiquetas />)
     fireEvent.click(screen.getByRole('button', { name: 'Pedir' }))
 
-    expect(screen.getByRole('button', { name: 'Volver' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: 'Conservar turno' })).toHaveFocus()
     expect(screen.queryByRole('button', { name: 'Confirmar' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Sí, cancelar el turno' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sí, cancelar turno' }))
 
     await act(async () => {
       await expect(answer).resolves.toBe(true)
