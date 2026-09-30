@@ -103,6 +103,16 @@ export const createBookingInputStyle = (): CSSProperties => ({
   borderRadius: 6
 })
 
+// Campos del cliente y del codigo OTP en la confirmacion de la reserva: los
+// comparten BookingStepConfirmation y BookingOtpSection (F11a-06).
+export const createBookingClientInputStyle = (): CSSProperties => ({
+  ...createBookingInputStyle(),
+  borderRadius: 6,
+  fontFamily: 'inherit',
+  outline: 'none',
+  transition: 'all 0.15s'
+})
+
 export const createSettingsInputStyle = create2000sInputStyle
 
 // --- Cards: contenido mas chico anidado dentro de un panel ---

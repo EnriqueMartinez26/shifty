@@ -6,7 +6,6 @@ import {
   Loader2,
   Mail,
   Phone,
-  ShieldCheck,
   Tag,
   TriangleAlert,
   User,
@@ -30,6 +29,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { phoneDigits } from '@shared/utils/otpSession'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
+import { BookingOtpSection } from './BookingOtpSection'
 import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
@@ -37,6 +37,7 @@ import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
 import {
   createBookingBackButtonStyle,
+  createBookingClientInputStyle,
   createBookingInputStyle,
   createBookingSurfaceStyle,
   createBookingAccentBoxStyle
@@ -242,13 +243,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     }
   }
 
-  const clientInputStyle = {
-    ...createBookingInputStyle(),
-    borderRadius: 6,
-    fontFamily: 'inherit',
-    outline: 'none',
-    transition: 'all 0.15s'
-  }
+  const clientInputStyle = createBookingClientInputStyle()
 
   const renderCustomField = (field: StoreCustomField) => {
     const commonProps = {
@@ -414,115 +409,6 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     </div>
   )
 
-  const renderOtpSection = () => (
-    <div className="p-5 bg-white space-y-4" style={createBookingSurfaceStyle()}>
-      <div className="flex items-start gap-3">
-        <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
-        <div>
-          <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-            Verificamos tu telefono
-          </p>
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Te mandamos un codigo por email para confirmar el {client.phone}
-          </p>
-          {/* Si el telefono ya tiene ficha con email cargado, el backend manda
-              el codigo a ESE email y no al que se tipee aca: quien pide el
-              codigo no elige el buzon (2026-09-20). Decirlo evita que alguien
-              espere el mail en una casilla que nunca lo va a recibir. */}
-          <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Si ya reservaste en este negocio, el codigo va al email que tenes registrado.
-          </p>
-        </div>
-      </div>
-
-      <div className="grid sm:grid-cols-[1fr_auto] gap-3">
-        <input
-          type="email"
-          inputMode="email"
-          autoComplete="email"
-          aria-label="Email para el codigo"
-          value={otpState.email}
-          onChange={(e) => onOtpEmailChange(e.target.value)}
-          className="px-4 py-3 font-bold outline-none"
-          style={clientInputStyle}
-          placeholder="tu@email.com"
-        />
-        <button
-          type="button"
-          disabled={
-            isRequestingOtp ||
-            !otpState.email.trim() ||
-            otpResendSeconds > 0 ||
-            otpState.rateLimited
-          }
-          onClick={onRequestOtp}
-          className="px-4 py-3 text-xs font-black uppercase tracking-widest"
-          style={{ ...buttonStyles2000s.default, borderRadius: 6 }}
-        >
-          {isRequestingOtp
-            ? 'Enviando...'
-            : otpResendSeconds > 0
-              ? `Reenviar en ${otpResendSeconds} s`
-              : 'Enviar codigo'}
-        </button>
-      </div>
-
-      <div className="space-y-3">
-        <input
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          value={otpState.code}
-          // Solo digitos: inputMode no impide tipear letras en un teclado fisico.
-          onChange={(e) => onOtpCodeChange(e.target.value.replace(/\D/g, ''))}
-          className="w-full px-4 py-3 font-bold outline-none"
-          style={clientInputStyle}
-          placeholder="Codigo que te llego por email"
-        />
-
-        {otpState.error && (
-          <div
-            role="alert"
-            aria-live="polite"
-            className="p-3 text-xs font-bold flex items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.danger.bg,
-              colors2000s.status.danger.border,
-              colors2000s.status.danger.text
-            )}
-          >
-            <TriangleAlert className="w-4 h-4" />
-            {otpState.error}
-          </div>
-        )}
-
-        {otpState.verified ? (
-          <div
-            className="p-3 text-xs font-bold flex items-center gap-2"
-            style={createBookingAccentBoxStyle(
-              colors2000s.status.success.bg,
-              colors2000s.status.success.border,
-              colors2000s.status.success.text
-            )}
-          >
-            <ShieldCheck className="w-4 h-4" />
-            Telefono validado correctamente
-          </div>
-        ) : (
-          <button
-            type="button"
-            disabled={!otpState.code || isVerifyingOtp}
-            onClick={onVerifyOtp}
-            className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
-            style={{ ...buttonStyles2000s.selected, borderRadius: 6 }}
-          >
-            {isVerifyingOtp ? 'Verificando...' : 'Verificar codigo'}
-          </button>
-        )}
-      </div>
-    </div>
-  )
-
   if (submission.phase === 'submitting') {
     return (
       <div className="flex flex-col items-center justify-center py-20 animate-in fade-in duration-500">
@@ -576,7 +462,19 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
       {renderClientFields()}
 
-      {showOtpSection && renderOtpSection()}
+      {showOtpSection && (
+        <BookingOtpSection
+          phone={client.phone}
+          otpState={otpState}
+          isRequestingOtp={isRequestingOtp}
+          otpResendSeconds={otpResendSeconds}
+          isVerifyingOtp={isVerifyingOtp}
+          onRequestOtp={onRequestOtp}
+          onVerifyOtp={onVerifyOtp}
+          onOtpEmailChange={onOtpEmailChange}
+          onOtpCodeChange={onOtpCodeChange}
+        />
+      )}
       {requiresOtp && !showOtpSection && (
         <p className="text-xs font-bold text-center" style={{ color: colors2000s.text.secondary }}>
           Completa tu telefono para verificarlo antes de confirmar.
