@@ -30,7 +30,9 @@ describe('ServiceService — politica de sena (F10-03 / F9-06)', () => {
       findById: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn()
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
     } as jest.Mocked<IServiceRepository>
 
     mockRepository.create.mockImplementation(async (created) => created)
@@ -157,7 +159,9 @@ describe('ServiceService — catalogo con inactivos', () => {
       findById: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
-      delete: jest.fn()
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
     } as jest.Mocked<IServiceRepository>
     return { mockRepository, service: new ServiceService(mockRepository) }
   }
@@ -176,5 +180,43 @@ describe('ServiceService — catalogo con inactivos', () => {
     await service.listServices()
 
     expect(mockRepository.findAll).toHaveBeenCalledWith()
+  })
+})
+
+/**
+ * 2026-09-30: el panel no podia subir la imagen de un servicio aunque el
+ * backend ya lo permitia.
+ */
+describe('ServiceService — imagen del servicio', () => {
+  const setup = () => {
+    const mockRepository = {
+      findAll: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
+    } as jest.Mocked<IServiceRepository>
+    return { mockRepository, service: new ServiceService(mockRepository) }
+  }
+
+  it('uploadImage delega en el repositorio y devuelve el servicio actualizado', async () => {
+    const { mockRepository, service } = setup()
+    const archivo = new Blob(['x'], { type: 'image/png' })
+    const actualizado = { id: 'svc-1' } as Awaited<ReturnType<IServiceRepository['uploadImage']>>
+    mockRepository.uploadImage.mockResolvedValue(actualizado)
+
+    await expect(service.uploadImage('svc-1', archivo)).resolves.toBe(actualizado)
+    expect(mockRepository.uploadImage).toHaveBeenCalledWith('svc-1', archivo)
+  })
+
+  it('removeImage delega en el repositorio', async () => {
+    const { mockRepository, service } = setup()
+    const actualizado = { id: 'svc-1' } as Awaited<ReturnType<IServiceRepository['removeImage']>>
+    mockRepository.removeImage.mockResolvedValue(actualizado)
+
+    await expect(service.removeImage('svc-1')).resolves.toBe(actualizado)
+    expect(mockRepository.removeImage).toHaveBeenCalledWith('svc-1')
   })
 })

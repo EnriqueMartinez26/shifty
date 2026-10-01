@@ -8,20 +8,26 @@ import {
   useCreateManagedService,
   useManagedServiceCatalog,
   useManagedServices,
-  useUpdateManagedService
+  useRemoveServiceImage,
+  useUpdateManagedService,
+  useUploadServiceImage
 } from './useManagedServices'
 
 const mockListServices = jest.fn()
 const mockListCatalog = jest.fn()
 const mockCreateService = jest.fn()
 const mockUpdateService = jest.fn()
+const mockUploadImage = jest.fn()
+const mockRemoveImage = jest.fn()
 
 jest.mock('@application/services/ServiceService', () => ({
   serviceService: {
     listServices: () => mockListServices(),
     listCatalog: () => mockListCatalog(),
     createService: (...args: unknown[]) => mockCreateService(...args),
-    updateService: (...args: unknown[]) => mockUpdateService(...args)
+    updateService: (...args: unknown[]) => mockUpdateService(...args),
+    uploadImage: (...args: unknown[]) => mockUploadImage(...args),
+    removeImage: (...args: unknown[]) => mockRemoveImage(...args)
   }
 }))
 
@@ -108,5 +114,49 @@ describe('useManagedServiceCatalog', () => {
 
     expect(mockUpdateService).toHaveBeenCalledWith('svc-1', { isActive: true })
     await waitFor(() => expect(mockListCatalog).toHaveBeenCalledTimes(2))
+  })
+})
+
+/**
+ * 2026-09-30: el panel no podia subir la imagen de un servicio aunque el
+ * backend ya lo permitia. Subir y quitar persisten al instante, asi que las dos
+ * mutaciones refrescan el prefijo `['services']` (catalogo y lista compartida).
+ */
+describe('imagen del servicio', () => {
+  const setup = () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false }, queries: { retry: false } }
+    })
+    const invalidar = jest.spyOn(queryClient, 'invalidateQueries')
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    return { invalidar, wrapper }
+  }
+
+  beforeEach(() => {
+    mockUploadImage.mockReset().mockResolvedValue({ id: 'svc-1' })
+    mockRemoveImage.mockReset().mockResolvedValue({ id: 'svc-1' })
+  })
+
+  it('subir la imagen invalida `services`', async () => {
+    const { invalidar, wrapper } = setup()
+    const archivo = new Blob(['x'], { type: 'image/png' })
+
+    const { result } = renderHook(() => useUploadServiceImage(), { wrapper })
+    await act(() => result.current.mutateAsync({ id: 'svc-1', file: archivo }))
+
+    expect(mockUploadImage).toHaveBeenCalledWith('svc-1', archivo)
+    expect(invalidar).toHaveBeenCalledWith({ queryKey: ['services'] })
+  })
+
+  it('quitar la imagen invalida `services`', async () => {
+    const { invalidar, wrapper } = setup()
+
+    const { result } = renderHook(() => useRemoveServiceImage(), { wrapper })
+    await act(() => result.current.mutateAsync('svc-1'))
+
+    expect(mockRemoveImage).toHaveBeenCalledWith('svc-1')
+    expect(invalidar).toHaveBeenCalledWith({ queryKey: ['services'] })
   })
 })

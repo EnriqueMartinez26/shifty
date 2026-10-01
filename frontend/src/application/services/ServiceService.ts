@@ -88,6 +88,19 @@ export class ServiceService extends BaseService<Service> {
       await this.repository.delete(id)
     }, 'deleteService')
   }
+
+  /** Sube la imagen y devuelve el servicio con su `imageUrl` nueva. */
+  async uploadImage(id: string, file: Blob): Promise<Service> {
+    return await this.execute(async () => {
+      return await this.repository.uploadImage(id, file)
+    }, 'uploadImage')
+  }
+
+  async removeImage(id: string): Promise<Service> {
+    return await this.execute(async () => {
+      return await this.repository.removeImage(id)
+    }, 'removeImage')
+  }
 }
 
 export const serviceService = new ServiceService(new HttpServiceRepository(apiClient))

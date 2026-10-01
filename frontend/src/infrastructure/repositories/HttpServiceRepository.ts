@@ -72,4 +72,30 @@ export class HttpServiceRepository
   protected async deleteImpl(id: string): Promise<void> {
     await this.client.delete(`/services/${id}`)
   }
+
+  async uploadImage(id: string, file: Blob): Promise<Service> {
+    try {
+      const form = new FormData()
+      // Solo `file`: el endpoint del servicio no lleva `kind` (el logo si).
+      form.append('file', file)
+      // Se fuerza multipart (el cliente por defecto manda application/json)
+      // para que el navegador arme el boundary; el backend valida por magic
+      // bytes, tamano y pixeles (modules/stores/media.py).
+      const { data } = await this.client.post<ServiceResponseDTO>(`/services/${id}/image`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      return ServiceMapper.toDomain(data)
+    } catch (error) {
+      this.handleRepositoryError('uploadImage', error)
+    }
+  }
+
+  async removeImage(id: string): Promise<Service> {
+    try {
+      const { data } = await this.client.delete<ServiceResponseDTO>(`/services/${id}/image`)
+      return ServiceMapper.toDomain(data)
+    } catch (error) {
+      this.handleRepositoryError('removeImage', error)
+    }
+  }
 }
