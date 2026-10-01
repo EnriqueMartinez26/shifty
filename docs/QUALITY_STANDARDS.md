@@ -126,7 +126,7 @@ The pipeline must fail on:
 ## Commit Policy
 
 - Commits are blocked locally by the Git hook in `.githooks/pre-commit`.
-- The hook enforces the fast gate: frontend format, strict lint, and typecheck; backend format, lint, and mypy.
+- The hook enforces the fast gate: it runs `npm run check` (frontend format, strict lint, typecheck, and dead-code) plus backend format, lint, and mypy. It is the only local gate; there is no `.pre-commit-config.yaml`.
 - CI enforces the heavier gate: tests, build, dead-code, OpenAPI import, and Alembic graph validation.
 - In a fresh clone, enable it with `git config core.hooksPath .githooks`.
 - If the hook fails, fix the code or update the standard explicitly before committing.
