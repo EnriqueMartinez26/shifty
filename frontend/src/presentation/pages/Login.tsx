@@ -50,7 +50,7 @@ const LoginPage: React.FC = () => {
   }
 
   return (
-    <AuthShell title="Shifty" subtitle="Gestiona tus turnos, clientes y equipo" variant="login">
+    <AuthShell title="Shifty" subtitle="Gestiona tus turnos, clientes y equipo">
       <form
         onSubmit={(event) => {
           void handleSubmit(event)

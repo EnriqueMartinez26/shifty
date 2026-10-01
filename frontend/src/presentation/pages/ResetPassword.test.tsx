@@ -3,14 +3,8 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 
 import ResetPasswordPage from './ResetPassword'
+import { cssValue } from '../../test/cssValue'
 import { colors2000s } from '../../theme/colors'
-
-/** The value as jsdom normalizes it (hex to rgb), so it can be compared with `element.style`. */
-const cssValue = (property: 'color' | 'border' | 'borderTop', value: string): string => {
-  const probe = document.createElement('div')
-  probe.style[property] = value
-  return probe.style[property]
-}
 
 const mockMutateAsync = jest.fn()
 
@@ -22,7 +16,7 @@ jest.mock('../hooks/useResetPassword', () => ({
 }))
 
 describe('ResetPasswordPage', () => {
-  // F11b-14: pins the page shell before it moves to `AuthShell`.
+  // F11b-14: pins the `AuthShell` markup as rendered by this page.
   it('renders the branding, card, back-to-login link and footer', () => {
     render(
       <MemoryRouter initialEntries={['/reset-password?token=abc']}>

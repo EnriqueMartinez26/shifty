@@ -5,14 +5,8 @@ import { MemoryRouter } from 'react-router'
 import { ValidationError } from '@shared/errors'
 
 import ForgotPasswordPage from './ForgotPassword'
+import { cssValue } from '../../test/cssValue'
 import { colors2000s } from '../../theme/colors'
-
-/** The value as jsdom normalizes it (hex to rgb), so it can be compared with `element.style`. */
-const cssValue = (property: 'color' | 'border' | 'borderTop', value: string): string => {
-  const probe = document.createElement('div')
-  probe.style[property] = value
-  return probe.style[property]
-}
 
 const mockMutateAsync = jest.fn()
 let mockIsPending = false
@@ -72,7 +66,7 @@ describe('ForgotPasswordPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Servicio caído')
   })
 
-  // F11b-14: pins the page shell before it moves to `AuthShell`.
+  // F11b-14: pins the `AuthShell` markup as rendered by this page.
   it('renders the branding, card, back-to-login link and footer', () => {
     render(
       <MemoryRouter>

@@ -3,19 +3,13 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
 import LoginPage from './Login'
+import { cssValue } from '../../test/cssValue'
 import { colors2000s } from '../../theme/colors'
 
 /**
  * 2026-09-28 (FF-36, D-20260928-06). Sintoma: al vencer la sesion el login
  * mandaba siempre a la ruta por defecto del rol y se perdia donde estaba.
  */
-
-/** The value as jsdom normalizes it (hex to rgb), so it can be compared with `element.style`. */
-const cssValue = (property: 'color' | 'border' | 'borderTop', value: string): string => {
-  const probe = document.createElement('div')
-  probe.style[property] = value
-  return probe.style[property]
-}
 
 const mockMutateAsync = jest.fn()
 
@@ -43,7 +37,7 @@ const entrarDesde = (from: string) => {
 }
 
 describe('LoginPage shell', () => {
-  /** F11b-14: fija la cascara de la pagina antes de moverla a `AuthShell`. */
+  /** F11b-14: fija el markup de `AuthShell` tal como lo renderiza esta pagina. */
   it('renders the branding, card, forgot-password link and footer', () => {
     render(
       <MemoryRouter>
@@ -60,8 +54,10 @@ describe('LoginPage shell', () => {
     expect(subtitle.className).toBe('text-sm font-medium')
     expect(subtitle.style.color).toBe(cssValue('color', colors2000s.text.secondary))
 
+    // 2026-10-01: Login unified with the recovery pages by owner decision; it
+    // gained `text-center` on the header and `px-4` on the outer div (below).
     const header = heading.parentElement as HTMLElement
-    expect(header.className).toBe('flex flex-col items-center mb-8')
+    expect(header.className).toBe('flex flex-col items-center mb-8 text-center')
 
     const iconBox = header.firstElementChild as HTMLElement
     expect(iconBox.className).toBe(
@@ -79,7 +75,7 @@ describe('LoginPage shell', () => {
     const column = header.parentElement as HTMLElement
     expect(column.className).toBe('w-full max-w-md p-8 relative z-10')
     expect((column.parentElement as HTMLElement).className).toBe(
-      'min-h-screen w-full flex items-center justify-center relative overflow-hidden'
+      'min-h-screen w-full flex items-center justify-center relative overflow-hidden px-4'
     )
 
     const form = screen.getByLabelText('Email').closest('form') as HTMLFormElement

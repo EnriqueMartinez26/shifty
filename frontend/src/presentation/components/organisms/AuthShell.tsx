@@ -10,24 +10,9 @@ import { Icon2000s } from '../legacy/Icon2000s'
 interface AuthShellProps {
   title: string
   subtitle: string
-  /**
-   * `login` conserva la cascara original del login (sin margen lateral ni
-   * `text-center` en el encabezado); `recovery` es la de olvido y restablecer.
-   */
-  variant?: 'login' | 'recovery'
   /** Pie dentro de la tarjeta con el link "Volver a iniciar sesion". */
   showBackToLogin?: boolean
   children: React.ReactNode
-}
-
-const PAGE_CLASS_NAME: Record<NonNullable<AuthShellProps['variant']>, string> = {
-  login: 'min-h-screen w-full flex items-center justify-center relative overflow-hidden',
-  recovery: 'min-h-screen w-full flex items-center justify-center relative overflow-hidden px-4'
-}
-
-const HEADER_CLASS_NAME: Record<NonNullable<AuthShellProps['variant']>, string> = {
-  login: 'flex flex-col items-center mb-8',
-  recovery: 'flex flex-col items-center mb-8 text-center'
 }
 
 /**
@@ -38,18 +23,17 @@ const HEADER_CLASS_NAME: Record<NonNullable<AuthShellProps['variant']>, string> 
 export const AuthShell: React.FC<AuthShellProps> = ({
   title,
   subtitle,
-  variant = 'recovery',
   showBackToLogin = false,
   children
 }) => (
   <div
-    className={PAGE_CLASS_NAME[variant]}
+    className="min-h-screen w-full flex items-center justify-center relative overflow-hidden px-4"
     style={{
       background: `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`
     }}
   >
     <div className="w-full max-w-md p-8 relative z-10">
-      <div className={HEADER_CLASS_NAME[variant]}>
+      <div className="flex flex-col items-center mb-8 text-center">
         <div
           className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4 rotate-3 relative overflow-hidden"
           style={{
