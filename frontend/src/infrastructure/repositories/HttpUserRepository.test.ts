@@ -239,6 +239,25 @@ describe('HttpUserRepository.list', () => {
     })
     expect(users[0]?.id).toBe('usr-1')
   })
+
+  it('la segunda pagina manda offset=100 (F4-03)', async () => {
+    // 2026-09-30: la lista de usuarios cortaba en 200 sin forma de ver el
+    // resto; no habia offset y el servidor siempre devolvia la primera pagina.
+    const get = jest.fn().mockResolvedValue({ data: [] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+
+    await repository.list({ limit: 100, includeInactive: true, offset: 100 })
+
+    expect(get.mock.calls[0][1]).toStrictEqual({
+      params: {
+        include_inactive: true,
+        q: undefined,
+        email: undefined,
+        limit: 100,
+        offset: 100
+      }
+    })
+  })
 })
 
 describe('HttpUserRepository.delete', () => {

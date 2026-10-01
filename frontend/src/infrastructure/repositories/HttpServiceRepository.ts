@@ -19,8 +19,17 @@ export class HttpServiceRepository
     this.client = client
   }
 
-  protected async findAllImpl(_options?: QueryOptions | boolean): Promise<Service[]> {
-    const { data } = await this.client.get<ServiceResponseDTO[]>('/services/')
+  protected async findAllImpl(options?: QueryOptions | boolean): Promise<Service[]> {
+    const includeInactive =
+      typeof options === 'boolean' ? options : Boolean(options?.includeInactive)
+    // `include_inactive` exige STORE_MANAGERS en el backend: a un profesional
+    // le da 403. Por eso viaja solo cuando se pide (el catalogo del panel) y la
+    // lista compartida sale sin parametros (FF-22).
+    const { data } = includeInactive
+      ? await this.client.get<ServiceResponseDTO[]>('/services/', {
+          params: { include_inactive: true }
+        })
+      : await this.client.get<ServiceResponseDTO[]>('/services/')
     return data.map(ServiceMapper.toDomain)
   }
 

@@ -38,13 +38,17 @@ export const UserManagementContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
 
-  const { data: users, isLoading, error } = useManagedDomainUsers(listQuery)
+  const {
+    data: users,
+    isLoading,
+    error,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage
+  } = useManagedDomainUsers(listQuery)
   const createMutation = useCreateManagedDomainUser()
   const updateMutation = useUpdateManagedDomainUser()
   const deleteMutation = useDeleteManagedDomainUser()
-
-  // El servidor corta en `limit`: si llego justo ese numero puede haber mas.
-  const isTruncated = users?.length === listQuery.limit
 
   const handleDelete = async (id: string) => {
     if (!(await confirm('¿Estás seguro de eliminar este usuario?'))) return
@@ -121,12 +125,6 @@ export const UserManagementContainer: React.FC = () => {
 
       <QueryErrorNotice error={error} message="No se pudieron cargar los usuarios." />
 
-      {isTruncated && (
-        <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-          Mostrando los primeros {listQuery.limit}; refiná la búsqueda.
-        </p>
-      )}
-
       {isLoading ? (
         <div
           className="flex flex-col items-center justify-center py-20 rounded-lg"
@@ -188,6 +186,21 @@ export const UserManagementContainer: React.FC = () => {
             />
           ))}
         </div>
+      )}
+
+      {/* El servidor corta en `limit`: el resto llega por paginas (F4-03). */}
+      {!isLoading && hasNextPage && (
+        <button
+          type="button"
+          onClick={() => {
+            void fetchNextPage()
+          }}
+          disabled={isFetchingNextPage}
+          className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
+          style={buttonStyles2000s.default}
+        >
+          {isFetchingNextPage ? 'Cargando...' : 'Ver más'}
+        </button>
       )}
 
       {isModalOpen && (

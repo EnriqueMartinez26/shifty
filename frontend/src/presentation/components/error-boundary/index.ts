@@ -1,1 +1,1 @@
-﻿export { ErrorBoundaryFallback } from './ErrorBoundaryFallback'
+export { ErrorBoundaryFallback } from './ErrorBoundaryFallback'

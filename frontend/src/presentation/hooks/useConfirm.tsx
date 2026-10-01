@@ -2,7 +2,12 @@ import React, { useState } from 'react'
 
 import { ConfirmDialog } from '../components/organisms/ConfirmDialog'
 
-interface PendingConfirm {
+interface ConfirmLabels {
+  confirmLabel?: string
+  cancelLabel?: string
+}
+
+interface PendingConfirm extends ConfirmLabels {
   message: string
   resolve: (confirmed: boolean) => void
 }
@@ -14,9 +19,9 @@ interface PendingConfirm {
 export const useConfirm = () => {
   const [pending, setPending] = useState<PendingConfirm | null>(null)
 
-  const confirm = (message: string) =>
+  const confirm = (message: string, labels: ConfirmLabels = {}) =>
     new Promise<boolean>((resolve) => {
-      setPending({ message, resolve })
+      setPending({ message, resolve, ...labels })
     })
 
   const settle = (confirmed: boolean) => {
@@ -27,6 +32,8 @@ export const useConfirm = () => {
   const confirmDialog: React.ReactNode = pending ? (
     <ConfirmDialog
       message={pending.message}
+      confirmLabel={pending.confirmLabel}
+      cancelLabel={pending.cancelLabel}
       onConfirm={() => settle(true)}
       onCancel={() => settle(false)}
     />
