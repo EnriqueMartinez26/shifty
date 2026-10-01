@@ -10,11 +10,12 @@ interface SummaryCard {
 
 interface SummaryCardsProps {
   cards: SummaryCard[]
-  columns: 3 | 4
+  columns: 1 | 3 | 4
 }
 
 // Clases literales: Tailwind solo genera las que encuentra escritas enteras.
 const GRID_COLUMNS: Record<SummaryCardsProps['columns'], string> = {
+  1: 'md:grid-cols-1',
   3: 'md:grid-cols-3',
   4: 'md:grid-cols-4'
 }
