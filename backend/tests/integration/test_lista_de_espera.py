@@ -358,3 +358,131 @@ async def test_el_dueno_reserva_a_mano_desde_la_lista(
         json={"starts_at": slot.isoformat(), "staff_id": staff},
     )
     assert choque.status_code == 409, choque.text
+
+
+async def _anotar(
+    client: AsyncClient, store: str, service: str, slot: datetime, **extra: object
+) -> str:
+    alta = await client.post(
+        "/public/waitlist", json=_alta(store, service, slot, **extra)
+    )
+    assert alta.status_code == 201, alta.text
+    return str(alta.json()["public_id"])
+
+
+@pytest.mark.asyncio
+async def test_el_cupo_se_ofrece_solo_a_quien_tiene_email_entregable(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FF-25 (2026-10-01): el cupo se le ofrecia a una entrada sin email.
+
+    Sintoma: ``offer_released_slot`` tomaba la primera entrada que encajaba
+    aunque no tuviera email entregable: quedaba ``offered`` sin que nadie
+    recibiera aviso, vencia, sumaba ``lapsed_offers`` y a la segunda expiraba.
+    Ahora la oferta va a la primera con email entregable y las otras siguen
+    esperando sin gastar ofertas, contadas en el aviso al duenio
+    (D-20260930-11).
+    """
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    store, token, service, staff, slot = await _tienda(client, "sin-email-mezcla")
+
+    sin_email = await _anotar(
+        client,
+        store,
+        service,
+        slot,
+        client_name="Sin Email",
+        client_phone="+5491155550111",
+        client_email=None,
+    )
+    tecnico = await _anotar(
+        client,
+        store,
+        service,
+        slot,
+        client_name="Email Tecnico",
+        client_phone="+5491155550112",
+        client_email="tecnico@example.com",
+    )
+    # Un email tecnico ``.noreply`` no es entregable: se fuerza en la fila
+    # porque el alta publica no lo produce.
+    fila = await _entrada(test_session, tecnico)
+    fila.client_email = "5491155550112@store1.noreply"
+    await test_session.commit()
+    con_email = await _anotar(
+        client,
+        store,
+        service,
+        slot,
+        client_name="Con Email",
+        client_phone="+5491155550113",
+        client_email="con-email@example.com",
+    )
+
+    pid = await _reservar(client, store, service, staff, slot, "sin-email-0001")
+    res = await client.patch(f"/appointments/{pid}/cancel", headers=auth_headers(token))
+    assert res.status_code == 200, res.text
+    mails_antes = len(buzon.enviados)
+
+    resultado = await process_outbox_batch(test_session)
+    assert resultado["failed"] == 0
+
+    for salteada in (sin_email, tecnico):
+        entrada = await _entrada(test_session, salteada)
+        assert entrada.status == "waiting"
+        assert entrada.lapsed_offers == 0
+        assert entrada.notified_at is None
+        assert entrada.offer_expires_at is None
+    ofrecida = await _entrada(test_session, con_email)
+    assert ofrecida.status == "offered"
+    nuevos = buzon.enviados[mails_antes:]
+    ofertas = [e for e in nuevos if e[1].startswith("Se libero un turno")]
+    assert [e[0] for e in ofertas] == ["con-email@example.com"]
+
+    # El duenio ve a los tres, tambien a los que no dejaron email.
+    aviso = (
+        await test_session.execute(
+            select(Notification).where(Notification.type == "waitlist.slot_released")
+        )
+    ).scalar_one()
+    assert "3 en lista de espera" in (aviso.body or "")
+
+
+@pytest.mark.asyncio
+async def test_sin_ninguna_entrada_con_email_no_hay_oferta_y_avisa_al_duenio(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FF-25 (2026-10-01): solo entradas sin email quedaban ``offered`` a nadie.
+
+    Sintoma: la unica entrada que encajaba, sin email, quedaba ``offered``,
+    vencia y gastaba ``lapsed_offers`` sin haber recibido nada. Ahora no hay
+    oferta, la entrada sigue esperando y el duenio recibe el aviso para
+    contactarla por WhatsApp (D-20260930-11).
+    """
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    store, token, service, staff, slot = await _tienda(client, "sin-email-solo")
+    sin_email = await _anotar(client, store, service, slot, client_email=None)
+
+    pid = await _reservar(client, store, service, staff, slot, "sin-email-0002")
+    res = await client.patch(f"/appointments/{pid}/cancel", headers=auth_headers(token))
+    assert res.status_code == 200, res.text
+    mails_antes = len(buzon.enviados)
+
+    resultado = await process_outbox_batch(test_session)
+    assert resultado["failed"] == 0
+
+    entrada = await _entrada(test_session, sin_email)
+    assert entrada.status == "waiting"
+    assert entrada.lapsed_offers == 0
+    assert entrada.offer_expires_at is None
+    assert not any(
+        e[1].startswith("Se libero un turno") for e in buzon.enviados[mails_antes:]
+    )
+    aviso = (
+        await test_session.execute(
+            select(Notification).where(Notification.type == "waitlist.slot_released")
+        )
+    ).scalar_one()
+    assert "1 en lista de espera" in (aviso.body or "")
