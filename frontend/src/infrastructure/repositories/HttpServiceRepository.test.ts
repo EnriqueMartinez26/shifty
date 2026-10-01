@@ -192,3 +192,52 @@ describe('HttpServiceRepository.findById ante un 404', () => {
     await expect(repository.findById('svc-x')).rejects.toBe(conflicto)
   })
 })
+
+/**
+ * FF-22 (2026-09-30): un servicio eliminado o desactivado desaparecia del panel
+ * y no se podia reactivar. `include_inactive` exige STORE_MANAGERS en el
+ * backend (403 a un profesional), asi que viaja SOLO cuando se pide.
+ */
+describe('HttpServiceRepository.findAll e include_inactive', () => {
+  const setup = () => {
+    const get = jest.fn().mockResolvedValue({ data: [serviceConSena] })
+    const client = { get, post: jest.fn(), patch: jest.fn(), delete: jest.fn() }
+    return { get, repository: new HttpServiceRepository(client as unknown as AxiosInstance) }
+  }
+
+  it('la lista compartida no manda ningun parametro', async () => {
+    const { get, repository } = setup()
+
+    await repository.findAll()
+
+    expect(get.mock.calls).toEqual([['/services/']])
+  })
+
+  it('el catalogo pide los inactivos con include_inactive=true', async () => {
+    const { get, repository } = setup()
+
+    await repository.findAll({ includeInactive: true })
+
+    expect(get.mock.calls).toEqual([['/services/', { params: { include_inactive: true } }]])
+  })
+
+  it('acepta el booleano de la interfaz, como HttpUserRepository', async () => {
+    const { get, repository } = setup()
+
+    await repository.findAll(true)
+    await repository.findAll(false)
+
+    expect(get.mock.calls).toEqual([
+      ['/services/', { params: { include_inactive: true } }],
+      ['/services/']
+    ])
+  })
+
+  it('reactivar manda solo `is_active: true`', async () => {
+    const { patch, repository } = createClient()
+
+    await repository.update('svc-1', { isActive: true })
+
+    expect(bodyOf(patch)).toEqual({ is_active: true })
+  })
+})
