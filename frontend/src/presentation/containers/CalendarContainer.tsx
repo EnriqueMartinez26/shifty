@@ -29,6 +29,8 @@ import {
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { AbsencesTimeline } from '../components/organisms/calendar/AbsencesTimeline'
+import { AgendaEventPill } from '../components/organisms/calendar/AgendaEventPill'
+import { AgendaRangeGrid } from '../components/organisms/calendar/AgendaRangeGrid'
 import { AgendaToolbar, type CalendarView } from '../components/organisms/calendar/AgendaToolbar'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
 import { StaffColumn } from '../components/organisms/StaffColumn'
@@ -53,8 +55,8 @@ import {
 import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
-import { statusStyle } from '../lib/appointmentStatusStyle'
 import {
+  NO_EVENTS,
   buildUnifiedEvents,
   groupEventsByDay,
   toInstantIso,
@@ -67,16 +69,13 @@ import {
   gridPlacement,
   rangeFromInstants
 } from '../lib/calendarGrid'
-import { canvasStyle, cardStyle, panelStyle } from '../lib/calendarStyles'
+import { canvasStyle, panelStyle } from '../lib/calendarStyles'
 import {
   mondayBasedWeekday,
   offHoursSegments,
   storeRangesFor,
   workingRangesFor
 } from '../lib/staffHours'
-
-/** Un dia sin eventos: la misma referencia siempre, para que la grilla no se recalcule. */
-const NO_EVENTS: readonly UnifiedCalendarEvent[] = []
 
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
@@ -419,46 +418,19 @@ export const CalendarContainer: React.FC = () => {
     )
   }
 
-  const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => {
-    const style =
-      event.type === 'block'
-        ? {
-            accent: '#c2410c',
-            background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-            text: '#9a3412'
-          }
-        : statusStyle(event.status)
-    return (
-      <div
-        key={`${event.type}-${event.id}`}
-        className={`relative rounded-[6px] border ${compact ? 'p-2' : 'p-3'}`}
-        style={{
-          background: style.background,
-          borderColor: style.accent,
-          boxShadow: '0 3px 6px rgba(0,0,0,0.05)'
-        }}
-      >
-        <p
-          className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-widest`}
-          style={{ color: style.text }}
-        >
-          {event.type === 'block' ? 'Bloqueo' : event.status}
-        </p>
-        <p
-          className={`${compact ? 'text-[11px]' : 'text-xs'} font-black`}
-          style={{ color: colors2000s.text.primary }}
-        >
-          {event.title}
-        </p>
-        <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
-          {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
-          {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
-        </p>
-        {renderActions(event, compact)}
-        {renderClientWhatsApp(event, compact)}
-      </div>
-    )
-  }
+  const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => (
+    <AgendaEventPill
+      key={`${event.type}-${event.id}`}
+      event={event}
+      compact={compact}
+      actions={
+        <>
+          {renderActions(event, compact)}
+          {renderClientWhatsApp(event, compact)}
+        </>
+      }
+    />
+  )
 
   const renderDayView = () => (
     <div className="rounded-[8px] border overflow-hidden relative" style={canvasStyle}>
@@ -591,54 +563,6 @@ export const CalendarContainer: React.FC = () => {
     </div>
   )
 
-  const renderRangeGrid = (compact = false) => (
-    <div className={compact ? 'overflow-x-auto' : undefined}>
-      <div
-        className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
-      >
-        {daysInRange.map((day) => {
-          const dayEvents = eventsByDay.get(format(day, 'yyyy-MM-dd')) ?? NO_EVENTS
-          return (
-            <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
-              <div className="mb-3">
-                <p
-                  className="text-[9px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.orange.accent }}
-                >
-                  {format(day, 'EEE')}
-                </p>
-                <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
-                  {format(day, 'dd/MM')}
-                </p>
-              </div>
-              <div className="space-y-2 max-h-64 overflow-auto">
-                {dayEvents
-                  .slice(0, compact ? 4 : dayEvents.length)
-                  .map((event) => renderEventPill(event, compact))}
-                {compact && dayEvents.length > 4 && (
-                  <div
-                    className="text-[10px] font-black uppercase tracking-widest"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    +{dayEvents.length - 4} eventos
-                  </div>
-                )}
-                {dayEvents.length === 0 && (
-                  <div
-                    className="text-[10px] font-bold uppercase tracking-widest"
-                    style={{ color: colors2000s.text.disabled }}
-                  >
-                    Sin eventos
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
       {confirmDialog}
@@ -676,8 +600,22 @@ export const CalendarContainer: React.FC = () => {
       )}
 
       {view === 'day' && renderDayView()}
-      {view === 'week' && renderRangeGrid(false)}
-      {view === 'month' && renderRangeGrid(true)}
+      {view === 'week' && (
+        <AgendaRangeGrid
+          days={daysInRange}
+          eventsByDay={eventsByDay}
+          compact={false}
+          renderEvent={renderEventPill}
+        />
+      )}
+      {view === 'month' && (
+        <AgendaRangeGrid
+          days={daysInRange}
+          eventsByDay={eventsByDay}
+          compact
+          renderEvent={renderEventPill}
+        />
+      )}
       {view === 'list' && (
         <div className="space-y-3">
           {unifiedEvents.map((event) => renderEventPill(event))}
