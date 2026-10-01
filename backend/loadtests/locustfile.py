@@ -115,6 +115,9 @@ class PublicAvailabilityUser(HttpUser):
             "client_name": "Load Test",
             "client_phone": f"{BOOKING_PHONE_PREFIX}{random.randint(1000000, 9999999)}",
             "client_email": None,
+            # Obligatorio en el servidor (PV-09): sin esto toda reserva da 422
+            # y la carga mide el rechazo, no la reserva (X-19, 2026-09-30).
+            "accepts_terms": True,
             "idempotency_key": f"load-{uuid.uuid4().hex}",
         }
         self.client.post(

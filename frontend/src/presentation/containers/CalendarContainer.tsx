@@ -10,23 +10,9 @@ import {
   startOfWeek,
   subDays
 } from 'date-fns'
-import {
-  Calendar as CalendarIcon,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Loader2,
-  Plus
-} from 'lucide-react'
-
-import { isBookingStatus } from '@domain/value-objects/BookingStatus'
 
 import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
-import {
-  formatArgentinaDate,
-  formatArgentinaDayMonth,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
+import { formatArgentinaDate, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 
 import { BlocksPanel, type EditableBlock } from './BlocksPanel'
@@ -34,15 +20,19 @@ import {
   RescheduleAppointmentDialog,
   type ReschedulableAppointment
 } from './RescheduleAppointmentDialog'
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
   type AppointmentAction
 } from '../components/molecules/AppointmentActions'
 import { ClientWhatsAppButton } from '../components/molecules/ClientWhatsAppButton'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
+import { AbsencesTimeline } from '../components/organisms/calendar/AbsencesTimeline'
+import { AgendaDayView } from '../components/organisms/calendar/AgendaDayView'
+import { AgendaEventPill } from '../components/organisms/calendar/AgendaEventPill'
+import { AgendaRangeGrid } from '../components/organisms/calendar/AgendaRangeGrid'
+import { AgendaToolbar, type CalendarView } from '../components/organisms/calendar/AgendaToolbar'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
-import { StaffColumn } from '../components/organisms/StaffColumn'
 import { useAuth } from '../context/AuthContext'
 import {
   ROLE_PROFESSIONAL,
@@ -64,94 +54,20 @@ import {
 import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
-import { statusStyle } from '../lib/appointmentStatusStyle'
+import {
+  NO_EVENTS,
+  buildUnifiedEvents,
+  groupEventsByDay,
+  toInstantIso,
+  type UnifiedCalendarEvent
+} from '../lib/calendarEvents'
 import {
   MIN_APPOINTMENT_MINUTES,
-  SLOT_HEIGHT_PX,
   buildDayGrid,
   gridPlacement,
   rangeFromInstants
 } from '../lib/calendarGrid'
-import { reportUnknownStatus } from '../lib/reportUnreadableInstant'
-import {
-  mondayBasedWeekday,
-  offHoursSegments,
-  storeRangesFor,
-  workingRangesFor
-} from '../lib/staffHours'
-import { create2000sPanelStyle } from '../lib/surfaceStyles'
-
-type CalendarView = 'day' | 'week' | 'month' | 'list'
-
-type UnifiedCalendarEvent =
-  | {
-      id: string
-      type: 'appointment' | 'absence'
-      staffId: string
-      staffName: string
-      title: string
-      subtitle: string
-      startsAt: Date
-      endsAt: Date
-      status: string
-      /** Solo llega para administradores (dato personal). */
-      clientPhone: string | null
-      serviceId: string
-    }
-  | {
-      id: string
-      type: 'block'
-      staffId: string
-      staffName: string
-      title: string
-      subtitle: string
-      startsAt: Date
-      endsAt: Date
-      status: 'blocked'
-    }
-
-const VIEW_LABELS: Record<CalendarView, string> = {
-  day: 'Dia',
-  week: 'Semana',
-  month: 'Mes',
-  list: 'Lista'
-}
-
-const panelStyle = create2000sPanelStyle()
-
-const canvasStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.default}`,
-  boxShadow: colors2000s.shadows.outerMedium
-}
-
-const cardStyle = {
-  background: 'white',
-  border: `1px solid ${colors2000s.border.light}`,
-  boxShadow: colors2000s.shadows.insetDark
-}
-
-const fieldStyle = {
-  ...cardStyle,
-  color: colors2000s.text.primary
-}
-
-/**
- * `toISOString()` de un `Date` invalido no devuelve vacio: lanza `RangeError`.
- * En un camino de render eso tumba la agenda entera por un solo turno con
- * fecha corrupta, asi que la cadena vacia entra a los formateadores de
- * `argentinaTime`, que ya la resuelven como "sin dato".
- */
-const toInstantIso = (date: Date) => (Number.isNaN(date.getTime()) ? '' : date.toISOString())
-
-/** Un dia sin eventos: la misma referencia siempre, para que la grilla no se recalcule. */
-const NO_EVENTS: readonly UnifiedCalendarEvent[] = []
-
-const eventPriority = (event: UnifiedCalendarEvent) => {
-  if (event.type === 'block') return 0
-  if (event.type === 'absence') return 1
-  return 2
-}
+import { mondayBasedWeekday, storeRangesFor, workingRangesFor } from '../lib/staffHours'
 
 export const CalendarContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
@@ -254,71 +170,17 @@ export const CalendarContainer: React.FC = () => {
     return blocksInRange.filter((block) => formatArgentinaDate(block.starts_at) === dateStr)
   }, [blocksInRange, dateStr])
 
-  const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(() => {
-    const appointmentEvents: UnifiedCalendarEvent[] = (agendaQuery.data?.appointments ?? []).map(
-      (appointment) => {
-        // Un estado nuevo del backend se muestra crudo y sin acciones; esto
-        // deja la senal en vez de pasar inadvertido (F8-03).
-        if (!isBookingStatus(appointment.status)) {
-          reportUnknownStatus('agenda', appointment.status)
-        }
-        return {
-          id: appointment.id,
-          type: appointment.status === 'absent' ? 'absence' : 'appointment',
-          staffId: appointment.staffId,
-          // Primero el nombre autoritativo que manda el backend (del join, vale
-          // aunque el profesional este dado de baja o el listado de staff no
-          // haya cargado); el cruce por id queda como respaldo.
-          staffName:
-            appointment.staffName ||
-            staffMembers?.find((staff) => staff.id === appointment.staffId)?.displayName ||
-            'Profesional',
-          title: appointment.clientName,
-          subtitle: appointment.serviceName,
-          startsAt: appointment.timeSpan.getStartsAt(),
-          endsAt: appointment.timeSpan.getEndsAt(),
-          status: appointment.status,
-          clientPhone: appointment.clientPhone,
-          serviceId: appointment.serviceId
-        }
-      }
-    )
+  const unifiedEvents = useMemo<UnifiedCalendarEvent[]>(
+    () =>
+      buildUnifiedEvents({
+        appointments: agendaQuery.data?.appointments ?? [],
+        blocks: blocksInRange,
+        staffMembers
+      }),
+    [agendaQuery.data, blocksInRange, staffMembers]
+  )
 
-    const blockEvents: UnifiedCalendarEvent[] = blocksInRange.map((block) => {
-      const staffName =
-        staffMembers?.find((staff) => staff.id === block.staff_id)?.displayName || 'Profesional'
-      return {
-        id: block.public_id,
-        type: 'block',
-        staffId: block.staff_id,
-        staffName,
-        title: block.reason,
-        subtitle: 'Bloqueo de agenda',
-        startsAt: new Date(block.starts_at),
-        endsAt: new Date(block.ends_at),
-        status: 'blocked'
-      }
-    })
-
-    return [...blockEvents, ...appointmentEvents].sort((a, b) => {
-      const startDiff = a.startsAt.getTime() - b.startsAt.getTime()
-      if (startDiff !== 0) return startDiff
-      return eventPriority(a) - eventPriority(b)
-    })
-  }, [agendaQuery.data, blocksInRange, staffMembers])
-
-  // Dia argentino de cada evento, calculado UNA vez por lista (F4-08): la vista
-  // mes lo recalculaba dias x eventos veces en cada render.
-  const eventsByDay = useMemo(() => {
-    const byDay = new Map<string, UnifiedCalendarEvent[]>()
-    for (const event of unifiedEvents) {
-      const key = formatArgentinaDate(toInstantIso(event.startsAt))
-      const bucket = byDay.get(key)
-      if (bucket) bucket.push(event)
-      else byDay.set(key, [event])
-    }
-    return byDay
-  }, [unifiedEvents])
+  const eventsByDay = useMemo(() => groupEventsByDay(unifiedEvents), [unifiedEvents])
 
   const eventsForSelectedDate = eventsByDay.get(dateStr) ?? NO_EVENTS
 
@@ -485,6 +347,22 @@ export const CalendarContainer: React.FC = () => {
     }
   }
 
+  const goPrev = () =>
+    setSelectedDate((prev) => subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+  const goNext = () =>
+    setSelectedDate((prev) => addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1))
+
+  const handleDeactivateBlock = (blockId: string) => {
+    void (async () => {
+      try {
+        await deleteBlock.mutateAsync(blockId)
+        setMessage('Bloqueo desactivado')
+      } catch (error: unknown) {
+        setMessage(getErrorMessage(error, 'No se pudo desactivar'))
+      }
+    })()
+  }
+
   const renderActions = (event: UnifiedCalendarEvent, compact: boolean) => {
     if (event.type !== 'appointment') return null
     return (
@@ -532,325 +410,31 @@ export const CalendarContainer: React.FC = () => {
     )
   }
 
-  const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => {
-    const style =
-      event.type === 'block'
-        ? {
-            accent: '#c2410c',
-            background: 'linear-gradient(180deg, #fff7ed 0%, #fed7aa 100%)',
-            text: '#9a3412'
-          }
-        : statusStyle(event.status)
-    return (
-      <div
-        key={`${event.type}-${event.id}`}
-        className={`relative rounded-[6px] border ${compact ? 'p-2' : 'p-3'}`}
-        style={{
-          background: style.background,
-          borderColor: style.accent,
-          boxShadow: '0 3px 6px rgba(0,0,0,0.05)'
-        }}
-      >
-        <p
-          className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-widest`}
-          style={{ color: style.text }}
-        >
-          {event.type === 'block' ? 'Bloqueo' : event.status}
-        </p>
-        <p
-          className={`${compact ? 'text-[11px]' : 'text-xs'} font-black`}
-          style={{ color: colors2000s.text.primary }}
-        >
-          {event.title}
-        </p>
-        <p className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
-          {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
-          {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
-        </p>
-        {renderActions(event, compact)}
-        {renderClientWhatsApp(event, compact)}
-      </div>
-    )
-  }
-
-  const renderDayView = () => (
-    <div className="rounded-[8px] border overflow-hidden relative" style={canvasStyle}>
-      {(loadingStaff || agendaQuery.isLoading) && (
-        <div className="absolute inset-0 z-50 bg-white/60 backdrop-blur-[2px] flex flex-col items-center justify-center">
-          <Loader2 className="w-12 h-12 animate-spin text-orange-500 mb-4" />
-          <p className="text-xs font-black text-gray-400 uppercase tracking-widest">
-            Actualizando agenda...
-          </p>
-        </div>
-      )}
-
-      <div className="overflow-x-auto">
-        <div className="min-w-[800px]">
-          <div className="flex border-b" style={{ borderColor: colors2000s.border.light }}>
-            <div
-              className="w-20 flex-shrink-0 flex items-center justify-center border-r"
-              style={{ borderColor: colors2000s.border.light }}
-            >
-              <Clock size={16} className="text-gray-400" />
-            </div>
-            <div className="flex flex-1" style={panelStyle}>
-              {staffMembers?.map((staff, idx) => (
-                <div
-                  key={staff.id}
-                  className="flex-1 min-w-[150px] p-4 text-center border-r"
-                  style={{ borderColor: colors2000s.border.light }}
-                >
-                  <div
-                    className="w-10 h-10 rounded-full text-white flex items-center justify-center mx-auto mb-2 font-black text-xs shadow-md"
-                    style={{
-                      background:
-                        idx % 2 === 0
-                          ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
-                          : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                      boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-                    }}
-                  >
-                    {staff.displayName
-                      .split(' ')
-                      .map((word) => word[0])
-                      .join('')
-                      .toUpperCase()}
-                  </div>
-                  <p className="text-[10px] font-black uppercase tracking-tight text-gray-800">
-                    {staff.displayName}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="h-[600px] overflow-y-auto relative bg-white">
-            <div className="flex">
-              <div
-                className="w-20 flex-shrink-0 bg-white sticky left-0 z-10 border-r"
-                style={{ borderColor: colors2000s.border.light }}
-              >
-                <div className="relative" style={{ height: dayGrid.totalHeightPx }}>
-                  {dayGrid.bands.map((band) =>
-                    band.kind === 'open' ? (
-                      band.labels.map((label) => (
-                        <div
-                          key={label.text}
-                          className="absolute inset-x-0 border-b border-gray-50 flex items-start justify-center pt-2"
-                          style={{ top: label.topPx, height: SLOT_HEIGHT_PX }}
-                        >
-                          <span className="text-[10px] font-black text-gray-400">{label.text}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <button
-                        key={band.key}
-                        type="button"
-                        onClick={() => toggleGap(band.key)}
-                        title={`Cerrado ${band.label}`}
-                        aria-expanded={band.expanded}
-                        className="absolute inset-x-0 border-y border-dashed flex items-center justify-center gap-1 text-[9px] font-black uppercase tracking-widest"
-                        style={{
-                          top: band.topPx,
-                          height: band.heightPx,
-                          background: colors2000s.bg.disabled,
-                          borderColor: colors2000s.border.default,
-                          color: colors2000s.text.secondary
-                        }}
-                      >
-                        {band.expanded ? '▾' : '▸'} Cerrado
-                      </button>
-                    )
-                  )}
-                </div>
-              </div>
-
-              <div className="flex flex-1">
-                {staffMembers?.map((staff) => {
-                  const working = hoursOfDay.byStaff.get(staff.id) ?? null
-                  return (
-                    <StaffColumn
-                      key={staff.id}
-                      grid={dayGrid}
-                      offHours={working ? offHoursSegments(dayGrid, working) : []}
-                      blocks={blocksForSelectedDate.filter((block) => block.staff_id === staff.id)}
-                      cards={appointmentCards
-                        .filter((event) => event.staffId === staff.id)
-                        .map((event) => ({
-                          id: event.id,
-                          title: event.title,
-                          subtitle: event.subtitle,
-                          status: event.status,
-                          top: event.top,
-                          height: event.height,
-                          timeLabel: event.timeLabel,
-                          controls: (
-                            <>
-                              {renderActions(event, true)}
-                              {renderClientWhatsApp(event, true)}
-                            </>
-                          )
-                        }))}
-                      canManageBlocks={canManageBlocks}
-                      onEditBlock={setBlockToEdit}
-                    />
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-
-  const renderRangeGrid = (compact = false) => (
-    <div className={compact ? 'overflow-x-auto' : undefined}>
-      <div
-        className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
-      >
-        {daysInRange.map((day) => {
-          const dayEvents = eventsByDay.get(format(day, 'yyyy-MM-dd')) ?? NO_EVENTS
-          return (
-            <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
-              <div className="mb-3">
-                <p
-                  className="text-[9px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.orange.accent }}
-                >
-                  {format(day, 'EEE')}
-                </p>
-                <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
-                  {format(day, 'dd/MM')}
-                </p>
-              </div>
-              <div className="space-y-2 max-h-64 overflow-auto">
-                {dayEvents
-                  .slice(0, compact ? 4 : dayEvents.length)
-                  .map((event) => renderEventPill(event, compact))}
-                {compact && dayEvents.length > 4 && (
-                  <div
-                    className="text-[10px] font-black uppercase tracking-widest"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    +{dayEvents.length - 4} eventos
-                  </div>
-                )}
-                {dayEvents.length === 0 && (
-                  <div
-                    className="text-[10px] font-bold uppercase tracking-widest"
-                    style={{ color: colors2000s.text.disabled }}
-                  >
-                    Sin eventos
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
+  const renderEventPill = (event: UnifiedCalendarEvent, compact = false) => (
+    <AgendaEventPill
+      key={`${event.type}-${event.id}`}
+      event={event}
+      compact={compact}
+      actions={
+        <>
+          {renderActions(event, compact)}
+          {renderClientWhatsApp(event, compact)}
+        </>
+      }
+    />
   )
 
   return (
     <div className="space-y-6 animate-in fade-in duration-700">
       {confirmDialog}
-      <div
-        className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
-        style={panelStyle}
-      >
-        <div className="flex items-center gap-4">
-          <div
-            className="w-12 h-12 rounded-[6px] text-white flex items-center justify-center flex-shrink-0"
-            style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-              boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
-            }}
-          >
-            <CalendarIcon size={24} />
-          </div>
-          <div>
-            <h2
-              className="text-2xl font-black uppercase tracking-tight leading-none mb-1"
-              style={{ color: colors2000s.text.primary }}
-            >
-              Agenda
-            </h2>
-            <p
-              className="text-[10px] font-black uppercase tracking-widest"
-              style={{ color: colors2000s.text.secondary }}
-            >
-              Vistas dia, semana, mes y lista
-            </p>
-          </div>
-        </div>
-
-        <div
-          className="flex flex-wrap items-center justify-center gap-2 sm:gap-3 p-2 rounded-[6px] border"
-          style={fieldStyle}
-        >
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedDate((prev) =>
-                subDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
-              )
-            }
-            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
-            style={buttonStyles2000s.default}
-          >
-            <ChevronLeft size={20} className="text-gray-600" />
-          </button>
-          <div className="px-4 sm:px-6 text-center min-w-[140px] sm:min-w-[200px]">
-            <p
-              className="text-[9px] font-black uppercase tracking-widest mb-0.5"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              {VIEW_LABELS[view]}
-            </p>
-            <p
-              className="text-base font-black uppercase tracking-tight"
-              style={{ color: colors2000s.text.primary }}
-            >
-              {format(selectedDate, "dd 'de' MMMM")}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() =>
-              setSelectedDate((prev) =>
-                addDays(prev, view === 'month' ? 30 : view === 'week' ? 7 : 1)
-              )
-            }
-            className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
-            style={buttonStyles2000s.default}
-          >
-            <ChevronRight size={20} className="text-gray-600" />
-          </button>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {(Object.keys(VIEW_LABELS) as CalendarView[]).map((viewKey) => (
-            <button
-              key={viewKey}
-              type="button"
-              onClick={() => setView(viewKey)}
-              className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-              style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
-            >
-              {VIEW_LABELS[viewKey]}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setIsNewAppointmentOpen(true)}
-            className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs"
-            style={buttonStyles2000s.selected}
-          >
-            <Plus size={18} /> Nuevo turno
-          </button>
-        </div>
-      </div>
+      <AgendaToolbar
+        view={view}
+        selectedDate={selectedDate}
+        onPrev={goPrev}
+        onNext={goNext}
+        onViewChange={setView}
+        onNewAppointment={() => setIsNewAppointmentOpen(true)}
+      />
 
       <QueryErrorNotice
         error={agendaQuery.error ?? staffError ?? blocksQuery.error}
@@ -876,9 +460,41 @@ export const CalendarContainer: React.FC = () => {
         </div>
       )}
 
-      {view === 'day' && renderDayView()}
-      {view === 'week' && renderRangeGrid(false)}
-      {view === 'month' && renderRangeGrid(true)}
+      {view === 'day' && (
+        <AgendaDayView
+          staffMembers={staffMembers}
+          loading={loadingStaff || agendaQuery.isLoading}
+          dayGrid={dayGrid}
+          hoursOfDay={hoursOfDay}
+          blocks={blocksForSelectedDate}
+          cards={appointmentCards}
+          canManageBlocks={canManageBlocks}
+          onToggleGap={toggleGap}
+          onEditBlock={setBlockToEdit}
+          renderControls={(event) => (
+            <>
+              {renderActions(event, true)}
+              {renderClientWhatsApp(event, true)}
+            </>
+          )}
+        />
+      )}
+      {view === 'week' && (
+        <AgendaRangeGrid
+          days={daysInRange}
+          eventsByDay={eventsByDay}
+          compact={false}
+          renderEvent={renderEventPill}
+        />
+      )}
+      {view === 'month' && (
+        <AgendaRangeGrid
+          days={daysInRange}
+          eventsByDay={eventsByDay}
+          compact
+          renderEvent={renderEventPill}
+        />
+      )}
       {view === 'list' && (
         <div className="space-y-3">
           {unifiedEvents.map((event) => renderEventPill(event))}
@@ -909,93 +525,12 @@ export const CalendarContainer: React.FC = () => {
           onMessage={setMessage}
         />
 
-        <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
-          <h3
-            className="text-lg font-black uppercase tracking-tight"
-            style={{ color: colors2000s.text.primary }}
-          >
-            Bloqueos y ausencias
-          </h3>
-          <div className="space-y-3">
-            {timelineEvents.map((event) => (
-              <div
-                key={`${event.type}-${event.id}`}
-                className="rounded-[6px] p-4 bg-white flex flex-col gap-3"
-                style={cardStyle}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-                      {event.title}
-                    </p>
-                    <p
-                      className="text-[11px] font-bold"
-                      style={{ color: colors2000s.text.secondary }}
-                    >
-                      {formatArgentinaDayMonth(toInstantIso(event.startsAt))}{' '}
-                      {formatArgentinaTime(toInstantIso(event.startsAt))} -{' '}
-                      {formatArgentinaTime(toInstantIso(event.endsAt))} · {event.staffName}
-                    </p>
-                  </div>
-                  <span
-                    className="px-2 py-1 rounded-[4px] text-[10px] font-black uppercase tracking-widest"
-                    style={{
-                      background: event.type === 'block' ? '#ffedd5' : '#fee2e2',
-                      color: event.type === 'block' ? '#c2410c' : '#b91c1c'
-                    }}
-                  >
-                    {event.type === 'block' ? 'Bloqueo' : 'Ausencia'}
-                  </span>
-                </div>
-                {event.type === 'block' && canManageBlocks && (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setBlockToEdit({
-                          public_id: event.id,
-                          staff_id: event.staffId,
-                          starts_at: toInstantIso(event.startsAt),
-                          ends_at: toInstantIso(event.endsAt),
-                          reason: event.title
-                        })
-                      }
-                      className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
-                      style={buttonStyles2000s.default}
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        void (async () => {
-                          try {
-                            await deleteBlock.mutateAsync(event.id)
-                            setMessage('Bloqueo desactivado')
-                          } catch (error: unknown) {
-                            setMessage(getErrorMessage(error, 'No se pudo desactivar'))
-                          }
-                        })()
-                      }}
-                      className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
-                      style={buttonStyles2000s.selected}
-                    >
-                      Desactivar
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-            {!timelineEvents.length && (
-              <div
-                className="rounded-[6px] p-6 bg-white text-sm font-bold"
-                style={{ ...cardStyle, color: colors2000s.text.secondary }}
-              >
-                No hay bloqueos ni ausencias en el rango actual.
-              </div>
-            )}
-          </div>
-        </div>
+        <AbsencesTimeline
+          events={timelineEvents}
+          canManageBlocks={canManageBlocks}
+          onEdit={setBlockToEdit}
+          onDeactivate={handleDeactivateBlock}
+        />
       </div>
       {isNewAppointmentOpen && (
         <NewAppointmentModal

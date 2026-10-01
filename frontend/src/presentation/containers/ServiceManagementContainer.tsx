@@ -12,8 +12,10 @@ import { useConfirm } from '../hooks/useConfirm'
 import {
   useCreateManagedService,
   useDeleteManagedService,
-  useManagedServices,
-  useUpdateManagedService
+  useManagedServiceCatalog,
+  useRemoveServiceImage,
+  useUpdateManagedService,
+  useUploadServiceImage
 } from '../hooks/useManagedServices'
 import { notifyError } from '../lib/notify'
 import type { ServiceFormValues } from '../types/forms'
@@ -24,10 +26,14 @@ export const ServiceManagementContainer: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingService, setEditingService] = useState<Service | null>(null)
 
-  const { data: services, isLoading, error } = useManagedServices()
+  // El catalogo trae los inactivos: "Eliminar" es un soft delete y sin ellos un
+  // servicio borrado desaparecia sin forma de reactivarlo (FF-22).
+  const { data: services, isLoading, error } = useManagedServiceCatalog()
   const createMutation = useCreateManagedService()
   const updateMutation = useUpdateManagedService()
   const deleteMutation = useDeleteManagedService()
+  const uploadImageMutation = useUploadServiceImage()
+  const removeImageMutation = useRemoveServiceImage()
 
   const filteredServices = services?.filter((service) =>
     service.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -46,6 +52,14 @@ export const ServiceManagementContainer: React.FC = () => {
       await deleteMutation.mutateAsync(id)
     } catch (error: unknown) {
       notifyError(error, 'No se pudo eliminar el servicio.')
+    }
+  }
+
+  const handleReactivate = async (id: string) => {
+    try {
+      await updateMutation.mutateAsync({ id, data: { isActive: true } })
+    } catch (error: unknown) {
+      notifyError(error, 'No se pudo reactivar el servicio.')
     }
   }
 
@@ -144,6 +158,7 @@ export const ServiceManagementContainer: React.FC = () => {
               service={service}
               onEdit={handleEdit}
               onDelete={(id) => void handleDelete(id)}
+              onReactivate={(id) => void handleReactivate(id)}
             />
           ))}
         </div>
@@ -154,6 +169,8 @@ export const ServiceManagementContainer: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleFormSubmit}
         editingService={editingService}
+        onUploadImage={(id, file) => uploadImageMutation.mutateAsync({ id, file })}
+        onRemoveImage={(id) => removeImageMutation.mutateAsync(id)}
       />
     </div>
   )

@@ -53,7 +53,18 @@ def require_can_manage_appointment(
     panel). Cualquier otro rol, nada. Antes cualquier usuario autenticado de
     la tienda cancelaba o movia el turno de cualquier profesional
     (2026-09-29). El rol sale del ``User`` releido de la base por request
-    (regla 1), nunca del JWT. Se llama con el turno ya lockeado y leido.
+    (regla 1), nunca del JWT. Cancelar y reprogramar la llaman con el turno ya
+    lockeado y leido.
+
+    Tambien la usan el link de pago y la confirmacion manual
+    (``payments/router.py``, D-20260930-13: admin y superadmin cobran
+    cualquier turno, el profesional solo los suyos). Ahi la llaman con el
+    turno leido sin lock y ANTES del lock del cobro: el ``staff_id`` de un
+    turno no cambia nunca (reprogramar crea otra fila), asi que el lock no
+    agrega nada a la decision y un 403 no toma ``FOR UPDATE`` ni deja ver el
+    estado de un turno ajeno. La recepcion NO cobra: la guarda la deja pasar
+    (cancelar y reprogramar si le tocan), asi que ese camino la corta antes
+    con ``_require_payment_manager``; quitar ese chequeo la habilitaria.
     """
     role = canonical_role(actor)
     if role in _ANY_APPOINTMENT_OF_THE_STORE:

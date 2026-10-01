@@ -35,6 +35,7 @@ from core.exceptions import (
 )
 from core.feature_flags import is_store_feature_enabled
 from core.validation import PUBLIC_ID_PATTERN
+from modules.appointments.guards import require_can_manage_appointment
 from modules.appointments.model import Appointment
 from modules.auth.dependencies import get_current_user
 from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
@@ -658,6 +659,9 @@ async def create_payment_preference(
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
     )
+    # Duenio del turno (D-20260930-13), antes del lock y de tocar el cobro; la
+    # recepcion ya quedo afuera en ``_require_payment_manager``.
+    require_can_manage_appointment(appointment, user, "cobrar este turno")
     try:
         # Sin override: si el turno ya tiene un cobro con la sena calculada
         # por la regla, se respeta ese importe y solo se refresca el link. El
@@ -709,6 +713,9 @@ async def manual_confirm_payment(
     await _ensure_payments_feature_enabled(db, user)
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
+    )
+    require_can_manage_appointment(
+        appointment, user, "confirmar el cobro de este turno"
     )
     payment = await svc.manual_confirm(
         appointment=appointment,

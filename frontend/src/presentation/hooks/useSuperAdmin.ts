@@ -1,4 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient
+} from '@tanstack/react-query'
 
 import {
   superAdminService,
@@ -13,7 +19,6 @@ import {
   type SuperAdminAuditLog,
   type SuperAdminPlan,
   type SuperAdminStoreOverview,
-  type SuperAdminStoreRow,
   type SuperAdminSubscriptionOverview,
   type SuperAdminUser,
   type UpdateSuperAdminCouponPayload,
@@ -22,11 +27,52 @@ import {
   type UpdateSuperAdminUserPayload
 } from '@application/services/SuperAdminService'
 
-export const useSuperAdminStores = (params: ListStoresParams) =>
-  useQuery<SuperAdminStoreRow[]>({
+// El backend admite hasta 200; 50 era su corte fijo antes de paginar.
+const STORES_PAGE_SIZE = 50
+
+/**
+ * Listado de tiendas por paginas con offset y total (FF-24). La clave no
+ * lleva el offset: cambiar un filtro arranca de la primera pagina. El orden
+ * del backend es solo `created_at`, asi que una tienda puede repetirse entre
+ * paginas y se descarta por `public_id`.
+ */
+export const useSuperAdminStores = (params: Omit<ListStoresParams, 'limit' | 'offset'>) => {
+  const query = useInfiniteQuery({
     queryKey: ['superadmin', 'stores', params],
-    queryFn: () => superAdminService.listStores(params)
+    queryFn: ({ pageParam }) =>
+      superAdminService.listStores({ ...params, limit: STORES_PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, pages) => {
+      const loaded = pages.reduce((count, page) => count + page.stores.length, 0)
+      // Sin total, una pagina llena quiere decir que puede haber mas.
+      const hasMore =
+        lastPage.total === null
+          ? lastPage.stores.length === STORES_PAGE_SIZE
+          : loaded < lastPage.total
+      return hasMore && lastPage.stores.length > 0 ? loaded : undefined
+    },
+    placeholderData: keepPreviousData
   })
+  const pages = query.data?.pages
+  const seen = new Set<string>()
+  const stores = pages
+    ?.flatMap((page) => page.stores)
+    .filter((store) => {
+      if (seen.has(store.public_id)) return false
+      seen.add(store.public_id)
+      return true
+    })
+  return {
+    data: stores,
+    total: pages?.[pages.length - 1]?.total ?? null,
+    hasNextPage: query.hasNextPage,
+    fetchNextPage: query.fetchNextPage,
+    isFetchingNextPage: query.isFetchingNextPage,
+    isLoading: query.isLoading,
+    isFetching: query.isFetching,
+    error: query.error
+  }
+}
 
 export const useSuperAdminOverview = (storePublicId: string | null) =>
   useQuery<SuperAdminStoreOverview>({

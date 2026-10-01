@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useRef, useState } from 'react'
 
 import { AlertTriangle } from 'lucide-react'
 
@@ -71,11 +71,20 @@ import { SuperAdminHeader } from './superadmin/SuperAdminHeader'
 import { TenantUsersSection } from './superadmin/TenantUsersSection'
 import { UserModals } from './superadmin/UserModals'
 
+const SEARCH_DEBOUNCE_MS = 300
+
 const SuperAdminPage: React.FC = () => {
   const { user } = useAuth()
   const { confirm, confirmDialog } = useConfirm()
 
+  // Lo que se tipea (draftSearch) y lo que se consulta (search) van aparte:
+  // cada tecla rearma el timer en el mismo evento, sin efecto (regla 27), y
+  // solo la ultima llega al listado. Antes cada tecla pedia listado, detalle y
+  // auditoria (F4-10). Si la pagina se desmonta con el timer armado, el
+  // setState tardio es un no-op en React 18+, asi que no hace falta limpiarlo.
+  const [draftSearch, setDraftSearch] = useState('')
   const [search, setSearch] = useState('')
+  const searchTimer = useRef<number | undefined>(undefined)
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('active')
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('all')
   // La tienda que el usuario eligio. La efectiva se deriva en el render.
@@ -98,10 +107,18 @@ const SuperAdminPage: React.FC = () => {
   const [editingPlan, setEditingPlan] = useState<SuperAdminPlan | null>(null)
   const [editingCoupon, setEditingCoupon] = useState<SuperAdminCoupon | null>(null)
 
+  const changeSearch = (value: string) => {
+    setDraftSearch(value)
+    window.clearTimeout(searchTimer.current)
+    searchTimer.current = window.setTimeout(() => setSearch(value), SEARCH_DEBOUNCE_MS)
+  }
+
   // Va a la query key, pero react-query la compara por valor: no hace falta memo.
+  // "Todas" viaja como `all`: con null axios lo omitia y el backend traia solo
+  // activas (FF-24).
   const storeParams = {
     search: search.trim() || undefined,
-    is_active: activityFilter === 'all' ? null : activityFilter === 'active',
+    is_active: activityFilter === 'all' ? ('all' as const) : activityFilter === 'active',
     has_subscription: subscriptionFilter === 'all' ? null : subscriptionFilter === 'with'
   }
 
@@ -645,8 +662,8 @@ const SuperAdminPage: React.FC = () => {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
         <div className="space-y-6">
           <StoresSection
-            search={search}
-            setSearch={setSearch}
+            search={draftSearch}
+            onSearchChange={changeSearch}
             activityFilter={activityFilter}
             setActivityFilter={setActivityFilter}
             subscriptionFilter={subscriptionFilter}

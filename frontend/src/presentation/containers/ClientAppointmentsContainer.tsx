@@ -6,7 +6,12 @@ import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/
 
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
-import { getErrorCode, getErrorMessage, getHttpStatus } from '@shared/errors/getErrorMessage'
+import {
+  getErrorCode,
+  getErrorMessage,
+  getHttpStatus,
+  isStateConflictError
+} from '@shared/errors/getErrorMessage'
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
@@ -17,6 +22,7 @@ import { createUuid } from '@shared/utils/uuid'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { ClientOtpGate } from '../components/organisms/ClientOtpGate'
+import { useConfirm } from '../hooks/useConfirm'
 import {
   useCancelClientAppointment,
   usePublicClientAppointments,
@@ -58,6 +64,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()
+  const { confirm, confirmDialog } = useConfirm()
 
   if (!phone) {
     return (
@@ -90,13 +97,27 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
   // 403 y 404 no se arreglan reintentando; 429, 503 y el resto quiza si.
   const reintentable = status !== 403 && status !== 404
 
+  // Un toque cancelaba sin preguntar (FF-07): se confirma con el dialogo propio.
   const cancelar = async (item: ClientAppointmentItem) => {
+    const question = `¿Cancelar tu turno de ${item.service_name} del ${formatArgentinaDateDisplay(
+      item.starts_at
+    )} a las ${formatArgentinaTime(item.starts_at)} hs? No se puede deshacer.`
+    // "Cancelar" en el dialogo seria NO cancelar el turno: los botones dicen
+    // lo que hacen.
+    const confirmed = await confirm(question, {
+      confirmLabel: 'Sí, cancelar turno',
+      cancelLabel: 'Conservar turno'
+    })
+    if (!confirmed) return
     setMessage('')
     try {
       await cancelAppointment.mutateAsync({ publicId: item.public_id, phone })
       setMessage('Cancelamos tu turno y le avisamos a la tienda.')
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No pudimos cancelar el turno'))
+      // La lista quedo vieja (la tienda ya lo cancelo, o tiene un cobro vivo):
+      // se recarga para no seguir ofreciendo la accion.
+      if (isStateConflictError(error)) void appointments.refetch()
     }
   }
 
@@ -121,6 +142,7 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
 
   return (
     <section className="max-w-2xl mx-auto space-y-4">
+      {confirmDialog}
       <div className="flex items-center justify-between gap-3">
         <h2
           className="text-lg font-black uppercase tracking-tight"

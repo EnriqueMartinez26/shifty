@@ -8,6 +8,11 @@ operaciones en una transaccion porque el repo cerraba la suya por su cuenta.
 
 Este test es la guarda estatica: cualquier ``commit()`` que vuelva a un repo o
 router de estos modulos falla en CI.
+
+2026-09-30, B6-05 (D-20260930-14): ``services`` se suma. Su repositorio
+commiteaba en ``create``/``update``/``soft_delete``, asi que el PATCH no podia
+cerrar en una sola transaccion con el borrado de la imagen huerfana; ahora el
+commit es de ``ServiceCatalogService`` (``modules/services/service.py``).
 """
 
 from __future__ import annotations
@@ -24,6 +29,8 @@ SIN_COMMIT = [
     "modules/staff/router.py",
     "modules/users/repository.py",
     "modules/users/router.py",
+    "modules/services/repository.py",
+    "modules/services/router.py",
 ]
 
 
@@ -39,7 +46,7 @@ def _commit_lines(path: Path) -> list[int]:
 
 
 @pytest.mark.parametrize("relative", SIN_COMMIT)
-def test_repositorios_y_routers_de_staff_y_users_no_commitean(relative: str) -> None:
+def test_repositorios_y_routers_migrados_no_commitean(relative: str) -> None:
     path = BACKEND_ROOT / relative
     lineas = _commit_lines(path)
     assert not lineas, (
@@ -49,9 +56,14 @@ def test_repositorios_y_routers_de_staff_y_users_no_commitean(relative: str) -> 
 
 
 @pytest.mark.parametrize(
-    "relative", ["modules/staff/service.py", "modules/users/service.py"]
+    "relative",
+    [
+        "modules/staff/service.py",
+        "modules/users/service.py",
+        "modules/services/service.py",
+    ],
 )
-def test_los_services_de_staff_y_users_son_los_duenos_del_commit(
+def test_los_services_migrados_son_los_duenos_del_commit(
     relative: str,
 ) -> None:
     path = BACKEND_ROOT / relative
