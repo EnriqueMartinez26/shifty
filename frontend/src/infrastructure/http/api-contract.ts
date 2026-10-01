@@ -7,10 +7,13 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
 } from '@shared/errors'
+
+const REQUEST_TIMEOUT_MESSAGE = 'La consulta tardó demasiado. Probá de nuevo.'
 
 interface ApiSuccess<T> {
   success: true
@@ -198,6 +201,16 @@ export const normalizeApiError = (error: unknown): ApplicationError => {
 
   const maybeError = error as ApiErrorLike | undefined
   const statusCode = maybeError?.response?.status ?? 0
+
+  // Una lectura que vencio su timeout de 15 s (D-20260930-02). El cliente pide
+  // clarifyTimeoutError, asi que ECONNABORTED queda para "Request aborted".
+  if (!maybeError?.response && maybeError?.code === 'ETIMEDOUT') {
+    return new RequestTimeoutError(REQUEST_TIMEOUT_MESSAGE, {
+      errorCode: 'REQUEST_TIMEOUT',
+      statusCode: 0,
+      originalError: { code: maybeError.code, message: maybeError.message, statusCode: 0 }
+    })
+  }
 
   if (!maybeError?.response) {
     return new NetworkError('No se pudo conectar con el servidor.', {
