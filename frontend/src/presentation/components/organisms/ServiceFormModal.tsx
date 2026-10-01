@@ -17,6 +17,8 @@ import {
 
 import { Service, type ServiceDepositMode, type ServiceDepositType } from '@domain/entities/Service'
 
+import { getClientValidationMessages } from '@application/validators/service.validators'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { validateServiceImage } from '@shared/utils/imageFile'
 
@@ -123,7 +125,13 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
       await onSubmit(formData)
       onClose()
     } catch (err) {
-      setError(getErrorMessage(err, 'No se pudo guardar'))
+      // D-20260930-09: si lo rechazo la validacion del cliente se dice que
+      // corregir; "No se pudo guardar" no lo decia. Lo demas sigue por la
+      // tabla de codigos (regla 20).
+      const motivos = getClientValidationMessages(err)
+      setError(
+        motivos.length > 0 ? motivos.join(' · ') : getErrorMessage(err, 'No se pudo guardar')
+      )
     } finally {
       setLoading(false)
     }
@@ -375,14 +383,13 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"
                     style={create2000sModalInputStyle()}
                     min={0}
-                    // Sin `max`: el backend acepta hasta 10.000.000 para
-                    // cualquier tipo, y un formulario mas estricto que el
-                    // contrato traba datos legitimos. Con `max=100` un servicio
-                    // ya cargado con 500% quedaba IMPOSIBLE de editar: la
-                    // validacion nativa bloqueaba el submit en un campo que el
-                    // dueno ni tocaba, y no se podia ni cambiarle el nombre.
-                    // Si se quiere el tope del 100%, va en el backend, que es
-                    // donde protege tambien a la API (2026-09-21).
+                    // Sin `max` nativo a proposito: el tope del porcentaje (100)
+                    // y el monto mayor a 0 los valida el schema del servicio
+                    // al crear y al editar (D-20260930-09), con un mensaje que
+                    // dice que corregir; la validacion nativa solo frenaba el
+                    // submit sin explicar nada. El backend y la base rechazan
+                    // lo mismo (`deposit_policy_error`,
+                    // `ck_services_deposit_percent_max`).
                     placeholder={formData.depositType === 'percent' ? 'Ej: 30' : 'Ej: 5000'}
                     required
                   />

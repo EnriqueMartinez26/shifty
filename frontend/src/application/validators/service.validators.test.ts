@@ -1,4 +1,4 @@
-import { createServiceSchema } from './service.validators'
+import { createServiceSchema, updateServiceSchema } from './service.validators'
 
 // Cobertura de F9-08 (2026-09-30): el schema no tenia test propio.
 //
@@ -189,4 +189,95 @@ describe('createServiceSchema con sena', () => {
       ['deposit_amount', 'El monto de la seña tiene que ser mayor a 0']
     ])
   })
+})
+
+describe('updateServiceSchema: el PATCH con los mismos topes (D-20260930-09)', () => {
+  // D-20260930-09 (2026-10-01): la edicion no validaba nada en el cliente; un
+  // porcentaje de 150 o una sena de 0 viajaban y el backend respondia 422.
+  // Semantica de PATCH: lo ausente no se valida y null borra donde el
+  // backend lo deja (B6-04).
+  const issuesDelPatch = (input: unknown) => {
+    const result = updateServiceSchema.safeParse(input)
+    return result.success ? [] : result.error.issues.map((i) => [i.path.join('.'), i.message])
+  }
+
+  it.each([
+    ['un PATCH vacio', {}],
+    ['solo reactivar', { is_active: true }],
+    ['solo el nombre', { name: 'Corte nuevo' }],
+    [
+      'null en los campos que se pueden borrar',
+      { description: null, color: null, youtube_trailer_url: null, deposit_amount: null }
+    ],
+    ['una imagen subida (URL relativa de medios)', { image_url: '/api/stores/media/abc' }],
+    ['un monto sin tipo ni modo (lo valida el backend contra la fila)', { deposit_amount: 500 }],
+    [
+      'el formulario entero valido',
+      {
+        name: 'Corte premium',
+        description: '',
+        duration_minutes: 45,
+        price: 12000,
+        color: '#3b82f6',
+        image_url: '',
+        youtube_trailer_url: '',
+        deposit_mode: 'required',
+        deposit_type: 'percent',
+        deposit_amount: 50
+      }
+    ]
+  ])('%s pasa', (_caso, input) => {
+    expect(issuesDelPatch(input)).toEqual([])
+  })
+
+  it.each([
+    [
+      'nombre de 256',
+      { name: 'a'.repeat(256) },
+      'name',
+      'El nombre no puede superar los 255 caracteres'
+    ],
+    ['nombre de 2', { name: 'Co' }, 'name', 'El nombre debe tener al menos 3 caracteres'],
+    [
+      'descripcion de 1001',
+      { description: 'a'.repeat(1001) },
+      'description',
+      'La descripción no puede superar los 1000 caracteres'
+    ],
+    [
+      'precio de 10.000.001',
+      { price: 10_000_001 },
+      'price',
+      'El precio no puede superar 10.000.000'
+    ],
+    ['color #abc', { color: '#abc' }, 'color', 'Color invalido'],
+    [
+      'porcentaje de 150',
+      { deposit_type: 'percent', deposit_amount: 150 },
+      'deposit_amount',
+      'El porcentaje de la seña no puede superar 100'
+    ],
+    [
+      'sena required fija de 0',
+      { deposit_mode: 'required', deposit_type: 'fixed', deposit_amount: 0 },
+      'deposit_amount',
+      'El monto de la seña tiene que ser mayor a 0'
+    ],
+    [
+      'sena optional en porcentaje que borra el monto',
+      { deposit_mode: 'optional', deposit_type: 'percent', deposit_amount: null },
+      'deposit_amount',
+      'Indicá el porcentaje de la seña'
+    ]
+  ])('%s falla con su mensaje', (_caso, input, campo, mensaje) => {
+    expect(issuesDelPatch(input)).toEqual([[campo, mensaje]])
+  })
+
+  it.each(['name', 'duration_minutes', 'price', 'deposit_mode', 'deposit_type'])(
+    'null en %s (columna NOT NULL) falla',
+    (campo) => {
+      // B6-04: el backend responde 422 ("no puede ser null").
+      expect(updateServiceSchema.safeParse({ [campo]: null }).success).toBe(false)
+    }
+  )
 })

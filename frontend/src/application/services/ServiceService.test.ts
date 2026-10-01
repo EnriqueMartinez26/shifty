@@ -148,6 +148,35 @@ describe('ServiceService — politica de sena (F10-03 / F9-06)', () => {
 
     expect(mockRepository.update).toHaveBeenCalledWith('svc-1', { name: 'Otro nombre' })
   })
+
+  it('updateService rechaza un porcentaje mayor a 100 sin llamar al repositorio (D-20260930-09)', async () => {
+    // D-20260930-09 (2026-10-01): la edicion no validaba en el cliente y el
+    // PATCH con 150% salia para volver con 422.
+    const promise = service.updateService('svc-1', {
+      depositMode: 'required',
+      depositType: 'percent',
+      depositAmount: 150
+    })
+
+    const error: unknown = await promise.catch((caught: unknown) => caught)
+    expect((error as ValidationDetails).details).toEqual([
+      { path: 'deposit_amount', message: 'El porcentaje de la seña no puede superar 100' }
+    ])
+    expect(mockRepository.update).not.toHaveBeenCalled()
+  })
+
+  it('updateService deja pasar un PATCH parcial y el null que borra', async () => {
+    mockRepository.update.mockResolvedValue(await service.createService(BASE_INPUT))
+
+    await service.updateService('svc-1', { isActive: true })
+    await service.updateService('svc-1', { description: null, depositAmount: null })
+
+    expect(mockRepository.update).toHaveBeenNthCalledWith(1, 'svc-1', { isActive: true })
+    expect(mockRepository.update).toHaveBeenNthCalledWith(2, 'svc-1', {
+      description: null,
+      depositAmount: null
+    })
+  })
 })
 
 /**
