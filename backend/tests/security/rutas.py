@@ -1429,10 +1429,16 @@ TABLA: tuple[Ruta, ...] = (
         A.PROPIA,
         _sin_cuerpo("DELETE", "/payments/mercadopago/oauth/connection"),
     ),
+    # Link de pago y confirmacion manual (D-20260930-13): admin y superadmin,
+    # cualquier turno; el profesional solo los de SU ficha (la misma guarda que
+    # cancelar y reprogramar) y la recepcion no cobra. El actor profesional de
+    # la matriz no tiene ficha de staff (el turno es de ``tienda.staff``), asi
+    # que aca recibe 403; el profesional duenio lo prueba
+    # tests/integration/test_cobrar_solo_turnos_propios.py.
     R(
         "POST",
         "/payments/preferences/{appointment_id}",
-        OPERATIVOS,
+        ADMINS,
         A.RECURSO,
         _preferencia,
         idor=IDOR_POR_ID,
@@ -1440,7 +1446,7 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "POST",
         "/payments/{appointment_id}/manual-confirm",
-        OPERATIVOS,
+        ADMINS,
         A.RECURSO,
         _confirmar_pago,
         idor=IDOR_POR_ID,
