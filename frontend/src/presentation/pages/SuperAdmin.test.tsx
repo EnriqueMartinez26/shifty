@@ -1,4 +1,4 @@
-import { fireEvent, screen, render, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, render, waitFor, within } from '@testing-library/react'
 
 import type {
   SuperAdminCoupon,
@@ -148,13 +148,26 @@ const mockOverview: SuperAdminStoreOverview = {
 
 let mockStores: SuperAdminStoreRow[] = [mockStoreUno]
 const mockOverviewFor = jest.fn()
+const mockStoresFor = jest.fn()
+const mockStoresPage = {
+  total: null as number | null,
+  hasNextPage: false,
+  isFetchingNextPage: false,
+  fetchNextPage: jest.fn()
+}
 
 jest.mock('../hooks/useSuperAdmin', () => ({
-  useSuperAdminStores: () => ({
-    data: mockStores,
-    isLoading: false,
-    isFetching: false
-  }),
+  // Con busqueda el listado trae otra tienda: si la busqueda se aplicara por
+  // tecla, el detalle se pediria una vez por cada tienda intermedia.
+  useSuperAdminStores: (params: { search?: string }) => {
+    mockStoresFor(params)
+    return {
+      data: params.search ? [{ ...mockStoreUno, public_id: `store-${params.search}` }] : mockStores,
+      isLoading: false,
+      isFetching: false,
+      ...mockStoresPage
+    }
+  },
   useSuperAdminOverview: (storeId: string | null) => {
     mockOverviewFor(storeId)
     return { data: mockOverview, isLoading: false, isFetching: false }
@@ -221,6 +234,10 @@ describe('SuperAdminPage', () => {
   beforeEach(() => {
     mockStores = [mockStoreUno]
     mockOverviewFor.mockReset()
+    mockStoresFor.mockReset()
+    mockStoresPage.total = null
+    mockStoresPage.hasNextPage = false
+    mockStoresPage.fetchNextPage.mockReset()
     Object.values(mockMutations).forEach((mutation) => mutation.mockReset())
     mockMutations.createStore.mockResolvedValue({
       ...mockStoreUno,
@@ -410,6 +427,65 @@ describe('SuperAdminPage', () => {
       })
     })
     expect(await screen.findByText('Cupon WELCOME10 canjeado en Barber Uno')).toBeInTheDocument()
+  })
+
+  // 2026-09-30 (FF-24, F4-10): "Todas" mostraba solo activas, la lista cortaba
+  // en 50 y cada tecla disparaba hasta 3 requests (listado, detalle y auditoria).
+  describe('listado de tiendas', () => {
+    it('"Todas" pide is_active=all', () => {
+      render(<SuperAdminPage />)
+
+      fireEvent.click(
+        first(sectionOf('Operacion por tenant').getAllByRole('button', { name: 'Todas' }))
+      )
+
+      expect(mockStoresFor).toHaveBeenLastCalledWith(expect.objectContaining({ is_active: 'all' }))
+    })
+
+    it('"Cargar mas" pide la pagina siguiente', () => {
+      mockStoresPage.hasNextPage = true
+      render(<SuperAdminPage />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cargar más' }))
+
+      expect(mockStoresPage.fetchNextPage).toHaveBeenCalledTimes(1)
+    })
+
+    it('muestra cuantas tiendas hay cargadas sobre el total', () => {
+      mockStoresPage.total = 120
+      const { rerender } = render(<SuperAdminPage />)
+      expect(screen.getByText('Mostrando 1 de 120')).toBeInTheDocument()
+
+      mockStoresPage.total = null
+      rerender(<SuperAdminPage />)
+      expect(screen.getByText('Mostrando 1')).toBeInTheDocument()
+    })
+
+    describe('busqueda con espera', () => {
+      beforeEach(() => jest.useFakeTimers())
+      afterEach(() => jest.useRealTimers())
+
+      it('cuatro teclas hacen UNA busqueda a los 300 ms y el detalle no se pide por tecla', () => {
+        render(<SuperAdminPage />)
+        const input = screen.getByPlaceholderText('Buscar por nombre o slug')
+
+        for (const value of ['b', 'ba', 'bar', 'barb']) {
+          fireEvent.change(input, { target: { value } })
+          act(() => jest.advanceTimersByTime(100))
+        }
+        expect((input as HTMLInputElement).value).toBe('barb')
+        expect(mockStoresFor).not.toHaveBeenCalledWith(expect.objectContaining({ search: 'b' }))
+
+        act(() => jest.advanceTimersByTime(300))
+
+        const searches = mockStoresFor.mock.calls
+          .map(([params]: [{ search?: string }]) => params.search)
+          .filter(Boolean)
+        expect(new Set(searches)).toEqual(new Set(['barb']))
+        const overviews = new Set(mockOverviewFor.mock.calls.map(([id]: [string]) => id))
+        expect(overviews).toEqual(new Set(['store-1', 'store-barb']))
+      })
+    })
   })
 
   // F11b-10: los cinco toggles comparten confirmar -> mutar -> avisar. Antes

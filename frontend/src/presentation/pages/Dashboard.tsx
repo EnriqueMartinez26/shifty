@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 
 import { subDays } from 'date-fns'
@@ -36,8 +36,6 @@ import {
 } from '@shared/utils/argentinaTime'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-import SalesDonut from '../components/organisms/dashboard/SalesDonut'
-import TrendChart from '../components/organisms/dashboard/TrendChart'
 import { useAuth } from '../context/AuthContext'
 import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
 import { useDashboardSummary } from '../hooks/useDashboard'
@@ -47,6 +45,18 @@ import { useProfessionalReports, useReportSummary, useReportTrend } from '../hoo
 import { useStoreFeatureFlags } from '../hooks/useStores'
 import { currencyFmtEsAr } from '../lib/formatters'
 import { createDashboardListItemStyle, createDashboardPanelStyle } from '../lib/surfaceStyles'
+
+// Los graficos traen recharts, que era casi todo el chunk del Dashboard
+// (426 KB) y bajaba en la primera pantalla del dueno. Con lazy van a su propio
+// chunk y la pagina pinta sin esperarlo (F4-13).
+const TrendChart = lazy(() => import('../components/organisms/dashboard/TrendChart'))
+const SalesDonut = lazy(() => import('../components/organisms/dashboard/SalesDonut'))
+
+// Alto del area de dibujo de cada grafico (el `height` de su contenedor en
+// TrendChart.tsx y SalesDonut.tsx). No se importa de esos modulos: hacerlo
+// traeria recharts de vuelta al chunk del Dashboard.
+const TREND_CHART_HEIGHT = 280
+const SALES_DONUT_HEIGHT = 200
 
 type Tone = 'neutral' | 'primary' | 'warning' | 'danger' | 'success'
 
@@ -842,8 +852,16 @@ function EnterpriseDashboard({
       <SummaryMetricsPanel title={copy.metricsTitle} metrics={todayMetrics} />
 
       <section style={insightsGridStyle} className="dashboard-insights-grid">
-        <TrendChart points={trendPoints} isLoading={trendLoading} />
-        <SalesDonut services={topServices} isLoading={salesLoading} />
+        <Suspense
+          fallback={<ChartPlaceholder text="Cargando tendencia..." height={TREND_CHART_HEIGHT} />}
+        >
+          <TrendChart points={trendPoints} isLoading={trendLoading} />
+        </Suspense>
+        <Suspense
+          fallback={<ChartPlaceholder text="Cargando ventas..." height={SALES_DONUT_HEIGHT} />}
+        >
+          <SalesDonut services={topServices} isLoading={salesLoading} />
+        </Suspense>
         <TransactionsPanel
           title={copy.transactionsTitle}
           description={copy.transactionsDescription}
@@ -1887,6 +1905,20 @@ function OpportunityList({ items, emptyText }: { items: OpportunityItem[]; empty
 
 function EmptyState({ text }: { text: string }) {
   return <p style={emptyStyle}>{text}</p>
+}
+
+/**
+ * Lugar reservado mientras baja el chunk de un grafico: el mismo panel y el
+ * alto de su area de dibujo, para que la grilla no salte cuando llega.
+ */
+function ChartPlaceholder({ text, height }: { text: string; height: number }) {
+  return (
+    <section style={createDashboardPanelStyle()} aria-busy="true">
+      <div style={panelBodyStyle}>
+        <p style={{ ...emptyStyle, height, display: 'grid', placeItems: 'center' }}>{text}</p>
+      </div>
+    </section>
+  )
 }
 
 export default Dashboard

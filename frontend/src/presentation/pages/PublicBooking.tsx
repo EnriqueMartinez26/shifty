@@ -1,7 +1,7 @@
 import React from 'react'
 
 import { CalendarCheck, Check, Clock3, MapPin, Phone, Store, X } from 'lucide-react'
-import { useParams, useSearchParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
 import { resolveBookingPreselect } from '@presentation/components/organisms/booking/deepLink'
@@ -20,6 +20,7 @@ import {
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const paymentId = searchParams.get('payment_id') || undefined
   const { data: store, isLoading, isError } = usePublicStore(slug)
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
@@ -99,8 +100,26 @@ const PublicBooking: React.FC = () => {
               ? 'Mercado Pago acreditó la seña y tu turno quedó reservado.'
               : failed
                 ? 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
-                : 'No cierres esta pantalla. La confirmación depende del webhook verificado del backend.'}
+                : paymentStatus.pollingStopped
+                  ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
+                  : 'No cierres esta pantalla. La confirmación depende del webhook verificado del backend.'}
           </p>
+          {paymentStatus.pollingStopped && (
+            // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a
+            // pedido. Solo relee el estado: confirmar es del webhook (regla 7).
+            <button
+              type="button"
+              onClick={() => void paymentStatus.refetch()}
+              disabled={paymentStatus.isFetching}
+              className="w-full py-4 rounded-xl font-black uppercase tracking-widest text-xs border disabled:opacity-60"
+              style={{
+                borderColor: colors2000s.border.default,
+                color: colors2000s.text.primary
+              }}
+            >
+              Volver a consultar
+            </button>
+          )}
           {paymentStatus.isError && (
             <p
               role="alert"
@@ -112,7 +131,9 @@ const PublicBooking: React.FC = () => {
           )}
           <button
             type="button"
-            onClick={() => window.location.assign(`/booking/${slug}`)}
+            // Sin payment_id en la URL se monta un wizard nuevo (estado y clave de
+            // idempotencia nuevos) sin recargar la SPA (F11b-20).
+            onClick={() => void navigate(`/booking/${slug}`)}
             className="w-full py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs"
             style={buttonStyles2000s.selected}
           >

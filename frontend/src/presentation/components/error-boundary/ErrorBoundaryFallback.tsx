@@ -1,4 +1,4 @@
-﻿type ErrorBoundaryFallbackProps = {
+type ErrorBoundaryFallbackProps = {
   title?: string
   description?: string
 }

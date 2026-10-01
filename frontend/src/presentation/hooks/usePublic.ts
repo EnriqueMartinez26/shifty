@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
@@ -19,6 +21,10 @@ import {
   type PublicWaitlistEntry,
   type WaitlistJoinPayload
 } from '@application/services/PublicBookingService'
+
+import { getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
+
+import { PAYMENT_POLL_MAX_MS, paymentPollDelayMs } from '../lib/paymentPolling'
 
 export type { PublicStore }
 
@@ -62,10 +68,18 @@ export const usePublicAvailability = (
     staleTime: 1000 * 30
   })
 
-export const useCreatePublicBooking = () =>
-  useMutation<BookingConfirmation, Error, PublicBookingPayload>({
-    mutationFn: (payload) => publicBookingService.createBooking(payload)
+export const useCreatePublicBooking = () => {
+  const queryClient = useQueryClient()
+  return useMutation<BookingConfirmation, Error, PublicBookingPayload>({
+    mutationFn: (payload) => publicBookingService.createBooking(payload),
+    // Con o sin exito la grilla quedo vieja: con staleTime de 30 s el horario
+    // tomado seguia libre al volver al paso 2 (FF-33). El paso 2 esta
+    // desmontado y su consulta inactiva: sin `refetchType: 'all'` no se pedia.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
+    }
   })
+}
 
 /** La seña real (con recargos por antelación e historial) antes de confirmar. */
 export const usePublicDepositPreview = (params: {
@@ -85,6 +99,15 @@ export const usePublicDepositPreview = (params: {
       params.promotionCode
     ],
     enabled: Boolean(params.storePublicId && params.serviceId && params.startsAt),
+    // Al completar el telefono o aplicar un codigo cambia la clave: sin la seña
+    // anterior mientras carga, el boton de Mercado Pago parpadeaba (FF-32). Solo
+    // para el MISMO turno: con otro horario la seña vieja pasaba por actual.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === params.storePublicId &&
+      previousQuery.queryKey[2] === params.serviceId &&
+      previousQuery.queryKey[3] === params.startsAt
+        ? previous
+        : undefined,
     queryFn: () =>
       publicBookingService.previewDeposit({
         storePublicId: params.storePublicId,
@@ -138,21 +161,37 @@ export const useJoinWaitlist = () =>
     mutationFn: (payload) => publicBookingService.joinWaitlist(payload)
   })
 
+/**
+ * Estado del pago al volver de Mercado Pago. Mientras sigue pendiente se
+ * sondea con backoff y se corta a los 30 min (F4-05); `pollingStopped` avisa
+ * el corte. El front nunca da el turno por confirmado: eso lo decide el
+ * webhook (regla 7). Sin `retry` propio: rige la politica global (main.tsx),
+ * que no repite un 429.
+ */
 export const usePublicPaymentStatus = (
   storePublicId: string | undefined,
   paymentPublicId: string | undefined
-) =>
-  useQuery<PublicPaymentStatus>({
+) => {
+  const [startedAt] = useState(() => Date.now())
+  const query = useQuery<PublicPaymentStatus>({
     queryKey: ['public-payment-status', storePublicId, paymentPublicId],
     queryFn: () =>
       publicBookingService.getPaymentStatus(storePublicId as string, paymentPublicId as string),
     enabled: Boolean(storePublicId && paymentPublicId),
-    refetchInterval: (query) => {
-      const status = query.state.data?.payment_status
-      return status === 'pending' ? 2000 : false
-    },
-    retry: 2
+    refetchInterval: (q) =>
+      q.state.data?.payment_status === 'pending'
+        ? paymentPollDelayMs(Date.now() - startedAt, getRetryAfterSeconds(q.state.error))
+        : false
   })
+  // Se deriva del reloj en cada render. La ultima consulta sale en el corte o
+  // despues (la espera previa es de 15 s) y su respuesta re-renderiza porque
+  // el spread de abajo lee, y suscribe, todas las propiedades del resultado
+  // (`dataUpdatedAt` incluida): con solo `data` una respuesta igual no
+  // renderizaba y el aviso no aparecia nunca.
+  const pollingStopped =
+    query.data?.payment_status === 'pending' && Date.now() - startedAt >= PAYMENT_POLL_MAX_MS
+  return { ...query, pollingStopped }
+}
 
 export const usePreviewPublicPromotion = () =>
   useMutation<PromotionPreview, Error, { storePublicId: string; serviceId: string; code: string }>({
