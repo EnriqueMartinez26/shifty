@@ -196,6 +196,25 @@ describe('ClientAppointmentsContainer', () => {
       expect(mockRefetch).toHaveBeenCalledTimes(1)
     })
 
+    it('fuera de plazo muestra el texto del servidor, con las horas de la tienda', async () => {
+      // FF-06 (2026-10-01): un texto neutro global para
+      // CANCELLATION_WINDOW_EXPIRED pisaba el del servidor al cancelar y el
+      // cliente dejaba de ver con cuantas horas se puede cancelar.
+      const dialogo = await pedirCancelar()
+      mockCancel.mockRejectedValue(
+        new ConflictError('Solo se puede cancelar con 24h de anticipación', {
+          errorCode: 'CANCELLATION_WINDOW_EXPIRED',
+          statusCode: 409
+        })
+      )
+
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, cancelar turno' }))
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        'Solo se puede cancelar con 24h de anticipación'
+      )
+    })
+
     it('un error que no es de estado no recarga la lista', async () => {
       const dialogo = await pedirCancelar()
       mockCancel.mockRejectedValue(
@@ -315,7 +334,7 @@ describe('ClientAppointmentsContainer', () => {
       ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],
       [
         'CANCELLATION_WINDOW_EXPIRED',
-        'Ya pasó el plazo para cancelar o cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
+        'Ya pasó el plazo para cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
       ],
       [
         'PAID_APPOINTMENT_RESCHEDULE_DENIED',
@@ -340,7 +359,9 @@ describe('ClientAppointmentsContainer', () => {
       expect(screen.getByRole('heading', { name: titulo })).toBeInTheDocument()
     })
 
-    it('un 400 BOOKING_NOTICE_REQUIRED muestra un texto neutro y deja la grilla abierta', async () => {
+    it('un 400 BOOKING_NOTICE_REQUIRED muestra el texto del servidor, con las horas, y deja la grilla abierta', async () => {
+      // FF-06 (2026-10-01): el texto del servidor le dice al cliente cuantas
+      // horas de anticipacion pide la tienda; uno neutro lo perdia.
       mockReschedule.mockRejectedValue(
         new ValidationError('Este local requiere 24h de anticipación para agendar/reprogramar.', {
           errorCode: 'BOOKING_NOTICE_REQUIRED',
@@ -353,7 +374,7 @@ describe('ClientAppointmentsContainer', () => {
       fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, mover turno' }))
 
       expect(await screen.findByRole('status')).toHaveTextContent(
-        'Ese horario está muy cerca: el negocio pide más anticipación. Elegí uno más adelante.'
+        'Este local requiere 24h de anticipación para agendar/reprogramar.'
       )
       expect(screen.getByRole('heading', { name: titulo })).toBeInTheDocument()
     })

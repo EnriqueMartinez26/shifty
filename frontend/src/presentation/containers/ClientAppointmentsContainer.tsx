@@ -140,9 +140,14 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     } catch (error: unknown) {
       // La grilla queda abierta para elegir otro horario; el hook ya la
       // vuelve a pedir. Si el turno cambio de estado, tambien la lista.
+      // BOOKING_NOTICE_REQUIRED muestra el texto del servidor, que dice las
+      // horas de anticipacion; el de CANCELLATION_WINDOW_EXPIRED habla de
+      // cancelar y aca se esta moviendo el turno.
       setMessage(
         getErrorMessage(error, 'No pudimos mover el turno a ese horario', {
-          APPOINTMENT_NOT_ACTIVE: 'Este turno ya terminó o fue cancelado: no se puede mover.'
+          APPOINTMENT_NOT_ACTIVE: 'Este turno ya terminó o fue cancelado: no se puede mover.',
+          CANCELLATION_WINDOW_EXPIRED:
+            'Ya pasó el plazo para cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
         })
       )
       if (isStateConflictError(error)) void appointments.refetch()
