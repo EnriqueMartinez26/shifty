@@ -15,7 +15,8 @@ import { superAdminService } from './SuperAdminService'
 describe('query strings por params (F9-11)', () => {
   beforeEach(() => {
     mockGet.mockReset()
-    mockGet.mockResolvedValue({ data: [] })
+    // axios siempre trae headers; listStores lee X-Total-Count (FF-24).
+    mockGet.mockResolvedValue({ data: [], headers: {} })
   })
 
   it('reportes: el rango de fechas viaja como params', async () => {

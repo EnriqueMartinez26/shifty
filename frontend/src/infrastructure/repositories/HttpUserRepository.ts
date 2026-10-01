@@ -84,7 +84,8 @@ export class HttpUserRepository
           include_inactive: query.includeInactive ?? false,
           q: query.q,
           email: query.email,
-          limit: query.limit
+          limit: query.limit,
+          offset: query.offset
         }
       })
       return data.map(UserMapper.toDomain)
