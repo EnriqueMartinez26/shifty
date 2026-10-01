@@ -41,7 +41,7 @@ const ESTADO: Record<BookingStatusValue, { label: string; color: string }> = {
 }
 
 interface ClientAppointmentsContainerProps {
-  store: PublicStore
+  store: Pick<PublicStore, 'public_id' | 'name' | 'slug'>
 }
 
 /**

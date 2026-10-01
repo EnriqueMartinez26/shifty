@@ -31,7 +31,7 @@ const store = {
   public_id: 'store-1',
   name: 'Peluqueria Sol',
   slug: 'sol'
-} as unknown as PublicStore
+} satisfies Pick<PublicStore, 'public_id' | 'name' | 'slug'>
 
 const turno = {
   public_id: 'appt-1',
