@@ -4,10 +4,16 @@ import { MemoryRouter, useLocation } from 'react-router'
 import Dashboard from './Dashboard'
 import { currencyFmtEsAr } from '../lib/formatters'
 
-// Caracterizacion de `Dashboard` (F11b-09): fija lo observable del render ANTES
-// de mover los componentes de presentacion a `organisms/dashboard/`. No es un
-// test de diseno: si una tajada de la extraccion cambia un texto, un orden, un
-// color de estado o el destino de un clic, este archivo falla. Los hooks de
+// Caracterizacion de `Dashboard`: red de seguridad de las cuatro tajadas de
+// F11b-09, que mueven los componentes de presentacion a `organisms/dashboard/`.
+// No es un test de diseno: si una tajada cambia un texto, un orden, un color de
+// estado o el destino de un clic, este archivo falla. Cada componente movido
+// tiene ademas su test de props en `organisms/dashboard/<Componente>.test.tsx`,
+// que fija las ramas y los literales de estilo que la pagina no ve. Cuando la
+// extraccion termine (cuarta tajada) y la pagina quede solo con contenedor,
+// hooks y mapeo de datos, estas expectativas se actualizan SOLO si cambio a
+// proposito el comportamiento visible; lo que sea de un componente suelto se
+// baja a su propio test y aca queda la pagina armada de punta a punta. Los hooks de
 // datos se reemplazan por dobles que respetan el argumento `enabled` (una query
 // deshabilitada de react-query devuelve `data: undefined`), asi tambien queda
 // fijado que el rol gobierna que se consulta. Los graficos se reemplazan para no
@@ -284,8 +290,10 @@ const cardOf = (scope: ReturnType<typeof within>, label: string) => {
 }
 
 // El estilo en linea de jsdom devuelve el color ya como rgb(). Son los tres
-// acentos de `toneTokens`: #b76a00, #0f9f6e y #d13b3b.
+// acentos de `toneTokens`: #b76a00, #0f9f6e y #d13b3b, mas el neutral
+// (`colors2000s.text.secondary`, #7a7a7a).
 const TONE = {
+  neutral: 'rgb(122, 122, 122)',
   warning: 'rgb(183, 106, 0)',
   success: 'rgb(15, 159, 110)',
   danger: 'rgb(209, 59, 59)'
@@ -302,7 +310,7 @@ const textOf = (element: HTMLElement | null | undefined) =>
 
 const currentPath = () => screen.getByTestId('location').textContent
 
-describe('Dashboard (caracterizacion previa a F11b-09)', () => {
+describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
   beforeEach(() => {
     Object.assign(mockScenario, adminScenario())
   })
@@ -481,6 +489,38 @@ describe('Dashboard (caracterizacion previa a F11b-09)', () => {
       expect(colorOf(transactions.getByText('completed'))).toBe(TONE.success)
       expect(colorOf(transactions.getByText('confirmed'))).toBe(TONE.success)
       expect(transactions.getByRole('button', { name: 'Ver todas' })).toBeInTheDocument()
+    })
+
+    it('pinta pendiente y pago pendiente en warning y un estado desconocido en neutral', async () => {
+      Object.assign(mockScenario, {
+        reports: {
+          data: {
+            ...ADMIN_REPORTS,
+            appointments: [
+              { ...ADMIN_REPORTS.appointments[0], public_id: 'rep-4', status: 'pending' },
+              { ...ADMIN_REPORTS.appointments[1], public_id: 'rep-5', status: 'pending_payment' },
+              { ...ADMIN_REPORTS.appointments[2], public_id: 'rep-6', status: 'desconocido' }
+            ]
+          },
+          isLoading: false
+        }
+      })
+      await renderDashboard()
+
+      const transactions = section('Transacciones')
+      expect(colorOf(transactions.getByText('pending'))).toBe(TONE.warning)
+      expect(colorOf(transactions.getByText('pending_payment'))).toBe(TONE.warning)
+      expect(colorOf(transactions.getByText('desconocido'))).toBe(TONE.neutral)
+    })
+
+    it('el modo compacto es solo de las alertas: 64 contra los 72 de las acciones urgentes', async () => {
+      await renderDashboard()
+
+      const minHeightOf = (title: string) =>
+        (screen.getByText(title).closest('button') as HTMLButtonElement).style.minHeight
+
+      expect(minHeightOf('Confirmar turnos')).toBe('72px')
+      expect(minHeightOf('Cancelaciones en el periodo')).toBe('64px')
     })
 
     it('entrega a los graficos los puntos de tendencia y los servicios con su carga', async () => {
