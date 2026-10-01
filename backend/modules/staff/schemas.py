@@ -60,8 +60,16 @@ class ScheduleResponse(ScheduleBase):
         from_attributes = True
 
 
+# Largo de staff.display_name (String(100); la migracion d5ec116d06a3 la bajo de
+# 255). 2026-10-01: el schema seguia en 255 y un nombre de 101 a 255 caracteres
+# pasaba Pydantic y reventaba en Postgres con un 500 (regla 20). Lo fija
+# tests/integration/test_staff_limites_de_columna.py y el guardia
+# tests/architecture/test_limites_de_schema_vs_columna.py.
+DISPLAY_NAME_MAX_LENGTH = 100
+
+
 class StaffBase(BaseModel):
-    display_name: str = Field(..., min_length=2, max_length=255)
+    display_name: str = Field(..., min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH)
 
 
 class StaffCreate(StaffBase):
@@ -105,7 +113,9 @@ class StaffUpdate(BaseModel):
     first_name: str | None = Field(None, min_length=1, max_length=100)
     last_name: str | None = Field(None, min_length=1, max_length=100)
     email: EmailStr | None = None
-    display_name: str | None = Field(None, min_length=2, max_length=255)
+    display_name: str | None = Field(
+        None, min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH
+    )
     service_ids: list[PublicId] | None = Field(None, max_length=100)
     is_active: bool | None = None
 
