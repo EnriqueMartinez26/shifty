@@ -77,6 +77,12 @@ SUSPENSION_ALLOWED_WRITES: frozenset[tuple[str, str]] = frozenset(
         # supresion es una obligacion legal con plazo (art. 16 Ley 25.326) y
         # no crea una obligacion comercial nueva.
         ("POST", "/users/{client_id}/anonymize"),
+        # Cancelar y liberar un turno ya tomado (D-20260930-12, 2026-09-30):
+        # extinguen una obligacion en vez de crearla y destraban la
+        # anonimizacion de clientes, que se niega con turnos activos a futuro.
+        # Reprogramar, confirmar, completar y crear siguen bloqueados.
+        ("PATCH", "/appointments/{public_id}/cancel"),
+        ("PATCH", "/appointments/{public_id}/release"),
     }
 )
 

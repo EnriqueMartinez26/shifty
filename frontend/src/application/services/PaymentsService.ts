@@ -94,16 +94,19 @@ export interface PromotionRecord {
   updated_at: string
 }
 
+// Los opcionales aceptan null: en el PATCH (exclude_unset) un null explicito
+// borra el campo y un undefined no viaja. code, title, promotion_type y value
+// nunca van en null: el backend los asigna con setattr y la columna no lo admite.
 export interface PromotionPayload {
   code: string
   title: string
-  description?: string
+  description?: string | null
   promotion_type: 'percent' | 'fixed'
   value: number
-  min_service_amount?: number
-  max_uses?: number
-  valid_from?: string
-  valid_until?: string
+  min_service_amount?: number | null
+  max_uses?: number | null
+  valid_from?: string | null
+  valid_until?: string | null
   is_active?: boolean
 }
 
