@@ -1,8 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { Service } from '@domain/entities/Service'
+import type { IServiceRepository } from '@domain/repositories/IServiceRepository'
+
+import { ServiceService } from '@application/services/ServiceService'
 
 import { ServiceFormModal } from './ServiceFormModal'
+
+// ServiceService.ts arma su singleton con el apiClient real (runtime-env /
+// import.meta, que ts-jest no compila): se mockea el cliente HTTP.
+jest.mock('@infrastructure/http/client', () => ({
+  __esModule: true,
+  default: {}
+}))
 
 /**
  * El riesgo de F10-03 no es "falta un campo": es que el formulario de edicion
@@ -86,38 +96,113 @@ describe('ServiceFormModal — politica de sena', () => {
     // Con la sena apagada no se pide ni tipo ni monto.
     expect(screen.queryByLabelText(/Porcentaje \(%\)|Monto fijo/)).not.toBeInTheDocument()
   })
+})
 
-  it('un porcentaje mayor a 100 no traba la edicion', async () => {
-    // El formulario no puede ser mas estricto que el backend, que acepta hasta
-    // 10.000.000 para cualquier tipo. Con `max=100` en el input, un servicio
-    // cargado con 500% quedaba imposible de editar: la validacion nativa
-    // bloqueaba el submit en un campo que el dueño ni habia tocado.
-    const onSubmit = jest.fn().mockResolvedValue(undefined)
-    const legado = Service.fromPrimitives({
-      ...servicioConSena().toPrimitives(),
-      deposit_amount: 500
-    })
+/**
+ * D-20260930-09 (2026-10-01): el formulario rechaza lo que el backend
+ * rechaza, al crear y al editar, y dice POR QUE. Antes el alta mostraba
+ * "No se pudo guardar" (BaseService envuelve el ZodError en un Error plano) y
+ * la edicion no validaba nada: un porcentaje de 150 viajaba y volvia 422.
+ * Se arma con el ServiceService real sobre un repositorio doble: lo que se
+ * prueba es el camino formulario -> servicio -> mensaje.
+ */
+describe('ServiceFormModal — motivo del rechazo (D-20260930-09)', () => {
+  const repositorio = () =>
+    ({
+      findAll: jest.fn(),
+      findById: jest.fn(),
+      create: jest.fn().mockImplementation(async (created: Service) => created),
+      update: jest.fn().mockImplementation(async () => servicioConSena()),
+      delete: jest.fn(),
+      uploadImage: jest.fn(),
+      removeImage: jest.fn()
+    }) as jest.Mocked<IServiceRepository>
 
+  it('al crear con una descripcion de 1001 caracteres muestra ese motivo y no llama a la API', async () => {
+    // 2026-10-01: el alta rechazaba en el cliente pero mostraba "No se pudo
+    // guardar", sin decir que campo corregir.
+    const repo = repositorio()
+    const service = new ServiceService(repo)
     render(
       <ServiceFormModal
         isOpen
         onClose={jest.fn()}
-        onSubmit={onSubmit}
-        editingService={legado}
+        onSubmit={async (data) => {
+          await service.createService(data)
+        }}
         {...sinImagen()}
       />
     )
 
-    expect(montoDeSena().value).toBe('500')
-    expect(montoDeSena()).not.toHaveAttribute('max')
+    fireEvent.change(screen.getByPlaceholderText('Ej: Corte de Cabello Premium'), {
+      target: { value: 'Corte' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('Describí qué incluye el servicio...'), {
+      target: { value: 'a'.repeat(1001) }
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Crear Servicio/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La descripción no puede superar los 1000 caracteres'
+    )
+    expect(screen.queryByText('No se pudo guardar')).not.toBeInTheDocument()
+    expect(repo.create).not.toHaveBeenCalled()
+  })
+
+  it('al editar con un porcentaje de 150 muestra el motivo y no llama a la API', async () => {
+    // 2026-10-01: la edicion no validaba en el cliente; el PATCH con 150%
+    // salia y el backend lo rechazaba ("un porcentaje de sena no puede
+    // superar 100"), igual que la base (ck_services_deposit_percent_max).
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={async (data) => {
+          await service.updateService('svc_1', data)
+        }}
+        editingService={servicioConSena()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.change(montoDeSena(), { target: { value: '150' } })
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'El porcentaje de la seña no puede superar 100'
+    )
+    expect(repo.update).not.toHaveBeenCalled()
+  })
+
+  it('al editar con datos validos guarda igual', async () => {
+    const repo = repositorio()
+    const service = new ServiceService(repo)
+    const onClose = jest.fn()
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={onClose}
+        onSubmit={async (data) => {
+          await service.updateService('svc_1', data)
+        }}
+        editingService={servicioConSena()}
+        {...sinImagen()}
+      />
+    )
 
     fireEvent.change(screen.getByDisplayValue('Corte premium'), {
       target: { value: 'Renombrado' }
     })
     fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
-    expect(onSubmit.mock.calls[0]?.[0]).toMatchObject({ depositAmount: 500 })
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    expect(repo.update).toHaveBeenCalledWith(
+      'svc_1',
+      expect.objectContaining({ name: 'Renombrado', depositType: 'percent', depositAmount: 50 })
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })
 
