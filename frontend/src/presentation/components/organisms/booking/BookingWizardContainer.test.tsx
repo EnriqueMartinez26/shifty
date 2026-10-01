@@ -221,9 +221,16 @@ describe('BookingWizardContainer', () => {
         target: { value: '+5491155550101' }
       })
       fireEvent.click(screen.getByRole('checkbox'))
+      await enviar()
+    }
+    // La huella se calcula con crypto.subtle, que es asincronico: se espera al
+    // envio en vez de suponer que sale en el mismo tick del click.
+    const enviar = async () => {
+      const antes = mockCreateBooking.mock.calls.length
       await act(async () => {
         fireEvent.click(screen.getByText('Reservar y pagar por WhatsApp'))
       })
+      await waitFor(() => expect(mockCreateBooking).toHaveBeenCalledTimes(antes + 1))
     }
     const claveDelIntento = (n: number) =>
       (mockCreateBooking.mock.calls[n]?.[0] as { idempotency_key?: string }).idempotency_key
@@ -244,6 +251,24 @@ describe('BookingWizardContainer', () => {
       expect(mockCreateBooking).toHaveBeenCalledTimes(2)
       expect(claveDelIntento(0)).toEqual(expect.any(String))
       expect(claveDelIntento(1)).toBe(claveDelIntento(0))
+    })
+
+    it('lo que queda en sessionStorage no tiene datos del cliente', async () => {
+      // 2026-10-01 (review de #83): la huella era el pedido en claro y dejaba
+      // nombre y telefono del cliente en sessionStorage.
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+      render(<BookingWizardContainer store={tienda(false)} />)
+      await confirmarReserva('Lucia')
+
+      const crudo = window.sessionStorage.getItem('shifty:booking-idem:tienda') ?? ''
+      expect(crudo).not.toBe('')
+      expect(crudo).not.toContain('Lucia')
+      expect(crudo).not.toContain('5491155550101')
+      expect(crudo).not.toContain('1155550101')
+      expect(JSON.parse(crudo)).toEqual({
+        fpHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+        key: claveDelIntento(0)
+      })
     })
 
     it('recargar y reenviar otros datos manda otra clave', async () => {
@@ -277,13 +302,12 @@ describe('BookingWizardContainer', () => {
       // El intento fallido deja la clave guardada para el reintento.
       expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).not.toBeNull()
 
-      await act(async () => {
-        fireEvent.click(screen.getByText('Reservar y pagar por WhatsApp'))
-      })
+      await enviar()
 
-      expect(mockCreateBooking).toHaveBeenCalledTimes(2)
       expect(claveDelIntento(1)).toBe(claveDelIntento(0))
-      expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).toBeNull()
+      await waitFor(() =>
+        expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).toBeNull()
+      )
     })
   })
 

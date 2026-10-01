@@ -372,8 +372,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
               }
               // La huella es el pedido entero (servicio, profesional, horario,
               // cliente, promo y forma de pago): la clave se reusa al recargar
-              // solo si se manda exactamente lo mismo (F4-04).
-              const idempotencyKey = bookingIdempotencyKey(store.slug, JSON.stringify(pedido))
+              // solo si se manda exactamente lo mismo (F4-04). Se guarda solo
+              // su SHA-256, sin datos del cliente.
+              const idempotencyKey = await bookingIdempotencyKey(store.slug, JSON.stringify(pedido))
               const confirmation = await createBooking.mutateAsync({
                 ...pedido,
                 idempotency_key: idempotencyKey
