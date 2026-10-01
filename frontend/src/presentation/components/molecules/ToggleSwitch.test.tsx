@@ -45,3 +45,19 @@ describe('ToggleSwitch', () => {
     expect(interruptor.style.background).toBe('rgb(255, 140, 66)')
   })
 })
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15): el interruptor acepta disabled y su motivo.
+describe('ToggleSwitch: deshabilitado', () => {
+  it('deshabilitado muestra el motivo y no avisa el click', () => {
+    const onToggle = jest.fn()
+    render(<ToggleSwitch label="Pagos" checked onToggle={onToggle} disabled title="Suspendida" />)
+
+    const interruptor = screen.getByRole('switch', { name: 'Pagos' })
+    fireEvent.click(interruptor)
+
+    expect(interruptor).toBeDisabled()
+    expect(interruptor).toHaveAttribute('title', 'Suspendida')
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+})

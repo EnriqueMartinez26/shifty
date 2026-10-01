@@ -74,6 +74,11 @@ jest.mock('../hooks/useManagedServices', () => ({
   useManagedServices: () => ({ data: [] })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 const renderSettings = () =>
   render(
     <MemoryRouter initialEntries={['/dashboard/settings']}>
@@ -290,6 +295,79 @@ describe('SettingsPage - funciones (FF-28)', () => {
     expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
     expect(updateStore).toHaveBeenCalledWith({ name: 'Otro nombre' })
     expect(updateFeatureFlags).not.toHaveBeenCalled()
+  })
+})
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15). PATCH /stores/me, PUT /stores/me/feature-flags y
+// POST /stores/me/media no estan en SUSPENSION_ALLOWED_WRITES; cambiar la
+// clave (PUT /auth/change-password) va por un router sin la guarda.
+describe('SettingsPage - tienda suspendida (FF-15)', () => {
+  const expectBlocked = (element: HTMLElement | null) => {
+    expect(element).toHaveAttribute('title', 'Tienda suspendida')
+  }
+
+  beforeEach(() => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+  })
+
+  afterEach(() => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  it('Guardar, Subir imagen y los interruptores de Funciones quedan deshabilitados', () => {
+    const { container } = renderSettings()
+    fireEvent.change(screen.getByDisplayValue('Peluqueria Tucuman'), {
+      target: { value: 'Otro nombre' }
+    })
+
+    const guardar = screen.getByRole('button', { name: 'Guardar Cambios' })
+    expect(guardar).toBeDisabled()
+    expectBlocked(guardar)
+    const logo = container.querySelector<HTMLInputElement>('input[type="file"]')
+    expect(logo).toBeDisabled()
+    expectBlocked(logo?.closest('label') ?? null)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+    const switches = screen.getAllByRole('switch')
+    expect(switches.length).toBeGreaterThan(0)
+    for (const toggle of switches) {
+      expect(toggle).toBeDisabled()
+      expectBlocked(toggle)
+    }
+  })
+
+  it('Mercado Pago: "Guardar condiciones" es el PATCH /stores/me y tambien se apaga', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Mercado Pago' }))
+
+    const guardar = screen.getByRole('button', { name: /Guardar condiciones/ })
+    expect(guardar).toBeDisabled()
+    expectBlocked(guardar)
+  })
+
+  it('Seguridad: cambiar la clave sigue habilitado', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Seguridad' }))
+
+    const actualizar = screen.getByRole('button', { name: 'Actualizar Acceso' })
+    expect(actualizar).not.toBeDisabled()
+    expect(actualizar).not.toHaveAttribute('title')
+  })
+
+  it('sin suspension Guardar se habilita con un cambio y los interruptores tambien', () => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+    renderSettings()
+    fireEvent.change(screen.getByDisplayValue('Peluqueria Tucuman'), {
+      target: { value: 'Otro nombre' }
+    })
+
+    expect(screen.getByRole('button', { name: 'Guardar Cambios' })).not.toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+    for (const toggle of screen.getAllByRole('switch')) {
+      expect(toggle).not.toBeDisabled()
+    }
   })
 })
 

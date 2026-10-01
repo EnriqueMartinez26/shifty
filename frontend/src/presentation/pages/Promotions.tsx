@@ -13,6 +13,7 @@ import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sInputStyle,
@@ -39,6 +40,10 @@ const PromotionsPage: React.FC = () => {
   const updatePromotion = useUpdatePromotion()
   // Evita el doble alta/actualizacion si se clickea mientras la mutacion vuela.
   const isSaving = createPromotion.isPending || updatePromotion.isPending
+  // Tienda suspendida (FF-15): POST /promotions/ y PATCH /promotions/{id}
+  // (crear, actualizar, pausar y reactivar) responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyTitle = writeAccess.readOnly ? writeAccess.reason : undefined
 
   const [promotionForm, setPromotionForm] = useState(createEmptyPromotionForm())
   const [editingPromotionId, setEditingPromotionId] = useState<string | null>(null)
@@ -167,7 +172,8 @@ const PromotionsPage: React.FC = () => {
             </div>
             <button
               type="button"
-              disabled={isSaving}
+              disabled={isSaving || writeAccess.readOnly}
+              title={readOnlyTitle}
               onClick={() => {
                 void handleSavePromotion()
               }}
@@ -489,7 +495,9 @@ const PromotionsPage: React.FC = () => {
                     onClick={() => {
                       void handleTogglePromotion(promotion)
                     }}
-                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                    disabled={writeAccess.readOnly}
+                    title={readOnlyTitle}
+                    className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                     style={
                       promotion.is_active ? buttonStyles2000s.selected : buttonStyles2000s.default
                     }

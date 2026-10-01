@@ -7,6 +7,9 @@ interface ToggleSwitchProps {
   onToggle: () => void
   /** Nombre accesible: el interruptor no tiene texto visible propio. */
   label: string
+  disabled?: boolean
+  /** Motivo de `disabled`, p. ej. la tienda suspendida (FF-15). */
+  title?: string
 }
 
 /**
@@ -14,14 +17,22 @@ interface ToggleSwitchProps {
  * veces en Settings y una en Promociones; cada fila conserva su propio
  * envoltorio y solo comparte esta pieza.
  */
-export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({ checked, onToggle, label }) => (
+export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
+  checked,
+  onToggle,
+  label,
+  disabled = false,
+  title
+}) => (
   <button
     type="button"
     role="switch"
     aria-checked={checked}
     aria-label={label}
     onClick={onToggle}
-    className="relative h-7 w-14 flex-shrink-0 rounded-full transition-all"
+    disabled={disabled}
+    title={title}
+    className="relative h-7 w-14 flex-shrink-0 rounded-full transition-all disabled:opacity-50"
     style={{
       background: checked ? colors2000s.orange.light : colors2000s.bg.disabled,
       // El riel solo no se distingue de la tarjeta blanca: apagado, gris claro

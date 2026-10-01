@@ -13,6 +13,11 @@ jest.mock('../hooks/usePayments', () => ({
   useUpdatePromotion: () => ({ mutateAsync: mockUpdateMutateAsync, isPending: false })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 const CAMPOS_OPCIONALES = [
   'description',
   'min_service_amount',
@@ -152,5 +157,50 @@ describe('PromotionsPage', () => {
     expect(valorDelContador('Activas')).toBe('2')
     expect(valorDelContador('Totales')).toBe('3')
     expect(valorDelContador('Con límite')).toBe('1')
+  })
+})
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15). POST /promotions/ y PATCH /promotions/{id} no
+// estan en SUSPENSION_ALLOWED_WRITES.
+describe('PromotionsPage: tienda suspendida', () => {
+  beforeEach(() => {
+    mockPromotions = [buildPromotion()]
+    mockUpdateMutateAsync.mockReset()
+  })
+
+  afterEach(() => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  it('con la tienda suspendida crear, actualizar y pausar quedan deshabilitados', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    render(<PromotionsPage />)
+
+    for (const name of ['Crear', 'Pausar']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+    // Editar solo carga el formulario; lo que escribe es "Actualizar".
+    fireEvent.click(screen.getByRole('button', { name: 'Editar' }))
+    expect(screen.getByRole('button', { name: 'Actualizar' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Pausar' }))
+    expect(mockUpdateMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('con la tienda suspendida una pausada no se puede reactivar', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    mockPromotions = [buildPromotion({ is_active: false })]
+    render(<PromotionsPage />)
+
+    expect(screen.getByRole('button', { name: 'Reactivar' })).toBeDisabled()
+  })
+
+  it('sin suspension crear y pausar siguen habilitados', () => {
+    render(<PromotionsPage />)
+
+    expect(screen.getByRole('button', { name: 'Crear' })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Pausar' })).not.toBeDisabled()
   })
 })
