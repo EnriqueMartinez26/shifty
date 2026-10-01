@@ -411,7 +411,10 @@ async def test_superadmin_create_admin_password_policy(
     )
     store_pid = cast(JsonDict, store.json())["public_id"]
 
-    for password in ("aaaaaaaaaaaa", "123456789012", "corta1"):
+    # 2026-10-01 (D-20261001-01): el piso bajo de 12 a 6 caracteres, asi que
+    # "corta1" (6, con letra y numero) ya es valida; la rechazada por corta es
+    # "abc12" (5). Los limites de largo completos, en test_password_limites.py.
+    for password in ("aaaaaaaaaaaa", "123456789012", "abc12"):
         debil = await client.post(
             f"/superadmin/stores/{store_pid}/admins",
             headers=headers,

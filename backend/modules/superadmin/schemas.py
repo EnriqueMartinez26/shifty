@@ -6,6 +6,8 @@ from core.validation import validate_password_strength
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from core.validation import (
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
     PUBLIC_ID_PATTERN,
     SLUG_PATTERN,
     reject_control_chars,
@@ -110,7 +112,9 @@ class StoreTableResponse(StoreGlobalResponse):
 
 class StoreAdminCreate(BaseModel):
     email: EmailStr
-    password: str = Field(..., min_length=12, max_length=128)
+    password: str = Field(
+        ..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
@@ -131,7 +135,9 @@ class UserGlobalUpdate(BaseModel):
     last_name: str | None = Field(None, min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
     role: UserRole | None = None
-    password: str | None = Field(None, min_length=12, max_length=128)
+    password: str | None = Field(
+        None, min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
     is_active: bool | None = None
 
     @field_validator("first_name", "last_name")
