@@ -2,7 +2,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from core.validation import reject_control_chars, validate_password_strength
+from core.validation import (
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    reject_control_chars,
+    validate_password_strength,
+)
 from modules.users.model import UserRole
 
 # AUD2-B5-03: nombre y apellido eran el unico texto libre del sistema sin esta
@@ -29,7 +34,9 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=12, max_length=128)
+    password: str = Field(
+        ..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
 
     _validar_password = field_validator("password")(validate_password_strength)
 
@@ -44,7 +51,9 @@ class UserUpdate(BaseModel):
     last_name: str | None = Field(None, min_length=1, max_length=100)
     phone: str | None = Field(None, max_length=50)
     role: UserRole | None = None
-    password: str | None = Field(None, min_length=12, max_length=128)
+    password: str | None = Field(
+        None, min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
 
     @field_validator(*_NOMBRES_LIBRES)
     @classmethod
