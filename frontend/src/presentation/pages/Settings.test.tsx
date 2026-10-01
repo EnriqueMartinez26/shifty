@@ -43,6 +43,7 @@ const store: StoreSettings = {
 }
 
 const updateStore = jest.fn()
+const updateFeatureFlags = jest.fn()
 let storeQuery: { data?: StoreSettings; isLoading: boolean; error: unknown } = {
   data: store,
   isLoading: false,
@@ -54,7 +55,7 @@ jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => storeQuery,
   useStoreFeatureFlags: () => ({ data: undefined }),
   useUpdateStoreSettings: () => ({ mutateAsync: updateStore, isPending: false }),
-  useUpdateStoreFeatureFlags: () => idleMutation,
+  useUpdateStoreFeatureFlags: () => ({ mutateAsync: updateFeatureFlags, isPending: false }),
   useUploadStoreLogo: () => idleMutation
 }))
 
@@ -226,6 +227,69 @@ describe('SettingsPage - slug repetido (409)', () => {
       await screen.findByText(/Los datos chocan con un registro existente/)
     ).toBeInTheDocument()
     expect(screen.queryByText(SLUG_TOMADO)).not.toBeInTheDocument()
+  })
+})
+
+// 2026-09-30 (FF-28): el panel mostraba interruptores que no hacen nada y decia
+// SMS/WhatsApp para un codigo que va por email. `advanced_reports` y
+// `new_calendar` no los lee ningun camino del backend; siguen en el contrato
+// (`StoreFeatureFlags`), solo dejan de mostrarse.
+describe('SettingsPage - funciones (FF-28)', () => {
+  // Los dos flags ocultos prendidos en la base: guardar otra cosa no los
+  // tiene que reenviar ni apagar.
+  const conFlagsOcultos: StoreSettings = {
+    ...store,
+    feature_flags: {
+      payments: false,
+      ledger: false,
+      advanced_reports: true,
+      new_calendar: true,
+      otp_booking: false
+    }
+  }
+
+  beforeEach(() => {
+    storeQuery = { data: conFlagsOcultos, isLoading: false, error: null }
+    updateStore.mockReset()
+    updateFeatureFlags.mockReset()
+  })
+
+  it('no muestra los interruptores que ningun camino del backend lee', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+
+    expect(screen.queryByText('Reportes avanzados')).not.toBeInTheDocument()
+    expect(screen.queryByText('Agenda nueva')).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Reportes avanzados' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: 'Agenda nueva' })).not.toBeInTheDocument()
+  })
+
+  it('dice que el codigo de la reserva publica va por email', () => {
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+
+    expect(screen.getByText('Código por email en la reserva pública')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'Pide un código de verificación, enviado por email, antes de confirmar la reserva.'
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/SMS o WhatsApp/)).not.toBeInTheDocument()
+  })
+
+  it('guardar sin tocar ningun flag no llama a updateFeatureFlags', async () => {
+    updateStore.mockResolvedValue(conFlagsOcultos)
+    renderSettings()
+
+    fireEvent.change(screen.getByDisplayValue('Peluqueria Tucuman'), {
+      target: { value: 'Otro nombre' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Funciones' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Guardar Cambios' }))
+
+    expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
+    expect(updateStore).toHaveBeenCalledWith({ name: 'Otro nombre' })
+    expect(updateFeatureFlags).not.toHaveBeenCalled()
   })
 })
 
