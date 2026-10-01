@@ -314,6 +314,19 @@ class AppointmentService:
         """
         await AsyncSession.commit(self.uow.session)
 
+    async def _commit_and_invalidate(self, store_id: str, *instants: datetime) -> None:
+        """Commit plano, invalidacion de la disponibilidad y contexto de tienda.
+
+        Sale de ``reschedule`` (B1-12, regla 29): la invalidacion es la llamada
+        de red, va despues del commit y el contexto se reaplica siempre, aun si
+        la invalidacion levanta (``_commit_before_network``).
+        """
+        await self._commit_before_network()
+        try:
+            await invalidate_availability(self.cache, store_id, *instants)
+        finally:
+            await _apply_tenant_context(self.uow.session)
+
     def _publish_client_mail(self, appointment: Appointment, event_type: str) -> None:
         """Aviso al cliente por el outbox, en la transaccion del cambio (F2-02).
 
@@ -740,13 +753,9 @@ class AppointmentService:
         # dueno 2026-09-25) no lleva "tu turno cambio": el cliente ya estuvo.
         if ensure_utc_aware(new_starts_at) >= now_utc():
             self._publish_client_mail(new_appointment, EVENT_APPOINTMENT_RESCHEDULED)
-        await self._commit_before_network()
-        try:
-            await invalidate_availability(
-                self.cache, original.store_id, original.starts_at, new_starts_at
-            )
-        finally:
-            await _apply_tenant_context(self.uow.session)
+        await self._commit_and_invalidate(
+            original.store_id, original.starts_at, new_starts_at
+        )
         return new_appointment, service, staff
 
     async def _lock_reschedulable(
