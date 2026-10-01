@@ -48,7 +48,7 @@ jobs:
             context: ./nginx
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
 
       - name: Setup Buildx
         uses: docker/setup-buildx-action@v4.4.1
