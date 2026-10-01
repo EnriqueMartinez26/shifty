@@ -211,3 +211,63 @@ async def test_la_corrida_commitea_una_vez_y_manda_los_mails_despues(
 
     assert contadores["reoffered"] == 1, contadores
     assert eventos == ["commit", "mail:marta@example.com"], eventos
+
+
+@pytest.mark.asyncio
+async def test_la_reoferta_saltea_a_quien_no_tiene_email(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FF-25 (2026-10-01): la re-oferta le pasaba el cupo a una entrada sin email.
+
+    Sintoma: al vencer una oferta, ``expire_lapsed_offers`` reusa
+    ``offer_released_slot``, que tomaba la siguiente entrada aunque no tuviera
+    email: quedaba ``offered`` sin aviso y le gastaba ``lapsed_offers``. Ahora
+    la saltea y el cupo pasa a la siguiente con email entregable
+    (D-20260930-11); la salteada sigue esperando sin gastar ofertas.
+    """
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    store, token, service, staff, slot = await _tienda(client, "reoferta-sin-email")
+    ids: list[str] = []
+    for nombre, telefono, email in (
+        ("Lucia", "+5491155550121", "lucia-reoferta@example.com"),
+        ("Sin Email", "+5491155550122", None),
+        ("Marta", "+5491155550123", "marta-reoferta@example.com"),
+    ):
+        alta = await client.post(
+            "/public/waitlist",
+            json=_alta(
+                store,
+                service,
+                slot,
+                client_name=nombre,
+                client_phone=telefono,
+                client_email=email,
+            ),
+        )
+        assert alta.status_code == 201, alta.text
+        ids.append(str(alta.json()["public_id"]))
+    pid = await _reservar(client, store, service, staff, slot, "reoferta-sinmail1")
+    cancelar = await client.patch(
+        f"/appointments/{pid}/cancel", headers=auth_headers(token)
+    )
+    assert cancelar.status_code == 200, cancelar.text
+    await process_outbox_batch(test_session)  # la oferta va a Lucia
+    await test_session.commit()
+    assert await _estados(test_session, ids) == ["offered", "waiting", "waiting"]
+
+    resumen = await expire_lapsed_offers(
+        test_session, now=datetime.now(timezone.utc) + timedelta(minutes=30)
+    )
+    await test_session.commit()
+
+    assert resumen.lapsed == 1 and resumen.reoffered == 1
+    assert [p.email for p in resumen.pending_emails] == ["marta-reoferta@example.com"]
+    assert await _estados(test_session, ids) == ["waiting", "waiting", "offered"]
+    salteada = (
+        await test_session.execute(
+            select(WaitlistEntry).where(WaitlistEntry.id == ids[1])
+        )
+    ).scalar_one()
+    assert salteada.lapsed_offers == 0
+    assert salteada.notified_at is None
