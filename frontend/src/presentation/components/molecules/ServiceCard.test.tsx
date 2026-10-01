@@ -25,10 +25,14 @@ const dto: ServiceResponseDTO = {
   is_active: true
 }
 
-const renderCard = (isActive: boolean) => {
+const renderCard = (isActive: boolean, readOnlyReason: string | null = null) => {
   const handlers = { onEdit: jest.fn(), onDelete: jest.fn(), onReactivate: jest.fn() }
   const view = render(
-    <ServiceCard service={ServiceMapper.toDomain({ ...dto, is_active: isActive })} {...handlers} />
+    <ServiceCard
+      service={ServiceMapper.toDomain({ ...dto, is_active: isActive })}
+      readOnlyReason={readOnlyReason}
+      {...handlers}
+    />
   )
   return { ...view, ...handlers }
 }
@@ -63,5 +67,27 @@ describe('ServiceCard', () => {
     const { getByTestId } = renderCard(true)
 
     expect(getByTestId('service-card').classList.contains('opacity-60')).toBe(false)
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). PATCH y DELETE /services/{id} no estan en
+  // SUSPENSION_ALLOWED_WRITES.
+  it.each([
+    [true, /editar/i],
+    [true, /eliminar/i],
+    [false, /reactivar/i]
+  ])('con la tienda suspendida (activo=%s) %s queda deshabilitado', (isActive, name) => {
+    const { getByRole } = renderCard(isActive, 'Tienda suspendida')
+
+    const button = getByRole('button', { name })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', 'Tienda suspendida')
+  })
+
+  it('sin suspension Editar y Eliminar siguen habilitados', () => {
+    const { getByRole } = renderCard(true)
+
+    expect(getByRole('button', { name: /editar/i })).not.toBeDisabled()
+    expect(getByRole('button', { name: /eliminar/i })).not.toBeDisabled()
   })
 })

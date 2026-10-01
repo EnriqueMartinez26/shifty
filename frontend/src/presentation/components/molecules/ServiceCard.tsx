@@ -12,6 +12,8 @@ interface ServiceCardProps {
   onDelete: (id: string) => void
   onReactivate: (id: string) => void
   isSelected?: boolean
+  /** Tienda suspendida: editar, eliminar y reactivar responden 402 (FF-15). */
+  readOnlyReason?: string | null
 }
 
 export const ServiceCard: React.FC<ServiceCardProps> = ({
@@ -19,9 +21,12 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   onEdit,
   onDelete,
   onReactivate,
-  isSelected = false
+  isSelected = false,
+  readOnlyReason = null
 }) => {
   const accentColor = service.color || colors2000s.orange.light
+  const blocked = readOnlyReason !== null
+  const title = readOnlyReason ?? undefined
 
   return (
     <div
@@ -148,7 +153,9 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
       <div className="grid grid-cols-2 gap-3 pt-4 mt-5">
         <button
           onClick={() => onEdit(service)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          disabled={blocked}
+          title={title}
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar
@@ -158,7 +165,9 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         {service.isActive ? (
           <button
             onClick={() => onDelete(service.id)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            disabled={blocked}
+            title={title}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
           >
             <Trash2 size={14} /> Eliminar
@@ -166,7 +175,9 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         ) : (
           <button
             onClick={() => onReactivate(service.id)}
-            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            disabled={blocked}
+            title={title}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.success.text }}
           >
             <RotateCcw size={14} /> Reactivar

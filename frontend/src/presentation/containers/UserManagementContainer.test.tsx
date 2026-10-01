@@ -44,6 +44,11 @@ jest.mock('../context/AuthContext', () => ({
   useAuth: () => ({ user: mockViewer })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 const otroAdmin = User.fromPrimitives({
   id: 'usr-2',
   email: 'beto@example.com',
@@ -62,6 +67,7 @@ describe('UserManagementContainer', () => {
   beforeEach(() => {
     mockUsersQuery = { data: [usuario], isLoading: false, error: null }
     mockViewer = { public_id: 'admin-1' }
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
     mockDelete.mockReset()
     mockUpdate.mockReset()
     mockUpdate.mockResolvedValue(usuario)
@@ -290,5 +296,29 @@ describe('UserManagementContainer', () => {
     render(<UserManagementContainer />)
 
     expect(screen.getByRole('alert')).toHaveTextContent('No se pudieron cargar los usuarios.')
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). POST /users/ y PATCH /users/{id} no estan en
+  // SUSPENSION_ALLOWED_WRITES; DELETE /users/{public_id} si (D-20260930-10).
+  it('con la tienda suspendida NUEVO y Editar se deshabilitan; Eliminar sigue', async () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    render(<UserManagementContainer />)
+
+    for (const name of [/nuevo usuario/i, /editar/i]) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+    fireEvent.click(screen.getByRole('button', { name: /eliminar/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    await waitFor(() => expect(mockDelete).toHaveBeenCalledWith('usr-1'))
+  })
+
+  it('sin suspension NUEVO y Editar siguen habilitados', () => {
+    render(<UserManagementContainer />)
+
+    expect(screen.getByRole('button', { name: /nuevo usuario/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /editar/i })).not.toBeDisabled()
   })
 })

@@ -34,6 +34,11 @@ interface ServiceFormModalProps {
   // Subir y quitar la imagen persisten al instante, sin pasar por Guardar.
   onUploadImage: (id: string, file: File) => Promise<Service>
   onRemoveImage: (id: string) => Promise<Service>
+  /**
+   * Tienda suspendida (FF-15): guardar y la imagen responden 402. Cubre el
+   * modal que quedo abierto antes de que cargara el plan.
+   */
+  readOnlyReason?: string | null
 }
 
 const PRESET_COLORS = [
@@ -79,8 +84,10 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   onSubmit,
   editingService,
   onUploadImage,
-  onRemoveImage
+  onRemoveImage,
+  readOnlyReason = null
 }) => {
+  const blockedTitle = readOnlyReason ?? undefined
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState<ServiceFormValues>(EMPTY_FORM)
@@ -409,8 +416,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               {editingService ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <label
-                    className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
+                    className={`inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 ${
+                      blockedTitle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                    }`}
                     style={buttonStyles2000s.default}
+                    title={blockedTitle}
                   >
                     {imageBusy ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -422,7 +432,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
                       className="hidden"
-                      disabled={imageBusy}
+                      disabled={imageBusy || readOnlyReason !== null}
                       onChange={(e) => void handleImageUpload(e)}
                     />
                   </label>
@@ -430,7 +440,8 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     <button
                       type="button"
                       onClick={() => void handleImageRemove()}
-                      disabled={imageBusy}
+                      disabled={imageBusy || readOnlyReason !== null}
+                      title={blockedTitle}
                       className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 disabled:opacity-50"
                       style={buttonStyles2000s.default}
                     >
@@ -517,7 +528,8 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
               </button>
               <button
                 type="submit"
-                disabled={loading || imageBusy}
+                disabled={loading || imageBusy || readOnlyReason !== null}
+                title={blockedTitle}
                 className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
                 style={buttonStyles2000s.selected}
               >

@@ -15,6 +15,7 @@ import {
   useManagedStaff,
   useUpdateManagedStaff
 } from '../hooks/useManagedStaff'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { notifyError } from '../lib/notify'
 
 export const StaffManagementContainer: React.FC = () => {
@@ -27,6 +28,10 @@ export const StaffManagementContainer: React.FC = () => {
   const createMutation = useCreateManagedStaff()
   const updateMutation = useUpdateManagedStaff()
   const deleteMutation = useDeleteManagedStaff()
+  // Tienda suspendida (FF-15): POST, PUT y DELETE /staff/... (horarios y
+  // servicios incluidos) no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
 
   const filteredStaff = staffList?.filter(
     (s) =>
@@ -69,8 +74,10 @@ export const StaffManagementContainer: React.FC = () => {
         </div>
 
         <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group"
+          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
           onClick={() => {
             setEditingStaff(null)
             setIsModalOpen(true)
@@ -160,6 +167,7 @@ export const StaffManagementContainer: React.FC = () => {
                 setIsModalOpen(true)
               }}
               onDelete={(id) => void handleDelete(id)}
+              readOnlyReason={readOnlyReason}
             />
           ))}
         </div>
