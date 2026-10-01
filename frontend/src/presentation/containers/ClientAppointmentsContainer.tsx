@@ -6,7 +6,12 @@ import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/
 
 import type { ClientAppointmentItem, PublicStore } from '@application/services/PublicBookingService'
 
-import { getErrorMessage, isStateConflictError } from '@shared/errors/getErrorMessage'
+import {
+  getErrorCode,
+  getErrorMessage,
+  getHttpStatus,
+  isStateConflictError
+} from '@shared/errors/getErrorMessage'
 import {
   argentinaLocalToUtcIso,
   formatArgentinaDate,
@@ -54,6 +59,9 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
     time: string
   } | null>(null)
   const appointments = usePublicClientAppointments(store.public_id, phone ?? '', Boolean(phone))
+  const code = getErrorCode(appointments.error)
+  const status = getHttpStatus(appointments.error)
+
   const cancelAppointment = useCancelClientAppointment()
   const rescheduleAppointment = useRescheduleClientAppointment()
   const { confirm, confirmDialog } = useConfirm()
@@ -63,6 +71,31 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       <ClientOtpGate storePublicId={store.public_id} storeSlug={store.slug} onVerified={setPhone} />
     )
   }
+
+  if (code === 'OTP_VERIFICATION_REQUIRED') {
+    // FF-05 (2026-09-30): la verificacion recordada (la del wizard, 30 min)
+    // no alcanza si la ficha no tiene ese email o ya vencio en el backend: el
+    // GET respondia 403 y el atajo de la puerta volvia a entrar con ella, en
+    // bucle. Con skipRemembered la puerta la olvida al pedir el codigo y
+    // siempre manda uno nuevo; tras verificar se vuelve a pedir la lista (con
+    // el mismo telefono la clave de la consulta no cambia).
+    return (
+      <ClientOtpGate
+        storePublicId={store.public_id}
+        storeSlug={store.slug}
+        skipRemembered
+        notice={`Para ver tus turnos verificá el email que tenés registrado en ${store.name}. Pedí un código nuevo.`}
+        initialPhone={phone}
+        onVerified={(p) => {
+          setPhone(p)
+          void appointments.refetch()
+        }}
+      />
+    )
+  }
+
+  // 403 y 404 no se arreglan reintentando; 429, 503 y el resto quiza si.
+  const reintentable = status !== 403 && status !== 404
 
   // Un toque cancelaba sin preguntar (FF-07): se confirma con el dialogo propio.
   const cancelar = async (item: ClientAppointmentItem) => {
@@ -140,9 +173,30 @@ export const ClientAppointmentsContainer: React.FC<ClientAppointmentsContainerPr
       )}
 
       {appointments.isError && (
-        <p role="alert" className="text-xs font-bold text-red-600">
-          No encontramos turnos para ese teléfono en {store.name}.
-        </p>
+        <div className="space-y-2">
+          <p role="alert" className="text-xs font-bold text-red-600">
+            {/* FF-05: 404, 429 y 5xx decian todos "No encontramos turnos". */}
+            {getErrorMessage(
+              appointments.error,
+              'No pudimos cargar tus turnos. Probá de nuevo en unos minutos.',
+              {
+                CLIENT_APPOINTMENTS_NOT_FOUND: `No encontramos turnos para ese teléfono en ${store.name}.`
+              }
+            )}
+          </p>
+          {reintentable && (
+            <button
+              type="button"
+              onClick={() => {
+                void appointments.refetch()
+              }}
+              className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+              style={buttonStyles2000s.default}
+            >
+              Reintentar
+            </button>
+          )}
+        </div>
       )}
 
       {!appointments.isLoading && !appointments.isError && items.length === 0 && (

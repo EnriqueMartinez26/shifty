@@ -289,8 +289,11 @@ class PublicBookingService {
   }
 
   async getClientAppointments(storePublicId: string, phone: string): Promise<ClientAppointments> {
+    // FF-05: sin limit el backend devuelve los 50 mas recientes (acepta 1..200);
+    // se piden todos los que permite para no esconder turnos viejos.
     const { data } = await apiClient.get<ClientAppointments>(
-      `/public/client/${storePublicId}/${phone}/appointments`
+      `/public/client/${storePublicId}/${phone}/appointments`,
+      { params: { limit: 200 } }
     )
     return data
   }
