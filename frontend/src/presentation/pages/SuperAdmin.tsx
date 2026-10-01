@@ -544,7 +544,7 @@ const SuperAdminPage: React.FC = () => {
     if (!nextState && user?.public_id === targetUser.public_id) {
       setFeedback({
         tone: 'warning',
-        text: 'No podés desactivar tu propia cuenta desde esta sesión.'
+        text: 'No podés desactivar tu propia cuenta de SuperAdmin.'
       })
       return
     }
@@ -570,7 +570,7 @@ const SuperAdminPage: React.FC = () => {
     if (!nextState && user?.public_id === targetUser.public_id) {
       setFeedback({
         tone: 'warning',
-        text: 'No podés revocarte tu propio permiso global desde esta sesion.'
+        text: 'No podés revocar tu propio permiso de SuperAdmin.'
       })
       return
     }

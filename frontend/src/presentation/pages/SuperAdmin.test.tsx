@@ -588,7 +588,7 @@ describe('SuperAdminPage', () => {
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
         expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
         expect(
-          screen.getByText('No podés revocarte tu propio permiso global desde esta sesion.')
+          screen.getByText('No podés revocar tu propio permiso de SuperAdmin.')
         ).toBeInTheDocument()
       } finally {
         mockAuthUser.public_id = 'root-user'
@@ -626,7 +626,7 @@ describe('SuperAdminPage', () => {
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
         expect(mockMutations.updateUser).not.toHaveBeenCalled()
         expect(
-          screen.getByText('No podés desactivar tu propia cuenta desde esta sesión.')
+          screen.getByText('No podés desactivar tu propia cuenta de SuperAdmin.')
         ).toBeInTheDocument()
       })
 
@@ -643,7 +643,7 @@ describe('SuperAdminPage', () => {
         expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
         expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
         expect(
-          screen.getByText('No podés revocarte tu propio permiso global desde esta sesion.')
+          screen.getByText('No podés revocar tu propio permiso de SuperAdmin.')
         ).toBeInTheDocument()
       })
 
