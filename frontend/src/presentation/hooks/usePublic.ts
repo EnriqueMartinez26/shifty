@@ -18,6 +18,7 @@ import {
   type PublicService,
   type PublicStaff,
   type PublicStore,
+  type PublicStoreRef,
   type PublicWaitlistEntry,
   type WaitlistJoinPayload
 } from '@application/services/PublicBookingService'
@@ -28,10 +29,19 @@ import { PAYMENT_POLL_MAX_MS, paymentPollDelayMs } from '../lib/paymentPolling'
 
 export type { PublicStore }
 
-export const usePublicStore = (slug: string) =>
+export const usePublicStore = (slug: string, enabled = true) =>
   useQuery<PublicStore>({
     queryKey: ['public-store', slug],
     queryFn: () => publicBookingService.getStore(slug),
+    enabled,
+    retry: false
+  })
+
+/** "Mis turnos" resuelve la tienda por aca: la vitrina da 404 si esta suspendida (FF-16). */
+export const usePublicStoreRef = (slug: string) =>
+  useQuery<PublicStoreRef>({
+    queryKey: ['public-store-ref', slug],
+    queryFn: () => publicBookingService.getStoreRef(slug),
     retry: false
   })
 

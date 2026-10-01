@@ -30,6 +30,16 @@ export interface PublicStore {
   feature_flags: PublicStoreFeatureFlags
 }
 
+/**
+ * Slug -> tienda para "Mis turnos" (FF-16). Responde tambien con la tienda
+ * suspendida, cuando la vitrina da 404: cancelar y reprogramar siguen.
+ */
+export interface PublicStoreRef {
+  store_public_id: string
+  name: string
+  accepts_new_bookings: boolean
+}
+
 export interface PublicService {
   public_id: string
   name: string
@@ -232,6 +242,11 @@ class PublicBookingService {
 
   async getStore(slug: string): Promise<PublicStore> {
     const { data } = await apiClient.get<PublicStore>(`/public/stores/${slug}`)
+    return data
+  }
+
+  async getStoreRef(slug: string): Promise<PublicStoreRef> {
+    const { data } = await apiClient.get<PublicStoreRef>(`/public/stores/${slug}/ref`)
     return data
   }
 

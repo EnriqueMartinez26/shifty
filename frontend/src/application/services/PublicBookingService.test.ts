@@ -108,6 +108,16 @@ describe('PublicBookingService', () => {
     expect(mockPost).toHaveBeenCalledWith('/public/appointments', payload)
   })
 
+  it('getStoreRef pide la referencia de la tienda por slug (FF-16)', async () => {
+    // FF-16 (2026-10-01): "Mis turnos" resolvia la tienda por la vitrina, que
+    // da 404 con la tienda suspendida; el ref responde 200 tambien entonces.
+    const ref = { store_public_id: 'store-1', name: 'Sol', accepts_new_bookings: false }
+    mockGet.mockResolvedValue({ data: ref })
+
+    await expect(publicBookingService.getStoreRef('sol')).resolves.toEqual(ref)
+    expect(mockGet).toHaveBeenCalledWith('/public/stores/sol/ref')
+  })
+
   it('cancelClientAppointment manda el telefono por PATCH', async () => {
     await publicBookingService.cancelClientAppointment('apt-1', '1155550000')
 
