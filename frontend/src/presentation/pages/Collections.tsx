@@ -11,6 +11,8 @@ import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
+import { useAuth } from '../context/AuthContext'
+import { ROLES_ADMIN_SUPER, hasAnyRole } from '../context/roles'
 import {
   useCreatePaymentPreference,
   useManualConfirmPayment,
@@ -23,7 +25,11 @@ import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceS
 
 const CollectionsPage: React.FC = () => {
   const appointmentsQuery = usePaymentsAppointments()
-  const summaryQuery = useReconciliationSummary()
+  const { user } = useAuth()
+  // La conciliacion es solo de admins (el backend le responde 403 al
+  // profesional): sin ella no hay pagos pendientes que mostrarle (FF-21).
+  const isAdmin = hasAnyRole(user?.role, ROLES_ADMIN_SUPER, user?.is_global_admin)
+  const summaryQuery = useReconciliationSummary(isAdmin)
   const createPreference = useCreatePaymentPreference()
   const manualConfirm = useManualConfirmPayment()
   const [message, setMessage] = useState('')
@@ -37,11 +43,15 @@ const CollectionsPage: React.FC = () => {
   const summary = summaryQuery.data
   const cards = [
     { label: 'Turnos listados', value: appointments.length },
-    { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
-    {
-      label: 'Monto pendiente',
-      value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
-    }
+    ...(isAdmin
+      ? [
+          { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
+          {
+            label: 'Monto pendiente',
+            value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
+          }
+        ]
+      : [])
   ]
 
   const handleCreatePreference = async (appointmentId: string) => {
@@ -78,7 +88,7 @@ const CollectionsPage: React.FC = () => {
 
       <MessageBanner message={message} />
 
-      <SummaryCards cards={cards} columns={3} />
+      <SummaryCards cards={cards} columns={isAdmin ? 3 : 1} />
 
       <div className="p-6 rounded-3xl space-y-4" style={cardStyle}>
         <div className="flex items-center gap-3">
