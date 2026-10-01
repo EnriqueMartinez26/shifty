@@ -1,40 +1,12 @@
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense } from 'react'
 
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 
 import { Sentry } from './infrastructure/observability/sentry'
 import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
 import { AuthProvider, useAuth } from './presentation/context/AuthContext'
-import {
-  ROLE_PROFESSIONAL,
-  ROLE_STORE_ADMIN,
-  ROLE_SUPER_ADMIN,
-  getDefaultAppRoute,
-  hasAnyRole
-} from './presentation/context/roles'
-
-const LoginPage = lazy(() => import('./presentation/pages/Login'))
-const ForgotPasswordPage = lazy(() => import('./presentation/pages/ForgotPassword'))
-const ResetPasswordPage = lazy(() => import('./presentation/pages/ResetPassword'))
-const AdminLayout = lazy(() => import('./presentation/layouts/AdminLayout'))
-const SuperAdminLayout = lazy(() => import('./presentation/layouts/SuperAdminLayout'))
-const Dashboard = lazy(() => import('./presentation/pages/Dashboard'))
-const CalendarPage = lazy(() => import('./presentation/pages/Calendar'))
-const ReportsPage = lazy(() => import('./presentation/pages/Reports'))
-const PaymentsPage = lazy(() => import('./presentation/pages/Payments'))
-const CollectionsPage = lazy(() => import('./presentation/pages/Collections'))
-const PromotionsPage = lazy(() => import('./presentation/pages/Promotions'))
-const LedgerPage = lazy(() => import('./presentation/pages/Ledger'))
-const ServicesPage = lazy(() => import('./presentation/pages/Services'))
-const StaffPage = lazy(() => import('./presentation/pages/Staff'))
-const WaitlistPage = lazy(() => import('./presentation/pages/Waitlist'))
-const SuperAdminPage = lazy(() => import('./presentation/pages/SuperAdmin'))
-const UsersPage = lazy(() => import('./presentation/pages/Users'))
-const PublicBookingPage = lazy(() => import('./presentation/pages/PublicBooking'))
-const ClientAppointmentsPage = lazy(() => import('./presentation/pages/ClientAppointments'))
-const SettingsPage = lazy(() => import('./presentation/pages/Settings'))
-const LegalPage = lazy(() => import('./presentation/pages/Legal'))
-const ManualPage = lazy(() => import('./presentation/pages/Manual'))
+import { getDefaultAppRoute, hasAnyRole } from './presentation/context/roles'
+import { PUBLIC_ROUTES, SESSION_ROUTES, type AppRoute } from './presentation/routes/appRoutes'
 
 const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
   <Sentry.ErrorBoundary
@@ -76,7 +48,7 @@ const ProtectedRoute = ({
   allowedRoles
 }: {
   children: React.ReactNode
-  allowedRoles?: string[]
+  allowedRoles?: readonly string[]
 }) => {
   const { token, isLoading, user, sessionUnavailable } = useAuth()
   const { pathname, search } = useLocation()
@@ -124,6 +96,35 @@ const AuthLayout = () => (
   </AuthProvider>
 )
 
+/**
+ * Envuelve la pagina como lo hacia el JSX a mano: la guarda por fuera, el
+ * `ModuleBoundary` por dentro.
+ */
+const routeElement = (route: AppRoute) => {
+  const target = 'page' in route ? <route.page /> : <Navigate to={route.redirectTo} replace />
+  const bounded = route.boundary ? (
+    <ModuleBoundary title={route.boundary}>{target}</ModuleBoundary>
+  ) : (
+    target
+  )
+  if (!route.access) return bounded
+  return (
+    <ProtectedRoute allowedRoles={route.access === 'authenticated' ? undefined : route.access}>
+      {bounded}
+    </ProtectedRoute>
+  )
+}
+
+const renderRoute = (route: AppRoute): React.ReactNode => {
+  const element = routeElement(route)
+  if (route.index) return <Route key="index" index element={element} />
+  return (
+    <Route key={route.path} path={route.path} element={element}>
+      {route.children?.map(renderRoute)}
+    </Route>
+  )
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -140,152 +141,14 @@ function App() {
       >
         <Routes>
           <Route element={<AuthLayout />}>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <ModuleBoundary title="The admin area is temporarily unavailable">
-                    <AdminLayout />
-                  </ModuleBoundary>
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="manual" element={<ManualPage />} />
-              <Route path="calendar" element={<CalendarPage />} />
-              <Route path="waitlist" element={<WaitlistPage />} />
-              <Route
-                path="reports"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <ReportsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="payments"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <ModuleBoundary title="Payments are temporarily unavailable">
-                      <PaymentsPage />
-                    </ModuleBoundary>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="collections"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <CollectionsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="promotions"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <PromotionsPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="ledger"
-                element={
-                  <ProtectedRoute
-                    allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN, ROLE_PROFESSIONAL]}
-                  >
-                    <LedgerPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="services"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <ServicesPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="staff"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <StaffPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="superadmin"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
-                    <Navigate to="/control-global" replace />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="users"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <UsersPage />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="settings"
-                element={
-                  <ProtectedRoute allowedRoles={[ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN]}>
-                    <SettingsPage />
-                  </ProtectedRoute>
-                }
-              />
-            </Route>
-            <Route
-              path="/control-global"
-              element={
-                <ProtectedRoute allowedRoles={[ROLE_SUPER_ADMIN]}>
-                  <ModuleBoundary title="Global control is temporarily unavailable">
-                    <SuperAdminLayout />
-                  </ModuleBoundary>
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<SuperAdminPage />} />
-            </Route>
+            {SESSION_ROUTES.map(renderRoute)}
             <Route path="/" element={<RootRedirect />} />
             {/* Cualquier ruta desconocida (p.ej. el viejo /register) vuelve al
                 inicio: sin sesion va al login, con sesion a su panel. */}
             <Route path="*" element={<RootRedirect />} />
           </Route>
           {/* Portal publico: sin AuthProvider (D-20260928-04). */}
-          <Route path="/legal/:document" element={<LegalPage />} />
-          <Route path="/legal" element={<Navigate to="/legal/terminos" replace />} />
-          <Route
-            path="/booking/:slug"
-            element={
-              <ModuleBoundary title="Booking is temporarily unavailable">
-                <PublicBookingPage />
-              </ModuleBoundary>
-            }
-          />
-          <Route path="/b/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
-          <Route path="/booking/:slug/mis-turnos" element={<ClientAppointmentsPage />} />
-          <Route
-            path="/b/:slug"
-            element={
-              <ModuleBoundary title="Booking is temporarily unavailable">
-                <PublicBookingPage />
-              </ModuleBoundary>
-            }
-          />
+          {PUBLIC_ROUTES.map(renderRoute)}
         </Routes>
       </Suspense>
     </BrowserRouter>
