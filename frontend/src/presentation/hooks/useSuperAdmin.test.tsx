@@ -44,11 +44,18 @@ describe('useSuperAdminStores', () => {
       wrapper: envoltorio
     })
     await waitFor(() => expect(result.current.hasNextPage).toBe(true))
-    expect(mockListStores).toHaveBeenLastCalledWith({ is_active: 'all', limit: 50, offset: 0 })
+    // F4-04 a (2026-10-01): la consulta lleva el AbortSignal de react-query.
+    expect(mockListStores).toHaveBeenLastCalledWith(
+      { is_active: 'all', limit: 50, offset: 0 },
+      expect.any(AbortSignal)
+    )
 
     await act(() => result.current.fetchNextPage())
 
-    expect(mockListStores).toHaveBeenLastCalledWith({ is_active: 'all', limit: 50, offset: 50 })
+    expect(mockListStores).toHaveBeenLastCalledWith(
+      { is_active: 'all', limit: 50, offset: 50 },
+      expect.any(AbortSignal)
+    )
     await waitFor(() => expect(result.current.data).toHaveLength(100))
     expect(result.current.total).toBe(120)
   })

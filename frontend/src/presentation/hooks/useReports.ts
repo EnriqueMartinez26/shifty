@@ -23,31 +23,30 @@ export const useReportSummary = (
   enabled = true,
   page?: ReportDetailPage
 ) => {
-  return useQuery({
+  return useQuery<ReportSummary>({
     queryKey: ['reports-summary', fromDate, toDate, page?.limit ?? null, page?.offset ?? 0],
     enabled: Boolean(fromDate && toDate && enabled),
     // Solo entre paginas del MISMO rango: con otro rango, los datos viejos
     // pasaban por actuales sin spinner.
     placeholderData: (prev, prevQuery) =>
       prevQuery?.queryKey[1] === fromDate && prevQuery.queryKey[2] === toDate ? prev : undefined,
-    queryFn: (): Promise<ReportSummary> => reportsService.getSummary(fromDate, toDate, page)
+    queryFn: ({ signal }) => reportsService.getSummary(fromDate, toDate, page, signal)
   })
 }
 
 export const useProfessionalReports = (fromDate: string, toDate: string, enabled = true) => {
-  return useQuery({
+  return useQuery<ProfessionalReports>({
     queryKey: ['reports-professionals', fromDate, toDate],
     enabled: Boolean(fromDate && toDate && enabled),
-    queryFn: (): Promise<ProfessionalReports> =>
-      reportsService.getProfessionalReports(fromDate, toDate)
+    queryFn: ({ signal }) => reportsService.getProfessionalReports(fromDate, toDate, signal)
   })
 }
 
 export const useReportTrend = (months = 6, enabled = true) => {
-  return useQuery({
+  return useQuery<ReportTrend>({
     queryKey: ['reports-trend', months],
     enabled: Boolean(enabled) && months > 0,
-    queryFn: (): Promise<ReportTrend> => reportsService.getTrend(months)
+    queryFn: ({ signal }) => reportsService.getTrend(months, signal)
   })
 }
 

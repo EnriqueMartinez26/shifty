@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import { RateLimitError } from '@shared/errors'
+import { NetworkError, RateLimitError } from '@shared/errors'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
 import type { PublicStore } from '../../../hooks/usePublic'
@@ -10,6 +10,7 @@ const mockStaff = jest.fn()
 const mockAvailability = jest.fn()
 const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
+const mockCreateBooking = jest.fn()
 
 jest.mock('../../../hooks/usePublic', () => ({
   usePublicServices: (...args: unknown[]) => mockServices(...args),
@@ -18,7 +19,7 @@ jest.mock('../../../hooks/usePublic', () => ({
   usePublicDepositPreview: () => ({ data: undefined, isLoading: false }),
   usePreviewPublicPromotion: () => ({ mutateAsync: jest.fn(), isPending: false }),
   useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
-  useCreatePublicBooking: () => ({ mutateAsync: jest.fn(), isPending: false }),
+  useCreatePublicBooking: () => ({ mutateAsync: mockCreateBooking, isPending: false }),
   useRequestPublicOtp: () => ({ mutateAsync: mockRequestOtp, isPending: false }),
   useVerifyPublicOtp: () => ({ mutateAsync: mockVerifyOtp, isPending: false })
 }))
@@ -72,6 +73,7 @@ describe('BookingWizardContainer', () => {
     mockAvailability.mockReset()
     mockRequestOtp.mockReset()
     mockVerifyOtp.mockReset()
+    mockCreateBooking.mockReset()
     mockStaff.mockReturnValue({ data: [], isLoading: false })
     mockAvailability.mockReturnValue({ data: [slot], isLoading: false })
     window.sessionStorage.clear()
@@ -203,6 +205,86 @@ describe('BookingWizardContainer', () => {
       getItem.mockRestore()
       setItem.mockRestore()
     }
+  })
+
+  describe('clave de idempotencia estable tras recargar (F4-04)', () => {
+    // F4-04 a (2026-10-01): la clave salia de createUuid() en un useState: al
+    // recargar despues de una respuesta perdida, el mismo pedido viajaba con
+    // otra clave y el backend no podia devolver la reserva ya hecha.
+    const confirmarReserva = async (nombre = 'Lucia') => {
+      await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
+      fireEvent.click(screen.getByText('09:00'))
+      fireEvent.change(screen.getByPlaceholderText('Ej: Juan Perez'), {
+        target: { value: nombre }
+      })
+      fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+        target: { value: '+5491155550101' }
+      })
+      fireEvent.click(screen.getByRole('checkbox'))
+      await act(async () => {
+        fireEvent.click(screen.getByText('Reservar y pagar por WhatsApp'))
+      })
+    }
+    const claveDelIntento = (n: number) =>
+      (mockCreateBooking.mock.calls[n]?.[0] as { idempotency_key?: string }).idempotency_key
+
+    beforeEach(() => {
+      mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
+    })
+
+    it('recargar y reenviar el mismo pedido conserva la clave', async () => {
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+      const primera = render(<BookingWizardContainer store={tienda(false)} />)
+      await confirmarReserva()
+      primera.unmount()
+
+      render(<BookingWizardContainer store={tienda(false)} />)
+      await confirmarReserva()
+
+      expect(mockCreateBooking).toHaveBeenCalledTimes(2)
+      expect(claveDelIntento(0)).toEqual(expect.any(String))
+      expect(claveDelIntento(1)).toBe(claveDelIntento(0))
+    })
+
+    it('recargar y reenviar otros datos manda otra clave', async () => {
+      mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
+      const primera = render(<BookingWizardContainer store={tienda(false)} />)
+      await confirmarReserva('Lucia')
+      primera.unmount()
+
+      render(<BookingWizardContainer store={tienda(false)} />)
+      await confirmarReserva('Lucia Perez')
+
+      expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
+    })
+
+    it('una reserva confirmada borra la clave guardada', async () => {
+      mockCreateBooking.mockRejectedValueOnce(new NetworkError('sin red')).mockResolvedValueOnce({
+        public_id: 'appt-1',
+        service_id: 'a',
+        service_name: 'Servicio a',
+        staff_id: 'st-1',
+        staff_name: 'Pro',
+        starts_at: slot.starts_at,
+        ends_at: slot.ends_at,
+        status: 'pending',
+        client_name: 'Lucia',
+        client_phone: '+5491155550101',
+        payment_required: false
+      })
+      render(<BookingWizardContainer store={tienda(false)} />)
+      await confirmarReserva()
+      // El intento fallido deja la clave guardada para el reintento.
+      expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).not.toBeNull()
+
+      await act(async () => {
+        fireEvent.click(screen.getByText('Reservar y pagar por WhatsApp'))
+      })
+
+      expect(mockCreateBooking).toHaveBeenCalledTimes(2)
+      expect(claveDelIntento(1)).toBe(claveDelIntento(0))
+      expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).toBeNull()
+    })
   })
 
   describe('pedir el codigo desde el celular (F4-11, J7)', () => {

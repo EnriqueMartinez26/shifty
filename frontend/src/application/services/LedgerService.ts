@@ -61,8 +61,11 @@ class LedgerService {
   }
 
   // `/users/` es solo del admin; este buscador sirve tambien al profesional.
-  async searchClients(q?: string): Promise<LedgerClient[]> {
-    const { data } = await apiClient.get<LedgerClient[]>('/ledger/clients', { params: { q } })
+  async searchClients(q?: string, signal?: AbortSignal): Promise<LedgerClient[]> {
+    const { data } = await apiClient.get<LedgerClient[]>('/ledger/clients', {
+      params: { q },
+      signal
+    })
     return data
   }
 

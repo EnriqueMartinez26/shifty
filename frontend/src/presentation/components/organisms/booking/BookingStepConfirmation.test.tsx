@@ -37,7 +37,6 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   startsAt: '2026-09-25T12:00:00+00:00',
   client: cliente(),
   promotionCode: '',
-  idempotencyKey: 'idem-1',
   ...patch
 })
 

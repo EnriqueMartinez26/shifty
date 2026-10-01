@@ -272,10 +272,12 @@ class PublicBookingService {
     storePublicId: string,
     serviceId: string,
     date: string,
-    forceAll = false
+    forceAll = false,
+    signal?: AbortSignal
   ): Promise<AvailabilitySlot[]> {
     const { data } = await apiClient.get<AvailabilitySlot[]>('/public/availability', {
-      params: { store_public_id: storePublicId, service_id: serviceId, date, force_all: forceAll }
+      params: { store_public_id: storePublicId, service_id: serviceId, date, force_all: forceAll },
+      signal
     })
     return data
   }

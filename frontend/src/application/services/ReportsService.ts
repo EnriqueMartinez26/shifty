@@ -122,24 +122,32 @@ class ReportsService {
   async getSummary(
     fromDate: string,
     toDate: string,
-    page?: ReportDetailPage
+    page?: ReportDetailPage,
+    signal?: AbortSignal
   ): Promise<ReportSummary> {
     const { data } = await apiClient.get<ReportSummary>('/reports/summary', {
-      params: { from_date: fromDate, to_date: toDate, ...page }
+      params: { from_date: fromDate, to_date: toDate, ...page },
+      signal
     })
     return data
   }
 
-  async getProfessionalReports(fromDate: string, toDate: string): Promise<ProfessionalReports> {
+  async getProfessionalReports(
+    fromDate: string,
+    toDate: string,
+    signal?: AbortSignal
+  ): Promise<ProfessionalReports> {
     const { data } = await apiClient.get<ProfessionalReports>('/reports/professionals', {
-      params: { from_date: fromDate, to_date: toDate }
+      params: { from_date: fromDate, to_date: toDate },
+      signal
     })
     return data
   }
 
-  async getTrend(months: number): Promise<ReportTrend> {
+  async getTrend(months: number, signal?: AbortSignal): Promise<ReportTrend> {
     const { data } = await apiClient.get<ReportTrend>('/reports/trend', {
-      params: { months }
+      params: { months },
+      signal
     })
     return data
   }
