@@ -145,3 +145,36 @@ describe('ServiceService — politica de sena (F10-03 / F9-06)', () => {
     expect(mockRepository.update).toHaveBeenCalledWith('svc-1', { name: 'Otro nombre' })
   })
 })
+
+/**
+ * FF-22 (2026-09-30): un servicio eliminado o desactivado desaparecia del panel
+ * y no se podia reactivar.
+ */
+describe('ServiceService — catalogo con inactivos', () => {
+  const setup = () => {
+    const mockRepository = {
+      findAll: jest.fn().mockResolvedValue([]),
+      findById: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn()
+    } as jest.Mocked<IServiceRepository>
+    return { mockRepository, service: new ServiceService(mockRepository) }
+  }
+
+  it('listCatalog pide los inactivos', async () => {
+    const { mockRepository, service } = setup()
+
+    await service.listCatalog()
+
+    expect(mockRepository.findAll).toHaveBeenCalledWith({ includeInactive: true })
+  })
+
+  it('listServices sigue pidiendo solo los activos', async () => {
+    const { mockRepository, service } = setup()
+
+    await service.listServices()
+
+    expect(mockRepository.findAll).toHaveBeenCalledWith()
+  })
+})

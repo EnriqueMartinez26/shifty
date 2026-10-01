@@ -10,11 +10,13 @@ import { UserRole } from '../value-objects/UserRole'
  *   nunca en el email.
  * - `email`: coincidencia exacta.
  * - `limit`: 1..500; el servidor corta ahi, asi que siempre se manda.
+ * - `offset`: 0..1_000_000; filas a saltear para pedir la pagina siguiente.
  */
 export interface UserListQuery {
   q?: string
   email?: string
   limit: number
+  offset?: number
   includeInactive?: boolean
 }
 

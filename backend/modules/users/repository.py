@@ -126,8 +126,15 @@ class UserRepository:
 
         # Cota: la tabla crece con cada reserva publica (un User CLIENT por
         # cliente nuevo), asi que un listado sin techo escalaba mal. El default
-        # de 200 preserva el contrato actual para tiendas chicas.
-        query = query.order_by(User.created_at.desc()).limit(limit).offset(offset)
+        # de 200 preserva el contrato actual para tiendas chicas. Sin
+        # desempate, dos altas del mismo instante no tienen orden definido y
+        # el OFFSET repetia o salteaba filas entre paginas: el id (ULID)
+        # desempata, como en services/repository.py.
+        query = (
+            query.order_by(User.created_at.desc(), User.id.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         result = await self.db.execute(query)
         return list(result.scalars().all())
 

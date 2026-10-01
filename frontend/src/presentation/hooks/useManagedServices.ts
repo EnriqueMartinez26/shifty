@@ -14,6 +14,20 @@ export const useManagedServices = () => {
   })
 }
 
+/**
+ * Catalogo del panel de servicios, con los inactivos (FF-22). Va en su propia
+ * clave: `['services']` lo leen el alta de turno, el de profesionales y los
+ * links, que tienen que seguir viendo solo los activos, y los inactivos le dan
+ * 403 a un profesional. Las mutaciones invalidan el prefijo `['services']`,
+ * asi que tambien refrescan esta clave.
+ */
+export const useManagedServiceCatalog = () => {
+  return useQuery<Service[]>({
+    queryKey: ['services', 'catalog'],
+    queryFn: () => serviceService.listCatalog()
+  })
+}
+
 export const useCreateManagedService = () => {
   const queryClient = useQueryClient()
 
