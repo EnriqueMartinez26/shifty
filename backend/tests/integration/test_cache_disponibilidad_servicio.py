@@ -129,12 +129,13 @@ async def test_redis_caido_no_rompe_la_edicion(
     """La invalidacion es best-effort despues del commit."""
     from redis.exceptions import ConnectionError as RedisConnectionError
 
-    import modules.services.router as services_router
+    import modules.services.service as services_service
 
     async def _redis_caido(*_args: object) -> None:
         raise RedisConnectionError("redis caido")
 
-    monkeypatch.setattr(services_router, "invalidate_store_availability", _redis_caido)
+    # B6-05 (2026-09-30): la invalidacion se mudo del router al service.
+    monkeypatch.setattr(services_service, "invalidate_store_availability", _redis_caido)
     store, token, service, _ = await _tienda_con_dia_lejano(client, "b6-08-red")
 
     res = await client.patch(

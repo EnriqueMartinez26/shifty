@@ -37,17 +37,17 @@ FORBIDDEN_FRAMEWORK_IMPORTS = {
 # aunque la deuda hubiera bajado. CLAUDE.md §2 nombraba solo cuatro de estos
 # archivos (public_api, payments, stores, superadmin) cuando el codigo tenia
 # once; desde 2026-09-19 no los lista y remite a esta tabla.
+# 2026-09-30: salieron las entradas que ya estaban en 0 (ledger/router,
+# notifications/router, promotions/router, staff/repository, users/repository:
+# techos viejos que nadie bajo al migrar) y `services/repository` (B6-05,
+# D-20260930-14: el commit del modulo es de `ServiceCatalogService`). Los
+# modulos ya migrados los fijan `test_transaccion_en_service.py` y
+# `test_commits_en_service.py`.
 COMMITS_DECLARADOS_FUERA_DE_SERVICE: dict[str, int] = {
     "modules/appointments/repository.py": 2,
-    "modules/ledger/router.py": 2,
-    "modules/notifications/router.py": 2,
     "modules/payments/router.py": 5,
-    "modules/promotions/router.py": 3,
-    "modules/services/repository.py": 3,
-    "modules/staff/repository.py": 4,
     "modules/stores/router.py": 3,
     "modules/superadmin/repository.py": 11,
-    "modules/users/repository.py": 3,
 }
 
 
