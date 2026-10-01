@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 
 import { Check } from 'lucide-react'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
 import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
@@ -20,6 +20,7 @@ import {
   useRequestPublicOtp,
   useVerifyPublicOtp
 } from '../../../hooks/usePublic'
+import { useResendCooldown } from '../../../hooks/useResendCooldown'
 import { createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingWizardContainerProps {
@@ -51,9 +52,9 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     email: '',
     verified: false,
     verifiedPhone: '',
-    debugCode: '',
     expiresAt: '',
-    error: ''
+    error: '',
+    rateLimited: false
   })
   const [bookingState, setBookingState] = useState<BookingWizardState>({
     serviceId: preselect.serviceId,
@@ -88,6 +89,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const createBooking = useCreatePublicBooking()
   const requestOtp = useRequestPublicOtp()
   const verifyOtp = useVerifyPublicOtp()
+  // La espera es del telefono pedido: cambiarlo la libera (F4-11).
+  const resendCooldown = useResendCooldown(phoneDigits(bookingState.client.phone))
   const { data: services } = usePublicServices(store.public_id)
 
   // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
@@ -132,7 +135,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         return { ...prev, email, verified: true, verifiedPhone: client.phone, error: '' }
       }
       return prev.verified
-        ? { ...prev, email, verified: false, code: '', debugCode: '', error: '' }
+        ? { ...prev, email, verified: false, code: '', error: '' }
         : { ...prev, email }
     })
   }
@@ -150,17 +153,22 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         channel: otpState.channel,
         email
       })
-      setOtpState((prev) => ({
-        ...prev,
-        debugCode: response.debug_code || '',
-        expiresAt: response.expires_at,
-        error: ''
-      }))
+      // debug_code no se muestra (J7, 2026-09-30): con OTP_DEBUG_EXPOSE_CODE
+      // es un senuelo cuando el codigo fue a otro buzon que el tipeado.
+      setOtpState((prev) => ({ ...prev, expiresAt: response.expires_at, error: '' }))
+      resendCooldown.start()
     } catch (error: unknown) {
+      // OTP_RATE_LIMITED: se agotaron los codigos del telefono y la ventana
+      // del backend es deslizante; no se ofrece pedir otro hasta recargar.
+      // Otro 429/503 con Retry-After arranca esa espera (F4-11, 2026-09-30).
+      const rateLimited = getErrorCode(error) === 'OTP_RATE_LIMITED'
       setOtpState((prev) => ({
         ...prev,
+        rateLimited: prev.rateLimited || rateLimited,
         error: getErrorMessage(error, 'No se pudo enviar el codigo')
       }))
+      const retryAfter = rateLimited ? undefined : getRetryAfterSeconds(error)
+      if (retryAfter !== undefined) resendCooldown.start(retryAfter)
     }
   }
 
@@ -320,6 +328,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             requiresOtp={requiresOtp}
             otpState={otpState}
             isRequestingOtp={requestOtp.isPending}
+            otpResendSeconds={resendCooldown.secondsLeft}
             isVerifyingOtp={verifyOtp.isPending}
             onRequestOtp={() => {
               void handleRequestOtp()
@@ -327,8 +336,14 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             onVerifyOtp={() => {
               void handleVerifyOtp()
             }}
-            onOtpEmailChange={(email) => setOtpState((prev) => ({ ...prev, email, error: '' }))}
-            onOtpCodeChange={(code) => setOtpState((prev) => ({ ...prev, code, error: '' }))}
+            // Con el pedido bloqueado, el aviso se queda: sin el, el boton
+            // deshabilitado no explica por que.
+            onOtpEmailChange={(email) =>
+              setOtpState((prev) => ({ ...prev, email, error: prev.rateLimited ? prev.error : '' }))
+            }
+            onOtpCodeChange={(code) =>
+              setOtpState((prev) => ({ ...prev, code, error: prev.rateLimited ? prev.error : '' }))
+            }
             onBack={prevStep}
             onClientChange={handleClientChange}
             onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}

@@ -47,9 +47,9 @@ const otpInicial = (patch: Partial<BookingOtpState> = {}): BookingOtpState => ({
   email: '',
   verified: false,
   verifiedPhone: '',
-  debugCode: '',
   expiresAt: '',
   error: '',
+  rateLimited: false,
   ...patch
 })
 
@@ -84,6 +84,7 @@ const props = (patch: Partial<Props> = {}): Props => ({
   requiresOtp: false,
   otpState: otpInicial(),
   isRequestingOtp: false,
+  otpResendSeconds: 0,
   isVerifyingOtp: false,
   onRequestOtp: jest.fn(),
   onVerifyOtp: jest.fn(),
@@ -423,6 +424,96 @@ describe('BookingStepConfirmation', () => {
 
       expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
       expect(botonReservar()).not.toBeDisabled()
+    })
+  })
+
+  describe('en el celular (F4-11)', () => {
+    // 2026-09-30, F4-11: en el celular el codigo abria el teclado de letras,
+    // no se ofrecia desde el mail y aceptaba cualquier largo; nombre, email y
+    // telefono no se autocompletaban.
+    it('nombre, email y telefono se autocompletan', () => {
+      render(<BookingStepConfirmation {...props()} />)
+
+      expect(screen.getByPlaceholderText('Ej: Juan Perez')).toHaveAttribute('autocomplete', 'name')
+      expect(screen.getByPlaceholderText('juan@email.com')).toHaveAttribute('autocomplete', 'email')
+      expect(screen.getByPlaceholderText('PREFIJO + NUM')).toHaveAttribute('autocomplete', 'tel')
+    })
+
+    it('el codigo usa teclado numerico, autocompletado de codigo y 6 digitos', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      const codigo = screen.getByPlaceholderText('Codigo que te llego por email')
+      expect(codigo).toHaveAttribute('inputmode', 'numeric')
+      expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
+      expect(codigo).toHaveAttribute('maxlength', '6')
+      expect(screen.getByLabelText('Email para el codigo')).toHaveAttribute('autocomplete', 'email')
+    })
+
+    it('el codigo descarta lo que no es un digito', () => {
+      // 2026-09-30, F4-11: inputMode numeric no impide tipear letras o guiones
+      // en un teclado fisico y el backend rechazaba el codigo como invalido.
+      const onOtpCodeChange = jest.fn()
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            onOtpCodeChange,
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      fireEvent.change(screen.getByPlaceholderText('Codigo que te llego por email'), {
+        target: { value: '12a-3 4' }
+      })
+
+      expect(onOtpCodeChange).toHaveBeenLastCalledWith('1234')
+    })
+
+    it('durante la espera el boton muestra los segundos y no pide', () => {
+      const onRequestOtp = jest.fn()
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            onRequestOtp,
+            otpResendSeconds: 42,
+            otpState: otpInicial({ email: 'lucia@example.com' }),
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      const boton = screen.getByRole('button', { name: 'Reenviar en 42 s' })
+      expect(boton).toBeDisabled()
+      fireEvent.click(boton)
+      expect(onRequestOtp).not.toHaveBeenCalled()
+    })
+
+    it('con OTP_RATE_LIMITED no deja pedir otro codigo y muestra el aviso', () => {
+      // 2026-09-30, F4-11: agotados los codigos del telefono, el boton seguia
+      // habilitado y cada toque volvia a chocar contra el limite.
+      const aviso =
+        'Pediste demasiados códigos para este teléfono. Esperá un rato antes de pedir otro.'
+      render(
+        <BookingStepConfirmation
+          {...props({
+            requiresOtp: true,
+            otpState: otpInicial({ email: 'lucia@example.com', rateLimited: true, error: aviso }),
+            bookingState: estado({ client: cliente({ phone: '1155550101' }) })
+          })}
+        />
+      )
+
+      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.getByRole('alert')).toHaveTextContent(aviso)
     })
   })
 

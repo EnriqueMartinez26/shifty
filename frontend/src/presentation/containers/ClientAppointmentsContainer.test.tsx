@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import type { PublicStore } from '@application/services/PublicBookingService'
 
@@ -308,24 +308,34 @@ describe('ClientAppointmentsContainer', () => {
       // FF-05 (2026-09-29): con la ficha sin email entregable, el codigo nuevo
       // se guardaba, el reintento volvia a dar 403 y "Enviarme el código"
       // entraba por el atajo al mismo 403 sin mandar ningun codigo.
-      mockAppointments.mockImplementation(fallaCon(rechazo))
+      // F4-11 (2026-09-30): el segundo pedido espera los 60 s del primero.
+      jest.useFakeTimers()
+      try {
+        mockAppointments.mockImplementation(fallaCon(rechazo))
 
-      render(<ClientAppointmentsContainer store={store} />)
-      entrarPorElAtajo()
-      await screen.findByText(aviso)
-      // Con el 403 vigente la puerta sigue en pantalla y "Salir" no aparece.
-      await pedirYVerificarCodigo()
-      await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1))
-      // El codigo nuevo quedo guardado y el reintento sigue en 403.
-      expect(isOtpStillValid('sol', '1155550101')).toBe(true)
-      expect(screen.getByText(aviso)).toBeInTheDocument()
+        render(<ClientAppointmentsContainer store={store} />)
+        entrarPorElAtajo()
+        await screen.findByText(aviso)
+        // Con el 403 vigente la puerta sigue en pantalla y "Salir" no aparece.
+        await pedirYVerificarCodigo()
+        await waitFor(() => expect(mockRefetch).toHaveBeenCalledTimes(1))
+        // El codigo nuevo quedo guardado y el reintento sigue en 403.
+        expect(isOtpStillValid('sol', '1155550101')).toBe(true)
+        expect(screen.getByText(aviso)).toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
-      fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Cambiar teléfono o email' }))
+        expect(screen.getByRole('button', { name: /^Reenviar en \d+ s$/ })).toBeDisabled()
+        act(() => {
+          jest.advanceTimersByTime(60_000)
+        })
+        fireEvent.click(screen.getByRole('button', { name: 'Enviarme el código' }))
 
-      await waitFor(() => expect(mockRequestOtp).toHaveBeenCalledTimes(2))
-      expect(isOtpStillValid('sol', '1155550101')).toBe(false)
-      expect(mockRefetch).toHaveBeenCalledTimes(1)
+        await waitFor(() => expect(mockRequestOtp).toHaveBeenCalledTimes(2))
+        expect(isOtpStillValid('sol', '1155550101')).toBe(false)
+        expect(mockRefetch).toHaveBeenCalledTimes(1)
+      } finally {
+        jest.useRealTimers()
+      }
     })
 
     it('un 404 dice que no hay turnos para ese telefono, sin reintentar', async () => {
