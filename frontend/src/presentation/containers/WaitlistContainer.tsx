@@ -18,6 +18,7 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'
 import { ROLE_STORE_ADMIN } from '../context/roles'
 import { useStoreSettings } from '../hooks/useStores'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { useBookFromWaitlist, useRemoveWaitlistEntry, useWaitlist } from '../hooks/useWaitlist'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -33,6 +34,10 @@ const STATUS_LABEL: Record<string, string> = {
 export const WaitlistContainer: React.FC = () => {
   const { user } = useAuth()
   const canManage = user?.role === ROLE_STORE_ADMIN || Boolean(user?.is_global_admin)
+  // Tienda suspendida (FF-15): DELETE /waitlist/{id} y POST
+  // /waitlist/{id}/book no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : undefined
   const waitlist = useWaitlist()
   const { data: storeSettings } = useStoreSettings()
   const removeEntry = useRemoveWaitlistEntry()
@@ -248,13 +253,16 @@ export const WaitlistContainer: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => (isBookingThis ? setBooking(null) : startBooking(entry))}
-                        className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest border text-blue-700 border-blue-200"
+                        disabled={readOnlyReason !== undefined}
+                        title={readOnlyReason}
+                        className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-[9px] font-black uppercase tracking-widest border text-blue-700 border-blue-200 disabled:opacity-50"
                       >
                         <CalendarPlus className="w-3 h-3" /> Reservar
                       </button>
                       <button
                         type="button"
-                        disabled={removeEntry.isPending}
+                        disabled={removeEntry.isPending || readOnlyReason !== undefined}
+                        title={readOnlyReason}
                         onClick={() => {
                           void removeFromWaitlist(entry)
                         }}
@@ -290,7 +298,8 @@ export const WaitlistContainer: React.FC = () => {
                     </label>
                     <button
                       type="button"
-                      disabled={bookEntry.isPending}
+                      disabled={bookEntry.isPending || readOnlyReason !== undefined}
+                      title={readOnlyReason}
                       onClick={() => {
                         void confirmBooking(entry)
                       }}

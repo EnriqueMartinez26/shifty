@@ -70,6 +70,10 @@ jest.mock('../components/organisms/NewAppointmentModal', () => ({
   NewAppointmentModal: () => null
 }))
 
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => ({ readOnly: false, reason: '' })
+}))
+
 describe('CalendarContainer - formulario de bloqueo (F11c-05)', () => {
   beforeEach(() => {
     jest.useFakeTimers({ now: new Date('2026-09-20T15:30:00.000Z') })

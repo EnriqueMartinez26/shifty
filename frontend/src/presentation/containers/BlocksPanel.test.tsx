@@ -23,6 +23,11 @@ jest.mock('../hooks/useAppointmentBlocks', () => ({
   useUpdateAppointmentBlock: () => ({ mutateAsync: mockUpdate, isPending: false })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 const staffMembers = [
   { id: 'st-1', displayName: 'Ana Gomez' },
   { id: 'st-2', displayName: 'Beto Diaz' }
@@ -77,6 +82,7 @@ describe('BlocksPanel', () => {
       m.mockReset()
     )
     mockTemplatesHook.mockReturnValue({ data: [], isLoading: false, error: null })
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
   })
 
   afterEach(() => {
@@ -154,6 +160,33 @@ describe('BlocksPanel', () => {
 
     expect(await screen.findByText(/Pedile a un administrador que confirme/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /y bloquear/ })).not.toBeInTheDocument()
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). Guardar dispara POST /preview, / o /batch, y
+  // actualizar el PATCH: ninguno esta en SUSPENSION_ALLOWED_WRITES.
+  it('con la tienda suspendida no deja guardar ni actualizar un bloqueo', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    const { unmount } = renderPanel()
+
+    const guardar = screen.getByRole('button', { name: 'Guardar bloqueo' })
+    expect(guardar).toBeDisabled()
+    expect(guardar).toHaveAttribute('title', 'Tienda suspendida')
+    fireEvent.click(guardar)
+    expect(mockPreview).not.toHaveBeenCalled()
+    unmount()
+
+    renderPanel({ editTarget: block })
+    const actualizar = screen.getByRole('button', { name: 'Actualizar bloqueo' })
+    expect(actualizar).toBeDisabled()
+    expect(actualizar).toHaveAttribute('title', 'Tienda suspendida')
+  })
+
+  it('sin suspension guardar sigue habilitado y sin titulo', () => {
+    renderPanel()
+    const guardar = screen.getByRole('button', { name: 'Guardar bloqueo' })
+    expect(guardar).not.toBeDisabled()
+    expect(guardar).not.toHaveAttribute('title')
   })
 
   // FF-14 / D-20260929-09: recepcion ve la agenda pero no gestiona bloqueos.

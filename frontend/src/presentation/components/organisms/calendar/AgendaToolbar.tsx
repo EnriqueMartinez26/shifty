@@ -22,6 +22,8 @@ interface AgendaToolbarProps {
   onNext: () => void
   onViewChange: (view: CalendarView) => void
   onNewAppointment: () => void
+  /** Tienda suspendida: POST /appointments/ responde 402 (FF-15). */
+  readOnlyReason?: string | null
 }
 
 /**
@@ -34,7 +36,8 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
   onPrev,
   onNext,
   onViewChange,
-  onNewAppointment
+  onNewAppointment,
+  readOnlyReason = null
 }) => (
   <div
     className="flex flex-col md:flex-row items-center justify-between gap-6 p-4 sm:p-6 rounded-[8px]"
@@ -117,7 +120,9 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
       <button
         type="button"
         onClick={onNewAppointment}
-        className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs"
+        disabled={readOnlyReason !== null}
+        title={readOnlyReason ?? undefined}
+        className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs disabled:opacity-50"
         style={buttonStyles2000s.selected}
       >
         <Plus size={18} /> Nuevo turno

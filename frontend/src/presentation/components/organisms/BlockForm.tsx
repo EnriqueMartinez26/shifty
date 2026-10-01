@@ -42,6 +42,8 @@ interface BlockFormProps {
   isEditing: boolean
   occurrences: number
   canSave: boolean
+  /** Por que no se puede guardar con la tienda suspendida (FF-15). */
+  readOnlyReason?: string | null
   onChange: (patch: Partial<BlockFormState>) => void
   onSave: () => void
   onReset: () => void
@@ -230,6 +232,7 @@ export const BlockForm: React.FC<BlockFormProps> = (props) => {
           type="button"
           onClick={props.onSave}
           disabled={!canSave}
+          title={props.readOnlyReason ?? undefined}
           className="px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
           style={buttonStyles2000s.selected}
         >

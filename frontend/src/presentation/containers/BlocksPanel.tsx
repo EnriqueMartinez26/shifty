@@ -18,6 +18,7 @@ import {
   useCreateRecurringAppointmentBlock,
   useUpdateAppointmentBlock
 } from '../hooks/useAppointmentBlocks'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import {
   MAX_BLOCK_OCCURRENCES,
   addCalendarDays,
@@ -230,6 +231,9 @@ export const BlocksPanel: React.FC<BlocksPanelProps> = (props) => {
   const { staffMembers, dateStr, canManageBlocks, editTarget } = props
   const [form, setForm] = useState<BlockFormState>(() => initialForm(editTarget))
   const templatesQuery = useBlockTemplates({ enabled: canManageBlocks })
+  // Tienda suspendida: /preview, /, /batch y el PATCH responden 402 (FF-15).
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
   const editor = useBlockEditor({
     editTarget,
     onCreated: () => setForm((prev) => initialForm(null, prev.staff_id)),
@@ -277,7 +281,8 @@ export const BlocksPanel: React.FC<BlocksPanelProps> = (props) => {
         templates={templatesQuery.data}
         isEditing={editTarget !== null}
         occurrences={occurrences}
-        canSave={Boolean(staffId) && validSeries && !editor.saving}
+        canSave={Boolean(staffId) && validSeries && !editor.saving && readOnlyReason === null}
+        readOnlyReason={readOnlyReason}
         onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
         onSave={handleSave}
         onReset={handleReset}

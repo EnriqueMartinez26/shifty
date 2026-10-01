@@ -54,6 +54,7 @@ import {
 import { useConfirm } from '../hooks/useConfirm'
 import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreSettings } from '../hooks/useStores'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import {
   NO_EVENTS,
   buildUnifiedEvents,
@@ -94,6 +95,10 @@ export const CalendarContainer: React.FC = () => {
   const canCancelOrRescheduleOf = (staffId: string) =>
     cancelsAnyAppointment ||
     (currentRole === ROLE_PROFESSIONAL && Boolean(user?.public_id) && staffId === user?.public_id)
+  // Tienda suspendida (FF-15): se deshabilita lo que el backend responde con
+  // 402; cancelar y liberar siguen (D-20260930-12).
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [view, setView] = useState<CalendarView>('day')
   const [message, setMessage] = useState('')
@@ -373,6 +378,7 @@ export const CalendarContainer: React.FC = () => {
         canManage={canManageAppointments}
         canCancelOrReschedule={canCancelOrRescheduleOf(event.staffId)}
         busy={transitionBusy}
+        readOnlyReason={readOnlyReason}
         compact={compact}
         onAction={(action) => {
           void handleAppointmentAction(event, action)
@@ -434,6 +440,7 @@ export const CalendarContainer: React.FC = () => {
         onNext={goNext}
         onViewChange={setView}
         onNewAppointment={() => setIsNewAppointmentOpen(true)}
+        readOnlyReason={readOnlyReason}
       />
 
       <QueryErrorNotice
@@ -468,7 +475,8 @@ export const CalendarContainer: React.FC = () => {
           hoursOfDay={hoursOfDay}
           blocks={blocksForSelectedDate}
           cards={appointmentCards}
-          canManageBlocks={canManageBlocks}
+          // Tocar un bloqueo abre su edicion (PATCH, 402 con la tienda suspendida).
+          canManageBlocks={canManageBlocks && readOnlyReason === null}
           onToggleGap={toggleGap}
           onEditBlock={setBlockToEdit}
           renderControls={(event) => (
@@ -530,6 +538,7 @@ export const CalendarContainer: React.FC = () => {
           canManageBlocks={canManageBlocks}
           onEdit={setBlockToEdit}
           onDeactivate={handleDeactivateBlock}
+          readOnlyReason={readOnlyReason}
         />
       </div>
       {isNewAppointmentOpen && (
