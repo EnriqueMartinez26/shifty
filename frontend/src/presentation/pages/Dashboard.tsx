@@ -8,7 +8,6 @@ import {
   DollarSign,
   Gauge,
   LayoutDashboard,
-  ListChecks,
   Sparkles,
   TrendingUp,
   TriangleAlert,
@@ -32,7 +31,9 @@ import {
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
 
-import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { colors2000s } from '../../theme/colors'
+import ActionList from '../components/organisms/dashboard/ActionList'
+import AgendaList from '../components/organisms/dashboard/AgendaList'
 import DashboardSignalCard from '../components/organisms/dashboard/DashboardSignalCard'
 import {
   boardGridStyle,
@@ -47,15 +48,16 @@ import {
   panelBodyStyle,
   subtleTextStyle
 } from '../components/organisms/dashboard/dashboardStyles'
-import EmptyState from '../components/organisms/dashboard/EmptyState'
 import ErrorPanel from '../components/organisms/dashboard/ErrorPanel'
 import HealthPill from '../components/organisms/dashboard/HealthPill'
 import MetricCard from '../components/organisms/dashboard/MetricCard'
 import MetricStack from '../components/organisms/dashboard/MetricStack'
+import OpportunityList from '../components/organisms/dashboard/OpportunityList'
 import Panel from '../components/organisms/dashboard/Panel'
 import QuickActionCard from '../components/organisms/dashboard/QuickActionCard'
+import RankedList from '../components/organisms/dashboard/RankedList'
 import SectionHeader from '../components/organisms/dashboard/SectionHeader'
-import { toneTokens } from '../components/organisms/dashboard/toneTokens'
+import TransactionsPanel from '../components/organisms/dashboard/TransactionsPanel'
 import type {
   ActionItem,
   AgendaItem,
@@ -77,7 +79,7 @@ import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
 import { useProfessionalReports, useReportSummary, useReportTrend } from '../hooks/useReports'
 import { useStoreFeatureFlags } from '../hooks/useStores'
 import { currencyFmtEsAr } from '../lib/formatters'
-import { createDashboardListItemStyle, createDashboardPanelStyle } from '../lib/surfaceStyles'
+import { createDashboardPanelStyle } from '../lib/surfaceStyles'
 
 // Los graficos traen recharts, que era casi todo el chunk del Dashboard
 // (426 KB) y bajaba en la primera pantalla del dueno. Con lazy van a su propio
@@ -967,431 +969,6 @@ function OperationPanel({
         </style>
       </div>
     </section>
-  )
-}
-
-function ActionList({
-  items,
-  emptyText,
-  compact = false
-}: {
-  items: ActionItem[]
-  emptyText: string
-  compact?: boolean
-}) {
-  if (!items.length) return <EmptyState text={emptyText} />
-
-  return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      {items.map((item) => {
-        const tone = toneTokens(item.tone)
-        return (
-          <button
-            key={item.id}
-            type="button"
-            onClick={item.onSelect}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 16,
-              minHeight: compact ? 64 : 72,
-              ...createDashboardListItemStyle(tone.border, tone.background, compact ? 14 : 16),
-              color: colors2000s.text.primary,
-              cursor: item.onSelect ? 'pointer' : 'default',
-              textAlign: 'left'
-            }}
-          >
-            <span style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-              <strong style={{ fontSize: 14, lineHeight: '18px', fontWeight: 900 }}>
-                {item.title}
-              </strong>
-              {item.description ? (
-                <small
-                  style={{
-                    color: colors2000s.text.secondary,
-                    fontSize: 12,
-                    lineHeight: '16px',
-                    fontWeight: 700
-                  }}
-                >
-                  {item.description}
-                </small>
-              ) : null}
-            </span>
-            {item.meta ? (
-              <em
-                style={{
-                  color: tone.accent,
-                  fontSize: 12,
-                  lineHeight: '16px',
-                  fontStyle: 'normal',
-                  whiteSpace: 'nowrap',
-                  fontWeight: 900
-                }}
-              >
-                {item.meta}
-              </em>
-            ) : null}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: string }) {
-  if (!items.length) return <EmptyState text={emptyText} />
-
-  return (
-    <div style={{ display: 'grid', gap: 10 }}>
-      {items.map((item) => {
-        const tone = toneTokens(item.tone)
-
-        return (
-          <div
-            key={item.id}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 16,
-              minHeight: 74,
-              ...createDashboardListItemStyle(tone.border, 'rgba(255, 255, 255, 0.68)', 14)
-            }}
-          >
-            <div
-              style={{
-                width: 60,
-                alignSelf: 'stretch',
-                borderRadius: 6,
-                display: 'grid',
-                placeItems: 'center',
-                background: tone.background
-              }}
-            >
-              <time
-                style={{ color: tone.accent, fontSize: 14, lineHeight: '18px', fontWeight: 900 }}
-              >
-                {item.time}
-              </time>
-            </div>
-
-            <span style={{ display: 'grid', gap: 4, minWidth: 0, flex: 1 }}>
-              <strong style={{ fontSize: 14, lineHeight: '18px', fontWeight: 900 }}>
-                {item.title}
-              </strong>
-              {item.subtitle ? (
-                <small
-                  style={{
-                    color: colors2000s.text.secondary,
-                    fontSize: 12,
-                    lineHeight: '16px',
-                    fontWeight: 700
-                  }}
-                >
-                  {item.subtitle}
-                </small>
-              ) : null}
-            </span>
-
-            {item.status ? (
-              <span
-                style={{
-                  padding: '6px 10px',
-                  borderRadius: 999,
-                  background: tone.background,
-                  color: tone.accent,
-                  fontSize: 10,
-                  lineHeight: '12px',
-                  fontWeight: 900,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                {item.status}
-              </span>
-            ) : null}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function TransactionsPanel({
-  title,
-  description,
-  items,
-  emptyText,
-  viewAllLabel,
-  onViewAll
-}: {
-  title: string
-  description: string
-  items: TransactionItem[]
-  emptyText: string
-  viewAllLabel: string
-  onViewAll: () => void
-}) {
-  return (
-    <section style={createDashboardPanelStyle()}>
-      <div style={{ ...panelBodyStyle, display: 'grid', gap: 16 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: 12
-          }}
-        >
-          <SectionHeader icon={<ListChecks size={18} />} title={title} description={description} />
-        </div>
-
-        {items.length ? (
-          <div style={{ display: 'grid', gap: 10 }}>
-            {items.map((item) => {
-              const tone = toneTokens(item.tone)
-              return (
-                <div
-                  key={item.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 12,
-                    ...createDashboardListItemStyle(tone.border, 'rgba(255, 255, 255, 0.68)', 12)
-                  }}
-                >
-                  <span style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-                    <strong
-                      style={{
-                        fontSize: 13,
-                        lineHeight: '17px',
-                        fontWeight: 900,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                      }}
-                    >
-                      {item.title}
-                    </strong>
-                    {item.subtitle ? (
-                      <small
-                        style={{
-                          color: colors2000s.text.secondary,
-                          fontSize: 11,
-                          lineHeight: '14px',
-                          fontWeight: 700,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {item.subtitle}
-                      </small>
-                    ) : null}
-                    <span
-                      style={{
-                        alignSelf: 'start',
-                        padding: '3px 8px',
-                        borderRadius: 999,
-                        background: tone.background,
-                        color: tone.accent,
-                        fontSize: 9,
-                        lineHeight: '11px',
-                        fontWeight: 900,
-                        letterSpacing: '0.06em',
-                        textTransform: 'uppercase'
-                      }}
-                    >
-                      {item.status}
-                    </span>
-                  </span>
-
-                  <strong
-                    style={{
-                      color: colors2000s.text.primary,
-                      fontSize: 13,
-                      lineHeight: '17px',
-                      fontWeight: 900,
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {item.amount}
-                  </strong>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          <EmptyState text={emptyText} />
-        )}
-
-        <button
-          type="button"
-          onClick={onViewAll}
-          style={{
-            ...buttonStyles2000s.default,
-            borderRadius: 6,
-            padding: '10px 12px',
-            justifySelf: 'start',
-            fontSize: 11,
-            lineHeight: '14px',
-            fontWeight: 900,
-            textTransform: 'uppercase',
-            letterSpacing: '0.08em',
-            color: colors2000s.orange.accent
-          }}
-        >
-          {viewAllLabel}
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function RankedList({ items }: { items: RankedItem[] }) {
-  if (!items.length) return <EmptyState text="Sin datos para este periodo." />
-
-  return (
-    <ol style={{ display: 'grid', gap: 12, listStyle: 'none', margin: 0, padding: 0 }}>
-      {items.map((item, index) => (
-        <li
-          key={item.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 14,
-            minHeight: 70,
-            ...createDashboardListItemStyle(
-              colors2000s.border.light,
-              'rgba(255, 255, 255, 0.65)',
-              14
-            )
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-            <span
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: 6,
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: 'rgba(255, 140, 66, 0.12)',
-                color: colors2000s.orange.accent,
-                fontSize: 12,
-                lineHeight: '16px',
-                fontWeight: 900
-              }}
-            >
-              {index + 1}
-            </span>
-            <span style={{ display: 'grid', gap: 4, minWidth: 0 }}>
-              <strong style={{ fontSize: 14, lineHeight: '18px', fontWeight: 900 }}>
-                {item.label}
-              </strong>
-              {item.detail ? (
-                <small
-                  style={{
-                    color: colors2000s.text.secondary,
-                    fontSize: 12,
-                    lineHeight: '16px',
-                    fontWeight: 700
-                  }}
-                >
-                  {item.detail}
-                </small>
-              ) : null}
-            </span>
-          </div>
-          <em
-            style={{
-              color: colors2000s.orange.accent,
-              fontSize: 12,
-              lineHeight: '16px',
-              fontStyle: 'normal',
-              whiteSpace: 'nowrap',
-              fontWeight: 900
-            }}
-          >
-            {item.value}
-          </em>
-        </li>
-      ))}
-    </ol>
-  )
-}
-
-function OpportunityList({ items, emptyText }: { items: OpportunityItem[]; emptyText: string }) {
-  if (!items.length) return <EmptyState text={emptyText} />
-
-  return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      {items.map((item) => {
-        const tone = toneTokens(item.tone)
-        return (
-          <div
-            key={item.id}
-            style={{
-              ...createDashboardListItemStyle(tone.border, 'rgba(255, 255, 255, 0.62)', 16),
-              display: 'grid',
-              gap: 10
-            }}
-          >
-            <div style={{ display: 'grid', gap: 4 }}>
-              <strong
-                style={{
-                  color: colors2000s.text.primary,
-                  fontSize: 14,
-                  lineHeight: '18px',
-                  fontWeight: 900
-                }}
-              >
-                {item.title}
-              </strong>
-              <p
-                style={{
-                  margin: 0,
-                  color: colors2000s.text.secondary,
-                  fontSize: 12,
-                  lineHeight: '16px',
-                  fontWeight: 700
-                }}
-              >
-                {item.description}
-              </p>
-            </div>
-
-            {item.actionLabel && item.onSelect ? (
-              <button
-                type="button"
-                onClick={item.onSelect}
-                style={{
-                  ...buttonStyles2000s.default,
-                  borderRadius: 6,
-                  padding: '10px 12px',
-                  justifySelf: 'start',
-                  fontSize: 11,
-                  lineHeight: '14px',
-                  fontWeight: 900,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.08em',
-                  color: tone.accent
-                }}
-              >
-                {item.actionLabel}
-              </button>
-            ) : null}
-          </div>
-        )
-      })}
-    </div>
   )
 }
 
