@@ -13,9 +13,12 @@ housekeeping y se bloquea todo lo que genera una obligacion nueva.
 - Panel: toda escritura se bloquea (402 SUBSCRIPTION_SUSPENDED) salvo las
   declaradas en `SUSPENSION_ALLOWED_WRITES`: marcar notificaciones leidas
   (B4-03), exportar lo propio (B5-14), dar de baja un usuario (criterio del
-  coordinador, pendiente de confirmacion del usuario) y las escrituras de panel
-  de pagos (cobrar turnos ya tomados, operar la pasarela). Los movimientos de
-  ledger, cargar y revertir, quedan bloqueados.
+  coordinador, pendiente de confirmacion del usuario), las escrituras de panel
+  de pagos (cobrar turnos ya tomados, operar la pasarela) y, desde
+  D-20260930-12, cancelar y liberar turnos ya tomados (extinguen una
+  obligacion y destraban la anonimizacion de clientes). Los movimientos de
+  ledger, cargar y revertir, quedan bloqueados, y tambien crear, reprogramar y
+  confirmar turnos.
 - Portal publico (B1-06): se bloquea SOLO crear reservas y anotarse en la
   lista de espera (mismo 404 que la vitrina); cancelar y reprogramar turnos
   existentes siguen permitidos: no se castiga al cliente por la mora.
@@ -24,6 +27,7 @@ housekeeping y se bloquea todo lo que genera una obligacion nueva.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 from fastapi.routing import APIRoute
@@ -34,8 +38,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from main import app
 import modules.billing.dependencies as guarda
+import modules.payments.service as payments_service
+from modules.appointments.model import Appointment
 from modules.billing.dependencies import SAFE_METHODS, block_writes_when_suspended
 from modules.billing.model import Plan, StoreSubscription
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus
+from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from modules.stores.model import Store
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
@@ -102,6 +110,19 @@ def test_las_escrituras_permitidas_existen_de_verdad() -> None:
     # falla por la asercion y no tumba la coleccion del archivo entero.
     permitidas = guarda.SUSPENSION_ALLOWED_WRITES
     assert permitidas <= rutas, permitidas - rutas
+
+
+def test_de_turnos_solo_cancelar_y_liberar_sobreviven_a_la_suspension() -> None:
+    """D-20260930-12: crear, reprogramar, confirmar y completar siguen bloqueados."""
+    de_turnos = {
+        clave
+        for clave in guarda.SUSPENSION_ALLOWED_WRITES
+        if clave[1].startswith("/appointments")
+    }
+    assert de_turnos == {
+        ("PATCH", "/appointments/{public_id}/cancel"),
+        ("PATCH", "/appointments/{public_id}/release"),
+    }
 
 
 async def _suspender(session: AsyncSession, store_public_id: str) -> None:
@@ -332,3 +353,154 @@ async def test_portal_publico_con_la_tienda_suspendida(
         json={"phone": TELEFONO},
     )
     assert cancelado.status_code == 200, cancelado.text
+
+
+@pytest.mark.asyncio
+async def test_tienda_suspendida_cancela_y_libera_turnos_ya_tomados(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D-20260930-12: cancelar y liberar extinguen una obligacion y destraban la
+    anonimizacion de clientes (se niega con turnos activos a futuro). Con la
+    tienda suspendida el cobro vivo se vence igual (pago a `expired` y el
+    `payment.preference.expire` al outbox, en la misma transaccion); crear,
+    reprogramar y confirmar siguen en 402."""
+
+    async def mp(
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "id": "pref-susp-cancel",
+            "init_point": "https://www.mercadopago.com/checkout?pref=susp-cancel",
+        }
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mp)
+    store, token = await register_and_login(
+        client, slug="susp-cancel", email="susp-cancel@example.com"
+    )
+    headers = auth_headers(token)
+    for url, cuerpo in (
+        ("/stores/me/feature-flags", {"payments": True}),
+        ("/payments/gateway-config", {"access_token": "TEST-SUSP-TOKEN"}),
+    ):
+        res = await client.put(url, headers=headers, json=cuerpo)
+        assert res.status_code == 200, res.text
+    service = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="fixed",
+        deposit_amount=2500,
+    )
+    staff = await create_staff(
+        client, token, service, email="pro-susp-cancel@example.com"
+    )
+    dia = datetime.now(timezone.utc) + timedelta(days=4)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+
+    def _inicio(hora: int) -> str:
+        return dia.replace(hour=hora, minute=0, second=0, microsecond=0).isoformat()
+
+    # Turno con sena pendiente (cobro vivo) y turno confirmado desde el panel,
+    # ambos tomados ANTES de la suspension.
+    reserva = await client.post(
+        "/public/appointments",
+        json={
+            "store_public_id": store,
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": _inicio(12),
+            "client_name": "Cliente Sena",
+            "client_phone": "+5491155560001",
+            "accepts_terms": True,
+            "payment_method": "mercadopago",
+            "idempotency_key": "susp-cancel-sena-01",
+        },
+    )
+    assert reserva.status_code == 201, reserva.text
+    assert reserva.json()["status"] == "pending_payment"
+    pendiente = str(reserva.json()["public_id"])
+    alta = await client.post(
+        "/appointments/",
+        headers=headers,
+        json={
+            "service_id": service,
+            "staff_id": staff,
+            "starts_at": _inicio(14),
+            "client_name": "Cliente Panel",
+            "client_phone": "+5491155560002",
+            "idempotency_key": "susp-cancel-panel-01",
+        },
+    )
+    assert alta.status_code == 201, alta.text
+    confirmado = str(alta.json()["public_id"])
+    await _suspender(test_session, store)
+
+    # Sigue bloqueado: crear, reprogramar y confirmar generan obligaciones.
+    _bloqueado(
+        await client.post(
+            "/appointments/",
+            headers=headers,
+            json={
+                "service_id": service,
+                "staff_id": staff,
+                "starts_at": _inicio(16),
+                "client_name": "Otro Cliente",
+                "client_phone": "+5491155560003",
+                "idempotency_key": "susp-cancel-panel-02",
+            },
+        )
+    )
+    _bloqueado(
+        await client.patch(
+            f"/appointments/{confirmado}/reschedule",
+            headers=headers,
+            json={"new_starts_at": _inicio(17)},
+        )
+    )
+    _bloqueado(
+        await client.patch(f"/appointments/{confirmado}/confirm", headers=headers)
+    )
+
+    # Permitido: liberar el pendiente de pago (queda `expired`) vence el cobro.
+    liberado = await client.patch(f"/appointments/{pendiente}/release", headers=headers)
+    assert liberado.status_code == 200, liberado.text
+    test_session.expire_all()
+    cobro = (
+        await test_session.execute(
+            select(Payment).where(Payment.appointment_id == pendiente)
+        )
+    ).scalar_one()
+    assert cobro.status == PaymentStatus.EXPIRED.value
+    eventos = [
+        e
+        for e in (
+            await test_session.execute(
+                select(OutboxMessage).where(
+                    OutboxMessage.event_type == EVENT_PREFERENCE_EXPIRE
+                )
+            )
+        ).scalars()
+        if e.payload.get("appointment_id") == pendiente
+    ]
+    assert len(eventos) == 1, eventos
+
+    # Permitido: cancelar el confirmado.
+    cancelado = await client.patch(
+        f"/appointments/{confirmado}/cancel", headers=headers
+    )
+    assert cancelado.status_code == 200, cancelado.text
+    assert cancelado.json()["status"] == "cancelled"
+    test_session.expire_all()
+    estados = {
+        fila.id: fila.status
+        for fila in (
+            await test_session.execute(
+                select(Appointment).where(Appointment.id.in_([pendiente, confirmado]))
+            )
+        ).scalars()
+    }
+    assert estados == {pendiente: "expired", confirmado: "cancelled"}, estados
