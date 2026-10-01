@@ -9,11 +9,15 @@ const mockCreate = jest.fn()
 const mockDelete = jest.fn()
 const mockListQuery = jest.fn()
 let mockViewer: { public_id: string; is_global_admin?: boolean } = { public_id: 'admin-1' }
-let mockUsersQuery: { data?: User[]; isLoading: boolean; error: unknown } = {
-  data: [],
-  isLoading: false,
-  error: null
+const mockFetchNextPage = jest.fn()
+type UsersQuery = {
+  data?: User[]
+  isLoading: boolean
+  error: unknown
+  hasNextPage?: boolean
+  isFetchingNextPage?: boolean
 }
+let mockUsersQuery: UsersQuery = { data: [], isLoading: false, error: null }
 
 const usuario = User.fromPrimitives({
   id: 'usr-1',
@@ -29,7 +33,7 @@ const usuario = User.fromPrimitives({
 jest.mock('../hooks/useManagedDomainUsers', () => ({
   useManagedDomainUsers: (query: unknown) => {
     mockListQuery(query)
-    return mockUsersQuery
+    return { fetchNextPage: mockFetchNextPage, ...mockUsersQuery }
   },
   useCreateManagedDomainUser: () => ({ mutateAsync: mockCreate }),
   useUpdateManagedDomainUser: () => ({ mutateAsync: mockUpdate }),
@@ -233,19 +237,52 @@ describe('UserManagementContainer', () => {
     render(<UserManagementContainer />)
     const buscador = screen.getByRole('searchbox', { name: 'Buscar usuario' })
 
-    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 200, includeInactive: true })
+    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 100, includeInactive: true })
 
     fireEvent.change(buscador, { target: { value: ' ana ' } })
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }))
-    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 200, includeInactive: true, q: 'ana' })
+    expect(mockListQuery).toHaveBeenLastCalledWith({ limit: 100, includeInactive: true, q: 'ana' })
 
     fireEvent.change(buscador, { target: { value: 'Ana@Example.com ' } })
     fireEvent.submit(buscador.closest('form')!)
     expect(mockListQuery).toHaveBeenLastCalledWith({
-      limit: 200,
+      limit: 100,
       includeInactive: true,
       email: 'ana@example.com'
     })
+  })
+
+  // 2026-09-30 (F4-03): la lista de usuarios cortaba en 200 sin forma de ver
+  // el resto; el aviso "Mostrando los primeros 200" era el unico camino.
+  it('con mas paginas muestra "Ver más" y pide la siguiente', () => {
+    mockUsersQuery = { data: [usuario], isLoading: false, error: null, hasNextPage: true }
+    mockFetchNextPage.mockReset()
+    render(<UserManagementContainer />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ver más' }))
+
+    expect(mockFetchNextPage).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText(/Mostrando los primeros/)).not.toBeInTheDocument()
+  })
+
+  it('"Ver más" queda deshabilitado mientras llega la pagina siguiente', () => {
+    mockUsersQuery = {
+      data: [usuario],
+      isLoading: false,
+      error: null,
+      hasNextPage: true,
+      isFetchingNextPage: true
+    }
+    render(<UserManagementContainer />)
+
+    expect(screen.getByRole('button', { name: /ver más|cargando/i })).toBeDisabled()
+  })
+
+  it('una pagina corta no muestra "Ver más"', () => {
+    mockUsersQuery = { data: [usuario], isLoading: false, error: null, hasNextPage: false }
+    render(<UserManagementContainer />)
+
+    expect(screen.queryByRole('button', { name: /ver más/i })).not.toBeInTheDocument()
   })
 
   it('si falla la lista lo avisa en vez de mostrarla vacia (N2)', () => {
