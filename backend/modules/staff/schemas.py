@@ -60,8 +60,16 @@ class ScheduleResponse(ScheduleBase):
         from_attributes = True
 
 
+# Largo de staff.display_name (String(100); la migracion d5ec116d06a3 la bajo de
+# 255). 2026-10-01: el schema seguia en 255 y un nombre de 101 a 255 caracteres
+# pasaba Pydantic y reventaba en Postgres con un 500 (regla 20). Lo fija
+# tests/integration/test_staff_limites_de_columna.py y el guardia
+# tests/architecture/test_limites_de_schema_vs_columna.py.
+DISPLAY_NAME_MAX_LENGTH = 100
+
+
 class StaffBase(BaseModel):
-    display_name: str = Field(..., min_length=2, max_length=255)
+    display_name: str = Field(..., min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH)
 
 
 class StaffCreate(StaffBase):
@@ -101,11 +109,24 @@ class StaffCreate(StaffBase):
         return self
 
 
+# Campos de StaffUpdate donde un null explicito no es un cambio posible.
+_STAFF_NOT_NULL_FIELDS = (
+    "first_name",
+    "last_name",
+    "display_name",
+    "email",
+    "is_active",
+    "service_ids",
+)
+
+
 class StaffUpdate(BaseModel):
     first_name: str | None = Field(None, min_length=1, max_length=100)
     last_name: str | None = Field(None, min_length=1, max_length=100)
     email: EmailStr | None = None
-    display_name: str | None = Field(None, min_length=2, max_length=255)
+    display_name: str | None = Field(
+        None, min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH
+    )
     service_ids: list[PublicId] | None = Field(None, max_length=100)
     is_active: bool | None = None
 
@@ -113,6 +134,17 @@ class StaffUpdate(BaseModel):
     @classmethod
     def reject_control_chars_in_names(cls, value: str | None) -> str | None:
         return reject_control_chars(value)
+
+    @model_validator(mode="after")
+    def reject_null_in_required_fields(self) -> Self:
+        # Q1: PUT y PATCH comparten handler y update_profile trata None como
+        # "no cambiar", asi que un null explicito respondia 200 sin cambiar
+        # nada. Ahora es 422 en los dos verbos (D-20260930-03); un campo
+        # ausente sigue siendo "no cambiar". Mismo patron que ScheduleUpdate.
+        for field in _STAFF_NOT_NULL_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser null")
+        return self
 
 
 class StaffResponse(StaffBase):

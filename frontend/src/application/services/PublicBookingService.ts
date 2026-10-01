@@ -198,7 +198,11 @@ export interface DepositPreview {
 
 export interface ClientAppointmentItem {
   public_id: string
+  /** `public_id` del servicio: con `staff_id`, pide la grilla para reprogramar. */
+  service_id: string
   service_name: string
+  /** Id publico del profesional, el mismo que usa la reserva publica. */
+  staff_id: string
   staff_name: string
   starts_at: string
   ends_at: string
