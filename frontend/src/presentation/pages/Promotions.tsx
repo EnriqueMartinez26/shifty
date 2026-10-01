@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { Loader2, Save, TicketPercent } from 'lucide-react'
 
@@ -47,36 +47,39 @@ const PromotionsPage: React.FC = () => {
   const cardStyle = create2000sPanelStyle()
   const inputStyle = create2000sInputStyle()
 
-  const promotionCards = useMemo(() => {
-    const promotions = promotionsQuery.data ?? []
-    return [
-      { label: 'Activas', value: promotions.filter((promotion) => promotion.is_active).length },
-      { label: 'Totales', value: promotions.length },
-      {
-        label: 'Con límite',
-        value: promotions.filter((promotion) => promotion.max_uses !== null).length
-      }
-    ]
-  }, [promotionsQuery.data])
+  const promotions = promotionsQuery.data ?? []
+  const promotionCards = [
+    { label: 'Activas', value: promotions.filter((promotion) => promotion.is_active).length },
+    { label: 'Totales', value: promotions.length },
+    {
+      label: 'Con límite',
+      value: promotions.filter((promotion) => promotion.max_uses !== null).length
+    }
+  ]
 
   const handleSavePromotion = async () => {
     if (isSaving) return
     try {
+      // Al editar, un opcional vaciado viaja en null: axios omite undefined y
+      // el PATCH (exclude_unset) dejaba el valor viejo guardado (2026-09-30).
+      // En el alta se sigue omitiendo. code, title, promotion_type y value
+      // nunca van en null.
+      const vacio = editingPromotionId ? null : undefined
       const payload: PromotionPayload = {
         code: promotionForm.code.trim().toUpperCase(),
         title: promotionForm.title.trim(),
-        description: promotionForm.description.trim() || undefined,
+        description: promotionForm.description.trim() || vacio,
         promotion_type: promotionForm.promotion_type,
         value: Number(promotionForm.value),
         min_service_amount: promotionForm.min_service_amount
           ? Number(promotionForm.min_service_amount)
-          : undefined,
-        max_uses: promotionForm.max_uses ? Number(promotionForm.max_uses) : undefined,
+          : vacio,
+        max_uses: promotionForm.max_uses ? Number(promotionForm.max_uses) : vacio,
         // El input entrega una hora de pared argentina sin offset. Mandarla
         // cruda dejaba que el backend la leyera como UTC: la promo vencia tres
         // horas antes de lo que el dueno habia tipeado (2026-09-20).
-        valid_from: fromDateTimeInput(promotionForm.valid_from) ?? undefined,
-        valid_until: fromDateTimeInput(promotionForm.valid_until) ?? undefined,
+        valid_from: fromDateTimeInput(promotionForm.valid_from) ?? vacio,
+        valid_until: fromDateTimeInput(promotionForm.valid_until) ?? vacio,
         is_active: promotionForm.is_active
       }
 

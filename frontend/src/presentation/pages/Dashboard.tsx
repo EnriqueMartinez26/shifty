@@ -1,9 +1,7 @@
-import { useMemo } from 'react'
-import type { CSSProperties, ReactNode } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 
 import { subDays } from 'date-fns'
 import {
-  ArrowUpRight,
   CalendarClock,
   CalendarX,
   Clock3,
@@ -25,8 +23,7 @@ import type { UpcomingAppointment } from '@application/services/DashboardService
 import type {
   ProfessionalReportItem,
   ReportAppointmentItem,
-  ReportTopServiceItem,
-  ReportTrendPoint
+  ReportTopServiceItem
 } from '@application/services/ReportsService'
 
 import {
@@ -36,8 +33,42 @@ import {
 } from '@shared/utils/argentinaTime'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-import SalesDonut from '../components/organisms/dashboard/SalesDonut'
-import TrendChart from '../components/organisms/dashboard/TrendChart'
+import DashboardSignalCard from '../components/organisms/dashboard/DashboardSignalCard'
+import {
+  boardGridStyle,
+  emptyStyle,
+  headlineStyle,
+  insightsGridStyle,
+  lowerGridStyle,
+  metricGridStyle,
+  metricPanelBodyStyle,
+  metricPanelStyle,
+  pageStyle,
+  panelBodyStyle,
+  subtleTextStyle
+} from '../components/organisms/dashboard/dashboardStyles'
+import EmptyState from '../components/organisms/dashboard/EmptyState'
+import ErrorPanel from '../components/organisms/dashboard/ErrorPanel'
+import HealthPill from '../components/organisms/dashboard/HealthPill'
+import MetricCard from '../components/organisms/dashboard/MetricCard'
+import MetricStack from '../components/organisms/dashboard/MetricStack'
+import Panel from '../components/organisms/dashboard/Panel'
+import QuickActionCard from '../components/organisms/dashboard/QuickActionCard'
+import SectionHeader from '../components/organisms/dashboard/SectionHeader'
+import { toneTokens } from '../components/organisms/dashboard/toneTokens'
+import type {
+  ActionItem,
+  AgendaItem,
+  DashboardCopy,
+  DashboardHero,
+  DashboardOperationCard,
+  EnterpriseDashboardProps,
+  MetricItem,
+  OpportunityItem,
+  RankedItem,
+  Tone,
+  TransactionItem
+} from '../components/organisms/dashboard/types'
 import { useAuth } from '../context/AuthContext'
 import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
 import { useDashboardSummary } from '../hooks/useDashboard'
@@ -48,124 +79,17 @@ import { useStoreFeatureFlags } from '../hooks/useStores'
 import { currencyFmtEsAr } from '../lib/formatters'
 import { createDashboardListItemStyle, createDashboardPanelStyle } from '../lib/surfaceStyles'
 
-type Tone = 'neutral' | 'primary' | 'warning' | 'danger' | 'success'
+// Los graficos traen recharts, que era casi todo el chunk del Dashboard
+// (426 KB) y bajaba en la primera pantalla del dueno. Con lazy van a su propio
+// chunk y la pagina pinta sin esperarlo (F4-13).
+const TrendChart = lazy(() => import('../components/organisms/dashboard/TrendChart'))
+const SalesDonut = lazy(() => import('../components/organisms/dashboard/SalesDonut'))
 
-type MetricItem = {
-  id: string
-  label: string
-  value: ReactNode
-  detail?: ReactNode
-  signal?: string
-  icon?: ReactNode
-  tone?: Tone
-  onSelect?: () => void
-}
-
-type ActionItem = {
-  id: string
-  title: string
-  description?: string
-  meta?: string
-  tone?: Tone
-  onSelect?: () => void
-}
-
-type AgendaItem = {
-  id: string
-  time: string
-  title: string
-  subtitle?: string
-  status?: string
-  tone?: Tone
-}
-
-type RankedItem = {
-  id: string
-  label: string
-  value: ReactNode
-  detail?: ReactNode
-}
-
-type TransactionItem = {
-  id: string
-  title: string
-  subtitle?: string
-  amount: string
-  status: string
-  tone?: Tone
-}
-
-type HealthItem = {
-  id: string
-  label: string
-  value: string
-  tone?: Tone
-}
-
-type OpportunityItem = {
-  id: string
-  title: string
-  description: string
-  tone?: Tone
-  actionLabel?: string
-  onSelect?: () => void
-}
-
-type DashboardHero = {
-  title: string
-  description: string
-  periodLabel: string
-  statusLabel: string
-  health: HealthItem[]
-  quickActions: ActionItem[]
-}
-
-type DashboardCopy = {
-  metricsTitle: string
-  transactionsTitle: string
-  transactionsDescription: string
-  viewTransactionsLabel: string
-  operationsTitle: string
-  operationsDescription: string
-  actionsTitle: string
-  moneyTitle: string
-  performanceTitle: string
-  alertsTitle: string
-  opportunitiesTitle: string
-  emptyActions: string
-  emptyAgenda: string
-  emptyAlerts: string
-  emptyOpportunities: string
-  emptyTransactions: string
-}
-
-type DashboardOperationCard = {
-  title: string
-  detail: string
-  meta: string
-  tone?: Tone
-}
-
-type EnterpriseDashboardProps = {
-  copy: DashboardCopy
-  hero: DashboardHero
-  trendPoints: ReportTrendPoint[]
-  trendLoading: boolean
-  topServices: ReportTopServiceItem[]
-  salesLoading: boolean
-  transactions: TransactionItem[]
-  onViewTransactions: () => void
-  todayMetrics: MetricItem[]
-  urgentActions: ActionItem[]
-  agenda: AgendaItem[]
-  operationCards: DashboardOperationCard[]
-  moneyMetrics: MetricItem[]
-  performanceItems: RankedItem[]
-  alerts: ActionItem[]
-  opportunities: OpportunityItem[]
-  isLoading: boolean
-  errorMessage?: string
-}
+// Alto del area de dibujo de cada grafico (el `height` de su contenedor en
+// TrendChart.tsx y SalesDonut.tsx). No se importa de esos modulos: hacerlo
+// traeria recharts de vuelta al chunk del Dashboard.
+const TREND_CHART_HEIGHT = 280
+const SALES_DONUT_HEIGHT = 200
 
 const numberFormatter = new Intl.NumberFormat('es-AR', {
   maximumFractionDigits: 0
@@ -192,87 +116,6 @@ const copy: DashboardCopy = {
   emptyAlerts: 'Sin alertas activas.',
   emptyOpportunities: 'Sin oportunidades destacadas por ahora.',
   emptyTransactions: 'No hay turnos registrados en el periodo.'
-}
-
-const pageStyle: CSSProperties = {
-  display: 'grid',
-  gap: 24,
-  color: colors2000s.text.primary
-}
-
-const metricGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(184px, 1fr))',
-  gap: 16
-}
-
-const boardGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.9fr) minmax(320px, 1fr)',
-  gap: 16,
-  alignItems: 'start'
-}
-
-const lowerGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 0.9fr)',
-  gap: 16,
-  alignItems: 'start'
-}
-
-const insightsGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 2fr) minmax(260px, 1fr) minmax(260px, 1fr)',
-  gap: 16,
-  alignItems: 'start'
-}
-
-const panelBodyStyle: CSSProperties = {
-  padding: 24
-}
-
-const metricPanelStyle: CSSProperties = {
-  ...createDashboardPanelStyle(),
-  padding: 0
-}
-
-const metricPanelBodyStyle: CSSProperties = {
-  ...panelBodyStyle,
-  display: 'grid',
-  gap: 20,
-  background: [
-    'linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.48))',
-    'radial-gradient(circle at top left, rgba(255, 140, 66, 0.12), transparent 32%)'
-  ].join(', ')
-}
-
-const subtleTextStyle: CSSProperties = {
-  color: colors2000s.text.secondary,
-  fontSize: 12,
-  lineHeight: '16px',
-  fontWeight: 700
-}
-
-const headlineStyle: CSSProperties = {
-  margin: 0,
-  fontSize: 28,
-  lineHeight: '32px',
-  fontWeight: 900,
-  color: colors2000s.text.primary,
-  letterSpacing: '-0.02em',
-  textTransform: 'uppercase'
-}
-
-const emptyStyle: CSSProperties = {
-  margin: 0,
-  padding: 16,
-  borderRadius: 6,
-  border: `1px dashed ${colors2000s.border.default}`,
-  background: 'rgba(255, 255, 255, 0.45)',
-  color: colors2000s.text.secondary,
-  fontSize: 12,
-  lineHeight: '16px',
-  fontWeight: 700
 }
 
 const canViewReports = (role: string | undefined, isGlobalAdmin: boolean) =>
@@ -306,42 +149,6 @@ const APPOINTMENT_TONES: Record<BookingStatusValue, Tone> = {
 
 const getAppointmentTone = (status: string): Tone =>
   isBookingStatus(status) ? APPOINTMENT_TONES[status] : 'neutral'
-
-const toneTokens = (tone: Tone = 'neutral') => {
-  if (tone === 'primary') {
-    return {
-      border: colors2000s.orange.accent,
-      accent: colors2000s.orange.accent,
-      background: 'rgba(255, 140, 66, 0.12)'
-    }
-  }
-  if (tone === 'success') {
-    return {
-      border: 'rgba(16, 185, 129, 0.45)',
-      accent: '#0f9f6e',
-      background: 'rgba(16, 185, 129, 0.1)'
-    }
-  }
-  if (tone === 'warning') {
-    return {
-      border: 'rgba(245, 158, 11, 0.42)',
-      accent: '#b76a00',
-      background: 'rgba(245, 158, 11, 0.12)'
-    }
-  }
-  if (tone === 'danger') {
-    return {
-      border: 'rgba(239, 68, 68, 0.38)',
-      accent: '#d13b3b',
-      background: 'rgba(239, 68, 68, 0.1)'
-    }
-  }
-  return {
-    border: colors2000s.border.light,
-    accent: colors2000s.text.secondary,
-    background: 'rgba(255, 255, 255, 0.45)'
-  }
-}
 
 const formatCurrency = (value: number | string | null | undefined) =>
   currencyFmtEsAr.format(Number(value ?? 0))
@@ -842,8 +649,16 @@ function EnterpriseDashboard({
       <SummaryMetricsPanel title={copy.metricsTitle} metrics={todayMetrics} />
 
       <section style={insightsGridStyle} className="dashboard-insights-grid">
-        <TrendChart points={trendPoints} isLoading={trendLoading} />
-        <SalesDonut services={topServices} isLoading={salesLoading} />
+        <Suspense
+          fallback={<ChartPlaceholder text="Cargando tendencia..." height={TREND_CHART_HEIGHT} />}
+        >
+          <TrendChart points={trendPoints} isLoading={trendLoading} />
+        </Suspense>
+        <Suspense
+          fallback={<ChartPlaceholder text="Cargando ventas..." height={SALES_DONUT_HEIGHT} />}
+        >
+          <SalesDonut services={topServices} isLoading={salesLoading} />
+        </Suspense>
         <TransactionsPanel
           title={copy.transactionsTitle}
           description={copy.transactionsDescription}
@@ -1074,92 +889,6 @@ function SummaryMetricsPanel({ title, metrics }: { title: string; metrics: Metri
   )
 }
 
-function ErrorPanel({ message }: { message: string }) {
-  return (
-    <div
-      style={{
-        ...createDashboardPanelStyle(),
-        ...panelBodyStyle,
-        borderColor: 'rgba(239, 68, 68, 0.42)',
-        color: '#d13b3b',
-        fontSize: 14,
-        lineHeight: '20px',
-        fontWeight: 800
-      }}
-    >
-      {message}
-    </div>
-  )
-}
-
-function Panel({
-  title,
-  description,
-  icon,
-  children
-}: {
-  title: string
-  description: string
-  icon: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <section style={createDashboardPanelStyle()}>
-      <div style={{ ...panelBodyStyle, display: 'grid', gap: 16 }}>
-        <SectionHeader icon={icon} title={title} description={description} />
-        {children}
-      </div>
-    </section>
-  )
-}
-
-function SectionHeader({
-  icon,
-  title,
-  description
-}: {
-  icon: ReactNode
-  title: string
-  description: string
-}) {
-  return (
-    <header style={{ display: 'grid', gap: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 6,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'rgba(255, 140, 66, 0.12)',
-            color: colors2000s.orange.accent,
-            boxShadow: colors2000s.shadows.insetLight
-          }}
-        >
-          {icon}
-        </span>
-        <div style={{ display: 'grid', gap: 2 }}>
-          <h3
-            style={{
-              margin: 0,
-              color: colors2000s.text.primary,
-              fontSize: 18,
-              lineHeight: '22px',
-              fontWeight: 900,
-              letterSpacing: '-0.02em'
-            }}
-          >
-            {title}
-          </h3>
-          <p style={{ margin: 0, ...subtleTextStyle }}>{description}</p>
-        </div>
-      </div>
-    </header>
-  )
-}
-
 function OperationPanel({
   title,
   description,
@@ -1238,193 +967,6 @@ function OperationPanel({
         </style>
       </div>
     </section>
-  )
-}
-
-function MetricCard({ item, emphasis = false }: { item: MetricItem; emphasis?: boolean }) {
-  const tone = toneTokens(item.tone)
-
-  return (
-    <button
-      type="button"
-      onClick={item.onSelect}
-      style={{
-        display: 'grid',
-        gap: emphasis ? 12 : 8,
-        minHeight: emphasis ? 164 : 112,
-        padding: emphasis ? 18 : 16,
-        background: emphasis
-          ? [
-              'linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(255, 255, 255, 0.82))',
-              tone.background
-            ].join(', ')
-          : 'rgba(255, 255, 255, 0.65)',
-        border: `1px solid ${tone.border}`,
-        borderRadius: 6,
-        boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`,
-        color: colors2000s.text.primary,
-        textAlign: 'left',
-        cursor: item.onSelect ? 'pointer' : 'default',
-        position: 'relative'
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 10
-        }}
-      >
-        <div style={{ display: 'grid', gap: 8 }}>
-          <span style={{ ...subtleTextStyle, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {item.label}
-          </span>
-          {item.signal ? (
-            <span
-              style={{
-                alignSelf: 'start',
-                padding: '4px 8px',
-                borderRadius: 999,
-                background: 'rgba(255, 255, 255, 0.74)',
-                color: tone.accent,
-                fontSize: 10,
-                lineHeight: '12px',
-                fontWeight: 900,
-                textTransform: 'uppercase',
-                letterSpacing: '0.08em'
-              }}
-            >
-              {item.signal}
-            </span>
-          ) : null}
-        </div>
-
-        {item.icon ? (
-          <span
-            style={{
-              width: emphasis ? 40 : 34,
-              height: emphasis ? 40 : 34,
-              borderRadius: 6,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'rgba(255, 255, 255, 0.86)',
-              color: tone.accent,
-              boxShadow: colors2000s.shadows.insetLight,
-              flexShrink: 0
-            }}
-          >
-            {item.icon}
-          </span>
-        ) : null}
-      </div>
-      <strong
-        style={{
-          color: item.tone === 'primary' ? colors2000s.orange.accent : colors2000s.text.primary,
-          fontSize: emphasis ? 32 : 26,
-          lineHeight: emphasis ? '36px' : '30px',
-          fontWeight: 900,
-          letterSpacing: '-0.03em'
-        }}
-      >
-        {item.value}
-      </strong>
-      {item.detail ? (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 10,
-            marginTop: 'auto',
-            paddingTop: emphasis ? 8 : 0
-          }}
-        >
-          <span style={{ color: tone.accent, fontSize: 12, lineHeight: '16px', fontWeight: 800 }}>
-            {item.detail}
-          </span>
-          {emphasis ? <ArrowUpRight size={14} color={tone.accent} /> : null}
-        </div>
-      ) : null}
-    </button>
-  )
-}
-
-function MetricStack({ items }: { items: MetricItem[] }) {
-  return (
-    <div style={{ display: 'grid', gap: 12 }}>
-      {items.map((item) => (
-        <MetricCard key={item.id} item={item} />
-      ))}
-    </div>
-  )
-}
-
-function HealthPill({ item }: { item: HealthItem }) {
-  const tone = toneTokens(item.tone)
-
-  return (
-    <div
-      style={{
-        padding: '14px 16px',
-        borderRadius: 4,
-        background: tone.background,
-        boxShadow: colors2000s.shadows.insetLight,
-        display: 'grid',
-        gap: 4
-      }}
-    >
-      <span style={{ ...subtleTextStyle, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-        {item.label}
-      </span>
-      <strong style={{ color: tone.accent, fontSize: 14, lineHeight: '18px', fontWeight: 900 }}>
-        {item.value}
-      </strong>
-    </div>
-  )
-}
-
-function QuickActionCard({ item }: { item: ActionItem }) {
-  const tone = toneTokens(item.tone)
-
-  return (
-    <button
-      type="button"
-      onClick={item.onSelect}
-      style={{
-        ...buttonStyles2000s.default,
-        borderRadius: 6,
-        padding: 16,
-        textAlign: 'left',
-        display: 'grid',
-        gap: 6,
-        borderColor: tone.border
-      }}
-    >
-      <strong
-        style={{
-          color: colors2000s.text.primary,
-          fontSize: 14,
-          lineHeight: '18px',
-          fontWeight: 900
-        }}
-      >
-        {item.title}
-      </strong>
-      {item.description ? (
-        <span
-          style={{
-            color: colors2000s.text.secondary,
-            fontSize: 12,
-            lineHeight: '16px',
-            fontWeight: 700
-          }}
-        >
-          {item.description}
-        </span>
-      ) : null}
-    </button>
   )
 }
 
@@ -1711,38 +1253,6 @@ function TransactionsPanel({
   )
 }
 
-function DashboardSignalCard({ card }: { card: DashboardOperationCard }) {
-  const tone = toneTokens(card.tone)
-
-  return (
-    <div
-      style={{
-        ...createDashboardListItemStyle(tone.border, tone.background),
-        display: 'grid',
-        gap: 8
-      }}
-    >
-      <span style={{ ...subtleTextStyle, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-        {card.title}
-      </span>
-      <strong style={{ color: tone.accent, fontSize: 22, lineHeight: '26px', fontWeight: 900 }}>
-        {card.meta}
-      </strong>
-      <p
-        style={{
-          margin: 0,
-          color: colors2000s.text.secondary,
-          fontSize: 12,
-          lineHeight: '16px',
-          fontWeight: 700
-        }}
-      >
-        {card.detail}
-      </p>
-    </div>
-  )
-}
-
 function RankedList({ items }: { items: RankedItem[] }) {
   if (!items.length) return <EmptyState text="Sin datos para este periodo." />
 
@@ -1885,8 +1395,18 @@ function OpportunityList({ items, emptyText }: { items: OpportunityItem[]; empty
   )
 }
 
-function EmptyState({ text }: { text: string }) {
-  return <p style={emptyStyle}>{text}</p>
+/**
+ * Lugar reservado mientras baja el chunk de un grafico: el mismo panel y el
+ * alto de su area de dibujo, para que la grilla no salte cuando llega.
+ */
+function ChartPlaceholder({ text, height }: { text: string; height: number }) {
+  return (
+    <section style={createDashboardPanelStyle()} aria-busy="true">
+      <div style={panelBodyStyle}>
+        <p style={{ ...emptyStyle, height, display: 'grid', placeItems: 'center' }}>{text}</p>
+      </div>
+    </section>
+  )
 }
 
 export default Dashboard

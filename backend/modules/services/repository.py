@@ -7,6 +7,13 @@ from modules.services.model import Service
 
 
 class ServiceRepository:
+    """Consultas y escrituras del catalogo, sin commit.
+
+    Solo hace ``flush``: el commit es del service (``ServiceCatalogService``,
+    B6-05, 2026-09-30), para que el PATCH y el borrado de la imagen huerfana
+    cierren en UNA transaccion.
+    """
+
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
 
@@ -20,7 +27,7 @@ class ServiceRepository:
         # del dueno; esto solo saca la linea muerta.
         new_service = Service(**service_data, store_id=store_id)
         self.db.add(new_service)
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(new_service)
         return new_service
 
@@ -58,10 +65,10 @@ class ServiceRepository:
         for key, value in update_data.items():
             setattr(service, key, value)
 
-        await self.db.commit()
+        await self.db.flush()
         await self.db.refresh(service)
         return service
 
     async def soft_delete(self, service: Service) -> None:
         service.is_active = False
-        await self.db.commit()
+        await self.db.flush()
