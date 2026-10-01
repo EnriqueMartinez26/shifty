@@ -35,4 +35,11 @@ export interface BookingOtpState {
    * deslizante y cualquier numero seria una promesa falsa (F4-11).
    */
   rateLimited: boolean
+  /**
+   * `debug_code` tal cual lo devolvio la API (solo con
+   * OTP_DEBUG_EXPOSE_CODE, fuera de produccion); vacio si no vino. Si el
+   * codigo fue al email de la ficha y no al tipeado es un senuelo
+   * (AUD2-SYNC-01): se muestra con el aviso de que puede no servir (J7).
+   */
+  debugCode: string
 }

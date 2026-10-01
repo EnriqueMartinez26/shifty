@@ -50,6 +50,7 @@ const otpInicial = (patch: Partial<BookingOtpState> = {}): BookingOtpState => ({
   expiresAt: '',
   error: '',
   rateLimited: false,
+  debugCode: '',
   ...patch
 })
 

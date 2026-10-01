@@ -311,20 +311,59 @@ describe('BookingWizardContainer', () => {
       expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
     })
 
-    it('no muestra el debug_code aunque la API lo devuelva', async () => {
-      // 2026-09-30, J7: con OTP_DEBUG_EXPOSE_CODE el backend devuelve un
-      // senuelo cuando el codigo fue a un buzon distinto del tipeado; la
-      // pantalla lo mostraba como "Codigo debug" y no verificaba.
-      mockRequestOtp.mockResolvedValue({
-        ok: true,
-        expires_at: '2026-09-30T13:00:00Z',
-        debug_code: '424242'
-      })
-      await hastaPedirElCodigo()
+    describe('codigo debug (J7)', () => {
+      // 2026-09-30, J7: mostrar el codigo debug con aviso de que puede no
+      // servir. Con OTP_DEBUG_EXPOSE_CODE el backend devuelve un senuelo si el
+      // codigo fue al email de la ficha y no al tipeado (AUD2-SYNC-01); el
+      // front muestra debug_code tal cual llega y avisa que puede no servir.
+      const AVISO =
+        'Codigo debug (solo desarrollo): 424242. Si el telefono ya tiene ficha con email, el codigo real fue a ese buzon y este puede no servir.'
 
-      expect(mockRequestOtp).toHaveBeenCalledTimes(1)
-      expect(screen.queryByText(/424242/)).not.toBeInTheDocument()
-      expect(screen.queryByText(/Codigo debug/i)).not.toBeInTheDocument()
+      it('un pedido exitoso con debug_code muestra el codigo con el aviso', async () => {
+        mockRequestOtp.mockResolvedValue({
+          ok: true,
+          expires_at: '2026-09-30T13:00:00Z',
+          debug_code: '424242'
+        })
+        await hastaPedirElCodigo()
+
+        expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+        expect(screen.getByRole('status')).toHaveTextContent(AVISO)
+      })
+
+      it('un pedido exitoso sin debug_code no muestra nada', async () => {
+        mockRequestOtp.mockResolvedValue({ ok: true, expires_at: '2026-09-30T13:00:00Z' })
+        await hastaPedirElCodigo()
+
+        expect(mockRequestOtp).toHaveBeenCalledTimes(1)
+        expect(screen.queryByText(/Codigo debug/)).not.toBeInTheDocument()
+      })
+
+      it('cambiar el telefono verificado borra el codigo debug con el codigo tipeado', async () => {
+        mockRequestOtp.mockResolvedValue({
+          ok: true,
+          expires_at: '2026-09-30T13:00:00Z',
+          debug_code: '424242'
+        })
+        mockVerifyOtp.mockResolvedValue({
+          phone: '+5491155550101',
+          verified_at: '2026-09-30T12:00:00Z'
+        })
+        await hastaPedirElCodigo()
+        fireEvent.change(screen.getByPlaceholderText('Codigo que te llego por email'), {
+          target: { value: '424242' }
+        })
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: 'Verificar codigo' }))
+        })
+        expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+
+        fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
+          target: { value: '+5491155550202' }
+        })
+
+        expect(screen.queryByText(/Codigo debug/)).not.toBeInTheDocument()
+      })
     })
   })
 })
