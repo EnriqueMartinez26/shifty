@@ -27,23 +27,32 @@ import { MiniButton } from '../SuperAdminUi'
  * llegan por props con los mismos nombres que usaba el JSX original.
  */
 
+/** Listado paginado (FF-24): `total` es null si el backend no mando el header. */
+interface StoresQueryState extends QueryState<SuperAdminStoreRow[]> {
+  total: number | null
+  hasNextPage: boolean
+  isFetchingNextPage: boolean
+  fetchNextPage: () => unknown
+}
+
 interface StoresSectionProps {
+  /** Texto tipeado; la consulta se aplica con espera en SuperAdmin.tsx (F4-10). */
   search: string
-  setSearch: React.Dispatch<React.SetStateAction<string>>
+  onSearchChange: (value: string) => void
   activityFilter: ActivityFilter
   setActivityFilter: React.Dispatch<React.SetStateAction<ActivityFilter>>
   subscriptionFilter: SubscriptionFilter
   setSubscriptionFilter: React.Dispatch<React.SetStateAction<SubscriptionFilter>>
   selectedStoreId: string | null
   setSelectedStoreId: React.Dispatch<React.SetStateAction<string | null>>
-  storesQuery: QueryState<SuperAdminStoreRow[]>
+  storesQuery: StoresQueryState
   openEditStoreFor: (store: SuperAdminStoreRow) => void
   toggleStoreActive: (store: SuperAdminStoreRow) => Promise<void>
 }
 
 export const StoresSection: React.FC<StoresSectionProps> = ({
   search,
-  setSearch,
+  onSearchChange,
   activityFilter,
   setActivityFilter,
   subscriptionFilter,
@@ -84,8 +93,10 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           />
           <input
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => onSearchChange(event.target.value)}
             placeholder="Buscar por nombre o slug"
+            aria-label="Buscar tienda"
+            maxLength={100}
             className="w-full rounded-2xl py-3 pl-11 pr-4 text-sm font-bold outline-none md:w-72"
             style={create2000sInputStyle()}
           />
@@ -322,5 +333,24 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
         </div>
       )}
     </div>
+
+    {storesQuery.data?.length ? (
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <p
+          className="text-[10px] font-black uppercase tracking-widest"
+          style={{ color: colors2000s.text.secondary }}
+        >
+          Mostrando {storesQuery.data.length}
+          {storesQuery.total === null ? '' : ` de ${storesQuery.total}`}
+        </p>
+        {storesQuery.hasNextPage ? (
+          <MiniButton
+            label={storesQuery.isFetchingNextPage ? 'Cargando...' : 'Cargar más'}
+            onClick={() => void storesQuery.fetchNextPage()}
+            disabled={storesQuery.isFetchingNextPage}
+          />
+        ) : null}
+      </div>
+    ) : null}
   </section>
 )

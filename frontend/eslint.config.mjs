@@ -287,6 +287,11 @@ export default [
   },
   {
     files: ['src/infrastructure/**/*.{ts,tsx}'],
+    // Infrastructure adapts to application contracts: it may only take the
+    // `dtos` and `mappers` from application (D-20260930-17, F12-03). A regex
+    // with a negative lookahead is used because gitignore-style `!` entries
+    // cannot re-include a folder whose parent (`application/**`) is excluded.
+    // It covers the alias and the relative form in one pattern.
     rules: {
       'no-restricted-imports': [
         'error',
@@ -295,6 +300,58 @@ export default [
             {
               group: ['@presentation/**', '**/presentation/**'],
               message: 'Infrastructure cannot depend on presentation.'
+            },
+            {
+              regex: '(^@application|/application)/(?!(dtos|mappers)(/|$))',
+              message: 'Infrastructure can only import application dtos and mappers.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    // Presentation consumes application services; the repositories are
+    // infrastructure adapters that only application wires up (D-20260930-17,
+    // F12-03). Other infrastructure modules (http client, session sync) stay
+    // allowed: AuthContext and the login hook need them.
+    files: ['src/presentation/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@infrastructure/repositories/**', '**/infrastructure/repositories/**'],
+              message: 'Presentation cannot import infrastructure repositories.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    // Theme holds design tokens only, so it sits next to shared at the bottom
+    // of the stack: no layer may be imported (D-20260930-17, F12-03).
+    files: ['src/theme/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                '@domain/**',
+                '@application/**',
+                '@infrastructure/**',
+                '@presentation/**',
+                '**/domain/**',
+                '**/application/**',
+                '**/infrastructure/**',
+                '**/presentation/**'
+              ],
+              message:
+                'Theme cannot depend on domain, application, infrastructure, or presentation.'
             }
           ]
         }

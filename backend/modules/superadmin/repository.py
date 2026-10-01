@@ -292,7 +292,13 @@ class StoreAdminRepository(_BaseAdminRepository):
             .outerjoin(canjes, canjes.c.store_id == Store.id)
             .where(*_store_filters(search, is_active, has_subscription, suscripcion))
         )
-        query = query.order_by(Store.created_at.desc()).offset(offset).limit(limit)
+        # El id desempata altas del mismo instante: sin el, el OFFSET repetia
+        # o salteaba tiendas entre paginas (como en services/repository.py).
+        query = (
+            query.order_by(Store.created_at.desc(), Store.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
 
         result = await self.db.execute(query)
         return [_store_row(row[0], row) for row in result.all()]

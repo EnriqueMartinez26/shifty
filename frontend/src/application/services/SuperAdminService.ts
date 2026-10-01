@@ -153,8 +153,23 @@ export interface SuperAdminCoupon {
 
 export interface ListStoresParams {
   search?: string
-  is_active?: boolean | null
+  /** `all` no filtra por estado; sin el parametro el backend trae solo activas. */
+  is_active?: boolean | 'all'
   has_subscription?: boolean | null
+  limit?: number
+  offset?: number
+}
+
+interface SuperAdminStoresPage {
+  stores: SuperAdminStoreRow[]
+  /** `X-Total-Count` del backend; null si no vino o no es un numero. */
+  total: number | null
+}
+
+const parseTotalCount = (raw: unknown): number | null => {
+  if (typeof raw !== 'string' || raw.trim() === '') return null
+  const total = Number(raw)
+  return Number.isInteger(total) && total >= 0 ? total : null
 }
 
 export interface CreateSuperAdminStorePayload {
@@ -253,16 +268,20 @@ export interface UpdateSuperAdminCouponPayload {
 }
 
 class SuperAdminService {
-  async listStores(params: ListStoresParams = {}): Promise<SuperAdminStoreRow[]> {
-    // axios omite los null/undefined; la busqueda vacia tampoco viaja.
-    const { data } = await apiClient.get<SuperAdminStoreRow[]>('/superadmin/stores', {
+  async listStores(params: ListStoresParams = {}): Promise<SuperAdminStoresPage> {
+    // axios omite los null/undefined; la busqueda vacia tampoco viaja. El total
+    // llega en X-Total-Count (expuesto por CORS en main.py) para no cambiar la
+    // forma de la respuesta, que sigue siendo una lista (FF-24).
+    const { data, headers } = await apiClient.get<SuperAdminStoreRow[]>('/superadmin/stores', {
       params: {
         search: params.search || undefined,
         is_active: params.is_active,
-        has_subscription: params.has_subscription
+        has_subscription: params.has_subscription,
+        limit: params.limit,
+        offset: params.offset
       }
     })
-    return data
+    return { stores: data, total: parseTotalCount(headers['x-total-count']) }
   }
 
   async getStoreOverview(storePublicId: string): Promise<SuperAdminStoreOverview> {
