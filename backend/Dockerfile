@@ -1,7 +1,10 @@
 FROM python:3.14.7-slim-trixie
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# `apt-get upgrade`: esta capa se cachea (cache gha de build-images.yml) y
+# dejaba paquetes con avisos de seguridad ya corregidos en trixie-security
+# (linux-libc-dev, openssl/libssl). Cada build que reconstruye la capa los trae.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
