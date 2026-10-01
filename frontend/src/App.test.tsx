@@ -139,7 +139,9 @@ const RUTAS_PANEL: RutaPanel[] = [
   },
   {
     ruta: '/dashboard/payments',
-    permitidos: ADMIN_SUPER_PRO,
+    // Sin el profesional: el backend le niega la conciliacion, la cola de
+    // envios y las devoluciones (FF-21, D-20260930-01).
+    permitidos: ADMIN_SUPER,
     marcadores: [...PANEL_ADMIN, 'boundary:Payments are temporarily unavailable', 'page:Payments']
   },
   {

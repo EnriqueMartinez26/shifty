@@ -90,6 +90,46 @@ describe('Sidebar', () => {
   })
 })
 
+describe('Sidebar: Ventas segun el rol (FF-21)', () => {
+  beforeEach(() => {
+    mockUser = {
+      first_name: 'Ana',
+      email: 'ana@example.com',
+      role: 'professional',
+      is_global_admin: false
+    }
+  })
+
+  const renderVentas = () =>
+    render(
+      <MemoryRouter initialEntries={['/dashboard/collections']}>
+        <Sidebar />
+      </MemoryRouter>
+    )
+
+  it('el profesional no ve "Cobros online" pero si "Cobros" y "Cuentas pendientes"', () => {
+    renderVentas()
+
+    expect(screen.queryByRole('link', { name: 'Cobros online' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Cobros' })).toHaveAttribute(
+      'href',
+      '/dashboard/collections'
+    )
+    expect(screen.getByRole('link', { name: 'Cuentas pendientes' })).toBeInTheDocument()
+  })
+
+  it('el admin de la tienda ve "Cobros online"', () => {
+    mockUser = { ...mockUser, role: 'store_admin' }
+    renderVentas()
+
+    expect(screen.getByRole('link', { name: 'Cobros online' })).toHaveAttribute(
+      'href',
+      '/dashboard/payments'
+    )
+    expect(screen.getByRole('link', { name: 'Cobros' })).toBeInTheDocument()
+  })
+})
+
 describe('Sidebar: grupos que siguen a la ruta (F11a-11)', () => {
   const GoTo = ({ path }: { path: string }) => {
     const navigate = useNavigate()
