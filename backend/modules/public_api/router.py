@@ -615,7 +615,11 @@ def _client_item(
     vigente = client_may_leave(appt)
     return ClientAppointmentItem(
         public_id=appt.public_id,
+        # Servicio y profesional ya vienen en el JOIN del historial: sin
+        # consultas extra (regla 12).
+        service_id=appt.service.public_id,
         service_name=appt.service.name,
+        staff_id=appt.staff.public_id,
         staff_name=appt.staff.display_name,
         starts_at=appt.starts_at,
         ends_at=appt.ends_at,

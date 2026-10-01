@@ -35,7 +35,9 @@ const store = {
 
 const turno = {
   public_id: 'appt-1',
+  service_id: 'svc-1',
   service_name: 'Corte',
+  staff_id: 'staff-1',
   staff_name: 'Ana',
   // 13:00 UTC = 10:00 en Argentina
   starts_at: '2026-09-15T13:00:00+00:00',

@@ -209,7 +209,12 @@ class PublicPromotionPreviewResponse(BaseModel):
 
 class ClientAppointmentItem(BaseModel):
     public_id: str
+    # Ids publicos para pedir la grilla al reprogramar (D-20260930-06): el
+    # ``public_id`` del servicio y el id publico del profesional, los mismos
+    # que usa la reserva publica.
+    service_id: str
     service_name: str
+    staff_id: str
     staff_name: str
     starts_at: datetime
     ends_at: datetime
