@@ -4174,7 +4174,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 
 | field | type | required | constraints |
 |---|---|---|---|
-| `display_name` | string | yes | minLength=2, maxLength=255 |
+| `display_name` | string | yes | minLength=2, maxLength=100 |
 | `kind` | enum("person", "resource") | no | default="person" |
 | `first_name` | string \| null | no | maxLength=100 |
 | `last_name` | string \| null | no | maxLength=100 |
@@ -4185,7 +4185,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 
 | field | type | required | constraints |
 |---|---|---|---|
-| `display_name` | string | yes | minLength=2, maxLength=255 |
+| `display_name` | string | yes | minLength=2, maxLength=100 |
 | `public_id` | string | yes |  |
 | `kind` | string | no | default="person" |
 | `first_name` | string | yes |  |
@@ -4203,7 +4203,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `first_name` | string \| null | no | minLength=1, maxLength=100 |
 | `last_name` | string \| null | no | minLength=1, maxLength=100 |
 | `email` | string \| null | no | format="email" |
-| `display_name` | string \| null | no | minLength=2, maxLength=255 |
+| `display_name` | string \| null | no | minLength=2, maxLength=100 |
 | `service_ids` | array<string> \| null | no | maxItems=100 |
 | `is_active` | boolean \| null | no |  |
 
@@ -4680,4 +4680,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-09-29, commit cf38280
+Generado desde app.openapi() el 2026-10-01, commit 42279b8
