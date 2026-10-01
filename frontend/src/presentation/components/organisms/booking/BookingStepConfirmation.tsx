@@ -23,6 +23,7 @@ import type {
 } from '@application/services/PublicBookingService'
 import type { StoreCustomField } from '@application/services/StoreSettingsService'
 
+import { useDebouncedValue } from '@presentation/hooks/useDebouncedValue'
 import {
   usePreviewPublicPromotion,
   usePublicDepositPreview,
@@ -30,6 +31,7 @@ import {
 } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { phoneDigits } from '@shared/utils/otpSession'
 import { asSafeHttpsUrl, navigateExternal, sanitizePhoneForUrl } from '@shared/utils/safeUrl'
 
 import { depositBreakdownText } from './depositReasons'
@@ -136,12 +138,17 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   // El telefono solo viaja dentro del rango que acepta el backend
   // (client_phone 6..30): a medio tipear era un 422 por tecla (F11a-05). Sin
   // el, el backend decide la seña sin historial, igual que con uno sin OTP.
+  // Viaja con 8 digitos o mas y 400 ms sin tipear: desde el sexto caracter
+  // era una request por tecla (F4-06).
   const depositPhone = bookingState.client.phone.trim()
+  const eligibleDepositPhone =
+    phoneDigits(depositPhone).length >= 8 && depositPhone.length <= 30 ? depositPhone : undefined
+  const debouncedDepositPhone = useDebouncedValue(eligibleDepositPhone, 400)
   const depositQuery = usePublicDepositPreview({
     storePublicId,
     serviceId,
     startsAt: bookingState.startsAt,
-    clientPhone: depositPhone.length >= 6 && depositPhone.length <= 30 ? depositPhone : undefined,
+    clientPhone: debouncedDepositPhone,
     promotionCode: bookingState.promotionCode || undefined
   })
   const inferredDeposit = Boolean(

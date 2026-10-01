@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
@@ -247,36 +247,69 @@ describe('BookingStepConfirmation', () => {
       })
     })
 
-    it('con un telefono a medio tipear consulta la seña sin telefono', () => {
+    describe('con un telefono a medio tipear', () => {
       // F11a-05 (2026-09-24): cada tecla cambiaba la queryKey y con menos de 6
       // caracteres el backend responde 422 (client_phone min_length=6), con
       // reintento y paso por el manejador global de errores.
-      const { rerender } = render(
-        <BookingStepConfirmation
-          {...props({ bookingState: estado({ client: cliente({ phone: '11555' }) }) })}
-        />
-      )
-      expect(mockDepositPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({ clientPhone: undefined })
-      )
+      // F4-06 (2026-09-30): aun dentro del rango habia una request por tecla
+      // desde el sexto caracter; el telefono viaja con 8 digitos o mas y
+      // despues de 400 ms sin tipear.
+      beforeEach(() => jest.useFakeTimers())
+      afterEach(() => jest.useRealTimers())
 
-      rerender(
+      const conTelefono = (phone: string) => (
         <BookingStepConfirmation
-          {...props({ bookingState: estado({ client: cliente({ phone: '1'.repeat(31) }) }) })}
+          {...props({ bookingState: estado({ client: cliente({ phone }) }) })}
         />
       )
-      expect(mockDepositPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({ clientPhone: undefined })
-      )
+      const ultimoTelefono = () => mockDepositPreview.mock.lastCall?.[0]?.clientPhone
 
-      rerender(
-        <BookingStepConfirmation
-          {...props({ bookingState: estado({ client: cliente({ phone: ' 115555 ' }) }) })}
-        />
-      )
-      expect(mockDepositPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({ clientPhone: '115555' })
-      )
+      it('con menos de 8 digitos o mas de 30 caracteres consulta la seña sin telefono', () => {
+        const { rerender } = render(conTelefono('11555'))
+        expect(ultimoTelefono()).toBeUndefined()
+
+        // 6 digitos: antes viajaba, ahora no.
+        rerender(conTelefono(' 115555 '))
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+
+        rerender(conTelefono('1155555'))
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+
+        rerender(conTelefono('1'.repeat(31)))
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+      })
+
+      it('con 8 digitos o mas manda el telefono despues de 400 ms sin tipear', () => {
+        const { rerender } = render(conTelefono('115'))
+
+        rerender(conTelefono(' 11555501 '))
+        expect(ultimoTelefono()).toBeUndefined()
+        act(() => {
+          jest.advanceTimersByTime(399)
+        })
+        expect(ultimoTelefono()).toBeUndefined()
+        act(() => {
+          jest.advanceTimersByTime(1)
+        })
+        expect(ultimoTelefono()).toBe('11555501')
+
+        // Una tecla mas reinicia la espera: sigue el telefono anterior.
+        rerender(conTelefono('115555010'))
+        expect(ultimoTelefono()).toBe('11555501')
+        act(() => {
+          jest.advanceTimersByTime(400)
+        })
+        expect(ultimoTelefono()).toBe('115555010')
+      })
     })
   })
 
