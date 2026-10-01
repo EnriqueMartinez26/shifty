@@ -1,0 +1,8 @@
+# Falsos positivos puntuales de gitleaks (formato commit:archivo:regla:linea).
+# Cada entrada lleva su motivo. No es un allowlist general: solo silencia ese
+# hallazgo exacto en ese commit; las reglas siguen activas en todo el repo.
+#
+# F9-08 (2026-10-01): relleno de un test que se reemplazo por 'x'.repeat(12) en
+# 7c839ee; el literal quedo en el historial del PR #42 y gitleaks escanea todos
+# sus commits. No es un secreto.
+f72f66b2b4db290cdff6b79d8e3d4064d5bff30c:frontend/src/application/services/SuperAdminService.test.ts:generic-api-key:70
