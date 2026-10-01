@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useState } from 'react'
 
 import { RefreshCcw, Settings2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -41,18 +41,16 @@ const PaymentsPage: React.FC = () => {
   })
   const [message, setMessage] = useState('')
 
-  const summaryCards = useMemo(() => {
-    const summary = summaryQuery.data
-    return [
-      { label: 'Por revisar', value: summary?.pending_payments ?? 0 },
-      { label: 'Aprobados', value: summary?.approved_payments ?? 0 },
-      { label: 'Confirmados manualmente', value: summary?.manual_confirmed_payments ?? 0 },
-      {
-        label: 'Total cobrado',
-        value: currencyFmt.format(Number(summary?.total_approved_amount ?? 0))
-      }
-    ]
-  }, [summaryQuery.data])
+  const summary = summaryQuery.data
+  const summaryCards = [
+    { label: 'Por revisar', value: summary?.pending_payments ?? 0 },
+    { label: 'Aprobados', value: summary?.approved_payments ?? 0 },
+    { label: 'Confirmados manualmente', value: summary?.manual_confirmed_payments ?? 0 },
+    {
+      label: 'Total cobrado',
+      value: currencyFmt.format(Number(summary?.total_approved_amount ?? 0))
+    }
+  ]
 
   const handleRefund = async () => {
     try {

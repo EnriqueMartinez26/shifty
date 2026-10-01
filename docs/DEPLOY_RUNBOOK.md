@@ -27,6 +27,7 @@ make deploy-edge                   # only when nginx's image or nginx/nginx.prod
 | certbot on the host with webroot `/opt/shifty/nginx/acme` (compose mounts `./nginx/acme` at `/var/www/acme` in nginx) and `scripts/cert-deploy-hook.sh` as deploy hook | `certbot renew --dry-run` |
 | After adding the `pg_backups` volume to `docker-compose.prod.yml`, the `db` container was recreated once so the volume attaches (see below) | `docker compose exec db ls /backups` |
 | python3 on the host (the latency report is stdlib only) | `python3 --version` |
+| Sending domain verified with the SMTP provider, with SPF, DKIM and DMARC published and the provider sandbox lifted (see "Mail deliverability" below) | a test OTP to a Gmail account shows `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS` |
 
 certbot:
 
@@ -49,6 +50,29 @@ APP_VERSION=$(cat .deploy/current) docker compose exec db ls -ld /backups
 Before the first deploy with this script there is no `.deploy/current`; use the sha that is about to be deployed.
 
 The clone is assumed at `/opt/shifty` in the systemd unit and the cron files; edit those paths if it lives elsewhere. `SHIFTY_DIR` defaults to the clone the script belongs to, so do not set it in a shared `ops.env`.
+
+### Mail deliverability (SPF, DKIM, DMARC)
+
+Production sends OTP codes, booking confirmations and reminders over SMTP with STARTTLS on port 587 (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `EMAILS_FROM_EMAIL` in the server `.env`; `docker-compose.prod.yml` refuses to start without them). Without SPF, DKIM and DMARC on the sending domain, Gmail and Outlook file that mail as spam or reject it, and a client who never sees the OTP cannot book. Do this once, before the first deploy; DNS changes can take hours to propagate.
+
+In the records below, `<domain>` is the domain of `EMAILS_FROM_EMAIL` and everything in `<...>` is a placeholder: take the real values from the chosen provider's console, never from this page.
+
+1. **Choose the provider.** Any SMTP relay with domain verification, DKIM signing and bounce handling works. Amazon SES is the cost reference (pay per message, no monthly minimum), not a decision. Below, "the chosen provider" is whatever is picked. `SMTP_USER`/`SMTP_PASS` are the provider's SMTP credentials (for SES, SMTP credentials generated in the console, not the IAM access keys).
+2. **Verify the sending domain** with the provider (verifying a single address is not enough: DKIM signs per domain). The provider asks for one or more DNS records to prove ownership; on SES the DKIM records below double as the verification.
+3. **Publish the DNS records** at the domain's DNS host:
+
+   | Record | Name | Value (pattern) |
+   | --- | --- | --- |
+   | SPF (TXT) | the envelope sender (Return-Path) domain: `<domain>`, or the custom MAIL FROM subdomain if the provider uses one (e.g. `<bounce-subdomain>.<domain>`) | `v=spf1 include:<provider-spf-domain> -all` |
+   | DKIM (CNAME or TXT, as the provider says) | `<selector>._domainkey.<domain>`, one per selector the provider gives | the CNAME target or the `v=DKIM1; k=rsa; p=<public-key>` value the provider gives |
+   | DMARC (TXT) | `_dmarc.<domain>` | `v=DMARC1; p=none; rua=mailto:<reports-mailbox>@<domain>` |
+
+   - A name has **at most one** SPF record. If `<domain>` already has one (for example for a mailbox provider), add the `include:` to it instead of creating a second record: two SPF records are a permanent error and SPF fails for both.
+   - DMARC passes when SPF or DKIM passes **for the domain in the From header**. A provider that uses its own domain as Return-Path passes SPF for that domain, not for `<domain>`; then DKIM is the one that aligns. Configure a custom MAIL FROM subdomain on the provider if SPF should align too.
+   - Start DMARC with `p=none` and read the aggregate reports that arrive at the `rua` mailbox for one or two weeks. When every legitimate source passes, move to `p=quarantine` (later `p=reject` if desired). Going straight to `quarantine` can send real mail to spam if a source was missed.
+4. **From address.** `EMAILS_FROM_EMAIL` must be an address on the verified domain (for example `no-reply@<domain>`); with any other address the provider refuses to send or DMARC fails. Changing it is a change to the server `.env`, applied by recreating the app services on the running version (`APP_VERSION=$(cat .deploy/current) docker compose up -d --no-deps --no-build backend celery_worker celery_worker_interactive celery_beat`).
+5. **Leave the sandbox.** Some providers start new accounts in a sandbox that only delivers to verified recipients and caps the daily volume (SES does). Request production access from the provider before the first deploy; the request asks for the kind of mail (transactional: codes, confirmations, reminders) and how bounces and complaints are handled.
+6. **Verify end to end.** With the release deployed, request an OTP from a store's public booking page with a phone that is not yet a client of that store and a Gmail address (`OTP_PROVIDER` must not be `console`: production refuses it). In Gmail, open the message, then "Mostrar original" ("Show original"): the header summary must read `SPF: PASS`, `DKIM: PASS` and `DMARC: PASS`, with the DKIM domain equal to `<domain>`. If one fails, fix the record before going live; tools such as `dig TXT _dmarc.<domain>` and `dig TXT <selector>._domainkey.<domain>` (or `CNAME`) show what is published.
 
 ## 2. Images (CI)
 

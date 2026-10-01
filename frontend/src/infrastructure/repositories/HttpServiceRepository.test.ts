@@ -192,3 +192,102 @@ describe('HttpServiceRepository.findById ante un 404', () => {
     await expect(repository.findById('svc-x')).rejects.toBe(conflicto)
   })
 })
+
+/**
+ * FF-22 (2026-09-30): un servicio eliminado o desactivado desaparecia del panel
+ * y no se podia reactivar. `include_inactive` exige STORE_MANAGERS en el
+ * backend (403 a un profesional), asi que viaja SOLO cuando se pide.
+ */
+describe('HttpServiceRepository.findAll e include_inactive', () => {
+  const setup = () => {
+    const get = jest.fn().mockResolvedValue({ data: [serviceConSena] })
+    const client = { get, post: jest.fn(), patch: jest.fn(), delete: jest.fn() }
+    return { get, repository: new HttpServiceRepository(client as unknown as AxiosInstance) }
+  }
+
+  it('la lista compartida no manda ningun parametro', async () => {
+    const { get, repository } = setup()
+
+    await repository.findAll()
+
+    expect(get.mock.calls).toEqual([['/services/']])
+  })
+
+  it('el catalogo pide los inactivos con include_inactive=true', async () => {
+    const { get, repository } = setup()
+
+    await repository.findAll({ includeInactive: true })
+
+    expect(get.mock.calls).toEqual([['/services/', { params: { include_inactive: true } }]])
+  })
+
+  it('acepta el booleano de la interfaz, como HttpUserRepository', async () => {
+    const { get, repository } = setup()
+
+    await repository.findAll(true)
+    await repository.findAll(false)
+
+    expect(get.mock.calls).toEqual([
+      ['/services/', { params: { include_inactive: true } }],
+      ['/services/']
+    ])
+  })
+
+  it('reactivar manda solo `is_active: true`', async () => {
+    const { patch, repository } = createClient()
+
+    await repository.update('svc-1', { isActive: true })
+
+    expect(bodyOf(patch)).toEqual({ is_active: true })
+  })
+})
+
+/**
+ * 2026-09-30: el panel no podia subir la imagen de un servicio aunque el
+ * backend ya lo permitia (POST y DELETE /services/{id}/image).
+ */
+describe('HttpServiceRepository — imagen del servicio', () => {
+  const conImagen: ServiceResponseDTO = {
+    ...serviceConSena,
+    image_url: 'https://app.test/api/stores/media/nueva'
+  }
+  const setup = () => {
+    const post = jest.fn().mockResolvedValue({ data: conImagen })
+    const del = jest.fn().mockResolvedValue({ data: serviceConSena })
+    const client = { get: jest.fn(), post, patch: jest.fn(), delete: del }
+    return { post, del, repository: new HttpServiceRepository(client as unknown as AxiosInstance) }
+  }
+
+  it('sube el archivo como multipart en el campo `file`, sin `kind`', async () => {
+    const { post, repository } = setup()
+    const archivo = new Blob([new Uint8Array([0x89, 0x50])], { type: 'image/png' })
+
+    const actualizado = await repository.uploadImage('svc-1', archivo)
+
+    expect(post).toHaveBeenCalledTimes(1)
+    const [ruta, form, config] = post.mock.calls[0] as [string, FormData, unknown]
+    expect(ruta).toBe('/services/svc-1/image')
+    expect(form).toBeInstanceOf(FormData)
+    expect([...form.keys()]).toEqual(['file'])
+    expect(form.get('file')).toBeInstanceOf(Blob)
+    expect(config).toEqual({ headers: { 'Content-Type': 'multipart/form-data' } })
+    expect(actualizado.imageUrl).toBe('https://app.test/api/stores/media/nueva')
+  })
+
+  it('quitar la imagen llama a DELETE y devuelve el servicio actualizado', async () => {
+    const { del, repository } = setup()
+
+    const actualizado = await repository.removeImage('svc-1')
+
+    expect(del.mock.calls).toEqual([['/services/svc-1/image']])
+    expect(actualizado.imageUrl).toBeNull()
+  })
+
+  it('un error de la API sale como error de aplicacion tipado', async () => {
+    const { post, repository } = setup()
+    const conflicto = new ConflictError('choque')
+    post.mockRejectedValue(conflicto)
+
+    await expect(repository.uploadImage('svc-1', new Blob(['x']))).rejects.toBe(conflicto)
+  })
+})

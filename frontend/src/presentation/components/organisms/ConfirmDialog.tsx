@@ -5,6 +5,10 @@ interface ConfirmDialogProps {
   message: string
   onConfirm: () => void
   onCancel: () => void
+  /** Texto del boton que confirma; por defecto "Confirmar". */
+  confirmLabel?: string
+  /** Texto del boton que no hace nada; por defecto "Cancelar". */
+  cancelLabel?: string
 }
 
 /**
@@ -13,7 +17,13 @@ interface ConfirmDialogProps {
  * cancela, Tab no se escapa del dialogo y al cerrarse el foco vuelve a donde
  * estaba.
  */
-export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ message, onConfirm, onCancel }) => {
+export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
+  message,
+  onConfirm,
+  onCancel,
+  confirmLabel = 'Confirmar',
+  cancelLabel = 'Cancelar'
+}) => {
   const titleId = useId()
   const cancelRef = useRef<HTMLButtonElement>(null)
   const confirmRef = useRef<HTMLButtonElement>(null)
@@ -59,7 +69,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ message, onConfirm
             onClick={onCancel}
             className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-xs font-black uppercase tracking-widest text-gray-600"
           >
-            Cancelar
+            {cancelLabel}
           </button>
           <button
             ref={confirmRef}
@@ -67,7 +77,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ message, onConfirm
             onClick={onConfirm}
             className="rounded-xl bg-orange-600 px-4 py-2 text-xs font-black uppercase tracking-widest text-white"
           >
-            Confirmar
+            {confirmLabel}
           </button>
         </div>
       </div>
