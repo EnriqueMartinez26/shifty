@@ -59,6 +59,11 @@ updates:
       # rompe `npm ci` en CI. Se cambian a mano, alineando todos los lugares.
       - dependency-name: "node"
       - dependency-name: "npm"
+      # @eslint/js se versiona junto con eslint (eslint@9.x depende de la misma
+      # version exacta de @eslint/js): un salto de major a 10.x es incompatible
+      # con eslint 9. Se actualiza solo en minor/patch, de la mano de eslint.
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
 
   # Acciones de CI: el repo las fija por version exacta (actions/checkout@v7.0.0,
   # astral-sh/setup-uv@v8.3.2, ...), incluida la composite de
