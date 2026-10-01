@@ -32,7 +32,9 @@ jest.mock('../hooks/useManagedServices', () => ({
   useManagedServiceCatalog: () => mockListCatalog(),
   useCreateManagedService: () => ({ mutateAsync: jest.fn() }),
   useUpdateManagedService: () => ({ mutateAsync: mockUpdate }),
-  useDeleteManagedService: () => ({ mutateAsync: mockDelete, isPending: false })
+  useDeleteManagedService: () => ({ mutateAsync: mockDelete, isPending: false }),
+  useUploadServiceImage: () => ({ mutateAsync: jest.fn() }),
+  useRemoveServiceImage: () => ({ mutateAsync: jest.fn() })
 }))
 
 jest.mock('../hooks/useConfirm', () => ({
