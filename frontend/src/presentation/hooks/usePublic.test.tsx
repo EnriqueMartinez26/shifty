@@ -9,19 +9,22 @@ import { ConflictError, RateLimitError } from '@shared/errors'
 import {
   useCreatePublicBooking,
   usePublicDepositPreview,
-  usePublicPaymentStatus
+  usePublicPaymentStatus,
+  useRescheduleClientAppointment
 } from './usePublic'
 import { PAYMENT_POLL_MAX_MS } from '../lib/paymentPolling'
 
 const mockCreateBooking = jest.fn()
 const mockPreviewDeposit = jest.fn()
 const mockGetPaymentStatus = jest.fn()
+const mockReschedule = jest.fn()
 
 jest.mock('@application/services/PublicBookingService', () => ({
   publicBookingService: {
     createBooking: (...args: unknown[]) => mockCreateBooking(...args),
     previewDeposit: (...args: unknown[]) => mockPreviewDeposit(...args),
-    getPaymentStatus: (...args: unknown[]) => mockGetPaymentStatus(...args)
+    getPaymentStatus: (...args: unknown[]) => mockGetPaymentStatus(...args),
+    rescheduleClientAppointment: (...args: unknown[]) => mockReschedule(...args)
   }
 }))
 
@@ -95,6 +98,38 @@ describe('useCreatePublicBooking', () => {
       refetchType: 'all'
     })
     await waitFor(() => expect(refetchGrilla).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('useRescheduleClientAppointment', () => {
+  it('un 409 vuelve a pedir la grilla para que el horario tomado deje de ofrecerse (FF-06)', async () => {
+    // FF-06 (2026-10-01): tras un 409 por horario tomado la grilla de "Mis
+    // turnos" seguia mostrando libre ese horario durante los 30 s de
+    // staleTime: solo se invalidaba al tener exito.
+    mockReschedule.mockRejectedValue(
+      new ConflictError('Horario ocupado', { errorCode: 'APPOINTMENT_CONFLICT', statusCode: 409 })
+    )
+    const queryClient = nuevoCliente()
+    const invalidate = jest.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useRescheduleClientAppointment(), {
+      wrapper: envoltorio(queryClient)
+    })
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({
+          publicId: 'appt-1',
+          phone: '1155550101',
+          newStartsAt: '2026-09-16T19:00:00+00:00',
+          idempotencyKey: 'k-1'
+        })
+      ).rejects.toThrow('Horario ocupado')
+    })
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['public-availability'],
+      refetchType: 'all'
+    })
   })
 })
 

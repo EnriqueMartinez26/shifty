@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { format } from 'date-fns'
 
 import type { PublicStore } from '@application/services/PublicBookingService'
 
-import { ConflictError } from '@shared/errors'
+import { ConflictError, ValidationError } from '@shared/errors'
 import { ForbiddenError } from '@shared/errors/ForbiddenError'
 import { InternalServerError } from '@shared/errors/InternalServerError'
 import { NotFoundError } from '@shared/errors/NotFoundError'
@@ -18,9 +19,14 @@ const mockCancel = jest.fn()
 const mockReschedule = jest.fn()
 const mockRequestOtp = jest.fn()
 const mockVerifyOtp = jest.fn()
+const mockAvailability = jest.fn()
+const mockStaff = jest.fn()
 
 jest.mock('../hooks/usePublic', () => ({
   usePublicClientAppointments: (...args: unknown[]) => mockAppointments(...args),
+  usePublicAvailability: (...args: unknown[]) => mockAvailability(...args),
+  usePublicStaff: (...args: unknown[]) => mockStaff(...args),
+  useJoinWaitlist: () => ({ mutateAsync: jest.fn(), isPending: false, isSuccess: false }),
   useCancelClientAppointment: () => ({ mutateAsync: mockCancel, isPending: false }),
   useRescheduleClientAppointment: () => ({ mutateAsync: mockReschedule, isPending: false }),
   useRequestPublicOtp: () => ({ mutateAsync: mockRequestOtp, isPending: false }),
@@ -74,6 +80,8 @@ describe('ClientAppointmentsContainer', () => {
     mockRefetch.mockReset()
     mockCancel.mockReset()
     mockReschedule.mockReset()
+    mockAvailability.mockReset().mockReturnValue({ isLoading: false, data: [] })
+    mockStaff.mockReset().mockReturnValue({ isLoading: false, data: [] })
     mockRequestOtp.mockReset().mockResolvedValue({ expires_at: '', debug_code: '' })
     mockVerifyOtp
       .mockReset()
@@ -202,29 +210,161 @@ describe('ClientAppointmentsContainer', () => {
     })
   })
 
-  it('reprograma mandando el instante UTC del dia y hora argentinos', async () => {
-    mockAppointments.mockReturnValue({
-      data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
-      isLoading: false,
-      isError: false
+  describe('reprogramar con la grilla (FF-06, D-20260930-06)', () => {
+    // FF-06 (2026-10-01): "Cambiar" abria inputs libres de fecha y hora y
+    // mandaba argentinaLocalToUtcIso(fecha, hora): cualquier horario fuera de
+    // la grilla terminaba en 409 o 400, y el instante se recomponia en vez de
+    // mandar el starts_at del slot tal cual.
+    const titulo = 'Elegí el nuevo horario'
+    // 19:00 UTC = 16:00 en Argentina. El "+00:00" literal prueba que se manda
+    // el starts_at del slot y no uno recompuesto (que saldria en ".000Z").
+    const libre = {
+      staff_id: 'staff-1',
+      staff_name: 'Ana',
+      starts_at: '2026-09-16T19:00:00+00:00',
+      ends_at: '2026-09-16T19:30:00+00:00',
+      status: 'available',
+      reason: null
+    }
+    const deOtro = {
+      ...libre,
+      staff_id: 'staff-2',
+      staff_name: 'Bruno',
+      starts_at: '2026-09-16T20:00:00+00:00',
+      ends_at: '2026-09-16T20:30:00+00:00'
+    }
+    const pregunta = '¿Mover tu turno del 15/09/2026 10:00 hs al 16/09/2026 16:00 hs?'
+
+    const abrirGrilla = async () => {
+      mockAppointments.mockReturnValue({
+        data: { client_name: 'Yo', client_phone: '1155550101', appointments: [turno] },
+        isLoading: false,
+        isError: false,
+        refetch: mockRefetch
+      })
+      mockAvailability.mockReturnValue({ isLoading: false, data: [libre, deOtro] })
+      mockStaff.mockReturnValue({
+        isLoading: false,
+        data: [
+          { public_id: 'staff-1', kind: 'person', display_name: 'Ana', service_ids: ['svc-1'] },
+          { public_id: 'staff-2', kind: 'person', display_name: 'Bruno', service_ids: ['svc-1'] }
+        ]
+      })
+      render(<ClientAppointmentsContainer store={store} />)
+      await entrar()
+      fireEvent.click(screen.getByRole('button', { name: /Cambiar/ }))
+      await screen.findByRole('heading', { name: titulo })
+    }
+
+    const elegirLibre = () => {
+      fireEvent.click(screen.getByRole('button', { name: /16:00/ }))
+      return screen.findByRole('alertdialog', { name: pregunta })
+    }
+
+    it('"Cambiar" pide la disponibilidad del servicio del turno, sin selector de profesional', async () => {
+      await abrirGrilla()
+
+      expect(mockAvailability).toHaveBeenCalledWith(
+        'store-1',
+        'svc-1',
+        format(new Date(), 'yyyy-MM-dd'),
+        false
+      )
+      expect(screen.queryByText('Profesional')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Cualquiera/ })).not.toBeInTheDocument()
+      // Solo los horarios del profesional del turno: el backend no lo cambia.
+      expect(screen.getByRole('button', { name: /16:00/ })).not.toBeDisabled()
+      expect(screen.queryByRole('button', { name: /17:00/ })).not.toBeInTheDocument()
+      // Sin lista de espera: el cliente ya tiene turno.
+      expect(screen.queryByRole('button', { name: /Avisame si se libera/ })).not.toBeInTheDocument()
     })
-    mockReschedule.mockResolvedValue(undefined)
 
-    render(<ClientAppointmentsContainer store={store} />)
-    await entrar()
-    fireEvent.click(screen.getByRole('button', { name: /Cambiar/ }))
+    it('confirmar manda el starts_at del slot tal cual, con clave de idempotencia', async () => {
+      mockReschedule.mockResolvedValue(undefined)
+      await abrirGrilla()
 
-    // Se precarga con el dia LOCAL del turno, no con el dia UTC.
-    expect((screen.getByLabelText('Nueva fecha') as HTMLInputElement).value).toBe('2026-09-15')
-    expect((screen.getByLabelText('Hora') as HTMLInputElement).value).toBe('10:00')
-    fireEvent.change(screen.getByLabelText('Hora'), { target: { value: '16:00' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Mover' }))
+      const dialogo = await elegirLibre()
+      expect(mockReschedule).not.toHaveBeenCalled()
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, mover turno' }))
 
-    await waitFor(() => expect(mockReschedule).toHaveBeenCalledTimes(1))
-    expect(mockReschedule.mock.calls[0]?.[0]).toMatchObject({
-      publicId: 'appt-1',
-      phone: '1155550101',
-      newStartsAt: '2026-09-15T19:00:00.000Z'
+      await waitFor(() => expect(mockReschedule).toHaveBeenCalledTimes(1))
+      const enviado = mockReschedule.mock.calls[0]?.[0] as Record<string, unknown>
+      expect(enviado).toMatchObject({ publicId: 'appt-1', phone: '1155550101' })
+      expect(enviado.newStartsAt).toBe(libre.starts_at)
+      expect(typeof enviado.idempotencyKey).toBe('string')
+      expect(enviado.idempotencyKey).not.toBe('')
+      expect(await screen.findByText('Listo, movimos tu turno.')).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: titulo })).not.toBeInTheDocument()
+    })
+
+    it('rechazar la confirmacion no mueve el turno y deja la grilla abierta', async () => {
+      await abrirGrilla()
+
+      const dialogo = await elegirLibre()
+      expect(within(dialogo).queryByRole('button', { name: 'Cancelar' })).not.toBeInTheDocument()
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Dejarlo como está' }))
+
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+      expect(mockReschedule).not.toHaveBeenCalled()
+      expect(screen.getByRole('heading', { name: titulo })).toBeInTheDocument()
+    })
+
+    it.each([
+      ['APPOINTMENT_CONFLICT', 'Ese horario ya no está disponible. Elegí otro.'],
+      ['OUT_OF_SCHEDULE', 'El profesional no atiende en ese horario. Elegí otro.'],
+      ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],
+      [
+        'CANCELLATION_WINDOW_EXPIRED',
+        'Ya pasó el plazo para cancelar o cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
+      ],
+      [
+        'PAID_APPOINTMENT_RESCHEDULE_DENIED',
+        'Este turno ya tiene un pago registrado. Para cambiarlo, comunicate con el negocio.'
+      ],
+      [
+        'PAYMENT_APPOINTMENT_REQUIRES_RELEASE',
+        'Este turno tiene un pago en curso. Para cancelarlo o cambiarlo, comunicate con el negocio.'
+      ],
+      ['APPOINTMENT_NOT_ACTIVE', 'Este turno ya terminó o fue cancelado: no se puede mover.']
+    ])('un 409 %s muestra su mensaje y deja la grilla abierta', async (codigo, mensaje) => {
+      mockReschedule.mockRejectedValue(
+        new ConflictError('texto crudo del servidor', { errorCode: codigo, statusCode: 409 })
+      )
+      await abrirGrilla()
+
+      const dialogo = await elegirLibre()
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, mover turno' }))
+
+      expect(await screen.findByRole('status')).toHaveTextContent(mensaje)
+      expect(screen.queryByText('texto crudo del servidor')).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: titulo })).toBeInTheDocument()
+    })
+
+    it('un 400 BOOKING_NOTICE_REQUIRED muestra un texto neutro y deja la grilla abierta', async () => {
+      mockReschedule.mockRejectedValue(
+        new ValidationError('Este local requiere 24h de anticipación para agendar/reprogramar.', {
+          errorCode: 'BOOKING_NOTICE_REQUIRED',
+          statusCode: 400
+        })
+      )
+      await abrirGrilla()
+
+      const dialogo = await elegirLibre()
+      fireEvent.click(within(dialogo).getByRole('button', { name: 'Sí, mover turno' }))
+
+      expect(await screen.findByRole('status')).toHaveTextContent(
+        'Ese horario está muy cerca: el negocio pide más anticipación. Elegí uno más adelante.'
+      )
+      expect(screen.getByRole('heading', { name: titulo })).toBeInTheDocument()
+    })
+
+    it('"Volver" cierra la grilla sin mover el turno', async () => {
+      await abrirGrilla()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
+
+      expect(screen.queryByRole('heading', { name: titulo })).not.toBeInTheDocument()
+      expect(mockReschedule).not.toHaveBeenCalled()
     })
   })
 

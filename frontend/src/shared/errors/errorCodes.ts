@@ -40,6 +40,19 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],
   ['OUT_OF_SCHEDULE', 'El profesional no atiende en ese horario. Elegí otro.'],
   ['NO_STAFF_AVAILABLE', 'No hay profesionales disponibles en ese horario. Elegí otro.'],
+  // El cliente cancelando o moviendo su turno desde "Mis turnos" (FF-06).
+  [
+    'BOOKING_NOTICE_REQUIRED',
+    'Ese horario está muy cerca: el negocio pide más anticipación. Elegí uno más adelante.'
+  ],
+  [
+    'CANCELLATION_WINDOW_EXPIRED',
+    'Ya pasó el plazo para cancelar o cambiar este turno. Si necesitás moverlo, comunicate con el negocio.'
+  ],
+  [
+    'PAID_APPOINTMENT_RESCHEDULE_DENIED',
+    'Este turno ya tiene un pago registrado. Para cambiarlo, comunicate con el negocio.'
+  ],
   [
     'IDEMPOTENCY_IN_PROGRESS',
     'La operación ya se está procesando. Esperá unos segundos y revisá antes de reintentar.'
