@@ -259,7 +259,7 @@ Fuente: `backend/core/config.py` y los archivos de ejemplo (`.env.example`, `bac
 | — | `.github/workflows/e2e.yml` | Fija npm 11.17.0 antes de `npm ci` |
 | — | `.github/workflows/monthly-backup-drill.yml` | Runner configurable (`vars.BACKUP_DRILL_RUNNER`) y chequeo temprano de secretos |
 | 53e1908 | `.github/dependabot.yml` (nuevo) | PRs semanales agrupados para `uv`, `npm` y `github-actions` |
-| — | `.pre-commit-config.yaml` | Solo un comentario: la compuerta no está activa hasta `core.hooksPath` |
+| — | `.pre-commit-config.yaml` | Borrado junto con la dependencia `pre-commit` y `test_pre_commit_config.py`: la única compuerta local es `.githooks/pre-commit` (se activa con `core.hooksPath`) |
 | **e68100e** | `.github/workflows/security-scan.yml` | **Pendiente de merge**: vive solo en `perf/cve-ci`. `pip-audit` sobre `uv.lock`, Trivy sobre las 3 imágenes, `npm audit` semanal |
 
 ### G6. Scripts y archivos de host
