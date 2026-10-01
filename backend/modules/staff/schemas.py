@@ -109,6 +109,17 @@ class StaffCreate(StaffBase):
         return self
 
 
+# Campos de StaffUpdate donde un null explicito no es un cambio posible.
+_STAFF_NOT_NULL_FIELDS = (
+    "first_name",
+    "last_name",
+    "display_name",
+    "email",
+    "is_active",
+    "service_ids",
+)
+
+
 class StaffUpdate(BaseModel):
     first_name: str | None = Field(None, min_length=1, max_length=100)
     last_name: str | None = Field(None, min_length=1, max_length=100)
@@ -123,6 +134,17 @@ class StaffUpdate(BaseModel):
     @classmethod
     def reject_control_chars_in_names(cls, value: str | None) -> str | None:
         return reject_control_chars(value)
+
+    @model_validator(mode="after")
+    def reject_null_in_required_fields(self) -> Self:
+        # Q1: PUT y PATCH comparten handler y update_profile trata None como
+        # "no cambiar", asi que un null explicito respondia 200 sin cambiar
+        # nada. Ahora es 422 en los dos verbos (D-20260930-03); un campo
+        # ausente sigue siendo "no cambiar". Mismo patron que ScheduleUpdate.
+        for field in _STAFF_NOT_NULL_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser null")
+        return self
 
 
 class StaffResponse(StaffBase):
