@@ -3202,7 +3202,9 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | field | type | required | constraints |
 |---|---|---|---|
 | `public_id` | string | yes |  |
+| `service_id` | string | yes |  |
 | `service_name` | string | yes |  |
+| `staff_id` | string | yes |  |
 | `staff_name` | string | yes |  |
 | `starts_at` | string | yes | format="date-time" |
 | `ends_at` | string | yes | format="date-time" |
@@ -4680,4 +4682,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-01, commit 42279b8
+Generado desde app.openapi() el 2026-10-01, commit 3eeb2022
