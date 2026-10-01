@@ -1,19 +1,13 @@
 import { createServiceSchema } from './service.validators'
 
-// Cobertura de F9-08 (2026-09-30): el schema no tenia test propio. Tests solo
-// de cobertura, verdes desde el principio: describen el comportamiento actual.
+// Cobertura de F9-08 (2026-09-30): el schema no tenia test propio.
 //
-// Deriva con el backend (backend/modules/services/schemas.py), documentada y
-// SIN arreglar: pendiente de decision del dueno.
-// - El comentario de service.validators.ts (el backend "acepta hasta
-//   10.000.000 para cualquier tipo") esta desactualizado:
-//   deposit_policy_error rechaza un porcentaje mayor a 100 y, con sena
-//   required u optional de tipo percent o fixed, un monto menor o igual a 0.
-//   El front acepta los dos.
-// - Nombre: el front exige 3 caracteres; ServiceBase, min_length=2.
-// - Color: el front exige hex de 6 digitos; el backend (y el value object
-//   ServiceColor del dominio) acepta tambien el de 3.
-// - Duracion: el front exige 5 minutos; el backend, gt=0.
+// D-20260930-09 (2026-10-01): el formulario rechaza lo que el backend
+// (backend/modules/services/schemas.py) ya rechaza: porcentaje de sena mayor a
+// 100, monto de sena menor o igual a 0, precio mayor a 10.000.000, descripcion
+// mayor a 1000 y nombre mayor a 255. El color de 6 digitos, la duracion minima
+// de 5 y el nombre minimo de 3 se mantienen; el minimo de 2 del backend no se
+// adopta.
 
 const minimo = { name: 'Corte', duration_minutes: 30, price: 1000 }
 
@@ -65,6 +59,57 @@ describe('createServiceSchema', () => {
   })
 })
 
+describe('createServiceSchema: topes del backend (D-20260930-09)', () => {
+  // D-20260930-09 (2026-10-01): el front aceptaba un nombre de 256, una
+  // descripcion de 1001 y un precio de 10.000.001; el backend los rechaza con
+  // 422 y el panel recien se enteraba despues del viaje.
+  it.each([
+    [
+      'nombre de 256 caracteres',
+      { name: 'a'.repeat(256) },
+      'name',
+      'El nombre no puede superar los 255 caracteres'
+    ],
+    [
+      'descripcion de 1001 caracteres',
+      { description: 'a'.repeat(1001) },
+      'description',
+      'La descripción no puede superar los 1000 caracteres'
+    ],
+    [
+      'precio de 10.000.001',
+      { price: 10_000_001 },
+      'price',
+      'El precio no puede superar 10.000.000'
+    ]
+  ])('%s falla con su mensaje', (_caso, cambio, campo, mensaje) => {
+    expect(issuesDe({ ...minimo, ...cambio })).toEqual([[campo, mensaje]])
+  })
+
+  it.each([
+    ['nombre de 255 caracteres', { name: 'a'.repeat(255) }],
+    ['descripcion de 1000 caracteres', { description: 'a'.repeat(1000) }],
+    ['descripcion vacia', { description: '' }],
+    ['precio de 10.000.000', { price: 10_000_000 }]
+  ])('%s pasa', (_caso, cambio) => {
+    expect(issuesDe({ ...minimo, ...cambio })).toEqual([])
+  })
+
+  it('un nombre de 2 caracteres sigue fallando', () => {
+    // D-20260930-09: el minimo de 3 se mantiene; el de 2 del backend no se
+    // adopta.
+    expect(issuesDe({ ...minimo, name: 'Co' })).toEqual([
+      ['name', 'El nombre debe tener al menos 3 caracteres']
+    ])
+  })
+
+  it('un color #abc sigue fallando', () => {
+    // D-20260930-09: el color de 6 digitos se mantiene aunque el backend
+    // acepte tambien el de 3.
+    expect(issuesDe({ ...minimo, color: '#abc' })).toEqual([['color', 'Color invalido']])
+  })
+})
+
 describe('createServiceSchema con sena', () => {
   it.each([
     ['required', 'percent', 'Indicá el porcentaje de la seña'],
@@ -82,7 +127,8 @@ describe('createServiceSchema con sena', () => {
   it.each([
     ['required con full', { deposit_mode: 'required', deposit_type: 'full' }],
     ['none con percent', { deposit_mode: 'none', deposit_type: 'percent' }],
-    ['none con fixed', { deposit_mode: 'none', deposit_type: 'fixed' }]
+    ['none con fixed', { deposit_mode: 'none', deposit_type: 'fixed' }],
+    ['none con monto 0', { deposit_mode: 'none', deposit_type: 'fixed', deposit_amount: 0 }]
   ])('%s no exige monto', (_caso, cambio) => {
     expect(issuesDe({ ...minimo, ...cambio })).toEqual([])
   })
@@ -102,40 +148,45 @@ describe('createServiceSchema con sena', () => {
 
     expect(createServiceSchema.safeParse(input).success).toBe(esperado)
   })
-})
 
-describe('createServiceSchema: deriva con el backend', () => {
-  it('un porcentaje de 150 pasa en el front', () => {
-    // Deriva con el backend, pendiente de decision del dueno: el backend lo
-    // rechaza ("un porcentaje de sena no puede superar 100").
+  it.each(['required', 'optional', 'none'])(
+    'un porcentaje de 150 con sena %s falla (D-20260930-09)',
+    (deposit_mode) => {
+      // D-20260930-09 (2026-10-01): el front lo aceptaba y el backend lo
+      // rechaza con cualquier modo ("un porcentaje de sena no puede superar
+      // 100"), igual que la base (ck_services_deposit_percent_max).
+      const input = { ...minimo, deposit_mode, deposit_type: 'percent', deposit_amount: 150 }
+
+      expect(issuesDe(input)).toEqual([
+        ['deposit_amount', 'El porcentaje de la seña no puede superar 100']
+      ])
+    }
+  )
+
+  it('un porcentaje de 100 pasa', () => {
     const input = {
       ...minimo,
       deposit_mode: 'required',
       deposit_type: 'percent',
-      deposit_amount: 150
+      deposit_amount: 100
     }
 
     expect(issuesDe(input)).toEqual([])
   })
 
-  it.each(['required', 'optional'])('una sena %s de monto 0 pasa en el front', (deposit_mode) => {
-    // Deriva con el backend, pendiente de decision del dueno: el backend exige
-    // un monto mayor a 0 ("una sena necesita un monto mayor a 0").
-    const input = { ...minimo, deposit_mode, deposit_type: 'fixed', deposit_amount: 0 }
+  it.each([
+    ['required', 'fixed'],
+    ['optional', 'fixed'],
+    ['required', 'percent'],
+    ['optional', 'percent']
+  ])('una sena %s de tipo %s con monto 0 falla (D-20260930-09)', (deposit_mode, deposit_type) => {
+    // D-20260930-09 (2026-10-01): el front aceptaba una sena de 0 y el backend
+    // la rechaza ("una sena necesita un monto mayor a 0"): el turno se
+    // reservaba sin cobrar.
+    const input = { ...minimo, deposit_mode, deposit_type, deposit_amount: 0 }
 
-    expect(issuesDe(input)).toEqual([])
-  })
-
-  it('un nombre de 2 caracteres falla en el front', () => {
-    // Deriva con el backend, pendiente de decision del dueno: min_length=2.
-    expect(issuesDe({ ...minimo, name: 'Co' })).toEqual([
-      ['name', 'El nombre debe tener al menos 3 caracteres']
+    expect(issuesDe(input)).toEqual([
+      ['deposit_amount', 'El monto de la seña tiene que ser mayor a 0']
     ])
-  })
-
-  it('un color #abc falla en el front', () => {
-    // Deriva con el backend, pendiente de decision del dueno: el patron del
-    // backend acepta el hex de 3 digitos.
-    expect(issuesDe({ ...minimo, color: '#abc' })).toEqual([['color', 'Color invalido']])
   })
 })
