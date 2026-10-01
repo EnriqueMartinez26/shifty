@@ -1,4 +1,4 @@
-from typing import Literal, Annotated
+from typing import Literal, Annotated, Self
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from datetime import time
@@ -27,6 +27,10 @@ class ScheduleCreate(ScheduleBase):
     pass
 
 
+# Columnas NOT NULL de schedules que el PATCH puede tocar.
+_SCHEDULE_NOT_NULL_FIELDS = ("day_of_week", "start_time", "end_time")
+
+
 class ScheduleUpdate(BaseModel):
     """Edicion parcial de una franja horaria.
 
@@ -36,6 +40,17 @@ class ScheduleUpdate(BaseModel):
     day_of_week: int | None = Field(None, ge=0, le=6)
     start_time: time | None = None
     end_time: time | None = None
+
+    @model_validator(mode="after")
+    def reject_null_in_required_columns(self) -> Self:
+        # M2: el PATCH aplica solo los campos enviados (exclude_unset), asi
+        # que un null explicito llegaba al repositorio: None >= time daba 500
+        # y day_of_week null violaba el NOT NULL. Las tres columnas son NOT
+        # NULL: 422 aca, igual que ServiceUpdate (B6-04).
+        for field in _SCHEDULE_NOT_NULL_FIELDS:
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} no puede ser null")
+        return self
 
 
 class ScheduleResponse(ScheduleBase):

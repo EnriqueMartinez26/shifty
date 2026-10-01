@@ -1,6 +1,6 @@
 import React from 'react'
 
-import { Briefcase, Clock, DollarSign, Edit2, Trash2, Check, X } from 'lucide-react'
+import { Briefcase, Clock, DollarSign, Edit2, Trash2, Check, X, RotateCcw } from 'lucide-react'
 
 import { Service } from '@domain/entities/Service'
 
@@ -10,6 +10,7 @@ interface ServiceCardProps {
   service: Service
   onEdit: (service: Service) => void
   onDelete: (id: string) => void
+  onReactivate: (id: string) => void
   isSelected?: boolean
 }
 
@@ -17,15 +18,17 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   service,
   onEdit,
   onDelete,
+  onReactivate,
   isSelected = false
 }) => {
   const accentColor = service.color || colors2000s.orange.light
 
   return (
     <div
+      data-testid="service-card"
       className={`relative p-6 rounded-md transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] border-l-[6px] flex flex-col justify-between h-full ${
         isSelected ? 'ring-2 ring-offset-2 ring-orange-400' : ''
-      }`}
+      } ${service.isActive ? '' : 'opacity-60'}`}
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         borderTop: `1px solid ${colors2000s.border.default}`,
@@ -150,13 +153,25 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
         >
           <Edit2 size={14} /> Editar
         </button>
-        <button
-          onClick={() => onDelete(service.id)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
-          style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
-        >
-          <Trash2 size={14} /> Eliminar
-        </button>
+        {/* "Eliminar" es un soft delete: un inactivo ya esta borrado, lo que
+            le queda es volver (FF-22). */}
+        {service.isActive ? (
+          <button
+            onClick={() => onDelete(service.id)}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
+          >
+            <Trash2 size={14} /> Eliminar
+          </button>
+        ) : (
+          <button
+            onClick={() => onReactivate(service.id)}
+            className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+            style={{ ...buttonStyles2000s.default, color: colors2000s.status.success.text }}
+          >
+            <RotateCcw size={14} /> Reactivar
+          </button>
+        )}
       </div>
     </div>
   )

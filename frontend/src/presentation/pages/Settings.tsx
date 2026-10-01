@@ -69,6 +69,11 @@ const TABS = [
   { id: 'security', label: 'Seguridad', icon: <Lock className="w-4 h-4" /> }
 ]
 
+// Solo los flags que el backend lee para decidir algo (FF-28).
+// `advanced_reports` y `new_calendar` siguen en el contrato (`StoreFeatureFlags`,
+// `DEFAULT_FEATURE_FLAGS`) pero ningun camino los consulta: mostrarlos era
+// ofrecer interruptores que no hacen nada. `planSave` solo manda las claves
+// que cambiaron, asi que ocultarlos no los pisa en la base.
 const FEATURE_LABELS = [
   {
     key: 'payments',
@@ -81,19 +86,9 @@ const FEATURE_LABELS = [
     description: 'Cuenta pendiente por cliente con cargos, pagos, ajustes y devoluciones.'
   },
   {
-    key: 'advanced_reports',
-    title: 'Reportes avanzados',
-    description: 'Metricas por tienda o profesional y exportacion.'
-  },
-  {
-    key: 'new_calendar',
-    title: 'Agenda nueva',
-    description: 'Disponibilidad con bloqueos, gaps y estados extendidos.'
-  },
-  {
     key: 'otp_booking',
-    title: 'OTP en reserva publica',
-    description: 'Validacion por SMS o WhatsApp antes de reservar.'
+    title: 'Código por email en la reserva pública',
+    description: 'Pide un código de verificación, enviado por email, antes de confirmar la reserva.'
   }
 ] as const
 

@@ -27,6 +27,13 @@ export class ServiceService extends BaseService<Service> {
     }, 'listServices')
   }
 
+  /** Catalogo del panel: incluye los inactivos para poder reactivarlos (FF-22). */
+  async listCatalog(): Promise<Service[]> {
+    return await this.execute(async () => {
+      return await this.repository.findAll({ includeInactive: true })
+    }, 'listCatalog')
+  }
+
   async createService(data: {
     name: string
     description?: string
@@ -80,6 +87,19 @@ export class ServiceService extends BaseService<Service> {
     await this.execute(async () => {
       await this.repository.delete(id)
     }, 'deleteService')
+  }
+
+  /** Sube la imagen y devuelve el servicio con su `imageUrl` nueva. */
+  async uploadImage(id: string, file: Blob): Promise<Service> {
+    return await this.execute(async () => {
+      return await this.repository.uploadImage(id, file)
+    }, 'uploadImage')
+  }
+
+  async removeImage(id: string): Promise<Service> {
+    return await this.execute(async () => {
+      return await this.repository.removeImage(id)
+    }, 'removeImage')
   }
 }
 

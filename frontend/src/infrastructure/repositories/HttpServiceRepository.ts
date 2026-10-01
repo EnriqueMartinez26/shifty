@@ -19,8 +19,17 @@ export class HttpServiceRepository
     this.client = client
   }
 
-  protected async findAllImpl(_options?: QueryOptions | boolean): Promise<Service[]> {
-    const { data } = await this.client.get<ServiceResponseDTO[]>('/services/')
+  protected async findAllImpl(options?: QueryOptions | boolean): Promise<Service[]> {
+    const includeInactive =
+      typeof options === 'boolean' ? options : Boolean(options?.includeInactive)
+    // `include_inactive` exige STORE_MANAGERS en el backend: a un profesional
+    // le da 403. Por eso viaja solo cuando se pide (el catalogo del panel) y la
+    // lista compartida sale sin parametros (FF-22).
+    const { data } = includeInactive
+      ? await this.client.get<ServiceResponseDTO[]>('/services/', {
+          params: { include_inactive: true }
+        })
+      : await this.client.get<ServiceResponseDTO[]>('/services/')
     return data.map(ServiceMapper.toDomain)
   }
 
@@ -62,5 +71,31 @@ export class HttpServiceRepository
 
   protected async deleteImpl(id: string): Promise<void> {
     await this.client.delete(`/services/${id}`)
+  }
+
+  async uploadImage(id: string, file: Blob): Promise<Service> {
+    try {
+      const form = new FormData()
+      // Solo `file`: el endpoint del servicio no lleva `kind` (el logo si).
+      form.append('file', file)
+      // Se fuerza multipart (el cliente por defecto manda application/json)
+      // para que el navegador arme el boundary; el backend valida por magic
+      // bytes, tamano y pixeles (modules/stores/media.py).
+      const { data } = await this.client.post<ServiceResponseDTO>(`/services/${id}/image`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      return ServiceMapper.toDomain(data)
+    } catch (error) {
+      this.handleRepositoryError('uploadImage', error)
+    }
+  }
+
+  async removeImage(id: string): Promise<Service> {
+    try {
+      const { data } = await this.client.delete<ServiceResponseDTO>(`/services/${id}/image`)
+      return ServiceMapper.toDomain(data)
+    } catch (error) {
+      this.handleRepositoryError('removeImage', error)
+    }
   }
 }
