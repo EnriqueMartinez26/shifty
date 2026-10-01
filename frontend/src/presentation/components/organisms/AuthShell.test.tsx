@@ -5,14 +5,8 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 
 import { AuthShell } from './AuthShell'
+import { cssValue } from '../../../test/cssValue'
 import { colors2000s } from '../../../theme/colors'
-
-/** The value as jsdom normalizes it (hex to rgb), so it can be compared with `element.style`. */
-const cssValue = (property: 'color' | 'border' | 'borderTop', value: string): string => {
-  const probe = document.createElement('div')
-  probe.style[property] = value
-  return probe.style[property]
-}
 
 const renderShell = (props: Partial<ComponentProps<typeof AuthShell>> = {}) =>
   render(
@@ -54,7 +48,7 @@ describe('AuthShell', () => {
     expect(copyright.style.color).toBe(cssValue('color', colors2000s.text.disabled))
   })
 
-  it('uses the recovery layout by default and omits the back link', () => {
+  it('uses one layout for every auth page and omits the back link by default', () => {
     renderShell()
 
     const heading = screen.getByRole('heading', { level: 1 })
@@ -64,17 +58,6 @@ describe('AuthShell', () => {
       'min-h-screen w-full flex items-center justify-center relative overflow-hidden px-4'
     )
     expect(screen.queryByRole('link', { name: 'Volver a iniciar sesión' })).toBeNull()
-  })
-
-  it('keeps the original login layout with variant="login"', () => {
-    renderShell({ variant: 'login' })
-
-    const heading = screen.getByRole('heading', { level: 1 })
-    const header = heading.parentElement as HTMLElement
-    expect(header.className).toBe('flex flex-col items-center mb-8')
-    expect((header.parentElement?.parentElement as HTMLElement).className).toBe(
-      'min-h-screen w-full flex items-center justify-center relative overflow-hidden'
-    )
   })
 
   it('renders the back-to-login footer after the children when requested', () => {
