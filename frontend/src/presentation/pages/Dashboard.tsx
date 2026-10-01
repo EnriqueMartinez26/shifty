@@ -4,33 +4,28 @@ import { subDays } from 'date-fns'
 import { CalendarX, DollarSign, Gauge, UserRoundPlus } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
-import { isBookingStatus, type BookingStatusValue } from '@domain/value-objects/BookingStatus'
+import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
-import type { UpcomingAppointment } from '@application/services/DashboardService'
-import type {
-  ProfessionalReportItem,
-  ReportAppointmentItem,
-  ReportTopServiceItem
-} from '@application/services/ReportsService'
-
+import { copy } from '../components/organisms/dashboard/dashboardCopy'
 import {
-  formatArgentinaDate,
-  formatArgentinaDayMonth,
-  formatArgentinaTime
-} from '@shared/utils/argentinaTime'
-
+  formatCurrency,
+  formatPercent,
+  numberFormatter
+} from '../components/organisms/dashboard/dashboardFormatters'
+import {
+  getTopProfessional,
+  mapAgenda,
+  mapTopServices,
+  mapTransactions
+} from '../components/organisms/dashboard/dashboardMappers'
 import EnterpriseDashboard from '../components/organisms/dashboard/EnterpriseDashboard'
 import type {
   ActionItem,
-  AgendaItem,
-  DashboardCopy,
   DashboardHero,
   DashboardOperationCard,
   MetricItem,
   OpportunityItem,
-  RankedItem,
-  Tone,
-  TransactionItem
+  RankedItem
 } from '../components/organisms/dashboard/types'
 import { useAuth } from '../context/AuthContext'
 import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
@@ -39,34 +34,6 @@ import { useLedgerSummary } from '../hooks/useLedger'
 import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
 import { useProfessionalReports, useReportSummary, useReportTrend } from '../hooks/useReports'
 import { useStoreFeatureFlags } from '../hooks/useStores'
-import { currencyFmtEsAr } from '../lib/formatters'
-
-const numberFormatter = new Intl.NumberFormat('es-AR', {
-  maximumFractionDigits: 0
-})
-
-const percentFormatter = new Intl.NumberFormat('es-AR', {
-  maximumFractionDigits: 1
-})
-
-const copy: DashboardCopy = {
-  metricsTitle: 'Resumen del dia',
-  transactionsTitle: 'Transacciones',
-  transactionsDescription: 'Ultimos turnos del periodo con su estado y monto.',
-  viewTransactionsLabel: 'Ver todas',
-  operationsTitle: 'Operacion de hoy',
-  operationsDescription: 'Turnos, carga operativa y capacidad disponible en una sola vista.',
-  actionsTitle: 'Acciones urgentes',
-  moneyTitle: 'Dinero',
-  performanceTitle: 'Rendimiento semanal',
-  alertsTitle: 'Alertas del sistema',
-  opportunitiesTitle: 'Oportunidades',
-  emptyActions: 'No hay tareas criticas por resolver.',
-  emptyAgenda: 'No hay proximos turnos para mostrar.',
-  emptyAlerts: 'Sin alertas activas.',
-  emptyOpportunities: 'Sin oportunidades destacadas por ahora.',
-  emptyTransactions: 'No hay turnos registrados en el periodo.'
-}
 
 const canViewReports = (role: string | undefined, isGlobalAdmin: boolean) =>
   isGlobalAdmin ||
@@ -76,71 +43,6 @@ const canViewReports = (role: string | undefined, isGlobalAdmin: boolean) =>
 
 const canViewFinancialAdmin = (role: string | undefined, isGlobalAdmin: boolean) =>
   isGlobalAdmin || role === ROLE_STORE_ADMIN || role === ROLE_SUPER_ADMIN
-
-/**
- * La API manda los estados en minusculas (`appointments/model.py`); esto los
- * comparaba en MAYUSCULAS, asi que las tres ramas eran codigo muerto y todo
- * caia en 'neutral': un turno cancelado se pintaba igual que uno confirmado.
- *
- * El mapa completo reemplaza a los tres `includes`: si el backend agrega un
- * estado, `BookingStatusValue` cambia y esto deja de compilar, en vez de
- * volver al gris en silencio. `'REJECTED'` no existia en el enum, y `absent`
- * no estaba en ninguna de las tres listas.
- */
-const APPOINTMENT_TONES: Record<BookingStatusValue, Tone> = {
-  pending: 'warning',
-  pending_payment: 'warning',
-  confirmed: 'success',
-  completed: 'success',
-  cancelled: 'danger',
-  absent: 'danger',
-  expired: 'danger'
-}
-
-const getAppointmentTone = (status: string): Tone =>
-  isBookingStatus(status) ? APPOINTMENT_TONES[status] : 'neutral'
-
-const formatCurrency = (value: number | string | null | undefined) =>
-  currencyFmtEsAr.format(Number(value ?? 0))
-
-const formatPercent = (value: number | null | undefined) =>
-  `${percentFormatter.format(Number(value ?? 0))}%`
-
-const getTopProfessional = (items: ProfessionalReportItem[] | undefined) =>
-  [...(items ?? [])].sort(
-    (left, right) => right.occupancy_rate - left.occupancy_rate || right.revenue - left.revenue
-  )[0]
-
-const mapAgenda = (appointments: UpcomingAppointment[] | undefined): AgendaItem[] =>
-  (appointments ?? []).map((appointment) => ({
-    id: appointment.public_id,
-    time: formatArgentinaTime(appointment.starts_at),
-    title: appointment.client_name,
-    subtitle: `${appointment.service_name} - ${appointment.staff_name}`,
-    status: appointment.status,
-    tone: getAppointmentTone(appointment.status)
-  }))
-
-const mapTopServices = (items: ReportTopServiceItem[] | undefined): RankedItem[] =>
-  (items ?? []).slice(0, 4).map((item) => ({
-    id: item.service_id,
-    label: item.service_name,
-    value: formatCurrency(item.revenue),
-    detail: `${numberFormatter.format(item.appointments)} reservas`
-  }))
-
-const mapTransactions = (items: ReportAppointmentItem[] | undefined): TransactionItem[] =>
-  [...(items ?? [])]
-    .sort((left, right) => new Date(right.starts_at).getTime() - new Date(left.starts_at).getTime())
-    .slice(0, 6)
-    .map((item) => ({
-      id: item.public_id,
-      title: item.client_name,
-      subtitle: `${item.service_name} - ${formatArgentinaDayMonth(item.starts_at)} ${formatArgentinaTime(item.starts_at)}`,
-      amount: formatCurrency(item.service_price),
-      status: item.status,
-      tone: getAppointmentTone(item.status)
-    }))
 
 const Dashboard = () => {
   const navigate = useNavigate()
