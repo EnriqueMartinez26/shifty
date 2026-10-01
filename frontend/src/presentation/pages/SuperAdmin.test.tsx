@@ -8,6 +8,8 @@ import type {
   SuperAdminUser
 } from '@application/services/SuperAdminService'
 
+import { ValidationError } from '@shared/errors/ValidationError'
+
 import SuperAdminPage from './SuperAdmin'
 
 /**
@@ -593,5 +595,129 @@ describe('SuperAdminPage', () => {
         mockAdminUser.is_global_admin = false
       }
     })
+
+    describe('la propia cuenta (D-20260930-05)', () => {
+      // D-20260930-05: sobre la propia cuenta "Desactivar" y "Revocar
+      // SuperAdmin" no se deshabilitan; al hacer clic avisan y cortan sin
+      // pedir confirmacion ni llamar al backend.
+      const propiaCuenta = () => {
+        mockAuthUser.public_id = 'user-admin-1'
+        mockAdminUser.is_global_admin = true
+      }
+
+      afterEach(() => {
+        mockAuthUser.public_id = 'root-user'
+        mockAdminUser.is_global_admin = false
+      })
+
+      it('"Desactivar" sobre la propia cuenta avisa y corta sin preguntar', () => {
+        // 2026-10-01: desactivar la propia cuenta pedia confirmacion y llamaba
+        // al backend, que la rechazaba con 400
+        // (SELF_SUPERADMIN_DEACTIVATION_DENIED); la autorrevocacion ya cortaba.
+        propiaCuenta()
+        render(<SuperAdminPage />)
+
+        const boton = first(
+          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Desactivar' })
+        )
+        expect(boton).not.toBeDisabled()
+        fireEvent.click(boton)
+
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+        expect(mockMutations.updateUser).not.toHaveBeenCalled()
+        expect(
+          screen.getByText('No podés desactivar tu propia cuenta desde esta sesión.')
+        ).toBeInTheDocument()
+      })
+
+      it('"Revocar SuperAdmin" sobre la propia cuenta esta habilitado, avisa y corta', () => {
+        propiaCuenta()
+        render(<SuperAdminPage />)
+
+        const boton = first(
+          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Revocar SuperAdmin' })
+        )
+        expect(boton).not.toBeDisabled()
+        fireEvent.click(boton)
+
+        expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+        expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
+        expect(
+          screen.getByText('No podés revocarte tu propio permiso global desde esta sesion.')
+        ).toBeInTheDocument()
+      })
+
+      it('sobre la cuenta de otro, "Desactivar" y "Revocar SuperAdmin" siguen preguntando', async () => {
+        mockAdminUser.is_global_admin = true
+        render(<SuperAdminPage />)
+        const detalle = sectionOf('Detalle del tenant')
+
+        fireEvent.click(first(detalle.getAllByRole('button', { name: 'Desactivar' })))
+        answerDialog('Desactivar root@barberuno.com?', 'Cancelar')
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+        fireEvent.click(first(detalle.getAllByRole('button', { name: 'Revocar SuperAdmin' })))
+        answerDialog(
+          'Revocar Super Admin global a root@barberuno.com? El backend impedira dejar al sistema sin un admin global activo.',
+          'Cancelar'
+        )
+        await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
+        expect(mockMutations.updateUser).not.toHaveBeenCalled()
+        expect(mockMutations.setGlobalAdmin).not.toHaveBeenCalled()
+      })
+    })
+
+    // D-20260930-05: "ultimo SuperAdmin activo" lo sigue resolviendo el 400
+    // del backend (regla 14). Su error_code se traduce a un texto neutro.
+    it.each([
+      [
+        'Desactivar',
+        'updateUser',
+        'SELF_SUPERADMIN_DEACTIVATION_DENIED',
+        'No podés desactivar tu propia cuenta de SuperAdmin.'
+      ],
+      [
+        'Desactivar',
+        'updateUser',
+        'LAST_SUPERADMIN_DEACTIVATION_DENIED',
+        'No se puede desactivar al último SuperAdmin activo.'
+      ],
+      [
+        'Revocar SuperAdmin',
+        'setGlobalAdmin',
+        'SELF_SUPERADMIN_REVOCATION_DENIED',
+        'No podés revocar tu propio permiso de SuperAdmin.'
+      ],
+      [
+        'Revocar SuperAdmin',
+        'setGlobalAdmin',
+        'LAST_SUPERADMIN_REVOCATION_DENIED',
+        'No se puede revocar al último SuperAdmin activo.'
+      ]
+    ] as const)(
+      '"%s" (%s) muestra el texto neutro de %s',
+      async (boton, mutacion, errorCode, mensaje) => {
+        // 2026-10-01: los cuatro codigos de la regla 14 no estaban en
+        // ERROR_CODE_MESSAGES y el panel mostraba el texto crudo del servidor.
+        mockMutations[mutacion].mockRejectedValue(
+          new ValidationError('texto crudo del servidor', { errorCode, statusCode: 400 })
+        )
+        mockAdminUser.is_global_admin = true
+        try {
+          render(<SuperAdminPage />)
+
+          fireEvent.click(
+            first(sectionOf('Detalle del tenant').getAllByRole('button', { name: boton }))
+          )
+          fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+
+          expect(await screen.findByText(mensaje)).toBeInTheDocument()
+          expect(screen.queryByText('texto crudo del servidor')).not.toBeInTheDocument()
+        } finally {
+          mockAdminUser.is_global_admin = false
+        }
+      }
+    )
   })
 })

@@ -51,6 +51,13 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ],
   ['FEATURE_DISABLED', 'Esta función no está habilitada para tu negocio.'],
   ['PERMISSION_DENIED', 'No tenés permiso para hacer esto.'],
+  // Regla 14 (backend/modules/users/guards.py). El panel corta antes la
+  // propia cuenta (D-20260930-05); "ultimo SuperAdmin activo" solo lo sabe
+  // el backend.
+  ['SELF_SUPERADMIN_DEACTIVATION_DENIED', 'No podés desactivar tu propia cuenta de SuperAdmin.'],
+  ['LAST_SUPERADMIN_DEACTIVATION_DENIED', 'No se puede desactivar al último SuperAdmin activo.'],
+  ['SELF_SUPERADMIN_REVOCATION_DENIED', 'No podés revocar tu propio permiso de SuperAdmin.'],
+  ['LAST_SUPERADMIN_REVOCATION_DENIED', 'No se puede revocar al último SuperAdmin activo.'],
   ['RATE_LIMITED', 'Hiciste demasiados intentos seguidos. Esperá un momento y volvé a intentar.'],
   // Tope de codigos por telefono (OTP_MAX_REQUESTS_PER_HOUR): la ventana es
   // deslizante, asi que no se promete una espera concreta (F4-11).

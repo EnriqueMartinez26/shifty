@@ -534,9 +534,22 @@ const SuperAdminPage: React.FC = () => {
     })
   }
 
-  const toggleUserActive = (targetUser: SuperAdminUser) => {
+  const toggleUserActive = async (targetUser: SuperAdminUser) => {
     const nextState = !targetUser.is_active
-    return confirmAndToggle({
+    // D-20260930-05, espejo de la regla 14 como en `toggleGlobalAdmin`: sobre
+    // la propia cuenta el boton no se deshabilita; avisa y corta sin preguntar
+    // ni llamar al backend. La garantia real es el 400 de
+    // `backend/modules/users/guards.py`, que tambien resuelve "ultimo
+    // SuperAdmin activo".
+    if (!nextState && user?.public_id === targetUser.public_id) {
+      setFeedback({
+        tone: 'warning',
+        text: 'No podés desactivar tu propia cuenta desde esta sesión.'
+      })
+      return
+    }
+
+    await confirmAndToggle({
       nextState,
       question: nextState ? `Activar ${targetUser.email}?` : `Desactivar ${targetUser.email}?`,
       run: () =>
