@@ -287,7 +287,7 @@ describe('BookingStepDateTime', () => {
       )
 
       expect(screen.getByRole('button', { name: AVISAME })).toBeInTheDocument()
-      expect(screen.getByRole('heading', { name: 'Elegi fecha y hora' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Elegí fecha y hora' })).toBeInTheDocument()
     })
 
     it('con showWaitlist={false} no monta la lista de espera aunque no haya horarios', () => {

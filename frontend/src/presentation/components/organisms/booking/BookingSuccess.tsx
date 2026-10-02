@@ -4,12 +4,13 @@ import { Calendar, Check, Clock, ExternalLink } from 'lucide-react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
+import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
-import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
 
 interface BookingSuccessProps {
   confirmation: BookingConfirmation
@@ -31,7 +32,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   // null si el WhatsApp de la tienda no se puede leer como numero: sin boton.
   const whatsappHref = buildWaMeUrl(
     whatsappNumber,
-    `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${bookingState.date} a las ${bookingState.startTime}. Quiero coordinar el pago.`
+    `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${formatArgentinaDateDisplay(bookingState.date ?? '')} a las ${bookingState.startTime}. Quiero coordinar el pago.`
   )
   const isPendingPayment = confirmation.status === 'pending_payment'
   const isPendingReview = confirmation.status === 'pending'
@@ -43,7 +44,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   const subtitle = confirmation.payment_required
     ? 'Tu turno se confirma cuando el cobro quede aprobado.'
     : isPendingReview
-      ? 'Tu solicitud ya fue enviada y queda pendiente de confirmacion.'
+      ? 'Tu solicitud ya fue enviada y queda pendiente de confirmación.'
       : bookingState.client.email
         ? `Te enviamos los detalles a ${bookingState.client.email}`
         : 'Tu reserva ya quedo registrada.'
@@ -106,7 +107,9 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               <p className="text-[9px] font-black uppercase tracking-wider text-gray-400">
                 Fecha del turno
               </p>
-              <p className="font-black text-gray-700 text-lg leading-tight">{bookingState.date}</p>
+              <p className="font-black text-gray-700 text-lg leading-tight">
+                {formatArgentinaDateDisplay(bookingState.date ?? '')}
+              </p>
             </div>
           </div>
 
@@ -139,13 +142,13 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
                 Resumen comercial
               </p>
               <div className="space-y-1 text-sm font-black text-slate-900">
-                <p>Servicio: {currencyFmt.format(Number(confirmation.service_price || 0))}</p>
+                <p>Servicio: {formatCurrency(Number(confirmation.service_price || 0))}</p>
                 {(confirmation.discount_amount || 0) > 0 && (
-                  <p>Descuento: -{currencyFmt.format(Number(confirmation.discount_amount || 0))}</p>
+                  <p>Descuento: -{formatCurrency(Number(confirmation.discount_amount || 0))}</p>
                 )}
                 <p>
                   Total final:{' '}
-                  {currencyFmt.format(
+                  {formatCurrency(
                     Number(confirmation.final_price || confirmation.service_price || 0)
                   )}
                 </p>
@@ -163,7 +166,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               </p>
               <p className="text-sm font-black text-amber-900">
                 {confirmation.payment_amount
-                  ? currencyFmt.format(Number(confirmation.payment_amount))
+                  ? formatCurrency(Number(confirmation.payment_amount))
                   : 'Importe a confirmar'}
               </p>
               <p className="text-xs font-bold text-amber-800 mt-2">

@@ -47,17 +47,17 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
         <ShieldCheck className="w-5 h-5 mt-0.5 text-orange-500" />
         <div>
           <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-            Verificamos tu telefono
+            Verificamos tu teléfono
           </p>
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Te mandamos un codigo por email para confirmar el {phone}
+            Te mandamos un código por email para confirmar el {phone}
           </p>
           {/* Si el telefono ya tiene ficha con email cargado, el backend manda
               el codigo a ESE email y no al que se tipee aca: quien pide el
               codigo no elige el buzon (2026-09-20). Decirlo evita que alguien
               espere el mail en una casilla que nunca lo va a recibir. */}
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Si ya reservaste en este negocio, el codigo va al email que tenes registrado.
+            Si ya reservaste en este negocio, el código va al email que tenés registrado.
           </p>
         </div>
       </div>
@@ -67,7 +67,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
           type="email"
           inputMode="email"
           autoComplete="email"
-          aria-label="Email para el codigo"
+          aria-label="Email para el código"
           value={otpState.email}
           onChange={(e) => onOtpEmailChange(e.target.value)}
           className="px-4 py-3 font-bold outline-none"
@@ -90,7 +90,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
             ? 'Enviando...'
             : otpResendSeconds > 0
               ? `Reenviar en ${otpResendSeconds} s`
-              : 'Enviar codigo'}
+              : 'Enviar código'}
         </button>
       </div>
 
@@ -104,7 +104,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
           onChange={(e) => onOtpCodeChange(e.target.value.replace(/\D/g, ''))}
           className="w-full px-4 py-3 font-bold outline-none"
           style={clientInputStyle}
-          placeholder="Codigo que te llego por email"
+          placeholder="Código que te llegó por email"
         />
 
         {/* J7 (2026-09-30): debug_code tal cual lo devolvio la API, solo si
@@ -120,8 +120,8 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
               colors2000s.status.info.text
             )}
           >
-            Codigo debug (solo desarrollo): {otpState.debugCode}. Si el telefono ya tiene ficha con
-            email, el codigo real fue a ese buzon y este puede no servir.
+            Código debug (solo desarrollo): {otpState.debugCode}. Si el teléfono ya tiene ficha con
+            email, el código real fue a ese buzón y este puede no servir.
           </div>
         )}
 
@@ -151,7 +151,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
             )}
           >
             <ShieldCheck className="w-4 h-4" />
-            Telefono validado correctamente
+            Teléfono validado correctamente
           </div>
         ) : (
           <button
@@ -161,7 +161,7 @@ export const BookingOtpSection: React.FC<BookingOtpSectionProps> = ({
             className="w-full px-4 py-3 text-xs font-black uppercase tracking-widest disabled:opacity-50"
             style={{ ...buttonStyles2000s.selected, borderRadius: 6 }}
           >
-            {isVerifyingOtp ? 'Verificando...' : 'Verificar codigo'}
+            {isVerifyingOtp ? 'Verificando...' : 'Verificar código'}
           </button>
         )}
       </div>

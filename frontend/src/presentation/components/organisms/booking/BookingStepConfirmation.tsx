@@ -26,7 +26,9 @@ import {
 } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
 import { CLIENT_PHONE_HINT, isValidClientPhone } from '@shared/utils/clientPhone'
+import { formatCurrency } from '@shared/utils/currency'
 import { phoneDigits } from '@shared/utils/otpSession'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
@@ -35,7 +37,6 @@ import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
-import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
 import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingBackButtonStyle,
@@ -220,7 +221,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     } catch (error: unknown) {
       setPromotionPreview(null)
       onPromotionCodeChange('')
-      setErrorMessage(getErrorMessage(error, 'No pudimos validar ese codigo'))
+      setErrorMessage(getErrorMessage(error, 'No pudimos validar ese código'))
     }
   }
 
@@ -241,7 +242,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       const result = await onConfirm(paymentMethod, acceptsTerms)
       if (paymentMethod === 'mercadopago') {
         if (!navigateExternal(result.payment_link)) {
-          throw new Error('Mercado Pago no devolvio un enlace de pago valido')
+          throw new Error('Mercado Pago no devolvió un enlace de pago válido')
         }
         return
       }
@@ -359,7 +360,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         <div className="relative">
           <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1 block mb-1">
-            Telefono
+            Teléfono
           </label>
           <div className="relative">
             <Phone size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -395,7 +396,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               Datos extra del turno
             </p>
             <p className="text-xs font-bold text-gray-500 mt-1">
-              Completalos para que el negocio prepare mejor tu atencion.
+              Completalos para que el negocio prepare mejor tu atención.
             </p>
           </div>
           {customFields.map((field) => (
@@ -474,10 +475,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             className="text-2xl font-black uppercase tracking-tight"
             style={{ color: colors2000s.orange.accent }}
           >
-            Tus datos y confirmacion
+            Tus datos y confirmación
           </h2>
           <p className="text-sm font-bold text-gray-500">
-            Completa tus datos, revisa el turno y confirma la reserva.
+            Completá tus datos, revisá el turno y confirmá la reserva.
           </p>
         </div>
       </div>
@@ -499,7 +500,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       )}
       {requiresOtp && !showOtpSection && (
         <p className="text-xs font-bold text-center" style={{ color: colors2000s.text.secondary }}>
-          Completa tu telefono para verificarlo antes de confirmar.
+          Completá tu teléfono para verificarlo antes de confirmar.
         </p>
       )}
 
@@ -512,7 +513,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">
               Fecha
             </p>
-            <p className="text-lg font-black text-gray-800">{bookingState.date}</p>
+            <p className="text-lg font-black text-gray-800">
+              {formatArgentinaDateDisplay(bookingState.date ?? '')}
+            </p>
           </div>
           <div
             className="p-4 border"
@@ -532,7 +535,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
           <div className="flex items-center gap-2">
             <Tag className="w-4 h-4 text-orange-500" />
             <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-              Codigo promocional
+              Código promocional
             </p>
           </div>
           <div className="grid sm:grid-cols-[1fr_auto] gap-3">
@@ -581,9 +584,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
                 {promotionPreview.title}
               </p>
               <div className="mt-2 space-y-1 text-sm font-black text-green-900">
-                <p>Servicio: {currencyFmt.format(Number(promotionPreview.base_amount))}</p>
-                <p>Descuento: -{currencyFmt.format(Number(promotionPreview.discount_amount))}</p>
-                <p>Total final: {currencyFmt.format(Number(promotionPreview.final_amount))}</p>
+                <p>Servicio: {formatCurrency(Number(promotionPreview.base_amount))}</p>
+                <p>Descuento: -{formatCurrency(Number(promotionPreview.discount_amount))}</p>
+                <p>Total final: {formatCurrency(Number(promotionPreview.final_amount))}</p>
               </div>
             </div>
           )}
@@ -614,10 +617,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             data-testid="deposit-preview"
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">Seña</p>
-            <p className="text-sm font-black">{currencyFmt.format(depositPreview.amount)}</p>
+            <p className="text-sm font-black">{formatCurrency(depositPreview.amount)}</p>
             {depositPreview.extra_percent > 0 && (
               <p className="font-medium mt-1">
-                {depositBreakdownText(depositPreview, (n) => currencyFmt.format(n))}
+                {depositBreakdownText(depositPreview, (n) => formatCurrency(n))}
               </p>
             )}
           </div>
@@ -633,7 +636,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             )}
           >
             <p className="font-black uppercase tracking-widest text-[10px] mb-1">
-              Politica de seña de {storeName}
+              Política de seña de {storeName}
             </p>
             <p className="font-medium whitespace-pre-line">{depositPolicy}</p>
           </div>
@@ -658,7 +661,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               className="underline"
               style={{ color: colors2000s.orange.accent }}
             >
-              terminos y condiciones
+              términos y condiciones
             </a>
             , la{' '}
             <a
@@ -668,9 +671,9 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               className="underline"
               style={{ color: colors2000s.orange.accent }}
             >
-              politica de privacidad
+              política de privacidad
             </a>
-            {depositPolicy ? ' y la politica de seña de la tienda.' : '.'}
+            {depositPolicy ? ' y la política de seña de la tienda.' : '.'}
           </span>
         </label>
 
@@ -733,7 +736,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         >
           <TriangleAlert className="w-4 h-4 flex-shrink-0" />
           El horario podria haberse ocupado mientras completabas el formulario. Volve un paso atras
-          y elegi otro.
+          y elegí otro.
         </div>
       )}
     </div>

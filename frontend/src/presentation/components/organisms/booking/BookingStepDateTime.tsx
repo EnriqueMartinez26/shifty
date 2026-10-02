@@ -54,7 +54,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   onBack,
   lockedStaffId,
   showWaitlist = true,
-  heading = 'Elegi fecha y hora'
+  heading = 'Elegí fecha y hora'
 }) => {
   const [activeDate, setActiveDate] = useState<Date>(() => {
     if (!selectedDate || selectedDate === 'invalid') return new Date()
@@ -279,7 +279,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             <p className="font-black text-gray-400 uppercase tracking-widest text-xs">
               No hay turnos disponibles.
             </p>
-            <p className="text-xs text-gray-400 mt-2 font-medium">Proba seleccionando otro dia.</p>
+            <p className="text-xs text-gray-400 mt-2 font-medium">Probá seleccionando otro día.</p>
             {showWaitlist && (
               <div className="px-4 text-left">
                 <WaitlistJoinForm

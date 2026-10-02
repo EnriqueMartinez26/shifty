@@ -71,7 +71,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         className="mt-4 w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center justify-center gap-2"
         style={buttonStyles2000s.default}
       >
-        <BellRing className="w-4 h-4" /> Avisame si se libera un turno este dia
+        <BellRing className="w-4 h-4" /> Avisame si se libera un turno este día
       </button>
     )
   }
@@ -93,7 +93,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
       })
       setAnotadoPara(date)
     } catch (err: unknown) {
-      setError(getErrorMessage(err, 'No pudimos anotarte. Proba de nuevo.'))
+      setError(getErrorMessage(err, 'No pudimos anotarte. Probá de nuevo.'))
     }
   }
 
@@ -127,7 +127,7 @@ export const WaitlistJoinForm: React.FC<WaitlistJoinFormProps> = ({
         value={form.phone}
         onChange={(e) => setForm({ ...form, phone: e.target.value })}
         placeholder="Tu WhatsApp (ej: 11 5555 0000)"
-        aria-label="Telefono"
+        aria-label="Teléfono"
         className="w-full rounded-xl px-4 py-3 font-bold outline-none"
         style={createBookingInputStyle()}
       />
