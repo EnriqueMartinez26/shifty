@@ -3,7 +3,7 @@ from typing import Annotated, cast
 
 from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError
+from jwt import InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,7 +105,7 @@ async def _authenticate(request: Request, db: AsyncSession) -> User:
         session_id = payload.get("sid")
         if not isinstance(user_id, str) or not isinstance(session_id, str):
             raise credentials_exception
-    except JWTError:
+    except InvalidTokenError:
         raise credentials_exception
 
     # Bypass acotado SOLO para resolver la identidad: las tablas users y

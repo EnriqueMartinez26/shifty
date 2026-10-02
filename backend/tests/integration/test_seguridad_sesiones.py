@@ -4,7 +4,7 @@ Fijan que un token filtrado/forjado no sea una llave maestra y que las
 revocaciones corten el access token de inmediato (no al vencer).
 """
 
-from jose import jwt as jose_jwt
+import jwt
 import pytest
 from httpx import AsyncClient
 
@@ -29,8 +29,8 @@ async def test_token_forjado_con_otra_clave_es_rechazado(client: AsyncClient) ->
     store, token = await register_and_login(
         client, slug="sec-forjado", email="forjado@test.com"
     )
-    real = jose_jwt.get_unverified_claims(token)
-    forjado = jose_jwt.encode(
+    real = jwt.decode(token, options={"verify_signature": False})
+    forjado = jwt.encode(
         {**real, "is_global_admin": True}, "otra-clave-de-atacante", algorithm="HS256"
     )
     res = await client.get(
