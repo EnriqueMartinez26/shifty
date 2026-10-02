@@ -7,6 +7,7 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestCanceledError,
   RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
@@ -14,6 +15,7 @@ import {
 } from '@shared/errors'
 
 const REQUEST_TIMEOUT_MESSAGE = 'La consulta tardó demasiado. Probá de nuevo.'
+const REQUEST_CANCELED_MESSAGE = 'La consulta se canceló.'
 
 interface ApiSuccess<T> {
   success: true
@@ -207,6 +209,16 @@ export const normalizeApiError = (error: unknown): ApplicationError => {
   if (!maybeError?.response && maybeError?.code === 'ETIMEDOUT') {
     return new RequestTimeoutError(REQUEST_TIMEOUT_MESSAGE, {
       errorCode: 'REQUEST_TIMEOUT',
+      statusCode: 0,
+      originalError: { code: maybeError.code, message: maybeError.message, statusCode: 0 }
+    })
+  }
+
+  // La cancelo quien la pidio (el `signal` de react-query al reemplazar una
+  // busqueda): axios la rechaza con ERR_CANCELED. No es falta de red.
+  if (!maybeError?.response && maybeError?.code === 'ERR_CANCELED') {
+    return new RequestCanceledError(REQUEST_CANCELED_MESSAGE, {
+      errorCode: 'REQUEST_CANCELED',
       statusCode: 0,
       originalError: { code: maybeError.code, message: maybeError.message, statusCode: 0 }
     })
