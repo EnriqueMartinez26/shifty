@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import {
   publicBookingService,
@@ -29,28 +29,37 @@ import { PAYMENT_POLL_MAX_MS, paymentPollDelayMs } from '../lib/paymentPolling'
 
 export type { PublicStore }
 
-export const usePublicStore = (slug: string, enabled = true) =>
-  useQuery<PublicStore>({
+// Clave, queryFn y retry de la tienda y sus servicios viven en un solo lugar:
+// el prefetch del portal (lib/portalPrefetch.ts, F4-14) usa las mismas y una
+// clave distinta repetiria la request al montar la pagina.
+export const publicStoreQuery = (slug: string) =>
+  queryOptions<PublicStore>({
     queryKey: ['public-store', slug],
     queryFn: () => publicBookingService.getStore(slug),
-    enabled,
     retry: false
   })
 
-/** "Mis turnos" resuelve la tienda por aca: la vitrina da 404 si esta suspendida (FF-16). */
-export const usePublicStoreRef = (slug: string) =>
-  useQuery<PublicStoreRef>({
+export const publicStoreRefQuery = (slug: string) =>
+  queryOptions<PublicStoreRef>({
     queryKey: ['public-store-ref', slug],
     queryFn: () => publicBookingService.getStoreRef(slug),
     retry: false
   })
 
-export const usePublicServices = (storePublicId: string | undefined) =>
-  useQuery<PublicService[]>({
+export const publicServicesQuery = (storePublicId: string | undefined) =>
+  queryOptions<PublicService[]>({
     queryKey: ['public-services', storePublicId],
-    queryFn: () => publicBookingService.getServices(storePublicId as string),
-    enabled: Boolean(storePublicId)
+    queryFn: () => publicBookingService.getServices(storePublicId as string)
   })
+
+export const usePublicStore = (slug: string, enabled = true) =>
+  useQuery({ ...publicStoreQuery(slug), enabled })
+
+/** "Mis turnos" resuelve la tienda por aca: la vitrina da 404 si esta suspendida (FF-16). */
+export const usePublicStoreRef = (slug: string) => useQuery(publicStoreRefQuery(slug))
+
+export const usePublicServices = (storePublicId: string | undefined) =>
+  useQuery({ ...publicServicesQuery(storePublicId), enabled: Boolean(storePublicId) })
 
 export const usePublicStaff = (storePublicId: string | undefined, serviceId?: string) =>
   useQuery<PublicStaff[]>({
