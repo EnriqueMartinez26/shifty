@@ -305,6 +305,64 @@ def test_cada_excepcion_aceptada_lleva_su_motivo(archivo: Path) -> None:
             )
 
 
+ARG_DEL_UPGRADE = "SECURITY_UPGRADE_STAMP"
+DOCKERFILES = {s: REPO_ROOT / s / "Dockerfile" for s in SERVICIOS}
+
+
+@pytest.mark.parametrize("servicio", SERVICIOS)
+def test_el_upgrade_de_seguridad_no_sale_de_la_cache(servicio: str) -> None:
+    """2026-10-01: la capa de apk/apt upgrade salia de la cache de GHA y las
+    imagenes no recibian parches (pcre2 CVE-2026-103111). El texto del
+    Dockerfile no cambiaba y BuildKit reusaba la capa vieja (D-20260930-23).
+    Un ARG distinto en cada build, justo antes del upgrade y en la etapa que se
+    publica, invalida esa capa y las que siguen; las de antes quedan en cache.
+    """
+    lineas = [
+        linea.strip()
+        for linea in DOCKERFILES[servicio].read_text(encoding="utf-8").splitlines()
+    ]
+    utiles = [linea for linea in lineas if linea and not linea.startswith("#")]
+    upgrades = [
+        i
+        for i, linea in enumerate(utiles)
+        if linea.startswith("RUN")
+        and ("apk upgrade" in linea or "apt-get upgrade" in linea)
+    ]
+    assert len(upgrades) == 1, f"{servicio}: se esperaba un solo RUN de upgrade"
+    upgrade = upgrades[0]
+    ultima_etapa = max(i for i, linea in enumerate(utiles) if linea.startswith("FROM"))
+    assert upgrade > ultima_etapa, f"{servicio}: el upgrade no esta en la etapa final"
+
+    declaraciones = [
+        i
+        for i, linea in enumerate(utiles)
+        if linea.startswith(f"ARG {ARG_DEL_UPGRADE}")
+    ]
+    # Una sola declaracion y pegada al RUN: antes invalidaria capas que no
+    # hace falta reconstruir (dependencias, build del front).
+    assert declaraciones == [upgrade - 1], (
+        f"{servicio}: ARG {ARG_DEL_UPGRADE} tiene que ir justo antes del upgrade"
+    )
+
+
+@pytest.mark.parametrize("workflow", [BUILD, SCAN], ids=lambda p: p.name)
+def test_los_builds_de_imagenes_cambian_el_arg_del_upgrade(workflow: Path) -> None:
+    pasos = [
+        paso
+        for job in _yaml(workflow)["jobs"].values()
+        for paso in job["steps"]
+        if str(paso.get("uses", "")).startswith("docker/build-push-action@")
+    ]
+    assert pasos, workflow.name
+    for paso in pasos:
+        argumentos = [
+            a.strip() for a in str(paso["with"].get("build-args", "")).splitlines()
+        ]
+        assert f"{ARG_DEL_UPGRADE}=${{{{ github.run_id }}}}" in argumentos, (
+            f"{workflow.name}: el build no pasa {ARG_DEL_UPGRADE} y reusa el upgrade"
+        )
+
+
 def test_las_acciones_de_security_scan_van_fijadas() -> None:
     for job in _scan_jobs().values():
         for paso in job["steps"]:

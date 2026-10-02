@@ -28,6 +28,9 @@ RUN npm run build
 FROM nginx:1.30.5-alpine
 
 # Paquetes de Alpine al ultimo parche de la rama, como nginx/Dockerfile.
+# Cambia en cada build para que el upgrade de seguridad no salga de la cache
+# (D-20260930-23). Va en esta etapa: la de build sigue cacheada.
+ARG SECURITY_UPGRADE_STAMP=manual
 RUN apk upgrade --no-cache
 
 # El mismo DSN del build decide el tunel: sin DSN, /sentry-tunnel es un 404.

@@ -71,10 +71,14 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          # Solo el Dockerfile del frontend los lee (el DSN publico de Sentry
-          # va en el bundle); los otros dos los ignoran.
+          # VITE_SENTRY_DSN: solo lo lee el Dockerfile del frontend (el DSN
+          # publico de Sentry va en el bundle); los otros dos lo ignoran.
+          # SECURITY_UPGRADE_STAMP: distinto en cada corrida, invalida la capa
+          # de apk/apt upgrade de los tres Dockerfiles. Sin el, la cache gha
+          # reusaba esa capa y la imagen no recibia parches (D-20260930-23).
           build-args: |
             VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
+            SECURITY_UPGRADE_STAMP=${{ github.run_id }}
           # Sin attestation de provenance: agrega un manifiesto SIN tag que
           # cuelga de la imagen, y la limpieza de versiones sin tag (job
           # retention) lo borraria y romperia la imagen.
