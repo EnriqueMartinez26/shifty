@@ -374,13 +374,14 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       ).toBeInTheDocument()
       expect(operation.getByText('Proximos movimientos de agenda')).toBeInTheDocument()
 
-      expect(colorOf(operation.getByText('confirmed'))).toBe(TONE.success)
+      // QA 2026-10-02: los estados salian crudos de la API; ahora en castellano.
+      expect(colorOf(operation.getByText('Confirmado'))).toBe(TONE.success)
       const row = (name: string) => operation.getByText(name).parentElement?.parentElement
       expect(textOf(row('Lucia Gomez'))).toContain('10:30')
       expect(textOf(row('Lucia Gomez'))).toContain('Corte clasico - Martina Paz')
       expect(textOf(row('Sofia Diaz'))).toContain('12:00')
       expect(textOf(row('Sofia Diaz'))).toContain('Color - Julian Rios')
-      expect(colorOf(operation.getByText('pending'))).toBe(TONE.warning)
+      expect(colorOf(operation.getByText('Pendiente'))).toBe(TONE.warning)
     })
 
     it('muestra las cuatro tarjetas de señal de la operacion', async () => {
@@ -485,9 +486,9 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(textOf(row('Carla Vega'))).toContain('Barba - 27/09 09:00')
       expect(textOf(row('Carla Vega'))).toContain(peso(8000))
 
-      expect(colorOf(transactions.getByText('cancelled'))).toBe(TONE.danger)
-      expect(colorOf(transactions.getByText('completed'))).toBe(TONE.success)
-      expect(colorOf(transactions.getByText('confirmed'))).toBe(TONE.success)
+      expect(colorOf(transactions.getByText('Cancelado'))).toBe(TONE.danger)
+      expect(colorOf(transactions.getByText('Completado'))).toBe(TONE.success)
+      expect(colorOf(transactions.getByText('Confirmado'))).toBe(TONE.success)
       expect(transactions.getByRole('button', { name: 'Ver todas' })).toBeInTheDocument()
     })
 
@@ -508,8 +509,8 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       await renderDashboard()
 
       const transactions = section('Transacciones')
-      expect(colorOf(transactions.getByText('pending'))).toBe(TONE.warning)
-      expect(colorOf(transactions.getByText('pending_payment'))).toBe(TONE.warning)
+      expect(colorOf(transactions.getByText('Pendiente'))).toBe(TONE.warning)
+      expect(colorOf(transactions.getByText('Pendiente de pago'))).toBe(TONE.warning)
       expect(colorOf(transactions.getByText('desconocido'))).toBe(TONE.neutral)
     })
 
