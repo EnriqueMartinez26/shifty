@@ -30,6 +30,7 @@ from core.config import Environment, settings
 from modules.payments.jobs import expire_unpaid_appointments
 from modules.payments.model import external_reference_for
 from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_payments_hardening_and_legal import _stub_mercadopago
 from tests.postgres.test_pg_lotes_skip_locked import (
     CUANTOS,
     _con_bypass,
@@ -77,6 +78,9 @@ async def test_los_cobros_de_prueba_quedan_retenidos_y_el_resto_vence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(tasks, "_send_email", Buzon())
+    # MP simulado desde las reservas: crear el link de pago tambien llama a MP
+    # (la primera corrida de CI salio a la red real y la reserva dio 502).
+    _stub_mercadopago(monkeypatch, remote_payment=None)
     store_a, token_a = await _tienda_con_mercadopago(client, app_sessions, "pg-ret-a")
     await _reservas_con_sena_pendiente(client, token_a, store_a, "pg-ret-a")
     store_b, token_b = await _tienda_con_mercadopago(client, app_sessions, "pg-ret-b")
