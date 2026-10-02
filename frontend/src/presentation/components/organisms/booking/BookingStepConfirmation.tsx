@@ -36,6 +36,7 @@ import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
+import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingBackButtonStyle,
   createBookingClientInputStyle,
@@ -43,7 +44,6 @@ import {
   createBookingSurfaceStyle,
   createBookingAccentBoxStyle
 } from '../../../lib/surfaceStyles'
-import { revealOnMount } from '../../../lib/revealOnMount'
 
 // Un 422 nombra el campo; el texto crudo de Pydantic nunca llega (regla 20).
 const BOOKING_FIELD_MESSAGES: Partial<Record<string, string>> = {

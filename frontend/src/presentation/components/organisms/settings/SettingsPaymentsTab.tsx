@@ -8,8 +8,8 @@ import { getErrorCode } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import type { SettingsFormData } from '../../../lib/settingsDraft'
-import { QueryErrorNotice } from '../../molecules/QueryErrorNotice'
 import { createSettingsInputStyle } from '../../../lib/surfaceStyles'
+import { QueryErrorNotice } from '../../molecules/QueryErrorNotice'
 
 type DepositConditions = Pick<SettingsFormData, 'allow_manual_coordination' | 'deposit_policy'>
 

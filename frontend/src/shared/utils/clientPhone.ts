@@ -6,7 +6,7 @@
  * vacio y el 422 se leia como "el horario podria estar ocupado" (QA
  * 2026-10-02).
  */
-export const CLIENT_PHONE_MIN_DIGITS = 6
+const CLIENT_PHONE_MIN_DIGITS = 6
 const CLIENT_PHONE_MAX_LENGTH = 30
 
 export const isValidClientPhone = (raw: string): boolean => {

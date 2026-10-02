@@ -5,11 +5,11 @@
  * selector de clientes confundia al dueno (QA 2026-10-02).
  */
 export const isDeliverableEmail = (email: string | null | undefined): email is string =>
-  !!email && email.includes('@') && !email.toLowerCase().endsWith('.noreply')
+  typeof email === 'string' && email.includes('@') && !email.toLowerCase().endsWith('.noreply')
 
 /** Si el texto es un email tecnico (`.noreply`). */
 const isTechnicalEmail = (value: string | null | undefined): boolean =>
-  !!value && value.includes('@') && value.toLowerCase().endsWith('.noreply')
+  typeof value === 'string' && value.includes('@') && value.toLowerCase().endsWith('.noreply')
 
 /**
  * Un nombre que el backend armo con el email tecnico (sin nombre ni apellido

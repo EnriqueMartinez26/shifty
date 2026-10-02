@@ -10,8 +10,8 @@ import type {
 import { formatArgentinaDayMonth, formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { formatCurrency, numberFormatter } from './dashboardFormatters'
-import { bookingStatusLabel } from '../../../lib/bookingStatusLabel'
 import type { AgendaItem, RankedItem, Tone, TransactionItem } from './types'
+import { bookingStatusLabel } from '../../../lib/bookingStatusLabel'
 
 /**
  * La API manda los estados en minusculas (`appointments/model.py`); esto los
