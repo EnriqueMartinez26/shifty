@@ -42,3 +42,14 @@ export interface BookingOtpState {
    */
   debugCode: string
 }
+
+/**
+ * Cambio de paso que el wizard le pide a quien guarda el paso (la URL, F4-15):
+ * `push` al avanzar, `replace` en los saltos automaticos y correcciones, y
+ * `back` al tocar "atras".
+ */
+export interface BookingStepChange {
+  to: number
+  from: number
+  mode: 'push' | 'replace' | 'back'
+}

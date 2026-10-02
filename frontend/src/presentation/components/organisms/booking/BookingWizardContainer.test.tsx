@@ -1,8 +1,13 @@
+import type { ComponentProps } from 'react'
+
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router'
 
 import { NetworkError, RateLimitError } from '@shared/errors'
 
 import { BookingWizardContainer } from './BookingWizardContainer'
+import { EMPTY_PRESELECT, initialStepFor } from './deepLink'
+import { useBookingStepParam } from '../../../hooks/useBookingStepParam'
 import type { PublicStore } from '../../../hooks/usePublic'
 
 const mockServices = jest.fn()
@@ -65,6 +70,47 @@ const slot = {
 
 const HORARIO = 'Elegi fecha y hora'
 const SERVICIO = '¿Qué servicio necesitás?'
+const DATOS = 'juan@email.com'
+
+type WizardProps = Omit<ComponentProps<typeof BookingWizardContainer>, 'step' | 'onStepChange'>
+
+// El paso vive en la URL (F4-15): el wizard se monta como lo hace
+// PublicBooking, con el hook que lee y escribe ?step=.
+const ConPasoEnUrl = (props: WizardProps) => {
+  const { step, changeStep } = useBookingStepParam(
+    initialStepFor(props.preselect ?? EMPTY_PRESELECT)
+  )
+  return <BookingWizardContainer {...props} step={step} onStepChange={changeStep} />
+}
+
+const Navegador = () => {
+  const location = useLocation()
+  const navigate = useNavigate()
+  return (
+    <>
+      <p data-testid="url">{`${location.pathname}${location.search}`}</p>
+      <button type="button" onClick={() => void navigate(-1)}>
+        Atras del navegador
+      </button>
+    </>
+  )
+}
+
+const WizardEnRuta = ({
+  historial = ['/booking/tienda'],
+  ...props
+}: WizardProps & { historial?: string[] }) => (
+  <MemoryRouter initialEntries={historial} initialIndex={historial.length - 1}>
+    <Routes>
+      <Route path="/booking/:slug" element={<ConPasoEnUrl {...props} />} />
+      <Route path="*" element={null} />
+    </Routes>
+    <Navegador />
+  </MemoryRouter>
+)
+
+const url = () => screen.getByTestId('url').textContent
+const atrasDelNavegador = () => fireEvent.click(screen.getByText('Atras del navegador'))
 
 describe('BookingWizardContainer', () => {
   beforeEach(() => {
@@ -82,7 +128,7 @@ describe('BookingWizardContainer', () => {
   it('con un servicio valido en la URL arranca en el horario', () => {
     mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
     render(
-      <BookingWizardContainer
+      <WizardEnRuta
         store={tienda(false)}
         preselect={{ serviceId: 'a', staffId: 'st-1', date: null }}
       />
@@ -93,7 +139,7 @@ describe('BookingWizardContainer', () => {
 
   it('con un solo servicio lo elige solo y salta al horario; "atras" no vuelve al servicio', async () => {
     mockServices.mockReturnValue({ data: [servicio('unico')], isLoading: false })
-    render(<BookingWizardContainer store={tienda(false)} />)
+    render(<WizardEnRuta store={tienda(false)} />)
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     expect(mockAvailability).toHaveBeenCalledWith('store-1', 'unico', expect.any(String), false)
@@ -106,14 +152,128 @@ describe('BookingWizardContainer', () => {
 
   it('con varios servicios arranca eligiendo el servicio', () => {
     mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
-    render(<BookingWizardContainer store={tienda(false)} />)
+    render(<WizardEnRuta store={tienda(false)} />)
     expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+  })
+
+  // 2026-10-02 (F4-15): el paso vivia solo en memoria. "Atras" del navegador
+  // sacaba de la reserva y un link no podia volver al paso en que estaba.
+  describe('paso en la URL', () => {
+    const elegirServicioYHorario = () => {
+      fireEvent.click(screen.getByText('Servicio a'))
+      fireEvent.click(screen.getByText('09:00'))
+    }
+
+    beforeEach(() => {
+      mockServices.mockReturnValue({ data: [servicio('a'), servicio('b')], isLoading: false })
+    })
+
+    it('avanzar escribe ?step= sin pisar los otros parametros', () => {
+      render(<WizardEnRuta store={tienda(false)} historial={['/booking/tienda?ref=ig']} />)
+
+      fireEvent.click(screen.getByText('Servicio a'))
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      expect(url()).toBe('/booking/tienda?ref=ig&step=1')
+
+      fireEvent.click(screen.getByText('09:00'))
+      expect(screen.getByPlaceholderText(DATOS)).toBeInTheDocument()
+      expect(url()).toBe('/booking/tienda?ref=ig&step=2')
+    })
+
+    it('"atras" del navegador vuelve al paso anterior con lo elegido', () => {
+      render(<WizardEnRuta store={tienda(false)} />)
+      elegirServicioYHorario()
+
+      atrasDelNavegador()
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      expect(mockAvailability).toHaveBeenLastCalledWith('store-1', 'a', expect.any(String), false)
+
+      atrasDelNavegador()
+      expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+      expect(url()).toBe('/booking/tienda')
+    })
+
+    it('"atras" de la app retrocede en el historial sin dejar un paso repetido', () => {
+      render(<WizardEnRuta store={tienda(false)} historial={['/otra-pagina', '/booking/tienda']} />)
+      elegirServicioYHorario()
+
+      // Atras desde los datos y desde el horario: dos pasos para atras.
+      fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+      expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+      expect(url()).toBe('/booking/tienda')
+
+      // Un "atras" mas del navegador sale de la reserva: no rebota a un paso.
+      atrasDelNavegador()
+      expect(url()).toBe('/otra-pagina')
+    })
+
+    it('el salto automatico con un solo servicio no deja un paso al que rebotar', async () => {
+      mockServices.mockReturnValue({ data: [servicio('unico')], isLoading: false })
+      render(<WizardEnRuta store={tienda(false)} historial={['/otra-pagina', '/booking/tienda']} />)
+      await waitFor(() => expect(url()).toBe('/booking/tienda?step=1'))
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+
+      atrasDelNavegador()
+      expect(url()).toBe('/otra-pagina')
+    })
+
+    it('el deep-link arranca en el horario y "atras" del navegador sale sin rebotar', () => {
+      render(
+        <WizardEnRuta
+          store={tienda(false)}
+          preselect={{ serviceId: 'a', staffId: null, date: null }}
+          historial={['/otra-pagina', '/booking/tienda?service=a']}
+        />
+      )
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      expect(url()).toBe('/booking/tienda?service=a')
+
+      atrasDelNavegador()
+      expect(url()).toBe('/otra-pagina')
+    })
+
+    it('volver al servicio desde un deep-link lo deja explicito en la URL', () => {
+      render(
+        <WizardEnRuta
+          store={tienda(false)}
+          preselect={{ serviceId: 'a', staffId: null, date: null }}
+          historial={['/booking/tienda?service=a']}
+        />
+      )
+
+      fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement)
+
+      expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+      expect(url()).toBe('/booking/tienda?service=a&step=0')
+    })
+
+    it('un ?step= sin lo elegido (recarga) se degrada y corrige la URL', async () => {
+      render(<WizardEnRuta store={tienda(false)} historial={['/booking/tienda?step=2']} />)
+
+      expect(screen.getByText(SERVICIO)).toBeInTheDocument()
+      await waitFor(() => expect(url()).toBe('/booking/tienda'))
+    })
+
+    it('un deep-link con ?step=2 sin horario elegido queda en el horario', async () => {
+      render(
+        <WizardEnRuta
+          store={tienda(false)}
+          preselect={{ serviceId: 'a', staffId: null, date: null }}
+          historial={['/booking/tienda?service=a&step=2']}
+        />
+      )
+
+      expect(screen.getByText(HORARIO)).toBeInTheDocument()
+      await waitFor(() => expect(url()).toBe('/booking/tienda?service=a'))
+    })
   })
 
   it('el codigo OTP se pide por email, al email que escribe el cliente', async () => {
     mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
     mockRequestOtp.mockResolvedValue({ ok: true, expires_at: '2026-09-25T13:00:00Z' })
-    render(<BookingWizardContainer store={tienda(true)} />)
+    render(<WizardEnRuta store={tienda(true)} />)
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     fireEvent.click(screen.getByText('09:00'))
@@ -147,7 +307,7 @@ describe('BookingWizardContainer', () => {
       'shifty:otp:tienda',
       JSON.stringify({ phone: '5491155550101', verifiedAt: new Date().toISOString() })
     )
-    render(<BookingWizardContainer store={tienda(true)} />)
+    render(<WizardEnRuta store={tienda(true)} />)
 
     await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
     fireEvent.click(screen.getByText('09:00'))
@@ -176,7 +336,7 @@ describe('BookingWizardContainer', () => {
         phone: '+5491155550101',
         verified_at: new Date().toISOString()
       })
-      render(<BookingWizardContainer store={tienda(true)} />)
+      render(<WizardEnRuta store={tienda(true)} />)
 
       await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
       fireEvent.click(screen.getByText('09:00'))
@@ -241,11 +401,11 @@ describe('BookingWizardContainer', () => {
 
     it('recargar y reenviar el mismo pedido conserva la clave', async () => {
       mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
-      const primera = render(<BookingWizardContainer store={tienda(false)} />)
+      const primera = render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva()
       primera.unmount()
 
-      render(<BookingWizardContainer store={tienda(false)} />)
+      render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva()
 
       expect(mockCreateBooking).toHaveBeenCalledTimes(2)
@@ -257,7 +417,7 @@ describe('BookingWizardContainer', () => {
       // 2026-10-01 (review de #83): la huella era el pedido en claro y dejaba
       // nombre y telefono del cliente en sessionStorage.
       mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
-      render(<BookingWizardContainer store={tienda(false)} />)
+      render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva('Lucia')
 
       const crudo = window.sessionStorage.getItem('shifty:booking-idem:tienda') ?? ''
@@ -273,11 +433,11 @@ describe('BookingWizardContainer', () => {
 
     it('recargar y reenviar otros datos manda otra clave', async () => {
       mockCreateBooking.mockRejectedValue(new NetworkError('No se pudo conectar con el servidor.'))
-      const primera = render(<BookingWizardContainer store={tienda(false)} />)
+      const primera = render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva('Lucia')
       primera.unmount()
 
-      render(<BookingWizardContainer store={tienda(false)} />)
+      render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva('Lucia Perez')
 
       expect(claveDelIntento(1)).not.toBe(claveDelIntento(0))
@@ -297,7 +457,7 @@ describe('BookingWizardContainer', () => {
         client_phone: '+5491155550101',
         payment_required: false
       })
-      render(<BookingWizardContainer store={tienda(false)} />)
+      render(<WizardEnRuta store={tienda(false)} />)
       await confirmarReserva()
       // El intento fallido deja la clave guardada para el reintento.
       expect(window.sessionStorage.getItem('shifty:booking-idem:tienda')).not.toBeNull()
@@ -320,7 +480,7 @@ describe('BookingWizardContainer', () => {
 
     const hastaPedirElCodigo = async () => {
       mockServices.mockReturnValue({ data: [servicio('a')], isLoading: false })
-      render(<BookingWizardContainer store={tienda(true)} />)
+      render(<WizardEnRuta store={tienda(true)} />)
       await waitFor(() => expect(screen.getByText(HORARIO)).toBeInTheDocument())
       fireEvent.click(screen.getByText('09:00'))
       fireEvent.change(screen.getByPlaceholderText('juan@email.com'), {
