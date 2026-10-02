@@ -15,6 +15,7 @@ import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
+import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
 import {
   usePublicPaymentStatus,
   usePublicServices,
@@ -45,7 +46,8 @@ const PublicBooking: React.FC = () => {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const paymentId = searchParams.get('payment_id') || undefined
-  const { data: store, isLoading, isError } = usePublicStore(slug)
+  const storeQuery = usePublicStore(slug)
+  const { data: store, isLoading, isError } = storeQuery
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
   // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
   // las listas publicas antes de montar el wizard. Sin parametros no se
@@ -80,7 +82,16 @@ const PublicBooking: React.FC = () => {
     )
   }
 
-  if (isError || !store) {
+  // 2026-10-02: cualquier falla decia "Negocio no encontrado", tambien sin red
+  // o con un 5xx. Solo el 404 es una tienda que no existe. Con la tienda ya
+  // cargada, un refetch fallido no tapa la pagina.
+  if (!store && isError && !isStoreMissing(storeQuery.error)) {
+    return (
+      <StoreLoadError onRetry={() => void storeQuery.refetch()} retrying={storeQuery.isFetching} />
+    )
+  }
+
+  if (!store) {
     return (
       <NotFoundScreen
         title="Negocio no encontrado"
