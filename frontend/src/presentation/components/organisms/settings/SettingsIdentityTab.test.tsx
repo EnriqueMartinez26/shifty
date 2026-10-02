@@ -89,6 +89,18 @@ describe('SettingsIdentityTab', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('La imagen supera el máximo de 1 MB.')
   })
 
+  // 2026-10-02 (F4-15): el logo no tenia tamano ni carga diferida y la
+  // pestana saltaba al llegar la imagen.
+  it('el logo reserva su caja de 80 px y carga diferida', () => {
+    renderTab({ value: { ...value, logo_url: 'https://cdn.test/logo.png' } })
+
+    const img = screen.getByRole('img', { name: 'Logo' })
+    expect(img).toHaveAttribute('loading', 'lazy')
+    expect(img).toHaveAttribute('decoding', 'async')
+    expect(img).toHaveAttribute('width', '80')
+    expect(img).toHaveAttribute('height', '80')
+  })
+
   it('subiendo o en solo lectura el input del logo se apaga', () => {
     const { container, unmount } = renderTab({ uploadingLogo: true })
     expect(screen.getByText('Subiendo...')).toBeInTheDocument()

@@ -4,7 +4,7 @@ import { ServiceManagementContainer } from '@presentation/containers/ServiceMana
 
 const ServicesPage: React.FC = () => {
   return (
-    <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+    <div className="duration-700">
       <ServiceManagementContainer />
     </div>
   )

@@ -110,7 +110,7 @@ export const WaitlistContainer: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
+    <div className="space-y-6 duration-700">
       <div
         className="flex flex-wrap gap-4 items-center justify-between p-6 rounded-3xl"
         style={{

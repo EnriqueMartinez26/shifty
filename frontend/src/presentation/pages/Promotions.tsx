@@ -136,7 +136,7 @@ const PromotionsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Promociones"
         description="Códigos y descuentos del booking público en una pantalla separada de pagos."

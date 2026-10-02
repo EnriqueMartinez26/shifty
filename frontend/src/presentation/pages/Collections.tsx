@@ -73,7 +73,7 @@ const CollectionsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Cobros"
         description="Turnos operables para generar links y confirmar pagos manuales sin mezclarlo con configuración."

@@ -195,7 +195,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={closeIfIdle} />
       <div
-        className="relative w-full max-w-5xl rounded-md animate-in zoom-in-95 duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
+        className="relative w-full max-w-5xl rounded-md duration-200 flex flex-col lg:flex-row overflow-hidden max-h-[95vh]"
         style={create2000sModalSurfaceStyle()}
       >
         {/* Formulario (Izquierda) */}
@@ -607,6 +607,10 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     <img
                       src={formData.imageUrl}
                       alt={formData.name || 'Servicio'}
+                      loading="lazy"
+                      decoding="async"
+                      width={48}
+                      height={48}
                       className="w-full h-full object-cover"
                     />
                   ) : (

@@ -32,7 +32,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
   }
 
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-500">
+    <div className="space-y-4 duration-500">
       <div className="mb-6">
         <h2
           className="text-2xl font-black uppercase tracking-tight"
@@ -75,7 +75,15 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                 }}
               >
                 {svc.image_url ? (
-                  <img src={svc.image_url} alt={svc.name} className="w-full h-full object-cover" />
+                  <img
+                    src={svc.image_url}
+                    alt={svc.name}
+                    loading="lazy"
+                    decoding="async"
+                    width={56}
+                    height={56}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <Briefcase className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
                 )}

@@ -146,7 +146,15 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
             }}
           >
             {value.logo_url ? (
-              <img src={value.logo_url} alt="Logo" className="w-full h-full object-contain" />
+              <img
+                src={value.logo_url}
+                alt="Logo"
+                loading="lazy"
+                decoding="async"
+                width={80}
+                height={80}
+                className="w-full h-full object-contain"
+              />
             ) : (
               <Store className="w-8 h-8" style={{ color: colors2000s.text.secondary }} />
             )}

@@ -250,6 +250,19 @@ describe('ServiceFormModal — imagen del servicio', () => {
 
   const png = () => new File([new Uint8Array(PNG)], 'foto.png', { type: 'image/png' })
 
+  // 2026-10-02 (F4-15): la vista previa no tenia tamano ni carga diferida y
+  // el modal saltaba al llegar la imagen.
+  it('la vista previa reserva su caja de 48 px y carga diferida', () => {
+    montar()
+
+    const img = screen.getByRole('img', { name: 'Corte premium' })
+    expect(img).toHaveAttribute('src', URL_VIEJA)
+    expect(img).toHaveAttribute('loading', 'lazy')
+    expect(img).toHaveAttribute('decoding', 'async')
+    expect(img).toHaveAttribute('width', '48')
+    expect(img).toHaveAttribute('height', '48')
+  })
+
   it('en el alta no hay input de archivo y se explica por que', () => {
     montar({ editingService: null })
 

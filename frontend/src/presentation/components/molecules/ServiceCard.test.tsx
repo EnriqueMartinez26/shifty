@@ -84,6 +84,27 @@ describe('ServiceCard', () => {
     expect(button).toHaveAttribute('title', 'Tienda suspendida')
   })
 
+  // 2026-10-02 (F4-15): la imagen no tenia tamano ni carga diferida; el panel
+  // de servicios bajaba todas las fotos al abrirse y la grilla saltaba al
+  // llegar cada una.
+  it('la imagen del servicio reserva su caja de 48 px y carga diferida', () => {
+    const { getByRole } = render(
+      <ServiceCard
+        service={ServiceMapper.toDomain({ ...dto, image_url: 'https://cdn.test/corte.png' })}
+        readOnlyReason={null}
+        onEdit={jest.fn()}
+        onDelete={jest.fn()}
+        onReactivate={jest.fn()}
+      />
+    )
+
+    const img = getByRole('img', { name: 'Corte' })
+    expect(img).toHaveAttribute('loading', 'lazy')
+    expect(img).toHaveAttribute('decoding', 'async')
+    expect(img).toHaveAttribute('width', '48')
+    expect(img).toHaveAttribute('height', '48')
+  })
+
   it('sin suspension Editar y Eliminar siguen habilitados', () => {
     const { getByRole } = renderCard(true)
 
