@@ -6,6 +6,7 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
@@ -123,6 +124,18 @@ describe('TransientErrorHandler (402, 429, 502/503)', () => {
     const avisos = sink.mock.calls.map(([texto]) => String(texto))
     expect(avisos[0]).toContain('Tu suscripción está suspendida')
     expect(avisos.join()).not.toContain(crudo)
+  })
+
+  it('una lectura vencida avisa con su propio texto, no como falta de red (D-20260930-02)', async () => {
+    // F4-04 b (2026-10-01): el refresco de una pantalla que vencia su timeout
+    // no tenia aviso propio.
+    const timeout = new RequestTimeoutError('x', { errorCode: 'REQUEST_TIMEOUT', statusCode: 0 })
+
+    expect(new NetworkErrorHandler().canHandle(timeout)).toBe(false)
+    expect(new TransientErrorHandler().canHandle(timeout)).toBe(true)
+    await new TransientErrorHandler().handle(timeout)
+
+    expect(sink).toHaveBeenCalledWith('La consulta tardó demasiado. Probá de nuevo.', 'warning')
   })
 
   it('con Retry-After dice en cuanto probar de nuevo (F4-04)', async () => {
