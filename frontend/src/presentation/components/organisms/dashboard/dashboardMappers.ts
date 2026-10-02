@@ -10,6 +10,7 @@ import type {
 import { formatArgentinaDayMonth, formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { formatCurrency, numberFormatter } from './dashboardFormatters'
+import { bookingStatusLabel } from '../../../lib/bookingStatusLabel'
 import type { AgendaItem, RankedItem, Tone, TransactionItem } from './types'
 
 /**
@@ -40,15 +41,20 @@ export const getTopProfessional = (items: ProfessionalReportItem[] | undefined) 
     (left, right) => right.occupancy_rate - left.occupancy_rate || right.revenue - left.revenue
   )[0]
 
+// Los proximos turnos pueden ser de varios dias: cada uno lleva su dia y van
+// por hora de inicio (QA 2026-10-02: llegaban sin fecha y desordenados).
 export const mapAgenda = (appointments: UpcomingAppointment[] | undefined): AgendaItem[] =>
-  (appointments ?? []).map((appointment) => ({
-    id: appointment.public_id,
-    time: formatArgentinaTime(appointment.starts_at),
-    title: appointment.client_name,
-    subtitle: `${appointment.service_name} - ${appointment.staff_name}`,
-    status: appointment.status,
-    tone: getAppointmentTone(appointment.status)
-  }))
+  [...(appointments ?? [])]
+    .sort((left, right) => new Date(left.starts_at).getTime() - new Date(right.starts_at).getTime())
+    .map((appointment) => ({
+      id: appointment.public_id,
+      day: formatArgentinaDayMonth(appointment.starts_at),
+      time: formatArgentinaTime(appointment.starts_at),
+      title: appointment.client_name,
+      subtitle: `${appointment.service_name} - ${appointment.staff_name}`,
+      status: bookingStatusLabel(appointment.status),
+      tone: getAppointmentTone(appointment.status)
+    }))
 
 export const mapTopServices = (items: ReportTopServiceItem[] | undefined): RankedItem[] =>
   (items ?? []).slice(0, 4).map((item) => ({
@@ -67,6 +73,6 @@ export const mapTransactions = (items: ReportAppointmentItem[] | undefined): Tra
       title: item.client_name,
       subtitle: `${item.service_name} - ${formatArgentinaDayMonth(item.starts_at)} ${formatArgentinaTime(item.starts_at)}`,
       amount: formatCurrency(item.service_price),
-      status: item.status,
+      status: bookingStatusLabel(item.status),
       tone: getAppointmentTone(item.status)
     }))

@@ -121,29 +121,43 @@ describe('mapAgenda', () => {
     expect(mapAgenda([])).toEqual([])
   })
 
-  it('mapea cada campo y pasa la hora a la de Argentina', () => {
+  it('mapea cada campo con el dia y la hora de Argentina y el estado en castellano', () => {
     expect(mapAgenda([upcoming({})])).toEqual([
       {
         id: 'apt-1',
+        day: '30/09',
         time: '10:30',
         title: 'Lucia Perez',
         subtitle: 'Corte clasico - Ana',
-        status: 'confirmed',
+        status: 'Confirmado',
         tone: 'success'
       }
     ])
   })
 
-  it('conserva el orden recibido y el estado crudo, con tono neutral si no se conoce', () => {
+  // 2026-10-02, QA en navegador: "Proximos movimientos" mezclaba turnos de
+  // varios dias sin fecha y en el orden en que llegaban.
+  it('ordena por inicio y lleva el dia de cada turno; un estado desconocido queda crudo', () => {
     const result = mapAgenda([
+      upcoming({ public_id: 'c', starts_at: '2026-10-01T12:00:00Z', status: 'pending' }),
       upcoming({ public_id: 'b', starts_at: '2026-09-30T15:00:00Z', status: 'pending' }),
       upcoming({ public_id: 'a', starts_at: '2026-09-30T12:00:00Z', status: 'rejected' })
     ])
 
-    expect(result.map((item) => item.id)).toEqual(['b', 'a'])
-    expect(result.map((item) => item.time)).toEqual(['12:00', '09:00'])
-    expect(result.map((item) => item.status)).toEqual(['pending', 'rejected'])
-    expect(result.map((item) => item.tone)).toEqual(['warning', 'neutral'])
+    expect(result.map((item) => item.id)).toEqual(['a', 'b', 'c'])
+    expect(result.map((item) => item.day)).toEqual(['30/09', '30/09', '01/10'])
+    expect(result.map((item) => item.time)).toEqual(['09:00', '12:00', '09:00'])
+    expect(result.map((item) => item.status)).toEqual(['rejected', 'Pendiente', 'Pendiente'])
+    expect(result.map((item) => item.tone)).toEqual(['neutral', 'warning', 'warning'])
+  })
+
+  it('no reordena la lista que recibe', () => {
+    const received = [
+      upcoming({ public_id: 'b', starts_at: '2026-09-30T15:00:00Z' }),
+      upcoming({ public_id: 'a', starts_at: '2026-09-30T12:00:00Z' })
+    ]
+    mapAgenda(received)
+    expect(received.map((item) => item.public_id)).toEqual(['b', 'a'])
   })
 })
 
@@ -215,7 +229,8 @@ describe('mapTransactions', () => {
       title: 'Lucia Perez',
       subtitle: 'Corte clasico - 15/09 09:00',
       amount: expect.any(String),
-      status: 'completed',
+      // QA 2026-10-02: el estado salia crudo (COMPLETED con uppercase).
+      status: 'Completado',
       tone: 'success'
     })
     expect(normalizeSpaces(String(row?.amount))).toBe('$ 4.500')

@@ -2,6 +2,8 @@ import React from 'react'
 
 import { format } from 'date-fns'
 
+import { formatArgentinaWeekdayShort } from '@shared/utils/argentinaTime'
+
 import { colors2000s } from '../../../../theme/colors'
 import { NO_EVENTS, type UnifiedCalendarEvent } from '../../../lib/calendarEvents'
 import { cardStyle } from '../../../lib/calendarStyles'
@@ -29,7 +31,8 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
       className={`grid ${compact ? 'grid-cols-7 min-w-[900px]' : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-4'} gap-4`}
     >
       {days.map((day) => {
-        const dayEvents = eventsByDay.get(format(day, 'yyyy-MM-dd')) ?? NO_EVENTS
+        const dayKey = format(day, 'yyyy-MM-dd')
+        const dayEvents = eventsByDay.get(dayKey) ?? NO_EVENTS
         return (
           <div key={day.toISOString()} className="rounded-[6px] p-4 bg-white" style={cardStyle}>
             <div className="mb-3">
@@ -37,7 +40,7 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
                 className="text-[9px] font-black uppercase tracking-widest"
                 style={{ color: colors2000s.orange.accent }}
               >
-                {format(day, 'EEE')}
+                {formatArgentinaWeekdayShort(dayKey)}
               </p>
               <p className="text-lg font-black" style={{ color: colors2000s.text.primary }}>
                 {format(day, 'dd/MM')}

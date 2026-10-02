@@ -8,6 +8,7 @@ import type {
 } from '@application/services/SuperAdminService'
 
 import { colors2000s } from '../../../theme/colors'
+import { subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatDateEsAr } from '../../lib/formatters'
 
 interface SuperAdminHealthPanelProps {
@@ -73,7 +74,7 @@ function createAlerts(
   } else if (subscription.status !== 'active') {
     alerts.push({
       tone: 'warning',
-      title: `Suscripción ${subscription.status}`,
+      title: `Suscripción ${subscriptionStatusLabel(subscription.status).toLowerCase()}`,
       detail: 'Conviene revisar billing y período vigente antes de seguir operando.'
     })
   } else {

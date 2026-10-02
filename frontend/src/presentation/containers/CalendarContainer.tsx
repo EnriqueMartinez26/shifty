@@ -20,7 +20,6 @@ import {
   RescheduleAppointmentDialog,
   type ReschedulableAppointment
 } from './RescheduleAppointmentDialog'
-import { colors2000s } from '../../theme/colors'
 import {
   AppointmentActions,
   type AppointmentAction
@@ -30,6 +29,7 @@ import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { AbsencesTimeline } from '../components/organisms/calendar/AbsencesTimeline'
 import { AgendaDayView } from '../components/organisms/calendar/AgendaDayView'
 import { AgendaEventPill } from '../components/organisms/calendar/AgendaEventPill'
+import { AgendaListView } from '../components/organisms/calendar/AgendaListView'
 import { AgendaRangeGrid } from '../components/organisms/calendar/AgendaRangeGrid'
 import { AgendaToolbar, type CalendarView } from '../components/organisms/calendar/AgendaToolbar'
 import { NewAppointmentModal } from '../components/organisms/NewAppointmentModal'
@@ -282,7 +282,12 @@ export const CalendarContainer: React.FC = () => {
       event.status === 'pending_payment'
         ? ' El cobro pendiente se va a vencer y su link de pago deja de servir.'
         : ''
-    if (!(await confirm(`¿Cancelar el turno de ${event.title}?${liveChargeWarning}`))) return
+    // "Cancelar"/"Confirmar" en un dialogo que cancela era ambiguo (QA 2026-10-02).
+    const confirmed = await confirm(`¿Cancelar el turno de ${event.title}?${liveChargeWarning}`, {
+      confirmLabel: 'Cancelar turno',
+      cancelLabel: 'Volver'
+    })
+    if (!confirmed) return
     try {
       await cancelAppointment.mutateAsync(event.id)
       setMessage('Turno cancelado')
@@ -504,21 +509,7 @@ export const CalendarContainer: React.FC = () => {
         />
       )}
       {view === 'list' && (
-        <div className="space-y-3">
-          {unifiedEvents.map((event) => renderEventPill(event))}
-          {!unifiedEvents.length && (
-            <div
-              className="rounded-[6px] p-6 bg-white text-sm font-bold"
-              style={{
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.insetDark,
-                color: colors2000s.text.secondary
-              }}
-            >
-              No hay eventos para el rango seleccionado.
-            </div>
-          )}
-        </div>
+        <AgendaListView eventsByDay={eventsByDay} renderEvent={(event) => renderEventPill(event)} />
       )}
 
       <div className={`grid gap-6 ${canManageBlocks ? 'xl:grid-cols-[1.05fr_0.95fr]' : ''}`}>

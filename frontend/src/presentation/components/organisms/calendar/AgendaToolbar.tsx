@@ -3,6 +3,8 @@ import React from 'react'
 import { format } from 'date-fns'
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 
+import { formatArgentinaLongDate } from '@shared/utils/argentinaTime'
+
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { fieldStyle, panelStyle } from '../../../lib/calendarStyles'
 
@@ -92,7 +94,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           className="text-base font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
         >
-          {format(selectedDate, "dd 'de' MMMM")}
+          {formatArgentinaLongDate(format(selectedDate, 'yyyy-MM-dd'))}
         </p>
       </div>
       <button

@@ -10,6 +10,7 @@ import type {
 
 import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
 import { colors2000s } from '../../../theme/colors'
+import { billingIntervalLabel, subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatCurrencyEsAr, formatDateEsAr } from '../../lib/formatters'
 import { ActionButton } from '../SuperAdminUi'
 
@@ -60,7 +61,8 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
               className="text-[10px] font-bold uppercase tracking-widest"
               style={{ color: colors2000s.text.secondary }}
             >
-              {overview.subscription.status} · {overview.subscription.billing_interval}
+              {subscriptionStatusLabel(overview.subscription.status)} ·{' '}
+              {billingIntervalLabel(overview.subscription.billing_interval ?? '')}
             </p>
           </div>
           <span

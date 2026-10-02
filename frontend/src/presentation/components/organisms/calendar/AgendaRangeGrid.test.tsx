@@ -37,6 +37,9 @@ describe('AgendaRangeGrid', () => {
       />
     )
     expect(screen.getByText('15/09')).toBeInTheDocument()
+    // QA 2026-10-02: date-fns sin locale mostraba 'Tue'.
+    expect(screen.getByText('mar')).toBeInTheDocument()
+    expect(screen.getByText('mié')).toBeInTheDocument()
     expect(screen.getByText('Evento 6')).toBeInTheDocument()
     expect(screen.getByText('Sin eventos')).toBeInTheDocument()
   })

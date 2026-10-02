@@ -17,6 +17,7 @@ import {
   type SubscriptionFilter
 } from './shared'
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
+import { subscriptionStatusLabel } from '../../lib/enumLabels'
 import { formatDateEsAr } from '../../lib/formatters'
 import { create2000sInputStyle } from '../../lib/surfaceStyles'
 import { MiniButton } from '../SuperAdminUi'
@@ -262,7 +263,9 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                         className="text-[10px] font-bold uppercase tracking-widest"
                         style={{ color: colors2000s.text.secondary }}
                       >
-                        {store.subscription_status || 'Sin suscripcion'}
+                        {store.subscription_status
+                          ? subscriptionStatusLabel(store.subscription_status)
+                          : 'Sin suscripcion'}
                       </p>
                     </td>
                     <td

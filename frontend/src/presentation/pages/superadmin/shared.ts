@@ -3,6 +3,7 @@ import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../../theme/colors'
+import { userRoleLabel } from '../../lib/enumLabels'
 import {
   create2000sEmptyStateStyle,
   create2000sInnerCardStyle,
@@ -197,13 +198,8 @@ export const createEmptyRedeemForm = (): RedeemFormState => ({
   coupon_code: ''
 })
 
-export const roleLabel = (role: string, isGlobalAdmin: boolean) => {
-  if (isGlobalAdmin) return 'Super Admin'
-  if (role === 'admin') return 'Admin'
-  if (role === 'staff') return 'Profesional'
-  if (role === 'receptionist') return 'Recepcion'
-  return 'Usuario'
-}
+export const roleLabel = (role: string, isGlobalAdmin: boolean) =>
+  isGlobalAdmin ? 'Super Admin' : userRoleLabel(role)
 
 export const statusLabel = (active: boolean) => (active ? 'Activa' : 'Inactiva')
 

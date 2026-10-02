@@ -89,6 +89,8 @@ describe('AgendaDayView', () => {
     expect(screen.getByText('Bruno Diaz')).toBeInTheDocument()
     expect(screen.getByText('09:00', { selector: 'span' })).toBeInTheDocument()
     expect(screen.getByText('Carla Ruiz')).toBeInTheDocument()
+    // QA 2026-10-02: el estado salia crudo ('CONFIRMED' con uppercase).
+    expect(screen.getByText('09:00 - Confirmado')).toBeInTheDocument()
     expect(screen.queryByText('Actualizando agenda...')).not.toBeInTheDocument()
   })
 

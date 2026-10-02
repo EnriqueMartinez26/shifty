@@ -55,6 +55,9 @@ describe('BlockPreviewModal', () => {
       screen.getAllByText((_, el) => (el?.textContent ?? '').includes('21:00 hs')).length
     ).toBeGreaterThan(0)
     expect(screen.getByText(/Esperando la seña/)).toBeInTheDocument()
+    // QA 2026-10-02: el estado salia crudo.
+    expect(screen.getByText('Confirmado')).toBeInTheDocument()
+    expect(screen.getByText('Pendiente de pago')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancelar 1 turno y bloquear' })).toBeInTheDocument()
   })
 

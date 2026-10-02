@@ -272,6 +272,18 @@ describe('SuperAdminPage', () => {
     ).toBeGreaterThan(0)
   })
 
+  // 2026-10-02, QA en navegador: estados de suscripcion e intervalos salian
+  // crudos de la API (ACTIVE, MONTHLY con uppercase).
+  it('muestra estado de suscripcion, intervalo y rol en castellano', () => {
+    render(<SuperAdminPage />)
+
+    expect(screen.queryByText(/\bactive\b/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/monthly/)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/Mensual/).length).toBeGreaterThan(0)
+    expect(sectionOf('Operacion por tenant').getByText('Activa', { selector: 'p' })).toBeTruthy()
+    expect(sectionOf('Detalle del tenant').getAllByText('Administrador').length).toBeGreaterThan(0)
+  })
+
   it('sin eleccion toma la primera tienda desde el primer render (F11b-21)', () => {
     render(<SuperAdminPage />)
 

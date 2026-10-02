@@ -4,6 +4,7 @@ import type { SuperAdminPlan } from '@application/services/SuperAdminService'
 
 import { innerCardStyle, panelStyle, scopeBadgeStyle, type QueryState } from './shared'
 import { colors2000s } from '../../../theme/colors'
+import { billingIntervalLabel } from '../../lib/enumLabels'
 import { formatCurrencyEsAr } from '../../lib/formatters'
 import { ActionButton, MiniButton } from '../SuperAdminUi'
 
@@ -57,7 +58,8 @@ export const PlansSection: React.FC<PlansSectionProps> = ({
                 className="text-[10px] font-bold uppercase tracking-widest"
                 style={{ color: colors2000s.text.secondary }}
               >
-                {plan.billing_interval} · {formatCurrencyEsAr(plan.price, plan.currency)}
+                {billingIntervalLabel(plan.billing_interval)} ·{' '}
+                {formatCurrencyEsAr(plan.price, plan.currency)}
               </p>
             </div>
             <span
@@ -84,7 +86,9 @@ export const PlansSection: React.FC<PlansSectionProps> = ({
             </div>
             <div>
               Ciclo:{' '}
-              <span style={{ color: colors2000s.text.primary }}>{plan.billing_interval}</span>
+              <span style={{ color: colors2000s.text.primary }}>
+                {billingIntervalLabel(plan.billing_interval)}
+              </span>
             </div>
           </div>
 

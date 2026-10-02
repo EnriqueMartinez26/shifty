@@ -266,6 +266,9 @@ describe('BookingStepDateTime', () => {
       expect(screen.queryByRole('button', { name: /Bruno/ })).not.toBeInTheDocument()
       // El horario de Ana esta tomado: el de Bruno, libre, no se ofrece.
       expect(screen.getByRole('button', { name: /10:00/ })).toBeDisabled()
+      // QA 2026-10-02 (S\08): el estado salia crudo, 'booked'.
+      expect(screen.getByRole('button', { name: /10:00/ })).toHaveTextContent('Ocupado')
+      expect(screen.queryByText('booked')).not.toBeInTheDocument()
     })
 
     it('sin showWaitlist la lista de espera sigue apareciendo como antes', () => {

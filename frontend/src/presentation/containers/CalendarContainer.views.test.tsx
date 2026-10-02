@@ -407,14 +407,15 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     expect(screen.getByTitle('Cerrado 13:00 - 16:00')).toHaveTextContent('▾ Cerrado')
   })
 
+  // QA 2026-10-02: la cabecera salia en ingles ('20 de September').
   it.each([
-    ['Dia', '19 de September', '21 de September'],
-    ['Semana', '13 de September', '27 de September'],
-    ['Mes', '21 de August', '20 de October']
+    ['Dia', '19 de septiembre', '21 de septiembre'],
+    ['Semana', '13 de septiembre', '27 de septiembre'],
+    ['Mes', '21 de agosto', '20 de octubre']
   ] as const)('la vista %s salta hacia atras a %s y hacia adelante a %s', (view, back, forward) => {
     const { container } = render(<CalendarContainer />)
     chooseView(view)
-    expect(screen.getByText('20 de September')).toBeInTheDocument()
+    expect(screen.getByText('20 de septiembre')).toBeInTheDocument()
 
     fireEvent.click(arrow(container, 'left'))
     expect(screen.getByText(back)).toBeInTheDocument()

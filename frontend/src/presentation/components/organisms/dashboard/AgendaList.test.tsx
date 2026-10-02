@@ -16,6 +16,19 @@ const item = (overrides: Partial<AgendaItem> = {}): AgendaItem => ({
 const rowOf = (title: string) => screen.getByText(title).parentElement?.parentElement as HTMLElement
 
 describe('AgendaList', () => {
+  // QA 2026-10-02: turnos de varios dias bajo un mismo encabezado, sin fecha.
+  it('muestra el dia de cada turno arriba de la hora', () => {
+    render(
+      <AgendaList
+        items={[item({ id: 'a', day: '30/09' }), item({ id: 'b', day: '01/10', title: 'Otro' })]}
+        emptyText="vacio"
+      />
+    )
+
+    expect(screen.getByText('30/09')).toBeInTheDocument()
+    expect(screen.getByText('01/10')).toBeInTheDocument()
+  })
+
   it('muestra el texto vacio cuando no hay turnos', () => {
     render(<AgendaList items={[]} emptyText="No hay proximos turnos para mostrar." />)
 
