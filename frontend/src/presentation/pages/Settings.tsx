@@ -16,19 +16,17 @@ import {
 import { useSearchParams } from 'react-router'
 
 import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
-import type { BusinessType } from '@shared/types/business'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
-import { CustomClientFieldsEditor } from '../components/organisms/settings/CustomClientFieldsEditor'
 import { SettingsFeaturesTab } from '../components/organisms/settings/SettingsFeaturesTab'
+import { SettingsIdentityTab } from '../components/organisms/settings/SettingsIdentityTab'
 import { SettingsNotificationsTab } from '../components/organisms/settings/SettingsNotificationsTab'
 import { SettingsPaymentsTab } from '../components/organisms/settings/SettingsPaymentsTab'
 import { SettingsPoliciesTab } from '../components/organisms/settings/SettingsPoliciesTab'
 import { SettingsScheduleTab } from '../components/organisms/settings/SettingsScheduleTab'
 import { SettingsSecurityTab } from '../components/organisms/settings/SettingsSecurityTab'
-import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
 import {
   useDisconnectMercadoPagoOAuth,
@@ -45,10 +43,10 @@ import {
   useUploadStoreLogo
 } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
-import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
+import { getBusinessLabels } from '../lib/businessLabels'
 import { planSave, type SettingsFormData } from '../lib/settingsDraft'
-import { normalizeSlugInput, validateSettingsDraft } from '../lib/settingsValidation'
-import { create2000sPanelStyle, createSettingsInputStyle } from '../lib/surfaceStyles'
+import { validateSettingsDraft } from '../lib/settingsValidation'
+import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 const TABS = [
   { id: 'identity', label: 'Identidad', icon: <Store className="w-4 h-4" /> },
@@ -384,288 +382,16 @@ const SettingsPage: React.FC = () => {
         style={create2000sPanelStyle()}
       >
         {activeTab === 'identity' && (
-          <div className="space-y-8">
-            <div className="grid md:grid-cols-2 gap-8">
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Rubro
-                </label>
-                <select
-                  value={formData.business_type}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      business_type: e.target.value as BusinessType
-                    })
-                  }
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                >
-                  {BUSINESS_TYPE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  {labels.businessNameLabel}
-                </label>
-                <input
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                  placeholder={labels.businessNamePlaceholder}
-                />
-              </div>
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-8">
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Slug de la URL
-                </label>
-                <div
-                  className="flex items-center gap-2 rounded-2xl px-5 py-3.5"
-                  style={createSettingsInputStyle()}
-                >
-                  <span className="text-xs font-black opacity-30">/booking/</span>
-                  <input
-                    value={formData.slug}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        slug: normalizeSlugInput(e.target.value)
-                      })
-                    }
-                    className="flex-1 bg-transparent font-black outline-none"
-                    placeholder={labels.slugPlaceholder}
-                    aria-label="Slug de la URL"
-                    aria-invalid={slugError !== undefined}
-                  />
-                </div>
-                {slugError && (
-                  <p
-                    className="text-[10px] font-bold"
-                    style={{ color: colors2000s.status.danger.text }}
-                  >
-                    {slugError}
-                  </p>
-                )}
-                <ShareLinksPanel slug={formData.slug} />
-              </div>
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Logo del negocio
-                </label>
-                <div className="flex items-center gap-4">
-                  <div
-                    className="w-20 h-20 rounded-md flex items-center justify-center overflow-hidden shrink-0"
-                    style={{
-                      background: 'white'
-                    }}
-                  >
-                    {formData.logo_url ? (
-                      <img
-                        src={formData.logo_url}
-                        alt="Logo"
-                        className="w-full h-full object-contain"
-                      />
-                    ) : (
-                      <Store className="w-8 h-8" style={{ color: colors2000s.text.secondary }} />
-                    )}
-                  </div>
-                  <div className="flex-1 space-y-2">
-                    <label
-                      className={`inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 ${
-                        readOnlyTitle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
-                      }`}
-                      style={buttonStyles2000s.default}
-                      title={readOnlyTitle}
-                    >
-                      {uploadLogo.isPending ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Store className="w-4 h-4" />
-                      )}
-                      {uploadLogo.isPending ? 'Subiendo...' : 'Subir imagen'}
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        disabled={uploadLogo.isPending || writeAccess.readOnly}
-                        onChange={(e) => void handleLogoUpload(e)}
-                      />
-                    </label>
-                    <p
-                      className="text-[10px] font-bold"
-                      style={{ color: colors2000s.text.secondary }}
-                    >
-                      PNG, JPEG o WebP · máx 1 MB
-                    </p>
-                  </div>
-                </div>
-                {logoError && (
-                  <div
-                    role="alert"
-                    className="rounded-2xl px-4 py-2.5 text-xs font-bold"
-                    style={{
-                      background: colors2000s.status.danger.bg,
-                      color: colors2000s.status.danger.text
-                    }}
-                  >
-                    {logoError}
-                  </div>
-                )}
-                <input
-                  value={formData.logo_url}
-                  onChange={(e) => setFormData({ ...formData, logo_url: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none text-xs"
-                  style={createSettingsInputStyle()}
-                  placeholder="…o pegá una URL https://"
-                />
-              </div>
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Color de Marca
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    type="color"
-                    value={formData.primary_color}
-                    onChange={(e) => setFormData({ ...formData, primary_color: e.target.value })}
-                    className="w-14 h-14 rounded-2xl bg-white border-none p-1 cursor-pointer shadow-inner"
-                    style={{ border: `1px solid ${colors2000s.border.default}` }}
-                  />
-                  <div
-                    className="flex-1 px-5 py-3.5 font-black uppercase tracking-widest rounded-2xl"
-                    style={createSettingsInputStyle()}
-                  >
-                    {formData.primary_color}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-8">
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  URL de portada
-                </label>
-                <input
-                  value={formData.cover_url}
-                  onChange={(e) => setFormData({ ...formData, cover_url: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                  placeholder="https://..."
-                />
-              </div>
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  WhatsApp
-                </label>
-                <input
-                  value={formData.whatsapp_number}
-                  onChange={(e) => setFormData({ ...formData, whatsapp_number: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                  placeholder="+54911..."
-                />
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <label
-                className="block text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                Descripcion publica
-              </label>
-              <textarea
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                className="w-full min-h-28 rounded-2xl px-5 py-3.5 font-bold outline-none resize-y"
-                style={createSettingsInputStyle()}
-                placeholder="Breve descripcion visible en el portal publico."
-              />
-            </div>
-
-            <CustomClientFieldsEditor
-              fields={formData.custom_client_fields}
-              onChange={(custom_client_fields) => patch({ custom_client_fields })}
-            />
-
-            <div className="grid md:grid-cols-3 gap-8">
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Instagram
-                </label>
-                <input
-                  value={formData.instagram_url}
-                  onChange={(e) => setFormData({ ...formData, instagram_url: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                  placeholder="https://instagram.com/..."
-                />
-              </div>
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Facebook
-                </label>
-                <input
-                  value={formData.facebook_url}
-                  onChange={(e) => setFormData({ ...formData, facebook_url: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                  placeholder="https://facebook.com/..."
-                />
-              </div>
-              <div className="space-y-3">
-                <label
-                  className="block text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Sitio web
-                </label>
-                <input
-                  value={formData.website_url}
-                  onChange={(e) => setFormData({ ...formData, website_url: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                  placeholder="https://..."
-                />
-              </div>
-            </div>
-          </div>
+          <SettingsIdentityTab
+            value={formData}
+            labels={labels}
+            slugError={slugError}
+            logoError={logoError}
+            uploadingLogo={uploadLogo.isPending}
+            onChange={patch}
+            onLogoUpload={(e) => void handleLogoUpload(e)}
+            readOnlyReason={readOnlyTitle ?? null}
+          />
         )}
 
         {activeTab === 'schedule' && (
