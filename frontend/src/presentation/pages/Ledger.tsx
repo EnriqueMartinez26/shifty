@@ -16,6 +16,7 @@ import {
   useLedgerClients,
   useLedgerSummary
 } from '../hooks/useLedger'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import {
   currencyFmtEsAr as currencyFmt,
   formatDateEsAr,
@@ -46,6 +47,9 @@ const LedgerPage: React.FC = () => {
   const clientsQuery = useLedgerClients(submittedSearch)
   const summaryQuery = useLedgerSummary()
   const addMovement = useAddLedgerMovement()
+  // Tienda suspendida (FF-15): POST /ledger/customers/{id}/movements no esta en
+  // SUSPENSION_ALLOWED_WRITES y responde 402.
+  const writeAccess = useStoreWriteAccess()
   const clients = clientsQuery.data ?? []
   // Una eleccion explicita se guarda entera y se sostiene aunque la busqueda
   // ya no la traiga: caer al primero de otra busqueda mandaba el movimiento
@@ -251,7 +255,8 @@ const LedgerPage: React.FC = () => {
             />
             <button
               type="submit"
-              disabled={!effectiveClientId || addMovement.isPending}
+              disabled={!effectiveClientId || addMovement.isPending || writeAccess.readOnly}
+              title={writeAccess.readOnly ? writeAccess.reason : undefined}
               className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >

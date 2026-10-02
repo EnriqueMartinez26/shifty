@@ -47,6 +47,11 @@ jest.mock('../hooks/useLedger', () => ({
   useAddLedgerMovement: () => ({ mutateAsync: jest.fn(), isPending: false })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 describe('LedgerPage', () => {
   beforeEach(() => {
     mockHasNextPage = true
@@ -103,5 +108,30 @@ describe('LedgerPage', () => {
     render(<LedgerPage />)
 
     expect(screen.queryByRole('button', { name: 'Ver mas' })).not.toBeInTheDocument()
+  })
+})
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15). POST /ledger/customers/{id}/movements no esta
+// en SUSPENSION_ALLOWED_WRITES.
+describe('LedgerPage: tienda suspendida', () => {
+  afterEach(() => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  it('con la tienda suspendida "Guardar movimiento" queda deshabilitado; buscar sigue', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    render(<LedgerPage />)
+
+    const guardar = screen.getByRole('button', { name: 'Guardar movimiento' })
+    expect(guardar).toBeDisabled()
+    expect(guardar).toHaveAttribute('title', 'Tienda suspendida')
+    expect(screen.getByRole('button', { name: 'Buscar' })).not.toBeDisabled()
+  })
+
+  it('sin suspension "Guardar movimiento" sigue habilitado', () => {
+    render(<LedgerPage />)
+
+    expect(screen.getByRole('button', { name: 'Guardar movimiento' })).not.toBeDisabled()
   })
 })

@@ -47,6 +47,7 @@ import {
   useUpdateStoreSettings,
   useUploadStoreLogo
 } from '../hooks/useStores'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { BUSINESS_TYPE_OPTIONS, getBusinessLabels } from '../lib/businessLabels'
 import { planSave, type BusinessHoursPeriod } from '../lib/settingsDraft'
 import {
@@ -162,6 +163,11 @@ const SettingsPage: React.FC = () => {
   const startMercadoPagoOAuth = useStartMercadoPagoOAuth()
   const refreshMercadoPagoOAuth = useRefreshMercadoPagoOAuth()
   const disconnectMercadoPagoOAuth = useDisconnectMercadoPagoOAuth()
+  // Tienda suspendida (FF-15): PATCH /stores/me (tambien "Guardar condiciones"
+  // de Mercado Pago), PUT /stores/me/feature-flags y POST /stores/me/media
+  // responden 402. La pasarela (OAuth) y la clave siguen: permitidas o sin guarda.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyTitle = writeAccess.readOnly ? writeAccess.reason : undefined
 
   // El formulario se deriva del servidor + el borrador local; no hay ningun
   // efecto que lo repueble, asi que un refetch de ['store-settings'] ya no
@@ -186,7 +192,8 @@ const SettingsPage: React.FC = () => {
     draftErrors.slug ??
     (slugConflict !== null && formData?.slug === slugConflict ? SLUG_TAKEN_MESSAGE : undefined)
   // Con errores el boton se apaga (el backend respondería 422) y dice por qué.
-  const saveDisabled = !hasChanges || blockingReasons.length > 0 || saveStatus === 'saving'
+  const saveDisabled =
+    writeAccess.readOnly || !hasChanges || blockingReasons.length > 0 || saveStatus === 'saving'
   const saveBlockedNotice =
     blockingReasons.length > 0 ? (
       <p
@@ -372,6 +379,7 @@ const SettingsPage: React.FC = () => {
             // Sin nada editado no hay nada que guardar: el boton se apaga en
             // vez de decir "Guardado" sin haber llamado a ningun endpoint.
             disabled={saveDisabled}
+            title={readOnlyTitle}
             className="flex items-center gap-2 px-6 py-3 font-black uppercase tracking-widest text-xs rounded-xl transition-all active:scale-95 disabled:opacity-50"
             style={buttonStyles2000s.selected}
           >
@@ -550,8 +558,11 @@ const SettingsPage: React.FC = () => {
                   </div>
                   <div className="flex-1 space-y-2">
                     <label
-                      className="inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] cursor-pointer transition-all active:scale-95"
+                      className={`inline-flex items-center gap-2 px-4 py-2.5 font-black uppercase tracking-widest text-[11px] transition-all active:scale-95 ${
+                        readOnlyTitle ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                      }`}
                       style={buttonStyles2000s.default}
+                      title={readOnlyTitle}
                     >
                       {uploadLogo.isPending ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -563,7 +574,7 @@ const SettingsPage: React.FC = () => {
                         type="file"
                         accept="image/png,image/jpeg,image/webp"
                         className="hidden"
-                        disabled={uploadLogo.isPending}
+                        disabled={uploadLogo.isPending || writeAccess.readOnly}
                         onChange={(e) => void handleLogoUpload(e)}
                       />
                     </label>
@@ -1269,6 +1280,8 @@ const SettingsPage: React.FC = () => {
                   <ToggleSwitch
                     label={feature.title}
                     checked={enabled}
+                    disabled={writeAccess.readOnly}
+                    title={readOnlyTitle}
                     onToggle={() =>
                       setFormData({
                         ...formData,
@@ -1438,6 +1451,7 @@ const SettingsPage: React.FC = () => {
                   void handleSave()
                 }}
                 disabled={saveDisabled}
+                title={readOnlyTitle}
                 className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                 style={{
                   background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
