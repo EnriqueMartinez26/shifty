@@ -4,7 +4,11 @@ import { CalendarCheck, Check, Clock3, MapPin, Phone, Store, X } from 'lucide-re
 import { useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { BookingWizardContainer } from '@presentation/components/organisms/booking/BookingWizardContainer'
-import { resolveBookingPreselect } from '@presentation/components/organisms/booking/deepLink'
+import {
+  initialStepFor,
+  resolveBookingPreselect
+} from '@presentation/components/organisms/booking/deepLink'
+import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 
 import { buildWaMeUrl } from '@shared/utils/clientWhatsApp'
 
@@ -41,6 +45,10 @@ const PublicBooking: React.FC = () => {
     Boolean(wanted.service) &&
     (servicesQuery.isLoading || (Boolean(wanted.staff) && staffQuery.isLoading))
   const preselect = resolveBookingPreselect(wanted, servicesQuery.data, staffQuery.data)
+  // El paso del wizard vive en ?step= (F4-15); sin el, se arranca en el
+  // horario si el deep-link trae un servicio valido. payment_id, service,
+  // staff y date no se tocan al escribirlo.
+  const bookingStep = useBookingStepParam(initialStepFor(preselect))
 
   if (isLoading || resolvingDeepLink) {
     return (
@@ -245,7 +253,12 @@ const PublicBooking: React.FC = () => {
       )}
 
       {/* The Wizard Component */}
-      <BookingWizardContainer store={store} preselect={preselect} />
+      <BookingWizardContainer
+        store={store}
+        preselect={preselect}
+        step={bookingStep.step}
+        onStepChange={bookingStep.changeStep}
+      />
 
       {/* Footer minimalista */}
       <div className="max-w-2xl mx-auto mt-12 text-center space-y-3">

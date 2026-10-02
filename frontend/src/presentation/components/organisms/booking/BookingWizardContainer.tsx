@@ -9,9 +9,9 @@ import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/u
 import { BookingStepConfirmation } from './BookingStepConfirmation'
 import { BookingStepDateTime } from './BookingStepDateTime'
 import { BookingStepService } from './BookingStepService'
-import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
-import { resolveBackJump, resolveStepJump } from './stepFlow'
-import type { BookingOtpState, BookingWizardState } from './types'
+import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
+import { clampStep, resolveBackJump, resolveStepJump } from './stepFlow'
+import type { BookingOtpState, BookingStepChange, BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
@@ -27,11 +27,19 @@ interface BookingWizardContainerProps {
   store: PublicStore
   /** Servicio y profesional ya validados contra las listas publicas (deep-link). */
   preselect?: BookingPreselect
+  /**
+   * Paso pedido, controlado desde afuera (la URL, F4-15). El wizard lo
+   * degrada si falta lo elegido antes y pide corregirlo con `replace`.
+   */
+  step: number
+  onStepChange: (change: BookingStepChange) => void
 }
 
 export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   store,
-  preselect = EMPTY_PRESELECT
+  preselect = EMPTY_PRESELECT,
+  step,
+  onStepChange
 }) => {
   const requiresOtp = Boolean(store.feature_flags?.otp_booking)
   const initialCustomFields = useMemo(
@@ -43,9 +51,6 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   // un paso propio.
   const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmacion'], [])
 
-  // Deep-link (?service=&staff=&date=): con servicio valido se arranca en el
-  // horario, que ya muestra al profesional pedido como filtro.
-  const [currentStep, setCurrentStep] = useState(() => initialStepFor(preselect))
   const [otpState, setOtpState] = useState<BookingOtpState>({
     code: '',
     channel: 'email',
@@ -93,9 +98,20 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const resendCooldown = useResendCooldown(phoneDigits(bookingState.client.phone))
   const { data: services } = usePublicServices(store.public_id)
 
+  // El paso pedido solo se muestra si lo anterior esta elegido: tras recargar
+  // con ?step=2 el estado arranca vacio (F4-15).
+  const currentStep = clampStep(step, bookingState)
+
+  // La URL pide un paso que no se puede mostrar: se corrige sin dejar una
+  // entrada en el historial a la que "atras" volveria. Sincroniza la URL.
+  useEffect(() => {
+    if (currentStep !== step) onStepChange({ to: currentStep, from: step, mode: 'replace' })
+  }, [currentStep, step, onStepChange])
+
   // Un solo servicio no es una eleccion: se elige solo y el wizard arranca
   // en el horario. Sincroniza con la lista publica (dato externo): cuando
-  // llega, si el paso visible es el del servicio y hay uno solo, salta.
+  // llega, si el paso visible es el del servicio y hay uno solo, salta. Con
+  // `replace`, "atras" del navegador no rebota al paso salteado.
   useEffect(() => {
     const jump = resolveStepJump(currentStep, { services })
     if (jump.step === currentStep) return
@@ -104,15 +120,23 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
         prev.serviceId === jump.serviceId ? prev : { ...prev, serviceId: jump.serviceId ?? null }
       )
     }
-    setCurrentStep(jump.step)
-  }, [currentStep, services])
+    onStepChange({ to: jump.step, from: currentStep, mode: 'replace' })
+  }, [currentStep, services, onStepChange])
 
   const updateState = (updates: Partial<typeof bookingState>) => {
     setBookingState((prev) => ({ ...prev, ...updates }))
   }
 
-  const nextStep = () => setCurrentStep((prev) => Math.min(prev + 1, steps.length - 1))
-  const prevStep = () => setCurrentStep((prev) => resolveBackJump(prev, { services }))
+  const nextStep = () =>
+    onStepChange({
+      to: Math.min(currentStep + 1, steps.length - 1),
+      from: currentStep,
+      mode: 'push'
+    })
+  const prevStep = () => {
+    const to = resolveBackJump(currentStep, { services })
+    if (to !== currentStep) onStepChange({ to, from: currentStep, mode: 'back' })
+  }
 
   const handleClientChange = (client: BookingWizardState['client']) => {
     const emailAnterior = bookingState.client.email
