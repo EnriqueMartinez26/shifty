@@ -4,13 +4,13 @@ import { Loader2, Store } from 'lucide-react'
 
 import type { BusinessType } from '@shared/types/business'
 
+import { CustomClientFieldsEditor } from './CustomClientFieldsEditor'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { BUSINESS_TYPE_OPTIONS, type getBusinessLabels } from '../../../lib/businessLabels'
 import type { SettingsFormData } from '../../../lib/settingsDraft'
 import { normalizeSlugInput } from '../../../lib/settingsValidation'
 import { createSettingsInputStyle } from '../../../lib/surfaceStyles'
 import { ShareLinksPanel } from '../ShareLinksPanel'
-import { CustomClientFieldsEditor } from './CustomClientFieldsEditor'
 
 type IdentitySettings = Pick<
   SettingsFormData,
