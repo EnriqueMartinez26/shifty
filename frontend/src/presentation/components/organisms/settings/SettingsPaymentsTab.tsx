@@ -70,7 +70,8 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
           Mercado Pago de la tienda
         </h3>
         <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-          La tienda autoriza su propia cuenta. Shifty nunca solicita ni muestra el token privado.
+          La tienda autoriza su propia cuenta. Shifty nunca te pide ni muestra tus claves de Mercado
+          Pago.
         </p>
       </div>
 
@@ -165,8 +166,7 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
         {/* Sin respuesta del servidor no se sabe si faltan las credenciales. */}
         {gateway && !gateway.oauth_supported && (
           <p role="alert" className="text-xs font-bold text-red-600">
-            El servidor todavía no tiene configuradas las credenciales OAuth de la aplicación
-            Shifty.
+            Shifty todavía no tiene habilitada la conexión con Mercado Pago.
           </p>
         )}
         {justConnected && (

@@ -13,8 +13,8 @@ import { ToggleSwitch } from '../../molecules/ToggleSwitch'
 const FEATURE_LABELS = [
   {
     key: 'payments',
-    title: 'Cobros online y senas',
-    description: 'Mercado Pago, confirmacion manual, devoluciones y actualizacion de pagos.'
+    title: 'Cobros online y señas',
+    description: 'Mercado Pago, confirmación manual, devoluciones y actualización de pagos.'
   },
   {
     key: 'ledger',
@@ -49,7 +49,7 @@ export const SettingsFeaturesTab: React.FC<SettingsFeaturesTabProps> = ({
       className="text-lg font-black uppercase tracking-tight"
       style={{ color: colors2000s.orange.accent }}
     >
-      Funciones por tenant
+      Funciones de la tienda
     </h3>
     {FEATURE_LABELS.map((feature) => {
       const enabled = Boolean(flags?.[feature.key])

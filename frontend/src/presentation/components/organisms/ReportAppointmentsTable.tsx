@@ -5,10 +5,10 @@ import { Download } from 'lucide-react'
 import type { ReportAppointmentItem } from '@application/services/ReportsService'
 
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { bookingStatusLabel } from '../../lib/bookingStatusLabel'
-import { currencyFmtEsAr as currencyFmt } from '../../lib/formatters'
 import { create2000sListCardStyle } from '../../lib/surfaceStyles'
 
 interface ReportAppointmentsTableProps {
@@ -100,7 +100,7 @@ export const ReportAppointmentsTable: React.FC<ReportAppointmentsTableProps> = (
                   className="px-6 py-4 font-black text-right"
                   style={{ color: colors2000s.text.primary }}
                 >
-                  {currencyFmt.format(item.service_price)}
+                  {formatCurrency(item.service_price)}
                 </td>
               </tr>
             ))}
@@ -128,7 +128,7 @@ export const ReportAppointmentsTable: React.FC<ReportAppointmentsTableProps> = (
         </span>
         {pageFailed && (
           <span role="alert" style={{ color: colors2000s.status.danger.text }}>
-            No se pudo cargar esta pagina del detalle.{' '}
+            No se pudo cargar esta página del detalle.{' '}
             <button type="button" onClick={onRetry} className="underline">
               Reintentar
             </button>

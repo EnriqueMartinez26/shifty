@@ -269,14 +269,14 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
         className="block text-[10px] font-black uppercase tracking-widest"
         style={{ color: colors2000s.text.secondary }}
       >
-        Descripcion publica
+        Descripción pública
       </label>
       <textarea
         value={value.description}
         onChange={(e) => onChange({ description: e.target.value })}
         className="w-full min-h-28 rounded-2xl px-5 py-3.5 font-bold outline-none resize-y"
         style={createSettingsInputStyle()}
-        placeholder="Breve descripcion visible en el portal publico."
+        placeholder="Breve descripción visible en el portal público."
       />
     </div>
 

@@ -31,18 +31,18 @@ const ResetPasswordPage: React.FC = () => {
     setMessage(null)
 
     if (!token) {
-      setError('El enlace no contiene un token valido.')
+      setError('El enlace no contiene un token válido.')
       return
     }
 
     // Mismo piso que `ResetPasswordRequest` en el backend (min_length=12).
     if (newPassword.length < 12) {
-      setError('La contrasena debe tener al menos 12 caracteres.')
+      setError('La contraseña debe tener al menos 12 caracteres.')
       return
     }
 
     if (newPassword !== confirmPassword) {
-      setError('Las contrasenas no coinciden.')
+      setError('Las contraseñas no coinciden.')
       return
     }
 
@@ -51,10 +51,10 @@ const ResetPasswordPage: React.FC = () => {
         token,
         new_password: newPassword
       })
-      setMessage(response.message || 'Contrasena actualizada correctamente.')
+      setMessage(response.message || 'Contraseña actualizada correctamente.')
       setTimeout(() => navigate('/login'), 1200)
     } catch (error: unknown) {
-      setError(getErrorMessage(error, 'No se pudo restablecer la contrasena'))
+      setError(getErrorMessage(error, 'No se pudo restablecer la contraseña'))
     }
   }
 
@@ -90,7 +90,7 @@ const ResetPasswordPage: React.FC = () => {
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
               style={inputStyle}
-              placeholder="Minimo 12 caracteres"
+              placeholder="Mínimo 12 caracteres"
               required
             />
           </div>

@@ -5,6 +5,7 @@ import { WalletCards } from 'lucide-react'
 import type { LedgerClient } from '@application/services/LedgerService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatCurrency } from '@shared/utils/currency'
 import { displayableEmail, withoutTechnicalEmail } from '@shared/utils/deliverableEmail'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -19,11 +20,7 @@ import {
   useLedgerSummary
 } from '../hooks/useLedger'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
-import {
-  currencyFmtEsAr as currencyFmt,
-  formatDateEsAr,
-  formatDateTimeEsAr
-} from '../lib/formatters'
+import { formatDateEsAr, formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
@@ -36,7 +33,7 @@ const movementTypeLabels: Record<MovementType, string> = {
   charge: 'Cargo',
   payment: 'Pago',
   adjustment: 'Ajuste',
-  refund: 'Devolucion'
+  refund: 'Devolución'
 }
 
 // Mismo tope que LedgerMovementCreate.amount en el backend (ge=0,
@@ -126,7 +123,7 @@ const LedgerPage: React.FC = () => {
     setFeedback(null)
     const clientName = selectedClient?.name ?? 'el cliente'
     const confirmed = await confirm(
-      `¿Registrar ${movementTypeLabels[movementType]} de ${currencyFmt.format(amount)} a ${clientName}?`,
+      `¿Registrar ${movementTypeLabels[movementType]} de ${formatCurrency(amount)} a ${clientName}?`,
       { confirmLabel: 'Registrar', cancelLabel: 'Volver' }
     )
     if (!confirmed) return
@@ -153,7 +150,7 @@ const LedgerPage: React.FC = () => {
     <div className="space-y-8 duration-500">
       <PageHeader
         title="Cuentas pendientes"
-        description="Mira cuanto debe cada cliente, que pago y que quedo pendiente."
+        description="Mirá cuánto debe cada cliente, qué pagó y qué quedó pendiente."
         isLoading={clientsQuery.isLoading || ledgerQuery.isLoading || summaryQuery.isLoading}
         loadingText="Cargando cuentas pendientes..."
       />
@@ -172,7 +169,7 @@ const LedgerPage: React.FC = () => {
             Saldo pendiente total
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.text.primary }}>
-            {currencyFmt.format(Number(summaryQuery.data?.total_balance ?? 0))}
+            {formatCurrency(Number(summaryQuery.data?.total_balance ?? 0))}
           </p>
         </div>
         <div className="p-5 rounded-2xl" style={cardStyle}>
@@ -194,7 +191,7 @@ const LedgerPage: React.FC = () => {
             Saldo promedio
           </p>
           <p className="text-2xl font-black mt-1" style={{ color: colors2000s.orange.accent }}>
-            {currencyFmt.format(Number(summaryQuery.data?.average_balance ?? 0))}
+            {formatCurrency(Number(summaryQuery.data?.average_balance ?? 0))}
           </p>
         </div>
         <div className="p-5 rounded-2xl" style={cardStyle}>
@@ -237,7 +234,7 @@ const LedgerPage: React.FC = () => {
               aria-label="Buscar cliente"
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
-              placeholder="Buscar por nombre o telefono"
+              placeholder="Buscar por nombre o teléfono"
             />
             <button
               type="submit"
@@ -289,7 +286,7 @@ const LedgerPage: React.FC = () => {
               <option value="charge">Cargo</option>
               <option value="payment">Pago</option>
               <option value="adjustment">Ajuste</option>
-              <option value="refund">Devolucion</option>
+              <option value="refund">Devolución</option>
             </select>
             <input
               aria-label="Monto"
@@ -354,7 +351,7 @@ const LedgerPage: React.FC = () => {
                 Saldo actual
               </p>
               <p className="text-3xl font-black" style={{ color: colors2000s.orange.accent }}>
-                {currencyFmt.format(Number(ledgerQuery.balance ?? 0))}
+                {formatCurrency(Number(ledgerQuery.balance ?? 0))}
               </p>
             </div>
           </div>
@@ -383,13 +380,13 @@ const LedgerPage: React.FC = () => {
                 </div>
                 <div className="text-right">
                   <p className="text-sm font-black" style={{ color: colors2000s.orange.accent }}>
-                    {currencyFmt.format(Number(movement.amount))}
+                    {formatCurrency(Number(movement.amount))}
                   </p>
                   <p
                     className="text-[11px] font-bold"
                     style={{ color: colors2000s.text.secondary }}
                   >
-                    Saldo: {currencyFmt.format(Number(movement.balance_after))}
+                    Saldo: {formatCurrency(Number(movement.balance_after))}
                   </p>
                 </div>
               </div>
@@ -399,7 +396,7 @@ const LedgerPage: React.FC = () => {
                 className="rounded-2xl p-6 bg-white text-sm font-bold"
                 style={{ ...create2000sListCardStyle(), color: colors2000s.text.secondary }}
               >
-                Este cliente todavia no tiene movimientos registrados.
+                Este cliente todavía no tiene movimientos registrados.
               </div>
             )}
             {ledgerQuery.movements.length > 0 && (
@@ -417,7 +414,7 @@ const LedgerPage: React.FC = () => {
                 className="w-full px-4 py-3 rounded-2xl text-xs font-black uppercase tracking-widest disabled:opacity-50"
                 style={buttonStyles2000s.default}
               >
-                {ledgerQuery.isFetchingNextPage ? 'Cargando...' : 'Ver mas'}
+                {ledgerQuery.isFetchingNextPage ? 'Cargando...' : 'Ver más'}
               </button>
             )}
           </div>
@@ -449,10 +446,10 @@ const LedgerPage: React.FC = () => {
                   className="text-[11px] font-bold mt-1"
                   style={{ color: colors2000s.text.secondary }}
                 >
-                  Ultimo movimiento: {formatDateEsAr(debtor.last_movement_at)}
+                  Último movimiento: {formatDateEsAr(debtor.last_movement_at)}
                 </p>
                 <p className="text-sm font-black mt-2" style={{ color: colors2000s.orange.accent }}>
-                  {currencyFmt.format(Number(debtor.balance))}
+                  {formatCurrency(Number(debtor.balance))}
                 </p>
               </div>
             ))}

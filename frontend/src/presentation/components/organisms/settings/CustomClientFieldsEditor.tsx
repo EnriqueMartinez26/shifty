@@ -15,7 +15,7 @@ import { createSettingsInputStyle } from '../../../lib/surfaceStyles'
 const CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: 'text', label: 'Texto corto' },
   { value: 'textarea', label: 'Texto largo' },
-  { value: 'tel', label: 'Telefono' },
+  { value: 'tel', label: 'Teléfono' },
   { value: 'email', label: 'Email' },
   { value: 'date', label: 'Fecha' },
   { value: 'select', label: 'Lista' }
@@ -41,10 +41,10 @@ export const CustomClientFieldsEditor: React.FC<CustomClientFieldsEditorProps> =
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
-          Campos extra del booking
+          Campos extra de la reserva
         </label>
         <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.disabled }}>
-          Define preguntas opcionales o requeridas para el portal publico.
+          Definí preguntas opcionales o requeridas para el portal público.
         </p>
       </div>
       <button
@@ -69,7 +69,7 @@ export const CustomClientFieldsEditor: React.FC<CustomClientFieldsEditorProps> =
           color: colors2000s.text.secondary
         }}
       >
-        No hay campos extra configurados. El booking publico va a pedir solo nombre, telefono, email
+        No hay campos extra configurados. La reserva pública va a pedir solo nombre, teléfono, email
         opcional y notas.
       </div>
     ) : (
@@ -258,7 +258,7 @@ export const CustomClientFieldsEditor: React.FC<CustomClientFieldsEditorProps> =
                   }}
                   className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
                   style={createSettingsInputStyle()}
-                  placeholder={'Una opcion por linea\nEj: Primera vez|primera_vez'}
+                  placeholder={'Una opción por línea\nEj: Primera vez|primera_vez'}
                 />
               </div>
             )}

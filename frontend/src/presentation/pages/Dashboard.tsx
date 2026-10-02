@@ -5,10 +5,10 @@ import { CalendarX, DollarSign, Gauge, UserRoundPlus } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 
 import { copy } from '../components/organisms/dashboard/dashboardCopy'
 import {
-  formatCurrency,
   formatPercent,
   numberFormatter
 } from '../components/organisms/dashboard/dashboardFormatters'
@@ -97,8 +97,8 @@ const Dashboard = () => {
     title: 'Hoy en Shifty',
     description: `${numberFormatter.format(stats?.appointments_today ?? 0)} turnos, ${numberFormatter.format(
       stats?.pending_confirmations ?? 0
-    )} pendientes, ocupacion ${formatPercent(stats?.occupancy_rate)}.`,
-    periodLabel: 'Corte operativo: hoy + ultimos 7 dias',
+    )} pendientes, ocupación ${formatPercent(stats?.occupancy_rate)}.`,
+    periodLabel: 'Corte operativo: hoy + últimos 7 días',
     statusLabel: heroStatusLabel,
     health: [
       {
@@ -107,7 +107,7 @@ const Dashboard = () => {
         value:
           Number(stats?.pending_confirmations ?? 0) > 0
             ? `${numberFormatter.format(stats?.pending_confirmations ?? 0)} pendientes`
-            : 'al dia',
+            : 'al día',
         tone: Number(stats?.pending_confirmations ?? 0) > 0 ? 'warning' : 'success'
       },
       {
@@ -136,7 +136,7 @@ const Dashboard = () => {
         value:
           Number(stats?.revenue_trend ?? 0) < 0
             ? `${formatPercent(stats?.revenue_trend)} vs semana pasada`
-            : `+${formatPercent(stats?.revenue_trend ?? 0)} de variacion`,
+            : `+${formatPercent(stats?.revenue_trend ?? 0)} de variación`,
         tone: Number(stats?.revenue_trend ?? 0) < 0 ? 'warning' : 'primary'
       }
     ],
@@ -151,7 +151,7 @@ const Dashboard = () => {
       {
         id: 'cobros',
         title: 'Registrar cobro',
-        description: 'Ir a cobros pendientes del dia',
+        description: 'Ir a cobros pendientes del día',
         tone: 'success',
         onSelect: () => void navigate('/dashboard/collections')
       },
@@ -185,7 +185,7 @@ const Dashboard = () => {
       detail: `${numberFormatter.format(clientStats?.returning_clients ?? 0)} recurrentes activos`,
       signal:
         Number(stats?.new_clients_last_30d ?? 0) > 0
-          ? 'Adquisicion en curso'
+          ? 'Adquisición en curso'
           : 'Sin altas recientes',
       icon: <UserRoundPlus size={18} />,
       tone: 'success',
@@ -193,12 +193,12 @@ const Dashboard = () => {
     },
     {
       id: 'occupancy',
-      label: 'Ocupacion',
+      label: 'Ocupación',
       value: formatPercent(stats?.occupancy_rate),
       detail: `${formatPercent(availableCapacity)} de capacidad libre`,
       signal:
         occupancy >= 85
-          ? 'Dia cargado'
+          ? 'Día cargado'
           : availableCapacity >= 40
             ? 'Espacio para crecer'
             : 'Ritmo estable',
@@ -210,7 +210,7 @@ const Dashboard = () => {
       id: 'cancellations',
       label: 'Cancelaciones',
       value: numberFormatter.format(reportStats?.cancelled_appointments ?? 0),
-      detail: `${numberFormatter.format(upcomingAppointments.length)} proximos en agenda`,
+      detail: `${numberFormatter.format(upcomingAppointments.length)} próximos en agenda`,
       signal:
         Number(reportStats?.cancelled_appointments ?? 0) > 0
           ? 'Revisar patron'
@@ -226,7 +226,7 @@ const Dashboard = () => {
       title: 'Pendientes por confirmar',
       detail:
         Number(stats?.pending_confirmations ?? 0) > 0
-          ? 'Hay reservas esperando decision'
+          ? 'Hay reservas esperando decisión'
           : 'No hay confirmaciones pendientes',
       meta: numberFormatter.format(stats?.pending_confirmations ?? 0),
       tone: Number(stats?.pending_confirmations ?? 0) > 0 ? 'warning' : 'success'
@@ -257,7 +257,7 @@ const Dashboard = () => {
     urgentActions.push({
       id: 'confirmations',
       title: 'Confirmar turnos',
-      description: 'Reservas esperando decision',
+      description: 'Reservas esperando decisión',
       meta: numberFormatter.format(stats?.pending_confirmations ?? 0),
       tone: 'warning',
       onSelect: () => void navigate('/dashboard/calendar')
@@ -313,7 +313,7 @@ const Dashboard = () => {
       id: 'average-ticket',
       label: 'Ticket promedio',
       value: formatCurrency(reportStats?.average_ticket),
-      detail: 'Promedio movil de 7 dias',
+      detail: 'Promedio móvil de 7 días',
       tone: 'neutral',
       onSelect: () => void navigate('/dashboard/reports')
     },
@@ -355,7 +355,7 @@ const Dashboard = () => {
     alerts.push({
       id: 'payments-disabled',
       title: 'Cobros online desactivados',
-      description: 'No hay cobro automatico activo',
+      description: 'No hay cobro automático activo',
       tone: 'neutral',
       onSelect: () => void navigate('/dashboard/settings')
     })
@@ -397,7 +397,7 @@ const Dashboard = () => {
   if (availableCapacity >= 35) {
     opportunityCandidates.push({
       id: 'low-occupancy',
-      title: 'Dia con capacidad libre',
+      title: 'Día con capacidad libre',
       description: `Queda ${formatPercent(availableCapacity)} sin ocupar. Conviene reforzar agenda o activar promociones.`,
       tone: 'primary',
       actionLabel: 'Ver agenda',

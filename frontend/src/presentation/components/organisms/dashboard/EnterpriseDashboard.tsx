@@ -67,7 +67,7 @@ function EnterpriseDashboard({
             fontWeight: 700
           }}
         >
-          Cargando dashboard...
+          Cargando panel...
         </div>
       </main>
     )
@@ -114,7 +114,7 @@ function EnterpriseDashboard({
         <div style={{ display: 'grid', gap: 16 }}>
           <Panel
             title={copy.actionsTitle}
-            description="Lo que merece atencion inmediata."
+            description="Lo que merece atención inmediata."
             icon={<TriangleAlert size={18} />}
           >
             <ActionList items={urgentActions} emptyText={copy.emptyActions} />
@@ -149,7 +149,7 @@ function EnterpriseDashboard({
 
         <Panel
           title={copy.opportunitiesTitle}
-          description="Espacios para crecer o corregir rapido."
+          description="Espacios para crecer o corregir rápido."
           icon={<Sparkles size={18} />}
         >
           <OpportunityList items={opportunities} emptyText={copy.emptyOpportunities} />
