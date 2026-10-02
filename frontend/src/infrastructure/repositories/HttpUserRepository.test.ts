@@ -255,8 +255,21 @@ describe('HttpUserRepository.list', () => {
         email: undefined,
         limit: 100,
         offset: 100
-      }
+      },
+      signal: undefined
     })
+  })
+
+  it('pasa la senal de cancelacion a axios', async () => {
+    // 2026-10-02: la lista de usuarios no recibia el `signal` de react-query;
+    // una busqueda reemplazada seguia viajando hasta el final.
+    const get = jest.fn().mockResolvedValue({ data: [] })
+    const repository = new HttpUserRepository({ get } as unknown as AxiosInstance)
+    const controller = new AbortController()
+
+    await repository.list({ limit: 100 }, controller.signal)
+
+    expect(get.mock.calls[0][1].signal).toBe(controller.signal)
   })
 })
 

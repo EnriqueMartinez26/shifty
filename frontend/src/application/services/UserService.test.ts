@@ -134,7 +134,18 @@ describe('UserService', () => {
       const result = await service.listUsers(query)
 
       expect(result).toEqual(users)
-      expect(mockRepository.list).toHaveBeenCalledWith(query)
+      expect(mockRepository.list).toHaveBeenCalledWith(query, undefined)
+    })
+
+    it('pasa la senal de cancelacion al repositorio', async () => {
+      // 2026-10-02: la senal de react-query no llegaba al repositorio.
+      mockRepository.list.mockResolvedValue([])
+      const controller = new AbortController()
+      const query = { limit: 100 }
+
+      await service.listUsers(query, controller.signal)
+
+      expect(mockRepository.list).toHaveBeenCalledWith(query, controller.signal)
     })
   })
 

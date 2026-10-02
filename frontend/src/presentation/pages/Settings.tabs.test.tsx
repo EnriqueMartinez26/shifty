@@ -329,9 +329,32 @@ describe('Settings - Mercado Pago', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Conectar con Mercado Pago' }))
 
+    // 2026-10-02: antes fijaba el generico "No se pudo iniciar la conexion..."
+    // porque getErrorMessage descartaba el mensaje del Error plano que tiraba
+    // el handler. El motivo propio (un texto nuestro, regla 20) ahora llega.
+    expect(
+      await screen.findByText('Mercado Pago devolvió un enlace de conexión inválido.')
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText('No se pudo iniciar la conexión con Mercado Pago')
+    ).not.toBeInTheDocument()
+  })
+
+  it('si pedir el enlace falla, avisa con el generico y no navega', async () => {
+    // 2026-10-02: separar el enlace invalido no puede filtrar el texto crudo
+    // de una excepcion al cartel (regla 20).
+    gateway = { provider: 'mercadopago', configured: false, oauth_supported: true }
+    startOAuth.mockRejectedValue(new Error('Traceback: KeyError client_secret'))
+    renderSettings()
+    openTab('Mercado Pago')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Conectar con Mercado Pago' }))
+
     expect(
       await screen.findByText('No se pudo iniciar la conexión con Mercado Pago')
     ).toBeInTheDocument()
+    expect(screen.queryByText(/Traceback/)).not.toBeInTheDocument()
+    expect(navigateExternal).not.toHaveBeenCalled()
   })
 
   it('sin credenciales OAuth en el servidor, "Conectar" esta apagado y lo dice', () => {

@@ -43,7 +43,8 @@ const flattenUniqueById = (pages: User[][]): User[] => {
 export const useManagedDomainUsers = (query: UserListQuery) => {
   const result = useInfiniteQuery({
     queryKey: managedUsersKeys.list(query),
-    queryFn: ({ pageParam }) => userService.listUsers({ ...query, offset: pageParam }),
+    queryFn: ({ pageParam, signal }) =>
+      userService.listUsers({ ...query, offset: pageParam }, signal),
     initialPageParam: 0,
     getNextPageParam: (last: User[], all: User[][]) =>
       last.length === query.limit ? all.length * query.limit : undefined,
