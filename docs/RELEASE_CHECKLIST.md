@@ -37,7 +37,7 @@ Use this checklist for every production release. A release is ready only when ea
 - [ ] Alembic has exactly one head before release.
 - [ ] Migration SQL has been reviewed for destructive operations, long locks, table rewrites, and backfill volume.
 - [ ] Every migration is expand-only for this release (contract steps ship one release later), indexes use `CONCURRENTLY` in an autocommit block, and constraints go `NOT VALID` + `VALIDATE`: the previous release must run against the new schema, or rollback is not possible.
-- [ ] Migrations ran through `make deploy` (`compose run --rm --no-deps --no-build backend alembic upgrade head`, before recreating the app), not by hand on a running container.
+- [ ] Migrations ran through `make deploy` (`compose run --rm --no-deps -T backend alembic upgrade head`, before recreating the app), not by hand on a running container.
 - [ ] The deploy ran through `scripts/deploy.sh`, which passes `APP_VERSION` and uses `up --no-build --remove-orphans` (a renamed service, such as `redis` split into `redis_cache`/`redis_state`, otherwise leaves the old container holding its port).
 - [ ] The migration role is a Postgres superuser: migration `b2c4e6a8d0f3` runs `CREATE EXTENSION IF NOT EXISTS pg_stat_statements`, which is not a trusted extension (the library is preloaded by the compose `shared_preload_libraries`). With a non-superuser migration role the deploy stops at that revision.
 - [ ] The pre-deploy data checks of `docs/DEPLOY_RUNBOOK.md` §5b returned 0 on production; any non-zero count stops the migrations.

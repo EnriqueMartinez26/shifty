@@ -189,6 +189,191 @@ exit 0
 """
 
 
+# --- flags que entiende Compose ---------------------------------------------
+#
+# 2026-10-02: `scripts/deploy.sh` migraba con `compose run ... --no-build`, un
+# flag que `docker compose run` no tuvo nunca (solo `up`/`create`): Compose
+# 5.5.1 frena con "unknown flag: --no-build" y el deploy muere al migrar. El
+# `docker` falso aceptaba cualquier cosa y el test afirmaba ese mismo string,
+# asi que no podia verlo. Ahora cada llamada a compose que hacen los scripts
+# se valida contra los flags de la version MINIMA soportada (Compose 2.24.0,
+# DEPLOY_MIN_COMPOSE): lo que entienda la minima lo entienden las siguientes.
+# Fuente: docker/compose v2.24.0, cmd/compose/{up,create,run,exec,config,ps,
+# pull,logs,version}.go. Un flag nuevo en un script va aca solo si existe en
+# esa version (`--pull` de `run` aparecio recien en 2.33.0).
+#
+# Por subcomando: (flags booleanos, flags con valor). Largo y corto, sin guion.
+_GLOBALES: tuple[set[str], set[str]] = ({"dry-run"}, set())
+_FLAGS_COMPOSE_2_24: dict[str, tuple[set[str], set[str]]] = {
+    "up": (
+        {
+            "detach",
+            "d",
+            "build",
+            "no-build",
+            "remove-orphans",
+            "no-color",
+            "no-log-prefix",
+            "force-recreate",
+            "no-recreate",
+            "no-start",
+            "abort-on-container-exit",
+            "timestamps",
+            "no-deps",
+            "always-recreate-deps",
+            "renew-anon-volumes",
+            "V",
+            "quiet-pull",
+            "attach-dependencies",
+            "wait",
+        },
+        {
+            "pull",
+            "scale",
+            "exit-code-from",
+            "timeout",
+            "t",
+            "attach",
+            "no-attach",
+            "wait-timeout",
+        },
+    ),
+    "run": (
+        {
+            "detach",
+            "d",
+            "rm",
+            "no-TTY",
+            "T",
+            "no-deps",
+            "use-aliases",
+            "service-ports",
+            "P",
+            "quiet-pull",
+            "build",
+            "remove-orphans",
+            "interactive",
+            "i",
+            "tty",
+            "t",
+        },
+        {
+            "env",
+            "e",
+            "label",
+            "l",
+            "name",
+            "user",
+            "u",
+            "workdir",
+            "w",
+            "entrypoint",
+            "cap-add",
+            "cap-drop",
+            "volume",
+            "v",
+            "publish",
+            "p",
+        },
+    ),
+    "exec": (
+        {"detach", "d", "privileged", "no-TTY", "T", "interactive", "i", "tty", "t"},
+        {"env", "e", "index", "user", "u", "workdir", "w"},
+    ),
+    "config": (
+        {
+            "resolve-image-digests",
+            "quiet",
+            "q",
+            "no-interpolate",
+            "no-normalize",
+            "no-path-resolution",
+            "no-consistency",
+            "services",
+            "volumes",
+            "profiles",
+            "images",
+        },
+        {"format", "hash", "output", "o"},
+    ),
+    "ps": (
+        {"quiet", "q", "services", "orphans", "all", "a", "no-trunc"},
+        {"format", "filter", "status"},
+    ),
+    "pull": (
+        {
+            "quiet",
+            "q",
+            "include-deps",
+            "parallel",
+            "no-parallel",
+            "ignore-pull-failures",
+            "ignore-buildable",
+        },
+        {"policy"},
+    ),
+    "logs": (
+        {"follow", "f", "no-color", "no-log-prefix", "timestamps", "t"},
+        {"index", "since", "until", "tail", "n"},
+    ),
+    "version": ({"short"}, {"format", "f"}),
+}
+# `run` y `exec` cortan los flags en el primer argumento suelto (el servicio):
+# lo que sigue es el comando del contenedor. El resto los acepta en cualquier
+# lugar (por defecto cobra intercala flags y argumentos).
+_SIN_INTERCALAR = {"run", "exec"}
+
+
+def flags_rechazados_por_compose(argumentos: list[str]) -> list[str]:
+    """Los flags de `docker compose <argumentos>` que Compose 2.24 rechaza.
+
+    `argumentos` empieza en el subcomando (sin `docker compose`). Un
+    subcomando que los scripts no usan no se valida."""
+    if not argumentos or argumentos[0] not in _FLAGS_COMPOSE_2_24:
+        return []
+    subcomando, resto = argumentos[0], argumentos[1:]
+    booleanos = _FLAGS_COMPOSE_2_24[subcomando][0] | _GLOBALES[0]
+    con_valor = _FLAGS_COMPOSE_2_24[subcomando][1] | _GLOBALES[1]
+    rechazados: list[str] = []
+    i = 0
+    while i < len(resto):
+        arg = resto[i]
+        i += 1
+        if arg == "--":
+            break
+        if not arg.startswith("-") or arg == "-":
+            if subcomando in _SIN_INTERCALAR:
+                break
+            continue
+        if arg.startswith("--"):
+            nombre, igual, _ = arg[2:].partition("=")
+            if nombre in con_valor:
+                i += 0 if igual else 1
+            elif nombre not in booleanos:
+                rechazados.append(f"{subcomando} --{nombre}")
+            continue
+        # Cortos, quiza juntos (`-dT`); uno con valor se come el resto.
+        cortos = arg[1:]
+        for j, letra in enumerate(cortos):
+            if letra in con_valor:
+                i += 0 if cortos[j + 1 :] else 1
+                break
+            if letra not in booleanos:
+                rechazados.append(f"{subcomando} -{letra}")
+    return rechazados
+
+
+def _llamadas_con_flags_invalidos(llamadas: list[str]) -> list[str]:
+    malas = []
+    for llamada in llamadas:
+        partes = llamada.split()
+        if partes[:2] == ["docker", "compose"]:
+            rechazados = flags_rechazados_por_compose(partes[2:])
+            if rechazados:
+                malas.append(f"{llamada}  <- {', '.join(rechazados)}")
+    return malas
+
+
 @dataclass
 class Host:
     raiz: Path
@@ -212,9 +397,12 @@ class Host:
     def correr_desde(
         self, cwd: Path, script: str, *args: str, **extra: str
     ) -> subprocess.CompletedProcess[str]:
-        """Como `correr`, pero con otro directorio actual."""
+        """Como `correr`, pero con otro directorio actual.
+
+        Falla si el script le paso a compose un flag que Compose 2.24 no
+        entiende: el `docker` falso lo aceptaria y el real no."""
         assert BASH is not None
-        return subprocess.run(
+        resultado = subprocess.run(
             [BASH, str(SCRIPTS / script), *args],
             cwd=cwd,
             env={**self.env, **extra},
@@ -223,6 +411,11 @@ class Host:
             timeout=60,
             check=False,
         )
+        malas = _llamadas_con_flags_invalidos(self.llamadas())
+        assert not malas, "flags que `docker compose` 2.24 no acepta:\n" + "\n".join(
+            malas
+        )
+        return resultado
 
 
 def _ejecutable(ruta: Path, contenido: str) -> None:

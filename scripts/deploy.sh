@@ -14,9 +14,10 @@
 #   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
 #      .github/workflows/build-images.yml). El VPS NUNCA construye: todo `up`
-#      y `run` lleva --no-build, y todo `up` --remove-orphans (un servicio
-#      renombrado, como `redis` -> `redis_cache`/`redis_state`, dejaba vivo el
-#      contenedor viejo con su puerto).
+#      lleva --no-build y --remove-orphans (un servicio renombrado, como
+#      `redis` -> `redis_cache`/`redis_state`, dejaba vivo el contenedor viejo
+#      con su puerto). `run` no tiene --no-build en ninguna version de
+#      Compose (ver `migrar`).
 #   4. MIGRA ANTES DE RECREAR, con el codigo viejo sirviendo:
 #      `compose run --rm --no-deps backend alembic upgrade head`. Por eso las
 #      migraciones son expand/contract (CLAUDE.md §3): el codigo viejo tiene
@@ -192,9 +193,15 @@ preflight() {
 
 # --- pasos ------------------------------------------------------------------
 
+# Sin --no-build: `compose run` no lo tiene (solo `up`/`create`; Compose
+# 5.5.1 frena con "unknown flag", 2026-10-02) y `--pull never` existe recien
+# desde 2.33, por encima de DEPLOY_MIN_COMPOSE. Igual no construye ni baja
+# nada: la vista de produccion no tiene `build` (`build: !reset null`,
+# test_produccion_no_construye_ninguna_imagen) y `imagenes_locales` ya
+# verifico que la imagen de la version esta en el host.
 migrar() {
   log "migrando a head con el codigo viejo sirviendo"
-  docker compose run --rm --no-deps --no-build -T "$DEPLOY_BACKEND_SERVICE" alembic upgrade head
+  docker compose run --rm --no-deps -T "$DEPLOY_BACKEND_SERVICE" alembic upgrade head
 }
 
 # Las funciones de pasos devuelven su error con `|| return 1` explicito: se
