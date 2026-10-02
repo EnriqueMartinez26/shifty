@@ -192,7 +192,10 @@ class Settings(BaseSettings):
     ENV: Environment = Environment.DEVELOPMENT
 
     SECRET_KEY: str
-    ALGORITHM: str = "HS256"
+    # Solo HS256: es lo que firman y verifican core/security.py y los tokens ya
+    # emitidos. Otro valor desde el entorno no carga (el proceso no arranca,
+    # regla 21) en vez de volver 500 cada login al primer jwt.encode.
+    ALGORITHM: Literal["HS256"] = "HS256"
     # Claims estandar del JWT: permiten denylist por jti y evitan que un token
     # emitido para otro sistema que comparta el secreto sea aceptado aca.
     JWT_ISSUER: str = "shifty-api"
