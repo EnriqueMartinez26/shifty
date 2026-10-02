@@ -341,6 +341,14 @@ class PublicBookingService {
     return data
   }
 
+  /**
+   * Baja del mail promocional con el token firmado del link (pagina `/baja`).
+   * Es POST a proposito: un escaner de correo que abre el link no da de baja.
+   */
+  async unsubscribeFromMarketing(token: string): Promise<void> {
+    await apiClient.post('/public/unsubscribe', { token })
+  }
+
   async verifyOtp(payload: OtpVerifyPayload): Promise<OtpVerifyResponse> {
     const { data } = await apiClient.post<OtpVerifyResponse>('/public/otp/verify', payload)
     return data

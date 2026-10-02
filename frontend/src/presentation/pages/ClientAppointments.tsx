@@ -6,6 +6,7 @@ import { ClientAppointmentsContainer } from '@presentation/containers/ClientAppo
 
 import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
+import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
 import { usePublicStore, usePublicStoreRef } from '../hooks/usePublic'
 
 const ClientAppointmentsPage: React.FC = () => {
@@ -14,7 +15,8 @@ const ClientAppointmentsPage: React.FC = () => {
   // y el cliente se quedaba sin cancelar ni reprogramar, que siguen
   // permitidos. El ref responde tambien entonces, con el mismo 404 neutro si
   // la tienda no existe.
-  const { data: ref, isLoading, isError } = usePublicStoreRef(slug)
+  const refQuery = usePublicStoreRef(slug)
+  const { data: ref, isLoading, isError } = refQuery
   const acceptsNewBookings = ref?.accepts_new_bookings === true
   // La politica de sena del pie solo la trae la vitrina: se pide cuando no va
   // a dar 404.
@@ -28,7 +30,12 @@ const ClientAppointmentsPage: React.FC = () => {
     )
   }
 
-  if (isError || !ref) {
+  // 2026-10-02: sin red o con un 5xx tambien decia "Negocio no encontrado".
+  if (!ref && isError && !isStoreMissing(refQuery.error)) {
+    return <StoreLoadError onRetry={() => void refQuery.refetch()} retrying={refQuery.isFetching} />
+  }
+
+  if (!ref) {
     return (
       <div className="min-h-screen grid place-items-center bg-[#EEF2F6] text-sm font-black uppercase tracking-widest text-red-500">
         Negocio no encontrado

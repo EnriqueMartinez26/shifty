@@ -1,9 +1,12 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
+import { NetworkError, NotFoundError, ServiceUnavailableError } from '@shared/errors'
+
 import PublicBooking from './PublicBooking'
 
 const mockRefetch = jest.fn()
+const mockRefetchTienda = jest.fn()
 let mockPago = {
   data: { payment_status: 'approved', appointment_status: 'confirmed' },
   pollingStopped: false
@@ -18,13 +21,15 @@ const TIENDA_SOL = {
     whatsapp_number: null as string | null
   },
   isLoading: false,
-  isError: false
+  isError: false,
+  error: null as unknown,
+  isFetching: false
 }
-let mockTienda: { data: typeof TIENDA_SOL.data | undefined; isLoading: boolean; isError: boolean } =
+let mockTienda: typeof TIENDA_SOL | (Omit<typeof TIENDA_SOL, 'data'> & { data: undefined }) =
   TIENDA_SOL
 
 jest.mock('../hooks/usePublic', () => ({
-  usePublicStore: () => mockTienda,
+  usePublicStore: () => ({ ...mockTienda, refetch: mockRefetchTienda }),
   usePublicPaymentStatus: (_store: string | undefined, paymentId: string | undefined) => ({
     data: paymentId ? mockPago.data : undefined,
     pollingStopped: paymentId ? mockPago.pollingStopped : false,
@@ -159,6 +164,10 @@ describe('PublicBooking: WhatsApp de la tienda', () => {
   })
 })
 
+const sinTienda = (error: unknown) => {
+  mockTienda = { ...TIENDA_SOL, data: undefined, isError: true, error }
+}
+
 describe('PublicBooking con una tienda que no existe', () => {
   afterEach(() => {
     mockTienda = TIENDA_SOL
@@ -166,7 +175,7 @@ describe('PublicBooking con una tienda que no existe', () => {
 
   it('muestra la pantalla de no encontrado con salida al inicio', () => {
     // Antes: un texto suelto "Negocio no encontrado" sin ningun link.
-    mockTienda = { data: undefined, isLoading: false, isError: true }
+    sinTienda(new NotFoundError('Tienda no encontrada', { statusCode: 404 }))
     renderEn('/booking/no-existe')
 
     expect(
@@ -175,5 +184,45 @@ describe('PublicBooking con una tienda que no existe', () => {
     expect(screen.getByRole('link', { name: 'Ir al inicio' })).toHaveAttribute('href', '/')
     // Ya esta en la portada de esa tienda: "volver" a ella no saca de ningun lado.
     expect(screen.queryByRole('link', { name: 'Volver a la tienda' })).toBeNull()
+  })
+})
+
+// 2026-10-02, QA en navegador: con la API caida (red o 5xx) el portal decia
+// "Negocio no encontrado", como si la tienda no existiera, y no habia forma de
+// reintentar. Solo un 404 es "no existe"; lo demas es una falla pasajera.
+describe('PublicBooking cuando la tienda no se pudo consultar', () => {
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+    mockRefetchTienda.mockReset()
+  })
+
+  it.each([
+    ['sin conexion', new NetworkError('No se pudo conectar con el servidor.')],
+    ['un 503', new ServiceUnavailableError('Servicio no disponible', { statusCode: 503 })]
+  ])('con %s no dice que la tienda no existe y deja reintentar', (_caso, error) => {
+    sinTienda(error)
+    renderEn('/booking/sol')
+
+    expect(screen.queryByText('Negocio no encontrado')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
+      'No pudimos cargar la tienda'
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+    expect(mockRefetchTienda).toHaveBeenCalledTimes(1)
+  })
+
+  it('mientras reintenta deshabilita el boton', () => {
+    mockTienda = {
+      ...TIENDA_SOL,
+      data: undefined,
+      isError: true,
+      error: new NetworkError('No se pudo conectar con el servidor.'),
+      isFetching: true
+    }
+    renderEn('/booking/sol')
+
+    expect(screen.getByRole('button', { name: 'Reintentando...' })).toBeDisabled()
   })
 })

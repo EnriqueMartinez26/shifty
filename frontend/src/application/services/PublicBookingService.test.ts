@@ -161,4 +161,11 @@ describe('PublicBookingService', () => {
 
     expect(mockPost).toHaveBeenCalledWith('/public/otp/verify', payload)
   })
+
+  it('unsubscribeFromMarketing manda el token en el cuerpo de un POST', async () => {
+    await publicBookingService.unsubscribeFromMarketing('t.o.k.en')
+
+    expect(mockPost).toHaveBeenCalledWith('/public/unsubscribe', { token: 't.o.k.en' })
+    expect(mockGet).not.toHaveBeenCalled()
+  })
 })
