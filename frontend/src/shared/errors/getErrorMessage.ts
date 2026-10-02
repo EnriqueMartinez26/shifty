@@ -92,6 +92,8 @@ const serverMessageFor = (error: unknown, code: string | undefined): string | un
 }
 
 /** El campo de una entrada "ruta -> del -> campo: motivo" del 422 de Pydantic. */
+const FIELD_NAME = /^[a-z_][a-z0-9_]*$/
+
 const fieldOf = (entry: unknown): string | undefined => {
   if (typeof entry !== 'string') return undefined
   const separator = entry.indexOf(': ')
@@ -104,7 +106,10 @@ const fieldOf = (entry: unknown): string | undefined => {
     .split(' -> ')
     .map((segment) => segment.trim())
     .filter((segment) => segment && !/^\d+$/.test(segment))
-  return segments[segments.length - 1]
+  const field = segments[segments.length - 1]
+  // Solo un nombre de campo de la API (snake_case): un mensaje de negocio con
+  // dos puntos ("Horario no disponible: elegi otro") no nombra un campo.
+  return field !== undefined && FIELD_NAME.test(field) ? field : undefined
 }
 
 /**
