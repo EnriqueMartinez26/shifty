@@ -133,7 +133,7 @@ const AdminLayout: React.FC = () => {
 
         <SubscriptionBanner subscription={subscription} storeName={store?.name} />
 
-        <div className="relative animate-in fade-in duration-500">
+        <div className="relative duration-500">
           <Outlet />
         </div>
 

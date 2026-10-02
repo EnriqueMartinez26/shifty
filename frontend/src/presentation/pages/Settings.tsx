@@ -377,10 +377,7 @@ const SettingsPage: React.FC = () => {
       )}
 
       {/* Tab Content */}
-      <div
-        className="p-8 rounded-lg animate-in fade-in slide-in-from-bottom-4 duration-500"
-        style={create2000sPanelStyle()}
-      >
+      <div className="p-8 rounded-lg duration-500" style={create2000sPanelStyle()}>
         {activeTab === 'identity' && (
           <SettingsIdentityTab
             value={formData}

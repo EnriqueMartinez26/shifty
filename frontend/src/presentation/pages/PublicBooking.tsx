@@ -151,7 +151,7 @@ const PublicBooking: React.FC = () => {
       style={{ background: colors2000s.bg.primary }}
     >
       {/* Header Info */}
-      <div className="max-w-2xl mx-auto mb-8 text-center animate-in fade-in slide-in-from-top-4 duration-700">
+      <div className="max-w-2xl mx-auto mb-8 text-center duration-700">
         <div
           className="inline-flex items-center justify-center w-16 h-16 rounded-md text-white mb-4 transform -rotate-6 border"
           style={{

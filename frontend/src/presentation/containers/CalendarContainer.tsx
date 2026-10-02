@@ -431,7 +431,7 @@ export const CalendarContainer: React.FC = () => {
   )
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-700">
+    <div className="space-y-6 duration-700">
       {confirmDialog}
       <AgendaToolbar
         view={view}

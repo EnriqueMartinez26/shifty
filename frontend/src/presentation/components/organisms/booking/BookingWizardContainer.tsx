@@ -259,7 +259,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
 
   return (
     <div
-      className="max-w-2xl mx-auto rounded-lg p-8 relative overflow-hidden animate-in fade-in zoom-in-95 duration-700"
+      className="max-w-2xl mx-auto rounded-lg p-8 relative overflow-hidden duration-700"
       style={{
         background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
         border: `1px solid ${colors2000s.border.default}`,

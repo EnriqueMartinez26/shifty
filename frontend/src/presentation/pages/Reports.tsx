@@ -205,7 +205,7 @@ const ReportsPage: React.FC = () => {
 
   if (summaryQuery.isError && !summary) {
     return (
-      <div className="space-y-8 animate-in fade-in duration-500">
+      <div className="space-y-8 duration-500">
         {rangeHeader}
         <div
           role="alert"
@@ -225,7 +225,7 @@ const ReportsPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       {rangeHeader}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-6">

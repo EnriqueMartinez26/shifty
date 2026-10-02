@@ -13,7 +13,10 @@ import {
 export const useStoreSettings = () =>
   useQuery<StoreSettings>({
     queryKey: ['store-settings'],
-    queryFn: () => storeSettingsService.getSettings()
+    queryFn: () => storeSettingsService.getSettings(),
+    // Solo cambia cuando el admin guarda, y esas mutaciones (abajo) invalidan
+    // ['store-settings']: no hace falta pedirla en cada navegacion (F4-15).
+    staleTime: 5 * 60 * 1000
   })
 
 /** Exportada para que main.tsx la invalide ante un SUBSCRIPTION_SUSPENDED. */

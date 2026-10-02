@@ -71,7 +71,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/45 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="relative w-full max-w-lg rounded-md animate-in zoom-in-95 duration-200 p-8 overflow-y-auto max-h-[90vh]"
+        className="relative w-full max-w-lg rounded-md duration-200 p-8 overflow-y-auto max-h-[90vh]"
         style={create2000sModalSurfaceStyle()}
       >
         <div className="flex justify-between items-center mb-8">

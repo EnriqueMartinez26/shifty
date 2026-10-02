@@ -92,7 +92,7 @@ const LedgerPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Cuentas pendientes"
         description="Mira cuanto debe cada cliente, que pago y que quedo pendiente."

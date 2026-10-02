@@ -79,7 +79,7 @@ const PaymentsPage: React.FC = () => {
   const inputStyle = create2000sInputStyle()
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
+    <div className="space-y-8 duration-500">
       <PageHeader
         title="Cobros online"
         description="Configura el cobro online, revisa el estado de los pagos y registra devoluciones."

@@ -44,7 +44,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         : 'Tu reserva ya quedo registrada.'
 
   return (
-    <div className="flex flex-col items-center py-10 text-center animate-in fade-in zoom-in-95 duration-500">
+    <div className="flex flex-col items-center py-10 text-center duration-500">
       <div className="relative mb-8">
         <div
           className={`absolute inset-0 rounded-full blur-xl opacity-20 animate-pulse ${isPendingPayment || isPendingReview ? 'bg-amber-500' : 'bg-green-500'}`}

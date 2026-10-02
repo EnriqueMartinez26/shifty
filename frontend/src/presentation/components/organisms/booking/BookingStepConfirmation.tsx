@@ -411,7 +411,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
   if (submission.phase === 'submitting') {
     return (
-      <div className="flex flex-col items-center justify-center py-20 animate-in fade-in duration-500">
+      <div className="flex flex-col items-center justify-center py-20 duration-500">
         <Loader2 className="w-16 h-16 animate-spin text-orange-500 mb-6" />
         <h2
           className="text-2xl font-black uppercase tracking-tight"
@@ -437,7 +437,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
+    <div className="space-y-6 duration-500">
       <div className="flex items-center gap-4 mb-2">
         <button
           onClick={onBack}
