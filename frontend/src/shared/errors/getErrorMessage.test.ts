@@ -4,6 +4,7 @@ import {
   getErrorCode,
   getErrorMessage,
   getHttpStatus,
+  getInvalidFields,
   isStateConflictError
 } from './getErrorMessage'
 import { InternalServerError } from './InternalServerError'
@@ -151,5 +152,70 @@ describe('getHttpStatus', () => {
 
   it('devuelve undefined si no hay ApplicationError', () => {
     expect(getHttpStatus(new Error('x'))).toBeUndefined()
+  })
+})
+
+// 2026-10-02, QA en navegador: un 422 de Pydantic terminaba en el fallback
+// generico de cada pantalla ("No se pudo registrar el movimiento") sin decir
+// que campo fallo. El campo sale del `detail` (lista "campo: motivo") y la
+// pantalla trae su propio texto: el motivo crudo de Pydantic nunca se muestra.
+describe('getErrorMessage: errores de validacion por campo', () => {
+  const pydantic422 = (...detail: string[]) =>
+    new ValidationError(detail.join('; '), {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422,
+      detail
+    })
+
+  it('nombra el campo invalido con el texto de la pantalla', () => {
+    const error = pydantic422('amount: Input should be greater than or equal to 0')
+
+    expect(getInvalidFields(error)).toEqual(['amount'])
+    expect(getErrorMessage(error, FALLBACK, {}, { amount: 'Revisá el monto.' })).toBe(
+      'Revisá el monto.'
+    )
+  })
+
+  it('toma el ultimo tramo de la ruta y saltea los indices de lista', () => {
+    const error = pydantic422('query -> limit: too big', 'items -> 0 -> name: required')
+
+    expect(getInvalidFields(error)).toEqual(['limit', 'name'])
+  })
+
+  it('tambien encuentra el campo dentro de un error envuelto por BaseService', () => {
+    const error = wrapped(pydantic422('client_phone: String should have at least 8 characters'))
+
+    expect(
+      getErrorMessage(error, FALLBACK, {}, { client_phone: 'El teléfono es muy corto.' })
+    ).toBe('El teléfono es muy corto.')
+  })
+
+  it('sin un campo conocido cae en el fallback, no en el texto del servidor', () => {
+    const error = pydantic422('otro: value is not valid')
+
+    expect(getErrorMessage(error, FALLBACK, {}, { amount: 'Revisá el monto.' })).toBe(FALLBACK)
+  })
+
+  it('el override por codigo le gana al texto por campo', () => {
+    const error = pydantic422('amount: bad')
+
+    expect(
+      getErrorMessage(
+        error,
+        FALLBACK,
+        { VALIDATION_ERROR: 'Datos inválidos.' },
+        { amount: 'Revisá el monto.' }
+      )
+    ).toBe('Datos inválidos.')
+  })
+
+  it('un detail que no es lista (ValidationException de negocio) no trae campos', () => {
+    const error = new ValidationError('x', {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422,
+      detail: { campo: 'x' }
+    })
+
+    expect(getInvalidFields(error)).toEqual([])
   })
 })

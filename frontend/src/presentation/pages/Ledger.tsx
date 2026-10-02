@@ -7,7 +7,7 @@ import type { LedgerClient } from '@application/services/LedgerService'
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
-import { MessageBanner } from '../components/molecules/MessageBanner'
+import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import {
@@ -16,6 +16,7 @@ import {
   useLedgerClients,
   useLedgerSummary
 } from '../hooks/useLedger'
+import { useConfirm } from '../hooks/useConfirm'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import {
   currencyFmtEsAr as currencyFmt,
@@ -28,11 +29,35 @@ import {
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
-const movementTypeLabels: Record<'charge' | 'payment' | 'adjustment' | 'refund', string> = {
+type MovementType = 'charge' | 'payment' | 'adjustment' | 'refund'
+
+const movementTypeLabels: Record<MovementType, string> = {
   charge: 'Cargo',
   payment: 'Pago',
   adjustment: 'Ajuste',
   refund: 'Devolucion'
+}
+
+// Mismo tope que LedgerMovementCreate.amount en el backend (ge=0,
+// le=10_000_000, decimal_places=2). Un movimiento en 0 no mueve el saldo: se
+// pide mayor a 0.
+const MAX_AMOUNT = 10_000_000
+const AMOUNT_MESSAGE = 'Ingresá un monto mayor a $ 0 y hasta $ 10.000.000, con hasta 2 decimales.'
+
+/** Monto tipeado -> numero valido para el backend, o null. Acepta coma decimal. */
+const parseAmount = (raw: string): number | null => {
+  const normalized = raw.trim().replace(',', '.')
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return null
+  const amount = Number(normalized)
+  return amount > 0 && amount <= MAX_AMOUNT ? amount : null
+}
+
+// Un 422 de Pydantic nombra el campo; el texto crudo nunca llega (regla 20).
+const MOVEMENT_FIELD_MESSAGES: Partial<Record<string, string>> = {
+  amount: AMOUNT_MESSAGE,
+  movement_type: 'Elegí el tipo de movimiento.',
+  appointment_id: 'El turno asociado no es válido. Revisá el código o dejalo vacío.',
+  notes: 'Las notas pueden tener hasta 500 caracteres.'
 }
 
 const inputStyle = create2000sInputStyle()
@@ -62,32 +87,57 @@ const LedgerPage: React.FC = () => {
       : clients
   const effectiveClientId = selectedClient?.public_id ?? null
   const ledgerQuery = useCustomerLedger(effectiveClientId)
+  // El tipo arranca SIN elegir y vuelve a "sin elegir" despues de guardar:
+  // volver solo a "Cargo" hizo que un pago se cargara como deuda (QA
+  // 2026-10-02). Recordar el ultimo tipo tiene el mismo riesgo con el
+  // movimiento siguiente; elegirlo cada vez, mas la confirmacion, no.
   const emptyMovementForm = {
-    movement_type: 'charge' as 'charge' | 'payment' | 'adjustment' | 'refund',
+    movement_type: '' as MovementType | '',
     amount: '',
     appointment_id: '',
     notes: ''
   }
   const [movementForm, setMovementForm] = useState(emptyMovementForm)
-  const [message, setMessage] = useState('')
+  const [feedback, setFeedback] = useState<FormFeedbackMessage | null>(null)
+  const { confirm, confirmDialog } = useConfirm()
+  const showError = (text: string) => setFeedback({ tone: 'error', text })
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!effectiveClientId) return
+    const movementType = movementForm.movement_type
+    if (!movementType) {
+      showError('Elegí el tipo de movimiento.')
+      return
+    }
+    const amount = parseAmount(movementForm.amount)
+    if (amount === null) {
+      showError(AMOUNT_MESSAGE)
+      return
+    }
+    setFeedback(null)
+    const clientName = selectedClient?.name ?? 'el cliente'
+    const confirmed = await confirm(
+      `¿Registrar ${movementTypeLabels[movementType]} de ${currencyFmt.format(amount)} a ${clientName}?`,
+      { confirmLabel: 'Registrar', cancelLabel: 'Volver' }
+    )
+    if (!confirmed) return
     try {
       await addMovement.mutateAsync({
         clientId: effectiveClientId,
         payload: {
-          movement_type: movementForm.movement_type,
-          amount: Number(movementForm.amount),
+          movement_type: movementType,
+          amount,
           appointment_id: movementForm.appointment_id || undefined,
           notes: movementForm.notes || undefined
         }
       })
       setMovementForm(emptyMovementForm)
-      setMessage('Movimiento registrado')
+      setFeedback({ tone: 'success', text: 'Movimiento registrado' })
     } catch (error: unknown) {
-      setMessage(getErrorMessage(error, 'No se pudo registrar el movimiento'))
+      showError(
+        getErrorMessage(error, 'No se pudo registrar el movimiento', {}, MOVEMENT_FIELD_MESSAGES)
+      )
     }
   }
 
@@ -104,8 +154,6 @@ const LedgerPage: React.FC = () => {
         error={clientsQuery.error ?? summaryQuery.error ?? ledgerQuery.error}
         message="No se pudieron cargar las cuentas pendientes."
       />
-
-      <MessageBanner message={message} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
         <div className="p-5 rounded-2xl" style={cardStyle}>
@@ -196,6 +244,7 @@ const LedgerPage: React.FC = () => {
             onChange={(e) => {
               setPickedClient(clientOptions.find((c) => c.public_id === e.target.value) ?? null)
               setMovementForm(emptyMovementForm)
+              setFeedback(null)
             }}
             className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
             style={inputStyle}
@@ -208,12 +257,14 @@ const LedgerPage: React.FC = () => {
           </select>
 
           <form
+            noValidate
             onSubmit={(event) => {
               void handleSubmit(event)
             }}
             className="space-y-3"
           >
             <select
+              aria-label="Tipo de movimiento"
               value={movementForm.movement_type}
               onChange={(e) =>
                 setMovementForm((prev) => ({
@@ -224,18 +275,22 @@ const LedgerPage: React.FC = () => {
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
             >
+              <option value="" disabled>
+                Elegí el tipo de movimiento
+              </option>
               <option value="charge">Cargo</option>
               <option value="payment">Pago</option>
               <option value="adjustment">Ajuste</option>
               <option value="refund">Devolucion</option>
             </select>
             <input
+              aria-label="Monto"
+              inputMode="decimal"
               value={movementForm.amount}
               onChange={(e) => setMovementForm((prev) => ({ ...prev, amount: e.target.value }))}
               className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
               style={inputStyle}
               placeholder="Monto"
-              required
             />
             <input
               value={movementForm.appointment_id}
@@ -262,7 +317,9 @@ const LedgerPage: React.FC = () => {
             >
               Guardar movimiento
             </button>
+            <FormFeedback feedback={feedback} />
           </form>
+          {confirmDialog}
         </div>
 
         <div className="p-6 rounded-3xl space-y-5" style={cardStyle}>

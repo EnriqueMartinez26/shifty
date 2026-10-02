@@ -1,6 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import type { LedgerClient } from '@application/services/LedgerService'
+
+import { ValidationError } from '@shared/errors/ValidationError'
 
 import LedgerPage from './Ledger'
 
@@ -44,8 +46,10 @@ jest.mock('../hooks/useLedger', () => ({
       error: null
     }
   },
-  useAddLedgerMovement: () => ({ mutateAsync: jest.fn(), isPending: false })
+  useAddLedgerMovement: () => ({ mutateAsync: mockAddMovement, isPending: false })
 }))
+
+const mockAddMovement = jest.fn()
 
 let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
 jest.mock('../hooks/useStoreWriteAccess', () => ({
@@ -108,6 +112,112 @@ describe('LedgerPage', () => {
     render(<LedgerPage />)
 
     expect(screen.queryByRole('button', { name: 'Ver mas' })).not.toBeInTheDocument()
+  })
+})
+
+// 2026-10-02, QA en navegador: despues de guardar, el tipo volvia solo a
+// "Cargo" sin aviso y un sobrepago de 99.999 quedo cargado como Cargo
+// (S\37-ledger-overpay.png). Un 422 (Ajuste negativo) decia "No se pudo
+// registrar el movimiento" arriba de todo, fuera de la vista y sin motivo.
+describe('LedgerPage: cargar un movimiento', () => {
+  const tipo = () => screen.getByLabelText('Tipo de movimiento') as HTMLSelectElement
+  const monto = () => screen.getByLabelText('Monto') as HTMLInputElement
+  const guardar = () => fireEvent.click(screen.getByRole('button', { name: 'Guardar movimiento' }))
+
+  beforeEach(() => {
+    mockAddMovement.mockReset()
+    mockAddMovement.mockResolvedValue({})
+  })
+
+  it('el tipo arranca sin elegir y sin tipo no se guarda ni se pregunta', () => {
+    render(<LedgerPage />)
+
+    expect(tipo().value).toBe('')
+    fireEvent.change(monto(), { target: { value: '500' } })
+    guardar()
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(mockAddMovement).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('Elegí el tipo de movimiento.')
+  })
+
+  it('confirma tipo, monto y cliente antes de guardar; "Volver" no guarda', async () => {
+    render(<LedgerPage />)
+    fireEvent.change(tipo(), { target: { value: 'payment' } })
+    fireEvent.change(monto(), { target: { value: '99999' } })
+    guardar()
+
+    const dialogo = await screen.findByRole('alertdialog')
+    expect(dialogo).toHaveTextContent('Pago')
+    expect(dialogo).toHaveTextContent('99.999')
+    expect(dialogo).toHaveTextContent('Ana Gomez')
+    fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(mockAddMovement).not.toHaveBeenCalled()
+    expect(tipo().value).toBe('payment')
+  })
+
+  it('al guardar manda el tipo elegido y despues el tipo vuelve a "sin elegir", no a Cargo', async () => {
+    render(<LedgerPage />)
+    fireEvent.change(tipo(), { target: { value: 'payment' } })
+    fireEvent.change(monto(), { target: { value: '500' } })
+    guardar()
+    fireEvent.click(await screen.findByRole('button', { name: 'Registrar' }))
+
+    await waitFor(() =>
+      expect(mockAddMovement).toHaveBeenCalledWith({
+        clientId: 'cli-a',
+        payload: {
+          movement_type: 'payment',
+          amount: 500,
+          appointment_id: undefined,
+          notes: undefined
+        }
+      })
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent('Movimiento registrado')
+    expect(tipo().value).toBe('')
+    expect(monto().value).toBe('')
+  })
+
+  it.each([['-100'], ['0'], ['abc'], ['10000001'], ['10.555']])(
+    'un monto invalido (%s) no llega al servidor y se dice junto al formulario',
+    (valor) => {
+      render(<LedgerPage />)
+      fireEvent.change(tipo(), { target: { value: 'adjustment' } })
+      fireEvent.change(monto(), { target: { value: valor } })
+      guardar()
+
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(mockAddMovement).not.toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(/monto/i)
+    }
+  )
+
+  it('un 422 del servidor muestra el motivo mapeado junto al formulario, nunca el texto crudo', async () => {
+    mockAddMovement.mockRejectedValue(
+      new ValidationError('amount: Input should be greater than or equal to 0', {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422,
+        detail: ['amount: Input should be greater than or equal to 0']
+      })
+    )
+    render(<LedgerPage />)
+    fireEvent.change(tipo(), { target: { value: 'adjustment' } })
+    fireEvent.change(monto(), { target: { value: '100' } })
+    guardar()
+    fireEvent.click(await screen.findByRole('button', { name: 'Registrar' }))
+
+    const alerta = await screen.findByRole('alert')
+    expect(alerta).toHaveTextContent(/monto/i)
+    expect(alerta).not.toHaveTextContent('Input should')
+    // Junto al boton de guardar, dentro del formulario: no arriba de la pagina.
+    expect(alerta.closest('form')).toBe(
+      screen.getByRole('button', { name: 'Guardar movimiento' }).closest('form')
+    )
+    // El tipo elegido no se pierde: el dueno corrige y reintenta.
+    expect(tipo().value).toBe('adjustment')
   })
 })
 
