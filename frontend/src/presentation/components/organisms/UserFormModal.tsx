@@ -17,6 +17,11 @@ interface UserFormModalProps {
   editingUser?: User | null
   /** Que puede tocar quien mira (FF-09); lo calcula el contenedor. */
   rules: UserFormRules
+  /**
+   * Tienda suspendida (FF-15): guardar responde 402. Cubre el modal que quedo
+   * abierto antes de que cargara el plan.
+   */
+  readOnlyReason?: string | null
 }
 
 /**
@@ -33,7 +38,8 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
   onClose,
   onSubmit,
   editingUser,
-  rules
+  rules,
+  readOnlyReason = null
 }) => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -228,7 +234,8 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || readOnlyReason !== null}
+              title={readOnlyReason ?? undefined}
               className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >

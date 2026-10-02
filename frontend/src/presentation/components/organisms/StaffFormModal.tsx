@@ -17,13 +17,19 @@ interface StaffFormModalProps {
   onClose: () => void
   onSubmit: (data: StaffFormValues) => Promise<void>
   editingStaff?: Staff | null
+  /**
+   * Tienda suspendida (FF-15): guardar responde 402. Cubre el modal que quedo
+   * abierto antes de que cargara el plan.
+   */
+  readOnlyReason?: string | null
 }
 
 export const StaffFormModal: React.FC<StaffFormModalProps> = ({
   isOpen,
   onClose,
   onSubmit,
-  editingStaff
+  editingStaff,
+  readOnlyReason = null
 }) => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -351,7 +357,8 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || readOnlyReason !== null}
+              title={readOnlyReason ?? undefined}
               className="flex-1 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs active:scale-95 disabled:opacity-50"
               style={buttonStyles2000s.selected}
             >

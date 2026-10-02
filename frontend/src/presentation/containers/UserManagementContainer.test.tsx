@@ -321,4 +321,19 @@ describe('UserManagementContainer', () => {
     expect(screen.getByRole('button', { name: /nuevo usuario/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /editar/i })).not.toBeDisabled()
   })
+
+  // 2026-10-02: si la tienda se suspendia con el modal abierto, el modal no
+  // recibia el motivo y guardar fallaba con 402 en vez de verse deshabilitado.
+  it('si la tienda se suspende con el modal abierto, guardar se deshabilita con el motivo', () => {
+    const { rerender } = render(<UserManagementContainer />)
+    fireEvent.click(screen.getByRole('button', { name: /nuevo usuario/i }))
+    expect(screen.getByRole('button', { name: 'Crear Usuario' })).not.toBeDisabled()
+
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    rerender(<UserManagementContainer />)
+
+    const guardar = screen.getByRole('button', { name: 'Crear Usuario' })
+    expect(guardar).toBeDisabled()
+    expect(guardar).toHaveAttribute('title', 'Tienda suspendida')
+  })
 })
