@@ -91,7 +91,7 @@ const AdminLayout: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsSidebarOpen(true)}
-              aria-label="Abrir menu de navegacion"
+              aria-label="Abrir menú de navegación"
               className="lg:hidden p-2.5 rounded-xl flex-shrink-0"
               style={{
                 background: 'white',

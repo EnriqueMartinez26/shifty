@@ -17,6 +17,6 @@ export const buildWaitlistMessage = (input: WaitlistMessageInput): string => {
   const nombre = input.clientName.trim() ? `Hola ${input.clientName.trim()}!` : 'Hola!'
   const con = input.staffName ? ` con ${input.staffName}` : ''
   const dia = formatArgentinaDateDisplay(input.windowStartsAt)
-  const link = input.bookingUrl ? ` Podes reservarlo aca: ${input.bookingUrl}` : ''
-  return `${nombre} Se libero un lugar para ${input.serviceName}${con} el ${dia}, como pediste en la lista de espera de ${input.storeName}.${link} Avisanos si lo queres.`
+  const link = input.bookingUrl ? ` Podés reservarlo acá: ${input.bookingUrl}` : ''
+  return `${nombre} Se liberó un lugar para ${input.serviceName}${con} el ${dia}, como pediste en la lista de espera de ${input.storeName}.${link} Avisanos si lo querés.`
 }

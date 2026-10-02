@@ -11,7 +11,7 @@ import { fieldStyle, panelStyle } from '../../../lib/calendarStyles'
 export type CalendarView = 'day' | 'week' | 'month' | 'list'
 
 const VIEW_LABELS: Record<CalendarView, string> = {
-  day: 'Dia',
+  day: 'Día',
   week: 'Semana',
   month: 'Mes',
   list: 'Lista'
@@ -66,7 +66,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           className="text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
-          Vistas dia, semana, mes y lista
+          Vistas día, semana, mes y lista
         </p>
       </div>
     </div>

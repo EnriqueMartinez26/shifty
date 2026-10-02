@@ -28,7 +28,7 @@ describe('AgendaToolbar', () => {
   it('avisa las flechas, la vista elegida y el turno nuevo', () => {
     const handlers = renderToolbar()
     const [prev, next] = screen.getAllByRole('button').filter((button) => button.textContent === '')
-    if (!prev || !next) throw new Error('faltan las flechas de navegacion')
+    if (!prev || !next) throw new Error('faltan las flechas de navegación')
     fireEvent.click(prev)
     fireEvent.click(next)
     fireEvent.click(screen.getByRole('button', { name: 'Mes' }))

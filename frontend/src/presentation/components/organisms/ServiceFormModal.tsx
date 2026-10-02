@@ -20,6 +20,7 @@ import { Service, type ServiceDepositMode, type ServiceDepositType } from '@doma
 import { getClientValidationMessages } from '@application/validators/service.validators'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatCurrency } from '@shared/utils/currency'
 import { validateServiceImage } from '@shared/utils/imageFile'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
@@ -689,7 +690,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                       className="text-[10px] font-black leading-none"
                       style={{ color: formData.color }}
                     >
-                      ${formData.price}
+                      {formatCurrency(formData.price)}
                     </p>
                   </div>
                 </div>

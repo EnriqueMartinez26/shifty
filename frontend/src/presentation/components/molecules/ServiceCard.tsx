@@ -146,7 +146,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
                 Precio
               </p>
               <p className="text-xs font-black leading-none" style={{ color: accentColor }}>
-                ${service.price.getValue().toLocaleString()}
+                {service.price.format()}
               </p>
             </div>
           </div>

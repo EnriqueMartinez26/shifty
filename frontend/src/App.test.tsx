@@ -280,7 +280,7 @@ describe('rutas del panel sin sesion', () => {
   })
 
   it.each(['/dashboard', '/dashboard/reports', '/control-global', '/'])(
-    'con la sesion no verificable (%s) ofrece reintentar y no manda a /login',
+    'con la sesión no verificable (%s) ofrece reintentar y no manda a /login',
     async (ruta) => {
       mockAuth = { ...sinSesion(), sessionUnavailable: true }
       abrir(ruta)
@@ -342,7 +342,7 @@ describe('raiz y comodin', () => {
   // Antes el comodin redirigia al inicio (login o panel): una direccion mal
   // escrita no decia nada y, sin backend, quedaba en "Cargando...".
   it.each(RUTAS_DESCONOCIDAS)(
-    'sin sesion %s muestra el 404, sin redirigir ni montar la sesion',
+    'sin sesión %s muestra el 404, sin redirigir ni montar la sesión',
     async (ruta) => {
       abrir(ruta)
 

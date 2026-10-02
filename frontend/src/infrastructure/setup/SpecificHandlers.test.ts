@@ -101,7 +101,7 @@ describe('ForbiddenErrorHandler', () => {
     await new ForbiddenErrorHandler().handle(error)
 
     expect(sink).toHaveBeenCalledWith(
-      'No tienes permisos suficientes para realizar esta acción.',
+      'No tenés permisos suficientes para realizar esta acción.',
       'error'
     )
   })
