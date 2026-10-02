@@ -5,6 +5,7 @@ import { CheckCircle2, CreditCard, ExternalLink, Link2 } from 'lucide-react'
 import { isCollectibleStatus } from '@domain/value-objects/BookingStatus'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { formatCurrency } from '@shared/utils/currency'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
@@ -22,7 +23,7 @@ import {
 import { useStoreFeatureFlags } from '../hooks/useStores'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { bookingStatusLabel } from '../lib/bookingStatusLabel'
-import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
+import { formatDateTimeEsAr } from '../lib/formatters'
 import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceStyles'
 
 const PAYMENTS_OFF_REASON =
@@ -65,7 +66,7 @@ const CollectionsPage: React.FC = () => {
           { label: 'Pagos pendientes', value: summary?.pending_payments ?? 0 },
           {
             label: 'Monto pendiente',
-            value: currencyFmt.format(Number(summary?.total_pending_amount ?? 0))
+            value: formatCurrency(Number(summary?.total_pending_amount ?? 0))
           }
         ]
       : [])

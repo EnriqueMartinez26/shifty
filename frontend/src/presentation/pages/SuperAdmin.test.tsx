@@ -268,7 +268,7 @@ describe('SuperAdminPage', () => {
     expect(sectionOf('Catalogo global').getByText('Plan Oro')).toBeInTheDocument()
     expect(sectionOf('Maestro editable').getByText('WELCOME10')).toBeInTheDocument()
     expect(
-      sectionOf('Detalle del tenant').getAllByText('root@barberuno.com').length
+      sectionOf('Detalle de la tienda').getAllByText('root@barberuno.com').length
     ).toBeGreaterThan(0)
   })
 
@@ -280,8 +280,10 @@ describe('SuperAdminPage', () => {
     expect(screen.queryByText(/\bactive\b/)).not.toBeInTheDocument()
     expect(screen.queryByText(/monthly/)).not.toBeInTheDocument()
     expect(screen.getAllByText(/Mensual/).length).toBeGreaterThan(0)
-    expect(sectionOf('Operacion por tenant').getByText('Activa', { selector: 'p' })).toBeTruthy()
-    expect(sectionOf('Detalle del tenant').getAllByText('Administrador').length).toBeGreaterThan(0)
+    expect(sectionOf('Operación por tienda').getByText('Activa', { selector: 'p' })).toBeTruthy()
+    expect(sectionOf('Detalle de la tienda').getAllByText('Administrador').length).toBeGreaterThan(
+      0
+    )
   })
 
   // QA 2026-10-02 (S\55): los filtros de suscripcion quedaban tapados por la
@@ -289,7 +291,7 @@ describe('SuperAdminPage', () => {
   it('los filtros de tiendas pasan de linea en vez de desbordar', () => {
     render(<SuperAdminPage />)
 
-    const grupo = screen.getByRole('button', { name: 'Con suscripcion' })
+    const grupo = screen.getByRole('button', { name: 'Con suscripción' })
       .parentElement as HTMLElement
     const filtros = grupo.parentElement as HTMLElement
     expect(grupo.className).toContain('flex-wrap')
@@ -439,7 +441,7 @@ describe('SuperAdminPage', () => {
     render(<SuperAdminPage />)
 
     fireEvent.click(
-      first(sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Editar' }))
+      first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Editar' }))
     )
     fireEvent.submit(openModalForm())
 
@@ -482,7 +484,7 @@ describe('SuperAdminPage', () => {
   it('canjea un cupon sobre la tienda seleccionada', async () => {
     render(<SuperAdminPage />)
 
-    fireEvent.click(first(screen.getAllByRole('button', { name: 'Canjear cupon' })))
+    fireEvent.click(first(screen.getAllByRole('button', { name: 'Canjear cupón' })))
     fireEvent.submit(openModalForm())
 
     await waitFor(() => {
@@ -491,7 +493,7 @@ describe('SuperAdminPage', () => {
         couponCode: 'WELCOME10'
       })
     })
-    expect(await screen.findByText('Cupon WELCOME10 canjeado en Barber Uno')).toBeInTheDocument()
+    expect(await screen.findByText('Cupón WELCOME10 canjeado en Barber Uno')).toBeInTheDocument()
   })
 
   // 2026-09-30 (FF-24, F4-10): "Todas" mostraba solo activas, la lista cortaba
@@ -501,7 +503,7 @@ describe('SuperAdminPage', () => {
       render(<SuperAdminPage />)
 
       fireEvent.click(
-        first(sectionOf('Operacion por tenant').getAllByRole('button', { name: 'Todas' }))
+        first(sectionOf('Operación por tienda').getAllByRole('button', { name: 'Todas' }))
       )
 
       expect(mockStoresFor).toHaveBeenLastCalledWith(expect.objectContaining({ is_active: 'all' }))
@@ -565,9 +567,9 @@ describe('SuperAdminPage', () => {
     it('desactiva una tienda despues de confirmar y avisa en tono de advertencia', async () => {
       render(<SuperAdminPage />)
 
-      fireEvent.click(sectionOf('Operacion por tenant').getByRole('button', { name: 'Desactivar' }))
+      fireEvent.click(sectionOf('Operación por tienda').getByRole('button', { name: 'Desactivar' }))
       answerDialog(
-        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones del tenant.',
+        'Desactivar Barber Uno? Esto puede bloquear nuevas operaciones de la tienda.',
         'Confirmar'
       )
 
@@ -597,14 +599,14 @@ describe('SuperAdminPage', () => {
       fireEvent.click(sectionOf('Maestro editable').getByRole('button', { name: 'Desactivar' }))
       fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
-      expect(await screen.findByText('No se pudo actualizar el cupon')).toBeInTheDocument()
+      expect(await screen.findByText('No se pudo actualizar el cupón')).toBeInTheDocument()
     })
 
     it('desactiva un usuario del tenant', async () => {
       render(<SuperAdminPage />)
 
       fireEvent.click(
-        first(sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Desactivar' }))
+        first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Desactivar' }))
       )
       fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 
@@ -621,7 +623,7 @@ describe('SuperAdminPage', () => {
 
       fireEvent.click(
         first(
-          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Promover SuperAdmin' })
+          sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Promover SuperAdmin' })
         )
       )
       fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
@@ -652,7 +654,7 @@ describe('SuperAdminPage', () => {
       try {
         render(<SuperAdminPage />)
 
-        const detalle = sectionOf('Detalle del tenant')
+        const detalle = sectionOf('Detalle de la tienda')
         // El unico "Promover" que queda es el del admin, en su propia lista.
         expect(detalle.getAllByRole('button', { name: 'Promover SuperAdmin' })).toHaveLength(1)
         const tarjeta = detalle.getByText('Clara Cliente').closest('div.rounded-2xl') as HTMLElement
@@ -677,7 +679,7 @@ describe('SuperAdminPage', () => {
       try {
         render(<SuperAdminPage />)
 
-        const tarjeta = sectionOf('Detalle del tenant')
+        const tarjeta = sectionOf('Detalle de la tienda')
           .getByText('Carla Global')
           .closest('div.rounded-2xl') as HTMLElement
         expect(
@@ -697,7 +699,7 @@ describe('SuperAdminPage', () => {
 
         fireEvent.click(
           first(
-            sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Revocar SuperAdmin' })
+            sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Revocar SuperAdmin' })
           )
         )
 
@@ -734,7 +736,7 @@ describe('SuperAdminPage', () => {
         render(<SuperAdminPage />)
 
         const boton = first(
-          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Desactivar' })
+          sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Desactivar' })
         )
         expect(boton).not.toBeDisabled()
         fireEvent.click(boton)
@@ -751,7 +753,7 @@ describe('SuperAdminPage', () => {
         render(<SuperAdminPage />)
 
         const boton = first(
-          sectionOf('Detalle del tenant').getAllByRole('button', { name: 'Revocar SuperAdmin' })
+          sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Revocar SuperAdmin' })
         )
         expect(boton).not.toBeDisabled()
         fireEvent.click(boton)
@@ -766,7 +768,7 @@ describe('SuperAdminPage', () => {
       it('sobre la cuenta de otro, "Desactivar" y "Revocar SuperAdmin" siguen preguntando', async () => {
         mockAdminUser.is_global_admin = true
         render(<SuperAdminPage />)
-        const detalle = sectionOf('Detalle del tenant')
+        const detalle = sectionOf('Detalle de la tienda')
 
         fireEvent.click(first(detalle.getAllByRole('button', { name: 'Desactivar' })))
         answerDialog('Desactivar root@barberuno.com?', 'Cancelar')
@@ -774,7 +776,7 @@ describe('SuperAdminPage', () => {
 
         fireEvent.click(first(detalle.getAllByRole('button', { name: 'Revocar SuperAdmin' })))
         answerDialog(
-          'Revocar Super Admin global a root@barberuno.com? El backend impedira dejar al sistema sin un admin global activo.',
+          'Revocar Super Admin global a root@barberuno.com? Shifty no permite dejar el sistema sin un admin global activo.',
           'Cancelar'
         )
         await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
@@ -824,7 +826,7 @@ describe('SuperAdminPage', () => {
           render(<SuperAdminPage />)
 
           fireEvent.click(
-            first(sectionOf('Detalle del tenant').getAllByRole('button', { name: boton }))
+            first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: boton }))
           )
           fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
 

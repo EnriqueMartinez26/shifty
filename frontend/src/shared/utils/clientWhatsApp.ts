@@ -35,7 +35,7 @@ export const buildClientMessage = (kind: ClientMessageKind, input: ClientMessage
   const iso = input.startsAt.toISOString()
   const cuando = `${formatArgentinaDateDisplay(iso)} a las ${formatArgentinaTime(iso)} hs`
   if (kind === 'rebook') {
-    const link = input.rebookUrl ? ` Reserva tu proximo turno en un toque: ${input.rebookUrl}` : ''
+    const link = input.rebookUrl ? ` Reservá tu próximo turno en un toque: ${input.rebookUrl}` : ''
     return `${nombre} Gracias por venir a ${input.storeName}.${link}`
   }
   return `${nombre} Te recordamos tu turno para ${input.serviceName} con ${input.staffName} el ${cuando}. Te esperamos en ${input.storeName}.`

@@ -4,6 +4,8 @@ import { Briefcase, Clock, Loader2, Check } from 'lucide-react'
 
 import { usePublicServices } from '@presentation/hooks/usePublic'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import { colors2000s } from '../../../../theme/colors'
 import { createBookingChoiceCardStyle } from '../../../lib/surfaceStyles'
 
@@ -118,7 +120,7 @@ export const BookingStepService: React.FC<BookingStepServiceProps> = ({
                       color: colors2000s.orange.accent
                     }}
                   >
-                    ${svc.price}
+                    {formatCurrency(svc.price)}
                   </span>
                 </div>
               </div>

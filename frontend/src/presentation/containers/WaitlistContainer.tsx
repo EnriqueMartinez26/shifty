@@ -71,7 +71,7 @@ export const WaitlistContainer: React.FC = () => {
         }
       })
       setBooking(null)
-      setMessage(`Turno reservado para ${entry.client_name}. Le mandamos la confirmacion.`)
+      setMessage(`Turno reservado para ${entry.client_name}. Le mandamos la confirmación.`)
     } catch (error: unknown) {
       setMessage(getErrorMessage(error, 'No se pudo reservar ese horario'))
     }
@@ -128,7 +128,7 @@ export const WaitlistContainer: React.FC = () => {
             Lista de espera
           </h2>
           <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Cuando se libera un cupo, se le ofrece a una persona por vez. Desde aca podes avisar por
+            Cuando se libera un cupo, se le ofrece a una persona por vez. Desde acá podés avisar por
             WhatsApp o reservarle el turno directamente.
           </p>
         </div>
@@ -179,7 +179,7 @@ export const WaitlistContainer: React.FC = () => {
             Nadie en lista de espera
           </p>
           <p className="text-xs font-bold text-gray-400 mt-2">
-            Los clientes se anotan desde tu pagina publica cuando un dia no tiene cupo.
+            Los clientes se anotan desde tu página pública cuando un día no tiene cupo.
           </p>
         </div>
       ) : (

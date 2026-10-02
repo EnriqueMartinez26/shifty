@@ -33,15 +33,15 @@ const props = (patch: Partial<Props> = {}): Props => ({
   ...patch
 })
 
-const CODIGO = 'Codigo que te llego por email'
+const CODIGO = 'Código que te llegó por email'
 
 describe('BookingOtpSection', () => {
   it('anuncia la verificacion del telefono que se tipeo', () => {
     render(<BookingOtpSection {...props()} />)
 
-    expect(screen.getByText('Verificamos tu telefono')).toBeInTheDocument()
+    expect(screen.getByText('Verificamos tu teléfono')).toBeInTheDocument()
     expect(
-      screen.getByText('Te mandamos un codigo por email para confirmar el 1155550101')
+      screen.getByText('Te mandamos un código por email para confirmar el 1155550101')
     ).toBeInTheDocument()
   })
 
@@ -52,7 +52,7 @@ describe('BookingOtpSection', () => {
     expect(codigo).toHaveAttribute('inputmode', 'numeric')
     expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
     expect(codigo).toHaveAttribute('maxlength', '6')
-    const email = screen.getByLabelText('Email para el codigo')
+    const email = screen.getByLabelText('Email para el código')
     expect(email).toHaveAttribute('inputmode', 'email')
     expect(email).toHaveAttribute('autocomplete', 'email')
   })
@@ -62,7 +62,7 @@ describe('BookingOtpSection', () => {
       const onRequestOtp = jest.fn()
       render(<BookingOtpSection {...props({ onRequestOtp })} />)
 
-      fireEvent.click(screen.getByRole('button', { name: 'Enviar codigo' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
 
       expect(onRequestOtp).toHaveBeenCalledTimes(1)
     })
@@ -70,7 +70,7 @@ describe('BookingOtpSection', () => {
     it('sin email no deja pedir el codigo', () => {
       render(<BookingOtpSection {...props({ otpState: otpInicial({ email: '  ' }) })} />)
 
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).toBeDisabled()
     })
 
     it('mientras se envia muestra Enviando... y no pide otro', () => {
@@ -102,7 +102,7 @@ describe('BookingOtpSection', () => {
         />
       )
 
-      const boton = screen.getByRole('button', { name: 'Enviar codigo' })
+      const boton = screen.getByRole('button', { name: 'Enviar código' })
       expect(boton).toBeDisabled()
       fireEvent.click(boton)
       expect(onRequestOtp).not.toHaveBeenCalled()
@@ -114,7 +114,7 @@ describe('BookingOtpSection', () => {
     it('sin codigo no deja verificar', () => {
       render(<BookingOtpSection {...props()} />)
 
-      expect(screen.getByRole('button', { name: 'Verificar codigo' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Verificar código' })).toBeDisabled()
     })
 
     it('con codigo verificar llama a onVerifyOtp', () => {
@@ -128,7 +128,7 @@ describe('BookingOtpSection', () => {
         />
       )
 
-      fireEvent.click(screen.getByRole('button', { name: 'Verificar codigo' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Verificar código' }))
 
       expect(onVerifyOtp).toHaveBeenCalledTimes(1)
     })
@@ -153,8 +153,8 @@ describe('BookingOtpSection', () => {
         />
       )
 
-      expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
-      expect(screen.queryByRole('button', { name: 'Verificar codigo' })).not.toBeInTheDocument()
+      expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Verificar código' })).not.toBeInTheDocument()
     })
   })
 
@@ -163,7 +163,7 @@ describe('BookingOtpSection', () => {
       const onOtpEmailChange = jest.fn()
       render(<BookingOtpSection {...props({ onOtpEmailChange })} />)
 
-      fireEvent.change(screen.getByLabelText('Email para el codigo'), {
+      fireEvent.change(screen.getByLabelText('Email para el código'), {
         target: { value: 'otra@example.com' }
       })
 
@@ -193,7 +193,7 @@ describe('BookingOtpSection', () => {
       )
 
       expect(screen.getByRole('status')).toHaveTextContent(
-        'Codigo debug (solo desarrollo): 424242. Si el telefono ya tiene ficha con email, el codigo real fue a ese buzon y este puede no servir.'
+        'Código debug (solo desarrollo): 424242. Si el teléfono ya tiene ficha con email, el código real fue a ese buzón y este puede no servir.'
       )
       // Se muestra, no se autocompleta: el codigo lo tipea la persona.
       expect((screen.getByPlaceholderText(CODIGO) as HTMLInputElement).value).toBe('')
@@ -203,7 +203,7 @@ describe('BookingOtpSection', () => {
       render(<BookingOtpSection {...props()} />)
 
       expect(screen.queryByRole('status')).not.toBeInTheDocument()
-      expect(screen.queryByText(/Codigo debug/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Código debug/)).not.toBeInTheDocument()
     })
   })
 })

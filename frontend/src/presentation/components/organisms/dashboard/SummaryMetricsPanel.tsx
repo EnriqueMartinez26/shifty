@@ -22,7 +22,7 @@ function SummaryMetricsPanel({ title, metrics }: { title: string; metrics: Metri
           <SectionHeader
             icon={<LayoutDashboard size={18} />}
             title={title}
-            description="Cuatro senales para entender el pulso del negocio antes de entrar al detalle."
+            description="Cuatro señales para entender el pulso del negocio antes de entrar al detalle."
           />
 
           <div
@@ -40,7 +40,7 @@ function SummaryMetricsPanel({ title, metrics }: { title: string; metrics: Metri
               letterSpacing: '0.08em'
             }}
           >
-            Lectura rapida del dia
+            Lectura rápida del día
           </div>
         </div>
 

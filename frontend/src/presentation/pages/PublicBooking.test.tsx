@@ -197,7 +197,7 @@ describe('PublicBooking cuando la tienda no se pudo consultar', () => {
   })
 
   it.each([
-    ['sin conexion', new NetworkError('No se pudo conectar con el servidor.')],
+    ['sin conexión', new NetworkError('No se pudo conectar con el servidor.')],
     ['un 503', new ServiceUnavailableError('Servicio no disponible', { statusCode: 503 })]
   ])('con %s no dice que la tienda no existe y deja reintentar', (_caso, error) => {
     sinTienda(error)

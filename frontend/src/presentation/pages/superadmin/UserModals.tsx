@@ -92,12 +92,12 @@ export const UserModals: React.FC<UserModalsProps> = ({
           >
             <option value="admin">Admin</option>
             <option value="staff">Profesional</option>
-            <option value="receptionist">Recepcion</option>
+            <option value="receptionist">Recepción</option>
             <option value="client">Cliente</option>
           </SelectInput>
         </div>
         <div>
-          <FieldLabel>Telefono</FieldLabel>
+          <FieldLabel>Teléfono</FieldLabel>
           <TextInput
             value={userForm.phone}
             onChange={(event) =>
@@ -121,7 +121,7 @@ export const UserModals: React.FC<UserModalsProps> = ({
 
       <ToggleRow
         label="Usuario activo"
-        description="Mantiene o revoca su acceso dentro del tenant."
+        description="Mantiene o revoca su acceso dentro de la tienda."
         checked={userForm.is_active}
         onToggle={() => setUserForm((current) => ({ ...current, is_active: !current.is_active }))}
       />

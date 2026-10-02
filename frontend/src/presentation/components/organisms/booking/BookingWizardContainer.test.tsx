@@ -68,7 +68,7 @@ const slot = {
   reason: null
 }
 
-const HORARIO = 'Elegi fecha y hora'
+const HORARIO = 'Elegí fecha y hora'
 const SERVICIO = '¿Qué servicio necesitás?'
 const DATOS = 'juan@email.com'
 
@@ -285,10 +285,10 @@ describe('BookingWizardContainer', () => {
       target: { value: '+5491155550101' }
     })
     // El email del codigo arranca con el del formulario.
-    expect((screen.getByLabelText('Email para el codigo') as HTMLInputElement).value).toBe(
+    expect((screen.getByLabelText('Email para el código') as HTMLInputElement).value).toBe(
       'lucia@example.com'
     )
-    fireEvent.click(screen.getByText('Enviar codigo'))
+    fireEvent.click(screen.getByText('Enviar código'))
 
     await waitFor(() => expect(mockRequestOtp).toHaveBeenCalledTimes(1))
     expect(mockRequestOtp).toHaveBeenCalledWith({
@@ -315,7 +315,7 @@ describe('BookingWizardContainer', () => {
       target: { value: '+5491155550101' }
     })
 
-    expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+    expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
     expect(mockRequestOtp).not.toHaveBeenCalled()
   })
 
@@ -343,24 +343,24 @@ describe('BookingWizardContainer', () => {
       fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
         target: { value: '54 9 11 5555-0101' }
       })
-      fireEvent.change(screen.getByPlaceholderText('Codigo que te llego por email'), {
+      fireEvent.change(screen.getByPlaceholderText('Código que te llegó por email'), {
         target: { value: '123456' }
       })
-      fireEvent.click(screen.getByText('Verificar codigo'))
+      fireEvent.click(screen.getByText('Verificar código'))
       await waitFor(() =>
-        expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+        expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
       )
 
       fireEvent.change(screen.getByPlaceholderText('Algo que debamos saber?'), {
         target: { value: 'Llego 5 minutos tarde' }
       })
 
-      expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+      expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
 
       fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
         target: { value: '54 9 11 5555-0102' }
       })
-      expect(screen.queryByText('Telefono validado correctamente')).not.toBeInTheDocument()
+      expect(screen.queryByText('Teléfono validado correctamente')).not.toBeInTheDocument()
     } finally {
       getItem.mockRestore()
       setItem.mockRestore()
@@ -490,7 +490,7 @@ describe('BookingWizardContainer', () => {
         target: { value: '+5491155550101' }
       })
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Enviar codigo' }))
+        fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
       })
     }
 
@@ -506,7 +506,7 @@ describe('BookingWizardContainer', () => {
       act(() => {
         jest.advanceTimersByTime(30_000)
       })
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).not.toBeDisabled()
       expect(mockRequestOtp).toHaveBeenCalledTimes(1)
     })
 
@@ -514,7 +514,7 @@ describe('BookingWizardContainer', () => {
       mockRequestOtp.mockRejectedValue(new Error('Demasiados pedidos'))
       await hastaPedirElCodigo()
 
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).not.toBeDisabled()
       expect(screen.queryByText(/Reenviar en/)).not.toBeInTheDocument()
     })
 
@@ -530,7 +530,7 @@ describe('BookingWizardContainer', () => {
       act(() => {
         jest.advanceTimersByTime(20_000)
       })
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).not.toBeDisabled()
     })
 
     it('OTP_RATE_LIMITED bloquea el pedido sin cuenta regresiva y lo explica', async () => {
@@ -549,16 +549,16 @@ describe('BookingWizardContainer', () => {
       const aviso =
         'Pediste demasiados códigos para este teléfono. Esperá un rato antes de pedir otro.'
       expect(screen.getByRole('alert')).toHaveTextContent(aviso)
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).toBeDisabled()
       expect(screen.queryByText(/Reenviar en/)).not.toBeInTheDocument()
 
       act(() => {
         jest.advanceTimersByTime(10 * 60_000)
       })
-      fireEvent.change(screen.getByLabelText('Email para el codigo'), {
+      fireEvent.change(screen.getByLabelText('Email para el código'), {
         target: { value: 'otra@example.com' }
       })
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).toBeDisabled()
       expect(screen.getByRole('alert')).toHaveTextContent(aviso)
       expect(mockRequestOtp).toHaveBeenCalledTimes(1)
     })
@@ -574,7 +574,7 @@ describe('BookingWizardContainer', () => {
         target: { value: '+5491155550202' }
       })
 
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).not.toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).not.toBeDisabled()
     })
 
     describe('codigo debug (J7)', () => {
@@ -583,7 +583,7 @@ describe('BookingWizardContainer', () => {
       // codigo fue al email de la ficha y no al tipeado (AUD2-SYNC-01); el
       // front muestra debug_code tal cual llega y avisa que puede no servir.
       const AVISO =
-        'Codigo debug (solo desarrollo): 424242. Si el telefono ya tiene ficha con email, el codigo real fue a ese buzon y este puede no servir.'
+        'Código debug (solo desarrollo): 424242. Si el teléfono ya tiene ficha con email, el código real fue a ese buzón y este puede no servir.'
 
       it('un pedido exitoso con debug_code muestra el codigo con el aviso', async () => {
         mockRequestOtp.mockResolvedValue({
@@ -602,7 +602,7 @@ describe('BookingWizardContainer', () => {
         await hastaPedirElCodigo()
 
         expect(mockRequestOtp).toHaveBeenCalledTimes(1)
-        expect(screen.queryByText(/Codigo debug/)).not.toBeInTheDocument()
+        expect(screen.queryByText(/Código debug/)).not.toBeInTheDocument()
       })
 
       it('cambiar el telefono verificado borra el codigo debug con el codigo tipeado', async () => {
@@ -616,13 +616,13 @@ describe('BookingWizardContainer', () => {
           verified_at: '2026-09-30T12:00:00Z'
         })
         await hastaPedirElCodigo()
-        fireEvent.change(screen.getByPlaceholderText('Codigo que te llego por email'), {
+        fireEvent.change(screen.getByPlaceholderText('Código que te llegó por email'), {
           target: { value: '424242' }
         })
         await act(async () => {
-          fireEvent.click(screen.getByRole('button', { name: 'Verificar codigo' }))
+          fireEvent.click(screen.getByRole('button', { name: 'Verificar código' }))
         })
-        expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+        expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
         // 2026-10-02: sin esta precondicion el test pasaba aunque el aviso
         // nunca se hubiera mostrado; el borrado tiene que partir de verlo.
         expect(screen.getByText(AVISO)).toBeInTheDocument()
@@ -631,7 +631,7 @@ describe('BookingWizardContainer', () => {
           target: { value: '+5491155550202' }
         })
 
-        expect(screen.queryByText(/Codigo debug/)).not.toBeInTheDocument()
+        expect(screen.queryByText(/Código debug/)).not.toBeInTheDocument()
       })
     })
   })

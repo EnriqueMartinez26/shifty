@@ -119,7 +119,7 @@ describe('LedgerPage', () => {
     render(<LedgerPage />)
 
     expect(screen.getByText('Mostrando 1 de 3')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Ver mas' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ver más' }))
     expect(mockFetchNextPage).toHaveBeenCalledTimes(1)
   })
 
@@ -127,7 +127,7 @@ describe('LedgerPage', () => {
     mockHasNextPage = false
     render(<LedgerPage />)
 
-    expect(screen.queryByRole('button', { name: 'Ver mas' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ver más' })).not.toBeInTheDocument()
   })
 })
 
@@ -198,7 +198,7 @@ describe('LedgerPage: cargar un movimiento', () => {
   })
 
   it.each([['-100'], ['0'], ['abc'], ['10000001'], ['10.555']])(
-    'un monto invalido (%s) no llega al servidor y se dice junto al formulario',
+    'un monto inválido (%s) no llega al servidor y se dice junto al formulario',
     (valor) => {
       render(<LedgerPage />)
       fireEvent.change(tipo(), { target: { value: 'adjustment' } })
@@ -215,7 +215,7 @@ describe('LedgerPage: cargar un movimiento', () => {
     ['10000000', 10_000_000],
     ['1234,56', 1234.56],
     ['0.5', 0.5]
-  ])('un monto valido (%s) se confirma y viaja como numero', async (valor, esperado) => {
+  ])('un monto válido (%s) se confirma y viaja como número', async (valor, esperado) => {
     render(<LedgerPage />)
     fireEvent.change(tipo(), { target: { value: 'charge' } })
     fireEvent.change(monto(), { target: { value: valor } })

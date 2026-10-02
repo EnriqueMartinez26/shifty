@@ -62,5 +62,7 @@ def test_pdf_muestra_la_hora_argentina(monkeypatch: pytest.MonkeyPatch) -> None:
     trazos = _espiar(monkeypatch)
     export_to_pdf(_resumen_de_la_noche())
     textos = [t.texto for t in trazos]
-    assert INICIO in textos
-    assert "2026-09-16 01:30" not in textos
+    # El PDF muestra la fecha como dd/mm/aaaa (2026-10-02); la hora sigue
+    # siendo la argentina.
+    assert "15/09/2026 22:30" in textos
+    assert not any("01:30" in texto for texto in textos)

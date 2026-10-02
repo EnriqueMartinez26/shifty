@@ -163,7 +163,7 @@ describe('Settings - funciones', () => {
     renderSettings()
     openTab('Funciones')
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y senas' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y señas' }))
     saveChanges()
 
     expect(await screen.findByRole('button', { name: 'Guardado' })).toBeInTheDocument()
@@ -204,7 +204,7 @@ describe('Settings - identidad y campos extra', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Agregar campo' }))
 
     fireEvent.change(screen.getByDisplayValue('Texto corto'), { target: { value: 'select' } })
-    fireEvent.change(screen.getByPlaceholderText(/Una opcion por linea/), {
+    fireEvent.change(screen.getByPlaceholderText(/Una opción por línea/), {
       target: { value: 'Primera vez|primera_vez\n  Control  \n\n' }
     })
     fireEvent.click(screen.getByRole('button', { name: 'Opcional' }))
@@ -367,7 +367,7 @@ describe('Settings - Mercado Pago', () => {
     openTab('Mercado Pago')
 
     expect(screen.getByRole('button', { name: 'Conectar con Mercado Pago' })).toBeDisabled()
-    expect(screen.getByRole('alert')).toHaveTextContent(/credenciales OAuth/)
+    expect(screen.getByRole('alert')).toHaveTextContent(/conexión con Mercado Pago/)
   })
 
   it('conectada, renovar y desconectar llaman a sus mutaciones', async () => {

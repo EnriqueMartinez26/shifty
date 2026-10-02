@@ -57,15 +57,24 @@ async def _tienda_con_turnos(
 
 
 def _hilos_del_formateo(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
-    """``True`` por cada fila formateada en el hilo del event loop."""
+    """``True`` por cada fila formateada en el hilo del event loop.
+
+    CSV y Excel formatean la fecha con ``_local_datetime``; el PDF, con
+    ``_pdf_local_datetime`` (dd/mm/aaaa, 2026-10-02). Se espian los dos.
+    """
     en_el_loop: list[bool] = []
-    original: Callable[[Any], str] = exporter._local_datetime
 
-    def registrar(value: Any) -> str:
-        en_el_loop.append(threading.current_thread() is threading.main_thread())
-        return original(value)
+    def espiar(nombre: str) -> None:
+        original: Callable[[Any], str] = getattr(exporter, nombre)
 
-    monkeypatch.setattr(exporter, "_local_datetime", registrar)
+        def registrar(value: Any) -> str:
+            en_el_loop.append(threading.current_thread() is threading.main_thread())
+            return original(value)
+
+        monkeypatch.setattr(exporter, nombre, registrar)
+
+    espiar("_local_datetime")
+    espiar("_pdf_local_datetime")
     return en_el_loop
 
 

@@ -130,8 +130,10 @@ describe('BookingStepConfirmation', () => {
     it('muestra fecha y hora del turno elegido y los campos del cliente', () => {
       render(<BookingStepConfirmation {...props()} />)
 
-      expect(screen.getByText('Tus datos y confirmacion')).toBeInTheDocument()
-      expect(screen.getByText('2026-09-25')).toBeInTheDocument()
+      expect(screen.getByText('Tus datos y confirmación')).toBeInTheDocument()
+      // 2026-10-02, QA en navegador: el resumen mostraba la fecha ISO.
+      expect(screen.getByText('25/09/2026')).toBeInTheDocument()
+      expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
       expect(screen.getByText('09:00 hs')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('Ej: Juan Perez')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('PREFIJO + NUM')).toBeInTheDocument()
@@ -172,11 +174,11 @@ describe('BookingStepConfirmation', () => {
     it('un 422 en client_phone dice que revise el telefono, no que el horario esta ocupado', async () => {
       const onConfirm = jest.fn().mockRejectedValue(
         new ValidationError(
-          'client_phone: Value error, El telefono debe tener al menos 6 digitos',
+          'client_phone: Value error, El teléfono debe tener al menos 6 digitos',
           {
             errorCode: 'VALIDATION_ERROR',
             statusCode: 422,
-            detail: ['client_phone: Value error, El telefono debe tener al menos 6 digitos']
+            detail: ['client_phone: Value error, El teléfono debe tener al menos 6 digitos']
           }
         )
       )
@@ -386,7 +388,7 @@ describe('BookingStepConfirmation', () => {
 
     it('un codigo rechazado muestra el motivo y no queda aplicado', async () => {
       mockPreviewPromotion.mockRejectedValue(
-        new ValidationError('El codigo vencio', { statusCode: 400 })
+        new ValidationError('El código vencio', { statusCode: 400 })
       )
       const onPromotionCodeChange = jest.fn()
       render(<BookingStepConfirmation {...props({ onPromotionCodeChange })} />)
@@ -396,7 +398,7 @@ describe('BookingStepConfirmation', () => {
       })
       fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }))
 
-      await waitFor(() => expect(screen.getByText('El codigo vencio')).toBeInTheDocument())
+      await waitFor(() => expect(screen.getByText('El código vencio')).toBeInTheDocument())
       expect(onPromotionCodeChange).toHaveBeenLastCalledWith('')
     })
 
@@ -449,9 +451,9 @@ describe('BookingStepConfirmation', () => {
       )
 
       expect(
-        screen.getByText('Completa tu telefono para verificarlo antes de confirmar.')
+        screen.getByText('Completá tu teléfono para verificarlo antes de confirmar.')
       ).toBeInTheDocument()
-      expect(screen.queryByText('Verificamos tu telefono')).not.toBeInTheDocument()
+      expect(screen.queryByText('Verificamos tu teléfono')).not.toBeInTheDocument()
     })
 
     it('con telefono completo muestra el pedido del codigo por email', () => {
@@ -467,9 +469,9 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      expect(screen.getByText('Verificamos tu telefono')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Verificar codigo' })).toBeDisabled()
-      fireEvent.click(screen.getByRole('button', { name: 'Enviar codigo' }))
+      expect(screen.getByText('Verificamos tu teléfono')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Verificar código' })).toBeDisabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Enviar código' }))
       expect(onRequestOtp).toHaveBeenCalledTimes(1)
     })
 
@@ -499,7 +501,7 @@ describe('BookingStepConfirmation', () => {
       )
       aceptarTerminos()
 
-      expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+      expect(screen.getByText('Teléfono validado correctamente')).toBeInTheDocument()
       expect(botonReservar()).not.toBeDisabled()
     })
   })
@@ -526,11 +528,11 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      const codigo = screen.getByPlaceholderText('Codigo que te llego por email')
+      const codigo = screen.getByPlaceholderText('Código que te llegó por email')
       expect(codigo).toHaveAttribute('inputmode', 'numeric')
       expect(codigo).toHaveAttribute('autocomplete', 'one-time-code')
       expect(codigo).toHaveAttribute('maxlength', '6')
-      expect(screen.getByLabelText('Email para el codigo')).toHaveAttribute('autocomplete', 'email')
+      expect(screen.getByLabelText('Email para el código')).toHaveAttribute('autocomplete', 'email')
     })
 
     it('el codigo descarta lo que no es un digito', () => {
@@ -547,7 +549,7 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      fireEvent.change(screen.getByPlaceholderText('Codigo que te llego por email'), {
+      fireEvent.change(screen.getByPlaceholderText('Código que te llegó por email'), {
         target: { value: '12a-3 4' }
       })
 
@@ -589,7 +591,7 @@ describe('BookingStepConfirmation', () => {
         />
       )
 
-      expect(screen.getByRole('button', { name: 'Enviar codigo' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Enviar código' })).toBeDisabled()
       expect(screen.getByRole('alert')).toHaveTextContent(aviso)
     })
   })

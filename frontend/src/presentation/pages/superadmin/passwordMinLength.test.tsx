@@ -8,7 +8,7 @@ const idle = { isPending: false }
 
 const passwordInput = (): HTMLInputElement => {
   const input = document.querySelector<HTMLInputElement>('input[type="password"]')
-  if (!input) throw new Error('el modal no renderizo el campo de contrasena')
+  if (!input) throw new Error('el modal no renderizo el campo de contraseña')
   return input
 }
 

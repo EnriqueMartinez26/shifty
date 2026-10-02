@@ -38,7 +38,7 @@ describe('WaitlistJoinForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '11 5555 0101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '11 5555 0101' } })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
 
@@ -73,7 +73,7 @@ describe('WaitlistJoinForm', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
 
@@ -103,7 +103,7 @@ describe('cambio de dia', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'lucia@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Anotarme' }))
     await waitFor(() => expect(mockJoin).toHaveBeenCalledTimes(1))
@@ -141,7 +141,7 @@ describe('email obligatorio (FF-25, D-20260930-11)', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /Avisame si se libera/ }))
     fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Lucia' } })
-    fireEvent.change(screen.getByLabelText('Telefono'), { target: { value: '1155550101' } })
+    fireEvent.change(screen.getByLabelText('Teléfono'), { target: { value: '1155550101' } })
     fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
   }
 

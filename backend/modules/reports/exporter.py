@@ -1,8 +1,9 @@
 import csv
 import unicodedata
 from collections.abc import Iterator
+from decimal import Decimal
 from io import BytesIO, StringIO
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from core.utils import ARGENTINA_TZ, ensure_utc_aware
@@ -26,6 +27,43 @@ _ENDS_AT_HEADER = f"ends_at ({_LOCAL_ZONE_LABEL})"
 def _local_datetime(value: datetime) -> str:
     """``YYYY-MM-DD HH:MM`` en hora argentina; un naive se toma como UTC."""
     return ensure_utc_aware(value).astimezone(ARGENTINA_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+# El PDF lo lee el dueno, no una planilla: fechas ``dd/mm/aaaa``, importes
+# es-AR y estados en castellano (QA 2026-10-02: decia "Sena retenida",
+# "Desde: 2026-01-01", "confirmed" y "$1500.0"). CSV y Excel no cambian:
+# claves y valores crudos para la planilla del contador.
+_PDF_STATUS_LABELS = {
+    "pending": "Pendiente",
+    "pending_payment": "Pendiente de pago",
+    "confirmed": "Confirmado",
+    "completed": "Completado",
+    "cancelled": "Cancelado",
+    "absent": "Ausente",
+    "expired": "Vencido",
+}
+_PDF_MONEY_METRICS = frozenset(
+    {"total_revenue", "average_ticket", "retained_deposit_revenue"}
+)
+
+
+def _pdf_date(value: date) -> str:
+    return value.strftime("%d/%m/%Y")
+
+
+def _pdf_local_datetime(value: datetime) -> str:
+    """``dd/mm/aaaa HH:MM`` en hora argentina; un naive se toma como UTC."""
+    return ensure_utc_aware(value).astimezone(ARGENTINA_TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def _pdf_money(value: object) -> str:
+    """``$ 48.500,50`` (es-AR); sin centavos si el importe es entero, como el
+    panel. Un negativo lleva el signo adelante: ``-$ 1.500``."""
+    monto = Decimal(str(value)).quantize(Decimal("0.01"))
+    decimales = 0 if monto == monto.to_integral_value() else 2
+    numero = f"{abs(monto):,.{decimales}f}"
+    numero = numero.replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"{'-' if monto < 0 else ''}$ {numero}"
 
 
 def _safe_text(value: object) -> str:
@@ -82,7 +120,7 @@ def _summary_metrics(
         ("expired_appointments", "Vencidos", stats.expired_appointments),
         ("total_revenue", "Ingreso total", stats.total_revenue),
         ("average_ticket", "Ticket promedio", stats.average_ticket),
-        ("retained_deposit_revenue", "Sena retenida", stats.retained_deposit_revenue),
+        ("retained_deposit_revenue", "Seña retenida", stats.retained_deposit_revenue),
     )
 
 
@@ -205,8 +243,9 @@ def export_to_excel(summary: ReportSummaryResponse) -> bytes:
 # caracteres y el precio, al final, era lo primero que se perdia. Ahora cada
 # campo tiene su columna, los textos se recortan con "..." dentro de la suya y
 # el precio va alineado a la derecha y nunca se recorta.
+# El estado tiene 70 pt: "Pendiente de pago" mide 67 en Helvetica 8.
 _PDF_FONT_SIZE = 8
-_PDF_TEXT_COLUMNS = ((40, 68), (110, 66), (178, 106), (288, 88), (378, 108))
+_PDF_TEXT_COLUMNS = ((40, 68), (110, 70), (182, 102), (288, 88), (378, 108))
 _PDF_PRICE_RIGHT_EDGE = 555
 _PDF_HEADERS = ("Fecha", "Estado", "Servicio", "Profesional", "Cliente", "Precio")
 _ELLIPSIS = "..."
@@ -259,13 +298,14 @@ def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
     y -= 24
 
     pdf.setFont("Helvetica", 10)
-    pdf.drawString(40, y, f"Desde: {summary.from_date.isoformat()}")
+    pdf.drawString(40, y, f"Desde: {_pdf_date(summary.from_date)}")
     y -= 14
-    pdf.drawString(40, y, f"Hasta: {summary.to_date.isoformat()}")
+    pdf.drawString(40, y, f"Hasta: {_pdf_date(summary.to_date)}")
     y -= 20
 
-    for _clave, etiqueta, valor in _summary_metrics(summary):
-        pdf.drawString(40, y, f"{etiqueta}: {valor}")
+    for clave, etiqueta, valor in _summary_metrics(summary):
+        texto = _pdf_money(valor) if clave in _PDF_MONEY_METRICS else str(valor)
+        pdf.drawString(40, y, f"{etiqueta}: {texto}")
         y -= 14
 
     y -= 8
@@ -277,12 +317,12 @@ def export_to_pdf(summary: ReportSummaryResponse) -> bytes:
 
     for item in summary.appointments:
         cells = (
-            _local_datetime(item.starts_at),
-            item.status,
+            _pdf_local_datetime(item.starts_at),
+            _PDF_STATUS_LABELS.get(item.status, item.status),
             item.service_name,
             item.staff_name,
             item.client_name,
-            f"${item.service_price}",
+            _pdf_money(item.service_price),
         )
         _draw_pdf_row(pdf, y, cells)
         y -= 11

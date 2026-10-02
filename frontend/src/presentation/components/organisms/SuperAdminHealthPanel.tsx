@@ -60,7 +60,7 @@ function createAlerts(
   if (!selectedStore.is_active) {
     alerts.push({
       tone: 'danger',
-      title: 'Tenant inactivo',
+      title: 'Tienda inactiva',
       detail: 'Puede bloquear alta de admins, suscripciones y operaciones sensibles.'
     })
   }
@@ -69,18 +69,18 @@ function createAlerts(
     alerts.push({
       tone: 'warning',
       title: 'Sin suscripción',
-      detail: 'El tenant quedó fuera del flujo comercial principal.'
+      detail: 'La tienda no tiene un plan asignado.'
     })
   } else if (subscription.status !== 'active') {
     alerts.push({
       tone: 'warning',
       title: `Suscripción ${subscriptionStatusLabel(subscription.status).toLowerCase()}`,
-      detail: 'Conviene revisar billing y período vigente antes de seguir operando.'
+      detail: 'Conviene revisar el cobro y el período vigente antes de seguir operando.'
     })
   } else {
     alerts.push({
       tone: 'good',
-      title: 'Billing operativo',
+      title: 'Suscripción al día',
       detail: `Renueva ${formatDateEsAr(subscription.current_period_end)}.`
     })
   }
@@ -89,7 +89,7 @@ function createAlerts(
     alerts.push({
       tone: 'danger',
       title: 'Sin admins activos',
-      detail: 'El tenant no tiene un responsable activo para operar el backoffice.'
+      detail: 'La tienda no tiene un responsable activo para operar el panel.'
     })
   }
 
@@ -97,7 +97,7 @@ function createAlerts(
     alerts.push({
       tone: 'warning',
       title: 'Sin usuarios activos',
-      detail: 'Puede ser un tenant recién creado o directamente desatendido.'
+      detail: 'Puede ser una tienda recién creada o desatendida.'
     })
   }
 
@@ -105,7 +105,7 @@ function createAlerts(
     alerts.push({
       tone: 'good',
       title: 'Estado saludable',
-      detail: 'No hay señales críticas inmediatas en tienda, usuarios o billing.'
+      detail: 'No hay señales críticas inmediatas en tienda, usuarios o suscripción.'
     })
   }
 
@@ -168,7 +168,7 @@ export function SuperAdminHealthPanel({
             className="mt-1 text-xl font-black uppercase tracking-tight"
             style={{ color: colors2000s.text.primary }}
           >
-            Executive summary
+            Resumen
           </h2>
         </div>
       </div>
@@ -226,7 +226,7 @@ export function SuperAdminHealthPanel({
             className="rounded-2xl px-4 py-3 text-[10px] font-black uppercase tracking-widest"
             style={{ background: '#fff', border: `1px solid ${colors2000s.border.default}` }}
           >
-            Ajustar tenant
+            Ajustar tienda
           </button>
           <button
             type="button"

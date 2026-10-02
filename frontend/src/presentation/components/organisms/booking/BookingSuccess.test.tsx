@@ -71,7 +71,7 @@ describe('BookingSuccess', () => {
 
       expect(screen.getByText('Reserva Registrada')).toBeInTheDocument()
       expect(
-        screen.getByText('Tu solicitud ya fue enviada y queda pendiente de confirmacion.')
+        screen.getByText('Tu solicitud ya fue enviada y queda pendiente de confirmación.')
       ).toBeInTheDocument()
     })
 
@@ -94,6 +94,14 @@ describe('BookingSuccess', () => {
 
       expect(screen.getByText('Reserva Confirmada')).toBeInTheDocument()
       expect(screen.getByText('Te enviamos los detalles a lucia@example.com')).toBeInTheDocument()
+    })
+
+    it('muestra la fecha del turno como dd/MM/yyyy, no en ISO', () => {
+      // 2026-10-02, QA en navegador: el resumen mostraba "2026-09-25".
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.getByText('25/09/2026')).toBeInTheDocument()
+      expect(screen.queryByText('2026-09-25')).not.toBeInTheDocument()
     })
   })
 

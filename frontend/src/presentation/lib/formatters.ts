@@ -2,19 +2,6 @@ import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/a
 
 import { reportUnreadableInstant } from './reportUnreadableInstant'
 
-export const currencyFmtEsAr = new Intl.NumberFormat('es-AR', {
-  style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0
-})
-
-export const formatCurrencyEsAr = (value: string | number, currency = 'ARS') =>
-  new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency,
-    maximumFractionDigits: 0
-  }).format(Number(value || 0))
-
 /**
  * `'es-AR'` es un locale, no una zona: sin `timeZone` estos formateadores
  * mostraban la hora del navegador. Un periodo que termina a las 02:00Z son
