@@ -572,6 +572,32 @@ describe('SuperAdminPage', () => {
       expect(await screen.findByText('root@barberuno.com ahora es Super Admin')).toBeInTheDocument()
     })
 
+    // 2026-10-02, QA en navegador (S\62): "Promover SuperAdmin" se ofrecia
+    // sobre un cliente final. El backend lo rechaza
+    // (CLIENT_GLOBAL_ADMIN_DENIED); el panel ni lo ofrece.
+    it('no ofrece promover a SuperAdmin a un cliente', () => {
+      const cliente: SuperAdminUser = {
+        ...mockAdminUser,
+        public_id: 'user-client-1',
+        email: 'cliente@example.com',
+        first_name: 'Clara',
+        last_name: 'Cliente',
+        role: 'client'
+      }
+      const usuarios = mockOverview.users.users
+      mockOverview.users.users = [cliente]
+      try {
+        render(<SuperAdminPage />)
+
+        const detalle = sectionOf('Detalle del tenant')
+        // El unico "Promover" que queda es el del admin, en su propia lista.
+        expect(detalle.getAllByRole('button', { name: 'Promover SuperAdmin' })).toHaveLength(1)
+        expect(detalle.getByText('Clara Cliente')).toBeInTheDocument()
+      } finally {
+        mockOverview.users.users = usuarios
+      }
+    })
+
     it('no deja revocarse el propio permiso global y ni siquiera pregunta', () => {
       // Guarda espejo de la regla 14; la garantia real vive en el backend.
       mockAuthUser.public_id = 'user-admin-1'

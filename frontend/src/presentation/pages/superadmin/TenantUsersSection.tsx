@@ -254,16 +254,20 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                       }}
                       tone={tenantUser.is_active ? 'danger' : 'default'}
                     />
-                    <MiniButton
-                      label={
-                        tenantUser.is_global_admin ? 'Revocar SuperAdmin' : 'Promover SuperAdmin'
-                      }
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        void toggleGlobalAdmin(tenantUser)
-                      }}
-                      tone={tenantUser.is_global_admin ? 'danger' : 'default'}
-                    />
+                    {/* Un cliente final no se promueve: el backend lo rechaza
+                        (CLIENT_GLOBAL_ADMIN_DENIED). Revocar sigue a mano. */}
+                    {tenantUser.is_global_admin || tenantUser.role !== 'client' ? (
+                      <MiniButton
+                        label={
+                          tenantUser.is_global_admin ? 'Revocar SuperAdmin' : 'Promover SuperAdmin'
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void toggleGlobalAdmin(tenantUser)
+                        }}
+                        tone={tenantUser.is_global_admin ? 'danger' : 'default'}
+                      />
+                    ) : null}
                   </div>
                 </div>
               ))
