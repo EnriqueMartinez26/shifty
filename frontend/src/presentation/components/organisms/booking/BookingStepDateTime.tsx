@@ -33,6 +33,14 @@ interface BookingStepDateTimeProps {
     startsAt: string
   ) => void
   onBack: () => void
+  /**
+   * Profesional fijo: siembra la seleccion y oculta el selector. "Mis turnos"
+   * reprograma siempre con el mismo profesional (D-20260930-06).
+   */
+  lockedStaffId?: string
+  /** En false no se monta la lista de espera (quien reprograma ya tiene turno). */
+  showWaitlist?: boolean
+  heading?: string
 }
 
 export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
@@ -42,7 +50,10 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   selectedDate,
   selectedTime,
   onSelect,
-  onBack
+  onBack,
+  lockedStaffId,
+  showWaitlist = true,
+  heading = 'Elegi fecha y hora'
 }) => {
   const [activeDate, setActiveDate] = useState<Date>(() => {
     if (!selectedDate || selectedDate === 'invalid') return new Date()
@@ -52,8 +63,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
   const [forceAll, setForceAll] = useState(false)
   // Semilla desde la prop `staffId` (el ultimo pedido guardado en el estado
   // del wizard) para que volver desde el paso de confirmacion conserve la
-  // seleccion en vez de resetear a "Cualquiera".
-  const [selectedStaffId, setSelectedStaffId] = useState<string | null>(staffId)
+  // seleccion en vez de resetear a "Cualquiera". Un profesional fijo manda.
+  const [selectedStaffId, setSelectedStaffId] = useState<string | null>(lockedStaffId ?? staffId)
 
   // 14 dias a partir de hoy, mas la fecha que vino por deep-link si cae mas
   // lejos: si no, el dia elegido cargaba sus horarios pero no se veia en la tira.
@@ -113,6 +124,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
     <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-500">
       <div className="flex items-center gap-4 mb-2">
         <button
+          type="button"
+          aria-label="Volver"
           onClick={onBack}
           className="p-2 rounded-full transition-all active:scale-90 flex items-center justify-center border"
           style={createBookingBackButtonStyle()}
@@ -124,7 +137,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             className="text-2xl font-black uppercase tracking-tight"
             style={{ color: colors2000s.orange.accent }}
           >
-            Elegi fecha y hora
+            {heading}
           </h2>
           <p className="text-sm font-bold text-gray-500">
             {hayRecursos
@@ -138,46 +151,48 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
         </div>
       </div>
 
-      <div>
-        <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
-          <Users size={14} className="text-orange-500" />
-          <span>{hayRecursos ? 'Cancha / sala' : 'Profesional'}</span>
-        </div>
+      {!lockedStaffId && (
+        <div>
+          <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
+            <Users size={14} className="text-orange-500" />
+            <span>{hayRecursos ? 'Cancha / sala' : 'Profesional'}</span>
+          </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
-          {isStaffLoading ? (
-            <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
-          ) : (
-            staffOptions.map((option) => {
-              const isSelected = selectedStaffId === option.id
-              return (
-                <button
-                  key={option.id ?? 'any-professional'}
-                  type="button"
-                  onClick={() => setSelectedStaffId(option.id)}
-                  className="flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
-                  style={{
-                    borderRadius: 6,
-                    background: isSelected
-                      ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-                      : '#ffffff',
-                    borderColor: isSelected
-                      ? colors2000s.orange.accent
-                      : colors2000s.border.default,
-                    boxShadow: isSelected
-                      ? colors2000s.shadows.insetLight
-                      : colors2000s.shadows.insetDark,
-                    color: isSelected ? '#ffffff' : colors2000s.text.primary
-                  }}
-                >
-                  {option.id === null && <Sparkles className="w-3.5 h-3.5" />}
-                  {option.label}
-                </button>
-              )
-            })
-          )}
+          <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+            {isStaffLoading ? (
+              <Loader2 className="w-5 h-5 animate-spin text-orange-500" />
+            ) : (
+              staffOptions.map((option) => {
+                const isSelected = selectedStaffId === option.id
+                return (
+                  <button
+                    key={option.id ?? 'any-professional'}
+                    type="button"
+                    onClick={() => setSelectedStaffId(option.id)}
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
+                    style={{
+                      borderRadius: 6,
+                      background: isSelected
+                        ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                        : '#ffffff',
+                      borderColor: isSelected
+                        ? colors2000s.orange.accent
+                        : colors2000s.border.default,
+                      boxShadow: isSelected
+                        ? colors2000s.shadows.insetLight
+                        : colors2000s.shadows.insetDark,
+                      color: isSelected ? '#ffffff' : colors2000s.text.primary
+                    }}
+                  >
+                    {option.id === null && <Sparkles className="w-3.5 h-3.5" />}
+                    {option.label}
+                  </button>
+                )
+              })
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       <div>
         <div className="flex items-center gap-2 mb-3 text-xs font-black text-gray-500 uppercase tracking-widest ml-1">
@@ -264,15 +279,17 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
               No hay turnos disponibles.
             </p>
             <p className="text-xs text-gray-400 mt-2 font-medium">Proba seleccionando otro dia.</p>
-            <div className="px-4 text-left">
-              <WaitlistJoinForm
-                key={dateStr}
-                storePublicId={storePublicId}
-                serviceId={serviceId}
-                staffId={staffId}
-                date={dateStr}
-              />
-            </div>
+            {showWaitlist && (
+              <div className="px-4 text-left">
+                <WaitlistJoinForm
+                  key={dateStr}
+                  storePublicId={storePublicId}
+                  serviceId={serviceId}
+                  staffId={staffId}
+                  date={dateStr}
+                />
+              </div>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
@@ -327,7 +344,8 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
             })}
           </div>
         )}
-        {!isLoading &&
+        {showWaitlist &&
+          !isLoading &&
           visibleSlots.length > 0 &&
           !visibleSlots.some((slot) => slot.status === 'available') && (
             <WaitlistJoinForm
