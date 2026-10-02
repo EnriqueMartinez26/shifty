@@ -93,7 +93,9 @@ describe('LoginPage shell', () => {
     const copyright = screen.getByText('Copyright 2026 Shifty SaaS. Todos los derechos reservados.')
     expect(copyright.className).toBe('mt-8 text-center text-xs')
     expect(copyright.style.color).toBe(cssValue('color', colors2000s.text.disabled))
-    expect(column.lastElementChild).toBe(copyright)
+    // Debajo del copyright cierran la columna los enlaces legales.
+    expect(column.lastElementChild).toBe(copyright.nextElementSibling)
+    expect(column.lastElementChild?.textContent).toBe('Términos y condiciones·Privacidad')
   })
 })
 

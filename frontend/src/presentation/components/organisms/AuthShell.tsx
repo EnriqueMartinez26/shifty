@@ -6,6 +6,7 @@ import { Link } from 'react-router'
 
 import { colors2000s } from '../../../theme/colors'
 import { Icon2000s } from '../legacy/Icon2000s'
+import LegalFooterLinks from '../navigation/LegalFooterLinks'
 
 interface AuthShellProps {
   title: string
@@ -86,6 +87,9 @@ export const AuthShell: React.FC<AuthShellProps> = ({
       <p className="mt-8 text-center text-xs" style={{ color: colors2000s.text.disabled }}>
         Copyright 2026 Shifty SaaS. Todos los derechos reservados.
       </p>
+      {/* Mismos enlaces legales que el portal y el panel: el login es la
+          portada de "/" y la 404 tambien la ve quien no tiene sesion. */}
+      <LegalFooterLinks className="mt-3" />
     </div>
   </div>
 )

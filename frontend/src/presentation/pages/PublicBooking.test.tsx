@@ -9,12 +9,16 @@ let mockPago = {
   pollingStopped: false
 }
 
+const TIENDA_SOL = {
+  data: { public_id: 'store-1', name: 'Peluqueria Sol', slug: 'sol', description: null },
+  isLoading: false,
+  isError: false
+}
+let mockTienda: { data: typeof TIENDA_SOL.data | undefined; isLoading: boolean; isError: boolean } =
+  TIENDA_SOL
+
 jest.mock('../hooks/usePublic', () => ({
-  usePublicStore: () => ({
-    data: { public_id: 'store-1', name: 'Peluqueria Sol', slug: 'sol', description: null },
-    isLoading: false,
-    isError: false
-  }),
+  usePublicStore: () => mockTienda,
   usePublicPaymentStatus: (_store: string | undefined, paymentId: string | undefined) => ({
     data: paymentId ? mockPago.data : undefined,
     pollingStopped: paymentId ? mockPago.pollingStopped : false,
@@ -119,5 +123,24 @@ describe('PublicBooking al volver del pago', () => {
     expect(screen.getByText('Wizard de reserva')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Reserva confirmada' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('ubicacion')).toHaveTextContent(/^\/booking\/sol$/)
+  })
+})
+
+describe('PublicBooking con una tienda que no existe', () => {
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('muestra la pantalla de no encontrado con salida al inicio', () => {
+    // Antes: un texto suelto "Negocio no encontrado" sin ningun link.
+    mockTienda = { data: undefined, isLoading: false, isError: true }
+    renderEn('/booking/no-existe')
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Negocio no encontrado' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Ir al inicio' })).toHaveAttribute('href', '/')
+    // Ya esta en la portada de esa tienda: "volver" a ella no saca de ningun lado.
+    expect(screen.queryByRole('link', { name: 'Volver a la tienda' })).toBeNull()
   })
 })

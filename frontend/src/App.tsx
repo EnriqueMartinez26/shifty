@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react'
+import React, { Suspense, lazy } from 'react'
 
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router'
 
@@ -7,6 +7,8 @@ import { ErrorBoundaryFallback } from './presentation/components/error-boundary'
 import { AuthProvider, useAuth } from './presentation/context/AuthContext'
 import { getDefaultAppRoute, hasAnyRole } from './presentation/context/roles'
 import { PUBLIC_ROUTES, SESSION_ROUTES, type AppRoute } from './presentation/routes/appRoutes'
+
+const NotFoundPage = lazy(() => import('./presentation/pages/NotFound'))
 
 const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
   <Sentry.ErrorBoundary
@@ -143,12 +145,13 @@ function App() {
           <Route element={<AuthLayout />}>
             {SESSION_ROUTES.map(renderRoute)}
             <Route path="/" element={<RootRedirect />} />
-            {/* Cualquier ruta desconocida (p.ej. el viejo /register) vuelve al
-                inicio: sin sesion va al login, con sesion a su panel. */}
-            <Route path="*" element={<RootRedirect />} />
           </Route>
           {/* Portal publico: sin AuthProvider (D-20260928-04). */}
           {PUBLIC_ROUTES.map(renderRoute)}
+          {/* Cualquier ruta desconocida (p.ej. el viejo /register) es un 404
+              propio, fuera del AuthProvider: no espera a la sesion y ofrece
+              volver al inicio (o a la tienda, si la direccion es de una). */}
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>
     </BrowserRouter>
