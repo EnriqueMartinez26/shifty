@@ -75,7 +75,7 @@ def test_con_nombres_largos_el_precio_sigue_en_el_pdf(
 
     assert contenido[:5] == b"%PDF-"
     textos = [t.texto for t in trazos]
-    assert "$123456.78" in textos
+    assert "$ 123.456,78" in textos
     # Los nombres se recortan con marca visible, no en silencio.
     assert any(t.startswith("Cliente con nombre") and t.endswith("...") for t in textos)
     # Nada se dibuja fuera del margen derecho de la hoja.
