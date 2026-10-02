@@ -13,9 +13,7 @@ import {
   Plus,
   Trash2,
   SlidersHorizontal,
-  CreditCard,
-  RefreshCcw,
-  Unplug
+  CreditCard
 } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
@@ -32,6 +30,7 @@ import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SettingsFeaturesTab } from '../components/organisms/settings/SettingsFeaturesTab'
 import { SettingsNotificationsTab } from '../components/organisms/settings/SettingsNotificationsTab'
+import { SettingsPaymentsTab } from '../components/organisms/settings/SettingsPaymentsTab'
 import { SettingsPoliciesTab } from '../components/organisms/settings/SettingsPoliciesTab'
 import { SettingsScheduleTab } from '../components/organisms/settings/SettingsScheduleTab'
 import { SettingsSecurityTab } from '../components/organisms/settings/SettingsSecurityTab'
@@ -983,181 +982,27 @@ const SettingsPage: React.FC = () => {
         )}
 
         {activeTab === 'payments' && (
-          <div className="space-y-6">
-            <div>
-              <h3
-                className="text-lg font-black uppercase tracking-tight"
-                style={{ color: colors2000s.orange.accent }}
-              >
-                Mercado Pago de la tienda
-              </h3>
-              <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                La tienda autoriza su propia cuenta. Shifty nunca solicita ni muestra el token
-                privado.
-              </p>
-            </div>
-
-            <div
-              className="rounded-md p-6 space-y-4"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.outer
-              }}
-            >
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <p className="font-black uppercase tracking-tight">
-                    {gatewayQuery.data?.configured ? 'Cuenta conectada' : 'Cuenta no conectada'}
-                  </p>
-                  <p className="text-xs font-bold text-gray-500 mt-1">
-                    {gatewayQuery.data?.oauth_user_id
-                      ? `Cuenta Mercado Pago ${gatewayQuery.data.oauth_user_id}`
-                      : 'Conectá la cuenta que recibirá las señas de esta tienda.'}
-                  </p>
-                </div>
-                <span
-                  className="px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest"
-                  style={{
-                    background: gatewayQuery.data?.configured
-                      ? colors2000s.status.success.bg
-                      : colors2000s.status.warning.bg,
-                    color: gatewayQuery.data?.configured
-                      ? colors2000s.status.success.text
-                      : colors2000s.status.warning.text
-                  }}
-                >
-                  {gatewayQuery.data?.configured ? 'Activa' : 'Pendiente'}
-                </span>
-              </div>
-
-              {!gatewayQuery.data?.configured ? (
-                <button
-                  type="button"
-                  onClick={() => void handleConnectMercadoPago()}
-                  disabled={startMercadoPagoOAuth.isPending || !gatewayQuery.data?.oauth_supported}
-                  className="w-full py-4 rounded-xl text-white font-black uppercase tracking-widest text-xs disabled:opacity-50"
-                  style={buttonStyles2000s.selected}
-                >
-                  {startMercadoPagoOAuth.isPending ? 'Conectando...' : 'Conectar con Mercado Pago'}
-                </button>
-              ) : (
-                <div className="grid sm:grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => void handleRefreshMercadoPago()}
-                    disabled={refreshMercadoPagoOAuth.isPending}
-                    className="py-3 font-black uppercase tracking-widest text-xs"
-                    style={buttonStyles2000s.default}
-                  >
-                    <RefreshCcw className="w-4 h-4 inline mr-2" />
-                    Renovar acceso
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleDisconnectMercadoPago()}
-                    disabled={disconnectMercadoPagoOAuth.isPending}
-                    className="py-3 rounded-xl font-black uppercase tracking-widest text-xs text-red-700 border border-red-200 bg-red-50"
-                  >
-                    <Unplug className="w-4 h-4 inline mr-2" />
-                    Desconectar
-                  </button>
-                </div>
-              )}
-
-              {!gatewayQuery.data?.oauth_supported && (
-                <p role="alert" className="text-xs font-bold text-red-600">
-                  El servidor todavía no tiene configuradas las credenciales OAuth de la aplicación
-                  Shifty.
-                </p>
-              )}
-              {searchParams.get('mercadopago') === 'connected' && (
-                <p className="text-xs font-bold text-green-700">
-                  La cuenta quedó conectada correctamente.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-4 pt-2">
-              <h4
-                className="text-sm font-black uppercase tracking-tight"
-                style={{ color: colors2000s.orange.accent }}
-              >
-                Condiciones de la seña
-              </h4>
-
-              <label className="flex items-start gap-3 text-xs font-bold cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={formData.allow_manual_coordination}
-                  onChange={(e) =>
-                    setFormData({ ...formData, allow_manual_coordination: e.target.checked })
-                  }
-                  className="mt-0.5 w-4 h-4 accent-orange-500 cursor-pointer"
-                />
-                <span style={{ color: colors2000s.text.secondary }}>
-                  Permitir coordinar el pago por fuera (WhatsApp).
-                  <span
-                    className="block font-medium mt-1"
-                    style={{ color: colors2000s.text.disabled }}
-                  >
-                    Si lo desactivás, los servicios con seña obligatoria solo se van a poder
-                    reservar pagando con Mercado Pago.
-                  </span>
-                </span>
-              </label>
-
-              <div className="space-y-2">
-                <label
-                  className="text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Política de seña, cancelación y reembolso
-                </label>
-                <textarea
-                  rows={5}
-                  maxLength={2000}
-                  value={formData.deposit_policy}
-                  onChange={(e) => setFormData({ ...formData, deposit_policy: e.target.value })}
-                  placeholder="Ej: La seña equivale al 30% del servicio y se descuenta del total. Se devuelve si cancelás con 24 horas de anticipación."
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                />
-                <p className="text-[11px] font-medium" style={{ color: colors2000s.text.disabled }}>
-                  Se le muestra al cliente antes de reservar y queda registrada su aceptación. Es tu
-                  respaldo ante un reclamo, así que conviene ser concreto.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  void handleSave()
-                }}
-                disabled={saveDisabled}
-                title={readOnlyTitle}
-                className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                style={{
-                  background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
-                  border: `1px solid ${colors2000s.orange.accent}`,
-                  color: colors2000s.text.onOrange,
-                  boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
-                }}
-              >
-                {saveStatus === 'success' ? (
-                  <Check className="w-4 h-4" />
-                ) : (
-                  <Save className="w-4 h-4" />
-                )}
-                {saveStatus === 'saving'
-                  ? 'Guardando...'
-                  : saveStatus === 'success'
-                    ? 'Guardado'
-                    : 'Guardar condiciones'}
-              </button>
-              {saveBlockedNotice}
-            </div>
-          </div>
+          <SettingsPaymentsTab
+            gateway={gatewayQuery.data}
+            pending={{
+              connect: startMercadoPagoOAuth.isPending,
+              refresh: refreshMercadoPagoOAuth.isPending,
+              disconnect: disconnectMercadoPagoOAuth.isPending
+            }}
+            onConnect={() => void handleConnectMercadoPago()}
+            onRefresh={() => void handleRefreshMercadoPago()}
+            onDisconnect={() => void handleDisconnectMercadoPago()}
+            justConnected={searchParams.get('mercadopago') === 'connected'}
+            value={formData}
+            onChange={patch}
+            onSave={() => {
+              void handleSave()
+            }}
+            saveDisabled={saveDisabled}
+            saveStatus={saveStatus}
+            saveBlockedNotice={saveBlockedNotice}
+            readOnlyReason={readOnlyTitle ?? null}
+          />
         )}
 
         {activeTab === 'security' && (
