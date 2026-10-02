@@ -26,6 +26,8 @@ export type ActionItem = {
 
 export type AgendaItem = {
   id: string
+  /** dd/MM en hora argentina: la lista puede abarcar varios dias. */
+  day?: string
   time: string
   title: string
   subtitle?: string

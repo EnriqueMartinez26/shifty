@@ -26,6 +26,7 @@ import {
 } from '@presentation/hooks/usePublic'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { CLIENT_PHONE_HINT, isValidClientPhone } from '@shared/utils/clientPhone'
 import { phoneDigits } from '@shared/utils/otpSession'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
@@ -35,6 +36,7 @@ import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { currencyFmtEsAr as currencyFmt } from '../../../lib/formatters'
+import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingBackButtonStyle,
   createBookingClientInputStyle,
@@ -42,6 +44,15 @@ import {
   createBookingSurfaceStyle,
   createBookingAccentBoxStyle
 } from '../../../lib/surfaceStyles'
+
+// Un 422 nombra el campo; el texto crudo de Pydantic nunca llega (regla 20).
+const BOOKING_FIELD_MESSAGES: Partial<Record<string, string>> = {
+  client_phone: `Revisá el teléfono. ${CLIENT_PHONE_HINT}`,
+  client_name: 'Revisá tu nombre: no puede quedar vacío ni tener caracteres raros.',
+  client_email: 'Revisá el email: no parece válido.',
+  notes: 'Las notas son demasiado largas o tienen caracteres no permitidos.',
+  custom_fields: 'Revisá los datos adicionales que pide el negocio.'
+}
 
 interface BookingStepConfirmationProps {
   storePublicId: string
@@ -176,8 +187,10 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
   const customFieldsValid = customFields.every(
     (field) => !field.required || Boolean(client.customFields[field.key]?.trim())
   )
-  const clientValid =
-    Boolean(client.name.trim()) && Boolean(client.phone.trim()) && customFieldsValid
+  // El telefono con el criterio del backend: con menos de 6 digitos era un 422
+  // que se leia como horario ocupado (QA 2026-10-02).
+  const phoneValid = isValidClientPhone(client.phone)
+  const clientValid = Boolean(client.name.trim()) && phoneValid && customFieldsValid
   // Gate duro: el backend rechaza la reserva si la tienda exige OTP y el
   // telefono no quedo verificado (create_public_booking, public_api/router.py).
   // No se debilita: el boton final queda deshabilitado hasta otpState.verified.
@@ -236,7 +249,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
     } catch (error: unknown) {
       dispatchSubmission({ type: 'fail' })
       setErrorMessage(
-        getErrorMessage(error, 'No pudimos procesar tu reserva. El horario podria estar ocupado.')
+        getErrorMessage(
+          error,
+          'No pudimos procesar tu reserva. El horario podria estar ocupado.',
+          {},
+          BOOKING_FIELD_MESSAGES
+        )
       )
     } finally {
       isSubmittingRef.current = false
@@ -354,8 +372,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
               className="w-full pl-12 pr-4 py-3.5 font-bold"
               style={clientInputStyle}
               placeholder="PREFIJO + NUM"
+              aria-invalid={Boolean(client.phone.trim()) && !phoneValid}
             />
           </div>
+          {client.phone.trim() && !phoneValid && (
+            <p className="mt-1 ml-1 text-[11px] font-bold text-red-600">{CLIENT_PHONE_HINT}</p>
+          )}
         </div>
       </div>
 
@@ -569,6 +591,8 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
 
         {errorMessage && (
           <div
+            key={errorMessage}
+            ref={revealOnMount}
             role="alert"
             aria-live="polite"
             className="p-3 text-xs font-bold flex items-center gap-2"

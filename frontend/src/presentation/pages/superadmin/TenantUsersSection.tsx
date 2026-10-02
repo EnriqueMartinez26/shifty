@@ -8,6 +8,8 @@ import type {
   SuperAdminUser
 } from '@application/services/SuperAdminService'
 
+import { withoutTechnicalEmail } from '@shared/utils/deliverableEmail'
+
 import { colors2000s } from '../../../theme/colors'
 import { MiniButton } from '../SuperAdminUi'
 import {
@@ -216,7 +218,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                     <div>
                       <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
                         {[tenantUser.first_name, tenantUser.last_name].filter(Boolean).join(' ') ||
-                          tenantUser.email}
+                          withoutTechnicalEmail(tenantUser.email, tenantUser.phone ?? 'Sin nombre')}
                       </p>
                       <p
                         className="text-[10px] font-bold uppercase tracking-widest"

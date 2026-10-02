@@ -71,6 +71,22 @@ describe('LedgerPage', () => {
     expect(screen.getByText(/ana@example\.com/)).toBeInTheDocument()
   })
 
+  // 2026-10-02, QA en navegador: el selector y "Cliente seleccionado"
+  // mostraban el email tecnico {tel}@store{id}.noreply del alta publica.
+  it('no muestra el email tecnico del cliente', () => {
+    const tecnico = '5491155550707@store01m3xx3hzqhynqygq38hwdawjp.noreply'
+    clientes.unshift({ public_id: 'cli-t', name: tecnico, email: tecnico, phone: '5491155550707' })
+    try {
+      render(<LedgerPage />)
+
+      expect(screen.queryByText(/\.noreply/)).not.toBeInTheDocument()
+      expect(screen.getByRole('option', { name: '5491155550707' })).toBeInTheDocument()
+      expect(screen.getByText(/Cliente seleccionado: 5491155550707/)).toBeInTheDocument()
+    } finally {
+      clientes.shift()
+    }
+  })
+
   it('la busqueda viaja al hook de /ledger/clients al enviarla, no por tecla', () => {
     render(<LedgerPage />)
 

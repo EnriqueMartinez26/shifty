@@ -37,7 +37,8 @@ describe('AgendaEventPill', () => {
     render(
       <AgendaEventPill event={appointment} actions={<button type="button">Confirmar</button>} />
     )
-    expect(screen.getByText('confirmed')).toBeInTheDocument()
+    // QA 2026-10-02: el estado salia crudo ('CONFIRMED' con uppercase).
+    expect(screen.getByText('Confirmado')).toBeInTheDocument()
     expect(screen.getByText('Carla Ruiz')).toBeInTheDocument()
     expect(screen.getByText(/10:00 - 10:30 · Ana Gomez/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Confirmar' })).toBeInTheDocument()

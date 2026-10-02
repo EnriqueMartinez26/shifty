@@ -17,6 +17,7 @@ import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { WaitlistJoinForm } from './WaitlistJoinForm'
 import { colors2000s } from '../../../../theme/colors'
+import { slotStatusLabel } from '../../../lib/enumLabels'
 import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
 interface BookingStepDateTimeProps {
@@ -337,7 +338,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                     className="text-[8px] uppercase tracking-widest mt-1"
                     style={{ color: isSelected ? '#ffffff' : badgeColor }}
                   >
-                    {selectedStaffId ? slot.status : slot.staff_name}
+                    {selectedStaffId ? slotStatusLabel(slot.status) : slot.staff_name}
                   </div>
                 </button>
               )

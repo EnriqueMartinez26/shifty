@@ -9,6 +9,7 @@ import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { StaffCard } from '../components/molecules/StaffCard'
 import { StaffFormModal } from '../components/organisms/StaffFormModal'
 import { useConfirm } from '../hooks/useConfirm'
+import { useManagedServices } from '../hooks/useManagedServices'
 import {
   useCreateManagedStaff,
   useDeleteManagedStaff,
@@ -25,6 +26,9 @@ export const StaffManagementContainer: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('')
 
   const { data: staffList, isLoading, error } = useManagedStaff()
+  // Los chips de la tarjeta decian "S-1, S-2": el nombre sale del catalogo.
+  const { data: services } = useManagedServices()
+  const serviceNames = new Map((services ?? []).map((service) => [service.id, service.name]))
   const createMutation = useCreateManagedStaff()
   const updateMutation = useUpdateManagedStaff()
   const deleteMutation = useDeleteManagedStaff()
@@ -168,6 +172,7 @@ export const StaffManagementContainer: React.FC = () => {
               }}
               onDelete={(id) => void handleDelete(id)}
               readOnlyReason={readOnlyReason}
+              serviceNames={serviceNames}
             />
           ))}
         </div>

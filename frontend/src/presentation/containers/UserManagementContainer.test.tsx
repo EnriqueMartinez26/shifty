@@ -73,6 +73,31 @@ describe('UserManagementContainer', () => {
     mockUpdate.mockResolvedValue(usuario)
   })
 
+  // 2026-10-02, QA en navegador: el rol salia crudo (CLIENT, RECEPTIONIST) y
+  // se veia el email tecnico {tel}@store{id}.noreply del alta publica.
+  it('muestra el rol en castellano y oculta el email tecnico', () => {
+    const cliente = User.fromPrimitives({
+      id: 'usr-3',
+      email: '5491155550707@store01m3xx3hzqhynqygq38hwdawjp.noreply',
+      firstName: 'Carla',
+      lastName: 'Ruiz',
+      phone: '5491155550707',
+      role: 'client',
+      isActive: true,
+      createdAt: '2026-09-01T12:00:00+00:00'
+    })
+    mockUsersQuery = { data: [usuario, cliente], isLoading: false, error: null }
+
+    render(<UserManagementContainer />)
+
+    expect(screen.queryByText('client')).not.toBeInTheDocument()
+    expect(screen.queryByText('receptionist')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Recepción').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Cliente').length).toBeGreaterThan(0)
+    expect(screen.queryByText(/\.noreply/)).not.toBeInTheDocument()
+    expect(screen.getAllByText('Sin email').length).toBeGreaterThan(0)
+  })
+
   it('edita un usuario mandando solo lo que cambio, en UserWriteInput', async () => {
     // F11c-11: el submit hacia `formData as unknown as UpdateUserInput` y el
     // repositorio adivinaba snake_case o camelCase. FF-10: ahora ademas el

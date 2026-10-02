@@ -20,7 +20,8 @@ describe('AgendaToolbar', () => {
   it('muestra la vista activa y la fecha elegida', () => {
     renderToolbar()
     expect(screen.getByRole('heading', { name: 'Agenda' })).toBeInTheDocument()
-    expect(screen.getByText('15 de September')).toBeInTheDocument()
+    // QA 2026-10-02: date-fns sin locale mostraba '15 de September'.
+    expect(screen.getByText('15 de septiembre')).toBeInTheDocument()
     expect(screen.getAllByText('Semana')).toHaveLength(2)
   })
 

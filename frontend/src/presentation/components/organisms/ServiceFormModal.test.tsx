@@ -5,6 +5,8 @@ import type { IServiceRepository } from '@domain/repositories/IServiceRepository
 
 import { ServiceService } from '@application/services/ServiceService'
 
+import { ValidationError } from '@shared/errors/ValidationError'
+
 import { ServiceFormModal } from './ServiceFormModal'
 
 // ServiceService.ts arma su singleton con el apiClient real (runtime-env /
@@ -174,6 +176,67 @@ describe('ServiceFormModal — motivo del rechazo (D-20260930-09)', () => {
       'El porcentaje de la seña no puede superar 100'
     )
     expect(repo.update).not.toHaveBeenCalled()
+  })
+
+  // 2026-10-02, QA en navegador (S\43): el motivo se pintaba arriba del
+  // formulario, a top=-299px dentro del modal: el dueno no lo veia.
+  it('un porcentaje de mas de 100 se avisa junto al campo y el motivo se lleva a la vista', async () => {
+    const scrollIntoView = jest.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const service = new ServiceService(repositorio())
+    try {
+      render(
+        <ServiceFormModal
+          isOpen
+          onClose={jest.fn()}
+          onSubmit={async (data) => {
+            await service.updateService('svc_1', data)
+          }}
+          editingService={servicioConSena()}
+          {...sinImagen()}
+        />
+      )
+
+      fireEvent.change(montoDeSena(), { target: { value: '150' } })
+      expect(screen.getByText('El porcentaje no puede superar 100.')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+      const alerta = await screen.findByRole('alert')
+      expect(scrollIntoView).toHaveBeenCalled()
+      expect(scrollIntoView.mock.contexts).toContain(alerta)
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView
+    }
+  })
+
+  // Revision R3: el 422 del servidor (la base o una validacion que el cliente
+  // no replica) se mapea por campo, nunca con el texto de Pydantic.
+  it('un 422 del servidor en deposit_amount dice que revisar, sin texto crudo', async () => {
+    const onSubmit = jest.fn().mockRejectedValue(
+      new ValidationError(
+        'Value error, deposit_amount: un porcentaje de sena no puede superar 100',
+        {
+          errorCode: 'VALIDATION_ERROR',
+          statusCode: 422,
+          detail: ['Value error, deposit_amount: un porcentaje de sena no puede superar 100']
+        }
+      )
+    )
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        editingService={servicioConSena()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    const alerta = await screen.findByRole('alert')
+    expect(alerta).toHaveTextContent('Revisá la seña')
+    expect(alerta).not.toHaveTextContent('Value error')
   })
 
   it('al editar con datos validos guarda igual', async () => {

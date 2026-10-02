@@ -31,9 +31,18 @@ function AgendaList({ items, emptyText }: { items: AgendaItem[]; emptyText: stri
                 borderRadius: 6,
                 display: 'grid',
                 placeItems: 'center',
+                alignContent: 'center',
                 background: tone.background
               }}
             >
+              {/* La lista abarca varios dias: el dia va arriba de la hora. */}
+              {item.day ? (
+                <span
+                  style={{ color: tone.accent, fontSize: 10, lineHeight: '12px', fontWeight: 800 }}
+                >
+                  {item.day}
+                </span>
+              ) : null}
               <time
                 style={{ color: tone.accent, fontSize: 14, lineHeight: '18px', fontWeight: 900 }}
               >

@@ -152,6 +152,50 @@ describe('BookingStepConfirmation', () => {
       expect(botonReservar()).not.toBeDisabled()
     })
 
+    // 2026-10-02, QA en navegador (S\05): con el telefono "123" el boton
+    // quedaba habilitado, el backend respondia 422 en client_phone y la
+    // pantalla decia "El horario podria estar ocupado".
+    it('un telefono con menos de 6 digitos bloquea la reserva y lo dice junto al campo', () => {
+      render(
+        <BookingStepConfirmation
+          {...props({
+            bookingState: estado({ client: cliente({ name: 'Lucia', phone: '123' }) })
+          })}
+        />
+      )
+      aceptarTerminos()
+
+      expect(botonReservar()).toBeDisabled()
+      expect(screen.getByText(/al menos 6 dígitos/)).toBeInTheDocument()
+    })
+
+    it('un 422 en client_phone dice que revise el telefono, no que el horario esta ocupado', async () => {
+      const onConfirm = jest.fn().mockRejectedValue(
+        new ValidationError(
+          'client_phone: Value error, El telefono debe tener al menos 6 digitos',
+          {
+            errorCode: 'VALIDATION_ERROR',
+            statusCode: 422,
+            detail: ['client_phone: Value error, El telefono debe tener al menos 6 digitos']
+          }
+        )
+      )
+      render(
+        <BookingStepConfirmation
+          {...props({
+            onConfirm,
+            bookingState: estado({ client: cliente({ name: 'Lucia', phone: '1155550101' }) })
+          })}
+        />
+      )
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      const aviso = (await screen.findByText(/Revisá el teléfono/)).closest('[role="alert"]')
+      expect(aviso).toHaveTextContent(/al menos 6 dígitos/)
+      expect(aviso).not.toHaveTextContent(/ocupado/)
+    })
+
     it('un campo personalizado obligatorio vacio bloquea la reserva', () => {
       render(
         <BookingStepConfirmation

@@ -4,6 +4,7 @@ import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../../theme/colors'
 import { statusStyle } from '../../lib/appointmentStatusStyle'
+import { bookingStatusLabel } from '../../lib/bookingStatusLabel'
 import { SLOT_HEIGHT_PX, gridPlacement, type DayGrid } from '../../lib/calendarGrid'
 
 interface StaffColumnBlock {
@@ -158,7 +159,7 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
               color: style.text
             }}
           >
-            {card.timeLabel} - {card.status}
+            {card.timeLabel} - {bookingStatusLabel(card.status)}
           </span>
         </div>
       )

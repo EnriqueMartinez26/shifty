@@ -4,6 +4,8 @@ import { MemoryRouter } from 'react-router'
 import type { GatewayConfig } from '@application/services/PaymentsService'
 import type { StoreSettings } from '@application/services/StoreSettingsService'
 
+import { ForbiddenError } from '@shared/errors/ForbiddenError'
+
 import SettingsPage from './Settings'
 
 // 2026-10-02 (F11b-08): caracterizacion de las siete pestanas antes de partir
@@ -54,6 +56,7 @@ const disconnectOAuth = jest.fn()
 const uploadLogo = jest.fn()
 const navigateExternal = jest.fn()
 let gateway: GatewayConfig | undefined
+let gatewayError: unknown = null
 
 jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => ({ data: store, isLoading: false, error: null }),
@@ -64,7 +67,7 @@ jest.mock('../hooks/useStores', () => ({
 }))
 
 jest.mock('../hooks/usePayments', () => ({
-  useGatewayConfig: () => ({ data: gateway, isLoading: false }),
+  useGatewayConfig: () => ({ data: gateway, isLoading: false, error: gatewayError }),
   useStartMercadoPagoOAuth: () => ({ mutateAsync: startOAuth, isPending: false }),
   useRefreshMercadoPagoOAuth: () => ({ mutateAsync: refreshOAuth, isPending: false }),
   useDisconnectMercadoPagoOAuth: () => ({ mutateAsync: disconnectOAuth, isPending: false })
@@ -105,6 +108,7 @@ beforeEach(() => {
   updateStore.mockResolvedValue(store)
   updateFeatureFlags.mockResolvedValue({ flags: store.feature_flags })
   gateway = undefined
+  gatewayError = null
   mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
 })
 
@@ -462,5 +466,50 @@ describe('Settings - solo lectura por pestana', () => {
 
     expect(screen.getByRole('button', { name: 'Conectar con Mercado Pago' })).not.toBeDisabled()
     expectBlocked(screen.getByRole('button', { name: /Guardar condiciones/ }))
+  })
+})
+
+// 2026-10-02, QA en navegador (S\52): con los cobros apagados, el 403 de
+// /payments/gateway-config pintaba "Esta función no está habilitada" en rojo
+// arriba de TODAS las pestanas, y la de Seguridad quedaba cortada.
+describe('Settings - cobros apagados', () => {
+  const featureDisabled = () =>
+    new ForbiddenError('Funcion deshabilitada', { errorCode: 'FEATURE_DISABLED', statusCode: 403 })
+
+  it('el aviso no aparece fuera de la pestana Mercado Pago', () => {
+    gatewayError = featureDisabled()
+    renderSettings()
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText(/no está habilitada/)).not.toBeInTheDocument()
+  })
+
+  it('en Mercado Pago es un estado informativo, no un error', () => {
+    gatewayError = featureDisabled()
+    renderSettings()
+    openTab('Mercado Pago')
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/cobros online están apagados/i)
+    expect(screen.getByRole('button', { name: 'Conectar con Mercado Pago' })).toBeDisabled()
+  })
+
+  it('otro error de la cuenta de Mercado Pago se avisa en su pestana', () => {
+    gatewayError = new ForbiddenError('x', { errorCode: 'HTTP_ERROR', statusCode: 500 })
+    renderSettings()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    openTab('Mercado Pago')
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'No se pudo cargar la cuenta de Mercado Pago.'
+    )
+  })
+
+  it('las pestanas pasan de linea en vez de cortar Seguridad', () => {
+    renderSettings()
+
+    const barra = screen.getByRole('button', { name: /Seguridad/ }).parentElement as HTMLElement
+    expect(barra.className).toContain('flex-wrap')
+    expect(barra.className).not.toContain('overflow-x-auto')
   })
 })

@@ -4,7 +4,10 @@ import { Shield, User as UserIcon, Mail, Phone, Check, X, Edit2, Trash2 } from '
 
 import { User } from '@domain/entities/User'
 
+import { displayableEmail } from '@shared/utils/deliverableEmail'
+
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { userRoleLabel } from '../../lib/enumLabels'
 
 interface UserCardProps {
   user: User
@@ -27,6 +30,8 @@ export const UserCard: React.FC<UserCardProps> = ({
   readOnlyReason = null
 }) => {
   const isAdmin = user.role.isAdmin()
+  // El alta publica inventa un email tecnico (.noreply): no se muestra.
+  const email = displayableEmail(user.email.getValue())
 
   const getInitials = (name: string) => {
     const parts = name.split(' ')
@@ -97,7 +102,7 @@ export const UserCard: React.FC<UserCardProps> = ({
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
               style={{ color: colors2000s.text.disabled }}
             >
-              {user.email.getValue()}
+              {email ?? 'Sin email'}
             </p>
           </div>
         </div>
@@ -113,7 +118,7 @@ export const UserCard: React.FC<UserCardProps> = ({
             }}
           >
             {isAdmin ? <Shield size={10} /> : <UserIcon size={10} />}
-            {user.role.getValue()}
+            {userRoleLabel(user.role.getValue())}
           </span>
         </div>
 
@@ -124,7 +129,7 @@ export const UserCard: React.FC<UserCardProps> = ({
             style={{ color: colors2000s.text.secondary }}
           >
             <Mail size={14} color={colors2000s.text.disabled} />
-            <span className="truncate">{user.email.getValue()}</span>
+            <span className="truncate">{email ?? 'Sin email'}</span>
           </div>
           {user.toPrimitives().phone && (
             <div

@@ -23,6 +23,10 @@ jest.mock('../hooks/useManagedStaff', () => ({
   useDeleteManagedStaff: () => ({ mutateAsync: mockDelete, isPending: false })
 }))
 
+jest.mock('../hooks/useManagedServices', () => ({
+  useManagedServices: () => ({ data: [] })
+}))
+
 jest.mock('../hooks/useConfirm', () => ({
   useConfirm: () => ({ confirm: () => Promise.resolve(true), confirmDialog: null })
 }))

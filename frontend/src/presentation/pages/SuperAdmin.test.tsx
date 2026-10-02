@@ -272,6 +272,31 @@ describe('SuperAdminPage', () => {
     ).toBeGreaterThan(0)
   })
 
+  // 2026-10-02, QA en navegador: estados de suscripcion e intervalos salian
+  // crudos de la API (ACTIVE, MONTHLY con uppercase).
+  it('muestra estado de suscripcion, intervalo y rol en castellano', () => {
+    render(<SuperAdminPage />)
+
+    expect(screen.queryByText(/\bactive\b/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/monthly/)).not.toBeInTheDocument()
+    expect(screen.getAllByText(/Mensual/).length).toBeGreaterThan(0)
+    expect(sectionOf('Operacion por tenant').getByText('Activa', { selector: 'p' })).toBeTruthy()
+    expect(sectionOf('Detalle del tenant').getAllByText('Administrador').length).toBeGreaterThan(0)
+  })
+
+  // QA 2026-10-02 (S\55): los filtros de suscripcion quedaban tapados por la
+  // columna derecha; ahora pasan de linea bajo el titulo.
+  it('los filtros de tiendas pasan de linea en vez de desbordar', () => {
+    render(<SuperAdminPage />)
+
+    const grupo = screen.getByRole('button', { name: 'Con suscripcion' })
+      .parentElement as HTMLElement
+    const filtros = grupo.parentElement as HTMLElement
+    expect(grupo.className).toContain('flex-wrap')
+    expect(filtros.className).toContain('flex-wrap')
+    expect((filtros.parentElement as HTMLElement).className).not.toContain('lg:flex-row')
+  })
+
   it('sin eleccion toma la primera tienda desde el primer render (F11b-21)', () => {
     render(<SuperAdminPage />)
 
@@ -297,6 +322,44 @@ describe('SuperAdminPage', () => {
     rerender(<SuperAdminPage />)
 
     expect(mockOverviewFor).toHaveBeenLastCalledWith('store-2')
+  })
+
+  // 2026-10-02, QA en navegador (S\56): un slug invalido daba "No se pudo
+  // guardar la tienda", sin decir que corregir.
+  it('un slug invalido no se envia y explica el formato', () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'Barber Dos!' } })
+    fireEvent.submit(form)
+
+    expect(mockMutations.createStore).not.toHaveBeenCalled()
+    expect(within(form).getByRole('alert')).toHaveTextContent(/minúsculas, números y guiones/)
+  })
+
+  it('un 422 en el slug dice el formato, nunca el texto crudo', async () => {
+    mockMutations.createStore.mockRejectedValueOnce(
+      new ValidationError("slug: String should match pattern '^[a-z0-9]'", {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422,
+        detail: ["slug: String should match pattern '^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$'"]
+      })
+    )
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'barber-dos' } })
+    fireEvent.submit(form)
+
+    const alerta = await within(form).findByRole('alert')
+    expect(alerta).toHaveTextContent(/minúsculas, números y guiones/)
+    expect(alerta).not.toHaveTextContent(/pattern/)
   })
 
   it('crea una tienda con el payload del formulario', async () => {

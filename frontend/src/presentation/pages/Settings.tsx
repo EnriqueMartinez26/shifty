@@ -294,8 +294,11 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
+      {/* El error de la cuenta de Mercado Pago (un 403 con los cobros apagados,
+          por ejemplo) vive en su pestana: aca salia arriba de todas (QA
+          2026-10-02). */}
       <QueryErrorNotice
-        error={featureFlagsQuery.error ?? gatewayQuery.error}
+        error={featureFlagsQuery.error}
         message="No se pudo cargar parte de la configuración."
       />
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -337,7 +340,9 @@ const SettingsPage: React.FC = () => {
 
       {/* Tabs Navigation */}
       <div
-        className="flex gap-2 p-2 rounded-lg overflow-x-auto no-scrollbar"
+        // Pasan de linea: con scroll horizontal oculto "Seguridad" quedaba
+        // cortada y sin pista de que habia mas (QA 2026-10-02).
+        className="flex flex-wrap gap-2 p-2 rounded-lg"
         style={{
           background: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
           border: `1px solid ${colors2000s.border.default}`,
@@ -419,6 +424,7 @@ const SettingsPage: React.FC = () => {
         {activeTab === 'payments' && (
           <SettingsPaymentsTab
             gateway={gatewayQuery.data}
+            gatewayError={gatewayQuery.error}
             pending={{
               connect: startMercadoPagoOAuth.isPending,
               refresh: refreshMercadoPagoOAuth.isPending,

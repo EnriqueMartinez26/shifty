@@ -5,8 +5,10 @@ import { X, Loader2 } from 'lucide-react'
 import { User } from '@domain/entities/User'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { PASSWORD_POLICY_TEXT, passwordPolicyError } from '@shared/utils/passwordPolicy'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { revealOnMount } from '../../lib/revealOnMount'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { UserFormRules } from '../../lib/userAccessRules'
 import type { UserFormValues } from '../../types/forms'
@@ -34,6 +36,16 @@ const USER_FORM_ERRORS = {
     'Solo el soporte global puede otorgar ese rol o cambiar el acceso de otro administrador.'
 }
 
+// Un 422 nombra el campo: el modal decia "No se pudo guardar el usuario" sin
+// el motivo (QA 2026-10-02). Nunca el texto crudo de Pydantic (regla 20).
+const USER_FIELD_ERRORS: Partial<Record<string, string>> = {
+  password: PASSWORD_POLICY_TEXT,
+  email: 'Revisá el email: no parece válido.',
+  phone: 'Revisá el teléfono: solo números, espacios, guiones, paréntesis o +.',
+  first_name: 'Revisá el nombre: es demasiado largo o tiene caracteres no permitidos.',
+  last_name: 'Revisá el apellido: es demasiado largo o tiene caracteres no permitidos.'
+}
+
 export const UserFormModal: React.FC<UserFormModalProps> = ({
   onClose,
   onSubmit,
@@ -59,6 +71,13 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    // La politica de contrasena se avisa antes de enviar (con una nueva o al
+    // cambiarla); el backend la vuelve a exigir.
+    const passwordError = formData.password ? passwordPolicyError(formData.password) : null
+    if (passwordError) {
+      setError(passwordError)
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -67,7 +86,9 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
     } catch (err) {
       // Antes el error solo iba a console y el modal quedaba sin feedback: el
       // usuario no sabia si guardo. Ahora se muestra y el modal no se cierra.
-      setError(getErrorMessage(err, 'No se pudo guardar el usuario', USER_FORM_ERRORS))
+      setError(
+        getErrorMessage(err, 'No se pudo guardar el usuario', USER_FORM_ERRORS, USER_FIELD_ERRORS)
+      )
     } finally {
       setLoading(false)
     }
@@ -114,6 +135,8 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
         >
           {error && (
             <div
+              key={error}
+              ref={revealOnMount}
               role="alert"
               className="rounded-2xl px-4 py-3 text-xs font-bold"
               style={{ background: '#fff1f2', color: '#be123c' }}

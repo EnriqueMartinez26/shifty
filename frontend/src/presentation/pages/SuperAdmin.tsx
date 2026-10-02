@@ -53,9 +53,12 @@ import {
   createEmptyStoreForm,
   createEmptySubscriptionForm,
   createEmptyUserForm,
+  isValidSlug,
   panelStyle,
   parseOptionalInt,
   scopeBadgeStyle,
+  SLUG_RULE_TEXT,
+  SUPERADMIN_FIELD_ERRORS,
   type AdminFormState,
   type CouponFormState,
   type PlanFormState,
@@ -295,6 +298,12 @@ const SuperAdminPage: React.FC = () => {
     event.preventDefault()
     setModalError(null)
 
+    // El backend lo rechaza con un 422; aca se explica el formato sin ir.
+    if (!isValidSlug(storeForm.slug.trim())) {
+      setModalError(SLUG_RULE_TEXT)
+      return
+    }
+
     try {
       const payload = {
         name: storeForm.name.trim(),
@@ -324,7 +333,9 @@ const SuperAdminPage: React.FC = () => {
 
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo guardar la tienda'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo guardar la tienda', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -347,7 +358,9 @@ const SuperAdminPage: React.FC = () => {
       setFeedback({ tone: 'success', text: `Admin creado: ${created.email}` })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo crear el admin'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo crear el admin', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -371,7 +384,9 @@ const SuperAdminPage: React.FC = () => {
       setFeedback({ tone: 'success', text: `Usuario actualizado: ${updated.email}` })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo actualizar el usuario'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo actualizar el usuario', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -406,7 +421,9 @@ const SuperAdminPage: React.FC = () => {
 
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo guardar el plan'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo guardar el plan', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -430,7 +447,9 @@ const SuperAdminPage: React.FC = () => {
       setFeedback({ tone: 'success', text: `Suscripcion actualizada para ${selectedStore.name}` })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo asignar el plan'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo asignar el plan', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -467,7 +486,9 @@ const SuperAdminPage: React.FC = () => {
 
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo guardar el cupon'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo guardar el cupon', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 
@@ -487,7 +508,9 @@ const SuperAdminPage: React.FC = () => {
       })
       closeModal()
     } catch (error) {
-      setModalError(getErrorMessage(error, 'No se pudo canjear el cupon'))
+      setModalError(
+        getErrorMessage(error, 'No se pudo canjear el cupon', {}, SUPERADMIN_FIELD_ERRORS)
+      )
     }
   }
 

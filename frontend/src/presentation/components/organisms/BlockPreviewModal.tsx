@@ -10,6 +10,8 @@ import type {
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
+import { bookingStatusLabel } from '../../lib/bookingStatusLabel'
+
 interface BlockPreviewModalProps {
   preview: BlockPreviewResult
   reason: string
@@ -47,7 +49,7 @@ const AffectedRow: React.FC<{ item: AffectedAppointment; reason: string }> = ({ 
         {nota && <p className="text-[11px] font-bold text-amber-700 mt-1">{nota}</p>}
       </div>
       <span className="text-[9px] font-black uppercase tracking-widest text-gray-500">
-        {item.status}
+        {bookingStatusLabel(item.status)}
       </span>
       {whatsappHref && (
         <a

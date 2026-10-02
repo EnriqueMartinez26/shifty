@@ -96,6 +96,11 @@ jest.mock('../hooks/useStoreWriteAccess', () => ({
   useStoreWriteAccess: () => mockWriteAccess
 }))
 
+const confirmarCancelacion = async () =>
+  fireEvent.click(
+    within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancelar turno' })
+  )
+
 const cardOf = (clientName: string) => {
   const card = screen.getByText(clientName).closest('.absolute')
   if (!(card instanceof HTMLElement)) throw new Error(`No encontre la tarjeta de ${clientName}`)
@@ -134,7 +139,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     expect(own.getByRole('button', { name: 'Reprogramar turno' })).toBeDisabled()
 
     fireEvent.click(own.getByRole('button', { name: 'Cancelar turno' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    await confirmarCancelacion()
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('appt-own'))
   })
 
@@ -176,7 +181,12 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
 
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
     expect(await screen.findByText('¿Cancelar el turno de Luis Propio?')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    // QA 2026-10-02: "Cancelar"/"Confirmar" era ambiguo en un dialogo de
+    // cancelacion. Ahora dice "Volver" y "Cancelar turno".
+    expect(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Volver' })
+    ).toBeInTheDocument()
+    await confirmarCancelacion()
 
     await waitFor(() => expect(mockCancel).toHaveBeenCalledWith('appt-own'))
     expect(await screen.findByText('Turno cancelado')).toBeInTheDocument()
@@ -192,7 +202,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     render(<CalendarContainer />)
 
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    await confirmarCancelacion()
 
     expect(
       await screen.findByText(
@@ -209,7 +219,7 @@ describe('CalendarContainer - cancelar y reprogramar (FF-31)', () => {
     render(<CalendarContainer />)
 
     fireEvent.click(within(cardOf('Luis Propio')).getByRole('button', { name: 'Cancelar turno' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Confirmar' }))
+    await confirmarCancelacion()
 
     expect(
       await screen.findByText('Solo podés cancelar los turnos de tu agenda.')

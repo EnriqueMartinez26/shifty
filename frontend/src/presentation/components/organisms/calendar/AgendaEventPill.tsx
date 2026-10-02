@@ -4,6 +4,7 @@ import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { colors2000s } from '../../../../theme/colors'
 import { statusStyle } from '../../../lib/appointmentStatusStyle'
+import { bookingStatusLabel } from '../../../lib/bookingStatusLabel'
 import { toInstantIso, type UnifiedCalendarEvent } from '../../../lib/calendarEvents'
 
 interface AgendaEventPillProps {
@@ -43,7 +44,7 @@ export const AgendaEventPill: React.FC<AgendaEventPillProps> = ({
         className={`${compact ? 'text-[8px]' : 'text-[9px]'} font-black uppercase tracking-widest`}
         style={{ color: style.text }}
       >
-        {event.type === 'block' ? 'Bloqueo' : event.status}
+        {event.type === 'block' ? 'Bloqueo' : bookingStatusLabel(event.status)}
       </p>
       <p
         className={`${compact ? 'text-[11px]' : 'text-xs'} font-black`}
