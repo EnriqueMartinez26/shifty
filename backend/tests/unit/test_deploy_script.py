@@ -22,6 +22,7 @@ from tests.unit.host_falso import (
     _indice,
     _ultimo_indice,
     crear_host,
+    flags_rechazados_por_compose,
 )
 
 
@@ -127,7 +128,7 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     verifica = _indice(llamadas, r"docker image inspect ghcr.io/x/shifty-backend:v2$")
     migra = _indice(
         llamadas,
-        r"compose run --rm --no-deps --no-build -T backend alembic upgrade head",
+        r"compose run --rm --no-deps -T backend alembic upgrade head$",
     )
     backend = _indice(
         llamadas, r"compose up -d --no-deps --no-build .*--scale backend=6 backend"
@@ -367,7 +368,10 @@ def test_compose_file_del_entorno_le_gana_al_env(host: Host) -> None:
 
 def test_ningun_up_ni_run_construye_imagenes(host: Host) -> None:
     """El VPS nunca construye: sin --no-build, una imagen que falta se
-    construiria desde el arbol del clon y correria codigo sin version."""
+    construiria desde el arbol del clon y correria codigo sin version. `run`
+    no tiene --no-build (2026-10-02): no lleva --build y lo que le impide
+    construir es la vista de produccion sin `build`
+    (test_compose_contract::test_produccion_no_construye_ninguna_imagen)."""
     _preparar_deploy(host, actual="v1")
 
     host.correr(
@@ -377,6 +381,9 @@ def test_ningun_up_ni_run_construye_imagenes(host: Host) -> None:
     llamadas = [ll for ll in host.llamadas() if re.search(r"compose (up|run) ", ll)]
     assert llamadas
     for llamada in llamadas:
+        if " run " in llamada:
+            assert "--build" not in llamada.split(), llamada
+            continue
         assert "--no-build" in llamada, llamada
         # `redis` paso a `redis_cache`/`redis_state`: sin esto el contenedor
         # viejo sigue vivo y retiene el 6379.
@@ -536,3 +543,53 @@ def test_una_alarma_de_rabbitmq_hace_fallar_la_compuerta(host: Host) -> None:
     assert "alarm" in resultado.stderr
     assert _hay(host.llamadas(), r"compose exec -T rabbitmq rabbitmq-diagnostics")
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+# --- flags de compose (2026-10-02) ------------------------------------------
+#
+# `migrar` corria `compose run --rm --no-deps --no-build ...`: `run` no tiene
+# `--no-build` en ninguna version (Compose 5.5.1: "unknown flag: --no-build"),
+# asi que el primer deploy real moria al migrar. El `docker` falso validaba
+# nada y el test afirmaba ese string. host_falso valida ahora cada llamada a
+# compose contra los flags de Compose 2.24 (la minima de DEPLOY_MIN_COMPOSE).
+
+
+@pytest.mark.parametrize(
+    ("argumentos", "rechazados"),
+    [
+        (
+            "run --rm --no-deps --no-build -T backend alembic upgrade head",
+            ["run --no-build"],
+        ),
+        # `--pull` de `run` existe recien desde Compose 2.33.0.
+        ("run --rm --pull never -T backend alembic upgrade head", ["run --pull"]),
+        ("run --rm --no-deps -T backend alembic upgrade head --no-build", []),
+        (
+            "up -d --no-deps --no-build --remove-orphans --wait --wait-timeout 180 --scale backend=6 backend",
+            [],
+        ),
+        ("exec -T db sh -c --no-build", []),
+        ("logs --no-log-prefix --since 2m nginx", []),
+        ("config --images backend frontend", []),
+        ("up -d --sin-esto backend", ["up --sin-esto"]),
+        ("ps -qz", ["ps -z"]),
+    ],
+)
+def test_el_docker_falso_rechaza_flags_que_compose_2_24_no_entiende(
+    argumentos: str, rechazados: list[str]
+) -> None:
+    assert flags_rechazados_por_compose(argumentos.split()) == rechazados
+
+
+def test_la_migracion_no_pasa_flags_que_compose_run_rechaza(host: Host) -> None:
+    """Sin el validador, este deploy pasaba con el `docker` falso y moria en el
+    VPS: `docker compose run` no entiende `--no-build`."""
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION="v2", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    migra = [ll for ll in host.llamadas() if "alembic upgrade head" in ll]
+    assert migra == [
+        "docker compose run --rm --no-deps -T backend alembic upgrade head"
+    ], migra
