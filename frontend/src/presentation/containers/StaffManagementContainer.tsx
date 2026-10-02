@@ -177,6 +177,7 @@ export const StaffManagementContainer: React.FC = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         editingStaff={editingStaff}
+        readOnlyReason={readOnlyReason}
         onSubmit={async (data) => {
           if (editingStaff) {
             await updateMutation.mutateAsync({ id: editingStaff.id, data })

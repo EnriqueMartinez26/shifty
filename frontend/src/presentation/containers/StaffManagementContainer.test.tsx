@@ -49,7 +49,11 @@ jest.mock('../components/molecules/StaffCard', () => ({
   )
 }))
 
-jest.mock('../components/organisms/StaffFormModal', () => ({ StaffFormModal: () => null }))
+jest.mock('../components/organisms/StaffFormModal', () => ({
+  StaffFormModal: ({ readOnlyReason }: { readOnlyReason?: string | null }) => (
+    <span data-testid="modal-reason">{readOnlyReason ?? 'editable'}</span>
+  )
+}))
 
 // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
 // verse deshabilitada (FF-15). POST, PUT y DELETE /staff/... no estan en
@@ -67,6 +71,8 @@ describe('StaffManagementContainer: tienda suspendida', () => {
     expect(nuevo).toBeDisabled()
     expect(nuevo).toHaveAttribute('title', 'Tienda suspendida')
     expect(getByTestId('card-reason')).toHaveTextContent('Tienda suspendida')
+    // 2026-10-02: el modal no recibia el motivo y su guardar fallaba con 402.
+    expect(getByTestId('modal-reason')).toHaveTextContent('Tienda suspendida')
   })
 
   it('sin suspension NUEVO sigue habilitado y la tarjeta no recibe motivo', () => {
@@ -74,6 +80,7 @@ describe('StaffManagementContainer: tienda suspendida', () => {
 
     expect(getByRole('button', { name: /nuevo profesional/i })).not.toBeDisabled()
     expect(getByTestId('card-reason')).toHaveTextContent('editable')
+    expect(getByTestId('modal-reason')).toHaveTextContent('editable')
   })
 })
 

@@ -623,6 +623,9 @@ describe('BookingWizardContainer', () => {
           fireEvent.click(screen.getByRole('button', { name: 'Verificar codigo' }))
         })
         expect(screen.getByText('Telefono validado correctamente')).toBeInTheDocument()
+        // 2026-10-02: sin esta precondicion el test pasaba aunque el aviso
+        // nunca se hubiera mostrado; el borrado tiene que partir de verlo.
+        expect(screen.getByText(AVISO)).toBeInTheDocument()
 
         fireEvent.change(screen.getByPlaceholderText('PREFIJO + NUM'), {
           target: { value: '+5491155550202' }

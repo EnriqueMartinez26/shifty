@@ -218,6 +218,7 @@ export const UserManagementContainer: React.FC = () => {
           onSubmit={handleFormSubmit}
           editingUser={editingUser}
           rules={userFormRules(viewer, editingUser)}
+          readOnlyReason={readOnlyReason}
         />
       )}
     </div>
