@@ -16,7 +16,6 @@ export interface BookingWizardState {
   startsAt: string | null
   client: BookingClientData
   promotionCode: string
-  idempotencyKey: string
 }
 
 export interface BookingOtpState {

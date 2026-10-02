@@ -39,8 +39,11 @@ const STORES_PAGE_SIZE = 50
 export const useSuperAdminStores = (params: Omit<ListStoresParams, 'limit' | 'offset'>) => {
   const query = useInfiniteQuery({
     queryKey: ['superadmin', 'stores', params],
-    queryFn: ({ pageParam }) =>
-      superAdminService.listStores({ ...params, limit: STORES_PAGE_SIZE, offset: pageParam }),
+    queryFn: ({ pageParam, signal }) =>
+      superAdminService.listStores(
+        { ...params, limit: STORES_PAGE_SIZE, offset: pageParam },
+        signal
+      ),
     initialPageParam: 0,
     getNextPageParam: (lastPage, pages) => {
       const loaded = pages.reduce((count, page) => count + page.stores.length, 0)

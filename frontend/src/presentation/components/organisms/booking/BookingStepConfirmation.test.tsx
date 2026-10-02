@@ -37,7 +37,6 @@ const estado = (patch: Partial<BookingWizardState> = {}): BookingWizardState => 
   startsAt: '2026-09-25T12:00:00+00:00',
   client: cliente(),
   promotionCode: '',
-  idempotencyKey: 'idem-1',
   ...patch
 })
 
@@ -608,6 +607,24 @@ describe('BookingStepConfirmation', () => {
       expect(
         screen.getByText(/El horario podria haberse ocupado mientras completabas el formulario/)
       ).toBeInTheDocument()
+    })
+
+    it('un 400 BOOKING_NOTICE_REQUIRED muestra el texto del servidor con las horas de anticipacion', async () => {
+      // FF-06 (2026-10-01): un texto neutro global para BOOKING_NOTICE_REQUIRED
+      // pisaba el del servidor y el cliente dejaba de ver cuantas horas de
+      // anticipacion pide la tienda.
+      const aviso = 'Este local requiere 24h de anticipación para agendar/reprogramar.'
+      const base = completo()
+      base.onConfirm = jest
+        .fn()
+        .mockRejectedValue(
+          new ValidationError(aviso, { errorCode: 'BOOKING_NOTICE_REQUIRED', statusCode: 400 })
+        )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      await waitFor(() => expect(screen.getByText(aviso)).toBeInTheDocument())
     })
 
     it('un doble click envia la reserva una sola vez', async () => {

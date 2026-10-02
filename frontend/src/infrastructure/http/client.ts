@@ -9,12 +9,18 @@ const { apiUrl, dev } = getRuntimeEnv()
 const API_URL = resolveApiBaseUrl(apiUrl, dev)
 const LEGACY_TOKEN_KEY = 'shifty_token'
 
+/** Timeout de las lecturas (D-20260930-02); las escrituras no llevan. */
+const READ_TIMEOUT_MS = 15_000
+
 const apiClient = axios.create({
   baseURL: API_URL,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json'
-  }
+  },
+  // Un timeout sale como ETIMEDOUT y no como ECONNABORTED, que axios tambien
+  // usa para "Request aborted": asi api-contract los distingue.
+  transitional: { clarifyTimeoutError: true }
 })
 
 // El access token vive SOLO en memoria: en localStorage cualquier XSS lo
@@ -59,6 +65,12 @@ apiClient.interceptors.request.use((config) => {
     config.headers = config.headers ?? {}
     config.headers.Authorization = `Bearer ${token}`
   }
+  // Timeout SOLO en lecturas (D-20260930-02): un GET colgado corta a los 15 s
+  // con su propio error (RequestTimeoutError) y react-query no lo reintenta.
+  // Un GET que ya trae su `timeout` lo conserva.
+  if ((config.method ?? 'get').toLowerCase() === 'get' && !config.timeout) {
+    config.timeout = READ_TIMEOUT_MS
+  }
   return config
 })
 
@@ -66,9 +78,10 @@ apiClient.interceptors.request.use((config) => {
 // de integridad, estado viejo, conflicto de agenda), asi que reintentarlo no
 // lo resuelve y solo demora el error; y un reintento de reprogramacion podia
 // aplicarse en silencio porque el backend libera la clave de idempotencia. Un
-// POST tampoco se reenvia: el servidor pudo haberlo aplicado. No hay `timeout`
-// a proposito: el proxy (nginx, 30s) ya acota y uno mas corto dejaria POST
-// fantasma aplicados en el servidor pero dados por fallidos aca.
+// POST tampoco se reenvia: el servidor pudo haberlo aplicado. Las escrituras
+// no llevan `timeout` a proposito: el proxy (nginx, 30s) ya las acota y uno
+// mas corto dejaria POST fantasma aplicados en el servidor pero dados por
+// fallidos aca.
 
 // Refresh coordinado entre pestanas (F4-01, F4-02; D-20260928-02/03): ver
 // sessionSync.ts. Muchos requests pueden caer en 401 a la vez cuando el access

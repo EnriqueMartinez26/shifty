@@ -6,6 +6,7 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
   ValidationError
@@ -78,6 +79,31 @@ describe('normalizeApiError', () => {
         errorCode: 'NOT_FOUND'
       }
     })
+  })
+
+  it('maps a read timeout to its own typed error (D-20260930-02)', () => {
+    // F4-04 b (2026-10-01): un timeout decia "No se pudo conectar con el
+    // servidor." y se reintentaba como una conexion caida.
+    const error = normalizeApiError({
+      code: 'ETIMEDOUT',
+      message: 'timeout of 15000ms exceeded'
+    })
+
+    expect(error).toBeInstanceOf(RequestTimeoutError)
+    expect(error).toMatchObject({
+      code: 'REQUEST_TIMEOUT',
+      statusCode: 0,
+      message: 'La consulta tardó demasiado. Probá de nuevo.',
+      context: { errorCode: 'REQUEST_TIMEOUT', statusCode: 0 }
+    })
+  })
+
+  it('keeps an aborted request (ECONNABORTED without timeout) as a network error', () => {
+    // Con clarifyTimeoutError, ECONNABORTED solo significa "Request aborted".
+    const error = normalizeApiError({ code: 'ECONNABORTED', message: 'Request aborted' })
+
+    expect(error).toBeInstanceOf(NetworkError)
+    expect(error).not.toBeInstanceOf(RequestTimeoutError)
   })
 
   it('maps missing transport responses to the shared network error', () => {

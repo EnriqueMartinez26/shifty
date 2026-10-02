@@ -67,12 +67,14 @@ export const usePublicAvailability = (
 ) =>
   useQuery<AvailabilitySlot[]>({
     queryKey: ['public-availability', storePublicId, serviceId, date, forceAll],
-    queryFn: () =>
+    // Con el signal, cambiar de dia cancela la grilla del dia anterior (F4-04).
+    queryFn: ({ signal }) =>
       publicBookingService.getAvailability(
         storePublicId as string,
         serviceId as string,
         date as string,
-        forceAll
+        forceAll,
+        signal
       ),
     enabled: Boolean(storePublicId) && Boolean(serviceId) && Boolean(date),
     staleTime: 1000 * 30
@@ -162,6 +164,12 @@ export const useRescheduleClientAppointment = () => {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['public-client-appointments'] })
       void queryClient.invalidateQueries({ queryKey: ['public-availability'] })
+    },
+    // Un 409 (horario tomado, bloqueado) deja la grilla vieja: se vuelve a
+    // pedir para no seguir ofreciendo ese horario (FF-06, mismo patron que
+    // FF-33 en useCreatePublicBooking).
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })
 }
