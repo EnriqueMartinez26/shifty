@@ -9,6 +9,9 @@ FROM nginx:1.30.5-alpine
 # misma rama (3.24) en el build. El scan de CI (security-scan.yml) mira la
 # imagen construida: un CVE de Alpine corregido despues de publicado el tag
 # (2026-09-26: libexpat CVE-2026-93990, 2.8.5-r0) no espera al rebuild oficial.
+# Cambia en cada build para que el upgrade de seguridad no salga de la cache
+# (D-20260930-23).
+ARG SECURITY_UPGRADE_STAMP=manual
 RUN apk upgrade --no-cache
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
