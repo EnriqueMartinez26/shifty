@@ -171,9 +171,46 @@ _BOOLEANOS_DE_PRODUCCION: tuple[tuple[str, bool, str], ...] = (
     ),
 )
 
+# Integraciones sin las que produccion no cobra o falla a ciegas:
+# `(campo, mensaje)`. Vacio o con marca de placeholder es lo mismo que ausente.
+# El mensaje nombra la variable, nunca su valor (regla 20). 2026-10-02
+# (auditoria de origin/main): eran opcionales y el compose las pasaba con `:-`.
+_OBLIGATORIOS_DE_PRODUCCION: tuple[tuple[str, str], ...] = (
+    # En produccion el webhook valida la firma SOLO con este secreto (no hay
+    # fallback al de la tienda): sin el, ningun pago de MP se aplica.
+    (
+        "MERCADOPAGO_WEBHOOK_SECRET",
+        "MERCADOPAGO_WEBHOOK_SECRET es obligatorio en produccion",
+    ),
+    # En produccion la cuenta de MP de la tienda solo se vincula por OAuth.
+    (
+        "MERCADOPAGO_OAUTH_CLIENT_ID",
+        "MERCADOPAGO_OAUTH_CLIENT_ID es obligatorio en produccion",
+    ),
+    (
+        "MERCADOPAGO_OAUTH_CLIENT_SECRET",
+        "MERCADOPAGO_OAUTH_CLIENT_SECRET es obligatorio en produccion",
+    ),
+    (
+        "MERCADOPAGO_OAUTH_REDIRECT_URI",
+        "MERCADOPAGO_OAUTH_REDIRECT_URI es obligatorio en produccion",
+    ),
+    ("SENTRY_DSN", "SENTRY_DSN es obligatorio en produccion"),
+)
+
+# Unico proveedor de OTP con envio real (modules/otp/service.py): email por el
+# SMTP. `console` es de desarrollo; cualquier otro nombre no manda nada.
+_OTP_PROVIDERS_DE_PRODUCCION = frozenset({"email"})
+
 # Una URL publica que apunte a la maquina del deploy deja los mails y los
 # retornos de Mercado Pago apuntando a ningun lado.
 _PREFIJOS_LOCALES = ("http://localhost", "http://127.0.0.1")
+
+
+def _origenes_sin_https(cors_origins: str) -> list[str]:
+    origenes = (o.strip() for o in cors_origins.split(","))
+    return [o for o in origenes if o and not o.startswith("https://")]
+
 
 # Unica API de Mercado Pago que se acepta fuera de desarrollo (regla 17): otra
 # base mandaria access tokens de las tiendas a un host ajeno.
@@ -447,6 +484,8 @@ class Settings(BaseSettings):
             raise ValueError("CORS_ORIGINS no debe incluir localhost en produccion")
         if "*" in self.CORS_ORIGINS:
             raise ValueError("CORS_ORIGINS no puede ser * con credenciales habilitadas")
+        if _origenes_sin_https(self.CORS_ORIGINS):
+            raise ValueError("CORS_ORIGINS solo admite origenes https:// en produccion")
         # Los dos mensajes van escritos enteros y no con un f-string sobre el
         # nombre del campo: el texto exacto es lo que se busca en el log y lo
         # que inventaria el test de alcances.
@@ -456,6 +495,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "PUBLIC_API_URL no puede apuntar a localhost en produccion"
             )
+        if not self.PUBLIC_API_URL.startswith("https://"):
+            raise ValueError("PUBLIC_API_URL debe usar https:// en produccion")
         if self.PUBLIC_PRIVACY_URL and self.PUBLIC_PRIVACY_URL.startswith(
             _PREFIJOS_LOCALES
         ):
@@ -481,10 +522,29 @@ class Settings(BaseSettings):
             )
         if self.OTP_PROVIDER == "console":
             raise ValueError("OTP_PROVIDER no puede ser console en produccion")
+        if self.OTP_PROVIDER not in _OTP_PROVIDERS_DE_PRODUCCION:
+            raise ValueError(
+                "OTP_PROVIDER debe ser email en produccion (unico proveedor implementado)"
+            )
         if self.COOKIE_SAMESITE.lower() not in {"lax", "strict", "none"}:
             raise ValueError("COOKIE_SAMESITE debe ser lax, strict o none")
         if not self.FIELD_ENCRYPTION_KEY:
             raise ValueError("FIELD_ENCRYPTION_KEY es obligatorio en produccion")
+
+    def _validate_production_integrations(self) -> None:
+        """Produccion: Mercado Pago y Sentry presentes y con credenciales reales."""
+        for field, message in _OBLIGATORIOS_DE_PRODUCCION:
+            value = str(getattr(self, field) or "").strip()
+            if not value or _looks_like_placeholder(value):
+                raise ValueError(message)
+        # Las credenciales de la app de prueba de MP empiezan con TEST-: con
+        # ellas el OAuth vincula cuentas de sandbox y ningun pago es real.
+        secret = str(self.MERCADOPAGO_OAUTH_CLIENT_SECRET).strip().upper()
+        if secret.startswith("TEST-"):
+            raise ValueError(
+                "MERCADOPAGO_OAUTH_CLIENT_SECRET es una credencial de prueba (TEST-) "
+                "y no sirve en produccion"
+            )
 
     def _validate_operational_limits(self) -> None:
         """Limites que valen en cualquier entorno, desarrollo incluido."""
@@ -512,7 +572,8 @@ class Settings(BaseSettings):
         Las 27 condiciones pertenecen a tres alcances con condiciones de entrada
         distintas; apiladas en un solo cuerpo de 94 lineas habia que leerlas
         todas para saber donde iba una nueva (B7-06). Produccion se reparte en
-        dos partes para que ninguna pase de 30 lineas. Cada `raise` sigue siendo
+        tres partes para que ninguna pase de 30 lineas (la de integraciones,
+        2026-10-02). Cada `raise` sigue siendo
         el mismo `ValueError` con el mismo texto, que es lo que verifican
         `tests/unit/test_config_production_guards.py` y
         `tests/unit/test_validador_de_produccion_por_alcance.py`.
@@ -522,6 +583,7 @@ class Settings(BaseSettings):
         if self.ENV == Environment.PRODUCTION:
             self._validate_production_origins()
             self._validate_production_hardening()
+            self._validate_production_integrations()
         self._validate_operational_limits()
         return self
 

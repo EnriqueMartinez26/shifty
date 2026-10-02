@@ -307,6 +307,12 @@ CRITICAS_EN_PRODUCCION = (
     "CELERY_BROKER_URL",
     "CELERY_RESULT_BACKEND_URL",
     "CORS_ORIGINS",
+    # 2026-10-02: sin ellas produccion no cobra o falla a ciegas.
+    "MERCADOPAGO_WEBHOOK_SECRET",
+    "MERCADOPAGO_OAUTH_CLIENT_ID",
+    "MERCADOPAGO_OAUTH_CLIENT_SECRET",
+    "MERCADOPAGO_OAUTH_REDIRECT_URI",
+    "SENTRY_DSN",
 )
 
 # Valor de desarrollo que no puede aparecer como default en produccion.
