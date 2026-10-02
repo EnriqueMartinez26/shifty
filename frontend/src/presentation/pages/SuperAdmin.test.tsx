@@ -324,6 +324,44 @@ describe('SuperAdminPage', () => {
     expect(mockOverviewFor).toHaveBeenLastCalledWith('store-2')
   })
 
+  // 2026-10-02, QA en navegador (S\56): un slug invalido daba "No se pudo
+  // guardar la tienda", sin decir que corregir.
+  it('un slug invalido no se envia y explica el formato', () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'Barber Dos!' } })
+    fireEvent.submit(form)
+
+    expect(mockMutations.createStore).not.toHaveBeenCalled()
+    expect(within(form).getByRole('alert')).toHaveTextContent(/minúsculas, números y guiones/)
+  })
+
+  it('un 422 en el slug dice el formato, nunca el texto crudo', async () => {
+    mockMutations.createStore.mockRejectedValueOnce(
+      new ValidationError("slug: String should match pattern '^[a-z0-9]'", {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422,
+        detail: ["slug: String should match pattern '^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$'"]
+      })
+    )
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear tienda' }))
+    const form = openModalForm()
+    const textboxes = within(form).getAllByRole('textbox')
+    fireEvent.change(first(textboxes), { target: { value: 'Barber Dos' } })
+    fireEvent.change(first(textboxes.slice(1)), { target: { value: 'barber-dos' } })
+    fireEvent.submit(form)
+
+    const alerta = await within(form).findByRole('alert')
+    expect(alerta).toHaveTextContent(/minúsculas, números y guiones/)
+    expect(alerta).not.toHaveTextContent(/pattern/)
+  })
+
   it('crea una tienda con el payload del formulario', async () => {
     render(<SuperAdminPage />)
 

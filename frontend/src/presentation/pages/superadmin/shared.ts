@@ -1,6 +1,7 @@
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
+import { PASSWORD_POLICY_TEXT } from '@shared/utils/passwordPolicy'
 
 import { colors2000s } from '../../../theme/colors'
 import { userRoleLabel } from '../../lib/enumLabels'
@@ -244,4 +245,29 @@ export interface QueryState<T> {
   data: T | undefined
   isLoading: boolean
   isFetching: boolean
+}
+
+// Mismo patron que core/validation.py::SLUG_PATTERN.
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,98}[a-z0-9]$/
+export const SLUG_RULE_TEXT =
+  'El slug va en minúsculas, números y guiones, de 2 a 100 caracteres, sin guion al principio ni al final.'
+
+export const isValidSlug = (slug: string) => SLUG_PATTERN.test(slug)
+
+/**
+ * Un 422 de los formularios del panel nombra el campo: los modales decian
+ * "No se pudo guardar la tienda" sin el motivo (QA 2026-10-02). Nunca el texto
+ * crudo de Pydantic (regla 20).
+ */
+export const SUPERADMIN_FIELD_ERRORS: Partial<Record<string, string>> = {
+  slug: SLUG_RULE_TEXT,
+  name: 'Revisá el nombre: es demasiado corto, largo o tiene caracteres no permitidos.',
+  logo_url: 'El logo tiene que ser una URL https válida.',
+  primary_color: 'El color tiene que ser un hexadecimal, por ejemplo #ff8c42.',
+  email: 'Revisá el email: no parece válido.',
+  password: PASSWORD_POLICY_TEXT,
+  phone: 'Revisá el teléfono: solo números, espacios, guiones, paréntesis o +.',
+  first_name: 'Revisá el nombre: es demasiado largo o tiene caracteres no permitidos.',
+  last_name: 'Revisá el apellido: es demasiado largo o tiene caracteres no permitidos.',
+  code: 'Revisá el código del cupón: letras, números y guiones.'
 }

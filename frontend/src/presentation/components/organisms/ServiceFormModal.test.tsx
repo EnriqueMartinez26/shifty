@@ -176,6 +176,37 @@ describe('ServiceFormModal — motivo del rechazo (D-20260930-09)', () => {
     expect(repo.update).not.toHaveBeenCalled()
   })
 
+  // 2026-10-02, QA en navegador (S\43): el motivo se pintaba arriba del
+  // formulario, a top=-299px dentro del modal: el dueno no lo veia.
+  it('un porcentaje de mas de 100 se avisa junto al campo y el motivo se lleva a la vista', async () => {
+    const scrollIntoView = jest.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    const service = new ServiceService(repositorio())
+    try {
+      render(
+        <ServiceFormModal
+          isOpen
+          onClose={jest.fn()}
+          onSubmit={async (data) => {
+            await service.updateService('svc_1', data)
+          }}
+          editingService={servicioConSena()}
+          {...sinImagen()}
+        />
+      )
+
+      fireEvent.change(montoDeSena(), { target: { value: '150' } })
+      expect(screen.getByText('El porcentaje no puede superar 100.')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+      const alerta = await screen.findByRole('alert')
+      expect(scrollIntoView).toHaveBeenCalled()
+      expect(scrollIntoView.mock.contexts).toContain(alerta)
+    } finally {
+      delete (Element.prototype as Partial<Element>).scrollIntoView
+    }
+  })
+
   it('al editar con datos validos guarda igual', async () => {
     const repo = repositorio()
     const service = new ServiceService(repo)

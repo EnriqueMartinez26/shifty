@@ -96,8 +96,11 @@ const fieldOf = (entry: unknown): string | undefined => {
   if (typeof entry !== 'string') return undefined
   const separator = entry.indexOf(': ')
   if (separator <= 0) return undefined
+  // Un model_validator de Pydantic no tiene ruta: el campo viene adentro del
+  // mensaje ("Value error, deposit_amount: ...").
   const segments = entry
     .slice(0, separator)
+    .replace(/^Value error, /, '')
     .split(' -> ')
     .map((segment) => segment.trim())
     .filter((segment) => segment && !/^\d+$/.test(segment))
@@ -113,9 +116,12 @@ const fieldOf = (entry: unknown): string | undefined => {
  */
 export const getInvalidFields = (error: unknown): string[] => {
   if (getErrorCode(error) !== 'VALIDATION_ERROR') return []
-  const detail = asApplicationError(error)?.context?.detail
-  if (!Array.isArray(detail)) return []
-  return detail.map(fieldOf).filter((field): field is string => field !== undefined)
+  const appError = asApplicationError(error)
+  const detail = appError?.context?.detail
+  // Una ValidationException de negocio no trae lista, pero algunas nombran el
+  // campo igual en su mensaje ("deposit_amount: ...", services/schemas.py).
+  const entries: unknown[] = Array.isArray(detail) ? detail : [appError?.message]
+  return entries.map(fieldOf).filter((field): field is string => field !== undefined)
 }
 
 const fieldMessageFor = (

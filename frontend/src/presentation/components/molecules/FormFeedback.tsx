@@ -2,6 +2,8 @@ import React from 'react'
 
 import { CircleCheck, TriangleAlert } from 'lucide-react'
 
+import { revealOnMount } from '../../lib/revealOnMount'
+
 export interface FormFeedbackMessage {
   tone: 'error' | 'success'
   text: string
@@ -10,17 +12,6 @@ export interface FormFeedbackMessage {
 interface FormFeedbackProps {
   /** null no renderiza nada. */
   feedback: FormFeedbackMessage | null
-}
-
-/**
- * Lleva el aviso a la vista al montarse. Funcion de modulo, estable entre
- * renders: React la llama solo al montar y al desmontar, no en cada tecla.
- * jsdom no implementa scrollIntoView, de ahi el chequeo.
- */
-const revealOnMount = (node: HTMLDivElement | null) => {
-  if (node && typeof node.scrollIntoView === 'function') {
-    node.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }
 }
 
 /**

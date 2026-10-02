@@ -209,13 +209,29 @@ describe('getErrorMessage: errores de validacion por campo', () => {
     ).toBe('Datos inválidos.')
   })
 
-  it('un detail que no es lista (ValidationException de negocio) no trae campos', () => {
-    const error = new ValidationError('x', {
+  it('un detail que no es lista (ValidationException de negocio) sin campo no trae campos', () => {
+    const error = new ValidationError('Ese movimiento ya fue revertido.', {
       errorCode: 'VALIDATION_ERROR',
       statusCode: 422,
       detail: { campo: 'x' }
     })
 
     expect(getInvalidFields(error)).toEqual([])
+  })
+
+  // 2026-10-02, QA en navegador (S\43): una sena de mas de 100% decia un
+  // mensaje generico. El campo viene en el mensaje del model_validator (al
+  // crear) o de la ValidationException (al editar).
+  it('lee el campo de un model_validator y de una ValidationException de negocio', () => {
+    const alCrear = pydantic422(
+      'Value error, deposit_amount: un porcentaje de sena no puede superar 100'
+    )
+    const alEditar = new ValidationError(
+      'deposit_amount: un porcentaje de sena no puede superar 100',
+      { errorCode: 'VALIDATION_ERROR', statusCode: 422, detail: {} }
+    )
+
+    expect(getInvalidFields(alCrear)).toEqual(['deposit_amount'])
+    expect(getInvalidFields(alEditar)).toEqual(['deposit_amount'])
   })
 })

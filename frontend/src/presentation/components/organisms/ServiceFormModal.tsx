@@ -23,6 +23,7 @@ import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { validateServiceImage } from '@shared/utils/imageFile'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { revealOnMount } from '../../lib/revealOnMount'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { ServiceFormValues } from '../../types/forms'
 
@@ -39,6 +40,16 @@ interface ServiceFormModalProps {
    * modal que quedo abierto antes de que cargara el plan.
    */
   readOnlyReason?: string | null
+}
+
+// Un 422 del servidor nombra el campo; nunca el texto crudo (regla 20).
+const SERVICE_FIELD_ERRORS: Partial<Record<string, string>> = {
+  deposit_amount:
+    'Revisá la seña: un porcentaje va de 1 a 100 y un monto fijo tiene que ser mayor a 0.',
+  name: 'El nombre tiene que tener entre 2 y 255 caracteres.',
+  description: 'La descripción es demasiado larga o tiene caracteres no permitidos.',
+  duration_minutes: 'La duración tiene que ser de 1 a 480 minutos.',
+  price: 'El precio tiene que ser de 0 a 10.000.000.'
 }
 
 const PRESET_COLORS = [
@@ -123,6 +134,10 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
   // Se calcula en el render, no en un efecto: `full` significa 100% del precio
   // y no lleva monto aparte, y sin seña el monto no significa nada.
   const needsDepositAmount = formData.depositMode !== 'none' && formData.depositType !== 'full'
+  // Aviso junto al campo: el motivo del submit sale arriba del formulario y
+  // con el modal scrolleado no se veia (QA 2026-10-02).
+  const percentTooHigh =
+    needsDepositAmount && formData.depositType === 'percent' && (formData.depositAmount ?? 0) > 100
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -137,7 +152,9 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
       // tabla de codigos (regla 20).
       const motivos = getClientValidationMessages(err)
       setError(
-        motivos.length > 0 ? motivos.join(' · ') : getErrorMessage(err, 'No se pudo guardar')
+        motivos.length > 0
+          ? motivos.join(' · ')
+          : getErrorMessage(err, 'No se pudo guardar', {}, SERVICE_FIELD_ERRORS)
       )
     } finally {
       setLoading(false)
@@ -232,6 +249,8 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
           >
             {error && (
               <div
+                key={error}
+                ref={revealOnMount}
                 role="alert"
                 className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
                 style={{
@@ -400,6 +419,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                     placeholder={formData.depositType === 'percent' ? 'Ej: 30' : 'Ej: 5000'}
                     required
                   />
+                  {percentTooHigh && (
+                    <p className="text-[11px] font-bold text-red-600 ml-1">
+                      El porcentaje no puede superar 100.
+                    </p>
+                  )}
                   <p className="text-[10px] font-bold text-gray-400 ml-1">
                     {formData.depositType === 'percent'
                       ? 'Porcentaje del precio que el cliente paga para reservar.'
