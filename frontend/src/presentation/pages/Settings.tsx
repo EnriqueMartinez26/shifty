@@ -234,13 +234,17 @@ const SettingsPage: React.FC = () => {
 
   const handleConnectMercadoPago = async () => {
     setErrorMessage('')
+    let authUrl: string
     try {
-      const connection = await startMercadoPagoOAuth.mutateAsync()
-      if (!navigateExternal(connection.auth_url)) {
-        throw new Error('Mercado Pago devolvió un enlace de conexión inválido')
-      }
+      authUrl = (await startMercadoPagoOAuth.mutateAsync()).auth_url
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error, 'No se pudo iniciar la conexión con Mercado Pago'))
+      return
+    }
+    // El motivo va directo al cartel: lanzado como Error plano, getErrorMessage
+    // lo descartaba y quedaba el generico. Es un texto nuestro (regla 20).
+    if (!navigateExternal(authUrl)) {
+      setErrorMessage('Mercado Pago devolvió un enlace de conexión inválido.')
     }
   }
 
