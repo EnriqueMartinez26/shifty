@@ -2,10 +2,11 @@ import React from 'react'
 
 import type { SuperAdminPlan } from '@application/services/SuperAdminService'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import { innerCardStyle, panelStyle, scopeBadgeStyle, type QueryState } from './shared'
 import { colors2000s } from '../../../theme/colors'
 import { billingIntervalLabel } from '../../lib/enumLabels'
-import { formatCurrencyEsAr } from '../../lib/formatters'
 import { ActionButton, MiniButton } from '../SuperAdminUi'
 
 /**
@@ -59,7 +60,7 @@ export const PlansSection: React.FC<PlansSectionProps> = ({
                 style={{ color: colors2000s.text.secondary }}
               >
                 {billingIntervalLabel(plan.billing_interval)} ·{' '}
-                {formatCurrencyEsAr(plan.price, plan.currency)}
+                {formatCurrency(plan.price, plan.currency)}
               </p>
             </div>
             <span

@@ -62,7 +62,7 @@ export function SuperAdminAuditTimeline({
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
           >
-            Audit trail
+            Historial de cambios
           </p>
           <h2
             className="mt-1 text-xl font-black uppercase tracking-tight"
@@ -132,7 +132,7 @@ export function SuperAdminAuditTimeline({
             Sin eventos recientes
           </p>
           <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Cuando haya cambios relevantes del tenant, van a aparecer acá.
+            Cuando haya cambios relevantes de la tienda, van a aparecer acá.
           </p>
         </div>
       )}

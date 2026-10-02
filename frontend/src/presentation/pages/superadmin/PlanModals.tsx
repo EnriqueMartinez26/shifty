@@ -2,6 +2,8 @@ import React from 'react'
 
 import type { SuperAdminPlan, SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import {
   formGridClass,
   scopeBadgeStyle,
@@ -11,7 +13,6 @@ import {
   type SuperAdminModalKey
 } from './shared'
 import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
-import { formatCurrencyEsAr } from '../../lib/formatters'
 import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
 
 /**
@@ -96,7 +97,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
       </div>
 
       <div>
-        <FieldLabel>Descripcion</FieldLabel>
+        <FieldLabel>Descripción</FieldLabel>
         <TextArea
           value={planForm.description}
           onChange={(event) =>
@@ -164,7 +165,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
       {modal === 'edit-plan' ? (
         <ToggleRow
           label="Plan activo"
-          description="Define si puede asignarse a nuevas tiendas."
+          description="Definí si se puede asignar a tiendas nuevas."
           checked={planForm.is_active}
           onToggle={() => setPlanForm((current) => ({ ...current, is_active: !current.is_active }))}
         />
@@ -176,15 +177,15 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
       onClose={closeModal}
       onSubmit={handleSubscriptionSubmit}
       title="Asignar plan"
-      subtitle={selectedStore ? `Suscripcion de ${selectedStore.name}` : 'Suscripcion por tienda'}
-      submitLabel="Guardar suscripcion"
+      subtitle={selectedStore ? `Suscripción de ${selectedStore.name}` : 'Suscripción por tienda'}
+      submitLabel="Guardar suscripción"
       loading={assignSubscriptionMutation.isPending}
       error={modalError}
       submitDisabled={selectedStoreUnavailable || !activePlans.length}
     >
       {selectedStoreUnavailable ? (
         <div className="rounded-2xl px-4 py-3 text-xs font-bold" style={scopeBadgeStyle('danger')}>
-          La tienda esta inactiva. El backend puede rechazar nuevas suscripciones hasta reactivarla.
+          La tienda está inactiva. Puede que no se acepten suscripciones nuevas hasta reactivarla.
         </div>
       ) : null}
 
@@ -198,10 +199,10 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
             }
             required
           >
-            <option value="">Selecciona un plan</option>
+            <option value="">Seleccioná un plan</option>
             {activePlans.map((plan) => (
               <option key={plan.public_id} value={plan.public_id}>
-                {plan.name} · {formatCurrencyEsAr(plan.price, plan.currency)}
+                {plan.name} · {formatCurrency(plan.price, plan.currency)}
               </option>
             ))}
           </SelectInput>
@@ -234,7 +235,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
             onChange={(event) =>
               setSubscriptionForm((current) => ({ ...current, base_amount: event.target.value }))
             }
-            placeholder="Usa precio del plan si queda vacio"
+            placeholder="Si queda vacío, se usa el precio del plan"
           />
         </div>
         <div>
@@ -253,7 +254,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Periodo desde</FieldLabel>
+          <FieldLabel>Período desde</FieldLabel>
           <TextInput
             type="datetime-local"
             value={subscriptionForm.current_period_start}
@@ -266,7 +267,7 @@ export const PlanModals: React.FC<PlanModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Periodo hasta</FieldLabel>
+          <FieldLabel>Período hasta</FieldLabel>
           <TextInput
             type="datetime-local"
             value={subscriptionForm.current_period_end}

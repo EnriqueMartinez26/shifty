@@ -444,7 +444,7 @@ const SuperAdminPage: React.FC = () => {
           current_period_end: fromDateTimeInput(subscriptionForm.current_period_end)
         }
       })
-      setFeedback({ tone: 'success', text: `Suscripcion actualizada para ${selectedStore.name}` })
+      setFeedback({ tone: 'success', text: `Suscripción actualizada para ${selectedStore.name}` })
       closeModal()
     } catch (error) {
       setModalError(
@@ -472,7 +472,7 @@ const SuperAdminPage: React.FC = () => {
 
       if (modal === 'create-coupon') {
         const created = await createCouponMutation.mutateAsync(payload)
-        setFeedback({ tone: 'success', text: `Cupon creado: ${created.code}` })
+        setFeedback({ tone: 'success', text: `Cupón creado: ${created.code}` })
       } else if (editingCoupon) {
         const updated = await updateCouponMutation.mutateAsync({
           couponPublicId: editingCoupon.public_id,
@@ -481,13 +481,13 @@ const SuperAdminPage: React.FC = () => {
             is_active: couponForm.is_active
           }
         })
-        setFeedback({ tone: 'success', text: `Cupon actualizado: ${updated.code}` })
+        setFeedback({ tone: 'success', text: `Cupón actualizado: ${updated.code}` })
       }
 
       closeModal()
     } catch (error) {
       setModalError(
-        getErrorMessage(error, 'No se pudo guardar el cupon', {}, SUPERADMIN_FIELD_ERRORS)
+        getErrorMessage(error, 'No se pudo guardar el cupón', {}, SUPERADMIN_FIELD_ERRORS)
       )
     }
   }
@@ -504,12 +504,12 @@ const SuperAdminPage: React.FC = () => {
       })
       setFeedback({
         tone: 'success',
-        text: `Cupon ${redemption.code_snapshot} canjeado en ${selectedStore.name}`
+        text: `Cupón ${redemption.code_snapshot} canjeado en ${selectedStore.name}`
       })
       closeModal()
     } catch (error) {
       setModalError(
-        getErrorMessage(error, 'No se pudo canjear el cupon', {}, SUPERADMIN_FIELD_ERRORS)
+        getErrorMessage(error, 'No se pudo canjear el cupón', {}, SUPERADMIN_FIELD_ERRORS)
       )
     }
   }
@@ -546,7 +546,7 @@ const SuperAdminPage: React.FC = () => {
       nextState,
       question: nextState
         ? `Activar ${store.name}?`
-        : `Desactivar ${store.name}? Esto puede bloquear nuevas operaciones del tenant.`,
+        : `Desactivar ${store.name}? Esto puede bloquear nuevas operaciones de la tienda.`,
       run: () =>
         updateStoreMutation.mutateAsync({
           storePublicId: store.public_id,
@@ -602,7 +602,7 @@ const SuperAdminPage: React.FC = () => {
       nextState,
       question: nextState
         ? `Promover a ${targetUser.email} como Super Admin global?`
-        : `Revocar Super Admin global a ${targetUser.email}? El backend impedira dejar al sistema sin un admin global activo.`,
+        : `Revocar Super Admin global a ${targetUser.email}? Shifty no permite dejar el sistema sin un admin global activo.`,
       run: () =>
         setGlobalAdminMutation.mutateAsync({
           userPublicId: targetUser.public_id,
@@ -632,14 +632,14 @@ const SuperAdminPage: React.FC = () => {
     const nextState = !coupon.is_active
     return confirmAndToggle({
       nextState,
-      question: nextState ? `Activar cupon ${coupon.code}?` : `Desactivar cupon ${coupon.code}?`,
+      question: nextState ? `Activar cupón ${coupon.code}?` : `Desactivar cupón ${coupon.code}?`,
       run: () =>
         updateCouponMutation.mutateAsync({
           couponPublicId: coupon.public_id,
           payload: { is_active: nextState }
         }),
-      doneText: `Cupon ${nextState ? 'activado' : 'desactivado'}: ${coupon.code}`,
-      failText: 'No se pudo actualizar el cupon'
+      doneText: `Cupón ${nextState ? 'activado' : 'desactivado'}: ${coupon.code}`,
+      failText: 'No se pudo actualizar el cupón'
     })
   }
 
@@ -780,8 +780,8 @@ const SuperAdminPage: React.FC = () => {
                   Estados sensibles
                 </p>
                 <p className="mt-2 text-xs font-bold">
-                  La UI diferencia acciones globales, acciones sobre tienda seleccionada y
-                  operaciones delicadas para evitar errores de tenant.
+                  Las acciones globales, las de la tienda seleccionada y las delicadas se muestran
+                  separadas para evitar errores.
                 </p>
               </div>
             </div>
