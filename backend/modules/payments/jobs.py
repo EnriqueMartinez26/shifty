@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Any
@@ -50,6 +57,7 @@ from modules.payments.model import (
 )
 from modules.payments.processing import (
     PAGO_NO_VERIFICADO,
+    alert_integrity_rejection,
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
@@ -1305,6 +1313,7 @@ async def _process_webhook_inbox_batch(
         except Exception as exc:
             failed += 1
             await _registrar_fallo(db, inbox, exc)
+            await alert_integrity_rejection(db, exc)
         else:
             if applied:
                 processed += 1
@@ -1604,7 +1613,8 @@ async def _conciliar_un_cobro(
             )
     except SoftTimeLimitExceeded:
         raise
-    except Exception:
+    except Exception as exc:
+        await alert_integrity_rejection(db, exc)
         # Como antes: cuenta como inspeccionado si ya habia tomado el turno.
         return ("inspected", "failed") if bloqueado else ("failed",)
     if applied and payment.status != estado_previo:
@@ -1744,7 +1754,7 @@ def _es_aprobado(remoto: Mapping[str, Any]) -> bool:
 
 
 def _expired_holds_query(
-    now: datetime, limit: int
+    now: datetime, limit: int, *, excluir: Collection[str] = ()
 ) -> Select[tuple[Appointment, Payment]]:
     """Turnos con retencion vencida y sin cobro acreditado, los mas viejos primero.
 
@@ -1758,8 +1768,11 @@ def _expired_holds_query(
     (``prepare_mercadopago_preference``), asi que ya vencio solo; un PUT por
     retencion vencida solo sumaria carga a MP. Si el cobro ya estaba
     acreditado, el grafo no lo degrada.
+
+    ``excluir``: turnos que una pagina anterior de la misma corrida ya vio
+    (``EXPIRE_MAX_PAGES``).
     """
-    return (
+    consulta = (
         select(Appointment, Payment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
         .where(
@@ -1779,6 +1792,9 @@ def _expired_holds_query(
         .order_by(Appointment.expires_at.asc())
         .limit(limit)
     )
+    if excluir:
+        consulta = consulta.where(Appointment.id.not_in(sorted(excluir)))
+    return consulta
 
 
 # Advisory locks de jobs: forma de DOS int4 (namespace, id). Postgres guarda
@@ -1872,15 +1888,82 @@ async def expire_unpaid_appointments(
         if not tomado:
             # Otra corrida del beat sigue adentro (MP lento): esta no hace nada.
             logger.info("expire_unpaid_appointments_overlap_skipped")
-            return {"expired": 0, "rescued": 0, "inspected": 0}
+            return {"expired": 0, "rescued": 0, "held": 0, "inspected": 0}
         return await _expire_unpaid_appointments(db, limit=limit)
+
+
+# Paginas por corrida del job de vencimiento (revision 4R de la PR #104). Un
+# turno cuyo pago de MP no pasa la integridad no se vence ni se rescata
+# (``_rescatar_o_retener``) y, como ``_expired_holds_query`` toma los mas
+# viejos primero, encabeza cada corrida: con ``limit`` turnos asi, el resto no
+# se vencia nunca. Si una pagina retuvo alguno, la corrida pide la siguiente
+# SIN los turnos ya vistos y con el MISMO presupuesto de MP de la fase A (no
+# suma tiempo al peor caso). El tope acota la corrida si casi todo esta
+# retenido; cada retenido aprobado ya llego a Sentry.
+EXPIRE_MAX_PAGES = 3
+
+
+@dataclass
+class _Vencimiento:
+    """Lo que hizo una corrida (o una pagina) del job de vencimiento."""
+
+    expired: int = 0
+    rescued: int = 0
+    held: int = 0
+    inspected: int = 0
+    liberados: list[tuple[str, datetime]] = field(default_factory=list)
+
+    def sumar(self, otra: _Vencimiento) -> None:
+        self.expired += otra.expired
+        self.rescued += otra.rescued
+        self.held += otra.held
+        self.inspected += otra.inspected
+        self.liberados.extend(otra.liberados)
 
 
 async def _expire_unpaid_appointments(
     db: AsyncSession, *, limit: int
 ) -> dict[str, int]:
     now = datetime.now(timezone.utc)
-    vencidos = _expired_holds_query(now, limit)
+    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    total = _Vencimiento()
+    vistos: set[str] = set()
+    for _pagina in range(EXPIRE_MAX_PAGES):
+        pagina = await _vencer_una_pagina(db, now, limit, vistos, limite)
+        total.sumar(pagina)
+        if not pagina.held:
+            break
+    # El cupo vuelve a estar libre: la pagina publica no puede seguir
+    # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
+    if total.liberados:
+        try:
+            cache = await get_availability_cache()
+            for store_id, starts_at in total.liberados:
+                await invalidate_availability(cache, store_id, starts_at)
+        except REDIS_UNAVAILABLE_ERRORS as exc:
+            # PV-22: solo el tipo; el texto de redis-py puede traer la URL
+            # de conexion con la clave.
+            logger.warning(
+                "availability_cache_invalidation_failed",
+                error_type=type(exc).__name__,
+            )
+    return {
+        "expired": total.expired,
+        "rescued": total.rescued,
+        "held": total.held,
+        "inspected": total.inspected,
+    }
+
+
+async def _vencer_una_pagina(
+    db: AsyncSession, now: datetime, limit: int, vistos: set[str], limite: float
+) -> _Vencimiento:
+    """Una pagina del job: fase A sin lock, fase B con lock, y su commit.
+
+    Agrega a ``vistos`` los turnos de la pagina para que la siguiente no los
+    vuelva a tomar.
+    """
+    vencidos = _expired_holds_query(now, limit, excluir=vistos)
 
     # Fase A, SIN lock: preguntarle a Mercado Pago por los cobros pendientes.
     # Es HTTP (hasta 20 s por pedido) y no puede correr con las filas del lote
@@ -1895,6 +1978,7 @@ async def _expire_unpaid_appointments(
     # mataba a mitad del job. Commit de AsyncSession y no de TenantSession (el
     # de TenantSession reabre otra transaccion); el contexto vuelve en fase B.
     configs, retiradas = await _lecturas_para_mp(db, pendientes)
+    vistos.update(appointment.id for appointment, _ in candidatos)
     await AsyncSession.commit(db)
     remotos, consultados = await _fetch_remote_payments(
         pendientes,
@@ -1902,6 +1986,7 @@ async def _expire_unpaid_appointments(
         configs=configs,
         retiradas=retiradas,
         persist_refresh=partial(persist_gateway_refresh, db),
+        limite=limite,
     )
     await _apply_tenant_context(db)
 
@@ -1916,25 +2001,10 @@ async def _expire_unpaid_appointments(
         )
     )
     rows = list(result.all())
-    expired, rescued, liberados = await _vencer_o_rescatar(
-        db, rows, remotos, consultados
-    )
+    vistos.update(appointment.id for appointment, _ in rows)
+    pagina = await _vencer_o_rescatar(db, rows, remotos, consultados)
     await db.commit()
-    # El cupo vuelve a estar libre: la pagina publica no puede seguir
-    # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
-    if liberados:
-        try:
-            cache = await get_availability_cache()
-            for store_id, starts_at in liberados:
-                await invalidate_availability(cache, store_id, starts_at)
-        except REDIS_UNAVAILABLE_ERRORS as exc:
-            # PV-22: solo el tipo; el texto de redis-py puede traer la URL
-            # de conexion con la clave.
-            logger.warning(
-                "availability_cache_invalidation_failed",
-                error_type=type(exc).__name__,
-            )
-    return {"expired": expired, "rescued": rescued, "inspected": len(rows)}
+    return pagina
 
 
 async def _vencer_o_rescatar(
@@ -1942,7 +2012,7 @@ async def _vencer_o_rescatar(
     rows: Sequence[Row[tuple[Appointment, Payment]]],
     remotos: Mapping[str, dict[str, Any]],
     consultados: set[str],
-) -> tuple[int, int, list[tuple[str, datetime]]]:
+) -> _Vencimiento:
     """Fase B del job de vencimiento, con los turnos bloqueados.
 
     Solo decide sobre los cobros de MP que la fase A consulto (``consultados``,
@@ -1951,12 +2021,10 @@ async def _vencer_o_rescatar(
     la relectura con ``SKIP LOCKED`` trajo sin que la fase A lo viera (vencio
     mientras tanto o entro en el ``limit``; revision de 3b977a9..6c84d46,
     #2), no se vence en esta corrida: pudo estar pagado; lo decide la
-    siguiente. Devuelve (vencidos, rescatados, (tienda, inicio) de cada turno
-    liberado).
+    siguiente. Uno cuyo pago remoto no se pudo aplicar queda retenido
+    (``held``; ver ``_rescatar_o_retener``).
     """
-    expired = 0
-    rescued = 0
-    liberados: list[tuple[str, datetime]] = []
+    resultado = _Vencimiento(inspected=len(rows))
     for appointment, payment in rows:
         if (
             payment is not None
@@ -1964,13 +2032,18 @@ async def _vencer_o_rescatar(
             and payment.id not in consultados
         ):
             continue
-        # Ultimo chequeo antes de liberar el turno: si el cobro se acredito y el
-        # webhook nunca llego, vencerlo perderia una reserva ya pagada.
-        if payment and await _apply_remote_payment(
-            db, payment, remotos.get(payment.id)
-        ):
-            rescued += 1
-            continue
+        if payment is not None:
+            # Ultimo chequeo antes de liberar el turno: si el cobro se acredito
+            # y el webhook nunca llego, vencerlo perderia una reserva pagada.
+            decision = await _rescatar_o_retener(
+                db, appointment.id, payment, remotos.get(payment.id)
+            )
+            if decision == "rescatado":
+                resultado.rescued += 1
+                continue
+            if decision == "retenido":
+                resultado.held += 1
+                continue
         appointment.apply_status_transition(AppointmentStatus.EXPIRED)
         if payment:
             # Por el grafo (pending/rejected -> expired); sin vencer el link:
@@ -1986,9 +2059,50 @@ async def _vencer_o_rescatar(
             ends_at=appointment.ends_at,
             reason="hold_expired",
         )
-        expired += 1
-        liberados.append((appointment.store_id, appointment.starts_at))
-    return expired, rescued, liberados
+        resultado.expired += 1
+        resultado.liberados.append((appointment.store_id, appointment.starts_at))
+    return resultado
+
+
+async def _rescatar_o_retener(
+    db: AsyncSession,
+    appointment_id: str,
+    payment: Payment,
+    remote: dict[str, Any] | None,
+) -> str:
+    """``rescatado``, ``retenido`` o ``vencer``, para el turno de este cobro.
+
+    Revision 4R de la PR #104 (CRITICO): el pago remoto se aplicaba sin
+    aislamiento. Una ``RuntimeError`` de integridad (en produccion un aprobado
+    con ``live_mode`` falso, sin importe, sin collector o con la tienda sin
+    ``oauth_user_id``) revertia el lote ENTERO antes del commit y, como ese
+    turno es el mas viejo, encabezaba cada corrida: el vencimiento se frenaba
+    para todas las tiendas. Ahora cada cobro va en su savepoint, como en la
+    conciliacion (AUD2-B2-11). Si falla, el turno NO se rescata NI se vence:
+    MP pudo haberlo cobrado y liberar el cupo perderia una reserva pagada.
+    Queda para una persona: un rechazo de integridad llega a Sentry una vez
+    por (pago de MP, motivo), este aprobado o no, porque el turno no se va a
+    liberar solo.
+    """
+    store_id, payment_id = payment.store_id, payment.id
+    try:
+        async with db.begin_nested():
+            rescatado = await _apply_remote_payment(db, payment, remote)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        # Solo ids, leidos antes: el savepoint revertido deja las instancias
+        # expiradas y releerlas aca seria un acceso perezoso (MissingGreenlet).
+        logger.warning(
+            "expire_hold_left_for_review",
+            store_id=store_id,
+            appointment_id=appointment_id,
+            payment_id=payment_id,
+            error_type=type(exc).__name__,
+        )
+        await alert_integrity_rejection(db, exc, incluir_no_aprobados=True)
+        return "retenido"
+    return "rescatado" if rescatado else "vencer"
 
 
 async def persist_gateway_refresh(
@@ -2029,6 +2143,7 @@ async def _fetch_remote_payments(
     configs: GatewayConfigs,
     retiradas: Mapping[str, Sequence[str]] | None = None,
     persist_refresh: PersistRefresh | None = None,
+    limite: float | None = None,
 ) -> tuple[dict[str, dict[str, Any]], set[str]]:
     """Consulta a Mercado Pago los cobros pendientes: ({payment.id: pago
     remoto}, ids que se consultaron, aunque la consulta haya fallado).
@@ -2038,11 +2153,13 @@ async def _fetch_remote_payments(
     detectar el cobro y dejarlo visible para reembolso. Con el mismo
     presupuesto que la conciliacion y el inbox (revision de e5579b6..3b977a9,
     #1: este job no tenia): lo que no se llego a consultar NO vence.
+    ``limite``: el de la corrida, compartido entre sus paginas.
     """
     remotos: dict[str, dict[str, Any]] = {}
     consultados: set[str] = set()
     de_mp = [p for p in payments if p.provider == "mercadopago"]
-    limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
+    if limite is None:
+        limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
     for indice, payment in enumerate(de_mp):
         if _presupuesto_agotado(
             limite, job="expire_holds", sin_consultar=len(de_mp) - indice

@@ -259,12 +259,23 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`). La firma cubre solo `data.id`: el estado y todo lo que
-   valida la integridad salen SOLO de `GET /v1/payments/{id}`; sin respuesta
-   de MP el evento queda en el inbox sin aplicar. Un `approved` sin importe
-   o sin collector falla cerrado, y en producción un pago con `live_mode`
-   distinto de `true` no se aplica
-   (`test_webhook_sin_confiar_en_el_cuerpo.py`, 2026-10-02). La integridad exige la `external_reference` del link
+   `processing.py`). Del cuerpo, la firma cubre solo `data.id`: a MP se le
+   consulta SOLO ese id, y el estado y todo lo que valida la integridad
+   salen SOLO de `GET /v1/payments/{id}`; sin respuesta de MP el evento
+   queda en el inbox sin aplicar. Un `approved` sin importe falla cerrado;
+   sin `collector_id` falla si la tienda tiene `oauth_user_id`, y en
+   producción una tienda sin `oauth_user_id` no acredita ningún aprobado
+   (por eso, en producción, el callback de OAuth no guarda un token sin
+   `user_id`). En producción un pago con `live_mode` distinto de `true` no
+   se aplica. Un aprobado rechazado por integridad avisa a Sentry una vez
+   por pago de MP y motivo (`processing.alert_integrity_rejection`). El job
+   de retenciones vencidas aplica cada pago remoto en su savepoint: el que
+   falla no se rescata ni se vence (queda para una persona y avisa, aprobado
+   o no) y la corrida sigue con la página siguiente (`EXPIRE_MAX_PAGES`)
+   (`test_webhook_sin_confiar_en_el_cuerpo.py`,
+   `test_vencimiento_con_cobro_rechazado.py`,
+   `test_oauth_sin_cuenta_en_produccion.py`, 2026-10-02). La integridad
+   exige la `external_reference` del link
    VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`, prendido
    por defecto; apagado, regenerar el link de un cobro vencido es 409; el pago
    de MP no trae `preference_id`). Los links que un cobro deja de usar quedan en

@@ -30,22 +30,28 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from httpx import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+import modules.payments.processing as processing
 import modules.payments.service as payments_service
 from core.config import Environment, settings
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.jobs import process_webhook_inbox_batch
 from modules.payments.model import (
+    WEBHOOK_INBOX_MAX_ATTEMPTS,
     Payment,
     PaymentGatewayConfig,
     PaymentStatus,
     WebhookInbox,
 )
-from modules.payments.processing import apply_mercadopago_webhook_payload
+from modules.payments.processing import (
+    PAGO_NO_VERIFICADO,
+    apply_mercadopago_webhook_payload,
+)
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
     webhook_signature_headers,
@@ -276,11 +282,11 @@ async def test_con_mp_caido_el_inbox_no_aplica_el_estado_del_cuerpo(
 
 
 @pytest.mark.asyncio
-async def test_si_mp_responde_se_aplica_lo_que_dice_mp_no_el_cuerpo(
+async def test_si_mp_no_manda_estado_el_del_cuerpo_no_lo_completa(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """MP dice ``rejected`` y el cuerpo ``approved``: gana MP. Y si MP no manda
-    estado, el del cuerpo no lo completa."""
+    """MP responde el pago SIN ``status`` y el cuerpo dice ``approved``: el
+    estado del cuerpo no completa el que falta (el evento no se aplica)."""
     store, cobro = await _cobro_pendiente(
         client, test_session, monkeypatch, "cuerpo-vs-mp"
     )
@@ -308,8 +314,12 @@ async def test_aprobado_sin_importe_no_se_aplica(
         monkeypatch, remote_payment=_remoto_aprobado(cobro, transaction_amount=None)
     )
 
+    # El cuerpo SI trae importe: si volviera la mezcla con el cuerpo, el
+    # importe saldria de ahi y el pago se acreditaria.
     datos = await _entregar(
-        client, store, {"id": "evt-sin-importe", "data": {"id": "mp-remoto"}}
+        client,
+        store,
+        _cuerpo_aprobado(cobro, evento="evt-sin-importe", pago="mp-remoto"),
     )
 
     assert datos["applied"] is False, "se acredito sin saber cuanto se pago"
@@ -440,3 +450,332 @@ async def test_fuera_de_produccion_un_pago_de_prueba_se_aplica(
         await test_session.execute(select(Payment).where(Payment.id == cobro.id))
     ).scalar_one()
     assert pago.status == PaymentStatus.APPROVED.value
+
+
+# --- Revision 4R de la PR #104 ------------------------------------------------
+
+
+def _mp_que_registra(
+    monkeypatch: pytest.MonkeyPatch, remoto: dict[str, Any] | None
+) -> list[str]:
+    """Como ``_stub_mercadopago``, pero anota cada ruta consultada."""
+    consultas: list[str] = []
+
+    async def fake_request(
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        consultas.append(path)
+        if path.startswith("/v1/payments/search"):
+            return {"results": [remoto] if remoto else []}
+        if path.startswith("/v1/payments/"):
+            return remoto or {}
+        return {}
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", fake_request)
+    return consultas
+
+
+def _sentry(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    avisos: list[dict[str, Any]] = []
+
+    def fake_report(exc: BaseException, **contexto: Any) -> None:
+        avisos.append({"error": str(exc), **contexto})
+
+    monkeypatch.setattr(processing, "report_exception", fake_report)
+    return avisos
+
+
+def _en_produccion(monkeypatch: pytest.MonkeyPatch) -> None:
+    # En produccion la firma se valida con el secreto global, no con el de la
+    # tienda (``_validate_mercadopago_signature``).
+    monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
+    monkeypatch.setattr(settings, "MERCADOPAGO_WEBHOOK_SECRET", "secret-demo")
+
+
+@pytest.mark.asyncio
+async def test_mp_dice_rechazado_y_el_cuerpo_aprobado_el_pago_no_se_acredita(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 W1: con la consulta buena gana MP, aunque el cuerpo diga otra cosa."""
+    store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "rechazado-vs-cuerpo"
+    )
+    _stub_mercadopago(
+        monkeypatch, remote_payment=_remoto_aprobado(cobro, status="rejected")
+    )
+
+    await _entregar(
+        client,
+        store,
+        _cuerpo_aprobado(cobro, evento="evt-rechazado", pago="mp-remoto"),
+    )
+
+    test_session.expire_all()
+    pago = (
+        await test_session.execute(select(Payment).where(Payment.id == cobro.id))
+    ).scalar_one()
+    assert pago.status != PaymentStatus.APPROVED.value, "acredito el cuerpo, no MP"
+    assert not pago.is_accredited
+    turno = (
+        await test_session.execute(
+            select(Appointment).where(Appointment.id == cobro.turno)
+        )
+    ).scalar_one()
+    assert turno.status != AppointmentStatus.CONFIRMED.value
+
+
+@pytest.mark.asyncio
+async def test_sin_metadata_ni_referencia_de_mp_el_cuerpo_no_las_completa(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 W1: MP no devuelve ``metadata``, ``external_reference`` ni
+    ``preference_id``; el cuerpo trae los reales. Sin ellos no se sabe de que
+    cobro es el pago, y el cuerpo no puede decirlo."""
+    store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "sin-metadata-mp"
+    )
+    _stub_mercadopago(
+        monkeypatch,
+        remote_payment=_remoto_aprobado(
+            cobro, external_reference=None, preference_id=None
+        ),
+    )
+
+    datos = await _entregar(
+        client, store, _cuerpo_aprobado(cobro, evento="evt-sin-meta", pago="mp-remoto")
+    )
+
+    assert datos["applied"] is False, "el cobro salio de la metadata del cuerpo"
+    await _sigue_pendiente(test_session, cobro)
+
+
+@pytest.mark.asyncio
+async def test_sin_estado_de_mp_el_inbox_deja_el_evento_para_reintentar(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 W1: el caso sin ``status`` tambien por el lote del inbox."""
+    _store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "sin-estado-inbox"
+    )
+    test_session.add(
+        WebhookInbox(
+            store_id=cobro.store_id,
+            provider="mercadopago",
+            event_id="mercadopago:evt-sin-estado-inbox",
+            event_type="payment",
+            payload=_cuerpo_aprobado(
+                cobro, evento="evt-sin-estado-inbox", pago="mp-remoto"
+            ),
+        )
+    )
+    await test_session.commit()
+    _stub_mercadopago(monkeypatch, remote_payment=_remoto_aprobado(cobro, status=None))
+
+    resultado = await process_webhook_inbox_batch(test_session)
+
+    assert (resultado["processed"], resultado["failed"]) == (0, 1), resultado
+    await _sigue_pendiente(test_session, cobro)
+    inbox = await _inbox(test_session)
+    assert inbox.processed_at is None
+    assert inbox.error == PAGO_NO_VERIFICADO
+    assert inbox.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_el_corte_de_celery_en_la_consulta_a_mp_no_gasta_un_intento(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 W2: con el ``enrich`` REAL, el soft time limit que salta en la
+    consulta a MP corta el lote (se propaga) y no cuenta como fallo."""
+    _store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "corte-en-enrich"
+    )
+    test_session.add(
+        WebhookInbox(
+            store_id=cobro.store_id,
+            provider="mercadopago",
+            event_id="mercadopago:evt-corte",
+            event_type="payment",
+            payload={"id": "evt-corte", "data": {"id": "mp-remoto"}},
+        )
+    )
+    await test_session.commit()
+
+    async def corte(*_args: Any, **_kwargs: Any) -> Any:
+        raise SoftTimeLimitExceeded()
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", corte)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        await process_webhook_inbox_batch(test_session)
+
+    await test_session.rollback()
+    inbox = await _inbox(test_session)
+    assert inbox.attempts == 0, "el corte de Celery no es un fallo del evento"
+    assert inbox.processed_at is None
+    assert inbox.error is None
+
+
+@pytest.mark.asyncio
+async def test_con_mp_caido_el_evento_agota_los_intentos_sin_aplicar_el_cuerpo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 W3: dead letter determinista. MP no responde nunca: el evento se
+    reintenta hasta ``WEBHOOK_INBOX_MAX_ATTEMPTS``, queda cerrado con el
+    motivo y el cuerpo ``approved`` nunca se aplico."""
+    _store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "dead-letter-mp"
+    )
+    test_session.add(
+        WebhookInbox(
+            store_id=cobro.store_id,
+            provider="mercadopago",
+            event_id="mercadopago:evt-dead-letter",
+            event_type="payment",
+            payload=_cuerpo_aprobado(cobro, evento="evt-dead-letter", pago="mp-dl"),
+        )
+    )
+    await test_session.commit()
+    _mp_caido(monkeypatch, falla="excepcion")
+
+    for _ in range(WEBHOOK_INBOX_MAX_ATTEMPTS):
+        await process_webhook_inbox_batch(test_session)
+
+    inbox = await _inbox(test_session)
+    assert inbox.attempts == WEBHOOK_INBOX_MAX_ATTEMPTS
+    assert inbox.processed_at is not None, "agotado, deja de reintentarse"
+    assert inbox.error == PAGO_NO_VERIFICADO
+    await _sigue_pendiente(test_session, cobro)
+
+
+@pytest.mark.asyncio
+async def test_en_produccion_un_pago_de_prueba_por_el_webhook_queda_en_el_inbox(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R3 S1: el caso de ``live_mode = false`` en produccion, de punta a
+    punta por el handler HTTP."""
+    store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "prod-sandbox-http"
+    )
+    await _vincular_cuenta(test_session, cobro)
+    _stub_mercadopago(
+        monkeypatch, remote_payment=_remoto_aprobado(cobro, live_mode=False)
+    )
+    _sentry(monkeypatch)
+    _en_produccion(monkeypatch)
+
+    datos = await _entregar(
+        client, store, _cuerpo_aprobado(cobro, evento="evt-prod-http", pago="mp-remoto")
+    )
+
+    assert datos == {"received": True, "applied": False}
+    await _sigue_pendiente(test_session, cobro)
+    inbox = await _inbox(test_session)
+    assert inbox.processed_at is None
+    assert inbox.attempts == 1
+    assert "prueba" in (inbox.error or ""), inbox.error
+
+
+@pytest.mark.asyncio
+async def test_un_aprobado_rechazado_por_integridad_avisa_a_sentry_una_vez(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R4 W2: una alerta por (pago de MP, motivo), con ids y sin datos
+    personales. La reentrega no repite; otro motivo del mismo pago si avisa."""
+    store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "alerta-integridad"
+    )
+    await _vincular_cuenta(test_session, cobro)
+    _stub_mercadopago(
+        monkeypatch, remote_payment=_remoto_aprobado(cobro, live_mode=False)
+    )
+    avisos = _sentry(monkeypatch)
+    _en_produccion(monkeypatch)
+    cuerpo = {"id": "evt-alerta", "type": "payment", "data": {"id": "mp-remoto"}}
+
+    await _entregar(client, store, cuerpo)
+    await _entregar(client, store, cuerpo)
+    assert [a["motivo"] for a in avisos] == ["modo_prueba"], avisos
+
+    _stub_mercadopago(
+        monkeypatch,
+        remote_payment=_remoto_aprobado(
+            cobro, live_mode=False, transaction_amount=None
+        ),
+    )
+    await _entregar(client, store, cuerpo)
+
+    assert [a["motivo"] for a in avisos] == ["modo_prueba", "sin_importe"], avisos
+    for aviso in avisos:
+        assert set(aviso) == {
+            "error",
+            "motivo",
+            "store_id",
+            "payment_id",
+            "mp_payment_id",
+        }
+        assert aviso["payment_id"] == cobro.id
+        assert aviso["mp_payment_id"] == "mp-remoto"
+    await _sigue_pendiente(test_session, cobro)
+
+
+@pytest.mark.asyncio
+async def test_un_rechazo_que_no_es_un_aprobado_no_avisa_a_sentry(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un pendiente de prueba en produccion tampoco se aplica, pero no es
+    plata cobrada: queda en el inbox sin alerta."""
+    store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "pendiente-de-prueba"
+    )
+    await _vincular_cuenta(test_session, cobro)
+    _stub_mercadopago(
+        monkeypatch,
+        remote_payment=_remoto_aprobado(cobro, status="pending", live_mode=False),
+    )
+    avisos = _sentry(monkeypatch)
+    _en_produccion(monkeypatch)
+
+    datos = await _entregar(
+        client,
+        store,
+        {"id": "evt-pend", "type": "payment", "data": {"id": "mp-remoto"}},
+    )
+
+    assert datos["applied"] is False
+    assert avisos == []
+
+
+@pytest.mark.asyncio
+async def test_solo_se_consulta_en_mp_el_id_que_cubrio_la_firma(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1: el cuerpo no trae ``data.id`` (la firma cubre el ``data.id`` del
+    query) pero si un ``payment_id`` distinto. Antes la consulta salia con el
+    ``payment_id`` del cuerpo, que nadie firmo."""
+    store, cobro = await _cobro_pendiente(
+        client, test_session, monkeypatch, "id-firmado"
+    )
+    consultas = _mp_que_registra(monkeypatch, _remoto_aprobado(cobro, id="mp-firmado"))
+
+    respuesta = await client.post(
+        f"/payments/webhooks/mercadopago?store_id={store}&data.id=mp-firmado",
+        json={"id": "evt-firmado", "type": "payment", "payment_id": "mp-ajeno"},
+        headers=webhook_signature_headers(
+            secret="secret-demo",
+            data_id="mp-firmado",
+            request_id="req-evt-firmado",
+            ts="1710000000",
+        ),
+    )
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert "/v1/payments/mp-firmado" in consultas, consultas
+    assert not [c for c in consultas if "mp-ajeno" in c], consultas
+    inbox = await _inbox(test_session)
+    guardado = inbox.payload["data"]
+    assert isinstance(guardado, dict) and guardado["id"] == "mp-firmado", guardado

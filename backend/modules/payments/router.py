@@ -49,8 +49,10 @@ from modules.payments.model import (
 )
 from modules.payments.processing import (
     PAGO_NO_VERIFICADO,
+    alert_integrity_rejection,
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
+    mercadopago_event_identity,
 )
 from modules.payments.service import PaymentGatewayNotConnectedError
 from modules.payments.oauth_state import (
@@ -68,6 +70,7 @@ from modules.payments.service import (
     load_gateway_configs,
     exchange_mercadopago_oauth_code_without_transaction,
     mercadopago_oauth_is_configured,
+    oauth_payload_lacks_account,
     refresh_mercadopago_oauth_without_transaction,
 )
 from modules.payments.schemas import (
@@ -253,7 +256,13 @@ async def _validate_mercadopago_signature(
     payload: dict[str, Any],
     request: Request,
     store_reference: str | None,
-) -> str:
+) -> tuple[str, str]:
+    """(tienda, ``data.id`` que cubrio la firma).
+
+    Ese id es el UNICO al que despues se le pregunta a MP (revision 4R de la
+    PR #104): el resto del cuerpo no esta firmado, y antes la consulta podia
+    salir con un ``payment_id`` del cuerpo distinto del id firmado.
+    """
     resolved_store_id, _config = await _resolve_store_for_webhook(db, store_reference)
     secret = settings.MERCADOPAGO_WEBHOOK_SECRET
     if not secret and settings.ENV != "production":
@@ -300,7 +309,7 @@ async def _validate_mercadopago_signature(
             error_code="INVALID_SIGNATURE",
         )
 
-    return resolved_store_id
+    return resolved_store_id, data_id
 
 
 async def _get_appointment_with_service(
@@ -550,6 +559,14 @@ async def mercadopago_oauth_callback(
             )
         except RuntimeError:
             return _oauth_frontend_redirect("exchange_failed")
+        if oauth_payload_lacks_account(token_payload):
+            # En produccion, sin la cuenta de MP no se acredita ningun cobro:
+            # no se guarda como conectada (revision 4R de la PR #104).
+            logger.warning(
+                "mercadopago_oauth_without_user_id",
+                store_id=str(state_payload["store_id"]),
+            )
+            return _oauth_frontend_redirect("exchange_failed")
 
         result = await db.execute(
             select(PaymentGatewayConfig).where(
@@ -762,7 +779,7 @@ async def refund_payment(
 
 
 async def _enriquecer_sin_transaccion_abierta(
-    db: AsyncSession, *, store_id: str, payload: dict[str, Any]
+    db: AsyncSession, *, store_id: str, payload: dict[str, Any], payment_id: str
 ) -> tuple[dict[str, Any] | None, GatewayConfigs]:
     """Le pide a Mercado Pago el detalle del evento, sin transaccion abierta.
 
@@ -787,6 +804,7 @@ async def _enriquecer_sin_transaccion_abierta(
         db,
         store_id=store_id,
         payload=payload,
+        payment_id=payment_id,
         configs=configs,
         # Un 401 refresca el OAuth: se persiste en su propia transaccion corta,
         # que se cierra antes del segundo HTTP. Sin esto el default hace
@@ -797,27 +815,27 @@ async def _enriquecer_sin_transaccion_abierta(
     return enriquecido, configs
 
 
-async def _aplicar_evento(
+async def _aplicar_y_anotar_en_el_inbox(
     db: AsyncSession,
     inbox: WebhookInbox,
     *,
     store_id: str,
-    payload: dict[str, Any] | None,
+    verificado: dict[str, Any] | None,
     configs: GatewayConfigs,
 ) -> bool:
     """Aplica el evento ya verificado contra MP y anota el resultado en el inbox.
 
-    Si no pudimos resolver el pago (la consulta a Mercado Pago fallo o el pago
-    no se encontro), el evento queda sin procesar para que el worker del inbox
-    lo reintente. Marcarlo aca perderia el cobro de forma permanente.
-    ``payload`` None: MP no confirmo el pago y el cuerpo crudo no se aplica
-    (2026-10-02); va por el mismo camino que una falla de integridad.
+    Lo que no se aplica queda sin ``processed_at`` para que el worker del
+    inbox lo reintente: marcarlo aca perderia el cobro de forma permanente.
     """
+    if verificado is None:
+        # MP no confirmo el pago y el cuerpo crudo no se aplica (2026-10-02):
+        # un intento, como en el lote de ``process_webhook_inbox_batch``.
+        inbox.register_failure(PAGO_NO_VERIFICADO)
+        return False
     try:
-        if payload is None:
-            raise RuntimeError(PAGO_NO_VERIFICADO)
         applied = await apply_mercadopago_webhook_payload(
-            db, store_id=store_id, payload=payload, configs=configs
+            db, store_id=store_id, payload=verificado, configs=configs
         )
     except RuntimeError as exc:
         # 2026-09-16 (B2-04): un importe, moneda, referencia o collector
@@ -828,6 +846,7 @@ async def _aplicar_evento(
         # uno y `processed_at` sigue vacio hasta agotar los intentos, igual
         # que hace el lote de `process_webhook_inbox_batch`.
         inbox.register_failure(str(exc))
+        await alert_integrity_rejection(db, exc)
         return False
     if applied:
         inbox.mark_processed()
@@ -851,20 +870,25 @@ async def mercadopago_webhook(
             raise WebhookException(message="Body de webhook invalido") from exc
         if not isinstance(payload, dict):
             raise WebhookException(message="Body de webhook invalido")
-        resolved_store_id = await _validate_mercadopago_signature(
+        resolved_store_id, id_firmado = await _validate_mercadopago_signature(
             db,
             payload=payload,
             request=request,
             store_reference=store_id,
         )
         verificado, configs = await _enriquecer_sin_transaccion_abierta(
-            db, store_id=resolved_store_id, payload=payload
+            db, store_id=resolved_store_id, payload=payload, payment_id=id_firmado
         )
-        # Sin el detalle de MP se guarda el cuerpo crudo para reintentar, pero
-        # nunca se aplica (2026-10-02): la firma no cubre el estado.
-        payload = verificado if verificado is not None else payload
+        # Lo que se guarda para el reintento: el evento verificado o, sin el
+        # detalle de MP, solo sus identificadores y el id firmado (2026-10-02).
+        # Nunca el cuerpo crudo: la firma no cubre el estado.
+        a_guardar = (
+            verificado
+            if verificado is not None
+            else mercadopago_event_identity(payload, id_firmado)
+        )
 
-        event_id = _webhook_event_id(payload)
+        event_id = _webhook_event_id(a_guardar)
 
         existing = await db.execute(
             select(WebhookInbox).where(WebhookInbox.event_id == event_id)
@@ -873,22 +897,22 @@ async def mercadopago_webhook(
         if inbox:
             if inbox.processed_at is not None:
                 return {"success": True, "data": {"status": "already_processed"}}
-            inbox.payload = payload
+            inbox.payload = a_guardar
         else:
             inbox = WebhookInbox(
                 store_id=resolved_store_id,
                 provider="mercadopago",
                 event_id=event_id,
-                event_type=str(payload.get("type") or payload.get("topic") or ""),
-                payload=payload,
+                event_type=str(a_guardar.get("type") or a_guardar.get("topic") or ""),
+                payload=a_guardar,
             )
             db.add(inbox)
 
-        applied = await _aplicar_evento(
+        applied = await _aplicar_y_anotar_en_el_inbox(
             db,
             inbox,
             store_id=resolved_store_id,
-            payload=verificado,
+            verificado=verificado,
             configs=configs,
         )
         await db.commit()

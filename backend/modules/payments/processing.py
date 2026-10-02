@@ -28,7 +28,10 @@ from modules.payments.model import (
     PaymentLinkHistory,
     PaymentStatus,
 )
-from modules.payments.minimization import minimize_payment_payload
+from modules.payments.minimization import (
+    PAYMENT_DATA_FIELDS,
+    minimize_payment_payload,
+)
 from modules.services.model import Service
 from modules.payments.service import (
     RELEASED_APPOINTMENT_STATUSES,
@@ -107,19 +110,21 @@ _CLAVES_DEL_EVENTO = (
     "date_created",
     "user_id",
 )
-# Lo que el webhook lee del recurso del pago (misma lista que
-# ``minimization.PAYMENT_DATA_FIELDS``).
-_CLAVES_DEL_PAGO = (
-    "status",
-    "external_reference",
-    "metadata",
-    "date_approved",
-    "transaction_amount",
-    "currency_id",
-    "collector_id",
-    "live_mode",
-    "preference_id",
-)
+
+
+def mercadopago_event_identity(
+    payload: dict[str, Any], payment_id: str
+) -> dict[str, Any]:
+    """Lo unico que se conserva del cuerpo: los identificadores del evento y el
+    ``data.id`` que cubrio la firma.
+
+    Es lo que guarda el inbox cuando MP no confirmo el pago (el reintento lee
+    ``data.id`` de aca) y la base del evento verificado: ni el estado ni un
+    ``payment_id`` del cuerpo, que no estan firmados, pasan.
+    """
+    evento = {k: payload[k] for k in _CLAVES_DEL_EVENTO if k in payload}
+    evento["data"] = {"id": payment_id}
+    return evento
 
 
 async def enrich_mercadopago_webhook_payload(
@@ -127,6 +132,7 @@ async def enrich_mercadopago_webhook_payload(
     *,
     store_id: str,
     payload: dict[str, Any],
+    payment_id: str | None = None,
     configs: GatewayConfigs | None = None,
     persist_refresh: PersistRefresh | None = None,
 ) -> dict[str, Any] | None:
@@ -140,10 +146,15 @@ async def enrich_mercadopago_webhook_payload(
     estado y todo lo que valida la integridad salen SOLO de MP; sin respuesta
     (o sin ``status``) es None y el llamador deja el evento en el inbox, sin
     ``processed_at``, para reintentarlo (regla 7).
+
+    ``payment_id``: el id que cubrio la firma (lo pasa el handler HTTP). Sin
+    el, el ``data.id`` del evento guardado, que el handler escribio con ese
+    mismo id (``mercadopago_event_identity``). Nunca el ``payment_id`` del
+    cuerpo: no esta firmado y podia nombrar otro pago.
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
-    payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    payment_id = str(payment_id or data.get("id") or "").strip()
     if not payment_id:
         return None
 
@@ -174,11 +185,13 @@ async def enrich_mercadopago_webhook_payload(
         )
         return None
 
+    # La misma lista blanca que se persiste (``minimization``): una sola
+    # fuente para lo que el webhook lee del recurso del pago.
     verified_data: dict[str, Any] = {
-        clave: payment_details.get(clave) for clave in _CLAVES_DEL_PAGO
+        clave: payment_details.get(clave) for clave in PAYMENT_DATA_FIELDS
     }
     verified_data["id"] = payment_details.get("id") or payment_id
-    verified = {k: payload[k] for k in _CLAVES_DEL_EVENTO if k in payload}
+    verified = mercadopago_event_identity(payload, payment_id)
     verified["data"] = verified_data
     verified["status"] = verified_data["status"]
     verified["external_reference"] = verified_data["external_reference"]
@@ -289,29 +302,77 @@ async def _validate_payment_identity(
         raise RuntimeError("La moneda acreditada no coincide con la esperada")
 
     config = await resolve_gateway_config(db, store_id, configs)
-    contexto = {"store_id": store_id, "payment_id": payment.id}
-    _validar_cuenta_cobradora(
-        data, config.oauth_user_id if config else None, payment_status, contexto
+    contexto = _ContextoDelRechazo(
+        store_id=store_id,
+        payment_id=payment.id,
+        mp_payment_id=str(data.get("id") or "").strip(),
+        aprobado=payment_status == PaymentStatus.APPROVED.value,
     )
-    _validar_plata_real(data, payment_status, contexto)
+    _validar_cuenta_cobradora(data, config.oauth_user_id if config else None, contexto)
+    _validar_importe_presente(data, contexto)
+    _validar_modo_real(data, contexto)
 
 
-def _rechazo_de_integridad(motivo: str, contexto: dict[str, str]) -> RuntimeError:
+# ``event_type`` de la marca que deduplica la alerta de un aprobado rechazado
+# por integridad. Nace con ``processed_at``: el lote del outbox no la toma.
+EVENT_INTEGRITY_ALERT = "payment.integrity_alert"
+
+
+@dataclass(frozen=True)
+class _ContextoDelRechazo:
+    """Ids del pago rechazado (sin datos personales) y si MP lo dio por aprobado."""
+
+    store_id: str
+    payment_id: str
+    mp_payment_id: str
+    aprobado: bool
+
+    def ids(self) -> dict[str, str]:
+        return {
+            "store_id": self.store_id,
+            "payment_id": self.payment_id,
+            "mp_payment_id": self.mp_payment_id,
+        }
+
+
+class PaymentRejectedForIntegrity(RuntimeError):
+    """Un pago de MP que no se aplica por integridad (y evento de Sentry).
+
+    ``str()`` es el motivo, que queda en ``WebhookInbox.error``
+    (``failed_webhooks`` del panel). ``codigo`` es la version estable del
+    motivo para deduplicar la alerta.
+    """
+
+    def __init__(self, motivo: str, *, codigo: str, contexto: _ContextoDelRechazo):
+        super().__init__(motivo)
+        self.codigo = codigo
+        self.contexto = contexto
+
+
+def _rechazo_de_integridad(
+    motivo: str, codigo: str, contexto: _ContextoDelRechazo
+) -> PaymentRejectedForIntegrity:
     """El error que deja el pago sin aplicar, con un log sin datos personales.
 
-    Mismo camino que el resto de la integridad (B2-04): el ``RuntimeError``
-    deja el motivo en ``WebhookInbox.error`` (``failed_webhooks`` del panel)
-    y el inbox lo reintenta hasta agotar los intentos (regla 7).
+    Mismo camino que el resto de la integridad (B2-04): es un ``RuntimeError``,
+    deja el motivo en ``WebhookInbox.error`` y el inbox lo reintenta hasta
+    agotar los intentos (regla 7). Si MP lo dio por aprobado, el llamador
+    avisa a Sentry con ``alert_integrity_rejection`` despues de revertir lo
+    suyo (la alerta no puede vivir en la transaccion que se revierte).
     """
-    logger.warning("mercadopago_payment_rejected", motivo=motivo, **contexto)
-    return RuntimeError(motivo)
+    logger.warning(
+        "mercadopago_payment_rejected",
+        motivo=codigo,
+        aprobado=contexto.aprobado,
+        **contexto.ids(),
+    )
+    return PaymentRejectedForIntegrity(motivo, codigo=codigo, contexto=contexto)
 
 
 def _validar_cuenta_cobradora(
     data: dict[str, Any],
     cuenta_de_la_tienda: str | None,
-    payment_status: str,
-    contexto: dict[str, str],
+    contexto: _ContextoDelRechazo,
 ) -> None:
     """El pago se cobro en la cuenta de MP de la tienda.
 
@@ -320,47 +381,119 @@ def _validar_cuenta_cobradora(
     ``approved`` se acreditaba sin saber a quien se pago. Para un aprobado
     falla cerrado. Sin ``oauth_user_id`` fuera de produccion es el modo manual
     (token pegado a mano, ``upsert_gateway_config``) y no hay contra que
-    comparar; en produccion la cuenta solo se vincula por OAuth.
+    comparar; en produccion la cuenta solo se vincula por OAuth y el callback
+    rechaza un token sin ``user_id``.
     """
     collector_id = str(data.get("collector_id") or "").strip()
     if cuenta_de_la_tienda and collector_id and collector_id != cuenta_de_la_tienda:
-        raise RuntimeError("El cobro pertenece a otra cuenta de Mercado Pago")
-    if payment_status != PaymentStatus.APPROVED.value:
+        raise _rechazo_de_integridad(
+            "El cobro pertenece a otra cuenta de Mercado Pago", "otra_cuenta", contexto
+        )
+    if not contexto.aprobado:
         return
     if cuenta_de_la_tienda and not collector_id:
         raise _rechazo_de_integridad(
-            "Mercado Pago no devolvio la cuenta que cobro el pago aprobado", contexto
+            "Mercado Pago no devolvio la cuenta que cobro el pago aprobado",
+            "sin_collector",
+            contexto,
         )
     if not cuenta_de_la_tienda and settings.ENV == Environment.PRODUCTION:
         raise _rechazo_de_integridad(
             "La tienda no tiene su cuenta de Mercado Pago vinculada por OAuth",
+            "sin_oauth",
             contexto,
         )
 
 
-def _validar_plata_real(
-    data: dict[str, Any], payment_status: str, contexto: dict[str, str]
+def _validar_importe_presente(
+    data: dict[str, Any], contexto: _ContextoDelRechazo
 ) -> None:
-    """Un aprobado trae su importe, y en produccion ningun pago es de prueba.
+    """Un aprobado trae su importe.
 
     2026-10-02 (auditoria de origin/main): sin ``transaction_amount`` el
-    control de importe de ``_validate_payment_link`` se salteaba; y
-    ``live_mode`` se pedia a MP y no se miraba, asi que en produccion un pago
-    de sandbox acreditaba un cobro real. Fuera de produccion el sandbox sigue
-    andando.
+    control de importe de ``_validate_payment_link`` se salteaba.
     """
-    if (
-        payment_status == PaymentStatus.APPROVED.value
-        and data.get("transaction_amount") is None
-    ):
+    if contexto.aprobado and data.get("transaction_amount") is None:
         raise _rechazo_de_integridad(
-            "Mercado Pago no devolvio el importe del pago aprobado", contexto
+            "Mercado Pago no devolvio el importe del pago aprobado",
+            "sin_importe",
+            contexto,
         )
+
+
+def _validar_modo_real(data: dict[str, Any], contexto: _ContextoDelRechazo) -> None:
+    """En produccion ningun pago es de prueba, sea cual sea su estado.
+
+    2026-10-02 (auditoria de origin/main): ``live_mode`` se pedia a MP y no se
+    miraba, asi que en produccion un pago de sandbox acreditaba un cobro real.
+    Fuera de produccion el sandbox sigue andando.
+    """
     if settings.ENV == Environment.PRODUCTION and data.get("live_mode") is not True:
         raise _rechazo_de_integridad(
             "Mercado Pago devolvio un pago de prueba (live_mode) en produccion",
+            "modo_prueba",
             contexto,
         )
+
+
+async def alert_integrity_rejection(
+    db: AsyncSession, exc: BaseException, *, incluir_no_aprobados: bool = False
+) -> None:
+    """Avisa a Sentry, UNA vez por (pago de MP, motivo), de un aprobado que no
+    se acredito por integridad. Cualquier otra excepcion: no hace nada.
+
+    Revision 4R de la PR #104 (R4 W2): el rechazo solo dejaba un warning en el
+    log, que se rota y nadie mira, y es plata cobrada que no llega al turno.
+    Mismo patron que ``PaymentOnReplacedLink``: ids sin datos personales y
+    una marca en ``outbox_messages`` con la clave en ``payload.aviso``. La
+    llaman el webhook, el inbox, la conciliacion y el vencimiento DESPUES de
+    revertir su savepoint (si no, la marca se iria con el).
+    ``incluir_no_aprobados``: el vencimiento retiene el turno aunque MP no lo
+    de por aprobado, y una persona tiene que enterarse igual.
+    """
+    if not isinstance(exc, PaymentRejectedForIntegrity):
+        return
+    if not (exc.contexto.aprobado or incluir_no_aprobados):
+        return
+    if await _primera_alerta(db, exc):
+        report_exception(exc, motivo=exc.codigo, **exc.contexto.ids())
+
+
+async def _primera_alerta(db: AsyncSession, exc: PaymentRejectedForIntegrity) -> bool:
+    """Deja la marca de la alerta y dice si es la primera para (pago, motivo).
+
+    En un savepoint propio, para que el fallo de un item siguiente del lote no
+    la revierta. Sin id de pago de MP no hay clave (la cadena vacia taparia
+    todos los avisos de la tienda) y se avisa cada vez; si la marca no se
+    puede escribir, tambien: mejor repetido que en silencio.
+    """
+    contexto = exc.contexto
+    if not contexto.mp_payment_id:
+        return True
+    clave = f"integridad:{contexto.mp_payment_id}:{exc.codigo}"
+    try:
+        async with db.begin_nested():
+            if await _aviso_publicado(
+                db, contexto.store_id, clave, EVENT_INTEGRITY_ALERT
+            ):
+                return False
+            db.add(
+                OutboxMessage(
+                    store_id=contexto.store_id,
+                    event_type=EVENT_INTEGRITY_ALERT,
+                    payload={"aviso": clave, "motivo": exc.codigo, **contexto.ids()},
+                    processed_at=datetime.now(timezone.utc),
+                )
+            )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as error:
+        logger.warning(
+            "mercadopago_integrity_alert_mark_failed",
+            error_type=type(error).__name__,
+            **contexto.ids(),
+        )
+    return True
 
 
 def _referencia_del_pago(payload: dict[str, Any]) -> str:
@@ -737,12 +870,17 @@ def _clave_del_aviso(mp_payment_id: str, payload: dict[str, Any]) -> str | None:
     return f"evento:{evento}" if evento else None
 
 
-async def _aviso_publicado(db: AsyncSession, store_id: str, clave: str) -> bool:
+async def _aviso_publicado(
+    db: AsyncSession,
+    store_id: str,
+    clave: str,
+    event_type: str = NotificationType.PAYMENT_ON_REPLACED_LINK.value,
+) -> bool:
     fila = await db.execute(
         select(OutboxMessage.id)
         .where(
             OutboxMessage.store_id == store_id,
-            OutboxMessage.event_type == NotificationType.PAYMENT_ON_REPLACED_LINK.value,
+            OutboxMessage.event_type == event_type,
             OutboxMessage.payload["aviso"].as_string() == clave,
         )
         .limit(1)
