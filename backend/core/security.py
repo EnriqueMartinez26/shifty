@@ -86,9 +86,19 @@ def decode_token(token: str) -> dict[str, Any]:
     ``ecdsa``): mismo HS256 y mismos claims, asi que los tokens ya emitidos
     siguen valiendo. ``algorithms`` es una lista cerrada: ni ``none`` ni otro
     algoritmo que el configurado. Con ``issuer``/``audience`` PyJWT ya exige
-    ``iss`` y ``aud``; ``require`` los repite junto a exp, iat y sub. Ademas
-    rechaza un ``iat`` futuro y un ``sub`` o ``jti`` que no sea string.
-    ``leeway`` 0: emite y verifica el mismo host.
+    ``iss`` y ``aud``; ``require`` los repite junto a exp, iat y sub.
+
+    Igual que python-jose: ``sub`` y ``jti``, si vienen, tienen que ser string.
+
+    Cambio respecto de python-jose: un ``iat`` futuro se rechaza
+    (``ImmatureSignatureError``); python-jose solo exigia que fuera entero.
+
+    ``leeway`` 0, invariante: todas las replicas de la API corren en el mismo
+    host y comparten su reloj, asi que quien emite y quien verifica ven la
+    misma hora. Si la API llega a correr en mas de un host, hay que sumar
+    leeway. Un desfasaje pasajero se cura solo: ante un 401 el front refresca
+    una vez y reintenta con un token nuevo
+    (``frontend/src/infrastructure/http/client.ts``); uno persistente no.
     """
     return jwt.decode(
         token,

@@ -294,7 +294,7 @@ Fuente: `backend/core/config.py` y los archivos de ejemplo (`.env.example`, `bac
 | Paquete | Versión en `backend/uv.lock` hoy | Cómo entra | Estado |
 |---|---|---|---|
 | anyio | 4.13.0 | transitiva (starlette/httpx) | pendiente de OK |
-| cryptography | 48.0.0 | **solo** por el extra `python-jose[cryptography]` (`uv.lock:1452-1454`) | pendiente de OK (ver Q3) |
+| cryptography | 50.0.0 | directa (`>=50.0.0`, `backend/pyproject.toml:18`; `uv.lock:411-412`) | hecho: declarada directa en el bump de CVE (`191c1b28`); Q3 cerrada |
 | ecdsa | 0.19.2 | transitiva (python-jose) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pillow | 12.2.0 | transitiva (reportlab) | pendiente de OK |
 | pyasn1 | 0.6.3 | transitiva (python-jose, rsa) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
@@ -370,6 +370,8 @@ Cambia el contrato, así que va con acuerdo previo. Si no hay un caso real de "b
 3. Si más adelante se quiere retirarlo del todo: fixture de tests primero, después borrar la ruta y su fila en `SUSPENSION_ALLOWED_WRITES`.
 
 ### Q3. ¿Declarar `cryptography` explícito en `pyproject.toml`?
+
+**Cerrada (2026-10-02).** `cryptography` es dependencia directa (`>=50.0.0` en `backend/pyproject.toml:18`, 50.0.0 en `backend/uv.lock:411-412`) desde el bump de CVE (`191c1b28`), y D-20260930-04 (PR #100) reemplazó `python-jose` por `PyJWT`, lo que sacó `ecdsa` y `pyasn1` del árbol. Lo que sigue es el análisis original, que describe el estado previo.
 
 **Confirmado que hace falta.** `backend/core/crypto.py:6` hace `from cryptography.fernet import Fernet` (cifrado de secretos del gateway), pero `cryptography` no está en `[project].dependencies`: entra solo por el extra `python-jose[cryptography]` (`uv.lock:1452-1454`). Si mañana se reemplaza `python-jose` (que sigue trayendo `ecdsa` y `pyasn1`, dos de los CVE pendientes) o se le quita el extra, el import de `core/crypto.py` se rompe sin que el lock lo avise.
 

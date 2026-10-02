@@ -3,8 +3,9 @@ from typing import Annotated, cast
 
 from fastapi import Depends, Request
 from fastapi.security import OAuth2PasswordBearer
-from jwt import InvalidTokenError
+import jwt
 from sqlalchemy import select
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import (
@@ -22,6 +23,8 @@ from core.roles import (
 from core.security import decode_token
 from modules.auth.session_model import AuthSession
 from modules.users.model import User
+
+logger = structlog.get_logger()
 
 
 def _aware(value: datetime) -> datetime:
@@ -105,7 +108,11 @@ async def _authenticate(request: Request, db: AsyncSession) -> User:
         session_id = payload.get("sid")
         if not isinstance(user_id, str) or not isinstance(session_id, str):
             raise credentials_exception
-    except InvalidTokenError:
+    except jwt.InvalidTokenError as exc:
+        # Solo la clase del rechazo (ExpiredSignatureError,
+        # InvalidAudienceError...): ni el token ni sus claims van al log. La
+        # respuesta sigue siendo el 401 neutro.
+        logger.info("access_token_rejected", reason=type(exc).__name__)
         raise credentials_exception
 
     # Bypass acotado SOLO para resolver la identidad: las tablas users y

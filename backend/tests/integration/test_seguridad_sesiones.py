@@ -31,7 +31,9 @@ async def test_token_forjado_con_otra_clave_es_rechazado(client: AsyncClient) ->
     )
     real = jwt.decode(token, options={"verify_signature": False})
     forjado = jwt.encode(
-        {**real, "is_global_admin": True}, "otra-clave-de-atacante", algorithm="HS256"
+        {**real, "is_global_admin": True},
+        "otra-clave-de-atacante-0123456789abcdef",
+        algorithm="HS256",
     )
     res = await client.get(
         "/superadmin/stores", headers={"Authorization": f"Bearer {forjado}"}

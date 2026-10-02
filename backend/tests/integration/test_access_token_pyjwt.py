@@ -15,6 +15,7 @@ from typing import Any
 import jwt
 import pytest
 from httpx import AsyncClient
+from structlog.testing import capture_logs
 
 from core.config import settings
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -24,9 +25,19 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 
 
 def _reemitir(token: str, **cambios: Any) -> str:
-    """Los claims del token real, cambiados y firmados con la clave real."""
+    """Los claims del token real, cambiados y firmados con la clave real.
+
+    Un ``timedelta`` es un corrimiento desde ahora, resuelto al firmar (no al
+    coleccionar el ``parametrize``, que puede ser mucho antes de correr).
+    """
     claims = jwt.decode(token, options={"verify_signature": False})
-    claims.update(cambios)
+    ahora = datetime.now(timezone.utc)
+    claims.update(
+        {
+            k: int((ahora + v).timestamp()) if isinstance(v, timedelta) else v
+            for k, v in cambios.items()
+        }
+    )
     claims = {k: v for k, v in claims.items() if v is not None}
     return jwt.encode(claims, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
@@ -57,12 +68,12 @@ async def test_el_token_del_login_lleva_sid_y_autentica(client: AsyncClient) -> 
         {"sid": None},
         {"sid": 123},
         {"sid": "01J9ZSESIONQUENOEXISTE0000"},
-        {"exp": int((datetime.now(timezone.utc) - timedelta(seconds=5)).timestamp())},
+        {"exp": -timedelta(seconds=5)},
         {"aud": "otro-sistema"},
         {"iss": "otro-emisor"},
         {"sub": None},
         {"sub": 42},
-        {"iat": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp())},
+        {"iat": timedelta(hours=1)},
     ],
     ids=[
         "sin-sid",
@@ -103,6 +114,35 @@ async def test_token_ilegible_es_401_no_500(client: AsyncClient, token: str) -> 
     res = await client.get("/me", headers=auth_headers(token))
 
     assert res.status_code == 401, res.text
+
+
+@pytest.mark.asyncio
+async def test_el_rechazo_se_loguea_por_clase_sin_el_token(
+    client: AsyncClient,
+) -> None:
+    """Observabilidad del rechazo: la clase de la excepcion de PyJWT va al log
+    (para distinguir vencidos de forjados), el token y sus claims no."""
+    _, token = await register_and_login(
+        client, slug="pyjwt-log", email="pyjwt-log@test.com"
+    )
+    vencido = _reemitir(token, exp=-timedelta(seconds=5))
+    claims = jwt.decode(vencido, options={"verify_signature": False})
+
+    with capture_logs() as logs:
+        res = await client.get("/me", headers=auth_headers(vencido))
+
+    assert res.status_code == 401, res.text
+    rechazos = [e for e in logs if e["event"] == "access_token_rejected"]
+    assert rechazos == [
+        {
+            "event": "access_token_rejected",
+            "reason": "ExpiredSignatureError",
+            "log_level": "info",
+        }
+    ]
+    volcado = repr(logs)
+    for secreto in (vencido, claims["sub"], claims["sid"], claims["jti"]):
+        assert secreto not in volcado
 
 
 @pytest.mark.asyncio
