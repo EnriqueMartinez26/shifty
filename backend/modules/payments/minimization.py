@@ -6,11 +6,14 @@ identificacion (DNI/CUIT) y telefono del pagador, titular y digitos de la
 tarjeta, IP, titulo del servicio. Ningun lector de ``raw_payload`` usa esos
 datos y la Politica de Privacidad dice que Shifty no los almacena.
 
-La lista del pago es la misma que arma el webhook
-(``processing.enrich_mercadopago_webhook_payload``); la de ``metadata``, las
-claves que Shifty manda en la preferencia (``service.prepare_mercadopago_preference``).
-La validacion (collector, importe, referencia) sigue leyendo el recurso
-completo en memoria: esto recorta solo lo que se persiste.
+``PAYMENT_DATA_FIELDS`` es tambien la unica fuente de lo que el webhook toma
+del recurso del pago: ``processing.enrich_mercadopago_webhook_payload`` arma
+el evento verificado con esta lista (2026-10-02), asi que lo que la
+integridad lee (collector, importe, referencia, ``live_mode``) tiene que
+estar aca. La de ``metadata`` son las claves que Shifty manda en la
+preferencia (``service.prepare_mercadopago_preference``). La conciliacion y
+el job de vencimiento validan sobre el recurso completo en memoria: esto
+recorta solo lo que se persiste.
 
 ``alembic/versions/b5d7f9a1c3e6_minimizar_raw_payload_de_pagos.py`` recorta
 las filas historicas con una copia congelada de estas listas.

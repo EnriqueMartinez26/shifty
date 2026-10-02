@@ -24,6 +24,15 @@ FUNCIONES = {
         "_validate_payment_link",
         "_avisar_al_dueno",
         "_sync_appointment",
+        # Revision 4R de la PR #104.
+        "enrich_mercadopago_webhook_payload",
+        "alert_integrity_rejection",
+        "alert_unexpected_payment_failure",
+    ],
+    "modules/payments/router.py": [
+        "mercadopago_webhook",
+        "mercadopago_oauth_callback",
+        "_aplicar_y_anotar_en_el_inbox",
     ],
     "modules/payments/service.py": [
         "create_panel_payment_preference",
@@ -45,6 +54,9 @@ FUNCIONES = {
         "_expire_unpaid_appointments",
         "_vencer_o_rescatar",
         "_fetch_remote_payments",
+        "_vencer_una_pagina",
+        "_rescatar_o_retener",
+        "_process_webhook_inbox_batch",
     ],
 }
 

@@ -944,6 +944,10 @@ async def test_webhook_can_fetch_mercadopago_payment_details_when_notification_i
             "external_reference": referencias[-1],
             "metadata": {"appointment_id": booking_public_id},
             "date_approved": datetime.now(timezone.utc).isoformat(),
+            # MP siempre manda el importe; un aprobado sin el no se aplica
+            # (2026-10-02, test_webhook_sin_confiar_en_el_cuerpo.py).
+            "transaction_amount": 2000.0,
+            "currency_id": "ARS",
         }
 
     monkeypatch.setattr(
@@ -1324,6 +1328,11 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
 ) -> None:
     import modules.payments.service as payments_service
 
+    # Lo que devuelve ``GET /v1/payments/{id}``: el webhook aplica SOLO esto,
+    # nunca el cuerpo sin firmar (2026-10-02). Antes esta consulta devolvia
+    # la preferencia (sin ``status``) y el test pasaba por el estado del cuerpo.
+    pago_en_mp: dict[str, Any] = {}
+
     async def fake_mp_request(
         access_token: str,
         *,
@@ -1335,6 +1344,8 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
         assert method
         assert path
         assert json_body is None or isinstance(json_body, dict)
+        if path.startswith("/v1/payments/"):
+            return pago_en_mp
         return {
             "id": "pref-webhook-booking",
             "sandbox_init_point": "https://sandbox.mercadopago.com/checkout/v1/redirect?pref=booking",
@@ -1397,17 +1408,21 @@ async def test_payment_webhook_approves_pending_booking_and_confirms_turn(
     )
     payment = payment_result.scalar_one()
 
-    payload = {
-        "id": "evt-booking-123",
-        "type": "payment",
-        "data": {
+    pago_en_mp.update(
+        {
             "id": "mp-pay-123",
             "status": "approved",
             # Como MP: la referencia del link (con su nonce, perf/f4-pay).
             "external_reference": payment.current_external_reference,
-            "preference_id": payment.preference_id,
             "metadata": {"appointment_id": booking.json()["public_id"]},
-        },
+            "transaction_amount": float(payment.amount),
+            "currency_id": payment.currency,
+        }
+    )
+    payload = {
+        "id": "evt-booking-123",
+        "type": "payment",
+        "data": {"id": "mp-pay-123"},
     }
     signature_headers = webhook_signature_headers(
         secret="secret-demo",

@@ -116,6 +116,7 @@ async def _book_with_mercadopago(
     *,
     slug_suffix: str,
     hour: int,
+    staff_email: str = "pro-demo@test.com",
 ) -> str:
     service_public_id = await create_service(
         client,
@@ -124,7 +125,11 @@ async def _book_with_mercadopago(
         deposit_type="percent",
         deposit_amount=30,
     )
-    staff_public_id = await create_staff(client, token, service_public_id)
+    # El email del personal es unico global: con dos tiendas en el mismo test
+    # la segunda pasa otro.
+    staff_public_id = await create_staff(
+        client, token, service_public_id, email=staff_email
+    )
     starts_at = datetime.now(timezone.utc) + timedelta(days=6)
     await add_staff_schedule(client, token, staff_public_id, target_date=starts_at)
     slot = starts_at.replace(hour=hour, minute=0, second=0, microsecond=0)
@@ -268,9 +273,12 @@ async def test_expiry_releases_the_slot_when_nothing_was_paid(
 
 @pytest.mark.asyncio
 async def test_webhook_inbox_gives_up_after_exhausting_retries(
-    client: AsyncClient, test_session: AsyncSession
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Un evento irrecuperable deja de reintentarse y queda contabilizado como fallido."""
+    # MP simulado: sin esto la consulta del pago salia a la red real (revision
+    # 4R de la PR #104, R3 W3). El pago no existe en MP.
+    _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
         client, slug="tienda-agota", email="agota@test.com"
     )
@@ -302,13 +310,14 @@ async def test_webhook_inbox_gives_up_after_exhausting_retries(
 
 @pytest.mark.asyncio
 async def test_unresolvable_webhook_stays_pending_for_retry(
-    client: AsyncClient, test_session: AsyncSession
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Un webhook que no pudimos aplicar no debe darse por procesado.
 
     Marcarlo perderia el cobro de forma permanente: el turno venceria aunque el
     cliente haya pagado.
     """
+    _stub_mercadopago(monkeypatch, remote_payment=None)
     store_public_id, token = await register_and_login(
         client, slug="tienda-retry", email="retry@test.com"
     )

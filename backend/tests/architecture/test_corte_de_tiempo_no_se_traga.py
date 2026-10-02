@@ -7,8 +7,10 @@ fallo del item (el inbox hasta le gastaba un ``attempts``, regla 7) y el lote
 SEGUIA hasta el hard limit, que mata el proceso sin ``finally``. El circuit
 breaker, igual: lo contaba como falla de Mercado Pago.
 
-Regla: en ``modules/*/jobs.py``, ``modules/*/tasks.py`` y
-``core/circuit_breaker.py``, todo ``try`` con un handler de ``Exception`` (o
+Regla: en ``modules/*/jobs.py``, ``modules/*/tasks.py``,
+``core/circuit_breaker.py`` y ``modules/payments/processing.py`` (la consulta
+a MP del webhook y la alerta de integridad corren dentro de los lotes;
+revision 4R de la PR #104), todo ``try`` con un handler de ``Exception`` (o
 ``BaseException``, o ``except:``) tiene ANTES un
 ``except SoftTimeLimitExceeded`` que termina en ``raise``, salvo que el propio
 handler termine en ``raise`` (re-levanta la misma excepcion).
@@ -28,7 +30,10 @@ def _archivos() -> list[Path]:
     modulos = BACKEND / "modules"
     return sorted(
         [*modulos.glob("*/jobs.py"), *modulos.glob("*/tasks.py")]
-        + [BACKEND / "core" / "circuit_breaker.py"]
+        + [
+            BACKEND / "core" / "circuit_breaker.py",
+            modulos / "payments" / "processing.py",
+        ]
     )
 
 

@@ -20,7 +20,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.circuit_breaker import AsyncCircuitBreaker, CircuitBreakerOpenError
-from core.config import settings
+from core.config import Environment, settings
 from core.crypto import decrypt_secret, encrypt_secret
 from core.database import _apply_tenant_context
 from core.exceptions import AppException
@@ -604,6 +604,22 @@ async def refresh_mercadopago_oauth_without_transaction(
             )
     finally:
         await _apply_tenant_context(db)
+
+
+def oauth_payload_lacks_account(token_payload: dict[str, JsonValue]) -> bool:
+    """True si el callback de OAuth NO puede guardar este token: en produccion,
+    sin ``user_id``.
+
+    Revision 4R de la PR #104: en produccion el webhook rechaza todo aprobado
+    de una tienda sin ``oauth_user_id`` (no hay contra que comparar el
+    ``collector_id``). Guardar la conexion como "conectada" sin esa cuenta
+    dejaba a la tienda cobrando y sin acreditar nada. Fuera de produccion
+    sigue como antes (sandbox y modo manual). Solo el callback: el refresh
+    conserva el ``oauth_user_id`` que ya tenia la tienda.
+    """
+    if settings.ENV != Environment.PRODUCTION:
+        return False
+    return not str(token_payload.get("user_id") or "").strip()
 
 
 def apply_mercadopago_oauth_payload(
