@@ -295,9 +295,9 @@ Fuente: `backend/core/config.py` y los archivos de ejemplo (`.env.example`, `bac
 |---|---|---|---|
 | anyio | 4.13.0 | transitiva (starlette/httpx) | pendiente de OK |
 | cryptography | 50.0.0 | directa (`>=50.0.0`, `backend/pyproject.toml:18`; `uv.lock:411-412`) | hecho: declarada directa en el bump de CVE (`191c1b28`); Q3 cerrada |
-| ecdsa | 0.19.2 | transitiva (python-jose) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
+| ecdsa | — (era 0.19.2) | ya no entra (era transitiva de python-jose) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pillow | 12.2.0 | transitiva (reportlab) | pendiente de OK |
-| pyasn1 | 0.6.3 | transitiva (python-jose, rsa) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
+| pyasn1 | — (era 0.6.4) | ya no entra (era transitiva de python-jose y rsa) | fuera del lock desde el 2026-10-02: python-jose se reemplazó por PyJWT (D-20260930-04) |
 | pydantic-settings | 2.14.1 | directa (`>=2.2.0`) | pendiente de OK |
 | starlette | 1.0.0 | transitiva (fastapi) | pendiente de OK |
 
