@@ -1035,15 +1035,27 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
         final = finales[turno]
         regenerar, webhook = propias["regenerar"], propias["webhook"]
         assert regenerar.status_code in {200, 409}, regenerar.text
+        assert webhook.status_code == 200, webhook.text
+        aplicado = webhook.json().get("data", webhook.json())["applied"]
         if regenerar.status_code == 409:
             # Turno cancelado, o el pago tardio del link retirado se aplico
             # entre la fase 1 y la 2 (el cobro adopto ese link): la fase 2
             # choca con la version y vence el link que habia creado.
-            assert regenerar.json()["error_code"] in {
-                "APPOINTMENT_NOT_PAYABLE",
-                "CONCURRENT_MODIFICATION",
-            }, regenerar.text
-        assert webhook.status_code == 200, webhook.text
+            esperados = {"APPOINTMENT_NOT_PAYABLE", "CONCURRENT_MODIFICATION"}
+            if estado_tardio == "approved":
+                # Si el webhook aprobado gana la carrera, el cobro queda
+                # acreditado y regenerar responde 409 PAYMENT_ALREADY_ACCREDITED:
+                # la fase 1 lo ve bajo el lock del turno y no escribe nada.
+                esperados.add("PAYMENT_ALREADY_ACCREDITED")
+            error = regenerar.json()["error_code"]
+            assert error in esperados, regenerar.text
+            if error == "PAYMENT_ALREADY_ACCREDITED":
+                # Acreditado por el webhook con su link de siempre: regenerar
+                # no retiro ese link ni le pidio uno nuevo a MP.
+                assert final["pago"] == "approved" and aplicado, (final, aplicado)
+                assert final["preferencia"] == viejas[turno], final
+                creadas = [p for p, ref in mp.creadas if ref.split(":")[0] == turno]
+                assert creadas == [viejas[turno]], creadas
         if con_cancelacion:
             assert propias["cancelar"].status_code == 200, propias["cancelar"].text
             assert final["turno"] == "cancelled", final
@@ -1052,7 +1064,6 @@ async def test_regenerar_link_vencido_contra_webhook_tardio_de_la_preferencia_vi
             assert final["turno"] == "confirmed", final
         if final["pago"] == "pending":
             assert final["preferencia"] != viejas[turno], final
-        aplicado = webhook.json().get("data", webhook.json())["applied"]
         avisos = [
             e
             for e, p in eventos
