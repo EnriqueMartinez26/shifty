@@ -28,12 +28,22 @@ BASE: dict[str, Any] = {
     "RATE_LIMIT_ENABLED": True,
     "RATE_LIMIT_FAIL_CLOSED": True,
     "COOKIE_SECURE": True,
-    "OTP_PROVIDER": "twilio",
+    # Email es el unico proveedor de OTP implementado (2026-10-02).
+    "OTP_PROVIDER": "email",
     "OTP_DEBUG_EXPOSE_CODE": False,
     "EXPOSE_API_DOCS": False,
     # El entorno de tests lo pone en "true" para los tests de /ops; produccion
     # lo exige apagado (AUD2-B7-12), igual que EXPOSE_API_DOCS.
     "OPS_ENABLE_PUBLIC_HEALTH": False,
+    # 2026-10-02: sin estas, produccion no cobra (webhook y OAuth de MP) o
+    # falla a ciegas (Sentry). Valores con forma real, sin marcas de placeholder.
+    "MERCADOPAGO_WEBHOOK_SECRET": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+    "MERCADOPAGO_OAUTH_CLIENT_ID": "1234567890123456",
+    "MERCADOPAGO_OAUTH_CLIENT_SECRET": "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Jh1Gf0Ed",
+    "MERCADOPAGO_OAUTH_REDIRECT_URI": (
+        "https://api.shifty.ar/api/payments/mercadopago/oauth/callback"
+    ),
+    "SENTRY_DSN": "https://0123456789abcdef@o123456.ingest.sentry.io/1234567",
 }
 
 
@@ -82,6 +92,36 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
             {"MERCADOPAGO_API_BASE_URL": "http://host.docker.internal:9999"},
             "MERCADOPAGO_API_BASE_URL",
         ),
+        # 2026-10-02 (auditoria de origin/main): opcionales en produccion. Sin
+        # el secreto global el webhook de MP no valida ninguna firma en
+        # produccion (no hay fallback al de la tienda); sin el trio OAuth no se
+        # vincula ninguna cuenta; sin Sentry los errores no se ven.
+        ({"MERCADOPAGO_WEBHOOK_SECRET": None}, "MERCADOPAGO_WEBHOOK_SECRET"),
+        ({"MERCADOPAGO_WEBHOOK_SECRET": "  "}, "MERCADOPAGO_WEBHOOK_SECRET"),
+        (
+            {"MERCADOPAGO_WEBHOOK_SECRET": "replace_with_webhook_secret"},
+            "MERCADOPAGO_WEBHOOK_SECRET",
+        ),
+        ({"MERCADOPAGO_OAUTH_CLIENT_ID": None}, "MERCADOPAGO_OAUTH_CLIENT_ID"),
+        ({"MERCADOPAGO_OAUTH_CLIENT_SECRET": None}, "MERCADOPAGO_OAUTH_CLIENT_SECRET"),
+        ({"MERCADOPAGO_OAUTH_REDIRECT_URI": ""}, "MERCADOPAGO_OAUTH_REDIRECT_URI"),
+        ({"SENTRY_DSN": None}, "SENTRY_DSN"),
+        ({"SENTRY_DSN": ""}, "SENTRY_DSN"),
+        # Solo se miraba que no fuera localhost.
+        ({"PUBLIC_API_URL": "http://api.shifty.ar"}, "PUBLIC_API_URL"),
+        ({"CORS_ORIGINS": "http://app.shifty.ar"}, "CORS_ORIGINS"),
+        (
+            {"CORS_ORIGINS": "https://app.shifty.ar, http://panel.shifty.ar"},
+            "CORS_ORIGINS",
+        ),
+        # Credencial de la app de prueba de MP.
+        (
+            {"MERCADOPAGO_OAUTH_CLIENT_SECRET": "TEST-1234567890-abcdef"},
+            "MERCADOPAGO_OAUTH_CLIENT_SECRET",
+        ),
+        # Solo email esta implementado: twilio no manda nada.
+        ({"OTP_PROVIDER": "twilio"}, "OTP_PROVIDER"),
+        ({"OTP_PROVIDER": "whatsapp"}, "OTP_PROVIDER"),
     ],
 )
 def test_produccion_rechaza_configuraciones_inseguras(
@@ -89,6 +129,39 @@ def test_produccion_rechaza_configuraciones_inseguras(
 ) -> None:
     with pytest.raises(ValueError, match=esperado):
         _build(**override)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"MERCADOPAGO_OAUTH_CLIENT_SECRET": "TEST-secreto-de-prueba-9876"},
+        {"MERCADOPAGO_WEBHOOK_SECRET": "replace_me_secreto_9876"},
+    ],
+)
+def test_el_error_no_imprime_el_secreto(override: dict[str, Any]) -> None:
+    """El mensaje nombra la variable, nunca su valor (regla 20): el error de
+    arranque termina en logs y en el 503 de BootErrorMiddleware."""
+    with pytest.raises(ValueError) as error:
+        _build(**override)
+    (valor,) = override.values()
+    assert valor not in str(error.value)
+
+
+def test_fuera_de_produccion_las_integraciones_siguen_siendo_opcionales() -> None:
+    """Desarrollo y staging arrancan sin Sentry ni OAuth de MP, y con el
+    sandbox y el OTP por consola."""
+    for env in ("development", "staging"):
+        settings = _build(
+            ENV=env,
+            MERCADOPAGO_WEBHOOK_SECRET=None,
+            MERCADOPAGO_OAUTH_CLIENT_ID=None,
+            MERCADOPAGO_OAUTH_CLIENT_SECRET="TEST-1234567890-abcdef",
+            MERCADOPAGO_OAUTH_REDIRECT_URI=None,
+            SENTRY_DSN=None,
+            PUBLIC_API_URL="http://api.shifty.ar",
+            OTP_PROVIDER="console",
+        )
+        assert settings.SENTRY_DSN is None
 
 
 @pytest.mark.parametrize(

@@ -43,7 +43,8 @@ x-app-environment-prod: &app_environment_prod
   ENV: production
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   VERSION: ${APP_VERSION:?APP_VERSION lo pasa scripts/deploy.sh (ver docs/DEPLOY_RUNBOOK.md); no va en .env}
-  SENTRY_DSN: ${SENTRY_DSN:-}
+  # 2026-10-02: el arranque tambien las exige (core/config.py, _OBLIGATORIOS_DE_PRODUCCION).
+  SENTRY_DSN: ${SENTRY_DSN:?Falta SENTRY_DSN en .env (DSN del proyecto de Sentry de produccion)}
   SECRET_KEY: ${SECRET_KEY:?Falta SECRET_KEY en .env (openssl rand -hex 32)}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?Falta FIELD_ENCRYPTION_KEY en .env (openssl rand -hex 32)}
   # La app conecta con el rol sin superusuario; las migraciones, con el dueno.
@@ -62,10 +63,12 @@ x-app-environment-prod: &app_environment_prod
   CELERY_RESULT_BACKEND_URL: ${CELERY_RESULT_BACKEND_URL:?Falta CELERY_RESULT_BACKEND_URL en .env}
   FRONTEND_URL: ${FRONTEND_URL:?Falta FRONTEND_URL en .env}
   PUBLIC_API_URL: ${PUBLIC_API_URL:?Falta PUBLIC_API_URL en .env}
-  MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:-}
-  MERCADOPAGO_OAUTH_CLIENT_SECRET: ${MERCADOPAGO_OAUTH_CLIENT_SECRET:-}
-  MERCADOPAGO_OAUTH_REDIRECT_URI: ${MERCADOPAGO_OAUTH_REDIRECT_URI:-}
-  MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET:-}
+  # En produccion la cuenta de MP de cada tienda solo se vincula por OAuth y el
+  # webhook firma solo con el secreto global: sin estas no se cobra.
+  MERCADOPAGO_OAUTH_CLIENT_ID: ${MERCADOPAGO_OAUTH_CLIENT_ID:?Falta MERCADOPAGO_OAUTH_CLIENT_ID en .env (app de Mercado Pago de produccion)}
+  MERCADOPAGO_OAUTH_CLIENT_SECRET: ${MERCADOPAGO_OAUTH_CLIENT_SECRET:?Falta MERCADOPAGO_OAUTH_CLIENT_SECRET en .env (no una credencial TEST-)}
+  MERCADOPAGO_OAUTH_REDIRECT_URI: ${MERCADOPAGO_OAUTH_REDIRECT_URI:?Falta MERCADOPAGO_OAUTH_REDIRECT_URI en .env (callback OAuth registrado en Mercado Pago)}
+  MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET:?Falta MERCADOPAGO_WEBHOOK_SECRET en .env (clave secreta de webhooks de la app de Mercado Pago)}
   # Regla 17: sin `*` ni localhost. El arranque lo verifica.
   CORS_ORIGINS: ${CORS_ORIGINS:?Falta CORS_ORIGINS en .env (los origenes del front, sin * ni localhost)}
   COOKIE_SECURE: ${COOKIE_SECURE:-true}

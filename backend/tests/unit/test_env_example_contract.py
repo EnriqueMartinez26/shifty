@@ -85,3 +85,42 @@ def test_el_ejemplo_de_produccion_explica_por_que_son_dos_roles() -> None:
     texto = PRODUCCION.read_text(encoding="utf-8")
     assert "DDL" in texto, "no dice por que las migraciones necesitan otro rol"
     assert "shifty_app" in texto
+
+
+# --- El ejemplo de produccion respeta el validador (2026-10-02) --------------
+#
+# Auditoria de origin/main. Sintoma: copiar backend/.env.production.example
+# daba un stack que no arrancaba por valores que el propio validador de
+# produccion rechaza (OPS_ENABLE_PUBLIC_HEALTH=true, OTP_PROVIDER=twilio, que
+# ni siquiera esta implementado), y no traia las claves de OAuth de MP.
+
+
+def _valores(ruta: Path) -> dict[str, str]:
+    valores: dict[str, str] = {}
+    for linea in ruta.read_text(encoding="utf-8").splitlines():
+        limpia = linea.strip()
+        if limpia and not limpia.startswith("#") and "=" in limpia:
+            clave, valor = limpia.split("=", 1)
+            valores[clave.strip()] = valor.strip()
+    return valores
+
+
+def test_el_ejemplo_de_produccion_no_choca_con_el_validador() -> None:
+    from core.config import (
+        _BOOLEANOS_DE_PRODUCCION,
+        _OBLIGATORIOS_DE_PRODUCCION,
+        _OTP_PROVIDERS_DE_PRODUCCION,
+    )
+
+    valores = _valores(PRODUCCION)
+    chocan = {
+        campo: valores[campo]
+        for campo, exigido, _ in _BOOLEANOS_DE_PRODUCCION
+        if campo in valores and valores[campo].lower() != str(exigido).lower()
+    }
+    assert not chocan, f"el arranque de produccion rechaza estos valores: {chocan}"
+    assert valores.get("OTP_PROVIDER") in _OTP_PROVIDERS_DE_PRODUCCION, (
+        f"OTP_PROVIDER={valores.get('OTP_PROVIDER')!r} no esta implementado"
+    )
+    faltan = [campo for campo, _ in _OBLIGATORIOS_DE_PRODUCCION if campo not in valores]
+    assert not faltan, f"el ejemplo no declara variables obligatorias: {faltan}"
