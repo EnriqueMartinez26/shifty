@@ -8,6 +8,7 @@ import {
   NetworkError,
   PaymentRequiredError,
   RateLimitError,
+  RequestTimeoutError,
   ServiceUnavailableError,
   type ApplicationError
 } from '@shared/errors'
@@ -141,13 +142,17 @@ export class NetworkErrorHandler extends ErrorHandler {
   }
 }
 
-/** 402, 429 y 502/503: texto de la tabla de codigos o uno neutro, nunca el del servidor. */
+/**
+ * 402, 429, 502/503 y la lectura vencida (D-20260930-02): texto de la tabla de
+ * codigos o uno neutro, nunca el del servidor.
+ */
 export class TransientErrorHandler extends ErrorHandler {
   public canHandle(error: unknown): boolean {
     return (
       error instanceof PaymentRequiredError ||
       error instanceof RateLimitError ||
-      error instanceof ServiceUnavailableError
+      error instanceof ServiceUnavailableError ||
+      error instanceof RequestTimeoutError
     )
   }
 

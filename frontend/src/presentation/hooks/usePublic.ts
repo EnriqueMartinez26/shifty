@@ -164,6 +164,12 @@ export const useRescheduleClientAppointment = () => {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['public-client-appointments'] })
       void queryClient.invalidateQueries({ queryKey: ['public-availability'] })
+    },
+    // Un 409 (horario tomado, bloqueado) deja la grilla vieja: se vuelve a
+    // pedir para no seguir ofreciendo ese horario (FF-06, mismo patron que
+    // FF-33 en useCreatePublicBooking).
+    onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ['public-availability'], refetchType: 'all' })
     }
   })
 }
