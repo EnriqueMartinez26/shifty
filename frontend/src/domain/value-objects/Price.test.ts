@@ -13,6 +13,8 @@ describe('Price Value Object', () => {
   it('debe formatear a moneda', () => {
     const price = Price.create(1500.5)
     // Intl.NumberFormat es-AR uses non-breaking spaces, so we normalize spaces for testing
-    expect(price.format().replace(/\s/g, ' ')).toMatch(/\$\s?1\.500,50/)
+    // Mismo formateador que el resto del front (shared/utils/currency): sin
+    // centavos.
+    expect(price.format().replace(/\s/g, ' ')).toBe('$ 1.501')
   })
 })

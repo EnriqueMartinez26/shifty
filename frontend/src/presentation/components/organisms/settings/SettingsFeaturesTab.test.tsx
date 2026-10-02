@@ -30,7 +30,7 @@ describe('SettingsFeaturesTab', () => {
     const onChange = jest.fn()
     render(<SettingsFeaturesTab flags={flags} onChange={onChange} />)
 
-    fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y senas' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Cobros online y señas' }))
 
     expect(onChange).toHaveBeenCalledWith({ ...flags, payments: true })
   })

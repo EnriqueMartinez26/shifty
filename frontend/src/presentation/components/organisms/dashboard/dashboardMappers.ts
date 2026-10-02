@@ -8,8 +8,9 @@ import type {
 } from '@application/services/ReportsService'
 
 import { formatArgentinaDayMonth, formatArgentinaTime } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 
-import { formatCurrency, numberFormatter } from './dashboardFormatters'
+import { numberFormatter } from './dashboardFormatters'
 import type { AgendaItem, RankedItem, Tone, TransactionItem } from './types'
 import { bookingStatusLabel } from '../../../lib/bookingStatusLabel'
 

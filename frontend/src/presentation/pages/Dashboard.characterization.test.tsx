@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, useLocation } from 'react-router'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import Dashboard from './Dashboard'
-import { currencyFmtEsAr } from '../lib/formatters'
 
 // Caracterizacion de `Dashboard`: red de seguridad de las cuatro tajadas de
 // F11b-09, que mueven los componentes de presentacion a `organisms/dashboard/`.
@@ -99,7 +100,7 @@ jest.mock('../hooks/useLedger', () => ({
 
 // Los pesos salen del mismo formateador de la app; se normaliza el espacio
 // duro (U+00A0) porque Testing Library compara el texto del nodo ya normalizado.
-const peso = (value: number) => currencyFmtEsAr.format(value).replace(/\s+/g, ' ')
+const peso = (value: number) => formatCurrency(value).replace(/\s+/g, ' ')
 
 const ADMIN_STATS = {
   appointments_today: 12,
@@ -320,8 +321,8 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       await renderDashboard()
 
       const hero = section('Hoy en Shifty')
-      expect(hero.getByText('Corte operativo: hoy + ultimos 7 dias')).toBeInTheDocument()
-      expect(hero.getByText('12 turnos, 3 pendientes, ocupacion 62,5%.')).toBeInTheDocument()
+      expect(hero.getByText('Corte operativo: hoy + últimos 7 días')).toBeInTheDocument()
+      expect(hero.getByText('12 turnos, 3 pendientes, ocupación 62,5%.')).toBeInTheDocument()
       expect(hero.getByText('requiere seguimiento')).toBeInTheDocument()
 
       const pillOf = (label: string) => within(hero.getByText(label).parentElement as HTMLElement)
@@ -330,19 +331,19 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(colorOf(pillOf('Cuentas pendientes').getByText('2 clientes con deuda'))).toBe(
         TONE.warning
       )
-      expect(pillOf('Ingresos').getByText('+8,4% de variacion')).toBeInTheDocument()
+      expect(pillOf('Ingresos').getByText('+8,4% de variación')).toBeInTheDocument()
     })
 
     it('muestra las cuatro metricas del resumen del dia con su señal y su detalle', async () => {
       await renderDashboard()
 
-      const summary = section('Resumen del dia')
+      const summary = section('Resumen del día')
       expect(
         summary.getByText(
-          'Cuatro senales para entender el pulso del negocio antes de entrar al detalle.'
+          'Cuatro señales para entender el pulso del negocio antes de entrar al detalle.'
         )
       ).toBeInTheDocument()
-      expect(summary.getByText('Lectura rapida del dia')).toBeInTheDocument()
+      expect(summary.getByText('Lectura rápida del día')).toBeInTheDocument()
 
       const revenue = cardOf(summary, 'Ingreso semanal')
       expect(revenue.getByText(peso(450000))).toBeInTheDocument()
@@ -352,27 +353,27 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       const clients = cardOf(summary, 'Clientes nuevos')
       expect(clients.getByText('18')).toBeInTheDocument()
       expect(clients.getByText('22 recurrentes activos')).toBeInTheDocument()
-      expect(clients.getByText('Adquisicion en curso')).toBeInTheDocument()
+      expect(clients.getByText('Adquisición en curso')).toBeInTheDocument()
 
-      const occupancy = cardOf(summary, 'Ocupacion')
+      const occupancy = cardOf(summary, 'Ocupación')
       expect(occupancy.getByText('62,5%')).toBeInTheDocument()
       expect(occupancy.getByText('37,5% de capacidad libre')).toBeInTheDocument()
       expect(occupancy.getByText('Ritmo estable')).toBeInTheDocument()
 
       const cancellations = cardOf(summary, 'Cancelaciones')
       expect(cancellations.getByText('4')).toBeInTheDocument()
-      expect(cancellations.getByText('2 proximos en agenda')).toBeInTheDocument()
+      expect(cancellations.getByText('2 próximos en agenda')).toBeInTheDocument()
       expect(cancellations.getByText('Revisar patron')).toBeInTheDocument()
     })
 
     it('lista la agenda de hoy con hora argentina, subtitulo y estado con su tono', async () => {
       await renderDashboard()
 
-      const operation = section('Operacion de hoy')
+      const operation = section('Operación de hoy')
       expect(
         operation.getByText('Turnos, carga operativa y capacidad disponible en una sola vista.')
       ).toBeInTheDocument()
-      expect(operation.getByText('Proximos movimientos de agenda')).toBeInTheDocument()
+      expect(operation.getByText('Próximos movimientos de agenda')).toBeInTheDocument()
 
       // QA 2026-10-02: los estados salian crudos de la API; ahora en castellano.
       expect(colorOf(operation.getByText('Confirmado'))).toBe(TONE.success)
@@ -387,13 +388,13 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
     it('muestra las cuatro tarjetas de señal de la operacion', async () => {
       await renderDashboard()
 
-      const operation = section('Operacion de hoy')
+      const operation = section('Operación de hoy')
       const signal = (title: string) =>
         operation.getByText(title, { selector: 'span' }).parentElement as HTMLElement
 
       expect(textOf(signal('Pendientes por confirmar'))).toContain('3')
       expect(textOf(signal('Pendientes por confirmar'))).toContain(
-        'Hay reservas esperando decision'
+        'Hay reservas esperando decisión'
       )
       expect(textOf(signal('Capacidad disponible'))).toContain('37,5%')
       expect(textOf(signal('Capacidad disponible'))).toContain('Espacio operativo libre para hoy')
@@ -407,7 +408,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
 
       const urgent = section('Acciones urgentes')
       expect(texts(urgent.getAllByRole('button'))).toEqual([
-        'Confirmar turnosReservas esperando decision3',
+        'Confirmar turnosReservas esperando decisión3',
         `Revisar cobros pendientes${peso(30000)}2`,
         'Revisar cobros onlineHay pagos pendientes de actualizar3',
         `Gestionar deuda${peso(25000)}2`
@@ -418,7 +419,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       expect(cardOf(money, 'Cobrado').getByText('Pagos aprobados y manuales')).toBeInTheDocument()
       expect(cardOf(money, 'Ticket promedio').getByText(peso(15000))).toBeInTheDocument()
       expect(
-        cardOf(money, 'Ticket promedio').getByText('Promedio movil de 7 dias')
+        cardOf(money, 'Ticket promedio').getByText('Promedio móvil de 7 días')
       ).toBeInTheDocument()
       expect(cardOf(money, 'Saldo pendiente').getByText(peso(25000))).toBeInTheDocument()
       expect(cardOf(money, 'Saldo pendiente').getByText('2 clientes con deuda')).toBeInTheDocument()
@@ -441,7 +442,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       ])
 
       const opportunities = section('Oportunidades')
-      expect(opportunities.getByText('Dia con capacidad libre')).toBeInTheDocument()
+      expect(opportunities.getByText('Día con capacidad libre')).toBeInTheDocument()
       expect(
         opportunities.getByText(
           'Queda 37,5% sin ocupar. Conviene reforzar agenda o activar promociones.'
@@ -469,7 +470,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
 
       const transactions = section('Transacciones')
       expect(
-        transactions.getByText('Ultimos turnos del periodo con su estado y monto.')
+        transactions.getByText('Últimos turnos del periodo con su estado y monto.')
       ).toBeInTheDocument()
 
       expect(
@@ -541,8 +542,8 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       ['Abrir reportes', 'hero', '/dashboard/reports'],
       ['Gestionar deuda', 'Acciones urgentes', '/dashboard/ledger'],
       ['Revisar cobros online', 'Acciones urgentes', '/dashboard/payments'],
-      ['Ocupacion', 'Resumen del dia', '/dashboard/reports'],
-      ['Clientes nuevos', 'Resumen del dia', '/dashboard/users'],
+      ['Ocupación', 'Resumen del día', '/dashboard/reports'],
+      ['Clientes nuevos', 'Resumen del día', '/dashboard/users'],
       ['Saldo pendiente', 'Dinero', '/dashboard/ledger'],
       ['Cobrado', 'Dinero', '/dashboard/collections'],
       ['Ver rendimiento', 'Oportunidades', '/dashboard/reports'],
@@ -567,7 +568,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
 
       const urgent = section('Acciones urgentes')
       expect(texts(urgent.getAllByRole('button'))).toEqual([
-        'Confirmar turnosReservas esperando decision3',
+        'Confirmar turnosReservas esperando decisión3',
         `Gestionar deuda${peso(25000)}2`
       ])
       expect(screen.queryByText('Revisar cobros pendientes')).not.toBeInTheDocument()
@@ -597,7 +598,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
 
       const alerts = section('Alertas del sistema')
       expect(texts(alerts.getAllByRole('button'))).toEqual([
-        'Cobros online desactivadosNo hay cobro automatico activo',
+        'Cobros online desactivadosNo hay cobro automático activo',
         'Cuentas pendientes desactivadasNo se lleva la deuda de cada cliente',
         'Cancelaciones en el periodoRevisar patron por servicio o profesional4'
       ])
@@ -608,14 +609,14 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
   })
 
   describe('estados de carga y error', () => {
-    it('muestra solo "Cargando dashboard..." mientras carga el resumen', async () => {
+    it('muestra solo "Cargando panel..." mientras carga el resumen', async () => {
       Object.assign(mockScenario, {
         summary: { data: undefined, isLoading: true, isError: false }
       })
       await renderDashboard()
 
-      expect(screen.getByText('Cargando dashboard...')).toBeInTheDocument()
-      expect(screen.queryByText('Resumen del dia')).not.toBeInTheDocument()
+      expect(screen.getByText('Cargando panel...')).toBeInTheDocument()
+      expect(screen.queryByText('Resumen del día')).not.toBeInTheDocument()
       expect(screen.queryByText('Hoy en Shifty')).not.toBeInTheDocument()
     })
 
@@ -628,7 +629,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       const message = screen.getByText('No se pudo cargar el resumen operativo.')
       expect(colorOf(message)).toBe(TONE.danger)
       expect(message.closest('main')?.firstElementChild).toBe(message)
-      expect(screen.getByText('Resumen del dia')).toBeInTheDocument()
+      expect(screen.getByText('Resumen del día')).toBeInTheDocument()
       expect(screen.getByText('Hoy en Shifty')).toBeInTheDocument()
     })
 
@@ -657,7 +658,7 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       await renderDashboard()
 
       expect(
-        section('Operacion de hoy').getByText('No hay proximos turnos para mostrar.')
+        section('Operación de hoy').getByText('No hay próximos turnos para mostrar.')
       ).toBeInTheDocument()
       expect(
         section('Acciones urgentes').getByText('No hay tareas criticas por resolver.')
@@ -680,11 +681,11 @@ describe('Dashboard (red de seguridad de la extraccion F11b-09)', () => {
       const hero = section('Hoy en Shifty')
       expect(hero.getByText('estable')).toBeInTheDocument()
       const pillOf = (label: string) => within(hero.getByText(label).parentElement as HTMLElement)
-      expect(colorOf(pillOf('Agenda').getByText('al dia'))).toBe(TONE.success)
+      expect(colorOf(pillOf('Agenda').getByText('al día'))).toBe(TONE.success)
       expect(pillOf('Cobros online').getByText('sin fallas')).toBeInTheDocument()
       expect(pillOf('Cuentas pendientes').getByText('sin deuda')).toBeInTheDocument()
 
-      const operation = section('Operacion de hoy')
+      const operation = section('Operación de hoy')
       expect(operation.getByText('Sin lider claro')).toBeInTheDocument()
       expect(operation.getByText('--')).toBeInTheDocument()
       expect(operation.getByText('No hay confirmaciones pendientes')).toBeInTheDocument()

@@ -4,6 +4,7 @@ import { Loader2, Save, TicketPercent } from 'lucide-react'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { fromDateTimeInput, toDateTimeInput } from '@shared/utils/argentinaTime'
+import { formatCurrency } from '@shared/utils/currency'
 
 import type { PromotionPayload, PromotionRecord } from '../../application/services/PaymentsService'
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -14,7 +15,7 @@ import { SummaryCards } from '../components/molecules/SummaryCards'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
-import { currencyFmtEsAr as currencyFmt, formatDateTimeEsAr } from '../lib/formatters'
+import { formatDateTimeEsAr } from '../lib/formatters'
 import {
   create2000sInputStyle,
   create2000sListCardStyle,
@@ -139,7 +140,7 @@ const PromotionsPage: React.FC = () => {
     <div className="space-y-8 duration-500">
       <PageHeader
         title="Promociones"
-        description="Códigos y descuentos del booking público en una pantalla separada de pagos."
+        description="Códigos y descuentos para la reserva pública."
         isLoading={promotionsQuery.isLoading}
         loadingText="Cargando promociones..."
       />
@@ -374,7 +375,7 @@ const PromotionsPage: React.FC = () => {
                 Activa
               </p>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                La promo queda visible para el booking público.
+                La promo queda visible en la reserva pública.
               </p>
             </div>
             <ToggleSwitch
@@ -437,7 +438,7 @@ const PromotionsPage: React.FC = () => {
                       {promotion.code} ·{' '}
                       {promotion.promotion_type === 'percent'
                         ? `${promotion.value}%`
-                        : currencyFmt.format(Number(promotion.value))}
+                        : formatCurrency(Number(promotion.value))}
                     </p>
                     {promotion.description && (
                       <p
@@ -470,7 +471,7 @@ const PromotionsPage: React.FC = () => {
                   <span>
                     Mínimo:{' '}
                     {promotion.min_service_amount
-                      ? currencyFmt.format(Number(promotion.min_service_amount))
+                      ? formatCurrency(Number(promotion.min_service_amount))
                       : 'sin mínimo'}
                   </span>
                   <span>

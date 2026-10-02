@@ -214,11 +214,11 @@ describe('ServiceFormModal — motivo del rechazo (D-20260930-09)', () => {
   it('un 422 del servidor en deposit_amount dice que revisar, sin texto crudo', async () => {
     const onSubmit = jest.fn().mockRejectedValue(
       new ValidationError(
-        'Value error, deposit_amount: un porcentaje de sena no puede superar 100',
+        'Value error, deposit_amount: un porcentaje de seña no puede superar 100',
         {
           errorCode: 'VALIDATION_ERROR',
           statusCode: 422,
-          detail: ['Value error, deposit_amount: un porcentaje de sena no puede superar 100']
+          detail: ['Value error, deposit_amount: un porcentaje de seña no puede superar 100']
         }
       )
     )

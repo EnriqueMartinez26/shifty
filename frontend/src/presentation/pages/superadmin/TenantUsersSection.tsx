@@ -57,7 +57,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           className="mt-2 text-xl font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
         >
-          Detalle del tenant
+          Detalle de la tienda
         </h2>
       </div>
       {overviewQuery.isFetching ? (
@@ -83,7 +83,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
             style={scopeBadgeStyle('danger')}
           >
             Contexto de tienda inactiva. Crear admins, asignar planes y canjear cupones puede quedar
-            bloqueado por reglas de backend.
+            bloqueado por las reglas del sistema.
           </div>
         ) : null}
 
@@ -280,7 +280,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
                   className="text-sm font-black uppercase tracking-widest"
                   style={{ color: colors2000s.text.primary }}
                 >
-                  No hay usuarios del tenant
+                  No hay usuarios en la tienda
                 </p>
               </div>
             )}
@@ -294,7 +294,7 @@ export const TenantUsersSection: React.FC<TenantUsersSectionProps> = ({
           className="text-sm font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.primary }}
         >
-          Selecciona una tienda
+          Seleccioná una tienda
         </p>
       </div>
     )}

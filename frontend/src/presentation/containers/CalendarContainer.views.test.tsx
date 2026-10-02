@@ -99,7 +99,7 @@ jest.mock('../hooks/useStoreWriteAccess', () => ({
   useStoreWriteAccess: () => mockWriteAccess
 }))
 
-const chooseView = (label: 'Dia' | 'Semana' | 'Mes' | 'Lista') => {
+const chooseView = (label: 'Día' | 'Semana' | 'Mes' | 'Lista') => {
   fireEvent.click(screen.getByRole('button', { name: label }))
 }
 
@@ -409,7 +409,7 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
 
   // QA 2026-10-02: la cabecera salia en ingles ('20 de September').
   it.each([
-    ['Dia', '19 de septiembre', '21 de septiembre'],
+    ['Día', '19 de septiembre', '21 de septiembre'],
     ['Semana', '13 de septiembre', '27 de septiembre'],
     ['Mes', '21 de agosto', '20 de octubre']
   ] as const)('la vista %s salta hacia atras a %s y hacia adelante a %s', (view, back, forward) => {

@@ -2,6 +2,8 @@ import React from 'react'
 
 import type { SuperAdminCoupon, SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import {
   formGridClass,
   innerCardStyle,
@@ -13,7 +15,6 @@ import {
 } from './shared'
 import { colors2000s } from '../../../theme/colors'
 import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
-import { formatCurrencyEsAr } from '../../lib/formatters'
 import { FieldLabel, SelectInput, TextArea, TextInput, ToggleRow } from '../SuperAdminUi'
 
 /**
@@ -64,15 +65,15 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       isOpen={modal === 'create-coupon' || modal === 'edit-coupon'}
       onClose={closeModal}
       onSubmit={handleCouponSubmit}
-      title={modal === 'create-coupon' ? 'Crear cupon' : 'Editar cupon'}
+      title={modal === 'create-coupon' ? 'Crear cupón' : 'Editar cupón'}
       subtitle="Gestiona valor, vigencia, cupo y reglas de canje global."
-      submitLabel={modal === 'create-coupon' ? 'Crear cupon' : 'Guardar cupon'}
+      submitLabel={modal === 'create-coupon' ? 'Crear cupón' : 'Guardar cupón'}
       loading={createCouponMutation.isPending || updateCouponMutation.isPending}
       error={modalError}
     >
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Codigo</FieldLabel>
+          <FieldLabel>Código</FieldLabel>
           <TextInput
             value={couponForm.code}
             onChange={(event) =>
@@ -137,11 +138,11 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
             onChange={(event) =>
               setCouponForm((current) => ({ ...current, max_uses: event.target.value }))
             }
-            placeholder="Sin limite"
+            placeholder="Sin límite"
           />
         </div>
         <div>
-          <FieldLabel>Canje unico por tienda</FieldLabel>
+          <FieldLabel>Canje único por tienda</FieldLabel>
           <SelectInput
             value={couponForm.one_time_per_store ? 'yes' : 'no'}
             onChange={(event) =>
@@ -181,7 +182,7 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       </div>
 
       <div>
-        <FieldLabel>Descripcion</FieldLabel>
+        <FieldLabel>Descripción</FieldLabel>
         <TextArea
           value={couponForm.description}
           onChange={(event) =>
@@ -192,8 +193,8 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
 
       {modal === 'edit-coupon' ? (
         <ToggleRow
-          label="Cupon activo"
-          description="Define si puede seguir canjeandose."
+          label="Cupón activo"
+          description="Definí si se puede seguir canjeando."
           checked={couponForm.is_active}
           onToggle={() =>
             setCouponForm((current) => ({ ...current, is_active: !current.is_active }))
@@ -206,33 +207,33 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
       isOpen={modal === 'redeem-coupon'}
       onClose={closeModal}
       onSubmit={handleRedeemSubmit}
-      title="Canjear cupon"
+      title="Canjear cupón"
       subtitle={selectedStore ? `Aplicar descuento a ${selectedStore.name}` : 'Canje sobre tienda'}
-      submitLabel="Canjear cupon"
+      submitLabel="Canjear cupón"
       loading={redeemCouponMutation.isPending}
       error={modalError}
       submitDisabled={!selectedStore || !hasSelectedStoreSubscription || !activeCoupons.length}
     >
       {!hasSelectedStoreSubscription ? (
         <div className="rounded-2xl px-4 py-3 text-xs font-bold" style={scopeBadgeStyle('danger')}>
-          Esta tienda no tiene suscripcion activa. No se puede canjear un cupon todavia.
+          Esta tienda no tiene suscripción activa. No se puede canjear un cupón todavía.
         </div>
       ) : null}
 
       <div>
-        <FieldLabel>Cupon</FieldLabel>
+        <FieldLabel>Cupón</FieldLabel>
         <SelectInput
           value={redeemForm.coupon_code}
           onChange={(event) => setRedeemForm({ coupon_code: event.target.value })}
           required
         >
-          <option value="">Selecciona un cupon</option>
+          <option value="">Seleccioná un cupón</option>
           {activeCoupons.map((coupon) => (
             <option key={coupon.public_id} value={coupon.code}>
               {coupon.code} ·{' '}
               {coupon.coupon_type === 'percent'
                 ? `${coupon.value}%`
-                : formatCurrencyEsAr(coupon.value, coupon.currency || 'ARS')}
+                : formatCurrency(coupon.value, coupon.currency || 'ARS')}
             </option>
           ))}
         </SelectInput>
@@ -242,8 +243,8 @@ export const CouponModals: React.FC<CouponModalsProps> = ({
         className="rounded-2xl px-4 py-3 text-xs font-bold"
         style={{ ...innerCardStyle, color: colors2000s.text.secondary }}
       >
-        El backend valida tienda activa, suscripcion vigente, expiracion del cupon y maximo de usos
-        antes de confirmar el canje.
+        Antes de confirmar el canje se valida que la tienda esté activa, la suscripción vigente, el
+        cupón sin vencer y el máximo de usos.
       </div>
     </SuperAdminFormModal>
   </>

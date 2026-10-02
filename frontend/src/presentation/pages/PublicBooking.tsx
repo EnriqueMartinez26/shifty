@@ -138,7 +138,7 @@ const PublicBooking: React.FC = () => {
                 ? 'El turno no fue confirmado. Podés volver a intentarlo desde la tienda.'
                 : paymentStatus.pollingStopped
                   ? 'Todavía no recibimos la confirmación del pago. Si ya pagaste, tu turno se confirma cuando Mercado Pago avise; podés volver a consultar o hablar con la tienda.'
-                  : 'No cierres esta pantalla. La confirmación depende del webhook verificado del backend.'}
+                  : 'No cierres esta pantalla. El turno se confirma cuando Mercado Pago nos avisa del pago.'}
           </p>
           {paymentStatus.pollingStopped && (
             // Pasados 30 min el sondeo corta (F4-05); consultar de nuevo es a

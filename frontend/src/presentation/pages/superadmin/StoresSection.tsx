@@ -81,10 +81,10 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           className="text-2xl font-black uppercase tracking-tight"
           style={{ color: colors2000s.text.primary }}
         >
-          Operacion por tenant
+          Operación por tienda
         </h2>
         <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-          Filtros directos por estado y suscripcion para triage operativo rapido.
+          Filtros por estado y suscripción para revisar rápido.
         </p>
       </div>
 
@@ -131,8 +131,8 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
         <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
           {[
             { value: 'all', label: 'Todas' },
-            { value: 'with', label: 'Con suscripcion' },
-            { value: 'without', label: 'Sin suscripcion' }
+            { value: 'with', label: 'Con suscripción' },
+            { value: 'without', label: 'Sin suscripción' }
           ].map((item) => (
             <button
               key={item.value}
@@ -171,7 +171,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                   'Estado',
                   'Recordatorios',
                   'Usuarios',
-                  'Suscripcion',
+                  'Suscripción',
                   'Renueva',
                   'Acciones'
                 ].map((label) => (
@@ -234,7 +234,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                       style={{ color: colors2000s.text.secondary }}
                     >
                       <div>
-                        Confirmacion:{' '}
+                        Confirmación:{' '}
                         <span style={{ color: colors2000s.text.primary }}>
                           {store.send_email_confirmation ? 'On' : 'Off'}
                         </span>
@@ -267,7 +267,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
                       >
                         {store.subscription_status
                           ? subscriptionStatusLabel(store.subscription_status)
-                          : 'Sin suscripcion'}
+                          : 'Sin suscripción'}
                       </p>
                     </td>
                     <td
@@ -333,7 +333,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
             No hay tiendas para este filtro
           </p>
           <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Ajusta busqueda, estado o suscripcion para recuperar resultados.
+            Ajustá la búsqueda, el estado o la suscripción para ver resultados.
           </p>
         </div>
       )}

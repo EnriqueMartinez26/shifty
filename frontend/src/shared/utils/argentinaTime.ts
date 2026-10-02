@@ -182,7 +182,7 @@ export const argentinaLocalToUtcIso = (date: string, time: string): string => {
     timeParts.length < 2 ||
     [year, month, day, hour, minute].some((n) => !Number.isFinite(n))
   ) {
-    throw new Error(`Fecha u hora invalida: ${date} ${time}`)
+    throw new Error(`Fecha u hora inválida: ${date} ${time}`)
   }
   // Se toma la hora tipeada "como si" fuera UTC y se corrige por el desfase
   // que la zona tiene en ese instante.

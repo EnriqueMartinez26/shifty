@@ -1,34 +1,8 @@
-import { formatCurrency, formatPercent, numberFormatter } from './dashboardFormatters'
+import { formatPercent, numberFormatter } from './dashboardFormatters'
 
 // F11b-09 (cuarta tajada): los formateadores salieron de `Dashboard.tsx`. Los
 // valores esperados son literales es-AR, no se calculan con el codigo bajo
-// prueba. `ars` normaliza el espacio duro (U+00A0) que Intl pone entre el
-// simbolo y el numero, igual que el `peso` de la caracterizacion de la pagina.
-
-const ars = (value: number | string | null | undefined) =>
-  formatCurrency(value).replace(/\s+/g, ' ')
-
-describe('formatCurrency', () => {
-  it('formatea un numero en pesos argentinos sin decimales', () => {
-    expect(ars(1500)).toBe('$ 1.500')
-    expect(ars(450000)).toBe('$ 450.000')
-  })
-
-  it('acepta el monto como texto', () => {
-    expect(ars('2500')).toBe('$ 2.500')
-  })
-
-  it('trata null, undefined y vacio como cero', () => {
-    expect(ars(null)).toBe('$ 0')
-    expect(ars(undefined)).toBe('$ 0')
-    expect(ars('')).toBe('$ 0')
-  })
-
-  it('redondea los centavos y respeta el signo', () => {
-    expect(ars(1234.56)).toBe('$ 1.235')
-    expect(ars(-1500)).toBe('-$ 1.500')
-  })
-})
+// prueba. El de importes es `shared/utils/currency` (con su propio test).
 
 describe('formatPercent', () => {
   it('imprime un decimal como mucho, con coma', () => {

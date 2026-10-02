@@ -49,7 +49,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   // Siempre 3 pasos, incluidas las tiendas con OTP: el paso de validacion se
   // muestra como sub-fase dentro de "Datos y Confirmacion" en vez de ocupar
   // un paso propio.
-  const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmacion'], [])
+  const steps = useMemo(() => ['Servicio', 'Horario y Profesional', 'Datos y Confirmación'], [])
 
   const [otpState, setOtpState] = useState<BookingOtpState>({
     code: '',
@@ -167,7 +167,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
   const handleRequestOtp = async () => {
     const email = otpState.email.trim()
     if (!email) {
-      setOtpState((prev) => ({ ...prev, error: 'Ingresa el email donde queres recibir el codigo' }))
+      setOtpState((prev) => ({ ...prev, error: 'Ingresá el email donde querés recibir el código' }))
       return
     }
     try {
@@ -194,7 +194,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       setOtpState((prev) => ({
         ...prev,
         rateLimited: prev.rateLimited || rateLimited,
-        error: getErrorMessage(error, 'No se pudo enviar el codigo')
+        error: getErrorMessage(error, 'No se pudo enviar el código')
       }))
       const retryAfter = rateLimited ? undefined : getRetryAfterSeconds(error)
       if (retryAfter !== undefined) resendCooldown.start(retryAfter)
@@ -218,7 +218,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
     } catch (error: unknown) {
       setOtpState((prev) => ({
         ...prev,
-        error: getErrorMessage(error, 'Codigo invalido')
+        error: getErrorMessage(error, 'Código inválido')
       }))
     }
   }

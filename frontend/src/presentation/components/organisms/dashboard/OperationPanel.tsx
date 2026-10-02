@@ -56,7 +56,7 @@ function OperationPanel({
                     color: colors2000s.text.primary
                   }}
                 >
-                  Proximos movimientos de agenda
+                  Próximos movimientos de agenda
                 </strong>
                 <span style={subtleTextStyle}>
                   Lo inmediato, antes de abrir el calendario completo.

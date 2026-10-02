@@ -57,7 +57,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
       onClose={closeModal}
       onSubmit={handleStoreSubmit}
       title={modal === 'create-store' ? 'Crear tienda' : 'Editar tienda'}
-      subtitle="Define identidad del tenant, reglas de operacion y notificaciones base."
+      subtitle="Definí la identidad de la tienda, sus reglas de operación y las notificaciones base."
       submitLabel={modal === 'create-store' ? 'Crear tienda' : 'Guardar tienda'}
       loading={createStoreMutation.isPending || updateStoreMutation.isPending}
       error={modalError}
@@ -119,7 +119,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
 
       <div className={formGridClass}>
         <div>
-          <FieldLabel>Horas de cancelacion</FieldLabel>
+          <FieldLabel>Horas de cancelación</FieldLabel>
           <TextInput
             type="number"
             min="0"
@@ -147,7 +147,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
       <div className="grid gap-3">
         <ToggleRow
           label="Confirmaciones por email"
-          description="Controla si el tenant envia confirmacion de reserva."
+          description="Controla si la tienda envía la confirmación de reserva."
           checked={storeForm.send_email_confirmation}
           onToggle={() =>
             setStoreForm((current) => ({
@@ -158,7 +158,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
         />
         <ToggleRow
           label="Recordatorios por email"
-          description="Controla si el tenant envia recordatorios automaticos."
+          description="Controla si la tienda envía recordatorios automáticos."
           checked={storeForm.send_email_reminders}
           onToggle={() =>
             setStoreForm((current) => ({
@@ -170,7 +170,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
         {modal === 'edit-store' ? (
           <ToggleRow
             label="Tienda activa"
-            description="Desactivar bloquea el contexto operativo del tenant."
+            description="Desactivarla bloquea la operación de la tienda."
             checked={storeForm.is_active}
             onToggle={() =>
               setStoreForm((current) => ({ ...current, is_active: !current.is_active }))
@@ -226,7 +226,7 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           />
         </div>
         <div>
-          <FieldLabel>Telefono</FieldLabel>
+          <FieldLabel>Teléfono</FieldLabel>
           <TextInput
             value={adminForm.phone}
             onChange={(event) =>

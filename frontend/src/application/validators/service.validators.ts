@@ -17,20 +17,20 @@ const nameSchema = z
 const descriptionSchema = z
   .string()
   .max(1000, 'La descripción no puede superar los 1000 caracteres')
-const durationSchema = z.number().min(5, 'Minimo 5 minutos').max(480, 'Maximo 8 horas')
+const durationSchema = z.number().min(5, 'Mínimo 5 minutos').max(480, 'Máximo 8 horas')
 const priceSchema = z
   .number()
   .min(0, 'El precio no puede ser negativo')
   .max(10_000_000, 'El precio no puede superar 10.000.000')
 const colorSchema = z
   .string()
-  .regex(/^#[0-9A-F]{6}$/i, 'Color invalido')
+  .regex(/^#[0-9A-F]{6}$/i, 'Color inválido')
   .or(z.literal(''))
-const urlSchema = z.string().url('URL invalida').or(z.literal(''))
+const urlSchema = z.string().url('URL inválida').or(z.literal(''))
 const depositAmountSchema = z
   .number()
-  .min(0, 'El monto de la sena no puede ser negativo')
-  .max(10_000_000, 'El monto de la sena es demasiado alto')
+  .min(0, 'El monto de la seña no puede ser negativo')
+  .max(10_000_000, 'El monto de la seña es demasiado alto')
   .nullable()
   .optional()
 

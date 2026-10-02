@@ -8,10 +8,12 @@ import type {
   SuperAdminStoreRow
 } from '@application/services/SuperAdminService'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import { emptyStateStyle, innerCardStyle, panelStyle, scopeBadgeStyle } from './shared'
 import { colors2000s } from '../../../theme/colors'
 import { billingIntervalLabel, subscriptionStatusLabel } from '../../lib/enumLabels'
-import { formatCurrencyEsAr, formatDateEsAr } from '../../lib/formatters'
+import { formatDateEsAr } from '../../lib/formatters'
 import { ActionButton } from '../SuperAdminUi'
 
 /**
@@ -41,7 +43,7 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
           className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
           style={scopeBadgeStyle('tenant')}
         >
-          Suscripcion
+          Suscripción
         </span>
       </div>
       <ActionButton
@@ -69,7 +71,7 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
             className="rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest"
             style={scopeBadgeStyle('tenant')}
           >
-            {formatCurrencyEsAr(overview.subscription.total_amount, overview.subscription.currency)}
+            {formatCurrency(overview.subscription.total_amount, overview.subscription.currency)}
           </span>
         </div>
         <div
@@ -79,16 +81,13 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
           <div>
             Base:{' '}
             <span style={{ color: colors2000s.text.primary }}>
-              {formatCurrencyEsAr(
-                overview.subscription.base_amount,
-                overview.subscription.currency
-              )}
+              {formatCurrency(overview.subscription.base_amount, overview.subscription.currency)}
             </span>
           </div>
           <div>
             Descuento:{' '}
             <span style={{ color: colors2000s.text.primary }}>
-              {formatCurrencyEsAr(
+              {formatCurrency(
                 overview.subscription.discount_amount,
                 overview.subscription.currency
               )}
@@ -124,10 +123,10 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
             className="text-[10px] font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.secondary }}
           >
-            Cupon aplicado
+            Cupón aplicado
           </p>
           <p className="mt-1 font-black" style={{ color: colors2000s.text.primary }}>
-            {overview.subscription.applied_coupon?.code || 'Sin cupon aplicado'}
+            {overview.subscription.applied_coupon?.code || 'Sin cupón aplicado'}
           </p>
         </div>
       </div>
@@ -138,10 +137,10 @@ export const SubscriptionSection: React.FC<SubscriptionSectionProps> = ({
           className="text-sm font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.primary }}
         >
-          Esta tienda no tiene suscripcion
+          Esta tienda no tiene suscripción
         </p>
         <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-          Asigna un plan para habilitar billing y canjes sobre el tenant.
+          Asigná un plan para habilitar el cobro y los canjes de la tienda.
         </p>
       </div>
     )}

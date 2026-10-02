@@ -73,12 +73,12 @@ describe('SettingsPaymentsTab', () => {
 
     fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.change(screen.getByPlaceholderText(/La seña equivale al 30%/), {
-      target: { value: 'Politica' }
+      target: { value: 'Política' }
     })
     fireEvent.click(screen.getByRole('button', { name: 'Guardar condiciones' }))
 
     expect(props.onChange).toHaveBeenNthCalledWith(1, { allow_manual_coordination: false })
-    expect(props.onChange).toHaveBeenNthCalledWith(2, { deposit_policy: 'Politica' })
+    expect(props.onChange).toHaveBeenNthCalledWith(2, { deposit_policy: 'Política' })
     expect(props.onSave).toHaveBeenCalledTimes(1)
   })
 

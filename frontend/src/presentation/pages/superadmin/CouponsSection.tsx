@@ -4,6 +4,8 @@ import { Tag } from 'lucide-react'
 
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
+import { formatCurrency } from '@shared/utils/currency'
+
 import {
   emptyStateStyle,
   innerCardStyle,
@@ -14,7 +16,7 @@ import {
   type QueryState
 } from './shared'
 import { colors2000s } from '../../../theme/colors'
-import { formatCurrencyEsAr, formatDateEsAr } from '../../lib/formatters'
+import { formatDateEsAr } from '../../lib/formatters'
 import { ActionButton, MiniButton } from '../SuperAdminUi'
 
 /**
@@ -52,7 +54,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
           Maestro editable
         </h2>
       </div>
-      <ActionButton label="Crear cupon" onClick={openCreateCouponModal} tone="primary" />
+      <ActionButton label="Crear cupón" onClick={openCreateCouponModal} tone="primary" />
     </div>
 
     <div className="space-y-3">
@@ -74,7 +76,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
                     {coupon.coupon_type} ·{' '}
                     {coupon.coupon_type === 'percent'
                       ? `${coupon.value}%`
-                      : formatCurrencyEsAr(coupon.value, coupon.currency || 'ARS')}
+                      : formatCurrency(coupon.value, coupon.currency || 'ARS')}
                   </p>
                 </div>
                 <span
@@ -97,7 +99,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
                   </span>
                 </div>
                 <div>
-                  Canje unico:{' '}
+                  Canje único:{' '}
                   <span style={{ color: colors2000s.text.primary }}>
                     {coupon.one_time_per_store ? 'Si' : 'No'}
                   </span>
@@ -115,7 +117,7 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
                   className="mt-4 rounded-2xl px-3 py-2 text-[10px] font-black uppercase tracking-widest"
                   style={scopeBadgeStyle('danger')}
                 >
-                  {expired ? 'Cupon expirado' : 'Maximo de usos alcanzado'}
+                  {expired ? 'Cupón expirado' : 'Máximo de usos alcanzado'}
                 </div>
               ) : null}
 
@@ -147,10 +149,10 @@ export const CouponsSection: React.FC<CouponsSectionProps> = ({
             className="text-sm font-black uppercase tracking-widest"
             style={{ color: colors2000s.text.primary }}
           >
-            No hay cupones todavia
+            No hay cupones todavía
           </p>
           <p className="mt-2 text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-            Crea el primer cupon global para empezar a operar descuentos.
+            Creá el primer cupón global para empezar a ofrecer descuentos.
           </p>
         </div>
       )}

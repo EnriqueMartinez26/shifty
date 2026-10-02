@@ -483,7 +483,7 @@ const SettingsPage: React.FC = () => {
               style={{ color: colors2000s.status.warning.text }}
             >
               Modificar el <strong>Slug</strong> invalidará el link de reserva compartido
-              anteriormente. Asegúrate de notificar a tus clientes.
+              anteriormente. Asegurate de avisarles a tus clientes.
             </p>
           </div>
         </div>
