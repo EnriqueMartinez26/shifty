@@ -135,6 +135,95 @@ describe('BookingSuccess', () => {
     })
   })
 
+  describe('resumen de precio y pago requerido', () => {
+    // 2026-10-02: el resumen comercial y el bloque de pago requerido no tenian
+    // test; un cambio en los importes o en la condicion de mostrarlos pasaba
+    // sin que nada fallara.
+    it('muestra servicio, descuento y total con sus importes', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              service_price: 12000,
+              discount_amount: 1500,
+              final_price: 10500
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Resumen comercial')).toBeInTheDocument()
+      expect(screen.getByText('Servicio: $ 12.000')).toBeInTheDocument()
+      expect(screen.getByText('Descuento: -$ 1.500')).toBeInTheDocument()
+      expect(screen.getByText('Total final: $ 10.500')).toBeInTheDocument()
+    })
+
+    it('sin descuento no muestra la linea y el total cae al precio del servicio', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({ service_price: 12000, discount_amount: 0 })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Servicio: $ 12.000')).toBeInTheDocument()
+      expect(screen.queryByText(/Descuento:/)).not.toBeInTheDocument()
+      expect(screen.getByText('Total final: $ 12.000')).toBeInTheDocument()
+    })
+
+    it('sin precio no muestra el resumen comercial', () => {
+      render(<BookingSuccess {...props()} />)
+
+      expect(screen.queryByText('Resumen comercial')).not.toBeInTheDocument()
+    })
+
+    it('con pago requerido muestra la sena a pagar y su estado', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_amount: 3150,
+              payment_status: 'pending'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Pago requerido')).toBeInTheDocument()
+      expect(screen.getByText('$ 3.150')).toBeInTheDocument()
+      expect(screen.getByText('Estado: pending')).toBeInTheDocument()
+    })
+
+    it('con pago requerido sin importe ni estado avisa que el importe se confirma', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({ status: 'pending_payment', payment_required: true })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Importe a confirmar')).toBeInTheDocument()
+      expect(screen.getByText('Estado: pendiente')).toBeInTheDocument()
+    })
+
+    it('sin pago requerido no muestra el bloque aunque traiga importe', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({ payment_required: false, payment_amount: 3150 })
+          })}
+        />
+      )
+
+      expect(screen.queryByText('Pago requerido')).not.toBeInTheDocument()
+      expect(screen.queryByText('$ 3.150')).not.toBeInTheDocument()
+    })
+  })
+
   describe('mis turnos', () => {
     it('con el slug de la tienda ofrece cambiar o cancelar el turno', () => {
       render(<BookingSuccess {...props()} />)
