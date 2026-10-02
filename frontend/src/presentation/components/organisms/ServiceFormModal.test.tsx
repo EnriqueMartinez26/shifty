@@ -222,12 +222,17 @@ describe('ServiceFormModal — imagen del servicio', () => {
     Service.fromPrimitives({ ...servicioConSena().toPrimitives(), image_url: imageUrl })
 
   const montar = (
-    opciones: { editingService?: Service | null; onUploadImage?: jest.Mock } = {}
+    opciones: {
+      editingService?: Service | null
+      onUploadImage?: jest.Mock
+      readOnlyReason?: string
+    } = {}
   ) => {
     const props = {
       onSubmit: jest.fn().mockResolvedValue(undefined),
       onUploadImage: opciones.onUploadImage ?? jest.fn().mockResolvedValue(conImagen(URL_NUEVA)),
-      onRemoveImage: jest.fn().mockResolvedValue(conImagen(null))
+      onRemoveImage: jest.fn().mockResolvedValue(conImagen(null)),
+      readOnlyReason: opciones.readOnlyReason
     }
     const editingService =
       'editingService' in opciones ? opciones.editingService : conImagen(URL_VIEJA)
@@ -320,5 +325,29 @@ describe('ServiceFormModal — imagen del servicio', () => {
 
     await waitFor(() => expect(props.onSubmit).toHaveBeenCalledTimes(1))
     expect(props.onSubmit.mock.calls[0]?.[0]).toMatchObject({ imageUrl: '' })
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). POST y DELETE /services/{id}/image y el PATCH
+  // del guardado no estan en SUSPENSION_ALLOWED_WRITES.
+  it('con la tienda suspendida subir, quitar y guardar quedan deshabilitados', () => {
+    montar({ readOnlyReason: 'Tienda suspendida' })
+
+    const input = screen.getByLabelText(/Subir imagen/i)
+    expect(input).toBeDisabled()
+    expect(input.closest('label')).toHaveAttribute('title', 'Tienda suspendida')
+    for (const name of [/Quitar imagen/i, /Guardar/i]) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+  })
+
+  it('sin suspension subir, quitar y guardar siguen habilitados', () => {
+    montar()
+
+    expect(screen.getByLabelText(/Subir imagen/i)).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Quitar imagen/i })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Guardar/i })).not.toBeDisabled()
   })
 })

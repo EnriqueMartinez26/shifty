@@ -17,6 +17,7 @@ import {
   useUpdateManagedService,
   useUploadServiceImage
 } from '../hooks/useManagedServices'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { notifyError } from '../lib/notify'
 import type { ServiceFormValues } from '../types/forms'
 
@@ -34,6 +35,10 @@ export const ServiceManagementContainer: React.FC = () => {
   const deleteMutation = useDeleteManagedService()
   const uploadImageMutation = useUploadServiceImage()
   const removeImageMutation = useRemoveServiceImage()
+  // Tienda suspendida (FF-15): POST, PATCH y DELETE /services/... (imagen
+  // incluida) no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
 
   const filteredServices = services?.filter((service) =>
     service.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -110,9 +115,11 @@ export const ServiceManagementContainer: React.FC = () => {
         </div>
 
         <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group"
+          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
           onClick={handleCreate}
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
         >
           <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
           NUEVO SERVICIO
@@ -159,6 +166,7 @@ export const ServiceManagementContainer: React.FC = () => {
               onEdit={handleEdit}
               onDelete={(id) => void handleDelete(id)}
               onReactivate={(id) => void handleReactivate(id)}
+              readOnlyReason={readOnlyReason}
             />
           ))}
         </div>
@@ -171,6 +179,7 @@ export const ServiceManagementContainer: React.FC = () => {
         editingService={editingService}
         onUploadImage={(id, file) => uploadImageMutation.mutateAsync({ id, file })}
         onRemoveImage={(id) => removeImageMutation.mutateAsync(id)}
+        readOnlyReason={readOnlyReason}
       />
     </div>
   )

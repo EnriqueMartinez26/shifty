@@ -41,13 +41,20 @@ jest.mock('../hooks/useConfirm', () => ({
   useConfirm: () => ({ confirm: () => Promise.resolve(true), confirmDialog: null })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 jest.mock('../components/molecules/ServiceCard', () => ({
   ServiceCard: ({
     onDelete,
-    onReactivate
+    onReactivate,
+    readOnlyReason
   }: {
     onDelete: (id: string) => void
     onReactivate: (id: string) => void
+    readOnlyReason?: string | null
   }) => (
     <>
       <button type="button" onClick={() => onDelete('svc-1')}>
@@ -56,11 +63,44 @@ jest.mock('../components/molecules/ServiceCard', () => ({
       <button type="button" onClick={() => onReactivate('svc-1')}>
         Reactivar
       </button>
+      <span data-testid="card-reason">{readOnlyReason ?? 'editable'}</span>
     </>
   )
 }))
 
-jest.mock('../components/organisms/ServiceFormModal', () => ({ ServiceFormModal: () => null }))
+const mockFormModal = jest.fn((_props: { readOnlyReason?: string | null }) => null)
+jest.mock('../components/organisms/ServiceFormModal', () => ({
+  ServiceFormModal: (props: { readOnlyReason?: string | null }) => mockFormModal(props)
+}))
+
+// 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+// verse deshabilitada (FF-15). POST, PATCH y DELETE /services/... (imagen
+// incluida) no estan en SUSPENSION_ALLOWED_WRITES.
+describe('ServiceManagementContainer: tienda suspendida', () => {
+  afterEach(() => {
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  it('con la tienda suspendida NUEVO se deshabilita y el motivo llega a la tarjeta y al modal', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    const { getByRole, getByTestId } = render(<ServiceManagementContainer />)
+
+    const nuevo = getByRole('button', { name: /nuevo servicio/i })
+    expect(nuevo).toBeDisabled()
+    expect(nuevo).toHaveAttribute('title', 'Tienda suspendida')
+    expect(getByTestId('card-reason')).toHaveTextContent('Tienda suspendida')
+    expect(mockFormModal).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnlyReason: 'Tienda suspendida' })
+    )
+  })
+
+  it('sin suspension NUEVO sigue habilitado y la tarjeta no recibe motivo', () => {
+    const { getByRole, getByTestId } = render(<ServiceManagementContainer />)
+
+    expect(getByRole('button', { name: /nuevo servicio/i })).not.toBeDisabled()
+    expect(getByTestId('card-reason')).toHaveTextContent('editable')
+  })
+})
 
 describe('ServiceManagementContainer: borrar', () => {
   it('si el backend rechaza el borrado, el usuario ve el aviso neutro', async () => {

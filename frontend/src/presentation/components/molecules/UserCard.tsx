@@ -12,9 +12,20 @@ interface UserCardProps {
   onDelete: (id: string) => void
   /** Mostrar "Eliminar" (baja logica); lo decide `canDeactivateUser`. */
   canDelete: boolean
+  /**
+   * Tienda suspendida: editar responde 402 (FF-15). Eliminar sigue: DELETE
+   * /users/{public_id} esta en SUSPENSION_ALLOWED_WRITES (D-20260930-10).
+   */
+  readOnlyReason?: string | null
 }
 
-export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete, canDelete }) => {
+export const UserCard: React.FC<UserCardProps> = ({
+  user,
+  onEdit,
+  onDelete,
+  canDelete,
+  readOnlyReason = null
+}) => {
   const isAdmin = user.role.isAdmin()
 
   const getInitials = (name: string) => {
@@ -131,7 +142,9 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onEdit, onDelete, canD
       <div className={`grid ${canDelete ? 'grid-cols-2' : 'grid-cols-1'} gap-3 pt-4 mt-4`}>
         <button
           onClick={() => onEdit(user)}
-          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95"
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
+          className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
           style={buttonStyles2000s.default}
         >
           <Edit2 size={14} /> Editar

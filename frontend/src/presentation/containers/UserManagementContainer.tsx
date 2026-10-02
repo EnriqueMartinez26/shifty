@@ -20,6 +20,7 @@ import {
   useManagedDomainUsers,
   useUpdateManagedDomainUser
 } from '../hooks/useManagedDomainUsers'
+import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { canDeactivateUser, userFormRules } from '../lib/userAccessRules'
 import { toCreateUserInput, toUserWriteInput } from '../lib/userFormPayload'
 import { toUserListQuery } from '../lib/userSearch'
@@ -49,6 +50,10 @@ export const UserManagementContainer: React.FC = () => {
   const createMutation = useCreateManagedDomainUser()
   const updateMutation = useUpdateManagedDomainUser()
   const deleteMutation = useDeleteManagedDomainUser()
+  // Tienda suspendida (FF-15): POST /users/ y PATCH /users/{id} responden 402;
+  // la baja sigue (DELETE /users/{public_id}, D-20260930-10).
+  const writeAccess = useStoreWriteAccess()
+  const readOnlyReason = writeAccess.readOnly ? writeAccess.reason : null
 
   const handleDelete = async (id: string) => {
     if (!(await confirm('¿Estás seguro de eliminar este usuario?'))) return
@@ -110,9 +115,11 @@ export const UserManagementContainer: React.FC = () => {
         </div>
 
         <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group"
+          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
           style={buttonStyles2000s.selected}
           onClick={handleCreate}
+          disabled={readOnlyReason !== null}
+          title={readOnlyReason ?? undefined}
         >
           <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
           NUEVO USUARIO
@@ -183,6 +190,7 @@ export const UserManagementContainer: React.FC = () => {
               onEdit={handleEdit}
               onDelete={(id) => void handleDelete(id)}
               canDelete={canDeactivateUser(viewer, user)}
+              readOnlyReason={readOnlyReason}
             />
           ))}
         </div>
