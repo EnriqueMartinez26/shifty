@@ -13,14 +13,21 @@ describe('normalizePhoneForWhatsApp', () => {
     ['351 555-1234', '5493515551234'],
     ['0351 15 555 1234', '5493515551234'],
     ['(011) 5555-0000', '5491155550000'],
-    ['+54 11 5555 0000', '5491155550000'],
     ['+54 9 11 15 5555 0000', '5491155550000'],
+    ['+54 11 15 5555 0000', '5491155550000'],
     ['00 54 9 351 555 1234', '5493515551234'],
-    ['541155550000', '5491155550000'],
     ['2964 15 401234', '5492964401234'],
     ['02964 401234', '5492964401234']
   ])('%s -> %s', (raw, expected) => {
     expect(normalizePhoneForWhatsApp(raw)).toBe(expected)
+  })
+
+  // Revision R3: con el codigo de pais escrito y sin 9 ni 15 puede ser una
+  // linea fija con WhatsApp Business; agregarle el 9 la mandaba a otro numero.
+  it('con 54 escrito y sin 9 ni 15 lo respeta tal cual', () => {
+    expect(normalizePhoneForWhatsApp('+54 11 4555 0000')).toBe('541145550000')
+    expect(normalizePhoneForWhatsApp('541145550000')).toBe('541145550000')
+    expect(normalizePhoneForWhatsApp('+54 011 4555 0000')).toBe('541145550000')
   })
 
   it('respeta un numero que ya trae otro codigo de pais', () => {

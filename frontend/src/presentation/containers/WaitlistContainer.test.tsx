@@ -140,7 +140,8 @@ describe('WaitlistContainer', () => {
     render(<WaitlistContainer />)
 
     expect(screen.getByText(/· 123/)).toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: 'WhatsApp' })).not.toBeInTheDocument()
+    // Ni link ni ancla muerta: el texto "WhatsApp" no aparece.
+    expect(screen.queryByText('WhatsApp')).not.toBeInTheDocument()
   })
 
   it('el personal sin rol de administrador no ve reservar ni quitar', () => {

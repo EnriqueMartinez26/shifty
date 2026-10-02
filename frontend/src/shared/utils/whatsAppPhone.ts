@@ -50,13 +50,21 @@ const toTenDigits = (national: string): string | null => {
   return null
 }
 
-/** Lo que sigue al 54: un 9 de celular y un 0 opcionales, y el nacional. */
+/**
+ * Lo que sigue al 54. Con el 9 (o con el 15 metido despues del area) es un
+ * celular: 549 + los 10 digitos. Sin ninguno de los dos se respeta tal cual
+ * (54 + 10 digitos): quien escribio el codigo de pais pudo cargar a proposito
+ * una linea fija con WhatsApp Business, y agregarle un 9 la mandaria a otro
+ * numero.
+ */
 const fromArgentineInternational = (afterCountry: string): string | null => {
-  let rest = afterCountry
-  if (rest.startsWith('9')) rest = rest.slice(1)
+  const isMobile = afterCountry.startsWith('9')
+  let rest = isMobile ? afterCountry.slice(1) : afterCountry
   if (rest.startsWith('0')) rest = rest.slice(1)
   const national = toTenDigits(rest)
-  return national ? ARGENTINA_MOBILE + national : null
+  if (!national) return null
+  const hadMobilePrefix = isMobile || rest.length === NATIONAL_WITH_15_LENGTH
+  return (hadMobilePrefix ? ARGENTINA_MOBILE : ARGENTINA_CODE) + national
 }
 
 const fromInternational = (digits: string): string | null => {

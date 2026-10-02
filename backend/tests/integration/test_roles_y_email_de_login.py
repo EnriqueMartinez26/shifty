@@ -180,6 +180,35 @@ async def test_promover_a_global_un_cliente_con_email_de_login_da_409(
 
 
 @pytest.mark.asyncio
+async def test_a_un_cliente_que_ya_es_global_se_le_puede_revocar(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """La guarda de cliente solo corta al promover: un flag global que haya
+    quedado en un cliente (datos previos a la guarda) se sigue pudiendo quitar.
+    """
+    headers = await _bootstrap_global_admin(
+        client, test_session, slug="qa-revoca-cliente", email="raiz-qa-revoca@demo.com"
+    )
+    raiz = await _usuario(test_session, "raiz-qa-revoca@demo.com")
+    cliente_id = await _cliente(
+        test_session, store_id=raiz.store_id, email="cliente-global@demo.com"
+    )
+    fila = await test_session.get(User, cliente_id)
+    assert fila is not None
+    fila.is_global_admin = True
+    await test_session.commit()
+
+    res = await client.patch(
+        f"/superadmin/users/{cliente_id}/global-admin",
+        headers=headers,
+        json={"is_global_admin": False},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["is_global_admin"] is False
+
+
+@pytest.mark.asyncio
 async def test_promover_a_global_un_cliente_se_rechaza_aunque_su_email_este_libre(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:

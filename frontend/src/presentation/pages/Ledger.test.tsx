@@ -195,6 +195,23 @@ describe('LedgerPage: cargar un movimiento', () => {
     }
   )
 
+  it.each([
+    ['10000000', 10_000_000],
+    ['1234,56', 1234.56],
+    ['0.5', 0.5]
+  ])('un monto valido (%s) se confirma y viaja como numero', async (valor, esperado) => {
+    render(<LedgerPage />)
+    fireEvent.change(tipo(), { target: { value: 'charge' } })
+    fireEvent.change(monto(), { target: { value: valor } })
+    guardar()
+    fireEvent.click(await screen.findByRole('button', { name: 'Registrar' }))
+
+    await waitFor(() => expect(mockAddMovement).toHaveBeenCalledTimes(1))
+    expect(mockAddMovement.mock.calls[0]?.[0]).toMatchObject({
+      payload: { movement_type: 'charge', amount: esperado }
+    })
+  })
+
   it('un 422 del servidor muestra el motivo mapeado junto al formulario, nunca el texto crudo', async () => {
     mockAddMovement.mockRejectedValue(
       new ValidationError('amount: Input should be greater than or equal to 0', {

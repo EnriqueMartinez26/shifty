@@ -592,7 +592,34 @@ describe('SuperAdminPage', () => {
         const detalle = sectionOf('Detalle del tenant')
         // El unico "Promover" que queda es el del admin, en su propia lista.
         expect(detalle.getAllByRole('button', { name: 'Promover SuperAdmin' })).toHaveLength(1)
-        expect(detalle.getByText('Clara Cliente')).toBeInTheDocument()
+        const tarjeta = detalle.getByText('Clara Cliente').closest('div.rounded-2xl') as HTMLElement
+        expect(within(tarjeta).queryByRole('button', { name: /SuperAdmin/ })).toBeNull()
+        expect(within(tarjeta).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+      } finally {
+        mockOverview.users.users = usuarios
+      }
+    })
+
+    it('a un cliente que ya es SuperAdmin se le puede revocar', () => {
+      const cliente: SuperAdminUser = {
+        ...mockAdminUser,
+        public_id: 'user-client-2',
+        first_name: 'Carla',
+        last_name: 'Global',
+        role: 'client',
+        is_global_admin: true
+      }
+      const usuarios = mockOverview.users.users
+      mockOverview.users.users = [cliente]
+      try {
+        render(<SuperAdminPage />)
+
+        const tarjeta = sectionOf('Detalle del tenant')
+          .getByText('Carla Global')
+          .closest('div.rounded-2xl') as HTMLElement
+        expect(
+          within(tarjeta).getByRole('button', { name: 'Revocar SuperAdmin' })
+        ).toBeInTheDocument()
       } finally {
         mockOverview.users.users = usuarios
       }
