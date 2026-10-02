@@ -58,12 +58,20 @@ describe('useManagedDomainUsers', () => {
 
     const { result } = renderHook(() => useManagedDomainUsers(consulta), { wrapper: envoltorio })
     await waitFor(() => expect(result.current.data).toHaveLength(100))
-    expect(mockListUsers).toHaveBeenLastCalledWith({ ...consulta, offset: 0 })
+    // 2026-10-02: la senal de react-query viaja hasta el servicio para que una
+    // busqueda reemplazada cancele su request.
+    expect(mockListUsers).toHaveBeenLastCalledWith(
+      { ...consulta, offset: 0 },
+      expect.any(AbortSignal)
+    )
     expect(result.current.hasNextPage).toBe(true)
 
     await act(() => result.current.fetchNextPage())
 
-    expect(mockListUsers).toHaveBeenLastCalledWith({ ...consulta, offset: 100 })
+    expect(mockListUsers).toHaveBeenLastCalledWith(
+      { ...consulta, offset: 100 },
+      expect.any(AbortSignal)
+    )
     await waitFor(() => expect(result.current.data).toHaveLength(103))
     // La segunda pagina vino corta: no hay mas que pedir.
     expect(result.current.hasNextPage).toBe(false)
