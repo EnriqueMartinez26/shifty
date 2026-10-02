@@ -5,6 +5,32 @@ import { Staff } from '@domain/entities/Staff'
 import { StaffCard } from './StaffCard'
 
 describe('StaffCard', () => {
+  // 2026-10-02, QA en navegador (S\45): los servicios salian como "S-1, S-2".
+  it('muestra los servicios por nombre', () => {
+    const persona = Staff.fromPrimitives({
+      public_id: 'st-1',
+      kind: 'person',
+      first_name: 'Ana',
+      last_name: 'Perez',
+      email: 'ana@example.com',
+      display_name: 'Ana P.',
+      is_active: true,
+      service_ids: ['s1', 's2']
+    })
+    const nombres = new Map([
+      ['s1', 'Corte'],
+      ['s2', 'Color']
+    ])
+
+    render(
+      <StaffCard staff={persona} serviceNames={nombres} onEdit={jest.fn()} onDelete={jest.fn()} />
+    )
+
+    expect(screen.getByText('Corte')).toBeInTheDocument()
+    expect(screen.getByText('Color')).toBeInTheDocument()
+    expect(screen.queryByText(/^S-\d/)).not.toBeInTheDocument()
+  })
+
   it('muestra el email de una persona', () => {
     const persona = Staff.fromPrimitives({
       public_id: 'st-1',

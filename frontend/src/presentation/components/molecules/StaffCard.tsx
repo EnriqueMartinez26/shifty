@@ -12,13 +12,16 @@ interface StaffCardProps {
   onDelete: (id: string) => void
   /** Tienda suspendida: editar (horarios y servicios incluidos) y eliminar responden 402 (FF-15). */
   readOnlyReason?: string | null
+  /** id -> nombre de los servicios de la tienda; sin el, el chip dice "Servicio". */
+  serviceNames?: ReadonlyMap<string, string>
 }
 
 export const StaffCard: React.FC<StaffCardProps> = ({
   staff,
   onEdit,
   onDelete,
-  readOnlyReason = null
+  readOnlyReason = null,
+  serviceNames
 }) => {
   const blocked = readOnlyReason !== null
   const title = readOnlyReason ?? undefined
@@ -135,7 +138,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
                 Sin servicios
               </span>
             ) : (
-              (staff.serviceIds || []).slice(0, 3).map((id, index) => (
+              (staff.serviceIds || []).slice(0, 3).map((id) => (
                 <span
                   key={id}
                   className="px-2 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest"
@@ -145,7 +148,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
                     color: colors2000s.orange.accent
                   }}
                 >
-                  S-{index + 1}
+                  {serviceNames?.get(id) ?? 'Servicio'}
                 </span>
               ))
             )}
