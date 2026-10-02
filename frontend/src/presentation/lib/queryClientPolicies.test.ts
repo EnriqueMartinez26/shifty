@@ -8,6 +8,7 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestCanceledError,
   RequestTimeoutError,
   ServiceUnavailableError,
   ValidationError
@@ -45,6 +46,20 @@ describe('shouldRetryQuery', () => {
     expect(shouldRetryQuery(0, timeout)).toBe(false)
     // Tambien envuelto por BaseService (el original en `originalError`).
     expect(shouldRetryQuery(0, Object.assign(new Error('x'), { originalError: timeout }))).toBe(
+      false
+    )
+  })
+
+  it('no reintenta una consulta cancelada a proposito', () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry, y como NetworkError tambien se reintentaba.
+    const canceled = new RequestCanceledError('x', {
+      errorCode: 'REQUEST_CANCELED',
+      statusCode: 0
+    })
+
+    expect(shouldRetryQuery(0, canceled)).toBe(false)
+    expect(shouldRetryQuery(0, Object.assign(new Error('x'), { originalError: canceled }))).toBe(
       false
     )
   })

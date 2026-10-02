@@ -6,6 +6,7 @@ import {
   NotFoundError,
   PaymentRequiredError,
   RateLimitError,
+  RequestCanceledError,
   RequestTimeoutError,
   ServiceUnavailableError,
   UnauthorizedError,
@@ -136,6 +137,19 @@ describe('TransientErrorHandler (402, 429, 502/503)', () => {
     await new TransientErrorHandler().handle(timeout)
 
     expect(sink).toHaveBeenCalledWith('La consulta tardó demasiado. Probá de nuevo.', 'warning')
+  })
+
+  it('una consulta cancelada no es ni falta de red ni un aviso transitorio', () => {
+    // 2026-10-02: una consulta cancelada por react-query se reportaba como
+    // error de red a Sentry y se anunciaba "Sin conexion a Internet".
+    const canceled = new RequestCanceledError('x', {
+      errorCode: 'REQUEST_CANCELED',
+      statusCode: 0
+    })
+
+    expect(new NetworkErrorHandler().canHandle(canceled)).toBe(false)
+    expect(new TransientErrorHandler().canHandle(canceled)).toBe(false)
+    expect(new InternalServerErrorHandler().canHandle(canceled)).toBe(false)
   })
 
   it('con Retry-After dice en cuanto probar de nuevo (F4-04)', async () => {

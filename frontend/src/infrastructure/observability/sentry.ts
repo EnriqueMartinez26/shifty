@@ -1,5 +1,7 @@
 import * as Sentry from '@sentry/react'
 
+import { isRequestCanceledError } from '@shared/errors/RequestCanceledError'
+
 import { getRuntimeEnv } from '../http/runtime-env'
 
 export const parseSampleRate = (rawValue: string | undefined): number | undefined => {
@@ -47,8 +49,11 @@ export const initSentry = (): boolean => {
       }
       return breadcrumb
     },
-    // Recorte de datos sensibles del evento antes de enviarlo.
-    beforeSend: (event) => {
+    // Recorte de datos sensibles del evento antes de enviarlo. Una consulta
+    // cancelada a proposito que termine sin atrapar (unhandledrejection) no es
+    // un error: no se manda.
+    beforeSend: (event, hint) => {
+      if (isRequestCanceledError(hint?.originalException)) return null
       if (event.request) {
         if (event.request.url) event.request.url = stripQuery(event.request.url)
         delete event.request.query_string
