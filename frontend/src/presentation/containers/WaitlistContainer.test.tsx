@@ -120,6 +120,30 @@ describe('WaitlistContainer', () => {
     })
   })
 
+  // 2026-10-02, QA en navegador: "11 5555 0303" armaba wa.me/1155550303, un
+  // numero de Estados Unidos. Un telefono local va con 549 adelante.
+  it('un telefono local argentino arma el link con 549 adelante', () => {
+    mockWaitlist.mockReturnValue({
+      data: [{ ...entrada, client_phone: '11 5555 0303' }],
+      isLoading: false
+    })
+
+    render(<WaitlistContainer />)
+
+    const href = screen.getByRole('link', { name: 'WhatsApp' }).getAttribute('href') ?? ''
+    expect(href.startsWith('https://wa.me/5491155550303?text=')).toBe(true)
+  })
+
+  it('un telefono que no se puede leer no arma un link roto', () => {
+    mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_phone: '123' }], isLoading: false })
+
+    render(<WaitlistContainer />)
+
+    expect(screen.getByText(/· 123/)).toBeInTheDocument()
+    // Ni link ni ancla muerta: el texto "WhatsApp" no aparece.
+    expect(screen.queryByText('WhatsApp')).not.toBeInTheDocument()
+  })
+
   it('el personal sin rol de administrador no ve reservar ni quitar', () => {
     mockUser.role = 'professional'
     mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_phone: null }], isLoading: false })

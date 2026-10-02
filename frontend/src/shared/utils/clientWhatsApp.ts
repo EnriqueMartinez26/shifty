@@ -1,5 +1,4 @@
 import { formatArgentinaDateDisplay, formatArgentinaTime } from './argentinaTime'
-import { sanitizePhoneForUrl } from './safeUrl'
 
 type ClientMessageKind = 'reminder' | 'rebook'
 
@@ -48,6 +47,3 @@ export const clientMessageKindFor = (status: string): ClientMessageKind | null =
   if (status === 'pending' || status === 'confirmed') return 'reminder'
   return null
 }
-
-export const buildWaMeUrl = (phone: string, text: string): string =>
-  `https://wa.me/${sanitizePhoneForUrl(phone)}?text=${encodeURIComponent(text)}`

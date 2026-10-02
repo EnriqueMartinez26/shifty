@@ -1,9 +1,4 @@
-import {
-  buildClientMessage,
-  buildRebookUrl,
-  buildWaMeUrl,
-  clientMessageKindFor
-} from './clientWhatsApp'
+import { buildClientMessage, buildRebookUrl, clientMessageKindFor } from './clientWhatsApp'
 
 const base = {
   clientName: 'Carla',
@@ -37,10 +32,5 @@ describe('clientWhatsApp', () => {
     expect(clientMessageKindFor('completed')).toBe('rebook')
     expect(clientMessageKindFor('cancelled')).toBeNull()
     expect(clientMessageKindFor('absent')).toBeNull()
-  })
-
-  it('arma el link wa.me con el telefono limpio y el texto codificado', () => {
-    const url = buildWaMeUrl('+54 9 11 5555-0031', 'Hola & chau')
-    expect(url).toBe('https://wa.me/5491155550031?text=Hola%20%26%20chau')
   })
 })

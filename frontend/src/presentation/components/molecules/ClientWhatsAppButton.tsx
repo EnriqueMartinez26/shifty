@@ -4,10 +4,10 @@ import { MessageCircle } from 'lucide-react'
 
 import {
   buildClientMessage,
-  buildWaMeUrl,
   clientMessageKindFor,
   type ClientMessageInput
 } from '@shared/utils/clientWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 interface ClientWhatsAppButtonProps {
   phone: string
@@ -28,11 +28,14 @@ export const ClientWhatsAppButton: React.FC<ClientWhatsAppButtonProps> = ({
   compact = false
 }) => {
   const kind = clientMessageKindFor(status)
-  if (!kind || !phone.trim()) return null
+  // Un telefono que no se puede leer como argentino no arma link: wa.me lo
+  // mandaria a otro numero.
+  const href = kind ? buildWaMeUrl(phone, buildClientMessage(kind, message)) : null
+  if (!kind || !href) return null
   const label = kind === 'rebook' ? 'Invitar a volver' : 'Recordar por WhatsApp'
   return (
     <a
-      href={buildWaMeUrl(phone, buildClientMessage(kind, message))}
+      href={href}
       target="_blank"
       rel="noreferrer"
       title={label}

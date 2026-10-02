@@ -119,6 +119,13 @@ describe('BookingSuccess', () => {
       expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
     })
 
+    // 2026-10-02, QA en navegador: el WhatsApp de la tienda es texto libre.
+    it('con un WhatsApp de la tienda que no se puede leer no ofrece coordinar', () => {
+      render(<BookingSuccess {...props({ whatsappNumber: 'consultar en el local' })} />)
+
+      expect(screen.queryByText(COORDINAR)).not.toBeInTheDocument()
+    })
+
     it('sin link de pago ofrece coordinar por WhatsApp con el numero de la tienda', () => {
       render(<BookingSuccess {...props({ whatsappNumber: '+54 9 11 5555-0000' })} />)
 

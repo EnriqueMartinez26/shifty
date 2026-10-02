@@ -8,7 +8,7 @@ import type {
 } from '@application/services/AppointmentBlocksService'
 
 import { formatArgentinaDateDisplay, formatArgentinaTime } from '@shared/utils/argentinaTime'
-import { sanitizePhoneForUrl } from '@shared/utils/safeUrl'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 interface BlockPreviewModalProps {
   preview: BlockPreviewResult
@@ -35,6 +35,7 @@ export const buildWhatsAppText = (item: AffectedAppointment, reason: string): st
 
 const AffectedRow: React.FC<{ item: AffectedAppointment; reason: string }> = ({ item, reason }) => {
   const nota = blockerLabel(item.blocker)
+  const whatsappHref = buildWaMeUrl(item.client_phone, buildWhatsAppText(item, reason))
   return (
     <li className="flex flex-wrap items-center gap-3 p-3">
       <div className="min-w-0 flex-1">
@@ -48,9 +49,9 @@ const AffectedRow: React.FC<{ item: AffectedAppointment; reason: string }> = ({ 
       <span className="text-[9px] font-black uppercase tracking-widest text-gray-500">
         {item.status}
       </span>
-      {item.client_phone && (
+      {whatsappHref && (
         <a
-          href={`https://wa.me/${sanitizePhoneForUrl(item.client_phone)}?text=${encodeURIComponent(buildWhatsAppText(item, reason))}`}
+          href={whatsappHref}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-2 py-1 text-[9px] font-black uppercase tracking-widest text-emerald-700"

@@ -11,8 +11,9 @@ import {
   formatArgentinaDateDisplay,
   formatArgentinaTime
 } from '@shared/utils/argentinaTime'
-import { buildRebookUrl, buildWaMeUrl } from '@shared/utils/clientWhatsApp'
+import { buildRebookUrl } from '@shared/utils/clientWhatsApp'
 import { buildWaitlistMessage } from '@shared/utils/waitlistWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { useAuth } from '../context/AuthContext'

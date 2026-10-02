@@ -66,6 +66,7 @@ describe('SubscriptionBanner', () => {
     )
 
     const link = screen.getByRole('link', { name: 'Renovar por WhatsApp' })
+    expect(link.getAttribute('href')).toMatch(/^https:\/\/wa\.me\/5493513000000\?text=/)
     expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('Peluqueria Sol')
   })
 
