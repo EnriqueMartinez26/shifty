@@ -4,15 +4,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 
-import { useCustomerLedger } from './useLedger'
+import { useCustomerLedger, useLedgerClients } from './useLedger'
 import { useReportSummary } from './useReports'
 
 const mockGetCustomerLedger = jest.fn()
 const mockGetSummary = jest.fn()
+const mockSearchClients = jest.fn()
 
 jest.mock('@application/services/LedgerService', () => ({
   ledgerService: {
-    getCustomerLedger: (...args: unknown[]) => mockGetCustomerLedger(...args)
+    getCustomerLedger: (...args: unknown[]) => mockGetCustomerLedger(...args),
+    searchClients: (...args: unknown[]) => mockSearchClients(...args)
   }
 }))
 
@@ -52,6 +54,29 @@ describe('useCustomerLedger', () => {
     // Mas nuevo primero, sin invertir: la segunda pagina va detras.
     expect(result.current.movements.map((m) => m.public_id)).toEqual(['mov-2', 'mov-1'])
     expect(result.current.total).toBe(2)
+  })
+})
+
+describe('useLedgerClients', () => {
+  it('cancela la busqueda vieja cuando se escribe otra (F4-04)', async () => {
+    // F4-04 a (2026-10-01): sin el signal de react-query, cada tecla dejaba
+    // viva su consulta al servidor aunque la pantalla ya pidiera otra.
+    mockSearchClients.mockReset().mockReturnValue(new Promise(() => {}))
+    const { rerender } = renderHook(({ term }) => useLedgerClients(term), {
+      wrapper: envoltorio,
+      initialProps: { term: 'an' }
+    })
+    await waitFor(() => expect(mockSearchClients).toHaveBeenCalledTimes(1))
+    const [termino, primera] = mockSearchClients.mock.calls[0] as [string, AbortSignal]
+    expect(termino).toBe('an')
+    expect(primera).toBeInstanceOf(AbortSignal)
+    expect(primera.aborted).toBe(false)
+
+    rerender({ term: 'ana' })
+
+    await waitFor(() => expect(mockSearchClients).toHaveBeenCalledTimes(2))
+    expect(mockSearchClients).toHaveBeenLastCalledWith('ana', expect.any(AbortSignal))
+    await waitFor(() => expect(primera.aborted).toBe(true))
   })
 })
 

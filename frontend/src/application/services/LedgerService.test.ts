@@ -29,6 +29,18 @@ describe('LedgerService', () => {
     })
   })
 
+  it('searchClients pasa el AbortSignal al GET (F4-04)', async () => {
+    // F4-04 a (2026-10-01): la busqueda no se podia cancelar al tipear otra.
+    const controller = new AbortController()
+
+    await ledgerService.searchClients('ana', controller.signal)
+
+    expect(mockGet).toHaveBeenCalledWith('/ledger/clients', {
+      params: { q: 'ana' },
+      signal: controller.signal
+    })
+  })
+
   it('getSummary pide el resumen por GET', async () => {
     await ledgerService.getSummary()
 

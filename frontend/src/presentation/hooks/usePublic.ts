@@ -67,12 +67,14 @@ export const usePublicAvailability = (
 ) =>
   useQuery<AvailabilitySlot[]>({
     queryKey: ['public-availability', storePublicId, serviceId, date, forceAll],
-    queryFn: () =>
+    // Con el signal, cambiar de dia cancela la grilla del dia anterior (F4-04).
+    queryFn: ({ signal }) =>
       publicBookingService.getAvailability(
         storePublicId as string,
         serviceId as string,
         date as string,
-        forceAll
+        forceAll,
+        signal
       ),
     enabled: Boolean(storePublicId) && Boolean(serviceId) && Boolean(date),
     staleTime: 1000 * 30

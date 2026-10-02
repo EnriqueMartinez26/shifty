@@ -27,7 +27,8 @@ export const useLedgerClients = (search: string) => {
   const q = term.length >= 2 ? term : undefined
   return useQuery<LedgerClient[]>({
     queryKey: ['ledger-clients', q ?? null],
-    queryFn: () => ledgerService.searchClients(q),
+    // Con el signal, la busqueda vieja se cancela al tipear otra (F4-04).
+    queryFn: ({ signal }) => ledgerService.searchClients(q, signal),
     placeholderData: keepPreviousData
   })
 }
