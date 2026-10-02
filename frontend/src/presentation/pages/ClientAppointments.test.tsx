@@ -1,9 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 
-import { NotFoundError } from '@shared/errors'
+import { NetworkError, NotFoundError } from '@shared/errors'
 
 import ClientAppointmentsPage from './ClientAppointments'
 
@@ -87,6 +87,30 @@ describe('ClientAppointmentsPage', () => {
     expect(await screen.findByText('Negocio no encontrado')).toBeInTheDocument()
     expect(mockContainer).not.toHaveBeenCalled()
     expect(mockGetStore).not.toHaveBeenCalled()
+  })
+
+  it('sin conexion no dice que la tienda no existe y deja reintentar', async () => {
+    // 2026-10-02, QA en navegador: con la API caida "Mis turnos" decia
+    // "Negocio no encontrado" para cualquier falla. Solo un 404 es "no existe".
+    mockGetStoreRef
+      .mockRejectedValueOnce(new NetworkError('No se pudo conectar con el servidor.'))
+      .mockResolvedValueOnce({
+        store_public_id: 'store-1',
+        name: 'Peluqueria Sol',
+        accepts_new_bookings: false
+      })
+
+    renderEn('/b/sol/mis-turnos')
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'No pudimos cargar la tienda' })
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Negocio no encontrado')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reintentar' }))
+
+    expect(await screen.findByText('Mis turnos de Peluqueria Sol')).toBeInTheDocument()
+    expect(mockGetStoreRef).toHaveBeenCalledTimes(2)
   })
 
   it('una tienda que toma reservas muestra el link y la politica de sena (FF-16)', async () => {
