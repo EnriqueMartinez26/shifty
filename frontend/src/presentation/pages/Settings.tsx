@@ -10,17 +10,10 @@ import {
   TriangleAlert,
   Loader2,
   Calendar,
-  Plus,
-  Trash2,
   SlidersHorizontal,
   CreditCard
 } from 'lucide-react'
 import { useSearchParams } from 'react-router'
-
-import type {
-  StoreCustomField,
-  StoreCustomFieldOption
-} from '@application/services/StoreSettingsService'
 
 import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
 import type { BusinessType } from '@shared/types/business'
@@ -28,6 +21,7 @@ import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
+import { CustomClientFieldsEditor } from '../components/organisms/settings/CustomClientFieldsEditor'
 import { SettingsFeaturesTab } from '../components/organisms/settings/SettingsFeaturesTab'
 import { SettingsNotificationsTab } from '../components/organisms/settings/SettingsNotificationsTab'
 import { SettingsPaymentsTab } from '../components/organisms/settings/SettingsPaymentsTab'
@@ -66,47 +60,9 @@ const TABS = [
   { id: 'security', label: 'Seguridad', icon: <Lock className="w-4 h-4" /> }
 ]
 
-const CUSTOM_FIELD_TYPE_OPTIONS = [
-  { value: 'text', label: 'Texto corto' },
-  { value: 'textarea', label: 'Texto largo' },
-  { value: 'tel', label: 'Telefono' },
-  { value: 'email', label: 'Email' },
-  { value: 'date', label: 'Fecha' },
-  { value: 'select', label: 'Lista' }
-] as const
-
 // IMAGE_CAPS["logo"] en backend/modules/stores/media.py. Las dimensiones las
 // valida solo el backend.
 const MAX_LOGO_BYTES = 1024 * 1024
-
-const createEmptyCustomField = (index: number): StoreCustomField => ({
-  key: `campo_${index}`,
-  label: '',
-  type: 'text',
-  required: false,
-  placeholder: '',
-  help_text: '',
-  options: []
-})
-
-const serializeFieldOptions = (options: StoreCustomFieldOption[]) =>
-  options
-    .map((option) =>
-      option.label === option.value ? option.value : `${option.label}|${option.value}`
-    )
-    .join('\n')
-
-const parseFieldOptions = (rawValue: string): StoreCustomFieldOption[] =>
-  rawValue
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [labelPart, valuePart] = line.split('|')
-      const label = (labelPart || '').trim()
-      const value = (valuePart || labelPart || '').trim()
-      return { label, value }
-    })
 
 /**
  * Una de las dos llamadas del guardado. `run` en `null` es "esta mitad no
@@ -657,258 +613,10 @@ const SettingsPage: React.FC = () => {
               />
             </div>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <label
-                    className="block text-[10px] font-black uppercase tracking-widest"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    Campos extra del booking
-                  </label>
-                  <p
-                    className="text-[11px] font-bold mt-1"
-                    style={{ color: colors2000s.text.disabled }}
-                  >
-                    Define preguntas opcionales o requeridas para el portal publico.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setFormData({
-                      ...formData,
-                      custom_client_fields: [
-                        ...(formData.custom_client_fields || []),
-                        createEmptyCustomField((formData.custom_client_fields?.length || 0) + 1)
-                      ]
-                    })
-                  }
-                  className="px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
-                  style={buttonStyles2000s.default}
-                >
-                  <Plus className="w-3 h-3 mr-1" />
-                  Agregar campo
-                </button>
-              </div>
-
-              {(formData.custom_client_fields || []).length === 0 ? (
-                <div
-                  className="p-4 rounded-2xl text-xs font-bold"
-                  style={{
-                    background: 'white',
-                    boxShadow: colors2000s.shadows.insetDark,
-                    color: colors2000s.text.secondary
-                  }}
-                >
-                  No hay campos extra configurados. El booking publico va a pedir solo nombre,
-                  telefono, email opcional y notas.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {(formData.custom_client_fields || []).map(
-                    (field: StoreCustomField, index: number) => (
-                      <div
-                        key={`${field.key}-${index}`}
-                        className="p-5 rounded-md space-y-4"
-                        style={{
-                          background: 'white',
-                          border: `1px solid ${colors2000s.border.light}`,
-                          boxShadow: colors2000s.shadows.outer
-                        }}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <p
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Campo #{index + 1}
-                            </p>
-                            <p
-                              className="text-xs font-bold mt-1"
-                              style={{ color: colors2000s.text.disabled }}
-                            >
-                              La clave se usa internamente y conviene mantenerla corta, en
-                              minusculas y con guiones bajos.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setFormData({
-                                ...formData,
-                                custom_client_fields: (formData.custom_client_fields || []).filter(
-                                  (_: StoreCustomField, fieldIndex: number) => fieldIndex !== index
-                                )
-                              })
-                            }
-                            className="p-2 rounded-xl transition-all active:scale-95"
-                            style={{ color: colors2000s.status.danger.light }}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <label
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Etiqueta
-                            </label>
-                            <input
-                              value={field.label}
-                              onChange={(e) => {
-                                const nextFields = [...(formData.custom_client_fields || [])]
-                                nextFields[index] = { ...field, label: e.target.value }
-                                setFormData({ ...formData, custom_client_fields: nextFields })
-                              }}
-                              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={createSettingsInputStyle()}
-                              placeholder="Ej: Motivo de consulta"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Clave
-                            </label>
-                            <input
-                              value={field.key}
-                              onChange={(e) => {
-                                const nextFields = [...(formData.custom_client_fields || [])]
-                                nextFields[index] = {
-                                  ...field,
-                                  key: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_')
-                                }
-                                setFormData({ ...formData, custom_client_fields: nextFields })
-                              }}
-                              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={createSettingsInputStyle()}
-                              placeholder="motivo_consulta"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Tipo
-                            </label>
-                            <select
-                              value={field.type}
-                              onChange={(e) => {
-                                const nextFields = [...(formData.custom_client_fields || [])]
-                                nextFields[index] = {
-                                  ...field,
-                                  type: e.target.value as StoreCustomField['type'],
-                                  options: e.target.value === 'select' ? field.options : []
-                                }
-                                setFormData({ ...formData, custom_client_fields: nextFields })
-                              }}
-                              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={createSettingsInputStyle()}
-                            >
-                              {CUSTOM_FIELD_TYPE_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="space-y-2">
-                            <label
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Placeholder
-                            </label>
-                            <input
-                              value={field.placeholder || ''}
-                              onChange={(e) => {
-                                const nextFields = [...(formData.custom_client_fields || [])]
-                                nextFields[index] = { ...field, placeholder: e.target.value }
-                                setFormData({ ...formData, custom_client_fields: nextFields })
-                              }}
-                              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={createSettingsInputStyle()}
-                              placeholder="Texto de ayuda dentro del campo"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="grid md:grid-cols-[1fr_auto] gap-4 items-start">
-                          <div className="space-y-2">
-                            <label
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Texto de ayuda
-                            </label>
-                            <input
-                              value={field.help_text || ''}
-                              onChange={(e) => {
-                                const nextFields = [...(formData.custom_client_fields || [])]
-                                nextFields[index] = { ...field, help_text: e.target.value }
-                                setFormData({ ...formData, custom_client_fields: nextFields })
-                              }}
-                              className="w-full rounded-2xl px-4 py-3 font-bold outline-none"
-                              style={createSettingsInputStyle()}
-                              placeholder="Ej: Aclaranos si es primera vez o seguimiento"
-                            />
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const nextFields = [...(formData.custom_client_fields || [])]
-                              nextFields[index] = { ...field, required: !field.required }
-                              setFormData({ ...formData, custom_client_fields: nextFields })
-                            }}
-                            className="mt-7 px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95"
-                            style={
-                              field.required
-                                ? buttonStyles2000s.selected
-                                : buttonStyles2000s.default
-                            }
-                          >
-                            {field.required ? 'Obligatorio' : 'Opcional'}
-                          </button>
-                        </div>
-
-                        {field.type === 'select' && (
-                          <div className="space-y-2">
-                            <label
-                              className="text-[10px] font-black uppercase tracking-widest"
-                              style={{ color: colors2000s.text.secondary }}
-                            >
-                              Opciones
-                            </label>
-                            <textarea
-                              value={serializeFieldOptions(field.options || [])}
-                              onChange={(e) => {
-                                const nextFields = [...(formData.custom_client_fields || [])]
-                                nextFields[index] = {
-                                  ...field,
-                                  options: parseFieldOptions(e.target.value)
-                                }
-                                setFormData({ ...formData, custom_client_fields: nextFields })
-                              }}
-                              className="w-full min-h-24 rounded-2xl px-4 py-3 font-bold outline-none resize-y"
-                              style={createSettingsInputStyle()}
-                              placeholder={'Una opcion por linea\nEj: Primera vez|primera_vez'}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
+            <CustomClientFieldsEditor
+              fields={formData.custom_client_fields}
+              onChange={(custom_client_fields) => patch({ custom_client_fields })}
+            />
 
             <div className="grid md:grid-cols-3 gap-8">
               <div className="space-y-3">
