@@ -58,6 +58,22 @@ describe('BlockPreviewModal', () => {
     expect(screen.getByRole('button', { name: 'Cancelar 1 turno y bloquear' })).toBeInTheDocument()
   })
 
+  // 2026-10-02, QA en navegador: un telefono ilegible armaba un wa.me roto.
+  it('un telefono que no se puede leer no ofrece WhatsApp', () => {
+    const [primero] = preview.affected
+    render(
+      <BlockPreviewModal
+        preview={{ ...preview, affected: [{ ...primero!, client_phone: '123' }] }}
+        reason="Vacaciones"
+        busy={false}
+        canCancel
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />
+    )
+    expect(screen.queryByText(/Avisar por WhatsApp/)).not.toBeInTheDocument()
+  })
+
   it('el link de WhatsApp lleva el telefono sin simbolos y el texto armado', () => {
     render(
       <BlockPreviewModal

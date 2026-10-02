@@ -9,6 +9,7 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.roles import assert_client_not_global_admin
 from core.security import hash_password_async
 from infrastructure.persistence.patch import apply_patch
 from modules.auth.service import (
@@ -561,6 +562,9 @@ class UserAdminRepository(_BaseAdminRepository):
         # deja la plataforma sin SuperAdmin igual que desactivar la cuenta.
         if not enabled:
             await assert_global_admin_revocation_allowed(self.db, actor, user)
+        # Antes de tocar la fila: promover pone role = admin, asi que el rol
+        # de cliente se lee aca o se pierde.
+        assert_client_not_global_admin(user, enabled)
         before = {"is_global_admin": user.is_global_admin}
         user.is_global_admin = enabled
         if enabled:

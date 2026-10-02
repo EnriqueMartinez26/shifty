@@ -572,6 +572,59 @@ describe('SuperAdminPage', () => {
       expect(await screen.findByText('root@barberuno.com ahora es Super Admin')).toBeInTheDocument()
     })
 
+    // 2026-10-02, QA en navegador (S\62): "Promover SuperAdmin" se ofrecia
+    // sobre un cliente final. El backend lo rechaza
+    // (CLIENT_GLOBAL_ADMIN_DENIED); el panel ni lo ofrece.
+    it('no ofrece promover a SuperAdmin a un cliente', () => {
+      const cliente: SuperAdminUser = {
+        ...mockAdminUser,
+        public_id: 'user-client-1',
+        email: 'cliente@example.com',
+        first_name: 'Clara',
+        last_name: 'Cliente',
+        role: 'client'
+      }
+      const usuarios = mockOverview.users.users
+      mockOverview.users.users = [cliente]
+      try {
+        render(<SuperAdminPage />)
+
+        const detalle = sectionOf('Detalle del tenant')
+        // El unico "Promover" que queda es el del admin, en su propia lista.
+        expect(detalle.getAllByRole('button', { name: 'Promover SuperAdmin' })).toHaveLength(1)
+        const tarjeta = detalle.getByText('Clara Cliente').closest('div.rounded-2xl') as HTMLElement
+        expect(within(tarjeta).queryByRole('button', { name: /SuperAdmin/ })).toBeNull()
+        expect(within(tarjeta).getByRole('button', { name: 'Editar' })).toBeInTheDocument()
+      } finally {
+        mockOverview.users.users = usuarios
+      }
+    })
+
+    it('a un cliente que ya es SuperAdmin se le puede revocar', () => {
+      const cliente: SuperAdminUser = {
+        ...mockAdminUser,
+        public_id: 'user-client-2',
+        first_name: 'Carla',
+        last_name: 'Global',
+        role: 'client',
+        is_global_admin: true
+      }
+      const usuarios = mockOverview.users.users
+      mockOverview.users.users = [cliente]
+      try {
+        render(<SuperAdminPage />)
+
+        const tarjeta = sectionOf('Detalle del tenant')
+          .getByText('Carla Global')
+          .closest('div.rounded-2xl') as HTMLElement
+        expect(
+          within(tarjeta).getByRole('button', { name: 'Revocar SuperAdmin' })
+        ).toBeInTheDocument()
+      } finally {
+        mockOverview.users.users = usuarios
+      }
+    })
+
     it('no deja revocarse el propio permiso global y ni siquiera pregunta', () => {
       // Guarda espejo de la regla 14; la garantia real vive en el backend.
       mockAuthUser.public_id = 'user-admin-1'

@@ -10,7 +10,7 @@ import {
 } from '@presentation/components/organisms/booking/deepLink'
 import { useBookingStepParam } from '@presentation/hooks/useBookingStepParam'
 
-import { buildWaMeUrl } from '@shared/utils/clientWhatsApp'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
@@ -21,6 +21,24 @@ import {
   usePublicStaff,
   usePublicStore
 } from '../hooks/usePublic'
+
+/**
+ * WhatsApp de la tienda: texto libre que carga el dueno. Si no se puede leer
+ * como un numero confiable se muestra tal cual, sin link: un wa.me roto
+ * mandaba la consulta a otro pais.
+ */
+const StoreWhatsAppContact: React.FC<{ phone: string; storeName: string }> = ({
+  phone,
+  storeName
+}) => {
+  const href = buildWaMeUrl(phone, `Hola ${storeName}! Quiero consultar por un turno.`)
+  if (!href) return <span>{phone}</span>
+  return (
+    <a href={href} target="_blank" rel="noreferrer">
+      {phone}
+    </a>
+  )
+}
 
 const PublicBooking: React.FC = () => {
   const { slug = '' } = useParams()
@@ -202,16 +220,7 @@ const PublicBooking: React.FC = () => {
           >
             <Phone size={14} className="text-orange-500 stroke-[2.5px]" />
             {store.whatsapp_number ? (
-              <a
-                href={buildWaMeUrl(
-                  store.whatsapp_number,
-                  `Hola ${store.name}! Quiero consultar por un turno.`
-                )}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {store.whatsapp_number}
-              </a>
+              <StoreWhatsAppContact phone={store.whatsapp_number} storeName={store.name} />
             ) : (
               <span>Reserva por web disponible</span>
             )}

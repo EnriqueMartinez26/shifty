@@ -10,7 +10,13 @@ let mockPago = {
 }
 
 const TIENDA_SOL = {
-  data: { public_id: 'store-1', name: 'Peluqueria Sol', slug: 'sol', description: null },
+  data: {
+    public_id: 'store-1',
+    name: 'Peluqueria Sol',
+    slug: 'sol',
+    description: null,
+    whatsapp_number: null as string | null
+  },
   isLoading: false,
   isError: false
 }
@@ -123,6 +129,33 @@ describe('PublicBooking al volver del pago', () => {
     expect(screen.getByText('Wizard de reserva')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Reserva confirmada' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('ubicacion')).toHaveTextContent(/^\/booking\/sol$/)
+  })
+})
+
+// 2026-10-02, QA en navegador: el WhatsApp de la tienda es texto libre y solo
+// se limpiaba de simbolos; un numero local armaba un wa.me de otro pais.
+describe('PublicBooking: WhatsApp de la tienda', () => {
+  const conWhatsApp = (whatsapp_number: string) => {
+    mockTienda = { ...TIENDA_SOL, data: { ...TIENDA_SOL.data, whatsapp_number } }
+  }
+
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('un numero local arma el link con 549 adelante', () => {
+    conWhatsApp('351 555-1234')
+    renderEn('/booking/sol')
+
+    const link = screen.getByRole('link', { name: '351 555-1234' })
+    expect(link.getAttribute('href')).toMatch(/^https:\/\/wa\.me\/5493515551234\?text=/)
+  })
+
+  it('un numero que no se puede leer se muestra sin link', () => {
+    conWhatsApp('pedir en el local')
+    renderEn('/booking/sol')
+
+    expect(screen.getByText('pedir en el local').closest('a')).toBeNull()
   })
 })
 
