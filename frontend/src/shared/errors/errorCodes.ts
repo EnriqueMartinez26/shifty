@@ -66,6 +66,8 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['SELF_SUPERADMIN_REVOCATION_DENIED', 'No podés revocar tu propio permiso de SuperAdmin.'],
   ['LAST_SUPERADMIN_REVOCATION_DENIED', 'No se puede revocar al último SuperAdmin activo.'],
   ['RATE_LIMITED', 'Hiciste demasiados intentos seguidos. Esperá un momento y volvé a intentar.'],
+  // Lo arma el front: una lectura que vencio su timeout de 15 s (D-20260930-02).
+  ['REQUEST_TIMEOUT', 'La consulta tardó demasiado. Probá de nuevo.'],
   // Tope de codigos por telefono (OTP_MAX_REQUESTS_PER_HOUR): la ventana es
   // deslizante, asi que no se promete una espera concreta (F4-11).
   [
