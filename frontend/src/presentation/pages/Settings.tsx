@@ -34,6 +34,7 @@ import { SettingsFeaturesTab } from '../components/organisms/settings/SettingsFe
 import { SettingsNotificationsTab } from '../components/organisms/settings/SettingsNotificationsTab'
 import { SettingsPoliciesTab } from '../components/organisms/settings/SettingsPoliciesTab'
 import { SettingsScheduleTab } from '../components/organisms/settings/SettingsScheduleTab'
+import { SettingsSecurityTab } from '../components/organisms/settings/SettingsSecurityTab'
 import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
 import {
@@ -1160,84 +1161,14 @@ const SettingsPage: React.FC = () => {
         )}
 
         {activeTab === 'security' && (
-          <form
+          <SettingsSecurityTab
+            form={passwordForm}
+            onFormChange={setPasswordForm}
             onSubmit={(event) => {
               void handlePasswordChange(event)
             }}
-            className="max-w-md space-y-6"
-          >
-            <h3
-              className="text-lg font-black uppercase tracking-tight"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              Seguridad
-            </h3>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label
-                  className="text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Contraseña Actual
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={passwordForm.current}
-                  onChange={(e) => setPasswordForm({ ...passwordForm, current: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label
-                  className="text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Nueva Contraseña
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={passwordForm.new}
-                  onChange={(e) => setPasswordForm({ ...passwordForm, new: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label
-                  className="text-[10px] font-black uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Confirmar Nueva
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={passwordForm.confirm}
-                  onChange={(e) => setPasswordForm({ ...passwordForm, confirm: e.target.value })}
-                  className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
-                  style={createSettingsInputStyle()}
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={saveStatus === 'saving'}
-              className="w-full py-4 rounded-2xl font-black uppercase tracking-widest text-sm transition-all active:scale-[0.98] disabled:opacity-50"
-              style={buttonStyles2000s.selected}
-            >
-              {saveStatus === 'saving' ? (
-                <Loader2 className="w-5 h-5 animate-spin mx-auto" />
-              ) : (
-                'Actualizar Acceso'
-              )}
-            </button>
-          </form>
+            saving={saveStatus === 'saving'}
+          />
         )}
       </div>
 
