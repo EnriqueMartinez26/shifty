@@ -284,6 +284,19 @@ describe('SuperAdminPage', () => {
     expect(sectionOf('Detalle del tenant').getAllByText('Administrador').length).toBeGreaterThan(0)
   })
 
+  // QA 2026-10-02 (S\55): los filtros de suscripcion quedaban tapados por la
+  // columna derecha; ahora pasan de linea bajo el titulo.
+  it('los filtros de tiendas pasan de linea en vez de desbordar', () => {
+    render(<SuperAdminPage />)
+
+    const grupo = screen.getByRole('button', { name: 'Con suscripcion' })
+      .parentElement as HTMLElement
+    const filtros = grupo.parentElement as HTMLElement
+    expect(grupo.className).toContain('flex-wrap')
+    expect(filtros.className).toContain('flex-wrap')
+    expect((filtros.parentElement as HTMLElement).className).not.toContain('lg:flex-row')
+  })
+
   it('sin eleccion toma la primera tienda desde el primer render (F11b-21)', () => {
     render(<SuperAdminPage />)
 

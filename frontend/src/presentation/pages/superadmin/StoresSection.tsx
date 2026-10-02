@@ -65,7 +65,9 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
   toggleStoreActive
 }) => (
   <section className="rounded-[2rem] p-6" style={panelStyle}>
-    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    {/* Titulo arriba y filtros abajo, que pasan de linea: en una fila, los
+        de suscripcion quedaban tapados por la columna derecha (QA 2026-10-02). */}
+    <div className="flex flex-col gap-4">
       <div>
         <div className="mb-2 flex items-center gap-2">
           <span
@@ -86,7 +88,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
         </p>
       </div>
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-center">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="relative">
           <Search
             className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2"
@@ -103,7 +105,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           />
         </div>
 
-        <div className="flex items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
           <Filter className="h-4 w-4" style={{ color: colors2000s.text.secondary }} />
           {[
             { value: 'active', label: 'Activas' },
@@ -126,7 +128,7 @@ export const StoresSection: React.FC<StoresSectionProps> = ({
           ))}
         </div>
 
-        <div className="flex items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
+        <div className="flex flex-wrap items-center gap-2 rounded-2xl p-2" style={innerCardStyle}>
           {[
             { value: 'all', label: 'Todas' },
             { value: 'with', label: 'Con suscripcion' },
