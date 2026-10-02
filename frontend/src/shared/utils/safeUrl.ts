@@ -23,7 +23,3 @@ export const navigateExternal = (raw: string | null | undefined): boolean => {
   window.location.assign(safe)
   return true
 }
-
-/** Deja solo dígitos y un `+` inicial: para armar links de wa.me sin inyección. */
-export const sanitizePhoneForUrl = (raw: string | null | undefined): string =>
-  (raw ?? '').replace(/[^\d]/g, '')

@@ -4,7 +4,8 @@ import { Calendar, Check, Clock, ExternalLink } from 'lucide-react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
-import { asSafeHttpsUrl, sanitizePhoneForUrl } from '@shared/utils/safeUrl'
+import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
@@ -27,7 +28,11 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   storeName,
   whatsappNumber
 }) => {
-  const whatsappPhone = (whatsappNumber || '').replace(/\D/g, '')
+  // null si el WhatsApp de la tienda no se puede leer como numero: sin boton.
+  const whatsappHref = buildWaMeUrl(
+    whatsappNumber,
+    `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${bookingState.date} a las ${bookingState.startTime}. Quiero coordinar el pago.`
+  )
   const isPendingPayment = confirmation.status === 'pending_payment'
   const isPendingReview = confirmation.status === 'pending'
   const title = isPendingPayment
@@ -186,11 +191,9 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         </a>
       )}
 
-      {whatsappPhone && !confirmation.payment_link && (
+      {whatsappHref && !confirmation.payment_link && (
         <a
-          href={`https://wa.me/${sanitizePhoneForUrl(whatsappPhone)}?text=${encodeURIComponent(
-            `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${bookingState.date} a las ${bookingState.startTime}. Quiero coordinar el pago.`
-          )}`}
+          href={whatsappHref}
           target="_blank"
           rel="noreferrer"
           className="w-full mt-6 font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"

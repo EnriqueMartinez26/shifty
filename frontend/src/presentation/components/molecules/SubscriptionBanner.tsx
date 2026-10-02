@@ -5,7 +5,7 @@ import { AlertTriangle, Lock } from 'lucide-react'
 import type { StoreSubscriptionStatus } from '@application/services/StoreSettingsService'
 
 import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
-import { sanitizePhoneForUrl } from '@shared/utils/safeUrl'
+import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import { colors2000s } from '../../../theme/colors'
 
@@ -71,6 +71,7 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
   if (!content) return null
   const bloqueado = content.tone === 'blocked'
   const texto = `Hola! Soy de ${storeName || 'mi negocio'} y quiero renovar mi plan de Shifty.`
+  const supportHref = buildWaMeUrl(SUPPORT_PHONE, texto)
   return (
     <div
       role="status"
@@ -92,19 +93,21 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
           {content.detail && <p className="text-xs font-bold mt-1">{content.detail}</p>}
         </div>
       </div>
-      <a
-        href={`https://wa.me/${sanitizePhoneForUrl(SUPPORT_PHONE)}?text=${encodeURIComponent(texto)}`}
-        target="_blank"
-        rel="noreferrer"
-        className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest whitespace-nowrap"
-        style={{
-          background: 'white',
-          border: `1px solid ${colors2000s.border.default}`,
-          color: bloqueado ? '#991b1b' : '#92400e'
-        }}
-      >
-        Renovar por WhatsApp
-      </a>
+      {supportHref && (
+        <a
+          href={supportHref}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest whitespace-nowrap"
+          style={{
+            background: 'white',
+            border: `1px solid ${colors2000s.border.default}`,
+            color: bloqueado ? '#991b1b' : '#92400e'
+          }}
+        >
+          Renovar por WhatsApp
+        </a>
+      )}
     </div>
   )
 }
