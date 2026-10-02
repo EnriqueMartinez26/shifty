@@ -1,4 +1,4 @@
-import { displayableEmail, isDeliverableEmail } from './deliverableEmail'
+import { displayableEmail, isDeliverableEmail, withoutTechnicalEmail } from './deliverableEmail'
 
 // Mismo criterio que notifications/tasks.py::is_deliverable_email.
 describe('deliverableEmail', () => {
@@ -12,6 +12,12 @@ describe('deliverableEmail', () => {
     expect(isDeliverableEmail(tecnico)).toBe(false)
     expect(displayableEmail(tecnico)).toBeNull()
     expect(displayableEmail('X@STORE1.NOREPLY')).toBeNull()
+  })
+
+  it('un nombre armado con el email tecnico cae al respaldo; otro texto queda igual', () => {
+    expect(withoutTechnicalEmail('99@store1.noreply', '1155550707')).toBe('1155550707')
+    expect(withoutTechnicalEmail('Ana Gomez', '1155550707')).toBe('Ana Gomez')
+    expect(withoutTechnicalEmail('ana@example.com', 'x')).toBe('ana@example.com')
   })
 
   it('vacio o sin arroba no se muestra', () => {

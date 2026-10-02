@@ -5,6 +5,7 @@ import { WalletCards } from 'lucide-react'
 import type { LedgerClient } from '@application/services/LedgerService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { displayableEmail, withoutTechnicalEmail } from '@shared/utils/deliverableEmail'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
@@ -59,6 +60,13 @@ const MOVEMENT_FIELD_MESSAGES: Partial<Record<string, string>> = {
   appointment_id: 'El turno asociado no es válido. Revisá el código o dejalo vacío.',
   notes: 'Las notas pueden tener hasta 500 caracteres.'
 }
+
+/**
+ * Sin nombre, el backend nombra al cliente con su email, que puede ser el
+ * tecnico {tel}@store{id}.noreply del alta publica: ahi va el telefono.
+ */
+const clientLabel = (client: LedgerClient): string =>
+  withoutTechnicalEmail(client.name, client.phone ?? 'Cliente sin nombre')
 
 const inputStyle = create2000sInputStyle()
 const cardStyle = create2000sPanelStyle()
@@ -251,7 +259,7 @@ const LedgerPage: React.FC = () => {
           >
             {clientOptions.map((client) => (
               <option key={client.public_id} value={client.public_id}>
-                {client.name}
+                {clientLabel(client)}
               </option>
             ))}
           </select>
@@ -332,7 +340,10 @@ const LedgerPage: React.FC = () => {
                 Estado de cuenta
               </h3>
               <p className="text-xs font-bold" style={{ color: colors2000s.text.secondary }}>
-                Cliente seleccionado: {selectedClient?.email ?? selectedClient?.name ?? '-'}
+                Cliente seleccionado:{' '}
+                {selectedClient
+                  ? (displayableEmail(selectedClient.email) ?? clientLabel(selectedClient))
+                  : '-'}
               </p>
             </div>
             <div className="text-right">
@@ -432,7 +443,7 @@ const LedgerPage: React.FC = () => {
                 style={create2000sListCardStyle()}
               >
                 <p className="text-sm font-black" style={{ color: colors2000s.text.primary }}>
-                  {debtor.client_name}
+                  {withoutTechnicalEmail(debtor.client_name, 'Cliente sin nombre')}
                 </p>
                 <p
                   className="text-[11px] font-bold mt-1"
