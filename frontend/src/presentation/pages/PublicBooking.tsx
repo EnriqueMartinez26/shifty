@@ -14,6 +14,7 @@ import { buildWaMeUrl } from '@shared/utils/clientWhatsApp'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
+import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
 import {
   usePublicPaymentStatus,
   usePublicServices,
@@ -63,12 +64,10 @@ const PublicBooking: React.FC = () => {
 
   if (isError || !store) {
     return (
-      <div
-        className="min-h-screen grid place-items-center text-sm font-black uppercase tracking-widest"
-        style={{ background: colors2000s.bg.primary, color: colors2000s.status.danger.light }}
-      >
-        Negocio no encontrado
-      </div>
+      <NotFoundScreen
+        title="Negocio no encontrado"
+        subtitle="No encontramos una tienda en esta dirección. Revisá el link que te compartieron."
+      />
     )
   }
 

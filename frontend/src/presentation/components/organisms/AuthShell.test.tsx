@@ -48,6 +48,19 @@ describe('AuthShell', () => {
     expect(copyright.style.color).toBe(cssValue('color', colors2000s.text.disabled))
   })
 
+  it('links the legal pages under the copyright, like the portal and the panel', () => {
+    renderShell()
+
+    const terms = screen.getByRole('link', { name: 'Términos y condiciones' })
+    expect(terms).toHaveAttribute('href', '/legal/terminos')
+    expect(screen.getByRole('link', { name: 'Privacidad' })).toHaveAttribute(
+      'href',
+      '/legal/privacidad'
+    )
+    const copyright = screen.getByText('Copyright 2026 Shifty SaaS. Todos los derechos reservados.')
+    expect(copyright.nextElementSibling?.contains(terms)).toBe(true)
+  })
+
   it('uses one layout for every auth page and omits the back link by default', () => {
     renderShell()
 

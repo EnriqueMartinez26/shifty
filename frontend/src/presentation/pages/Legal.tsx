@@ -3,6 +3,8 @@ import React from 'react'
 import { Link, useParams } from 'react-router'
 
 import { colors2000s } from '../../theme/colors'
+import { LegalLayout } from '../components/organisms/LegalLayout'
+import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
 
 type LegalDocument = 'terminos' | 'privacidad'
 
@@ -131,71 +133,53 @@ const DOCUMENTS: Record<LegalDocument, { title: string; intro: string; sections:
     }
   }
 
+const isLegalDocument = (value: string | undefined): value is LegalDocument =>
+  value === 'terminos' || value === 'privacidad'
+
 const LegalPage: React.FC = () => {
   const { document: documentParam } = useParams<{ document: string }>()
-  const key: LegalDocument = documentParam === 'privacidad' ? 'privacidad' : 'terminos'
+  // Un documento que no existe (p. ej. /legal/cookies) es un 404, no los
+  // terminos con otra direccion.
+  if (!isLegalDocument(documentParam)) return <NotFoundScreen />
+
+  const key = documentParam
   const doc = DOCUMENTS[key]
 
   return (
-    <div
-      className="min-h-screen font-sans py-10 px-4"
-      style={{
-        background: `linear-gradient(180deg, ${colors2000s.bg.primary} 0%, ${colors2000s.bg.secondary} 100%)`,
-        color: colors2000s.text.primary
-      }}
-    >
-      <div
-        className="max-w-3xl mx-auto rounded-xl p-8"
-        style={{
-          background: 'white',
-          border: `1px solid ${colors2000s.border.default}`,
-          boxShadow: colors2000s.shadows.outerMedium
-        }}
-      >
-        <h1
-          className="text-2xl font-black tracking-tight mb-2 uppercase"
-          style={{ color: colors2000s.orange.accent }}
-        >
-          {doc.title}
-        </h1>
-        <p className="text-sm mb-8" style={{ color: colors2000s.text.secondary }}>
-          {doc.intro}
-        </p>
-
-        {doc.sections.map((section) => (
-          <section key={section.title} className="mb-6">
-            <h2
-              className="text-sm font-black uppercase tracking-widest mb-2"
+    <LegalLayout title={doc.title} intro={doc.intro}>
+      {doc.sections.map((section) => (
+        <section key={section.title} className="mb-8">
+          <h2
+            className="text-base font-black uppercase tracking-widest mb-3"
+            style={{ color: colors2000s.text.primary }}
+          >
+            {section.title}
+          </h2>
+          {section.paragraphs.map((paragraph) => (
+            <p
+              key={paragraph.slice(0, 40)}
+              className="text-base leading-7 mb-3"
               style={{ color: colors2000s.text.primary }}
             >
-              {section.title}
-            </h2>
-            {section.paragraphs.map((paragraph) => (
-              <p
-                key={paragraph.slice(0, 40)}
-                className="text-sm leading-relaxed mb-2"
-                style={{ color: colors2000s.text.secondary }}
-              >
-                {paragraph}
-              </p>
-            ))}
-          </section>
-        ))}
+              {paragraph}
+            </p>
+          ))}
+        </section>
+      ))}
 
-        <div
-          className="mt-8 pt-6 flex flex-wrap gap-4"
-          style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
+      <div
+        className="mt-10 pt-6 flex flex-wrap gap-4"
+        style={{ borderTop: `1px solid ${colors2000s.border.light}` }}
+      >
+        <Link
+          to={key === 'terminos' ? '/legal/privacidad' : '/legal/terminos'}
+          className="text-sm font-bold underline"
+          style={{ color: colors2000s.orange.accent }}
         >
-          <Link
-            to={key === 'terminos' ? '/legal/privacidad' : '/legal/terminos'}
-            className="text-xs font-bold underline"
-            style={{ color: colors2000s.orange.accent }}
-          >
-            {key === 'terminos' ? 'Ver Política de Privacidad' : 'Ver Términos y Condiciones'}
-          </Link>
-        </div>
+          {key === 'terminos' ? 'Ver Política de Privacidad' : 'Ver Términos y Condiciones'}
+        </Link>
       </div>
-    </div>
+    </LegalLayout>
   )
 }
 
