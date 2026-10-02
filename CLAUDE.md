@@ -259,7 +259,12 @@ Una instrucción en lenguaje natural no es una garantía.
    de idempotencia en otro lado.
 7. **Webhooks de MP**: HMAC + ventana de antigüedad + idempotencia por
    `event_id` + verificar collector y monto (`payments/router.py`,
-   `processing.py`); la integridad exige la `external_reference` del link
+   `processing.py`). La firma cubre solo `data.id`: el estado y todo lo que
+   valida la integridad salen SOLO de `GET /v1/payments/{id}`; sin respuesta
+   de MP el evento queda en el inbox sin aplicar. Un `approved` sin importe
+   o sin collector falla cerrado, y en producción un pago con `live_mode`
+   distinto de `true` no se aplica
+   (`test_webhook_sin_confiar_en_el_cuerpo.py`, 2026-10-02). La integridad exige la `external_reference` del link
    VIGENTE (`<turno>:<link_ref>` con `MERCADOPAGO_LINK_REF_ENABLED`, prendido
    por defecto; apagado, regenerar el link de un cobro vencido es 409; el pago
    de MP no trae `preference_id`). Los links que un cobro deja de usar quedan en

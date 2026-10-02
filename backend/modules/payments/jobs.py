@@ -49,6 +49,7 @@ from modules.payments.model import (
     WebhookInbox,
 )
 from modules.payments.processing import (
+    PAGO_NO_VERIFICADO,
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
@@ -1275,6 +1276,14 @@ async def _process_webhook_inbox_batch(
     inspected = 0
     for inbox in filas:
         inspected += 1
+        verificado = enriquecidos[inbox.id]
+        if verificado is None:
+            # Sin el detalle de MP no se aplica el cuerpo guardado: la firma no
+            # cubre el estado (2026-10-02). Gasta un intento, como cualquier
+            # falla, y queda para la corrida siguiente (regla 7).
+            failed += 1
+            await _registrar_fallo(db, inbox, RuntimeError(PAGO_NO_VERIFICADO))
+            continue
         try:
             # Savepoint por item (AUD2-B2-11): ver el comentario del lote del
             # outbox. Un fallo de base en un webhook no puede llevarse puestos
@@ -1282,7 +1291,7 @@ async def _process_webhook_inbox_batch(
             async with db.begin_nested():
                 applied = True
                 if inbox.provider == "mercadopago" and inbox.store_id:
-                    inbox.payload = enriquecidos[inbox.id]
+                    inbox.payload = verificado
                     applied = await apply_mercadopago_webhook_payload(
                         db,
                         store_id=inbox.store_id,
@@ -1333,16 +1342,17 @@ async def _inbox_fase_b(db: AsyncSession, ids: list[str]) -> list[WebhookInbox]:
 
 async def _enrich_inbox_payloads(
     db: AsyncSession, pendientes: list[WebhookInbox], configs: GatewayConfigs
-) -> dict[str, dict[str, JsonValue]]:
+) -> dict[str, dict[str, JsonValue] | None]:
     """Consulta el detalle de cada webhook en MP. Sin lock ni transaccion abierta.
 
-    Un evento que no se puede enriquecer conserva su payload crudo: ``enrich``
-    ya devuelve el original ante cualquier fallo, y la fase B decide con eso.
+    Un evento que no se puede enriquecer queda en None: la fase B le cuenta un
+    intento y NO aplica su payload guardado, que puede ser el cuerpo crudo sin
+    firmar (2026-10-02; antes se devolvia el original y se aplicaba).
     Con el presupuesto agotado deja de consultar: lo que falta no figura en el
     resultado y la fase B no lo toca (F1-20).
     """
     persistir = partial(persist_gateway_refresh, db)
-    enriquecidos: dict[str, dict[str, JsonValue]] = {}
+    enriquecidos: dict[str, dict[str, JsonValue] | None] = {}
     limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
     for indice, inbox in enumerate(pendientes):
         if inbox.provider != "mercadopago" or not inbox.store_id:

@@ -6,9 +6,11 @@ from decimal import Decimal
 from typing import Any
 
 import structlog
+from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import Environment, settings
 from core.observability import report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
@@ -89,6 +91,37 @@ def resolve_payment_status(payload: dict[str, Any]) -> str | None:
     )
 
 
+# Motivo que queda en ``WebhookInbox.error`` cuando no hay detalle de MP.
+PAGO_NO_VERIFICADO = "No se pudo consultar el pago en Mercado Pago"
+
+# Claves de la notificacion que solo IDENTIFICAN el evento: se conservan del
+# cuerpo. Todo lo demas (estado, referencia, importe, cuenta, metadata) sale
+# de la respuesta de MP.
+_CLAVES_DEL_EVENTO = (
+    "id",
+    "type",
+    "action",
+    "topic",
+    "resource",
+    "api_version",
+    "date_created",
+    "user_id",
+)
+# Lo que el webhook lee del recurso del pago (misma lista que
+# ``minimization.PAYMENT_DATA_FIELDS``).
+_CLAVES_DEL_PAGO = (
+    "status",
+    "external_reference",
+    "metadata",
+    "date_approved",
+    "transaction_amount",
+    "currency_id",
+    "collector_id",
+    "live_mode",
+    "preference_id",
+)
+
+
 async def enrich_mercadopago_webhook_payload(
     db: AsyncSession,
     *,
@@ -96,12 +129,23 @@ async def enrich_mercadopago_webhook_payload(
     payload: dict[str, Any],
     configs: GatewayConfigs | None = None,
     persist_refresh: PersistRefresh | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    """El evento con el detalle del pago que devuelve MP, o None si no lo hay.
+
+    La firma de MP cubre solo ``data.id``, ``x-request-id`` y ``ts``: el resto
+    del cuerpo no esta firmado. 2026-10-02 (auditoria de origin/main): si la
+    consulta ``GET /v1/payments/{id}`` fallaba o volvia vacia se devolvia el
+    cuerpo crudo y el webhook aplicaba su ``data.status``; y con la consulta
+    buena, un campo que MP no mandaba se completaba con el del cuerpo. Ahora el
+    estado y todo lo que valida la integridad salen SOLO de MP; sin respuesta
+    (o sin ``status``) es None y el llamador deja el evento en el inbox, sin
+    ``processed_at``, para reintentarlo (regla 7).
+    """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
     if not payment_id:
-        return payload
+        return None
 
     try:
         payment_details = await fetch_mercadopago_payment(
@@ -111,41 +155,34 @@ async def enrich_mercadopago_webhook_payload(
             configs=configs,
             persist_refresh=persist_refresh,
         )
-    except Exception:
-        return payload
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "mercadopago_payment_fetch_failed",
+            store_id=store_id,
+            mp_payment_id=payment_id,
+            error_type=type(exc).__name__,
+        )
+        return None
 
-    if not payment_details:
-        return payload
+    if not payment_details or not payment_details.get("status"):
+        logger.warning(
+            "mercadopago_payment_fetch_empty",
+            store_id=store_id,
+            mp_payment_id=payment_id,
+        )
+        return None
 
-    merged_data = dict(data)
-    merged_data.update(
-        {
-            "id": payment_details.get("id", merged_data.get("id")),
-            "status": payment_details.get("status", merged_data.get("status")),
-            "external_reference": payment_details.get(
-                "external_reference", merged_data.get("external_reference")
-            ),
-            "metadata": payment_details.get("metadata") or merged_data.get("metadata"),
-            "date_approved": payment_details.get(
-                "date_approved", merged_data.get("date_approved")
-            ),
-            "transaction_amount": payment_details.get("transaction_amount"),
-            "currency_id": payment_details.get("currency_id"),
-            "collector_id": payment_details.get("collector_id"),
-            "live_mode": payment_details.get("live_mode"),
-            "preference_id": payment_details.get(
-                "preference_id", merged_data.get("preference_id")
-            ),
-        }
-    )
-    merged_payload = dict(payload)
-    merged_payload["data"] = merged_data
-    merged_payload["status"] = payment_details.get("status", payload.get("status"))
-    merged_payload["external_reference"] = payment_details.get(
-        "external_reference",
-        payload.get("external_reference"),
-    )
-    return merged_payload
+    verified_data: dict[str, Any] = {
+        clave: payment_details.get(clave) for clave in _CLAVES_DEL_PAGO
+    }
+    verified_data["id"] = payment_details.get("id") or payment_id
+    verified = {k: payload[k] for k in _CLAVES_DEL_EVENTO if k in payload}
+    verified["data"] = verified_data
+    verified["status"] = verified_data["status"]
+    verified["external_reference"] = verified_data["external_reference"]
+    return verified
 
 
 async def find_payment_for_webhook(
@@ -215,10 +252,11 @@ async def _validate_payment_identity(
     store_id: str,
     payment: Payment,
     payload: dict[str, Any],
+    payment_status: str,
     configs: GatewayConfigs | None = None,
 ) -> None:
     """El pago es de ESTE cobro: metadata, turno de la referencia, moneda y
-    cuenta de MP.
+    cuenta de MP, y es plata real.
 
     Corre ANTES de clasificar el link del pago (revision de perf/f4-pay,
     2026-09-25): un payload que no es de este cobro se rechaza por integridad
@@ -251,10 +289,78 @@ async def _validate_payment_identity(
         raise RuntimeError("La moneda acreditada no coincide con la esperada")
 
     config = await resolve_gateway_config(db, store_id, configs)
+    contexto = {"store_id": store_id, "payment_id": payment.id}
+    _validar_cuenta_cobradora(
+        data, config.oauth_user_id if config else None, payment_status, contexto
+    )
+    _validar_plata_real(data, payment_status, contexto)
+
+
+def _rechazo_de_integridad(motivo: str, contexto: dict[str, str]) -> RuntimeError:
+    """El error que deja el pago sin aplicar, con un log sin datos personales.
+
+    Mismo camino que el resto de la integridad (B2-04): el ``RuntimeError``
+    deja el motivo en ``WebhookInbox.error`` (``failed_webhooks`` del panel)
+    y el inbox lo reintenta hasta agotar los intentos (regla 7).
+    """
+    logger.warning("mercadopago_payment_rejected", motivo=motivo, **contexto)
+    return RuntimeError(motivo)
+
+
+def _validar_cuenta_cobradora(
+    data: dict[str, Any],
+    cuenta_de_la_tienda: str | None,
+    payment_status: str,
+    contexto: dict[str, str],
+) -> None:
+    """El pago se cobro en la cuenta de MP de la tienda.
+
+    2026-10-02 (auditoria de origin/main): el control se salteaba si MP no
+    mandaba ``collector_id`` o la tienda no tenia ``oauth_user_id``, y un
+    ``approved`` se acreditaba sin saber a quien se pago. Para un aprobado
+    falla cerrado. Sin ``oauth_user_id`` fuera de produccion es el modo manual
+    (token pegado a mano, ``upsert_gateway_config``) y no hay contra que
+    comparar; en produccion la cuenta solo se vincula por OAuth.
+    """
     collector_id = str(data.get("collector_id") or "").strip()
-    if config and config.oauth_user_id and collector_id:
-        if collector_id != config.oauth_user_id:
-            raise RuntimeError("El cobro pertenece a otra cuenta de Mercado Pago")
+    if cuenta_de_la_tienda and collector_id and collector_id != cuenta_de_la_tienda:
+        raise RuntimeError("El cobro pertenece a otra cuenta de Mercado Pago")
+    if payment_status != PaymentStatus.APPROVED.value:
+        return
+    if cuenta_de_la_tienda and not collector_id:
+        raise _rechazo_de_integridad(
+            "Mercado Pago no devolvio la cuenta que cobro el pago aprobado", contexto
+        )
+    if not cuenta_de_la_tienda and settings.ENV == Environment.PRODUCTION:
+        raise _rechazo_de_integridad(
+            "La tienda no tiene su cuenta de Mercado Pago vinculada por OAuth",
+            contexto,
+        )
+
+
+def _validar_plata_real(
+    data: dict[str, Any], payment_status: str, contexto: dict[str, str]
+) -> None:
+    """Un aprobado trae su importe, y en produccion ningun pago es de prueba.
+
+    2026-10-02 (auditoria de origin/main): sin ``transaction_amount`` el
+    control de importe de ``_validate_payment_link`` se salteaba; y
+    ``live_mode`` se pedia a MP y no se miraba, asi que en produccion un pago
+    de sandbox acreditaba un cobro real. Fuera de produccion el sandbox sigue
+    andando.
+    """
+    if (
+        payment_status == PaymentStatus.APPROVED.value
+        and data.get("transaction_amount") is None
+    ):
+        raise _rechazo_de_integridad(
+            "Mercado Pago no devolvio el importe del pago aprobado", contexto
+        )
+    if settings.ENV == Environment.PRODUCTION and data.get("live_mode") is not True:
+        raise _rechazo_de_integridad(
+            "Mercado Pago devolvio un pago de prueba (live_mode) en produccion",
+            contexto,
+        )
 
 
 def _referencia_del_pago(payload: dict[str, Any]) -> str:
@@ -718,7 +824,12 @@ async def apply_mercadopago_webhook_payload(
         return False
     # Identidad primero: lo que no es de este cobro no llega a clasificarse.
     await _validate_payment_identity(
-        db, store_id=store_id, payment=payment, payload=payload, configs=configs
+        db,
+        store_id=store_id,
+        payment=payment,
+        payload=payload,
+        payment_status=payment_status,
+        configs=configs,
     )
     resuelto = await _resolver_link(
         db,
