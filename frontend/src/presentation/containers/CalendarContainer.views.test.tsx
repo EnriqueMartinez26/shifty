@@ -94,6 +94,11 @@ jest.mock('../components/organisms/NewAppointmentModal', () => ({
   NewAppointmentModal: () => null
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 const chooseView = (label: 'Dia' | 'Semana' | 'Mes' | 'Lista') => {
   fireEvent.click(screen.getByRole('button', { name: label }))
 }
@@ -137,6 +142,7 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     mockTotal = null
     mockBusinessHours = { sun: [{ open: '09:00', close: '21:00' }] }
     mockUser.role = 'store_admin'
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
   })
 
   afterEach(() => {
@@ -359,6 +365,27 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
 
     await waitFor(() => expect(mockDeleteBlock).toHaveBeenCalledWith('blk-1'))
     expect(await screen.findByText('Bloqueo desactivado')).toBeInTheDocument()
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). PATCH y DELETE /appointment-blocks/{id} no
+  // estan en SUSPENSION_ALLOWED_WRITES.
+  it('con la tienda suspendida "Editar" y "Desactivar" quedan deshabilitados con el motivo', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    mockBlocks = [
+      blockOf('blk-1', 'Tramite', '2026-09-20T17:00:00.000Z', '2026-09-20T18:00:00.000Z')
+    ]
+    render(<CalendarContainer />)
+
+    for (const name of ['Editar', 'Desactivar']) {
+      const button = within(timelinePanel()).getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+    fireEvent.click(within(timelinePanel()).getByRole('button', { name: 'Desactivar' }))
+    expect(mockDeleteBlock).not.toHaveBeenCalled()
+    // Tocar el bloqueo en la vista de dia tampoco abre su edicion.
+    expect(screen.getByRole('button', { name: /^Tramite/ })).toBeDisabled()
   })
 
   it('el hueco cerrado de la jornada partida arranca colapsado y se expande', () => {

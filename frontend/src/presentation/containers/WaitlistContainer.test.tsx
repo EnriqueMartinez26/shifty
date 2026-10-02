@@ -18,6 +18,11 @@ jest.mock('../hooks/useStores', () => ({
   useStoreSettings: () => ({ data: { name: 'Peluqueria Sol', slug: 'sol' } })
 }))
 
+let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+jest.mock('../hooks/useStoreWriteAccess', () => ({
+  useStoreWriteAccess: () => mockWriteAccess
+}))
+
 // El rol que expone useAuth() ya viene canonicalizado por AuthContext
 // (canonicalRole convierte 'admin' -> 'store_admin'); el mock refleja eso.
 const mockUser = { role: 'store_admin', is_global_admin: false }
@@ -52,6 +57,36 @@ describe('WaitlistContainer', () => {
     mockRemove.mockReset()
     mockBook.mockReset()
     mockUser.role = 'store_admin'
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  // 2026-10-01: con la tienda suspendida cada accion fallaba con 402 en vez de
+  // verse deshabilitada (FF-15). DELETE /waitlist/{id} y POST
+  // /waitlist/{id}/book no estan en SUSPENSION_ALLOWED_WRITES.
+  it('con la tienda suspendida reservar y quitar quedan deshabilitados con el motivo', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+
+    render(<WaitlistContainer />)
+
+    for (const name of [/Reservar/, /Quitar/]) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      expect(button).toHaveAttribute('title', 'Tienda suspendida')
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Quitar/ }))
+    expect(mockRemove).not.toHaveBeenCalled()
+    // El aviso por WhatsApp no escribe nada: sigue.
+    expect(screen.getByRole('link', { name: 'WhatsApp' })).toBeInTheDocument()
+  })
+
+  it('sin suspension reservar y quitar siguen habilitados', () => {
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+
+    render(<WaitlistContainer />)
+
+    expect(screen.getByRole('button', { name: /Reservar/ })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: /Quitar/ })).not.toBeDisabled()
   })
 
   it('muestra la entrada con el cupo ofrecido y el link de WhatsApp con deep-link', () => {

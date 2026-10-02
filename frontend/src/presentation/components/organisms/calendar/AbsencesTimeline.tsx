@@ -20,6 +20,8 @@ interface AbsencesTimelineProps {
   canManageBlocks: boolean
   onEdit: (block: AbsencesTimelineBlock) => void
   onDeactivate: (blockId: string) => void
+  /** Tienda suspendida: PATCH y DELETE de bloqueos responden 402 (FF-15). */
+  readOnlyReason?: string | null
 }
 
 /**
@@ -30,7 +32,8 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
   events,
   canManageBlocks,
   onEdit,
-  onDeactivate
+  onDeactivate,
+  readOnlyReason = null
 }) => (
   <div className="p-6 rounded-[8px] space-y-4" style={panelStyle}>
     <h3
@@ -80,7 +83,9 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
                     reason: event.title
                   })
                 }
-                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest"
+                disabled={readOnlyReason !== null}
+                title={readOnlyReason ?? undefined}
+                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                 style={buttonStyles2000s.default}
               >
                 Editar
@@ -88,7 +93,9 @@ export const AbsencesTimeline: React.FC<AbsencesTimelineProps> = ({
               <button
                 type="button"
                 onClick={() => onDeactivate(event.id)}
-                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+                disabled={readOnlyReason !== null}
+                title={readOnlyReason ?? undefined}
+                className="px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-50"
                 style={buttonStyles2000s.selected}
               >
                 Desactivar
