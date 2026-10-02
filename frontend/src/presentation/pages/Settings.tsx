@@ -30,7 +30,8 @@ import { navigateExternal } from '@shared/utils/safeUrl'
 
 import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
-import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
+import { SettingsFeaturesTab } from '../components/organisms/settings/SettingsFeaturesTab'
+import { SettingsNotificationsTab } from '../components/organisms/settings/SettingsNotificationsTab'
 import { SettingsScheduleTab } from '../components/organisms/settings/SettingsScheduleTab'
 import { ShareLinksPanel } from '../components/organisms/ShareLinksPanel'
 import { useChangePassword } from '../hooks/useChangePassword'
@@ -68,29 +69,6 @@ const TABS = [
   { id: 'payments', label: 'Mercado Pago', icon: <CreditCard className="w-4 h-4" /> },
   { id: 'security', label: 'Seguridad', icon: <Lock className="w-4 h-4" /> }
 ]
-
-// Solo los flags que el backend lee para decidir algo (FF-28).
-// `advanced_reports` y `new_calendar` siguen en el contrato (`StoreFeatureFlags`,
-// `DEFAULT_FEATURE_FLAGS`) pero ningun camino los consulta: mostrarlos era
-// ofrecer interruptores que no hacen nada. `planSave` solo manda las claves
-// que cambiaron, asi que ocultarlos no los pisa en la base.
-const FEATURE_LABELS = [
-  {
-    key: 'payments',
-    title: 'Cobros online y senas',
-    description: 'Mercado Pago, confirmacion manual, devoluciones y actualizacion de pagos.'
-  },
-  {
-    key: 'ledger',
-    title: 'Deuda / fiado',
-    description: 'Cuenta pendiente por cliente con cargos, pagos, ajustes y devoluciones.'
-  },
-  {
-    key: 'otp_booking',
-    title: 'Código por email en la reserva pública',
-    description: 'Pide un código de verificación, enviado por email, antes de confirmar la reserva.'
-  }
-] as const
 
 const CUSTOM_FIELD_TYPE_OPTIONS = [
   { value: 'text', label: 'Texto corto' },
@@ -1156,127 +1134,15 @@ const SettingsPage: React.FC = () => {
         )}
 
         {activeTab === 'notifications' && (
-          <div className="space-y-6">
-            <div
-              className="flex items-center justify-between p-6 rounded-md transition-all"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.outer
-              }}
-            >
-              <div className="space-y-1">
-                <p
-                  className="font-black uppercase tracking-tight"
-                  style={{ color: colors2000s.text.primary }}
-                >
-                  Email de Confirmación
-                </p>
-                <p
-                  className="text-[10px] font-bold uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Enviar al confirmar reserva.
-                </p>
-              </div>
-              <ToggleSwitch
-                label="Email de Confirmación"
-                checked={formData.send_email_confirmation}
-                onToggle={() =>
-                  setFormData({
-                    ...formData,
-                    send_email_confirmation: !formData.send_email_confirmation
-                  })
-                }
-              />
-            </div>
-
-            <div
-              className="flex items-center justify-between p-6 rounded-md transition-all"
-              style={{
-                background: 'white',
-                border: `1px solid ${colors2000s.border.light}`,
-                boxShadow: colors2000s.shadows.outer
-              }}
-            >
-              <div className="space-y-1">
-                <p
-                  className="font-black uppercase tracking-tight"
-                  style={{ color: colors2000s.text.primary }}
-                >
-                  Recordatorios 24hs
-                </p>
-                <p
-                  className="text-[10px] font-bold uppercase tracking-widest"
-                  style={{ color: colors2000s.text.secondary }}
-                >
-                  Aviso automático un día antes.
-                </p>
-              </div>
-              <ToggleSwitch
-                label="Recordatorios 24hs"
-                checked={formData.send_email_reminders}
-                onToggle={() =>
-                  setFormData({ ...formData, send_email_reminders: !formData.send_email_reminders })
-                }
-              />
-            </div>
-          </div>
+          <SettingsNotificationsTab value={formData} onChange={patch} />
         )}
 
         {activeTab === 'features' && (
-          <div className="space-y-6">
-            <h3
-              className="text-lg font-black uppercase tracking-tight"
-              style={{ color: colors2000s.orange.accent }}
-            >
-              Funciones por tenant
-            </h3>
-            {FEATURE_LABELS.map((feature) => {
-              const enabled = Boolean(formData.feature_flags?.[feature.key])
-              return (
-                <div
-                  key={feature.key}
-                  className="flex items-center justify-between gap-6 p-6 rounded-md transition-all"
-                  style={{
-                    background: 'white',
-                    border: `1px solid ${colors2000s.border.light}`,
-                    boxShadow: colors2000s.shadows.outer
-                  }}
-                >
-                  <div className="space-y-1">
-                    <p
-                      className="font-black uppercase tracking-tight"
-                      style={{ color: colors2000s.text.primary }}
-                    >
-                      {feature.title}
-                    </p>
-                    <p
-                      className="text-[10px] font-bold uppercase tracking-widest"
-                      style={{ color: colors2000s.text.secondary }}
-                    >
-                      {feature.description}
-                    </p>
-                  </div>
-                  <ToggleSwitch
-                    label={feature.title}
-                    checked={enabled}
-                    disabled={writeAccess.readOnly}
-                    title={readOnlyTitle}
-                    onToggle={() =>
-                      setFormData({
-                        ...formData,
-                        feature_flags: {
-                          ...formData.feature_flags,
-                          [feature.key]: !enabled
-                        }
-                      })
-                    }
-                  />
-                </div>
-              )
-            })}
-          </div>
+          <SettingsFeaturesTab
+            flags={formData.feature_flags}
+            onChange={(feature_flags) => patch({ feature_flags })}
+            readOnlyReason={readOnlyTitle ?? null}
+          />
         )}
 
         {activeTab === 'payments' && (
