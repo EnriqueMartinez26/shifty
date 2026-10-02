@@ -231,6 +231,11 @@ export const useRequestPublicOtp = () =>
     mutationFn: (payload) => publicBookingService.requestOtp(payload)
   })
 
+export const useUnsubscribeFromMarketing = () =>
+  useMutation<void, Error, string>({
+    mutationFn: (token) => publicBookingService.unsubscribeFromMarketing(token)
+  })
+
 export const useVerifyPublicOtp = () =>
   useMutation<OtpVerifyResponse, Error, OtpVerifyPayload>({
     mutationFn: (payload) => publicBookingService.verifyOtp(payload)

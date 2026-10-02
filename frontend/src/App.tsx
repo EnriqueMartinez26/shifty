@@ -9,6 +9,9 @@ import { getDefaultAppRoute, hasAnyRole } from './presentation/context/roles'
 import { PUBLIC_ROUTES, SESSION_ROUTES, type AppRoute } from './presentation/routes/appRoutes'
 
 const NotFoundPage = lazy(() => import('./presentation/pages/NotFound'))
+// Link de baja del mail promocional (`modules/legal/unsubscribe.py`). Vive
+// aca y no en la tabla de rutas, como el 404: es publica y sin sesion.
+const UnsubscribePage = lazy(() => import('./presentation/pages/Unsubscribe'))
 
 const ModuleBoundary = ({ children, title }: { children: React.ReactNode; title: string }) => (
   <Sentry.ErrorBoundary
@@ -148,6 +151,7 @@ function App() {
           </Route>
           {/* Portal publico: sin AuthProvider (D-20260928-04). */}
           {PUBLIC_ROUTES.map(renderRoute)}
+          <Route path="/baja" element={<UnsubscribePage />} />
           {/* Cualquier ruta desconocida (p.ej. el viejo /register) es un 404
               propio, fuera del AuthProvider: no espera a la sesion y ofrece
               volver al inicio (o a la tienda, si la direccion es de una). */}

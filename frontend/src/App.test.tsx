@@ -93,6 +93,7 @@ jest.mock('./presentation/pages/Settings', () => mockPage('Settings'))
 jest.mock('./presentation/pages/Legal', () => mockPage('Legal'))
 jest.mock('./presentation/pages/Manual', () => mockPage('Manual'))
 jest.mock('./presentation/pages/NotFound', () => mockPage('NotFound'))
+jest.mock('./presentation/pages/Unsubscribe', () => mockPage('Unsubscribe'))
 
 const SESIONES = {
   super_admin: { role: 'super_admin', is_global_admin: true },
@@ -205,7 +206,9 @@ const RUTAS_PUBLICAS = [
   { ruta: '/booking/mi-tienda', marcadores: [BOUNDARY_BOOKING, 'page:PublicBooking'] },
   { ruta: '/b/mi-tienda', marcadores: [BOUNDARY_BOOKING, 'page:PublicBooking'] },
   { ruta: '/booking/mi-tienda/mis-turnos', marcadores: ['page:ClientAppointments'] },
-  { ruta: '/b/mi-tienda/mis-turnos', marcadores: ['page:ClientAppointments'] }
+  { ruta: '/b/mi-tienda/mis-turnos', marcadores: ['page:ClientAppointments'] },
+  // Link de baja del mail promocional: publica, sin sesion (2026-10-02).
+  { ruta: '/baja', marcadores: ['page:Unsubscribe'] }
 ]
 
 const sinSesion = (): EstadoAuth => ({
