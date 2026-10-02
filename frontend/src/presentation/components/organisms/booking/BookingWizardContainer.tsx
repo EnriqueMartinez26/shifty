@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Check } from 'lucide-react'
 
 import { getErrorCode, getErrorMessage, getRetryAfterSeconds } from '@shared/errors/getErrorMessage'
+import { bookingIdempotencyKey, forgetBookingIdempotency } from '@shared/utils/bookingIdempotency'
 import { isOtpStillValid, phoneDigits, rememberOtpVerification } from '@shared/utils/otpSession'
 
 import { BookingStepConfirmation } from './BookingStepConfirmation'
@@ -11,7 +12,6 @@ import { BookingStepService } from './BookingStepService'
 import { EMPTY_PRESELECT, initialStepFor, type BookingPreselect } from './deepLink'
 import { resolveBackJump, resolveStepJump } from './stepFlow'
 import type { BookingOtpState, BookingWizardState } from './types'
-import { createUuid } from '../../../../shared/utils/uuid'
 import { colors2000s } from '../../../../theme/colors'
 import {
   type PublicStore,
@@ -71,8 +71,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
       notes: '',
       customFields: initialCustomFields
     },
-    promotionCode: '',
-    idempotencyKey: createUuid()
+    promotionCode: ''
   })
 
   useEffect(() => {
@@ -353,8 +352,8 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
             onBack={prevStep}
             onClientChange={handleClientChange}
             onPromotionCodeChange={(promotionCode) => updateState({ promotionCode })}
-            onConfirm={async (paymentMethod, acceptsTerms) =>
-              await createBooking.mutateAsync({
+            onConfirm={async (paymentMethod, acceptsTerms) => {
+              const pedido = {
                 store_public_id: store.public_id,
                 service_id: selectedServiceId,
                 staff_id:
@@ -369,10 +368,20 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                 custom_fields: bookingState.client.customFields,
                 promotion_code: bookingState.promotionCode || undefined,
                 payment_method: paymentMethod,
-                accepts_terms: acceptsTerms,
-                idempotency_key: bookingState.idempotencyKey
+                accepts_terms: acceptsTerms
+              }
+              // La huella es el pedido entero (servicio, profesional, horario,
+              // cliente, promo y forma de pago): la clave se reusa al recargar
+              // solo si se manda exactamente lo mismo (F4-04). Se guarda solo
+              // su SHA-256, sin datos del cliente.
+              const idempotencyKey = await bookingIdempotencyKey(store.slug, JSON.stringify(pedido))
+              const confirmation = await createBooking.mutateAsync({
+                ...pedido,
+                idempotency_key: idempotencyKey
               })
-            }
+              forgetBookingIdempotency(store.slug)
+              return confirmation
+            }}
           />
         )}
       </div>

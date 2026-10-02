@@ -47,6 +47,22 @@ if (typeof customGlobal.crypto?.randomUUID !== 'function') {
   }
 }
 
+// jsdom no trae crypto.subtle (2026-10-01, F4-04: la huella de la reserva se
+// guarda como SHA-256). Se toma el WebCrypto de Node, el mismo algoritmo que
+// el del navegador.
+if (customGlobal.crypto && typeof customGlobal.crypto.subtle === 'undefined') {
+  try {
+    const { webcrypto } = jest.requireActual<{ webcrypto: Crypto }>('node:crypto')
+    Object.defineProperty(customGlobal.crypto, 'subtle', {
+      value: webcrypto.subtle,
+      configurable: true,
+      writable: true
+    })
+  } catch (_error) {
+    // Fail-safe fallback if the environment disallows redefining globals.
+  }
+}
+
 if (typeof customGlobal.TextEncoder === 'undefined') {
   class SimpleTextEncoder {
     encode(input = ''): Uint8Array {

@@ -15,10 +15,12 @@ const MAX_QUERY_RETRIES = 1
  * Un 4xx es determinista (402 suspendida, 403, 404, 409, 422, 429): repetir
  * el GET no lo arregla, solo demora el error y suma carga (un 429 reintentado
  * empeora el limite). Se reintenta una vez lo que puede ser pasajero: sin
- * respuesta, 5xx o un error que no vino del cliente HTTP.
+ * respuesta, 5xx o un error que no vino del cliente HTTP. Una lectura que
+ * vencio su timeout de 15 s no se reintenta (D-20260930-02).
  */
 export const shouldRetryQuery = (failureCount: number, error: unknown): boolean => {
   if (failureCount >= MAX_QUERY_RETRIES) return false
+  if (getErrorCode(error) === 'REQUEST_TIMEOUT') return false
   const status = getHttpStatus(error)
   return status === undefined || status < 400 || status >= 500
 }

@@ -268,7 +268,10 @@ export interface UpdateSuperAdminCouponPayload {
 }
 
 class SuperAdminService {
-  async listStores(params: ListStoresParams = {}): Promise<SuperAdminStoresPage> {
+  async listStores(
+    params: ListStoresParams = {},
+    signal?: AbortSignal
+  ): Promise<SuperAdminStoresPage> {
     // axios omite los null/undefined; la busqueda vacia tampoco viaja. El total
     // llega en X-Total-Count (expuesto por CORS en main.py) para no cambiar la
     // forma de la respuesta, que sigue siendo una lista (FF-24).
@@ -279,7 +282,8 @@ class SuperAdminService {
         has_subscription: params.has_subscription,
         limit: params.limit,
         offset: params.offset
-      }
+      },
+      signal
     })
     return { stores: data, total: parseTotalCount(headers['x-total-count']) }
   }
