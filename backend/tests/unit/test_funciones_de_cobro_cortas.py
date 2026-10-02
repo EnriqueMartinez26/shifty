@@ -27,6 +27,7 @@ FUNCIONES = {
         # Revision 4R de la PR #104.
         "enrich_mercadopago_webhook_payload",
         "alert_integrity_rejection",
+        "alert_unexpected_payment_failure",
     ],
     "modules/payments/router.py": [
         "mercadopago_webhook",

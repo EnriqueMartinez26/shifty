@@ -27,6 +27,7 @@ aplicar ANTES de escribir, con el turno y el pago ya lockeados como siempre.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -43,16 +44,19 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.jobs import process_webhook_inbox_batch
 from modules.payments.model import (
     WEBHOOK_INBOX_MAX_ATTEMPTS,
+    OutboxMessage,
     Payment,
     PaymentGatewayConfig,
     PaymentStatus,
     WebhookInbox,
 )
 from modules.payments.processing import (
+    EVENT_PAYMENT_ALERT_MARK,
     PAGO_NO_VERIFICADO,
     apply_mercadopago_webhook_payload,
 )
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
+    auth_headers,
     register_and_login,
     webhook_signature_headers,
 )
@@ -779,3 +783,44 @@ async def test_solo_se_consulta_en_mp_el_id_que_cubrio_la_firma(
     inbox = await _inbox(test_session)
     guardado = inbox.payload["data"]
     assert isinstance(guardado, dict) and guardado["id"] == "mp-firmado", guardado
+
+
+@pytest.mark.asyncio
+async def test_las_marcas_de_alerta_no_cuentan_como_eventos_procesados(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Re-revision de la PR #104 (S5): la marca que deduplica una alerta a
+    Sentry nace procesada, pero no es un evento del outbox: las estadisticas
+    del panel no la cuentan."""
+    store, token = await register_and_login(
+        client, slug="stats-sin-marcas", email="stats-sin-marcas@test.com"
+    )
+    await _enable_payments(client, token)
+    await _configure_gateway(client, token)
+    tienda = (
+        await test_session.execute(select(PaymentGatewayConfig.store_id))
+    ).scalar_one()
+    ahora = datetime.now(timezone.utc)
+    test_session.add_all(
+        [
+            OutboxMessage(
+                store_id=tienda,
+                event_type=EVENT_PAYMENT_ALERT_MARK,
+                payload={"aviso": "integridad:mp-1:modo_prueba"},
+                processed_at=ahora,
+            ),
+            OutboxMessage(
+                store_id=tienda,
+                event_type="payment.approved",
+                payload={},
+                processed_at=ahora,
+            ),
+        ]
+    )
+    await test_session.commit()
+
+    stats = await client.get("/payments/outbox/stats", headers=auth_headers(token))
+
+    assert stats.status_code == 200, stats.text
+    datos = stats.json().get("data", stats.json())
+    assert datos["processed"] == 1, datos

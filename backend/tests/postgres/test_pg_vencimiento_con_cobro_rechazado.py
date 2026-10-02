@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import modules.notifications.tasks as tasks
+import modules.payments.jobs as jobs
 import modules.payments.processing as processing
 import modules.payments.service as payments_service
 from core.config import Environment, settings
@@ -163,9 +164,112 @@ async def test_los_cobros_de_prueba_quedan_retenidos_y_el_resto_vence(
             await conn.execute(
                 text(
                     "select count(*) from outbox_messages "
-                    "where event_type = 'payment.integrity_alert' "
+                    "where event_type = 'payment.alert_mark' "
                     "and processed_at is not null"
                 )
             )
         ).scalar_one()
     assert marcas == CUANTOS
+
+
+@pytest.mark.asyncio
+async def test_una_pagina_mezcla_retenidos_vencidos_y_un_error_inesperado(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-revision de la PR #104 (S6, W1, W3), en UNA pagina y contra Postgres:
+
+    - aprobado de prueba: retenido, una alerta de integridad;
+    - pendiente de prueba (no aprobado): vence por el grafo, releido despues
+      de revertir su savepoint;
+    - un error inesperado al aplicar (no de integridad): retenido, una alerta
+      por clase de error.
+
+    La segunda corrida no repite alertas ni vence nada mas.
+    """
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    store, token = await _tienda_con_mercadopago(client, app_sessions, "pg-mixto")
+    await _reservas_con_sena_pendiente(client, token, store, "pg-mixto")
+    cobros = sorted(
+        await _cobros_de(owner_engine, store), key=lambda c: str(c["appointment_id"])
+    )
+    assert len(cobros) == CUANTOS == 3
+    remotos: dict[str, dict[str, Any]] = {}
+    for cobro, (estado, live) in zip(
+        cobros, [("approved", False), ("pending", False), ("approved", True)]
+    ):
+        turno = str(cobro["appointment_id"])
+        remotos[turno] = {
+            "id": f"mp-{turno}",
+            "status": estado,
+            "external_reference": external_reference_for(turno, cobro["link_ref"]),
+            "transaction_amount": float(cobro["amount"]),
+            "currency_id": cobro["currency"],
+            "collector_id": CUENTA,
+            "live_mode": live,
+        }
+    retenido, vencido, explota = (str(c["appointment_id"]) for c in cobros)
+
+    async def mercadopago(
+        access_token: str,
+        *,
+        method: str,
+        path: str,
+        json_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        for turno, remoto in remotos.items():
+            if turno in path:
+                return {"results": [remoto]}
+        return {"results": []}
+
+    monkeypatch.setattr(payments_service, "_mercadopago_api_request", mercadopago)
+    aplicar = processing.apply_mercadopago_webhook_payload
+
+    async def aplicar_o_explotar(
+        db: AsyncSession, *, store_id: str, payload: dict[str, Any], **kw: Any
+    ) -> bool:
+        if payload["data"]["id"] == f"mp-{explota}":
+            raise ValueError("bug al aplicar el pago")
+        return await aplicar(db, store_id=store_id, payload=payload, **kw)
+
+    monkeypatch.setattr(jobs, "apply_mercadopago_webhook_payload", aplicar_o_explotar)
+    avisos: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        processing,
+        "report_exception",
+        lambda exc, **contexto: avisos.append(contexto),
+    )
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text("update payment_gateway_configs set oauth_user_id = :cuenta"),
+            {"cuenta": CUENTA},
+        )
+        await conn.execute(
+            text("update appointments set expires_at = :t"),
+            {"t": datetime.now(timezone.utc) - timedelta(minutes=5)},
+        )
+    monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
+
+    primera = await _con_bypass(app_sessions, expire_unpaid_appointments)
+    segunda = await _con_bypass(app_sessions, expire_unpaid_appointments)
+
+    assert (primera["held"], primera["expired"]) == (2, 1), primera
+    assert (segunda["held"], segunda["expired"]) == (2, 0), segunda
+    async with owner_engine.connect() as conn:
+        filas = await conn.execute(
+            text(
+                "select a.id, a.status, p.status from appointments a "
+                "join payments p on p.appointment_id = a.id"
+            )
+        )
+        estados = {str(i): (str(a), str(p)) for i, a, p in filas.all()}
+    assert estados[retenido] == ("pending_payment", "pending"), estados
+    assert estados[explota] == ("pending_payment", "pending"), estados
+    assert estados[vencido] == ("expired", "expired"), estados
+    assert sorted(str(a.get("motivo") or a.get("error_type")) for a in avisos) == [
+        "ValueError",
+        "modo_prueba",
+    ], avisos

@@ -280,6 +280,7 @@ async def _validate_payment_identity(
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     raw_metadata = data.get("metadata")
     metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+    contexto = _contexto_del_rechazo(store_id, payment, payload, payment_status)
 
     expected_values = {
         "payment_id": payment.id,
@@ -289,33 +290,39 @@ async def _validate_payment_identity(
     for key, expected in expected_values.items():
         received = str(metadata.get(key) or "").strip()
         if received and received != str(expected):
-            raise RuntimeError(f"Mercado Pago devolvio metadata inconsistente: {key}")
+            raise _rechazo_de_integridad(
+                f"Mercado Pago devolvio metadata inconsistente: {key}",
+                f"metadata_{key}",
+                contexto,
+            )
 
     external_reference = _referencia_del_pago(payload)
     if external_reference and (
         appointment_id_from_reference(external_reference) != payment.appointment_id
     ):
-        raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
+        raise _rechazo_de_integridad(
+            "Mercado Pago devolvio una referencia externa inconsistente",
+            "referencia",
+            contexto,
+        )
 
     currency = str(data.get("currency_id") or "").strip()
     if currency and currency != payment.currency:
-        raise RuntimeError("La moneda acreditada no coincide con la esperada")
+        raise _rechazo_de_integridad(
+            "La moneda acreditada no coincide con la esperada", "moneda", contexto
+        )
 
     config = await resolve_gateway_config(db, store_id, configs)
-    contexto = _ContextoDelRechazo(
-        store_id=store_id,
-        payment_id=payment.id,
-        mp_payment_id=str(data.get("id") or "").strip(),
-        aprobado=payment_status == PaymentStatus.APPROVED.value,
-    )
     _validar_cuenta_cobradora(data, config.oauth_user_id if config else None, contexto)
     _validar_importe_presente(data, contexto)
     _validar_modo_real(data, contexto)
 
 
-# ``event_type`` de la marca que deduplica la alerta de un aprobado rechazado
-# por integridad. Nace con ``processed_at``: el lote del outbox no la toma.
-EVENT_INTEGRITY_ALERT = "payment.integrity_alert"
+# ``event_type`` de la marca que deduplica una alerta de pagos a Sentry (un
+# aprobado rechazado por integridad, un fallo inesperado del vencimiento).
+# Nace con ``processed_at``: el lote del outbox no la toma, y las estadisticas
+# del outbox del panel no la cuentan (``router.outbox_stats``).
+EVENT_PAYMENT_ALERT_MARK = "payment.alert_mark"
 
 
 @dataclass(frozen=True)
@@ -333,6 +340,19 @@ class _ContextoDelRechazo:
             "payment_id": self.payment_id,
             "mp_payment_id": self.mp_payment_id,
         }
+
+
+def _contexto_del_rechazo(
+    store_id: str, payment: Payment, payload: dict[str, Any], payment_status: str
+) -> _ContextoDelRechazo:
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    return _ContextoDelRechazo(
+        store_id=store_id,
+        payment_id=payment.id,
+        mp_payment_id=str(data.get("id") or "").strip(),
+        aprobado=payment_status == PaymentStatus.APPROVED.value,
+    )
 
 
 class PaymentRejectedForIntegrity(RuntimeError):
@@ -436,9 +456,7 @@ def _validar_modo_real(data: dict[str, Any], contexto: _ContextoDelRechazo) -> N
         )
 
 
-async def alert_integrity_rejection(
-    db: AsyncSession, exc: BaseException, *, incluir_no_aprobados: bool = False
-) -> None:
+async def alert_integrity_rejection(db: AsyncSession, exc: BaseException) -> None:
     """Avisa a Sentry, UNA vez por (pago de MP, motivo), de un aprobado que no
     se acredito por integridad. Cualquier otra excepcion: no hace nada.
 
@@ -448,40 +466,66 @@ async def alert_integrity_rejection(
     una marca en ``outbox_messages`` con la clave en ``payload.aviso``. La
     llaman el webhook, el inbox, la conciliacion y el vencimiento DESPUES de
     revertir su savepoint (si no, la marca se iria con el).
-    ``incluir_no_aprobados``: el vencimiento retiene el turno aunque MP no lo
-    de por aprobado, y una persona tiene que enterarse igual.
     """
-    if not isinstance(exc, PaymentRejectedForIntegrity):
+    if not isinstance(exc, PaymentRejectedForIntegrity) or not exc.contexto.aprobado:
         return
-    if not (exc.contexto.aprobado or incluir_no_aprobados):
-        return
-    if await _primera_alerta(db, exc):
-        report_exception(exc, motivo=exc.codigo, **exc.contexto.ids())
+    contexto = exc.contexto
+    clave = (
+        f"integridad:{contexto.mp_payment_id}:{exc.codigo}"
+        if contexto.mp_payment_id
+        else None
+    )
+    if await _primera_alerta(db, contexto.store_id, clave):
+        report_exception(exc, motivo=exc.codigo, **contexto.ids())
 
 
-async def _primera_alerta(db: AsyncSession, exc: PaymentRejectedForIntegrity) -> bool:
-    """Deja la marca de la alerta y dice si es la primera para (pago, motivo).
+async def alert_unexpected_payment_failure(
+    db: AsyncSession,
+    exc: BaseException,
+    *,
+    store_id: str,
+    payment_id: str,
+    mp_payment_id: str,
+) -> None:
+    """Avisa a Sentry, UNA vez por (pago de MP, clase de error), de un fallo
+    que no es de integridad al aplicar un pago remoto.
+
+    Re-revision de la PR #104 (W1): el vencimiento retiene el turno ante
+    cualquier error (deadlock, timeout, un bug) y la tarea termina bien, asi
+    que sin esto el monitor de Sentry de la tarea seguia verde y nadie se
+    enteraba. Misma marca que ``alert_integrity_rejection``.
+    """
+    sujeto = mp_payment_id or f"cobro-{payment_id}"
+    clave = f"fallo:{sujeto}:{type(exc).__name__}"
+    if await _primera_alerta(db, store_id, clave):
+        report_exception(
+            exc,
+            error_type=type(exc).__name__,
+            store_id=store_id,
+            payment_id=payment_id,
+            mp_payment_id=mp_payment_id,
+        )
+
+
+async def _primera_alerta(db: AsyncSession, store_id: str, clave: str | None) -> bool:
+    """Deja la marca de una alerta y dice si es la primera para ``clave``.
 
     En un savepoint propio, para que el fallo de un item siguiente del lote no
-    la revierta. Sin id de pago de MP no hay clave (la cadena vacia taparia
-    todos los avisos de la tienda) y se avisa cada vez; si la marca no se
-    puede escribir, tambien: mejor repetido que en silencio.
+    la revierta. Sin clave (sin id de pago de MP: la cadena vacia taparia
+    todos los avisos de la tienda) se avisa cada vez; si la marca no se puede
+    escribir, tambien: mejor repetido que en silencio.
     """
-    contexto = exc.contexto
-    if not contexto.mp_payment_id:
+    if clave is None:
         return True
-    clave = f"integridad:{contexto.mp_payment_id}:{exc.codigo}"
     try:
         async with db.begin_nested():
-            if await _aviso_publicado(
-                db, contexto.store_id, clave, EVENT_INTEGRITY_ALERT
-            ):
+            if await _aviso_publicado(db, store_id, clave, EVENT_PAYMENT_ALERT_MARK):
                 return False
             db.add(
                 OutboxMessage(
-                    store_id=contexto.store_id,
-                    event_type=EVENT_INTEGRITY_ALERT,
-                    payload={"aviso": clave, "motivo": exc.codigo, **contexto.ids()},
+                    store_id=store_id,
+                    event_type=EVENT_PAYMENT_ALERT_MARK,
+                    payload={"aviso": clave},
                     processed_at=datetime.now(timezone.utc),
                 )
             )
@@ -489,9 +533,9 @@ async def _primera_alerta(db: AsyncSession, exc: PaymentRejectedForIntegrity) ->
         raise
     except Exception as error:
         logger.warning(
-            "mercadopago_integrity_alert_mark_failed",
+            "payment_alert_mark_failed",
             error_type=type(error).__name__,
-            **contexto.ids(),
+            store_id=store_id,
         )
     return True
 
@@ -534,7 +578,10 @@ class _LinkEsperado:
 
 
 def _validate_payment_link(
-    payment: Payment, payload: dict[str, Any], esperado: _LinkEsperado | None = None
+    payment: Payment,
+    payload: dict[str, Any],
+    contexto: _ContextoDelRechazo,
+    esperado: _LinkEsperado | None = None,
 ) -> None:
     """El pago es del link esperado (el VIGENTE si no se dice otro) y por su
     importe.
@@ -553,19 +600,35 @@ def _validate_payment_link(
     # (antes pasaba, fail-open; revision de perf/f4-pay, 2026-09-25). Sin
     # nonce (link de antes de la columna) se tolera como siempre.
     if link.link_ref and not external_reference:
-        raise RuntimeError("Mercado Pago no devolvio la referencia externa del link")
+        raise _rechazo_de_integridad(
+            "Mercado Pago no devolvio la referencia externa del link",
+            "sin_referencia",
+            contexto,
+        )
     if external_reference and external_reference != link.referencia:
-        raise RuntimeError("Mercado Pago devolvio una referencia externa inconsistente")
+        raise _rechazo_de_integridad(
+            "Mercado Pago devolvio una referencia externa inconsistente",
+            "referencia",
+            contexto,
+        )
 
     received_amount = data.get("transaction_amount")
     if received_amount is not None and Decimal(str(received_amount)).quantize(
         Decimal("0.01")
     ) != Decimal(str(link.importe)).quantize(Decimal("0.01")):
-        raise RuntimeError("El importe acreditado no coincide con la seña esperada")
+        raise _rechazo_de_integridad(
+            "El importe acreditado no coincide con la seña esperada",
+            "importe",
+            contexto,
+        )
 
     preference_id = str(data.get("preference_id") or "").strip()
     if preference_id and link.preferencia and preference_id != link.preferencia:
-        raise RuntimeError("La preferencia acreditada no coincide con la esperada")
+        raise _rechazo_de_integridad(
+            "La preferencia acreditada no coincide con la esperada",
+            "preferencia",
+            contexto,
+        )
 
 
 # Estados de un turno cuyo horario ya se solto: un pago que llega despues no
@@ -795,7 +858,10 @@ async def _resolver_link(
         # la adopcion a medias, y el webhook HTTP commitea tras
         # ``register_failure``.
         _validate_payment_link(
-            payment, payload, _LinkEsperado.retirado(payment, link.retirado)
+            payment,
+            payload,
+            _contexto_del_rechazo(store_id, payment, payload, payment_status),
+            _LinkEsperado.retirado(payment, link.retirado),
         )
         adopt_retired_link(db, payment, link.retirado)
         return None
@@ -979,7 +1045,11 @@ async def apply_mercadopago_webhook_payload(
     if resuelto is not None:
         return resuelto
 
-    _validate_payment_link(payment, payload)
+    _validate_payment_link(
+        payment,
+        payload,
+        _contexto_del_rechazo(store_id, payment, payload, payment_status),
+    )
 
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}

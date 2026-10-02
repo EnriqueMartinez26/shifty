@@ -48,6 +48,7 @@ from modules.payments.model import (
     WebhookInbox,
 )
 from modules.payments.processing import (
+    EVENT_PAYMENT_ALERT_MARK,
     PAGO_NO_VERIFICADO,
     alert_integrity_rejection,
     apply_mercadopago_webhook_payload,
@@ -951,6 +952,9 @@ async def outbox_stats(
         OutboxMessage,
         OutboxMessage.store_id == user.store_id,
         OutboxMessage.processed_at.is_not(None),
+        # La marca que deduplica una alerta a Sentry no es un evento que el
+        # outbox haya procesado (re-revision de la PR #104, S5).
+        OutboxMessage.event_type != EVENT_PAYMENT_ALERT_MARK,
     )
     return OutboxStatsResponse(
         pending=pending,

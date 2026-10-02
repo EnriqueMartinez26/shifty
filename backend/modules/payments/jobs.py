@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
@@ -57,7 +57,9 @@ from modules.payments.model import (
 )
 from modules.payments.processing import (
     PAGO_NO_VERIFICADO,
+    PaymentRejectedForIntegrity,
     alert_integrity_rejection,
+    alert_unexpected_payment_failure,
     apply_mercadopago_webhook_payload,
     enrich_mercadopago_webhook_payload,
 )
@@ -1930,29 +1932,37 @@ async def _expire_unpaid_appointments(
     vistos: set[str] = set()
     for _pagina in range(EXPIRE_MAX_PAGES):
         pagina = await _vencer_una_pagina(db, now, limit, vistos, limite)
+        # Despues del commit de CADA pagina (re-revision de la PR #104, S4):
+        # si la pagina siguiente falla, los cupos que esta ya libero no
+        # pueden quedar cacheados como ocupados.
+        await _invalidar_cupos(pagina.liberados)
         total.sumar(pagina)
         if not pagina.held:
             break
-    # El cupo vuelve a estar libre: la pagina publica no puede seguir
-    # mostrandolo ocupado cinco minutos mas. Redis caido no frena el job.
-    if total.liberados:
-        try:
-            cache = await get_availability_cache()
-            for store_id, starts_at in total.liberados:
-                await invalidate_availability(cache, store_id, starts_at)
-        except REDIS_UNAVAILABLE_ERRORS as exc:
-            # PV-22: solo el tipo; el texto de redis-py puede traer la URL
-            # de conexion con la clave.
-            logger.warning(
-                "availability_cache_invalidation_failed",
-                error_type=type(exc).__name__,
-            )
     return {
         "expired": total.expired,
         "rescued": total.rescued,
         "held": total.held,
         "inspected": total.inspected,
     }
+
+
+async def _invalidar_cupos(liberados: Sequence[tuple[str, datetime]]) -> None:
+    """El cupo vuelve a estar libre: la pagina publica no puede seguir
+    mostrandolo ocupado cinco minutos mas. Redis caido no frena el job."""
+    if not liberados:
+        return
+    try:
+        cache = await get_availability_cache()
+        for store_id, starts_at in liberados:
+            await invalidate_availability(cache, store_id, starts_at)
+    except REDIS_UNAVAILABLE_ERRORS as exc:
+        # PV-22: solo el tipo; el texto de redis-py puede traer la URL de
+        # conexion con la clave.
+        logger.warning(
+            "availability_cache_invalidation_failed",
+            error_type=type(exc).__name__,
+        )
 
 
 async def _vencer_una_pagina(
@@ -2021,8 +2031,8 @@ async def _vencer_o_rescatar(
     la relectura con ``SKIP LOCKED`` trajo sin que la fase A lo viera (vencio
     mientras tanto o entro en el ``limit``; revision de 3b977a9..6c84d46,
     #2), no se vence en esta corrida: pudo estar pagado; lo decide la
-    siguiente. Uno cuyo pago remoto no se pudo aplicar queda retenido
-    (``held``; ver ``_rescatar_o_retener``).
+    siguiente. Uno cuyo pago remoto aprobado no se pudo aplicar queda
+    retenido (``held``; ver ``_rescatar_o_retener``).
     """
     resultado = _Vencimiento(inspected=len(rows))
     for appointment, payment in rows:
@@ -2036,7 +2046,7 @@ async def _vencer_o_rescatar(
             # Ultimo chequeo antes de liberar el turno: si el cobro se acredito
             # y el webhook nunca llego, vencerlo perderia una reserva pagada.
             decision = await _rescatar_o_retener(
-                db, appointment.id, payment, remotos.get(payment.id)
+                db, appointment, payment, remotos.get(payment.id)
             )
             if decision == "rescatado":
                 resultado.rescued += 1
@@ -2064,13 +2074,16 @@ async def _vencer_o_rescatar(
     return resultado
 
 
+_Decision = Literal["rescatado", "retenido", "vencer"]
+
+
 async def _rescatar_o_retener(
     db: AsyncSession,
-    appointment_id: str,
+    appointment: Appointment,
     payment: Payment,
     remote: dict[str, Any] | None,
-) -> str:
-    """``rescatado``, ``retenido`` o ``vencer``, para el turno de este cobro.
+) -> _Decision:
+    """Que hacer con el turno de este cobro, segun lo que diga MP.
 
     Revision 4R de la PR #104 (CRITICO): el pago remoto se aplicaba sin
     aislamiento. Una ``RuntimeError`` de integridad (en produccion un aprobado
@@ -2078,31 +2091,63 @@ async def _rescatar_o_retener(
     ``oauth_user_id``) revertia el lote ENTERO antes del commit y, como ese
     turno es el mas viejo, encabezaba cada corrida: el vencimiento se frenaba
     para todas las tiendas. Ahora cada cobro va en su savepoint, como en la
-    conciliacion (AUD2-B2-11). Si falla, el turno NO se rescata NI se vence:
-    MP pudo haberlo cobrado y liberar el cupo perderia una reserva pagada.
-    Queda para una persona: un rechazo de integridad llega a Sentry una vez
-    por (pago de MP, motivo), este aprobado o no, porque el turno no se va a
-    liberar solo.
+    conciliacion (AUD2-B2-11). Si falla:
+
+    - un rechazo de integridad de un pago que MP da por APROBADO: ni se
+      rescata ni se vence (MP lo cobro; liberar el cupo perderia una reserva
+      pagada). Queda retenido para una persona y llega a Sentry una vez por
+      (pago de MP, motivo);
+    - uno de un pago NO aprobado: MP no cobro nada, asi que vence por el
+      grafo como cualquier otro (regla 3; re-revision de la PR #104, W3);
+    - cualquier otro error (deadlock, timeout, un bug): queda retenido para
+      la corrida siguiente y llega a Sentry una vez por (pago de MP, clase
+      de error) (re-revision, W1: antes no avisaba).
     """
-    store_id, payment_id = payment.store_id, payment.id
+    store_id, payment_id, appointment_id = (
+        payment.store_id,
+        payment.id,
+        appointment.id,
+    )
     try:
         async with db.begin_nested():
             rescatado = await _apply_remote_payment(db, payment, remote)
     except SoftTimeLimitExceeded:
         raise
+    except PaymentRejectedForIntegrity as exc:
+        if exc.contexto.aprobado:
+            _log_retenido(store_id, appointment_id, payment_id, exc)
+            await alert_integrity_rejection(db, exc)
+            return "retenido"
+        # El savepoint revertido dejo las dos instancias expiradas: se releen
+        # (bajo el lock del turno, que es de la transaccion externa) antes de
+        # pasarlas por el grafo; un acceso perezoso daria MissingGreenlet.
+        await db.refresh(appointment)
+        await db.refresh(payment)
+        return "vencer"
     except Exception as exc:
-        # Solo ids, leidos antes: el savepoint revertido deja las instancias
-        # expiradas y releerlas aca seria un acceso perezoso (MissingGreenlet).
-        logger.warning(
-            "expire_hold_left_for_review",
+        _log_retenido(store_id, appointment_id, payment_id, exc)
+        await alert_unexpected_payment_failure(
+            db,
+            exc,
             store_id=store_id,
-            appointment_id=appointment_id,
             payment_id=payment_id,
-            error_type=type(exc).__name__,
+            mp_payment_id=str((remote or {}).get("id") or ""),
         )
-        await alert_integrity_rejection(db, exc, incluir_no_aprobados=True)
         return "retenido"
     return "rescatado" if rescatado else "vencer"
+
+
+def _log_retenido(
+    store_id: str, appointment_id: str, payment_id: str, exc: Exception
+) -> None:
+    # Solo ids, leidos antes del savepoint: sus instancias quedaron expiradas.
+    logger.warning(
+        "expire_hold_left_for_review",
+        store_id=store_id,
+        appointment_id=appointment_id,
+        payment_id=payment_id,
+        error_type=type(exc).__name__,
+    )
 
 
 async def persist_gateway_refresh(

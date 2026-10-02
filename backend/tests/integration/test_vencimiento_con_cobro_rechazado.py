@@ -11,11 +11,13 @@ el mismo turno encabezaba cada corrida. Sintoma: un smoke test en produccion
 con un vendedor de prueba de MP (aprobado, ``live_mode = false``) frenaba
 para siempre el vencimiento de TODAS las tiendas.
 
-Ahora cada cobro va en su savepoint. El que falla no se rescata ni se vence
-(si MP lo cobro, liberar el cupo perderia una reserva pagada): queda para una
-persona, cuenta como ``held`` y, si MP lo dio por aprobado, llega a Sentry una
-vez por (pago de MP, motivo). La corrida sigue con la pagina siguiente para
-que los retenidos no tapen al resto.
+Ahora cada cobro va en su savepoint. Un aprobado que no pasa la integridad
+no se rescata ni se vence (MP lo cobro: liberar el cupo perderia una reserva
+pagada): queda para una persona, cuenta como ``held`` y llega a Sentry una vez
+por (pago de MP, motivo). Uno no aprobado vence por el grafo (regla 3). Un
+error inesperado retiene el turno y avisa una vez por (pago de MP, clase de
+error). La corrida sigue con la pagina siguiente para que los retenidos no
+tapen al resto.
 
 SQLite alcanza para el aislamiento y la paginacion; la version contra
 Postgres (savepoints con ``FOR UPDATE SKIP LOCKED`` y RLS) esta en
@@ -34,6 +36,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+import modules.payments.jobs as jobs
 import modules.payments.processing as processing
 import modules.payments.service as payments_service
 from core.config import Environment, settings
@@ -242,27 +245,154 @@ async def test_los_retenidos_no_tapan_a_los_que_siguen_en_la_cola(
 
 
 @pytest.mark.asyncio
-async def test_un_pendiente_de_prueba_tambien_queda_retenido_y_avisa(
-    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("estado", ["pending", "rejected"])
+async def test_un_pago_no_aprobado_que_no_pasa_la_integridad_vence_por_el_grafo(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    estado: str,
 ) -> None:
-    """Retenido aunque MP no lo de por aprobado: el turno no se libera solo,
-    asi que una persona se entera por Sentry (una vez)."""
+    """Re-revision de la PR #104 (W3): si MP NO lo da por aprobado, nadie
+    cobro nada; retenerlo bloqueaba el cupo para siempre. Vence por el grafo
+    como un cobro sin pago (regla 3), sin alerta."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _stub_mercadopago(monkeypatch, remote_payment=None)
-    retenida = await _retencion_vencida(
-        client, test_session, "venc-pendiente", vencio_hace=timedelta(hours=1)
+    retencion = await _retencion_vencida(
+        client,
+        test_session,
+        f"venc-no-aprobado-{estado}",
+        vencio_hace=timedelta(hours=1),
     )
-    remoto = {**_aprobado_de_prueba(retenida), "status": "pending"}
-    _mp_por_turno(monkeypatch, {retenida.turno: remoto})
+    remoto = {**_aprobado_de_prueba(retencion), "status": estado}
+    _mp_por_turno(monkeypatch, {retencion.turno: remoto})
     avisos = _sentry(monkeypatch)
     monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
 
     resultado = await expire_unpaid_appointments(test_session)
-    await expire_unpaid_appointments(test_session)
+
+    assert (resultado["held"], resultado["expired"]) == (0, 1), resultado
+    assert await _estado(test_session, retencion) == (
+        AppointmentStatus.EXPIRED.value,
+        PaymentStatus.EXPIRED.value,
+    )
+    assert avisos == []
+
+
+@pytest.mark.asyncio
+async def test_un_aprobado_con_otro_importe_queda_retenido_y_avisa(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-revision (W1): los controles de integridad que levantaban un
+    ``RuntimeError`` suelto (importe, referencia, moneda, metadata,
+    preferencia) tambien avisan, con su codigo."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    retencion = await _retencion_vencida(
+        client, test_session, "venc-otro-importe", vencio_hace=timedelta(hours=1)
+    )
+    remoto = {
+        **_aprobado_de_prueba(retencion),
+        "live_mode": True,
+        "transaction_amount": retencion.importe / 2,
+    }
+    _mp_por_turno(monkeypatch, {retencion.turno: remoto})
+    avisos = _sentry(monkeypatch)
+
+    resultado = await expire_unpaid_appointments(test_session)
 
     assert resultado["held"] == 1, resultado
-    assert await _estado(test_session, retenida) == (
+    assert await _estado(test_session, retencion) == (
         AppointmentStatus.PENDING_PAYMENT.value,
         PaymentStatus.PENDING.value,
     )
-    assert [a["motivo"] for a in avisos] == ["modo_prueba"], avisos
+    assert [a["motivo"] for a in avisos] == ["importe"], avisos
+
+
+@pytest.mark.asyncio
+async def test_un_error_inesperado_retiene_el_turno_y_avisa_una_vez(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-revision (W1): un error que no es de integridad (un bug, un
+    deadlock) retiene el turno y la tarea termina bien, asi que el monitor de
+    la tarea no lo ve: tiene que llegar a Sentry, una vez por (pago de MP,
+    clase de error), aunque se repita en cada corrida."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    retencion = await _retencion_vencida(
+        client, test_session, "venc-error-inesperado", vencio_hace=timedelta(hours=1)
+    )
+    _mp_por_turno(
+        monkeypatch,
+        {retencion.turno: {**_aprobado_de_prueba(retencion), "live_mode": True}},
+    )
+    avisos = _sentry(monkeypatch)
+
+    async def explota(*_args: Any, **_kwargs: Any) -> bool:
+        raise ValueError("bug en la aplicacion del pago")
+
+    monkeypatch.setattr(jobs, "apply_mercadopago_webhook_payload", explota)
+
+    primera = await expire_unpaid_appointments(test_session)
+    segunda = await expire_unpaid_appointments(test_session)
+
+    assert (primera["held"], segunda["held"]) == (1, 1), (primera, segunda)
+    assert await _estado(test_session, retencion) == (
+        AppointmentStatus.PENDING_PAYMENT.value,
+        PaymentStatus.PENDING.value,
+    )
+    assert len(avisos) == 1, avisos
+    assert avisos[0]["error_type"] == "ValueError"
+    assert avisos[0]["payment_id"] == retencion.cobro
+    assert avisos[0]["mp_payment_id"] == f"mp-{retencion.turno}"
+
+
+@pytest.mark.asyncio
+async def test_si_una_pagina_siguiente_falla_los_cupos_ya_liberados_se_invalidan(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-revision (S4): la invalidacion del cache corria una sola vez al
+    final; si la pagina 2 fallaba, los cupos que la pagina 1 ya habia
+    liberado (y commiteado) seguian cacheados como ocupados."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    pagada = await _retencion_vencida(
+        client, test_session, "venc-cache-a", vencio_hace=timedelta(hours=2)
+    )
+    impaga = await _retencion_vencida(
+        client, test_session, "venc-cache-b", vencio_hace=timedelta(minutes=5)
+    )
+    _mp_por_turno(monkeypatch, {pagada.turno: _aprobado_de_prueba(pagada)})
+    _sentry(monkeypatch)
+    monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
+    invalidados: list[str] = []
+
+    async def cache() -> object:
+        return object()
+
+    async def invalidar(_cache: object, store_id: str, _starts_at: Any) -> None:
+        invalidados.append(store_id)
+
+    monkeypatch.setattr(jobs, "get_availability_cache", cache)
+    monkeypatch.setattr(jobs, "invalidate_availability", invalidar)
+    pagina_real = jobs._vencer_una_pagina
+    paginas: list[int] = []
+
+    async def pagina_que_falla_la_segunda(*args: Any, **kwargs: Any) -> Any:
+        paginas.append(1)
+        if len(paginas) == 2:
+            raise RuntimeError("la base se cayo en la pagina 2")
+        return await pagina_real(*args, **kwargs)
+
+    monkeypatch.setattr(jobs, "_vencer_una_pagina", pagina_que_falla_la_segunda)
+
+    with pytest.raises(RuntimeError, match="pagina 2"):
+        await expire_unpaid_appointments(test_session)
+
+    await test_session.rollback()
+    assert (await _estado(test_session, impaga))[0] == AppointmentStatus.EXPIRED.value
+    store_impaga = (
+        await test_session.execute(
+            select(Appointment.store_id).where(Appointment.id == impaga.turno)
+        )
+    ).scalar_one()
+    assert invalidados == [store_impaga], invalidados

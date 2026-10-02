@@ -217,6 +217,15 @@ Una instrucción en lenguaje natural no es una garantía.
    - el job de retenciones vencidas (`payments/jobs.py`, toma los cobros de
      `LIVE_CHARGE_PAYMENT_STATUSES` y los vence por el grafo; sin publicar:
      el link se creó con `expiration_date_to` = la retención y ya venció).
+     Antes le pregunta a MP: un pago aprobado lo rescata; uno NO aprobado
+     vence aunque no pase la integridad (MP no cobró nada). Uno aprobado que
+     no pasa la integridad (regla 7) queda RETENIDO (`held`): ni se rescata
+     ni se vence, porque MP lo cobró y liberar el cupo perdería la reserva.
+     Espera a una persona, que lo suelta con `release_pending` (o lo
+     cancela) después de resolver el pago en MP; mientras tanto el job lo
+     vuelve a consultar en cada corrida. Un error inesperado al aplicar el
+     pago también lo retiene, hasta la corrida siguiente
+     (`_rescatar_o_retener`, `test_vencimiento_con_cobro_rechazado.py`).
    El cliente no lo cancela ni lo reprograma
    (`client_cancel_denial`/`client_reschedule_denial`, 409
    `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), y un turno terminal no se
@@ -267,12 +276,15 @@ Una instrucción en lenguaje natural no es una garantía.
    producción una tienda sin `oauth_user_id` no acredita ningún aprobado
    (por eso, en producción, el callback de OAuth no guarda un token sin
    `user_id`). En producción un pago con `live_mode` distinto de `true` no
-   se aplica. Un aprobado rechazado por integridad avisa a Sentry una vez
-   por pago de MP y motivo (`processing.alert_integrity_rejection`). El job
-   de retenciones vencidas aplica cada pago remoto en su savepoint: el que
-   falla no se rescata ni se vence (queda para una persona y avisa, aprobado
-   o no) y la corrida sigue con la página siguiente (`EXPIRE_MAX_PAGES`)
-   (`test_webhook_sin_confiar_en_el_cuerpo.py`,
+   se aplica. Todo rechazo de integridad es un `PaymentRejectedForIntegrity`
+   con su código, y uno de un aprobado avisa a Sentry una vez por pago de MP
+   y motivo (`processing.alert_integrity_rejection`). El job de retenciones
+   vencidas aplica cada pago remoto en su savepoint (regla 3): un aprobado
+   que falla queda retenido y avisa; uno no aprobado vence; cualquier otro
+   error retiene el turno y avisa una vez por pago de MP y clase de error
+   (`alert_unexpected_payment_failure`). La corrida sigue con la página
+   siguiente (`EXPIRE_MAX_PAGES`) e invalida el caché después de cada
+   página (`test_webhook_sin_confiar_en_el_cuerpo.py`,
    `test_vencimiento_con_cobro_rechazado.py`,
    `test_oauth_sin_cuenta_en_produccion.py`, 2026-10-02). La integridad
    exige la `external_reference` del link
