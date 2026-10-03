@@ -15,7 +15,8 @@ de un link retirado del mismo cobro:
   normal (aviso normal al dueno) y el link vigente se vence en la misma
   transaccion; el cobro pasa a ser el del link pagado;
 - cobro ya acreditado: pago duplicado, camino de alerta ("devolvelo desde
-  Mercado Pago"), una vez por pago de MP;
+  Mercado Pago"), una vez por pago de MP, y el webhook queda procesado (sin
+  reintentos ni dead letter, igual que por el link vigente);
 - importe distinto: camino de alerta.
 La conciliacion tambien busca en MP por las referencias de los links
 retirados del cobro en los ultimos ``RETIRED_LINK_SEARCH_DAYS`` dias.
@@ -25,21 +26,32 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import modules.payments.processing as processing
 import modules.payments.service as payments_service
 from core.config import settings
 from modules.notifications.model import NotificationType
-from modules.payments.jobs import reconcile_pending_payments
+from modules.payments.jobs import (
+    process_webhook_inbox_batch,
+    reconcile_pending_payments,
+)
 from modules.payments.links import (
     RETIRED_LINK_SEARCH_DAYS,
     retired_link_references,
 )
-from modules.payments.model import OutboxMessage, PaymentLinkHistory, PaymentStatus
+from modules.payments.model import (
+    OutboxMessage,
+    Payment,
+    PaymentLinkHistory,
+    PaymentStatus,
+    WebhookInbox,
+)
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from tests.integration.test_cancelar_desde_el_panel_vence_el_cobro import _cobro
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -151,7 +163,9 @@ async def test_un_approved_de_un_link_retirado_con_el_cobro_pago_es_duplicado(
         _pago_de_mp(cobro, referencia=mp.referencias[vieja], externo="mp-viejo-1"),
     )
 
-    assert aplicado is False
+    # Re-revision de la PR #112 (hallazgo 3): procesado, como el mismo
+    # duplicado por el link vigente; el aviso ya se deduplica por pago de MP.
+    assert aplicado is True
     cobro = await _cobro(test_session, turno)
     assert (cobro.status, cobro.preference_id, cobro.external_payment_id) == (
         PaymentStatus.APPROVED.value,
@@ -166,6 +180,94 @@ async def test_un_approved_de_un_link_retirado_con_el_cobro_pago_es_duplicado(
     assert len(alertas) == 1
     assert alertas[0].payload["duplicado"] is True
     assert alertas[0].payload["mp_payment_id"] == "mp-viejo-1"
+
+
+async def _acreditado_por_el_link_nuevo(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    slug: str,
+) -> tuple[str, Payment, str]:
+    """Cobro regenerado y acreditado por el link VIGENTE (``mp-nuevo``).
+    Devuelve el turno, el cobro y la referencia del link retirado."""
+    turno, mp, vieja, nueva = await _regenerado(client, test_session, monkeypatch, slug)
+    cobro = await _cobro(test_session, turno)
+    assert await _aplicar(
+        test_session,
+        cobro,
+        _pago_de_mp(cobro, referencia=mp.referencias[nueva], externo="mp-nuevo"),
+    )
+    return turno, await _cobro(test_session, turno), mp.referencias[vieja]
+
+
+@pytest.mark.asyncio
+async def test_el_duplicado_de_un_link_retirado_no_queda_como_dead_letter(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-revision de la PR #112 (hallazgo 3). Antes devolvia False: el inbox
+    lo reintentaba 10 veces y terminaba como dead letter con la alerta
+    critica, por un duplicado que ya se le habia avisado al dueno."""
+    turno, cobro, referencia_vieja = await _acreditado_por_el_link_nuevo(
+        client, test_session, monkeypatch, "retirado-dup-inbox"
+    )
+    cobro_id, store_id = cobro.id, cobro.store_id
+    remoto = _pago_de_mp(cobro, referencia=referencia_vieja, externo="mp-viejo-3")
+    monkeypatch.setattr(
+        processing,
+        "fetch_mercadopago_payment",
+        AsyncMock(return_value=dict(remoto["data"])),
+    )
+    test_session.add(
+        WebhookInbox(
+            store_id=store_id,
+            provider="mercadopago",
+            event_id="mercadopago:evt-retirado-dup",
+            event_type="payment",
+            payload={"type": "payment", "data": {"id": "mp-viejo-3"}},
+        )
+    )
+    await test_session.commit()
+
+    stats = await process_webhook_inbox_batch(test_session)
+
+    assert stats == {"processed": 1, "failed": 0, "inspected": 1}, stats
+    test_session.expire_all()
+    fila = (await test_session.execute(select(WebhookInbox))).scalar_one()
+    assert fila.processed_at is not None
+    assert (fila.attempts, fila.error) == (0, None)
+    alertas = [
+        e
+        for e in await _eventos(test_session, cobro_id)
+        if e.event_type == NotificationType.PAYMENT_ON_REPLACED_LINK.value
+    ]
+    assert [a.payload["aviso"] for a in alertas] == ["pago:mp-viejo-3"]
+    final = await _cobro(test_session, turno)
+    assert (final.status, final.external_payment_id) == ("approved", "mp-nuevo")
+
+
+@pytest.mark.asyncio
+async def test_el_contracargo_de_otro_pago_por_un_link_retirado_avisa(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-revision de la PR #112 (hallazgo 1), por el link RETIRADO: el
+    contracargo de un pago que no asento el cobro no se aplica, pero avisa."""
+    monkeypatch.setattr(processing, "report_exception", lambda *_a, **_k: None)
+    turno, cobro, referencia_vieja = await _acreditado_por_el_link_nuevo(
+        client, test_session, monkeypatch, "retirado-contracargo"
+    )
+    payload = _pago_de_mp(cobro, referencia=referencia_vieja, externo="mp-viejo-4")
+    payload["status"] = payload["data"]["status"] = "charged_back"
+
+    assert await _aplicar(test_session, cobro, payload) is True
+
+    avisos = [
+        e
+        for e in await _eventos(test_session, cobro.id)
+        if e.event_type == "payment.reversal_of_other_payment"
+    ]
+    assert [a.payload["aviso"] for a in avisos] == ["reverso:mp-viejo-4:charged_back"]
+    final = await _cobro(test_session, turno)
+    assert (final.status, final.external_payment_id) == ("approved", "mp-nuevo")
 
 
 @pytest.mark.asyncio

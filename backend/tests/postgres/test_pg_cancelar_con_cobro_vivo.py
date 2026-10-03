@@ -1218,7 +1218,10 @@ async def test_pago_del_link_retirado_contra_pago_del_link_vigente(
     for i, turno in enumerate(turnos):
         viejo, nuevo = respuestas[2 * i], respuestas[2 * i + 1]
         aplicados = [r.json().get("data", r.json())["applied"] for r in (viejo, nuevo)]
-        assert sorted(aplicados) == [False, True], (turno, aplicados)
+        # Los dos quedan procesados: el duplicado ya avisado no se reintenta
+        # (re-revision de la PR #112, hallazgo 3). Que uno solo se aplico lo
+        # fijan el cobro acreditado y el unico ``payment.approved``.
+        assert aplicados == [True, True], (turno, aplicados)
         final = finales[turno]
         assert final["pago"] == "approved", final
         aprobados = [
