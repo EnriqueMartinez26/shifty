@@ -76,8 +76,15 @@ jobs:
           # SECURITY_UPGRADE_STAMP: distinto en cada corrida, invalida la capa
           # de apk/apt upgrade de los tres Dockerfiles. Sin el, la cache gha
           # reusaba esa capa y la imagen no recibia parches (D-20260930-23).
+          # VITE_SUPPORT_WHATSAPP, VITE_CONTACT_EMAIL, VITE_LEGAL_RESPONSABLES:
+          # contacto de Shifty, solo del front. Van en variables del repo y no
+          # en el codigo porque el repo es publico; vacias, el front omite esa
+          # linea (docs/DEPLOY_RUNBOOK.md, seccion 2).
           build-args: |
             VITE_SENTRY_DSN=${{ vars.VITE_SENTRY_DSN }}
+            VITE_SUPPORT_WHATSAPP=${{ vars.VITE_SUPPORT_WHATSAPP }}
+            VITE_CONTACT_EMAIL=${{ vars.VITE_CONTACT_EMAIL }}
+            VITE_LEGAL_RESPONSABLES=${{ vars.VITE_LEGAL_RESPONSABLES }}
             SECURITY_UPGRADE_STAMP=${{ github.run_id }}
           # Sin attestation de provenance: agrega un manifiesto SIN tag que
           # cuelga de la imagen, y la limpieza de versiones sin tag (job

@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Navigate, Route, Routes, useLocation } from 'react-router'
 
+import { getContactEnv } from '@shared/utils/env'
+
 import LegalPage from './Legal'
 
 const CurrentPath = () => <span data-testid="path">{useLocation().pathname}</span>
@@ -84,5 +86,82 @@ describe('LegalPage', () => {
       screen.getByRole('heading', { level: 1, name: 'Página no encontrada' })
     ).toBeInTheDocument()
     expect(screen.queryByText('Términos y Condiciones')).toBeNull()
+  })
+})
+
+// 2026-10-03: Ley 25.326 art. 6 pide identidad y contacto del responsable y la
+// Res. 104/2005 un telefono o email de contacto. El repo es publico: los datos
+// reales llegan por configuracion del build (VITE_LEGAL_RESPONSABLES,
+// VITE_CONTACT_EMAIL, VITE_SUPPORT_WHATSAPP). Aca, valores de prueba.
+describe('LegalPage: responsables y contacto', () => {
+  const bloque = () => screen.queryByRole('region', { name: 'Responsables y contacto' })
+
+  afterEach(() => {
+    jest.mocked(getContactEnv).mockReturnValue({})
+  })
+
+  it.each([['/legal/terminos'], ['/legal/privacidad']])(
+    'con todo configurado %s muestra responsables, email y WhatsApp',
+    (ruta) => {
+      jest.mocked(getContactEnv).mockReturnValue({
+        legalResponsables: 'Persona Responsable Uno',
+        contactEmail: 'responsable@example.com',
+        supportWhatsApp: '5493510000000'
+      })
+      renderAt([ruta])
+
+      const region = bloque()
+      expect(region).not.toBeNull()
+      expect(region).toHaveTextContent('Persona Responsable Uno')
+      expect(screen.getByRole('link', { name: 'responsable@example.com' })).toHaveAttribute(
+        'href',
+        'mailto:responsable@example.com'
+      )
+      expect(screen.getByRole('link', { name: '+5493510000000' })).toHaveAttribute(
+        'href',
+        'https://wa.me/5493510000000'
+      )
+    }
+  )
+
+  it('con una parte configurada muestra solo esa linea, sin texto de relleno', () => {
+    jest.mocked(getContactEnv).mockReturnValue({ contactEmail: 'responsable@example.com' })
+    renderAt(['/legal/privacidad'])
+
+    const region = bloque()
+    expect(region).not.toBeNull()
+    expect(region).toHaveTextContent('responsable@example.com')
+    expect(region).not.toHaveTextContent(/Responsables:|WhatsApp/)
+    expect(region).not.toHaveTextContent(/pendiente|COMPLETAR/i)
+  })
+
+  it('sin nada configurado (o con placeholders) no hay bloque ni texto de relleno', () => {
+    jest.mocked(getContactEnv).mockReturnValue({
+      legalResponsables: '[[COMPLETAR]]',
+      contactEmail: 'pendiente',
+      supportWhatsApp: ''
+    })
+    renderAt(['/legal/terminos'])
+
+    expect(bloque()).toBeNull()
+    expect(screen.queryByText(/COMPLETAR|\bpendiente\b/i)).toBeNull()
+  })
+
+  it('las consultas sobre los terminos van al email configurado', () => {
+    jest.mocked(getContactEnv).mockReturnValue({ contactEmail: 'responsable@example.com' })
+    renderAt(['/legal/terminos'])
+
+    expect(
+      screen.getByText(
+        /^Para consultas sobre estos términos, escribinos a responsable@example\.com/
+      )
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/canales de contacto informados por la plataforma/)).toBeNull()
+  })
+
+  it('sin email, las consultas remiten a los canales de la plataforma como antes', () => {
+    renderAt(['/legal/terminos'])
+
+    expect(screen.getByText(/canales de contacto informados por la plataforma/)).toBeInTheDocument()
   })
 })

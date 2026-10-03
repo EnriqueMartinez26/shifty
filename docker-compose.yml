@@ -438,6 +438,12 @@ services:
         # Vacio = Sentry apagado y /sentry-tunnel en 404. Prenderlo es setear
         # la variable y reconstruir la imagen (ver frontend/sentry-tunnel.sh).
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        # Contacto de Shifty para un build local; en produccion la imagen sale
+        # de CI con las variables del repo (docs/DEPLOY_RUNBOOK.md, seccion 2).
+        # Vacio = el front omite esa linea.
+        VITE_SUPPORT_WHATSAPP: ${VITE_SUPPORT_WHATSAPP:-}
+        VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-}
+        VITE_LEGAL_RESPONSABLES: ${VITE_LEGAL_RESPONSABLES:-}
     container_name: ${COMPOSE_PROJECT_NAME:-shifty}_frontend
     restart: always
     logging: *logging

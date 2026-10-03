@@ -2,6 +2,8 @@ import React from 'react'
 
 import { Link, useParams } from 'react-router'
 
+import { getContactInfo, type ContactInfo } from '@shared/utils/contactInfo'
+
 import { colors2000s } from '../../theme/colors'
 import { LegalLayout } from '../components/organisms/LegalLayout'
 import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
@@ -12,6 +14,16 @@ interface LegalSection {
   title: string
   paragraphs: string[]
 }
+
+// Sin email configurado queda el texto generico; con uno, el email (Res.
+// 104/2005: telefono o email de contacto).
+const GENERIC_TERMS_CONTACT =
+  'Para consultas sobre estos términos, escribinos por los canales de contacto informados por la plataforma.'
+
+const contactParagraph = (paragraph: string, email: string | null): string =>
+  paragraph === GENERIC_TERMS_CONTACT && email
+    ? `Para consultas sobre estos términos, escribinos a ${email}.`
+    : paragraph
 
 const TERMS_SECTIONS: LegalSection[] = [
   {
@@ -69,7 +81,7 @@ const TERMS_SECTIONS: LegalSection[] = [
     title: '8. Cambios y contacto',
     paragraphs: [
       'Shifty puede modificar estos términos. Los cambios relevantes se comunican por los canales habituales con antelación razonable.',
-      'Para consultas sobre estos términos, escribinos por los canales de contacto informados por la plataforma.'
+      GENERIC_TERMS_CONTACT
     ]
   }
 ]
@@ -133,6 +145,56 @@ const DOCUMENTS: Record<LegalDocument, { title: string; intro: string; sections:
     }
   }
 
+const contactLineStyle = { color: colors2000s.text.primary }
+const contactLinkStyle = { color: colors2000s.orange.accent }
+
+/**
+ * Identidad y contacto del responsable (Ley 25.326, art. 6) desde la
+ * configuracion del build: el repo es publico y los datos reales no van al
+ * codigo. Cada linea aparece solo si su dato es valido; sin ninguno, no hay
+ * bloque. Domicilio y CUIT quedan afuera a proposito por ahora.
+ */
+const LegalContactBlock: React.FC<{ contact: ContactInfo }> = ({ contact }) => {
+  const { responsables, email, whatsAppNumber } = contact
+  if (!responsables && !email && !whatsAppNumber) return null
+  return (
+    <section aria-labelledby="legal-contacto" className="mb-8">
+      <h2
+        id="legal-contacto"
+        className="text-base font-black uppercase tracking-widest mb-3"
+        style={{ color: colors2000s.text.primary }}
+      >
+        Responsables y contacto
+      </h2>
+      <ul className="text-base leading-7 space-y-1">
+        {responsables && <li style={contactLineStyle}>Responsables: {responsables}</li>}
+        {email && (
+          <li style={contactLineStyle}>
+            Email:{' '}
+            <a href={`mailto:${email}`} className="font-bold underline" style={contactLinkStyle}>
+              {email}
+            </a>
+          </li>
+        )}
+        {whatsAppNumber && (
+          <li style={contactLineStyle}>
+            WhatsApp:{' '}
+            <a
+              href={`https://wa.me/${whatsAppNumber}`}
+              target="_blank"
+              rel="noreferrer"
+              className="font-bold underline"
+              style={contactLinkStyle}
+            >
+              +{whatsAppNumber}
+            </a>
+          </li>
+        )}
+      </ul>
+    </section>
+  )
+}
+
 const isLegalDocument = (value: string | undefined): value is LegalDocument =>
   value === 'terminos' || value === 'privacidad'
 
@@ -144,6 +206,7 @@ const LegalPage: React.FC = () => {
 
   const key = documentParam
   const doc = DOCUMENTS[key]
+  const contact = getContactInfo()
 
   return (
     <LegalLayout title={doc.title} intro={doc.intro}>
@@ -161,11 +224,13 @@ const LegalPage: React.FC = () => {
               className="text-base leading-7 mb-3"
               style={{ color: colors2000s.text.primary }}
             >
-              {paragraph}
+              {contactParagraph(paragraph, contact.email)}
             </p>
           ))}
         </section>
       ))}
+
+      <LegalContactBlock contact={contact} />
 
       <div
         className="mt-10 pt-6 flex flex-wrap gap-4"
