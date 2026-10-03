@@ -190,25 +190,35 @@ Una instrucción en lenguaje natural no es una garantía.
    es `pending_payment` o un `Payment` en `pending` o `rejected` (MP deja
    reintentar sobre el mismo link), p. ej. el link que el panel genera sobre
    un confirmado (`LIVE_CHARGE_PAYMENT_STATUSES` en
-   `modules/payments/model.py`; en SQL, `live_charge_of` en
+   `modules/payments/model.py`; en SQL, `live_charge_provider_of` en
    `modules/payments/repository.py`). El camino compartido que lo vence es
    `payments/service.py::expire_live_charge` (todos menos el job de
-   retenciones, que vence por el grafo sin publicar; ver abajo): pago a `expired` por la
-   entidad y `payment.preference.expire` al outbox en la misma transacción
-   (salvo un link placeholder, que no existe en MP), con el turno lockeado
-   antes que el pago; el link de MP lo anula después el outbox. Todos los
-   caminos que sueltan un turno (propuesta por Mateo, adoptada por el dueño el
+   retenciones, que vence por el grafo sin publicar; ver abajo): pago a
+   `expired` por la entidad y `payment.preference.expire` al outbox en la
+   misma transacción (salvo un link placeholder, que no existe en MP), con el
+   turno lockeado antes que el pago; el link de MP lo anula después el
+   outbox. Un cobro de `provider = "manual"` (la seña por WhatsApp, ver
+   "Una seña obligatoria se cobra por Mercado Pago o por WhatsApp" más abajo)
+   no tiene link ni se le consulta nada a MP: en todos estos caminos vence
+   directo por el grafo, sin `payment.preference.expire`. Todos los caminos
+   que sueltan un turno (propuesta por Mateo, adoptada por el dueño el
    2026-09-25, D-20260925-02, y revisión de perf/f4-pay):
    - cancelar desde el panel (`AppointmentService.cancel`, cualquier
      personal; un turno ya cancelado es 409 `APPOINTMENT_ALREADY_CANCELLED`;
      cancelar no toca un pago acreditado);
    - reprogramar desde el panel (`reschedule`) un turno con link del panel:
      vence el link y el turno nuevo nace sin cobro. Un `pending_payment`
-     (seña REQUERIDA pendiente) no se reprograma: 409
+     (seña REQUERIDA pendiente, por MP o por WhatsApp) no se reprograma: 409
      `DEPOSIT_PENDING_RESCHEDULE_DENIED` bajo el lock del turno y antes de
      tocar nada, la seña nunca se pierde; se cobra y después se mueve, o se
      cancela (opción A, propuesta por Mateo, adoptada por el dueño el 2026-09-25,
-     D-20260925-03; `guards.reject_reschedule_with_pending_deposit`);
+     D-20260925-03; `guards.reject_reschedule_with_pending_deposit`). Por
+     WhatsApp vale igual (elección técnica del coordinador, 2026-10-03): el
+     personal registra el pago en Cobros y después lo mueve; sin pagar la
+     mueve el cliente (abajo). Tampoco se confirma con "Confirmar": `PATCH
+     /appointments/{id}/confirm` sobre un `pending_payment` con cobro vivo es
+     409 `DEPOSIT_PENDING_CONFIRM_DENIED` (ningún turno confirmado queda con
+     un cobro vivo; la seña se registra con `manual-confirm`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);
@@ -228,11 +238,20 @@ Una instrucción en lenguaje natural no es una garantía.
      (`_rescatar_o_retener`, `test_vencimiento_con_cobro_rechazado.py`).
    El cliente no lo cancela ni lo reprograma
    (`client_cancel_denial`/`client_reschedule_denial`, 409
-   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), y un turno terminal no se
-   reprograma desde ningún lado (409 `APPOINTMENT_NOT_ACTIVE`). El link del
-   panel y la confirmación manual lockean el turno y rechazan uno soltado
-   (`cancelled`/`expired`, `RELEASED_APPOINTMENT_STATUSES`: 409
-   `APPOINTMENT_NOT_PAYABLE`); un `completed` o `absent` se sigue cobrando.
+   `PAYMENT_APPOINTMENT_REQUIRES_RELEASE`), salvo una seña por WhatsApp
+   pendiente (propuesta del coordinador, aceptada por Mateo, 2026-10-03): la
+   regla existe por la carrera con MP, y por WhatsApp no pasa plata por la
+   plataforma. Cancelar vence ese cobro por el grafo; reprogramar lo vence y
+   el turno nuevo nace `pending_payment` con un cobro `manual` del mismo
+   importe y snapshot, y el plazo recalculado contra el horario nuevo
+   (`payments/service.py::carry_manual_deposit`; el dueño recibe el aviso
+   con el plazo nuevo). Un turno terminal no se reprograma desde ningún lado
+   (409 `APPOINTMENT_NOT_ACTIVE`). El link del panel y la confirmación manual
+   lockean el turno y rechazan uno soltado (`RELEASED_APPOINTMENT_STATUSES`:
+   `cancelled` es 409 `APPOINTMENT_NOT_PAYABLE`; en la confirmación manual
+   un `expired` es 409 `APPOINTMENT_HOLD_EXPIRED`, que le dice al personal
+   que agende un turno nuevo y registre el pago ahí); un `completed` o
+   `absent` se sigue cobrando.
    Regenerar el link de un cobro `expired` sella un `preference_id` nuevo y
    lo reabre con `Payment.reopen_for_panel_link` (único llamador el link del
    panel, bajo el lock del turno; `ALLOWED_PAYMENT_TRANSITIONS` no tiene
@@ -246,7 +265,8 @@ Una instrucción en lenguaje natural no es una garantía.
    `test_turnos_terminales_no_reviven.py`,
    `test_link_del_panel_solo_turnos_vivos.py`,
    `test_confirmacion_manual_solo_turnos_vivos.py`,
-   `test_pg_cancelar_con_cobro_vivo.py`)
+   `test_pg_cancelar_con_cobro_vivo.py`, `test_sena_por_whatsapp_regla_3.py`,
+   `test_pg_cancelar_sena_por_whatsapp.py`)
 4. **Lock pesimista antes de cualquier transición o reserva.**
    `lock_staff_row` / `lock_by_public_id` (`SELECT ... FOR UPDATE`) antes
    de leer disponibilidad. Prohibido "verificar y luego actuar" sin lock.
@@ -571,14 +591,32 @@ Una instrucción en lenguaje natural no es una garantía.
   (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
   Configurarla exige un canal: MP conectado con el flag `payments`, o un
   WhatsApp de la tienda que `core/whatsapp_phone.py` lea igual que el front
-  (`whatsAppPhone.ts`); sin canal es 422 `DEPOSIT_CHANNEL_REQUIRED`, y reservar
-  sin canal es 409 `DEPOSIT_CHANNEL_UNAVAILABLE` antes de escribir nada. Por
-  WhatsApp el turno nace `pending_payment` con la misma retención que MP y un
-  `Payment` `pending` de `provider = "manual"` con link placeholder: el job de
-  retenciones lo vence por el grafo sin consultar a MP, la conciliación no lo
-  toca y un link del panel lo pasa a `mercadopago`. `manual-confirm` no pide el
-  flag `payments` (no es de MP) y publica `appointment.confirmed` en su
-  transacción si confirma el turno. (`test_sena_por_mp_o_whatsapp.py`,
+  (`whatsAppPhone.ts`; los casos de los dos viven en
+  `whatsAppPhone.cases.json`, con NBSP, espacio fino y BOM); sin canal es 422
+  `DEPOSIT_CHANNEL_REQUIRED`, y reservar
+  sin canal es 409 `DEPOSIT_CHANNEL_UNAVAILABLE` antes de escribir nada (con
+  un warning `deposit_channel_unavailable` por tienda y hora, y un evento a
+  Sentry por tienda). "MP conectado" es un solo predicado,
+  `payments/service.py::gateway_has_usable_token` (token que se descifra; no
+  el `"pending"` de un OAuth a medias), el mismo de la preferencia. Perder el
+  último canal con servicios de seña obligatoria (borrar o romper el
+  WhatsApp, apagar los cobros, desconectar MP) no se bloquea: avisa al dueño
+  por el panel y por mail (`warn_if_deposit_channel_lost`, evento
+  `store.deposit_channel_lost`). Por WhatsApp el turno nace `pending_payment`
+  retenido hasta 2 h antes del turno, con un piso de 30 minutos y nunca
+  después del inicio (`whatsapp_hold_deadline`, decisión de Mateo,
+  2026-10-03; MP sigue en `PAYMENT_HOLD_MINUTES`), y un `Payment` `pending`
+  de `provider = "manual"` con link placeholder. La respuesta del alta lleva
+  `deposit_channel` y `deposit_deadline` (aditivos), y el plazo sale igual en
+  la pantalla de éxito, en "reserva registrada" y en el aviso al dueño. El job
+  de retenciones lo vence por el grafo sin consultar a MP y avisa al dueño
+  (`appointment.deposit_lapsed`); la conciliación no lo toca y un link del
+  panel lo pasa a `mercadopago`. `manual-confirm` y el `refund` de un cobro
+  manual no piden el flag `payments` (no son de MP); `manual-confirm` publica
+  `appointment.confirmed` en su transacción si confirma un turno que no
+  empezó. Un `approved` de MP sobre una seña ya registrada a mano avisa una
+  vez por pago de MP como pago duplicado. Cancelar y reprogramar: regla 3.
+  (`test_sena_por_mp_o_whatsapp.py`, `test_sena_por_whatsapp_regla_3.py`,
   `test_pg_sena_por_whatsapp.py`)
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
@@ -719,15 +757,16 @@ Una instrucción en lenguaje natural no es una garantía.
 ### Tamaño y forma
 
 29. **Función de más de 80 líneas necesita justificación en el PR.** En el
-    backend quedan 11 al 2026-09-25 (AST, `end_lineno - lineno + 1 > 80`,
+    backend quedan 10 al 2026-10-03 (AST, `end_lineno - lineno + 1 > 80`,
     sin `tests/` ni `alembic/`): `_build_store_notification` y
-    `_claim_and_expire_preferences` (`payments/jobs.py`), `book_for_client` y `_find_suggestion`
-    (`appointments/service.py`), `availability.get_available_slots`,
+    `_claim_and_expire_preferences` (`payments/jobs.py`), `book_for_client`
+    y `_find_suggestion` (`appointments/service.py`),
     `ledger/router.py::get_ledger_summary`,
-    `stores/router.py::update_my_store`,
+    `waitlist/offers.py::offer_released_slot`,
     `core/security_middleware.py::__call__` y tres en `scripts/`.
-    `process_outbox_batch`, `OtpService.request_code` y
-    `_expire_unpaid_appointments` ya bajaron del tope.
+    `process_outbox_batch`, `OtpService.request_code`,
+    `_expire_unpaid_appointments`, `availability.get_available_slots` y
+    `stores/router.py::update_my_store` ya bajaron del tope.
     Son deuda, no permiso. `create_public_booking` y `client_reschedule_appointment`
     se descompusieron (B1-12). El front no está medido acá. Ante una
     validación nueva se extrae, no se apila.
@@ -811,7 +850,7 @@ Una instrucción en lenguaje natural no es una garantía.
   RPO de 24 h sigue sin cumplirse.
 - Falta todavía: activar el pre-commit hook en cada clon que falte (`git
   config core.hooksPath .githooks`, con el toolchain alineado); descomponer
-  las 11 funciones de más de 80 líneas que quedan en el backend (regla 29);
+  las 10 funciones de más de 80 líneas que quedan en el backend (regla 29);
   zona horaria por tienda; migrar los commits de routers/repos que quedan en
   `COMMITS_DECLARADOS_FUERA_DE_SERVICE` al patrón de `appointments`; medir
   la cobertura del backend en CI (`fail_under = 80` en `pyproject.toml`,
