@@ -69,3 +69,19 @@ export const useAddLedgerMovement = () => {
     }
   })
 }
+
+/**
+ * Revierte un movimiento (decision de Mateo, 2026-10-03). Con exito o con
+ * error se vuelve a pedir la cuenta: el saldo y la marca "Revertido" son del
+ * servidor, y un 422 (ya revertido) quiere decir que la vista quedo vieja.
+ */
+export const useReverseLedgerMovement = () => {
+  const queryClient = useQueryClient()
+  return useMutation<LedgerMovement, Error, { clientId: string; movementId: string }>({
+    mutationFn: ({ clientId, movementId }) => ledgerService.reverseMovement(clientId, movementId),
+    onSettled: (_data, _error, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ['ledger-summary'] })
+      void queryClient.invalidateQueries({ queryKey: ['customer-ledger', variables.clientId] })
+    }
+  })
+}

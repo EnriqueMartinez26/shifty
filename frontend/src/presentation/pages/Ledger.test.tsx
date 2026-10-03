@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-import type { LedgerClient } from '@application/services/LedgerService'
+import type { LedgerClient, LedgerMovement } from '@application/services/LedgerService'
 
 import { ValidationError } from '@shared/errors/ValidationError'
 
@@ -11,18 +11,21 @@ const clientes: LedgerClient[] = [
   { public_id: 'cli-b', name: 'Beto Gomez', email: 'beto@example.com', phone: '1155550002' }
 ]
 
-const movimiento = {
+const movimiento: LedgerMovement = {
   public_id: 'mov-1',
-  movement_type: 'charge' as const,
+  movement_type: 'charge',
   amount: 1000,
   balance_after: 1000,
-  created_at: '2026-09-20T12:00:00Z'
+  created_at: '2026-09-20T12:00:00Z',
+  reverses_id: null,
+  reversed: false
 }
 
 const mockCustomerLedger = jest.fn()
 const mockLedgerClients = jest.fn()
 const mockFetchNextPage = jest.fn()
 let mockHasNextPage = true
+let mockMovements: LedgerMovement[] = [movimiento]
 
 // El selector sale de /ledger/clients (useLedgerClients), no de /users/: si la
 // pagina volviera a useStoreClients, este test no tendria QueryClient y fallaria.
@@ -38,7 +41,7 @@ jest.mock('../hooks/useLedger', () => ({
     return {
       balance: 1000,
       total: 3,
-      movements: [movimiento],
+      movements: mockMovements,
       hasNextPage: mockHasNextPage,
       fetchNextPage: mockFetchNextPage,
       isFetchingNextPage: false,
@@ -46,10 +49,12 @@ jest.mock('../hooks/useLedger', () => ({
       error: null
     }
   },
-  useAddLedgerMovement: () => ({ mutateAsync: mockAddMovement, isPending: false })
+  useAddLedgerMovement: () => ({ mutateAsync: mockAddMovement, isPending: false }),
+  useReverseLedgerMovement: () => ({ mutateAsync: mockReverseMovement, isPending: false })
 }))
 
 const mockAddMovement = jest.fn()
+const mockReverseMovement = jest.fn()
 
 let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
 jest.mock('../hooks/useStoreWriteAccess', () => ({
@@ -276,5 +281,115 @@ describe('LedgerPage: tienda suspendida', () => {
     render(<LedgerPage />)
 
     expect(screen.getByRole('button', { name: 'Guardar movimiento' })).not.toBeDisabled()
+  })
+})
+
+// Decision de Mateo (2026-10-03): el fiado TIENE que poder revertir un
+// movimiento desde la pantalla. El backend ya lo hacia (POST .../reverse),
+// pero el panel no lo ofrecia ni sabia cual ya estaba revertido.
+describe('LedgerPage: revertir un movimiento', () => {
+  const reversa: LedgerMovement = {
+    public_id: 'mov-r',
+    movement_type: 'adjustment',
+    amount: -1000,
+    balance_after: 0,
+    notes: 'Reversa de movimiento mov-1',
+    created_at: '2026-09-21T12:00:00Z',
+    reverses_id: 'mov-1',
+    reversed: false
+  }
+  const revertido: LedgerMovement = { ...movimiento, reversed: true }
+  // Por el titulo de la fila: "Cargo" tambien es una opcion del formulario.
+  const filaDe = (titulo: string | RegExp): HTMLElement => {
+    const fila = screen.getAllByTestId('ledger-movement').find((elemento) => {
+      const texto = elemento.querySelector('p')?.textContent ?? ''
+      return typeof titulo === 'string' ? texto === titulo : titulo.test(texto)
+    })
+    if (!fila) throw new Error(`No hay una fila "${String(titulo)}"`)
+    return fila
+  }
+
+  beforeEach(() => {
+    mockReverseMovement.mockReset()
+    mockReverseMovement.mockResolvedValue(reversa)
+  })
+
+  afterEach(() => {
+    mockMovements = [movimiento]
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+  })
+
+  it('ofrece "Revertir" solo en un movimiento vigente que no es una reversión', () => {
+    const vigente: LedgerMovement = { ...movimiento, public_id: 'mov-2', movement_type: 'payment' }
+    mockMovements = [reversa, vigente, revertido]
+    render(<LedgerPage />)
+
+    const botones = screen.getAllByRole('button', { name: 'Revertir' })
+    expect(botones).toHaveLength(1)
+    expect(filaDe('Pago').contains(botones[0] ?? null)).toBe(true)
+    // El original queda marcado y la reversion dice que anula.
+    expect(filaDe('Cargo')).toHaveTextContent('Revertido')
+    expect(filaDe(/^Reversión de Cargo/)).toHaveTextContent('20/09/2026')
+    // La nota automatica con el id interno no se muestra.
+    expect(screen.queryByText(/Reversa de movimiento/)).not.toBeInTheDocument()
+  })
+
+  it('una reversión cuyo original no está en la página igual se marca', () => {
+    mockMovements = [reversa]
+    render(<LedgerPage />)
+
+    expect(screen.getByText('Reversión de un movimiento anterior')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Revertir' })).not.toBeInTheDocument()
+  })
+
+  it('con la tienda suspendida "Revertir" se ve deshabilitado con el motivo', () => {
+    mockWriteAccess = { readOnly: true, reason: 'Tienda suspendida' }
+    render(<LedgerPage />)
+
+    const revertir = screen.getByRole('button', { name: 'Revertir' })
+    expect(revertir).toBeDisabled()
+    expect(revertir).toHaveAttribute('title', 'Tienda suspendida')
+  })
+
+  it('confirma nombrando tipo, monto y fecha; "Volver" no revierte', async () => {
+    render(<LedgerPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Revertir' }))
+
+    const dialogo = await screen.findByRole('alertdialog')
+    expect(dialogo).toHaveTextContent('Cargo')
+    expect(dialogo).toHaveTextContent('1.000')
+    expect(dialogo).toHaveTextContent('20/09/2026')
+    fireEvent.click(screen.getByRole('button', { name: 'Volver' }))
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(mockReverseMovement).not.toHaveBeenCalled()
+  })
+
+  it('al confirmar revierte ese movimiento del cliente elegido y lo avisa', async () => {
+    render(<LedgerPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Revertir' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Sí, revertir' }))
+
+    await waitFor(() =>
+      expect(mockReverseMovement).toHaveBeenCalledWith({ clientId: 'cli-a', movementId: 'mov-1' })
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent('Movimiento revertido')
+  })
+
+  it('un 422 (ya revertido) se dice en castellano, sin el texto del servidor', async () => {
+    mockReverseMovement.mockRejectedValue(
+      new ValidationError('Ese movimiento ya fue revertido.', {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422
+      })
+    )
+    render(<LedgerPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Revertir' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Sí, revertir' }))
+
+    const alerta = await screen.findByRole('alert')
+    expect(alerta).toHaveTextContent(
+      'Ese movimiento ya fue revertido o es una reversión. La cuenta se actualizó.'
+    )
   })
 })

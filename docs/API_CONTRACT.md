@@ -3505,6 +3505,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `appointment_id` | string \| null | no |  |
 | `notes` | string \| null | no |  |
 | `created_at` | string | yes | format="date-time" |
+| `reverses_id` | string \| null | no |  |
+| `reversed` | boolean | no | default=false |
 
 ### LedgerSummaryClientItem
 
@@ -4682,4 +4684,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-01, commit 3eeb2022
+Generado desde app.openapi() el 2026-10-02, commit e165a9a7
