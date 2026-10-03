@@ -29,10 +29,12 @@ Escalar Shifty de forma segura para crecimiento multi-tenant sin degradar agenda
   local a la transaccion, `core/database.py`).
   `deploy/pgbouncer/pgbouncer.ini.example` es un resto de esa recomendacion y
   no se usa.
-- El pool lo da SQLAlchemy en cada proceso: con 3 replicas del backend de un
-  proceso cada una (F0-04), las conexiones son `3 x (pool_size + max_overflow)`
-  mas los workers de Celery; `max_connections` de Postgres se dimensiona con
-  esa cuenta (F0-14: 100-150).
+- El pool lo da SQLAlchemy en cada proceso: con 2 replicas del backend de un
+  proceso cada una (F0-04; eran 3 hasta pasar a un VPS de 2 vCPU y 8 GB,
+  2026-10-02), las conexiones son `2 x (pool_size + max_overflow)` mas los
+  hijos de Celery, y el doble de replicas durante el deploy gradual;
+  `max_connections` de Postgres (100) se dimensiona con la cuenta del pico
+  (`docs/DEPLOY_RUNBOOK.md` §1).
 - Camino cuando haya mas de un host: Postgres administrado (plan §7, decision
   3), no un pooler delante del de hoy.
 - Indices compuestos de agenda ya aplicados:

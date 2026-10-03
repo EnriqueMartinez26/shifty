@@ -52,6 +52,7 @@ x-app-environment-prod: &app_environment_prod
   MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?Falta MIGRATION_DATABASE_URL en .env (rol dueno, con DDL)}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Falta APP_DB_PASSWORD en .env (openssl rand -hex 32)}
   # F2-04: 5 + 5 por proceso (ver compose base y max_connections, abajo).
+  # Subirlo obliga a rehacer la cuenta de max_connections del servicio db.
   DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
   DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
   # F0-15: dos Redis; el de estado no desaloja, el de cache si (ver compose base).
@@ -109,12 +110,17 @@ services:
       - .env
     environment: *app_environment_prod
     ports: !reset []
-    # F0-04: tres replicas de UN proceso de uvicorn, no `--workers 3`. Un
-    # worker que muere en loop dentro de un contenedor "sano" violaba la
-    # regla 21; con replicas cada proceso tiene su healthcheck y su reinicio.
-    # nginx reparte entre las tres por el DNS interno de compose.
+    # F0-04: replicas de UN proceso de uvicorn, no `--workers N`. Un worker
+    # que muere en loop dentro de un contenedor "sano" violaba la regla 21; con
+    # replicas cada proceso tiene su healthcheck y su reinicio. nginx reparte
+    # entre ellas por el DNS interno de compose.
+    # Dos y no tres (VPS de 2 vCPU y 8 GB, 2026-10-02): una por nucleo, y el
+    # deploy gradual levanta otras tantas al lado de las viejas, asi que cada
+    # replica cuesta su limite dos veces en el pico. scripts/deploy.sh
+    # (DEPLOY_BACKEND_REPLICAS) usa el mismo numero
+    # (test_el_deploy_levanta_tantas_replicas_como_produccion).
     deploy:
-      replicas: 3
+      replicas: 2
 
   celery_worker:
     image: *app_image_prod
@@ -146,28 +152,37 @@ services:
     # del host. Compose fusiona por destino: postgres_data sigue montado.
     volumes:
       - pg_backups:/backups
-    # F0-14: Postgres para ~4 GB de un VPS de 16 GB. Este `command` REEMPLAZA
+    # F0-14: Postgres para 2,5 GB de un VPS de 8 GB (Hostinger KVM 2: 2 vCPU,
+    # 8 GB, NVMe; 2026-10-02). El presupuesto de todo el stack esta en
+    # docs/DEPLOY_RUNBOOK.md §1 y lo verifica
+    # test_la_memoria_de_produccion_entra_en_el_vps. Este `command` REEMPLAZA
     # al del compose base (compose no fusiona `command`), por eso repite
     # shared_preload_libraries y el slow log. log_parameter_max_length=0: el
     # slow log no vuelca los valores de los binds (emails, telefonos). SSD:
     # random_page_cost 1.1 y effective_io_concurrency 200.
-    # max_connections=150 (F2-04): la app abre como maximo 3 replicas x (5 + 5)
-    # = 30 mas los hijos de Celery (2 del general + 1 del interactivo) x 10 =
-    # 30; beat no corre tareas y los padres de prefork desechan su pool. El
-    # resto queda para migraciones, backups y una consola
+    # Memoria: shared_buffers = 25 % del limite; effective_cache_size = 75 %
+    # (el cache de pagina de la base se carga al cgroup del contenedor, asi que
+    # no hay mas que el limite). work_mem 4 MB: ~100 conexiones posibles x
+    # varias operaciones cada una tienen que entrar en lo que queda;
+    # log_temp_files=0 muestra la consulta que derrame a disco.
+    # max_connections=100 (F2-04): en el PICO del deploy la app abre
+    # (2 replicas viejas + 2 nuevas) x (5 + 5) = 40, mas los hijos de Celery
+    # (2 del general + 1 del interactivo) x 10 = 30: 70. Beat no corre tareas
+    # y los padres de prefork desechan su pool. Quedan 30 para la migracion,
+    # pg_dump, una consola y las 3 reservadas al superusuario
     # (test_los_pools_de_produccion_entran_en_max_connections).
     command:
       - postgres
       - -c
-      - shared_buffers=1GB
+      - shared_buffers=640MB
       - -c
-      - effective_cache_size=3GB
+      - effective_cache_size=1920MB
       - -c
-      - work_mem=8MB
+      - work_mem=4MB
       - -c
-      - maintenance_work_mem=256MB
+      - maintenance_work_mem=128MB
       - -c
-      - max_connections=150
+      - max_connections=100
       - -c
       - max_wal_size=2GB
       - -c
@@ -204,13 +219,15 @@ services:
     # paralelo (hash joins y sorts de los workers); el default de docker es
     # 64 MB y una consulta paralela grande fallaba con "could not resize
     # shared memory segment". shared_buffers no vive ahi (es mmap anonimo).
-    shm_size: 512m
+    # Lo que se usa de /dev/shm se carga al limite del contenedor: 256 MB
+    # alcanzan con 2 vCPU (dos workers paralelos por consulta como mucho).
+    shm_size: 256m
     # Ante falta de memoria en el host, el OOM killer elige otro proceso.
     oom_score_adj: -800
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 2560M
 
   redis_cache:
     ports: !reset []
