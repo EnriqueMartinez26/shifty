@@ -595,10 +595,13 @@ Una instrucción en lenguaje natural no es una garantía.
   `whatsAppPhone.cases.json`, con NBSP, espacio fino y BOM); sin canal es 422
   `DEPOSIT_CHANNEL_REQUIRED`, y reservar
   sin canal es 409 `DEPOSIT_CHANNEL_UNAVAILABLE` antes de escribir nada (con
-  un warning `deposit_channel_unavailable` por tienda y hora, y un evento a
-  Sentry por tienda). "MP conectado" es un solo predicado,
-  `payments/service.py::gateway_has_usable_token` (token que se descifra; no
-  el `"pending"` de un OAuth a medias), el mismo de la preferencia. Perder el
+  un warning `deposit_channel_unavailable` y un evento a Sentry, a lo sumo
+  uno por tienda y hora, `core.observability.OncePer`). "MP conectado" es un
+  solo predicado, `payments/service.py::gateway_has_usable_token` (token que
+  se descifra; no el `"pending"` de un OAuth a medias), el mismo de la
+  preferencia; un token guardado que no se descifra (una
+  `FIELD_ENCRYPTION_KEY` rota o rotada) avisa con ids y a Sentry en vez de
+  pasar en silencio a WhatsApp. Perder el
   último canal con servicios de seña obligatoria (borrar o romper el
   WhatsApp, apagar los cobros, desconectar MP) no se bloquea: avisa al dueño
   por el panel y por mail (`warn_if_deposit_channel_lost`, evento
@@ -614,10 +617,16 @@ Una instrucción en lenguaje natural no es una garantía.
   panel lo pasa a `mercadopago`. `manual-confirm` y el `refund` de un cobro
   manual no piden el flag `payments` (no son de MP); `manual-confirm` publica
   `appointment.confirmed` en su transacción si confirma un turno que no
-  empezó. Un `approved` de MP sobre una seña ya registrada a mano avisa una
-  vez por pago de MP como pago duplicado. Cancelar y reprogramar: regla 3.
-  (`test_sena_por_mp_o_whatsapp.py`, `test_sena_por_whatsapp_regla_3.py`,
-  `test_pg_sena_por_whatsapp.py`)
+  empezó. Un cobro asentado (acreditado o devuelto) solo acepta eventos del
+  pago de MP que lo asentó, el `external_payment_id` que dejó una transición
+  APLICADA; un `manual_confirmed` no lo asentó MP
+  (`processing._evento_de_otro_pago`). El `approved` de otro pago es un pago
+  duplicado (aviso una vez por pago de MP, antes de validar el importe) y su
+  `refunded` o contracargo no se aplica: sin esto, devolver el duplicado en
+  MP dejaba devuelta la seña que la tienda se quedó. Cancelar y reprogramar:
+  regla 3. (`test_sena_por_mp_o_whatsapp.py`,
+  `test_sena_por_whatsapp_regla_3.py`, `test_pg_sena_por_whatsapp.py`,
+  `test_pg_reprogramar_sena_por_whatsapp.py`)
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
   sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión

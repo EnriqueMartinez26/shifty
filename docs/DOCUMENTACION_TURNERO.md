@@ -192,8 +192,11 @@ WhatsApp, y el personal confirma a mano la de WhatsApp. Regla y codigo en
   cobro `manual` o confirmado a mano se registra sin el modulo `payments`; uno
   que paso por Mercado Pago sigue pidiendolo (403 `FEATURE_DISABLED`).
 - **Pago doble:** si Mercado Pago aprueba un pago del link vigente de una seña
-  que ya se habia registrado a mano, no se aplica y el dueño recibe un aviso
-  de "Pago duplicado", una vez por pago de Mercado Pago.
+  que ya estaba registrada (a mano, o acreditada por otro pago de Mercado
+  Pago), no se aplica y el dueño recibe un aviso de "Pago duplicado", una vez
+  por pago de Mercado Pago, aunque el importe no coincida con el registrado.
+  Un reembolso o contracargo de ESE pago tampoco se aplica: la seña que la
+  tienda se quedo sigue registrada.
 
 ### Contratos pendientes del front (perf/f4-pay, 2026-09-25)
 
