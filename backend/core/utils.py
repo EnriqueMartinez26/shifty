@@ -101,7 +101,7 @@ def format_ars(value: object) -> str:
     """
     try:
         monto = Decimal(str(value)).quantize(Decimal("0.01"))
-    except (InvalidOperation, ValueError):
+    except InvalidOperation, ValueError:
         return str(value)
     if not monto.is_finite():
         return str(value)
