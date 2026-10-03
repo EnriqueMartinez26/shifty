@@ -26,6 +26,10 @@ class NotificationType(str, enum.Enum):
     # Disputa abierta en Mercado Pago sobre un cobro ya acreditado (V-diff de
     # AUD2-B2-04): el estado del cobro no cambia, la plata queda retenida.
     PAYMENT_IN_MEDIATION = "payment.in_mediation"
+    # Contracargo, disputa o devolucion de OTRO pago de MP sobre un cobro ya
+    # asentado (registrado a mano o acreditado por otro pago): no se aplica,
+    # pero el dueno se entera (re-revision de la PR #112, hallazgo 1).
+    PAYMENT_REVERSAL_OF_OTHER_PAYMENT = "payment.reversal_of_other_payment"
     WAITLIST_SLOT_RELEASED = "waitlist.slot_released"
     SUBSCRIPTION_EXPIRING = "subscription.expiring"
     APPOINTMENT_CANCELLED_BY_CLIENT = "appointment.cancelled_by_client"

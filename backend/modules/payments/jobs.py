@@ -503,6 +503,7 @@ async def _plan_outbox_message(
 
     notification = (
         _replaced_link_notification(message)
+        or _other_payment_reversal_notification(message)
         or _deposit_notification(message)
         or _build_store_notification(message)
     )
@@ -977,6 +978,50 @@ def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
         type=message.event_type,
         title=titulo,
         body=cuerpo,
+        appointment_id=str(appointment_id) if appointment_id else None,
+    )
+
+
+# Titulo y "que informo MP" del aviso de una reversa de OTRO pago de MP.
+_REVERSOS_DE_OTRO_PAGO = {
+    "charged_back": ("Contracargo en Mercado Pago", "un contracargo"),
+    "in_mediation": ("Disputa abierta en Mercado Pago", "una disputa"),
+    "refunded": ("Devolución en Mercado Pago", "una devolución"),
+}
+
+
+def _other_payment_reversal_notification(message: OutboxMessage) -> Notification | None:
+    """Contracargo, disputa o devolucion de OTRO pago de MP sobre un cobro ya
+    asentado (``processing._avisar_reverso_de_otro_pago``, re-revision de la
+    PR #112, hallazgo 1). El cobro no se toco: el aviso lo dice.
+
+    Aparte de ``_build_store_notification`` (deuda de la regla 29).
+    """
+    if (
+        not message.store_id
+        or message.event_type
+        != NotificationType.PAYMENT_REVERSAL_OF_OTHER_PAYMENT.value
+    ):
+        return None
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    titulo, que = _REVERSOS_DE_OTRO_PAGO.get(
+        str(payload.get("remote_status") or ""),
+        ("Movimiento en Mercado Pago", "un movimiento"),
+    )
+    mp_payment_id = str(payload.get("mp_payment_id") or "").strip()
+    del_pago = f" del pago {mp_payment_id}" if mp_payment_id else " de un pago"
+    amount = payload.get("amount")
+    amount_label = f" de {format_ars(amount)}" if amount else ""
+    appointment_id = payload.get("appointment_id")
+    return Notification(
+        store_id=message.store_id,
+        type=message.event_type,
+        title=titulo,
+        body=(
+            f"Mercado Pago informó {que}{del_pago}{amount_label} de un turno "
+            "cuya seña ya estaba registrada; no se modificó el cobro. Revisalo "
+            "en Mercado Pago."
+        ),
         appointment_id=str(appointment_id) if appointment_id else None,
     )
 

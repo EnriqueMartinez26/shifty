@@ -28,6 +28,11 @@ FUNCIONES = {
         "enrich_mercadopago_webhook_payload",
         "alert_integrity_rejection",
         "alert_unexpected_payment_failure",
+        # Re-revision de la PR #112.
+        "_resolver_link",
+        "_es_de_otro_pago",
+        "_evento_de_otro_pago",
+        "_avisar_reverso_de_otro_pago",
     ],
     "modules/payments/router.py": [
         "mercadopago_webhook",
@@ -57,6 +62,7 @@ FUNCIONES = {
         "_vencer_una_pagina",
         "_rescatar_o_retener",
         "_process_webhook_inbox_batch",
+        "_other_payment_reversal_notification",
     ],
 }
 
