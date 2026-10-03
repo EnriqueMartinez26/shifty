@@ -3,9 +3,14 @@ import React, { useState } from 'react'
 import { X, Loader2 } from 'lucide-react'
 
 import { User } from '@domain/entities/User'
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_REJECTED_MESSAGE,
+  validateNewPassword
+} from '@domain/value-objects/PasswordRules'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
-import { PASSWORD_POLICY_TEXT, passwordPolicyError } from '@shared/utils/passwordPolicy'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
 import { revealOnMount } from '../../lib/revealOnMount'
@@ -39,7 +44,7 @@ const USER_FORM_ERRORS = {
 // Un 422 nombra el campo: el modal decia "No se pudo guardar el usuario" sin
 // el motivo (QA 2026-10-02). Nunca el texto crudo de Pydantic (regla 20).
 const USER_FIELD_ERRORS: Partial<Record<string, string>> = {
-  password: PASSWORD_POLICY_TEXT,
+  password: PASSWORD_REJECTED_MESSAGE,
   email: 'Revisá el email: no parece válido.',
   phone: 'Revisá el teléfono: solo números, espacios, guiones, paréntesis o +.',
   first_name: 'Revisá el nombre: es demasiado largo o tiene caracteres no permitidos.',
@@ -71,15 +76,15 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // La politica de contrasena se avisa antes de enviar (con una nueva o al
-    // cambiarla); el backend la vuelve a exigir.
-    const passwordError = formData.password ? passwordPolicyError(formData.password) : null
+    setError(null)
+    // Alta: la clave es obligatoria. Edición: opcional, y solo se valida si se
+    // escribió algo (D-20261001-01); vacía no viaja (`toUserWriteInput`).
+    const passwordError = formData.password ? validateNewPassword(formData.password) : null
     if (passwordError) {
       setError(passwordError)
       return
     }
     setLoading(true)
-    setError(null)
     try {
       await onSubmit(formData)
       onClose()
@@ -237,6 +242,9 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
               </label>
               <input
                 type="password"
+                autoComplete="new-password"
+                minLength={PASSWORD_MIN_LENGTH}
+                maxLength={PASSWORD_MAX_LENGTH * 2}
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 className="w-full rounded-xl px-4 py-3 font-bold border text-sm transition-all"

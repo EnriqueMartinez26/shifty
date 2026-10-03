@@ -19,13 +19,39 @@ describe('createUserSchema', () => {
     expect(issuesDe(minimo)).toEqual([])
   })
 
+  // 2026-10-01, D-20261001-01: el piso de la contraseña pasó de 12 a 6, con tope
+  // de 64 caracteres y 72 bytes y regla de letra y número (`validateNewPassword`).
   it.each([
     ['email invalido', { email: 'ana@' }, 'email', 'Email inválido'],
     [
-      'password de 11 caracteres',
-      { password: 'once-chars1' },
+      'password de 5 caracteres',
+      { password: 'abcd1' },
       'password',
-      'La contraseña debe tener al menos 12 caracteres'
+      'La contraseña debe tener al menos 6 caracteres'
+    ],
+    [
+      'password de 65 caracteres',
+      { password: `${'a'.repeat(64)}1` },
+      'password',
+      'La contraseña no puede tener más de 64 caracteres'
+    ],
+    [
+      'password de mas de 72 bytes',
+      { password: `${'é'.repeat(36)}12` },
+      'password',
+      'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+    ],
+    [
+      'password sin numero',
+      { password: 'abcdefgh' },
+      'password',
+      'La contraseña debe incluir al menos un número'
+    ],
+    [
+      'password sin letra',
+      { password: '12345678' },
+      'password',
+      'La contraseña debe incluir al menos una letra'
     ],
     ['nombre de 101 caracteres', { first_name: 'a'.repeat(101) }, 'first_name', 'Nombre muy largo'],
     [
@@ -40,7 +66,10 @@ describe('createUserSchema', () => {
   })
 
   it.each([
-    ['password de 12 caracteres', { password: 'a'.repeat(12) }],
+    ['password de 6 caracteres', { password: 'abcde1' }],
+    ['password de 64 caracteres', { password: `${'a'.repeat(63)}1` }],
+    ['password de 72 bytes', { password: `${'é'.repeat(35)}12` }],
+    ['password con espacios en los extremos (no se recorta)', { password: ' abc123 ' }],
     ['nombre de 100 caracteres', { first_name: 'a'.repeat(100) }],
     ['telefono de 50 caracteres', { phone: '1'.repeat(50) }],
     ['first_name undefined', { first_name: undefined }]
