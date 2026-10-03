@@ -53,7 +53,8 @@ describe('HttpUserRepository.update (F11c-11)', () => {
 
   it('no manda la clave vacia ni los campos ausentes', async () => {
     // Editar sin tocar la contraseña deja el campo en '': mandarlo seria un
-    // 422 del backend (min 12) o, peor, un intento de pisar la clave.
+    // 422 del backend (min 6; era 12 hasta 2026-10-01, D-20261001-01) o, peor,
+    // un intento de pisar la clave.
     const { patch, repository } = createRepository()
 
     await repository.update('usr-1', { firstName: 'Ana', password: '' })
