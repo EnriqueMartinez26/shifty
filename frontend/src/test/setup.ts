@@ -10,7 +10,10 @@ import './jest-dom'
 // en tests; por defecto se comporta como entorno de desarrollo.
 jest.mock('@shared/utils/env', () => ({
   isProduction: () => false,
-  isDevelopment: () => true
+  isDevelopment: () => true,
+  // Sin contacto configurado, como un build sin las variables: los tests que
+  // lo necesitan lo fijan con jest.mocked(getContactEnv).
+  getContactEnv: jest.fn(() => ({}))
 }))
 
 const customGlobal = globalThis as typeof globalThis & {

@@ -2,6 +2,8 @@ import { render, screen } from '@testing-library/react'
 
 import type { StoreSubscriptionStatus } from '@application/services/StoreSettingsService'
 
+import { getContactEnv } from '@shared/utils/env'
+
 import { SubscriptionBanner, subscriptionBanner } from './SubscriptionBanner'
 
 const base: StoreSubscriptionStatus = {
@@ -56,18 +58,48 @@ describe('subscriptionBanner', () => {
   })
 })
 
+// 2026-10-03: el numero era un placeholder en el codigo (5493513000000). El real
+// es un telefono personal y el repo es publico: llega por configuracion del
+// build (VITE_SUPPORT_WHATSAPP). Aca, valores de prueba.
 describe('SubscriptionBanner', () => {
-  it('ofrece el WhatsApp de soporte con el nombre de la tienda', () => {
-    render(
-      <SubscriptionBanner
-        subscription={{ ...base, status: 'suspended', blocks_writes: true }}
-        storeName="Peluqueria Sol"
-      />
-    )
+  const suspendida = { ...base, status: 'suspended' as const, blocks_writes: true }
+
+  afterEach(() => {
+    jest.mocked(getContactEnv).mockReturnValue({})
+  })
+
+  it('con el WhatsApp configurado ofrece renovar por wa.me con el nombre de la tienda', () => {
+    jest.mocked(getContactEnv).mockReturnValue({ supportWhatsApp: '5493510000000' })
+    render(<SubscriptionBanner subscription={suspendida} storeName="Peluqueria Sol" />)
 
     const link = screen.getByRole('link', { name: 'Renovar por WhatsApp' })
-    expect(link.getAttribute('href')).toMatch(/^https:\/\/wa\.me\/5493513000000\?text=/)
+    expect(link.getAttribute('href')).toMatch(/^https:\/\/wa\.me\/5493510000000\?text=/)
     expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('Peluqueria Sol')
+  })
+
+  it('sin WhatsApp ni email configurados no hay link: queda un texto neutro', () => {
+    render(<SubscriptionBanner subscription={suspendida} storeName="Peluqueria Sol" />)
+
+    expect(screen.queryByRole('link')).toBeNull()
+    expect(screen.getByText('Escribinos para renovar')).toBeInTheDocument()
+  })
+
+  it('un WhatsApp invalido no arma un link roto', () => {
+    jest.mocked(getContactEnv).mockReturnValue({ supportWhatsApp: '[[COMPLETAR]]' })
+    render(<SubscriptionBanner subscription={suspendida} />)
+
+    expect(screen.queryByRole('link', { name: 'Renovar por WhatsApp' })).toBeNull()
+    expect(screen.getByText('Escribinos para renovar')).toBeInTheDocument()
+  })
+
+  it('sin WhatsApp pero con email, el texto neutro escribe al email', () => {
+    jest.mocked(getContactEnv).mockReturnValue({ contactEmail: 'responsable@example.com' })
+    render(<SubscriptionBanner subscription={suspendida} />)
+
+    expect(screen.getByRole('link', { name: 'Escribinos para renovar' })).toHaveAttribute(
+      'href',
+      'mailto:responsable@example.com'
+    )
   })
 
   it('no renderiza nada cuando no hay nada que avisar', () => {

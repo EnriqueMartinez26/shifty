@@ -5,12 +5,12 @@ import { AlertTriangle, Lock } from 'lucide-react'
 import type { StoreSubscriptionStatus } from '@application/services/StoreSettingsService'
 
 import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
-import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
+import { getContactInfo, supportWhatsAppUrl } from '@shared/utils/contactInfo'
 
 import { colors2000s } from '../../../theme/colors'
 
-/** WhatsApp de soporte de Shifty para renovar el plan. */
-const SUPPORT_PHONE = '5493513000000'
+const ACTION_CLASS =
+  'rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest whitespace-nowrap'
 
 interface BannerContent {
   tone: 'warn' | 'blocked'
@@ -70,8 +70,17 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
   const content = subscriptionBanner(subscription)
   if (!content) return null
   const bloqueado = content.tone === 'blocked'
+  const actionStyle: React.CSSProperties = {
+    background: 'white',
+    border: `1px solid ${colors2000s.border.default}`,
+    color: bloqueado ? '#991b1b' : '#92400e'
+  }
   const texto = `Hola! Soy de ${storeName || 'mi negocio'} y quiero renovar mi plan de Shifty.`
-  const supportHref = buildWaMeUrl(SUPPORT_PHONE, texto)
+  // El WhatsApp de soporte es configuracion del build (VITE_SUPPORT_WHATSAPP),
+  // nunca un numero en el codigo: el repo es publico. Sin uno valido no hay
+  // link roto, queda un texto neutro (al email, si esta configurado).
+  const supportHref = supportWhatsAppUrl(texto)
+  const supportEmail = supportHref ? null : getContactInfo().email
   return (
     <div
       role="status"
@@ -93,20 +102,24 @@ export const SubscriptionBanner: React.FC<SubscriptionBannerProps> = ({
           {content.detail && <p className="text-xs font-bold mt-1">{content.detail}</p>}
         </div>
       </div>
-      {supportHref && (
+      {supportHref ? (
         <a
           href={supportHref}
           target="_blank"
           rel="noreferrer"
-          className="rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest whitespace-nowrap"
-          style={{
-            background: 'white',
-            border: `1px solid ${colors2000s.border.default}`,
-            color: bloqueado ? '#991b1b' : '#92400e'
-          }}
+          className={ACTION_CLASS}
+          style={actionStyle}
         >
           Renovar por WhatsApp
         </a>
+      ) : supportEmail ? (
+        <a href={`mailto:${supportEmail}`} className={ACTION_CLASS} style={actionStyle}>
+          Escribinos para renovar
+        </a>
+      ) : (
+        <p className="text-[10px] font-black uppercase tracking-widest whitespace-nowrap">
+          Escribinos para renovar
+        </p>
       )}
     </div>
   )

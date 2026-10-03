@@ -142,6 +142,17 @@ In the records below, `<domain>` is the domain of `EMAILS_FROM_EMAIL` and everyt
 
 `.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: every `up` in `scripts/deploy.sh` carries `--no-build` and `--remove-orphans` (so a renamed service does not leave its old container behind), and the migration `run` cannot build because the production view has no `build` section, and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
 
+**Front build variables (GitHub repository variables).** The frontend bundle is static, so these are read at build time, not when the container starts: changing one means a new build (push to `main` or a manual run of `build-images.yml`) and a deploy of that sha. Set them in GitHub under Settings → Secrets and variables → Actions → **Variables** (not Secrets: they end up in the public bundle anyway). `build-images.yml` passes them to `frontend/Dockerfile` as build args. The repository is public, so the real values never go into code, docs, `*.example` files, commits or PRs.
+
+| Variable | Format | Used by | Empty or invalid |
+|---|---|---|---|
+| `VITE_SENTRY_DSN` | Sentry DSN of the frontend project | browser error reporting and `/sentry-tunnel` | Sentry off, tunnel answers 404 |
+| `VITE_SUPPORT_WHATSAPP` | digits only, with country code, e.g. `549351XXXXXXX` (normalized by `shared/utils/whatsAppPhone.ts`) | "Renovar por WhatsApp" in the subscription banner; WhatsApp line of "Responsables y contacto" on `/legal/terminos` and `/legal/privacidad` | no WhatsApp link: the banner shows "Escribinos para renovar" (a `mailto:` if the email is set) and the legal line is omitted |
+| `VITE_CONTACT_EMAIL` | one email address, e.g. `contacto@example.com` | email line (`mailto:`) of "Responsables y contacto"; the terms' "consultas" paragraph | line omitted; the terms keep the generic contact sentence |
+| `VITE_LEGAL_RESPONSABLES` | free text, one or more full names (up to 300 characters) | "Responsables" line (Ley 25.326 art. 6) | line omitted |
+
+If all three contact variables are empty, the legal pages show no "Responsables y contacto" block at all; a value that still looks like a template placeholder (`[[...]]`, `pendiente`, `change_me`) counts as empty. Domicilio and CUIT are not shown yet on purpose. A local `docker compose build frontend` reads the same names from the root `.env` (see `.env.example`). If the Vercel preview should show them too, set the same names in the Vercel project environment.
+
 `docker-compose.prod.yml` references `ghcr.io/enriquemartinez26/shifty-<service>:${APP_VERSION}` for backend (API, workers and beat) and frontend. The production edge runs the base image `nginx:1.30.5-alpine` with `nginx/nginx.prod.conf` bind-mounted, so its image does not change per release; the `shifty-nginx` image CI publishes is not what production runs.
 
 ## 3. Deploy sequence (`scripts/deploy.sh deploy`)
