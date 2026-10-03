@@ -27,7 +27,8 @@ interface BlockPreviewModalProps {
 }
 
 const blockerLabel = (blocker: string | null): string | null => {
-  if (blocker === 'pending_payment') return 'Esperando la seña en Mercado Pago: liberalo a mano'
+  // La seña se paga por Mercado Pago o por WhatsApp (decision de Mateo, 2026-10-03).
+  if (blocker === 'pending_payment') return 'Esperando la seña: liberalo a mano'
   if (blocker === 'has_deposit') return 'Con seña acreditada: decidí vos qué hacer'
   return null
 }

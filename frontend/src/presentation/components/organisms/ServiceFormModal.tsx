@@ -354,6 +354,11 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                       </option>
                     ))}
                   </select>
+                  {formData.depositMode === 'required' && (
+                    <p className="text-[10px] font-bold text-gray-400 ml-1">
+                      Se paga por Mercado Pago o por WhatsApp: necesitás uno de los dos configurado.
+                    </p>
+                  )}
                 </div>
 
                 {formData.depositMode !== 'none' && (

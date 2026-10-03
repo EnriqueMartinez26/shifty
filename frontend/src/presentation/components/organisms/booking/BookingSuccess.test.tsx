@@ -55,7 +55,11 @@ describe('BookingSuccess', () => {
       render(
         <BookingSuccess
           {...props({
-            confirmation: confirmacion({ status: 'pending_payment', payment_required: true })
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+            })
           })}
         />
       )
@@ -143,6 +147,61 @@ describe('BookingSuccess', () => {
       )
     })
 
+    // Decision de Mateo (2026-10-03): una sena obligatoria se paga por Mercado
+    // Pago o por WhatsApp. QA 2026-10-02 (barberia-sentinel): la pantalla de
+    // exito no mencionaba la sena cuando se pagaba por fuera.
+    it('con sena por WhatsApp muestra el importe y el boton para coordinar el pago', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: '11 5555 0303',
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_link: null,
+              payment_amount: 3000,
+              payment_status: 'pending'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Reserva Pendiente de Pago')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'Pagá la seña por WhatsApp: tu turno se confirma cuando Tienda reciba el pago.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
+      expect(screen.getByText('$ 3.000')).toBeInTheDocument()
+      const boton = screen.getByRole('link', { name: COORDINAR })
+      const href = boton.getAttribute('href') ?? ''
+      expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
+      // El mensaje ya le dice a la tienda que es para pagar la sena y cuanto
+      // (Intl separa "$" del importe con un espacio duro).
+      const texto = decodeURIComponent(href.split('text=')[1] ?? '').replace(/\s/g, ' ')
+      expect(texto).toContain('Quiero pagar la seña de $ 3.000.')
+      expect(screen.queryByRole('link', { name: IR_A_PAGAR })).not.toBeInTheDocument()
+    })
+
+    it('con sena por WhatsApp y sin numero que se pueda leer pide hablar con la tienda', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            whatsappNumber: 'consultar en el local',
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_amount: 3000
+            })
+          })}
+        />
+      )
+
+      expect(screen.queryByRole('link', { name: COORDINAR })).not.toBeInTheDocument()
+      expect(screen.getByText('Comunicate con Tienda para pagar la seña.')).toBeInTheDocument()
+    })
+
     it('sin link y sin WhatsApp de la tienda no ofrece coordinar', () => {
       render(<BookingSuccess {...props()} />)
 
@@ -207,9 +266,27 @@ describe('BookingSuccess', () => {
         />
       )
 
-      expect(screen.getByText('Pago requerido')).toBeInTheDocument()
+      expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
       expect(screen.getByText('$ 3.150')).toBeInTheDocument()
       expect(screen.getByText('Estado: pending')).toBeInTheDocument()
+    })
+
+    it('con link de pago muestra el pago requerido de Mercado Pago', () => {
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              payment_amount: 3150,
+              payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Pago requerido')).toBeInTheDocument()
+      expect(screen.queryByText('Seña a pagar por WhatsApp')).not.toBeInTheDocument()
     })
 
     it('con pago requerido sin importe ni estado avisa que el importe se confirma', () => {
@@ -235,6 +312,7 @@ describe('BookingSuccess', () => {
       )
 
       expect(screen.queryByText('Pago requerido')).not.toBeInTheDocument()
+      expect(screen.queryByText('Seña a pagar por WhatsApp')).not.toBeInTheDocument()
       expect(screen.queryByText('$ 3.150')).not.toBeInTheDocument()
     })
   })

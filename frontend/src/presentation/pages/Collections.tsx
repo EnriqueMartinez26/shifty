@@ -28,6 +28,7 @@ import { create2000sListCardStyle, create2000sPanelStyle } from '../lib/surfaceS
 
 const PAYMENTS_OFF_REASON =
   'Los cobros online están apagados para tu negocio. Activalos en Configuración > Funciones.'
+const PAYMENTS_OFF_NOTICE = `${PAYMENTS_OFF_REASON} Las señas que te pagan por WhatsApp las confirmás igual con "Confirmar pago".`
 
 const CollectionsPage: React.FC = () => {
   const appointmentsQuery = usePaymentsAppointments()
@@ -45,11 +46,12 @@ const CollectionsPage: React.FC = () => {
   const manualConfirm = useManualConfirmPayment()
   // Tienda suspendida: crear el link y confirmar el pago responden 402.
   const writeAccess = useStoreWriteAccess()
-  const blockedReason = paymentsOff
-    ? PAYMENTS_OFF_REASON
-    : writeAccess.readOnly
-      ? writeAccess.reason
-      : null
+  const suspendedReason = writeAccess.readOnly ? writeAccess.reason : null
+  // El link es de Mercado Pago: necesita los cobros online. Confirmar a mano
+  // no (decision de Mateo, 2026-10-03): es como se cierra la seña que el
+  // cliente paga por WhatsApp, con o sin Mercado Pago.
+  const linkBlockedReason = paymentsOff ? PAYMENTS_OFF_REASON : suspendedReason
+  const confirmBlockedReason = suspendedReason
   const [feedback, setFeedback] = useState<FormFeedbackMessage | null>(null)
 
   const cardStyle = create2000sPanelStyle()
@@ -120,7 +122,7 @@ const CollectionsPage: React.FC = () => {
             color: colors2000s.status.info.text
           }}
         >
-          {PAYMENTS_OFF_REASON}
+          {PAYMENTS_OFF_NOTICE}
         </div>
       )}
 
@@ -183,8 +185,8 @@ const CollectionsPage: React.FC = () => {
                     onClick={() => {
                       void handleCreatePreference(appointment.public_id)
                     }}
-                    disabled={blockedReason !== null}
-                    title={blockedReason ?? undefined}
+                    disabled={linkBlockedReason !== null}
+                    title={linkBlockedReason ?? undefined}
                     className="px-4 py-2 text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 disabled:opacity-50"
                     style={buttonStyles2000s.default}
                   >
@@ -196,13 +198,13 @@ const CollectionsPage: React.FC = () => {
                     onClick={() => {
                       void handleManualConfirm(appointment.public_id)
                     }}
-                    disabled={blockedReason !== null}
-                    title={blockedReason ?? undefined}
+                    disabled={confirmBlockedReason !== null}
+                    title={confirmBlockedReason ?? undefined}
                     className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest inline-flex items-center gap-2 disabled:opacity-50"
                     style={buttonStyles2000s.selected}
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    Confirmar manual
+                    Confirmar pago
                   </button>
                   {latestLink && (
                     <a
