@@ -625,6 +625,8 @@ describe('BookingStepConfirmation', () => {
       await waitFor(() => expect(screen.getByText('Reserva Registrada')).toBeInTheDocument())
     })
 
+    // Reservar por WhatsApp una seña obligatoria deja el pago pendiente y sin
+    // link de Mercado Pago: se paga por WhatsApp (decision de Mateo, 2026-10-03).
     it('una reserva con pago pendiente se anuncia como pendiente de pago', async () => {
       const base = completo()
       base.onConfirm = jest
@@ -636,7 +638,9 @@ describe('BookingStepConfirmation', () => {
 
       await waitFor(() => expect(screen.getByText('Reserva Pendiente de Pago')).toBeInTheDocument())
       expect(
-        screen.getByText('Tu turno se confirma cuando el cobro quede aprobado.')
+        screen.getByText(
+          'Pagá la seña por WhatsApp: tu turno se confirma cuando Tienda reciba el pago.'
+        )
       ).toBeInTheDocument()
     })
 
