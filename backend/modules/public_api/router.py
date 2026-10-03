@@ -26,7 +26,6 @@ from core.exceptions import (
     StoreNotFoundException,
     ValidationException,
 )
-from core.feature_flags import is_store_feature_enabled
 from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.rate_limit import enforce_rate_limit
 from core.redis import get_availability_cache, get_redis
@@ -37,7 +36,8 @@ from modules.billing.service import store_is_suspended
 from modules.notifications.tasks import enqueue_otp_email
 from modules.otp.service import OtpService
 from modules.payments.deposit_channels import (
-    deposit_channels_of,
+    deposit_channels_for,
+    deposit_mode_of,
     online_payment_mandatory,
 )
 from modules.payments.deposit_rules import (
@@ -399,19 +399,21 @@ async def preview_public_deposit(
         decision = decide(
             service, store, price=price, starts_at=starts_at_utc, history=history
         )
-        deposit_mode = getattr(service, "deposit_mode", "none") or "none"
+        deposit_mode = deposit_mode_of(service)
+        # Atajo de ``deposit_channels_for``: sin sena obligatoria no se lee la
+        # config de MP (los canales no deciden nada).
+        channels = await deposit_channels_for(db, store, deposit_mode=deposit_mode)
         return PublicDepositPreviewResponse(
             amount=float(decision.amount),
             base_amount=float(decision.base_amount),
             extra_percent=decision.extra_percent,
             reasons=list(decision.reasons),
             price=float(price),
-            payments_enabled=is_store_feature_enabled(store.feature_flags, "payments"),
+            payments_enabled=channels.payments_enabled,
             # La misma regla que el alta (``deposit_channels``): sin WhatsApp
             # usable, la sena obligatoria solo se paga por MP.
-            online_payment_mandatory=deposit_mode == "required"
-            and online_payment_mandatory(
-                channels=await deposit_channels_of(db, store),
+            online_payment_mandatory=online_payment_mandatory(
+                channels=channels,
                 deposit_amount=decision.amount,
                 deposit_mode=deposit_mode,
                 allow_manual_coordination=store.allow_manual_coordination,
@@ -609,7 +611,11 @@ CLIENT_HISTORY_MAX_LIMIT = 200
 
 
 def _client_item(
-    appt: Appointment, cancellation_hours: int, *, paid: bool, live_payment: bool
+    appt: Appointment,
+    cancellation_hours: int,
+    *,
+    paid: bool,
+    live_charge_provider: str | None,
 ) -> ClientAppointmentItem:
     """Un turno del historial con lo que el cliente puede hacer con el.
 
@@ -635,7 +641,9 @@ def _client_item(
         custom_fields=appt.intake_answers or {},
         can_cancel=vigente
         and client_cancel_denial(
-            appt, cancellation_hours=cancellation_hours, live_payment=live_payment
+            appt,
+            cancellation_hours=cancellation_hours,
+            live_charge_provider=live_charge_provider,
         )
         is None,
         can_reschedule=vigente
@@ -643,7 +651,7 @@ def _client_item(
             appt,
             cancellation_hours=cancellation_hours,
             paid=paid,
-            live_payment=live_payment,
+            live_charge_provider=live_charge_provider,
         )
         is None,
     )
@@ -690,7 +698,12 @@ async def get_client_appointments(
         # Con el pago acreditado y el cobro vivo de cada turno en el mismo SELECT.
         filas = await repo.get_client_appointments(client.id, store.id, limit=limit)
         items = [
-            _client_item(appt, store.cancellation_hours, paid=paid, live_payment=vivo)
+            _client_item(
+                appt,
+                store.cancellation_hours,
+                paid=paid,
+                live_charge_provider=vivo,
+            )
             for appt, paid, vivo in filas
         ]
 

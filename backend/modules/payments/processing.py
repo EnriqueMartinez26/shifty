@@ -878,6 +878,7 @@ async def _pago_en_link_reemplazado(
     payment: Payment,
     payload: dict[str, Any],
     duplicado: bool,
+    link_vigente: bool = False,
 ) -> None:
     """No se aplica, pero la plata acreditada nunca queda en silencio.
 
@@ -889,6 +890,10 @@ async def _pago_en_link_reemplazado(
     del inbox). El webhook queda sin aplicar: el inbox lo reintenta hasta
     agotar y queda como dead letter, visible en ``/ops/slo``. ``duplicado``:
     el cobro ya estaba acreditado (o devuelto): el aviso pide devolver el pago.
+
+    ``link_vigente``: el pago es del link VIGENTE de un cobro que ya se
+    registro a mano (``_pago_doble_sobre_confirmacion_manual``); la clave de
+    deduplicacion es la misma (``pago:<id de MP>``) y el aviso dice que paso.
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -901,6 +906,7 @@ async def _pago_en_link_reemplazado(
         "payment_id": payment.id,
         "mp_payment_id": mp_payment_id,
         "duplicado": duplicado,
+        "link_vigente": link_vigente,
     }
     logger.warning("payment_on_replaced_link", **contexto)
     report_exception(
@@ -916,6 +922,7 @@ async def _pago_en_link_reemplazado(
                 "mp_payment_id": mp_payment_id,
                 "amount": str(data.get("transaction_amount") or ""),
                 "duplicado": duplicado,
+                "link_vigente": link_vigente,
                 "aviso": clave,
             },
         )
@@ -952,6 +959,39 @@ async def _aviso_publicado(
         .limit(1)
     )
     return fila.first() is not None
+
+
+async def _pago_doble_sobre_confirmacion_manual(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment: Payment,
+    payload: dict[str, Any],
+    status: str,
+) -> None:
+    """Un ``approved`` del link vigente sobre un cobro ya confirmado a mano.
+
+    Revision 4R de la PR #108 (R1 W1): una sena por WhatsApp a la que el
+    panel le mando despues un link de MP, que se confirmo a mano (el cliente
+    pago por fuera) y despues entro el pago de MP: dos pagos por la misma
+    sena. ``manual_confirmed -> approved`` es ilegal, asi que el estado no
+    cambia, y ``_avisar_al_dueno`` solo avisa lo que no estaba asentado: el
+    pago quedaba en silencio. Se avisa como un pago duplicado, una vez por
+    pago de MP (``_pago_en_link_reemplazado``, misma deduplicacion).
+    """
+    if (
+        status != PaymentStatus.APPROVED.value
+        or payment.status != PaymentStatus.MANUAL_CONFIRMED.value
+    ):
+        return
+    await _pago_en_link_reemplazado(
+        db,
+        store_id=store_id,
+        payment=payment,
+        payload=payload,
+        duplicado=True,
+        link_vigente=True,
+    )
 
 
 async def _lock_turno_y_pago(
@@ -1064,5 +1104,8 @@ async def apply_mercadopago_webhook_payload(
         appointment=appointment,
         was_settled=was_settled,
         data=data,
+    )
+    await _pago_doble_sobre_confirmacion_manual(
+        db, store_id=store_id, payment=payment, payload=payload, status=payment_status
     )
     return True

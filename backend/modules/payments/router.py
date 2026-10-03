@@ -41,6 +41,7 @@ from modules.auth.dependencies import get_current_user
 from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
 from modules.payments.on_demand import request_inbox_retry
 from modules.payments.model import (
+    PAYMENT_PROVIDER_MANUAL,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -56,6 +57,10 @@ from modules.payments.processing import (
     mercadopago_event_identity,
 )
 from modules.payments.service import PaymentGatewayNotConnectedError
+from modules.payments.deposit_channels import (
+    deposit_channels_of,
+    warn_if_deposit_channel_lost,
+)
 from modules.payments.oauth_state import (
     InvalidOAuthStateError,
     create_mercadopago_oauth_state,
@@ -662,7 +667,13 @@ async def disconnect_mercadopago_oauth(
     if not config:
         return OAuthDisconnectResponse(disconnected=False)
 
+    store = await db.get(Store, user.store_id)
+    canales_antes = await deposit_channels_of(db, store) if store else None
     await db.delete(config)
+    await db.flush()  # sin autoflush: la lectura de canales ya no lo ve
+    # Desconectar MP puede dejar a la tienda sin canal de sena obligatoria.
+    if store is not None and canales_antes is not None:
+        await warn_if_deposit_channel_lost(db, store, canales_antes)
     await db.commit()
     return OAuthDisconnectResponse(disconnected=True)
 
@@ -770,8 +781,14 @@ async def refund_payment(
 ) -> PaymentResponse:
     _require_payment_admin(user)
     db = svc.uow.session
-    await _ensure_payments_feature_enabled(db, user)
     payment = await _get_payment_by_id(db, payment_id, user.store_id)
+    # Una sena por WhatsApp (proveedor ``manual``) o un cobro confirmado a mano
+    # se registra sin el flag ``payments``: la plata entro y sale por fuera,
+    # como ``manual-confirm`` (revision 4R de la PR #108). Sin esto, una tienda
+    # sin cobros online no podia registrar la devolucion de una sena por
+    # WhatsApp. Lo que paso por Mercado Pago sigue detras del flag.
+    if not _settled_outside_mercadopago(payment):
+        await _ensure_payments_feature_enabled(db, user)
     payment = await svc.refund(
         payment=payment,
         actor=user,
@@ -781,6 +798,15 @@ async def refund_payment(
     )
     await db.refresh(payment)
     return _payment_response(payment)
+
+
+def _settled_outside_mercadopago(payment: Payment) -> bool:
+    """El cobro no movio plata por Mercado Pago: sena por WhatsApp o pago
+    registrado a mano."""
+    return (
+        payment.provider == PAYMENT_PROVIDER_MANUAL
+        or payment.status == PaymentStatus.MANUAL_CONFIRMED.value
+    )
 
 
 async def _enriquecer_sin_transaccion_abierta(

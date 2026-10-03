@@ -1,4 +1,5 @@
 from datetime import date as _date, datetime, time as _time, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 # Shifty opera solo en Argentina. Los horarios que carga una tienda ("abro
@@ -86,3 +87,17 @@ def ensure_utc_aware(value: datetime) -> datetime:
     Todo lo que la base guarda es UTC: un naive se interpreta como UTC.
     """
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def format_ars(value: object) -> str:
+    """Importe en pesos para personas: ``$ 48.500,50`` (es-AR).
+
+    Sin centavos si el importe es entero, como el panel (``formatCurrency``
+    del front). Un negativo lleva el signo adelante: ``-$ 1.500``. Lo usan el
+    PDF de reportes y los avisos al dueno, que antes mostraban ``$3000.00``.
+    """
+    monto = Decimal(str(value)).quantize(Decimal("0.01"))
+    decimales = 0 if monto == monto.to_integral_value() else 2
+    numero = f"{abs(monto):,.{decimales}f}"
+    numero = numero.replace(",", "_").replace(".", ",").replace("_", ".")
+    return f"{'-' if monto < 0 else ''}$ {numero}"

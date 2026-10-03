@@ -98,7 +98,7 @@ def awaits_payment(appointment: Appointment, *, live_payment: bool) -> bool:
     O tiene un ``Payment`` vivo (``live_payment``: un link generado desde el
     panel sobre un turno confirmado, decision de Mateo D1, 2026-09-25). La
     guarda es pura: ``live_payment`` lo calcula el repositorio
-    (``payments.repository.live_charge_of``) antes de llamarla.
+    (``payments.repository.live_charge_provider_of``) antes de llamarla.
     """
     return appointment.status == AppointmentStatus.PENDING_PAYMENT.value or live_payment
 
@@ -156,6 +156,11 @@ def reject_reschedule_with_pending_deposit(appointment: Appointment) -> None:
     cobro). Solo ``pending_payment``: el link del panel de un turno
     confirmado no es una sena requerida y ese turno se sigue reprogramando
     (vence el link). Se llama con el turno ya lockeado, antes de tocar nada.
+
+    Vale igual para la sena por WhatsApp (eleccion tecnica del coordinador,
+    2026-10-03): el personal registra el pago en Cobros y despues lo mueve, o
+    lo cancela; el que la mueve sin pagarla es el cliente, desde "Mis turnos",
+    con el plazo recalculado (``public_api.service.reschedule_by_client``).
     """
     if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
         raise AppException(
@@ -165,11 +170,35 @@ def reject_reschedule_with_pending_deposit(appointment: Appointment) -> None:
         )
 
 
+def reject_confirm_with_pending_deposit(
+    appointment: Appointment, *, live_payment: bool
+) -> None:
+    """Un turno que espera su sena no se confirma con "Confirmar": 409.
+
+    Revision 4R de la PR #108: ``PATCH /appointments/{id}/confirm`` sobre un
+    ``pending_payment`` dejaba el turno ``confirmed`` con el cobro vivo (por
+    WhatsApp, una sena ``pending`` que nadie iba a cerrar; por MP, un link
+    pagable de un turno ya confirmado). La sena se registra desde Cobros
+    (``POST /payments/{id}/manual-confirm``), que confirma el turno y cierra
+    el cobro en la misma transaccion. La agenda no ofrece "Confirmar" para un
+    pendiente de pago (``BookingStatus.ts``): esto cierra la API. Se llama
+    con el turno y su cobro ya lockeados.
+    """
+    if appointment.status == AppointmentStatus.PENDING_PAYMENT.value and live_payment:
+        raise AppException(
+            message="Esta reserva espera la seña: registrá el pago desde Cobros "
+            "para confirmarla",
+            http_status=HTTPStatus.CONFLICT,
+            error_code="DEPOSIT_PENDING_CONFIRM_DENIED",
+        )
+
+
 __all__ = [
     "awaits_payment",
     "is_active",
     "reject_already_cancelled",
     "reject_already_started",
+    "reject_confirm_with_pending_deposit",
     "reject_reschedule_with_pending_deposit",
     "reject_inactive",
     "require_can_manage_appointment",

@@ -30,7 +30,7 @@ from modules.appointments.working_hours import staff_ids_working_range
 from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
 from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
-from modules.payments.repository import live_charge_of
+from modules.payments.repository import live_charge_provider_of
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -684,16 +684,17 @@ class PublicRepository:
 
     async def get_client_appointments(
         self, client_id: str, store_id: str, *, limit: int
-    ) -> list[tuple[Appointment, bool, bool]]:
+    ) -> list[tuple[Appointment, bool, str | None]]:
         """Los ``limit`` turnos mas recientes del cliente, con servicio y profesional,
-        si cada uno tiene un pago acreditado (para ``can_reschedule``) y si
-        tiene un cobro vivo (para ``can_cancel`` y ``can_reschedule``, D1).
+        si cada uno tiene un pago acreditado (para ``can_reschedule``) y el
+        proveedor de su cobro vivo (para ``can_cancel`` y ``can_reschedule``,
+        D1; una sena por WhatsApp no frena al cliente).
 
-        El pago acreditado y el cobro vivo van en el MISMO SELECT como
-        ``EXISTS`` correlacionados por ``uq_payments_store_appointment``
-        (store_id, appointment_id): una consulta aparte sumaba una sentencia al
-        historial (techo de ``test_historial_del_cliente_con_limite``). El del
-        cobro vivo es ``live_charge_of``, la misma condicion que la accion.
+        El pago acreditado y el cobro vivo van en el MISMO SELECT, correlacionados
+        por ``uq_payments_store_appointment`` (store_id, appointment_id): una
+        consulta aparte sumaba una sentencia al historial (techo de
+        ``test_historial_del_cliente_con_limite``). El del cobro vivo es
+        ``live_charge_provider_of``, la misma condicion que la accion.
 
         Un solo SELECT con JOIN (F3-09, R1-09): antes eran ``selectinload`` de
         servicio y profesional, y el profesional arrastraba en cascada sus
@@ -711,9 +712,9 @@ class PublicRepository:
             )
             .label("paid")
         )
-        cobro_vivo = live_charge_of(Appointment.id, Appointment.store_id).label(
-            "live_charge"
-        )
+        cobro_vivo = live_charge_provider_of(
+            Appointment.id, Appointment.store_id
+        ).label("live_charge_provider")
         result = await self.db.execute(
             select(Appointment, pagado, cobro_vivo)
             .where(Appointment.client_id == client_id, Appointment.store_id == store_id)
@@ -727,6 +728,6 @@ class PublicRepository:
             .limit(limit)
         )
         return [
-            (appointment, bool(paid), bool(vivo))
+            (appointment, bool(paid), None if vivo is None else str(vivo))
             for appointment, paid, vivo in result.all()
         ]

@@ -36,6 +36,7 @@ from modules.appointments.domain_service import SchedulingDomainService
 from modules.appointments.guards import (
     reject_already_cancelled,
     reject_already_started,
+    reject_confirm_with_pending_deposit,
     reject_inactive,
     reject_reschedule_with_pending_deposit,
     require_can_manage_appointment,
@@ -451,7 +452,13 @@ class AppointmentService:
         return appointment
 
     async def confirm(self, *, public_id: str, actor: User) -> Appointment:
-        """Confirma un turno (solo ADMIN o STAFF)."""
+        """Confirma un turno (solo ADMIN o STAFF).
+
+        Un turno que espera su sena con el cobro vivo no se confirma aca: 409
+        ``DEPOSIT_PENDING_CONFIRM_DENIED`` (``reject_confirm_with_pending_deposit``,
+        revision 4R de la PR #108). Se confirma registrando el pago en Cobros,
+        para que ningun turno confirmado quede con un cobro vivo.
+        """
         # Lock pesimista antes de leer: sin esto, dos transiciones validas
         # y distintas pueden partir del mismo estado origen (TOCTOU).
         await self.uow.appointments.lock_by_public_id(public_id, actor.store_id)
@@ -460,6 +467,14 @@ class AppointmentService:
         )
         if not appointment:
             raise AppointmentNotFoundException(public_id)
+        if appointment.status == AppointmentStatus.PENDING_PAYMENT.value:
+            # Orden turno -> pago (regla 7): el turno ya esta lockeado.
+            payment = await self.uow.payments.get_by_appointment_locked(
+                appointment.id, actor.store_id
+            )
+            reject_confirm_with_pending_deposit(
+                appointment, live_payment=payment is not None and payment.is_live_charge
+            )
 
         payload_before = {"status": appointment.status}
         appointment.apply_status_transition(AppointmentStatus.CONFIRMED)

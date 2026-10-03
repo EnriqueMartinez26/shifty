@@ -27,6 +27,7 @@ from core.exceptions import AppException
 from core.observability import report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
+    PAYMENT_PROVIDER_MERCADOPAGO,
     JsonValue,
     OutboxMessage,
     Payment,
@@ -447,6 +448,23 @@ def _resolve_access_token(config: PaymentGatewayConfig | None) -> str | None:
         return None
 
 
+def gateway_has_usable_token(config: PaymentGatewayConfig | None) -> bool:
+    """ "MP conectado": hay config y su token se puede descifrar.
+
+    Unico predicado: lo usan ``prepare_mercadopago_preference`` (sin token no
+    hay preferencia) y el canal de la sena (``deposit_channels``), para que la
+    tienda que el backend da por conectada sea la que puede pedir un link. Un
+    token vacio, el ``"pending"`` que deja un alta de OAuth sin terminar
+    (``payments/router.py``) o uno cifrado con otra clave no cuentan.
+    """
+    return _resolve_access_token(config) is not None
+
+
+async def mercadopago_connected(db: AsyncSession, store_id: str) -> bool:
+    """La tienda tiene Mercado Pago conectado (``gateway_has_usable_token``)."""
+    return gateway_has_usable_token(await _get_gateway_config(db, store_id))
+
+
 def _resolve_refresh_token(config: PaymentGatewayConfig | None) -> str | None:
     if not config or not config.encrypted_refresh_token:
         return None
@@ -746,7 +764,7 @@ async def prepare_mercadopago_preference(
     pago sin depender de ``preference_id``, que el pago de MP no trae.
     """
     config = await _get_gateway_config(db, store_id)
-    if config is None or not _resolve_access_token(config):
+    if config is None or not gateway_has_usable_token(config):
         return None
 
     store = await _get_store(db, store_id)
@@ -1101,6 +1119,42 @@ def expire_live_charge(
     return payment
 
 
+def carry_manual_deposit(
+    db: AsyncSession,
+    payment: Payment,
+    new_appointment: Appointment,
+    *,
+    released_by: str | None = None,
+) -> Payment:
+    """Pasa una sena por WhatsApp pendiente al turno reprogramado.
+
+    El cliente puede reprogramar un turno con la sena por WhatsApp pendiente
+    (propuesta del coordinador aceptada por Mateo, 2026-10-03): no hay link de
+    MP ni plata en la plataforma, asi que la carrera que la regla 3 evita no
+    existe. La sena no se pierde: el cobro del turno original vence por el
+    grafo (``expire_live_charge``; un placeholder no publica nada) y el nuevo
+    turno nace con un cobro ``manual`` ``pending`` del MISMO importe y el mismo
+    snapshot (``deposit_rule``: un cobro con regla conserva su importe). Hay un
+    cobro por turno (``uq_payments_store_appointment``), por eso es otra fila.
+
+    Precondicion: los dos turnos y ``payment`` ya estan lockeados o son
+    nuevos, y ``payment`` es una sena manual viva. Sin commit.
+    """
+    expire_live_charge(db, payment, reason="client_reschedule", released_by=released_by)
+    nuevo = _nuevo_cobro_pendiente(
+        store_id=payment.store_id,
+        appointment=new_appointment,
+        amount=payment.amount,
+        original_amount=payment.original_amount or payment.amount,
+        discount_amount=payment.discount_amount or Decimal("0.00"),
+        promotion_code=payment.promotion_code,
+        deposit_rule=payment.deposit_rule,
+        provider=payment.provider,
+    )
+    db.add(nuevo)
+    return nuevo
+
+
 class ProviderPreferenceWithoutLinkError(RuntimeError):
     """MP creo la preferencia pero no devolvio un link de checkout usable.
 
@@ -1180,7 +1234,7 @@ async def _attach_provider_link(
     # Con un link real el cobro es de MP aunque haya nacido como sena por
     # WhatsApp (``provider = manual``): el job de retenciones y la
     # conciliacion vuelven a consultarlo (``deposit_channels``).
-    payment.provider = "mercadopago"
+    payment.provider = PAYMENT_PROVIDER_MERCADOPAGO
     # Solo el id y los links (PV-14, L3-01): la respuesta repite ``payer`` e
     # ``items`` (nombre y email del pagador, nombre del servicio).
     payment.raw_payload = minimize_preference_payload(preference_payload)
@@ -1232,7 +1286,7 @@ async def ensure_payment_preference(
     create_provider_link: bool = True,
     deposit_rule: dict[str, JsonValue] | None = None,
     keep_existing_amount: bool = False,
-    provider: str = "mercadopago",
+    provider: str = PAYMENT_PROVIDER_MERCADOPAGO,
 ) -> Payment:
     payment, _creado = await _upsert_payment_preference(
         db,
@@ -1322,7 +1376,7 @@ async def _upsert_payment_preference(
     deposit_rule: dict[str, JsonValue] | None,
     keep_existing_amount: bool,
     renew_expired_link: bool = False,
-    provider: str = "mercadopago",
+    provider: str = PAYMENT_PROVIDER_MERCADOPAGO,
 ) -> tuple[Payment, bool]:
     """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17).
 
@@ -1478,13 +1532,24 @@ async def lock_payable_appointment(
     db: AsyncSession, *, appointment_id: str, store_id: str
 ) -> bool:
     """Lockea el turno (``FOR UPDATE``) y dice si admite un cobro: existe y
-    no esta soltado (``RELEASED_APPOINTMENT_STATUSES``).
+    no esta soltado (``RELEASED_APPOINTMENT_STATUSES``)."""
+    estado = await lock_appointment_status(
+        db, appointment_id=appointment_id, store_id=store_id
+    )
+    return estado is not None and estado not in RELEASED_APPOINTMENT_STATUSES
+
+
+async def lock_appointment_status(
+    db: AsyncSession, *, appointment_id: str, store_id: str
+) -> str | None:
+    """Lockea el turno (``FOR UPDATE``) y devuelve su estado (None si no existe).
 
     Es el PRIMER lock de quien toca el cobro del turno (orden turno -> pago,
     regla 7), el mismo que cancelar, liberar y el webhook. Lee la columna, no
     la entidad: el turno que trae el router se leyo sin lock y puede estar
     viejo. Sin autoflush: un cambio pendiente del cobro no puede tomar la fila
-    del pago antes que la del turno.
+    del pago antes que la del turno. La confirmacion manual usa el estado para
+    elegir el 409 (``payments.application._not_payable``).
     """
     with db.no_autoflush:
         estado = (
@@ -1497,7 +1562,7 @@ async def lock_payable_appointment(
                 .with_for_update()
             )
         ).scalar_one_or_none()
-    return estado is not None and estado not in RELEASED_APPOINTMENT_STATUSES
+    return None if estado is None else str(estado)
 
 
 async def _discard_unsealed_link(

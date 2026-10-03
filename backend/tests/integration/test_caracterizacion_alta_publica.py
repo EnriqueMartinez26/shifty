@@ -181,7 +181,14 @@ def _sin_ids(cuerpo: dict[str, Any]) -> dict[str, Any]:
     return {
         k: v
         for k, v in cuerpo.items()
-        if k not in {"public_id", "starts_at", "ends_at", "payment_public_id"}
+        if k
+        not in {
+            "public_id",
+            "starts_at",
+            "ends_at",
+            "payment_public_id",
+            "deposit_deadline",
+        }
     }
 
 
@@ -214,6 +221,7 @@ async def test_reserva_manual_cuerpo_filas_outbox_cache_mail_y_replay(
         "notes": "Primera vez",
         "custom_fields": {},
         "payment_required": False,
+        "deposit_channel": None,
         "payment_status": None,
         "payment_link": None,
         "payment_amount": 0.0,
@@ -299,6 +307,7 @@ async def test_reserva_con_mp_commit_antes_del_link(
         "notes": "Primera vez",
         "custom_fields": {},
         "payment_required": True,
+        "deposit_channel": "mercadopago",
         "payment_status": "pending",
         "payment_link": "https://sandbox.mercadopago.com/x?pref=carac",
         "payment_amount": 2500.0,
@@ -307,6 +316,8 @@ async def test_reserva_con_mp_commit_antes_del_link(
         "discount_amount": 0.0,
         "final_price": 10000.0,
     }
+    # El plazo de pago (aditivo, PR #108) es la retencion corta de MP.
+    assert cuerpo["deposit_deadline"] is not None
     # Regla 5: el alta commitea e invalida; recien despues MP y su commit.
     assert orden == ["commit", "cache", "mp:POST", "commit"], orden
     pago = (

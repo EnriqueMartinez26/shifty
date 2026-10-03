@@ -50,7 +50,7 @@ from core.exceptions import (
     ValidationException,
 )
 from core.feature_flags import is_store_feature_enabled
-from core.utils import BOOKING_HORIZON_DAYS, today_local
+from core.utils import BOOKING_HORIZON_DAYS, ensure_utc_aware, today_local
 from modules.appointments.guards import (
     awaits_payment,
     is_active,
@@ -68,11 +68,15 @@ from modules.notifications.tasks import (
 from modules.legal.versions import AcceptedVersions, check_accepted_versions
 from modules.otp.service import OtpService, mask_phone
 from modules.payments.deposit_channels import (
-    MANUAL_PAYMENT_PROVIDER,
     DepositChannel,
     DepositChannels,
-    deposit_channels_of,
+    DepositChannelUnavailableError,
+    deposit_channels_for,
+    deposit_mode_of,
+    provider_for,
+    report_deposit_channel_unavailable,
     resolve_deposit_channel,
+    whatsapp_hold_deadline,
 )
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
@@ -81,13 +85,20 @@ from modules.payments.deposit_rules import (
     DepositRules,
     decide_deposit,
 )
-from modules.payments.model import JsonValue, OutboxMessage, Payment
+from modules.payments.model import (
+    PAYMENT_PROVIDER_MANUAL,
+    JsonValue,
+    OutboxMessage,
+    Payment,
+)
 from modules.payments.repository import PaymentRepository
 from modules.payments.service import (
     MercadoPagoAPIError,
     PaymentGatewayNotConnectedError,
     ProviderPreferenceWithoutLinkError,
+    carry_manual_deposit,
     ensure_payment_preference,
+    expire_live_charge,
     expire_unsealed_preference,
     mercadopago_budget,
 )
@@ -109,9 +120,6 @@ from modules.waitlist.offers import mark_booked
 
 logger = structlog.get_logger()
 
-# Sena no obligatoria: los canales no se consultan (``_resolve_request``).
-_SIN_CANALES = DepositChannels(mercadopago=False, whatsapp=False)
-
 
 # ---------------------------------------------------------------------------
 # Reglas puras (antes en el router)
@@ -131,6 +139,19 @@ def payment_hold_deadline(starts_at: datetime) -> datetime:
         reference,
     )
     return deadline.replace(tzinfo=None) if is_naive else deadline
+
+
+def deposit_hold_deadline(channel: DepositChannel, starts_at: datetime) -> datetime:
+    """Hasta cuando se retiene el turno segun por donde se paga la sena.
+
+    Mercado Pago: la ventana corta de siempre (``payment_hold_deadline``).
+    WhatsApp: hasta dos horas antes del turno, con un piso
+    (``deposit_channels.whatsapp_hold_deadline``, decision de Mateo
+    2026-10-03).
+    """
+    if channel == "whatsapp":
+        return whatsapp_hold_deadline(starts_at)
+    return payment_hold_deadline(starts_at)
 
 
 def _normalize_custom_field_value(value: object) -> str:
@@ -233,7 +254,7 @@ def client_cancel_denial(
     appointment: Appointment,
     *,
     cancellation_hours: int,
-    live_payment: bool,
+    live_charge_provider: str | None,
     now: datetime | None = None,
 ) -> AppException | None:
     """Por que el cliente NO puede cancelar este turno; ``None`` si puede.
@@ -245,12 +266,24 @@ def client_cancel_denial(
     de la guarda del panel, con un mensaje para el cliente) y despues la
     ventana de la tienda.
 
-    ``live_payment``: el turno tiene un ``Payment`` vivo (un link generado
-    desde el panel sobre un turno confirmado, D1 2026-09-25). Lo calcula el
-    llamador con ``live_charge_of``: la accion con
-    ``PaymentRepository.has_live_charge``, el historial en su mismo SELECT.
+    ``live_charge_provider``: el ``Payment.provider`` del cobro vivo del turno
+    (un link de MP, o un link del panel sobre un turno confirmado, D1
+    2026-09-25), o None si no tiene. Lo calcula el llamador con
+    ``live_charge_provider_of``: la accion con
+    ``PaymentRepository.live_charge_provider``, el historial en su mismo
+    SELECT.
+
+    Una sena por WhatsApp pendiente (proveedor ``manual``) NO frena al cliente
+    (propuesta del coordinador aceptada por Mateo, 2026-10-03): la regla del
+    cobro vivo existe por la carrera con Mercado Pago (pagar un link de un
+    turno que se suelta), y por WhatsApp no pasa plata por la plataforma.
+    Cancelar vence ese cobro por el grafo (``cancel_by_client``).
     """
-    if awaits_payment(appointment, live_payment=live_payment):
+    sena_por_whatsapp = live_charge_provider == PAYMENT_PROVIDER_MANUAL
+    if (
+        awaits_payment(appointment, live_payment=live_charge_provider is not None)
+        and not sena_por_whatsapp
+    ):
         return AppException(
             message=_CLIENT_PAYMENT_IN_PROGRESS,
             http_status=status.HTTP_409_CONFLICT,
@@ -272,7 +305,7 @@ def client_reschedule_denial(
     *,
     cancellation_hours: int,
     paid: bool,
-    live_payment: bool,
+    live_charge_provider: str | None,
     now: datetime | None = None,
 ) -> AppException | None:
     """Por que el cliente NO puede reprogramar este turno; ``None`` si puede.
@@ -281,12 +314,13 @@ def client_reschedule_denial(
     (AUD2-B1-02). Despues, un pago acreditado: el ``Payment`` quedaria
     huerfano apuntando al turno cancelado y el nuevo apareceria impago; eso lo
     maneja la tienda. ``paid`` sale de
-    ``PublicRepository.accredited_appointment_ids``.
+    ``PublicRepository.accredited_appointment_ids``. Una sena por WhatsApp
+    pendiente se reprograma con el turno (``reschedule_by_client``).
     """
     denial = client_cancel_denial(
         appointment,
         cancellation_hours=cancellation_hours,
-        live_payment=live_payment,
+        live_charge_provider=live_charge_provider,
         now=now,
     )
     if denial is not None:
@@ -592,12 +626,9 @@ class PublicBookingService:
         discounted_price = await self._discounted_price(
             data, service, store, base_price
         )
-        # Los canales de la sena solo importan si es obligatoria: la consulta
-        # de MP no se paga en cada reserva.
-        channels = (
-            await deposit_channels_of(self.db, store)
-            if (getattr(service, "deposit_mode", "none") or "none") == "required"
-            else _SIN_CANALES
+        # Los canales solo se consultan para una sena obligatoria.
+        channels = await deposit_channels_for(
+            self.db, store, deposit_mode=deposit_mode_of(service)
         )
         return self._decide_deposit(
             data,
@@ -686,14 +717,18 @@ class PublicBookingService:
             starts_at=starts_at_utc,
             history=history,
         )
-        deposit_channel = resolve_deposit_channel(
-            data.payment_method,
-            payments_enabled=is_store_feature_enabled(store.feature_flags, "payments"),
-            channels=channels,
-            deposit_amount=deposit.amount,
-            deposit_mode=getattr(service, "deposit_mode", "none") or "none",
-            allow_manual_coordination=store.allow_manual_coordination,
-        )
+        try:
+            deposit_channel = resolve_deposit_channel(
+                data.payment_method,
+                channels=channels,
+                deposit_amount=deposit.amount,
+                deposit_mode=deposit_mode_of(service),
+                allow_manual_coordination=store.allow_manual_coordination,
+            )
+        except DepositChannelUnavailableError:
+            # El 409 es neutro y el dueno no lo ve: queda rastro con ids.
+            report_deposit_channel_unavailable(store_id=store.id, service_id=service.id)
+            raise
         return _BookingRequest(
             store=store,
             store_id=store.id,
@@ -762,13 +797,13 @@ class PublicBookingService:
             buffer_minutes=request.store.buffer_minutes or 0,
             price_amount=request.discounted_price,
             client_email=str(data.client_email) if data.client_email else None,
-            # Un turno esperando la seña retiene el slot solo por una ventana
-            # corta: si no se paga, vuelve a estar disponible enseguida en vez
-            # de bloquear la agenda hasta la hora del turno. La coordinacion
-            # manual si retiene hasta el horario, porque la confirma la tienda.
+            # Un turno esperando la seña retiene el slot hasta su plazo de pago
+            # (por MP una ventana corta, por WhatsApp hasta 2 h antes): si no
+            # se paga, el horario vuelve a estar libre. Sin seña retiene hasta
+            # el horario, porque lo confirma la tienda.
             expires_at=(
-                payment_hold_deadline(request.starts_at_utc)
-                if request.payment_required
+                deposit_hold_deadline(request.deposit_channel, request.starts_at_utc)
+                if request.deposit_channel is not None
                 else request.starts_at_utc
             ),
             # El schema ya exige accepts_terms (PV-09): todo turno publico nace
@@ -787,8 +822,13 @@ class PublicBookingService:
             booking.payment = await self._create_pending_payment(request, booking)
         # A MP lo acredita el webhook; por WhatsApp o sin sena, la tienda.
         if request.deposit_channel != "mercadopago":
-            self._publish_pending_confirmation(
-                data, store_id, booking, request.deposit_channel
+            self.db.add(
+                _pending_confirmation_message(
+                    booking.appointment,
+                    client_name=data.client_name,
+                    service_name=booking.service.name,
+                    deposit=booking.payment,
+                )
             )
         return booking
 
@@ -815,36 +855,6 @@ class PublicBookingService:
             )
         except ValueError as exc:
             raise ValidationException(str(exc))
-
-    def _publish_pending_confirmation(
-        self,
-        data: PublicBookingCreate,
-        store_id: str,
-        booking: _Booking,
-        channel: DepositChannel | None,
-    ) -> None:
-        """El pago se coordina por fuera, asi que la tienda tiene que
-        confirmar el turno a mano. Con sena por WhatsApp el aviso lleva el
-        importe y hasta cuando se retiene el turno (``jobs``)."""
-        payload: dict[str, JsonValue] = {
-            "appointment_id": booking.appointment.id,
-            "client_name": data.client_name,
-            "service_name": booking.service.name,
-        }
-        if channel == "whatsapp" and booking.payment is not None:
-            expires_at = booking.appointment.expires_at
-            payload |= {
-                "channel": "whatsapp",
-                "amount": str(booking.payment.amount),
-                "expires_at": expires_at.isoformat() if expires_at else None,
-            }
-        self.db.add(
-            OutboxMessage(
-                store_id=store_id,
-                event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
-                payload=payload,
-            )
-        )
 
     async def _create_pending_payment(
         self, request: _BookingRequest, booking: _Booking
@@ -888,11 +898,7 @@ class PublicBookingService:
             promotion_code=quote.code if quote else None,
             create_provider_link=False,
             deposit_rule=final_decision.snapshot(),
-            provider=(
-                MANUAL_PAYMENT_PROVIDER
-                if request.deposit_channel == "whatsapp"
-                else "mercadopago"
-            ),
+            provider=provider_for(request.deposit_channel or "mercadopago"),
         )
 
     async def _attach_payment_link(
@@ -1004,12 +1010,19 @@ class PublicBookingService:
         denial = client_cancel_denial(
             appointment,
             cancellation_hours=await self._cancellation_hours(appointment.store_id),
-            live_payment=await self._has_live_charge(appointment),
+            live_charge_provider=await self._live_charge_provider(appointment),
         )
         if denial is not None:
             raise denial
 
         appointment.apply_status_transition(AppointmentStatus.CANCELLED)
+        # Una sena por WhatsApp pendiente vence por el grafo: sin link que
+        # vencer en MP (placeholder) ni ``payment.preference.expire``.
+        expire_live_charge(
+            self.db,
+            await self._lock_payment(appointment),
+            reason="client_cancel",
+        )
         publish_slot_released(
             self.db,
             store_id=appointment.store_id,
@@ -1052,17 +1065,25 @@ class PublicBookingService:
         # mover el turno a una fecha lejana para liberar el horario igual.
         # Y un turno con pago acreditado no se mueve desde el cliente. Las
         # mismas reglas que el flag ``can_reschedule`` del historial.
+        live_charge_provider = await self._live_charge_provider(original)
         denial = client_reschedule_denial(
             original,
             cancellation_hours=await self._cancellation_hours(original.store_id),
             paid=bool(await self.repo.accredited_appointment_ids([original.id])),
-            live_payment=await self._has_live_charge(original),
+            live_charge_provider=live_charge_provider,
         )
         if denial is not None:
             raise denial
         service, staff = await self._service_and_staff(original)
         new_ends_at = data.new_starts_at + timedelta(minutes=service.duration_minutes)
         await self._check_new_slot(original, staff, data.new_starts_at, new_ends_at)
+        # Una sena por WhatsApp pendiente se muda con el turno: lockeada
+        # despues del turno (regla 7) y con el plazo recalculado.
+        sena = (
+            await self._lock_payment(original)
+            if live_charge_provider == PAYMENT_PROVIDER_MANUAL
+            else None
+        )
 
         # El estado se lee ANTES de cancelar el original: la copia lo conserva
         # (AUD2-B1-14) y ``apply_status_transition`` ya lo habria pisado.
@@ -1080,10 +1101,12 @@ class PublicBookingService:
                 reason="client_rescheduled",
             )
             new_appointment = _rescheduled_copy(
-                original, client, service, data, new_ends_at, estado_previo
+                original, client, service, data, new_ends_at, estado_previo, sena
             )
             self.db.add(new_appointment)
             await self.db.flush()
+            if sena is not None:
+                self._move_whatsapp_deposit(sena, new_appointment, client, service)
 
         await self.db.commit()
         await self.db.refresh(new_appointment)
@@ -1127,10 +1150,36 @@ class PublicBookingService:
         store = await self.repo.get_store_by_id(store_id)
         return getattr(store, "cancellation_hours", 2) if store else 2
 
-    async def _has_live_charge(self, appointment: Appointment) -> bool:
-        """El turno (ya lockeado) tiene un cobro vivo: un link del panel (D1)."""
-        return await PaymentRepository(self.db).has_live_charge(
+    async def _live_charge_provider(self, appointment: Appointment) -> str | None:
+        """Proveedor del cobro vivo del turno (ya lockeado), o None."""
+        return await PaymentRepository(self.db).live_charge_provider(
             appointment.id, appointment.store_id
+        )
+
+    async def _lock_payment(self, appointment: Appointment) -> Payment | None:
+        """El cobro del turno con ``FOR UPDATE``, despues del turno (regla 7)."""
+        return await PaymentRepository(self.db).get_by_appointment_locked(
+            appointment.id, appointment.store_id
+        )
+
+    def _move_whatsapp_deposit(
+        self,
+        sena: Payment,
+        new_appointment: Appointment,
+        client: User,
+        service: Service,
+    ) -> None:
+        """La sena por WhatsApp pasa al turno nuevo (``carry_manual_deposit``)
+        y el dueno recibe el aviso con el plazo nuevo: el anterior ya no vale.
+        """
+        nueva = carry_manual_deposit(self.db, sena, new_appointment)
+        self.db.add(
+            _pending_confirmation_message(
+                new_appointment,
+                client_name=client.full_name or "Un cliente",
+                service_name=service.name,
+                deposit=nueva,
+            )
         )
 
     async def _notify_owner_of_cancellation(
@@ -1236,16 +1285,29 @@ def _rescheduled_copy(
     data: ClientRescheduleRequest,
     new_ends_at: datetime,
     estado_previo: str,
+    whatsapp_deposit: Payment | None = None,
 ) -> Appointment:
     # El turno movido conserva el estado del original (AUD2-B1-14): antes
     # nacia siempre con el default de la columna, asi que un turno confirmado
     # volvia a "pendiente de confirmar" sin que nadie se enterara y el job de
-    # expiracion lo levantaba a la hora de inicio. A esta altura no hay sena
-    # de por medio -``client_reschedule_denial`` frena el ``pending_payment``,
-    # el cobro vivo (link del panel, D1) y el pago acreditado-,
-    # asi que lo unico que se conserva es un ``confirmed`` sin cobro, y con el
-    # se va el ``expires_at``: no hay retencion que vencer.
+    # expiracion lo levantaba a la hora de inicio. ``client_reschedule_denial``
+    # frena el cobro vivo de MP (link del panel, D1) y el pago acreditado, asi
+    # que lo que se conserva es un ``confirmed`` sin cobro (sin ``expires_at``:
+    # no hay retencion que vencer) o una sena por WhatsApp pendiente
+    # (``whatsapp_deposit``): sigue ``pending_payment`` y su plazo se recalcula
+    # contra el horario nuevo (``whatsapp_hold_deadline``), porque el plazo es
+    # "hasta 2 h antes del turno".
     confirmado = estado_previo == AppointmentStatus.CONFIRMED.value
+    if whatsapp_deposit is not None:
+        estado = AppointmentStatus.PENDING_PAYMENT.value
+        vence: datetime | None = whatsapp_hold_deadline(data.new_starts_at)
+    elif confirmado:
+        estado, vence = AppointmentStatus.CONFIRMED.value, None
+    else:
+        # Mismo criterio que el alta publica para un turno sin cobro online:
+        # retiene el horario hasta que empieza y despues lo levanta el job de
+        # expiracion si nadie lo confirmo (B1-22).
+        estado, vence = AppointmentStatus.PENDING.value, data.new_starts_at
     return Appointment(
         store_id=original.store_id,
         staff_id=original.staff_id,
@@ -1262,16 +1324,52 @@ def _rescheduled_copy(
         notes=original.notes,
         intake_answers=original.intake_answers or {},
         idempotency_key=data.idempotency_key,
-        status=(
-            AppointmentStatus.CONFIRMED.value
-            if confirmado
-            else AppointmentStatus.PENDING.value
-        ),
-        # Mismo criterio que el alta publica para un turno sin cobro online:
-        # retiene el horario hasta que empieza y despues lo levanta el job de
-        # expiracion si nadie lo confirmo (B1-22).
-        expires_at=None if confirmado else data.new_starts_at,
+        status=estado,
+        expires_at=vence,
     )
+
+
+def _pending_confirmation_message(
+    appointment: Appointment,
+    *,
+    client_name: str,
+    service_name: str,
+    deposit: Payment | None,
+) -> OutboxMessage:
+    """Aviso al dueno de un turno que la tienda confirma a mano.
+
+    Con una sena por WhatsApp pendiente (cobro ``manual``) lleva el canal, el
+    importe y hasta cuando se retiene el turno: el aviso le dice al dueno que
+    confirme desde Cobros y cuando se libera
+    (``jobs._pending_confirmation_notification``). Lo publican el alta publica
+    y la reprogramacion de una sena por WhatsApp, que cambia el plazo.
+    """
+    payload: dict[str, JsonValue] = {
+        "appointment_id": appointment.id,
+        "client_name": client_name,
+        "service_name": service_name,
+    }
+    if deposit is not None and deposit.provider == PAYMENT_PROVIDER_MANUAL:
+        expires_at = appointment.expires_at
+        payload |= {
+            "channel": "whatsapp",
+            "amount": str(deposit.amount),
+            "expires_at": ensure_utc_aware(expires_at).isoformat()
+            if expires_at
+            else None,
+        }
+    return OutboxMessage(
+        store_id=appointment.store_id,
+        event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
+        payload=payload,
+    )
+
+
+def _deposit_deadline(appointment: Appointment) -> datetime | None:
+    """El plazo para pagar la sena (la retencion del turno), en UTC aware."""
+    if appointment.status != AppointmentStatus.PENDING_PAYMENT.value:
+        return None
+    return ensure_utc_aware(appointment.expires_at) if appointment.expires_at else None
 
 
 def _self_service_response(
@@ -1294,6 +1392,11 @@ def _self_service_response(
         client_phone=phone,
         notes=appointment.notes,
         custom_fields=appointment.intake_answers or {},
+        # Por autogestion solo una sena por WhatsApp queda pendiente (la de MP
+        # no se mueve): el cliente ve su plazo nuevo.
+        payment_required=_deposit_deadline(appointment) is not None,
+        deposit_channel="whatsapp" if _deposit_deadline(appointment) else None,
+        deposit_deadline=_deposit_deadline(appointment),
     )
 
 
@@ -1316,6 +1419,10 @@ def _booking_response(
         notes=data.notes,
         custom_fields=appointment.intake_answers or request.custom_fields,
         payment_required=request.payment_required,
+        # Canal explicito (revision 4R): el front no lo infiere de la falta
+        # de link. El plazo es la retencion del turno: hasta ahi se paga.
+        deposit_channel=request.deposit_channel,
+        deposit_deadline=_deposit_deadline(appointment),
         payment_status=payment.status if payment else None,
         # Por WhatsApp el cobro tiene un link placeholder que no existe.
         payment_link=(

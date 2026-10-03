@@ -16,8 +16,9 @@ se serializan sobre la fila del turno, sin deadlock y sin estados mezclados:
 - gana la confirmacion: turno ``confirmed``, cobro ``manual_confirmed``, un
   ``appointment.confirmed`` en el outbox y el job no lo toca;
 - gana el job: turno y cobro ``expired``, el cupo liberado y la confirmacion
-  responde 409 ``APPOINTMENT_NOT_PAYABLE`` (regla 3: un turno soltado no se
-  cobra).
+  responde 409 ``APPOINTMENT_HOLD_EXPIRED`` (regla 3: un turno soltado no se
+  cobra; el codigo le dice al personal que reagende, revision 4R de la PR
+  #108).
 
 Nunca un turno vencido con el cobro confirmado ni al reves, y cero 5xx.
 """
@@ -208,7 +209,7 @@ async def test_confirmar_a_mano_y_vencer_la_retencion_a_la_vez_no_mezclan_estado
             assert (confirmados, liberados) == (1, 0)
         else:
             assert respuesta.status_code == 409, respuesta.text
-            assert respuesta.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE"
+            assert respuesta.json()["error_code"] == "APPOINTMENT_HOLD_EXPIRED"
             assert (turno_estado, cobro_estado) == ("expired", "expired")
             assert (confirmados, liberados) == (0, 1)
             vencidos += 1
@@ -218,15 +219,19 @@ async def test_confirmar_a_mano_y_vencer_la_retencion_a_la_vez_no_mezclan_estado
 
 
 @pytest.mark.asyncio
-async def test_el_job_saltea_la_sena_que_se_esta_confirmando(
+async def test_el_job_saltea_con_skip_locked_un_turno_lockeado_y_la_confirmacion_espera(
     client: AsyncClient,
     app_sessions: async_sessionmaker[AsyncSession],
     owner_engine: AsyncEngine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Orden fijo: con el turno lockeado (como lo deja la confirmacion antes
-    de escribir el pago), el job lo saltea con SKIP LOCKED en vez de vencerlo
-    o de esperar; al soltarse el lock la confirmacion termina."""
+    """Orden fijo, con el lock del TURNO tomado desde afuera (una conexion del
+    test, no la confirmacion): es el mismo lock que la confirmacion toma
+    antes de escribir el pago (``lock_appointment_status``). Con el turno
+    lockeado, el job lo saltea con SKIP LOCKED en vez de vencerlo o esperar,
+    y la confirmacion, que pide el mismo lock, espera; al soltarlo termina.
+    (Revision 4R de la PR #108: el nombre anterior decia que el job salteaba
+    "la sena que se esta confirmando", pero quien tiene el lock es el test.)"""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _mp_prohibido(monkeypatch)
     t = await _tienda_con_senas_por_whatsapp(client, app_sessions, "pg-wa-lock", 1)
@@ -265,10 +270,19 @@ async def test_rafaga_de_confirmaciones_de_una_sena_por_whatsapp_sin_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """N confirmaciones a la vez del mismo turno con los cobros APAGADOS:
-    cero 5xx, una sola transicion y un solo mail de "turno confirmado"."""
+    cero 5xx, una sola transicion y un solo mail de "turno confirmado".
+
+    Aca no aplica la forma "1 exito, N-1 conflictos" de CLAUDE.md §4:
+    ``manual-confirm`` es idempotente a proposito (registrar un pago ya
+    registrado es un no-op 200 con el cobro tal cual, revision de
+    e5579b6..3b977a9, #5), asi que una rafaga da N x 200 (o 409 si el lock
+    corta). Lo que §4 protege -una sola transicion, ningun efecto
+    duplicado, cero 5xx- es lo que se fija."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     llamadas = _mp_prohibido(monkeypatch)
     t = await _tienda_con_senas_por_whatsapp(client, app_sessions, "pg-wa-rafaga", 1)
+    flags = await client.get("/stores/me/feature-flags", headers=auth_headers(t.token))
+    assert flags.json()["flags"]["payments"] is False, flags.text
     (turno,) = t.turnos
 
     respuestas = await asyncio.gather(
@@ -285,4 +299,158 @@ async def test_rafaga_de_confirmaciones_de_una_sena_por_whatsapp_sin_flag(
         "manual",
     )
     assert await _eventos(owner_engine, "appointment.confirmed", turno) == 1
+    assert llamadas == []
+
+
+# ---------------------------------------------------------------------------
+# Rafaga sobre el alta publica por WhatsApp (CLAUDE.md §4; revision 4R, R3 W3)
+# ---------------------------------------------------------------------------
+
+
+async def _tienda_para_rafaga(
+    client: AsyncClient, sessions: async_sessionmaker[AsyncSession], slug: str
+) -> tuple[str, str, str, datetime]:
+    store, token = await register_and_login(
+        client, sessions, slug=slug, email=f"{slug}@demo.com"
+    )
+    canal = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"whatsapp_number": "11 5555 0303"},
+    )
+    assert canal.status_code == 200, canal.text
+    servicio = await create_service(
+        client,
+        token,
+        deposit_mode="required",
+        deposit_type="percent",
+        deposit_amount=30,
+    )
+    staff = await create_staff(client, token, servicio, email=f"pro-{slug}@demo.com")
+    dia = datetime.now(timezone.utc) + timedelta(days=5)
+    await add_staff_schedule(client, token, staff, target_date=dia)
+    slot = dia.replace(hour=11, minute=0, second=0, microsecond=0)
+    return store, servicio, staff, slot
+
+
+def _alta(
+    store: str, servicio: str, staff: str, slot: datetime, *, clave: str, telefono: str
+) -> dict[str, Any]:
+    return {
+        "store_public_id": store,
+        "service_id": servicio,
+        "staff_id": staff,
+        "starts_at": slot.isoformat(),
+        "client_name": "Cliente Rafaga",
+        "client_phone": telefono,
+        "payment_method": "manual",
+        "accepts_terms": True,
+        "idempotency_key": clave,
+    }
+
+
+async def _contar_del_profesional(
+    owner_engine: AsyncEngine, staff: str
+) -> tuple[int, int, int]:
+    """(turnos activos, cobros manuales, avisos de sena) del profesional."""
+    async with owner_engine.connect() as conn:
+        fila = (
+            await conn.execute(
+                text(
+                    "select "
+                    "(select count(*) from appointments where staff_id = :s "
+                    " and status in ('pending','pending_payment','confirmed')), "
+                    "(select count(*) from payments p join appointments a "
+                    " on a.id = p.appointment_id where a.staff_id = :s "
+                    " and p.provider = 'manual'), "
+                    "(select count(*) from outbox_messages o join appointments a "
+                    " on a.id = o.payload->>'appointment_id' where a.staff_id = :s "
+                    " and o.event_type = 'appointment.pending_confirmation')"
+                ),
+                {"s": staff},
+            )
+        ).one()
+    return int(fila[0]), int(fila[1]), int(fila[2])
+
+
+@pytest.mark.asyncio
+async def test_rafaga_de_la_misma_reserva_por_whatsapp_deja_un_turno_y_un_cobro(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N altas identicas (misma clave de idempotencia): un turno, UN cobro
+    ``manual`` y UN aviso al dueno; las demas son el replay (201 con el mismo
+    turno) o 409; cero 5xx y ninguna llamada a MP."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    llamadas = _mp_prohibido(monkeypatch)
+    store, servicio, staff, slot = await _tienda_para_rafaga(
+        client, app_sessions, "pg-wa-rafaga-alta"
+    )
+    cuerpo = _alta(
+        store,
+        servicio,
+        staff,
+        slot,
+        clave="pg-wa-rafaga-alta-0001",
+        telefono="+5491155551234",
+    )
+
+    respuestas = await asyncio.gather(
+        *(client.post("/public/appointments", json=cuerpo) for _ in range(RAFAGA))
+    )
+    codigos = sorted(r.status_code for r in respuestas)
+
+    assert all(c < 500 for c in codigos), codigos
+    assert set(codigos) <= {201, 409}, codigos
+    creados = {r.json()["public_id"] for r in respuestas if r.status_code == 201}
+    assert len(creados) == 1, creados
+    assert all(
+        r.json()["deposit_channel"] == "whatsapp"
+        for r in respuestas
+        if r.status_code == 201
+    )
+    assert await _contar_del_profesional(owner_engine, staff) == (1, 1, 1)
+    assert llamadas == []
+
+
+@pytest.mark.asyncio
+async def test_rafaga_de_reservas_distintas_por_whatsapp_al_mismo_horario(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N altas al MISMO horario con claves y clientes distintos: un turno
+    (lock del profesional + exclusion GiST, regla 4), 1 x 201 y N-1 x 409,
+    un solo cobro manual y cero 5xx."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    llamadas = _mp_prohibido(monkeypatch)
+    store, servicio, staff, slot = await _tienda_para_rafaga(
+        client, app_sessions, "pg-wa-rafaga-slot"
+    )
+
+    respuestas = await asyncio.gather(
+        *(
+            client.post(
+                "/public/appointments",
+                json=_alta(
+                    store,
+                    servicio,
+                    staff,
+                    slot,
+                    clave=f"pg-wa-rafaga-slot-{i:06d}",
+                    telefono=f"+54911577{i:05d}",
+                ),
+            )
+            for i in range(RAFAGA)
+        )
+    )
+    codigos = sorted(r.status_code for r in respuestas)
+
+    assert all(c < 500 for c in codigos), codigos
+    assert codigos.count(201) == 1, codigos
+    assert set(codigos) == {201, 409}, codigos
+    assert await _contar_del_profesional(owner_engine, staff) == (1, 1, 1)
     assert llamadas == []
