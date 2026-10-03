@@ -29,6 +29,69 @@ make deploy-edge                   # only when nginx's image or nginx/nginx.prod
 | After adding the `pg_backups` volume to `docker-compose.prod.yml`, the `db` container was recreated once so the volume attaches (see below) | `docker compose exec db ls /backups` |
 | python3 on the host (the latency report is stdlib only) | `python3 --version` |
 | Sending domain verified with the SMTP provider, with SPF, DKIM and DMARC published and the provider sandbox lifted (see "Mail deliverability" below) | a test OTP to a Gmail account shows `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS` |
+| 2 GB swapfile with `vm.swappiness=10`, and Docker started at boot (see "Host: memory budget, swap and boot" below) | `swapon --show`, `sysctl vm.swappiness`, `systemctl is-enabled docker containerd` |
+| The reboot test passed once (see below) | after `sudo reboot`, `APP_VERSION=$(cat .deploy/current) docker compose ps` shows every service `healthy` without anyone running `up` |
+
+### Host: memory budget, swap and boot
+
+The production VPS is a Hostinger KVM 2: **2 vCPU, 8 GB RAM, 100 GB NVMe**. Every container has a memory limit (`deploy.resources.limits` in `docker-compose.yml` and `docker-compose.prod.yml`), and the limits must add up to less than the RAM, also during a deploy: `scripts/deploy.sh` starts the new backend replicas **next to** the old ones before it stops the old ones. `test_la_memoria_de_produccion_entra_en_el_vps` (`backend/tests/unit/test_compose_contract.py`) sums the limits from the compose files and `deploy.sh` and fails above 6.5 GiB steady or 7 GiB (8 GiB minus 1 GiB for the system) at the deploy peak.
+
+| Service | Before (16 GB host) | Now (8 GB host) | CPU limit |
+| --- | --- | --- | --- |
+| db (Postgres) | 4096M | 2560M | none (plan §8: CFS throttling adds p95 spikes) |
+| backend | 3 x 512M | 2 x 512M | none (same reason) |
+| celery_worker (2 children) | 768M | 768M | 1.5 -> 1.0 |
+| celery_worker_interactive (1 child) | 256M | 256M | 0.5 (new) |
+| celery_beat | 256M | 256M | 0.25 (new) |
+| rabbitmq (alarm at 280 MiB) | 384M | 384M | none |
+| redis_cache (`maxmemory 96mb`) | 192M | 192M | none |
+| redis_state (`maxmemory 48mb`) | 96M | 96M | none |
+| nginx | 256M | 256M | none |
+| frontend | 64M | 64M | none |
+| **Steady total** | **7904 MiB (7.7 GiB)** | **5856 MiB (5.7 GiB)** | |
+| **Deploy peak** (steady + the new backend replicas) | **9440 MiB (9.2 GiB)** | **6880 MiB (6.7 GiB)** | |
+| Left for the OS, Docker and page cache at the peak (of 8192 MiB) | none | 1312 MiB | |
+
+- **Two backend replicas**, one per vCPU. `DEPLOY_BACKEND_REPLICAS` in `scripts/deploy.sh` must equal `deploy.replicas` in `docker-compose.prod.yml` (`test_el_deploy_levanta_tantas_replicas_como_produccion`).
+- **Postgres** gets 2560M: `shared_buffers=640MB` (25 %), `effective_cache_size=1920MB` (75 %: the database's page cache is charged to its own cgroup, so it cannot use more than the limit), `work_mem=4MB`, `maintenance_work_mem=128MB`, `shm_size: 256m`.
+- **`max_connections=100`**, from the deploy peak: (2 old + 2 new backend replicas) x (`DB_POOL_SIZE` 5 + `DB_MAX_OVERFLOW` 5) = 40, plus the Celery children (2 general + 1 interactive) x 10 = 30, total 70. Beat runs no tasks and the prefork parents dispose their pool before forking, so they add nothing. On top of that: the migration (2), the backup (2), the weekly `pg_stat_statements` report and a console (3) and the 3 connections Postgres reserves for the superuser: 80 of 100. Raising the pool, the replicas or the Celery concurrency means redoing this sum (`test_los_pools_de_produccion_entran_en_max_connections`).
+- **CPU**: the API and the database have no CPU limit. Each Celery process does, and none gets more than half the host, so a runaway batch leaves at least one vCPU for the API and Postgres (`test_ningun_proceso_de_celery_deja_sin_cpu_a_la_api`).
+- **Staging does not fit** next to production on this host (section 6).
+
+Swap, once. It is a safety margin for a short spike, not memory to plan with: with `vm.swappiness=10` the kernel only swaps under real pressure, and `scripts/checks.sh` alerts when there is no swap or more than half of it is in use.
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-shifty-swap.conf
+sudo sysctl -p /etc/sysctl.d/99-shifty-swap.conf
+swapon --show            # /swapfile, 2G
+sysctl vm.swappiness     # vm.swappiness = 10
+```
+
+Docker at boot, once. Every service has `restart: always`, so the stack comes back by itself only if the Docker daemon starts with the host:
+
+```bash
+sudo systemctl enable docker containerd
+systemctl is-enabled docker containerd   # enabled, enabled
+```
+
+Reboot test, once before launch (and after any change to the host's boot setup), in a maintenance window: the site is down for the minute or two the reboot takes.
+
+```bash
+sudo reboot
+# back on the host, without running any `up`:
+cd /opt/shifty
+APP_VERSION=$(cat .deploy/current) docker compose ps    # every service running and healthy (backend, workers and beat may take 1-2 min)
+swapon --show                                           # the swapfile is active again
+curl -fsS https://<domain>/api/ops/health/ready         # 200
+systemctl list-timers shifty-backup.timer               # the backup timer is scheduled again
+```
+
+If a service is missing after the reboot, `docker compose ps -a` and `docker compose logs <service>` show why; do not paper over it with a manual `up`, because the next unattended reboot will have the same problem.
 
 certbot:
 
@@ -95,7 +158,7 @@ In the records below, `<domain>` is the domain of `EMAILS_FROM_EMAIL` and everyt
 3. Save the running version to `.deploy/previous` (from `.deploy/current`, or the tag of the running backend image on the first run).
 4. `docker compose pull` of the app services, then `docker image inspect` of every expected `image:tag`. A failed pull or a missing image stops the deploy here, before migrating.
 5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps -T backend alembic upgrade head`. If it fails, nothing was recreated. `run` takes no `--no-build` in any Compose version (only `up` and `create` do; Compose 5.5.1 rejects it as an unknown flag) and `run --pull never` needs Compose 2.33, above the 2.24 minimum. It still cannot build or pull: the production view has no `build` section (`build: !reset null`) and the previous step checked that the image is local.
-6. **Backend, gradually**: `up -d --no-deps --no-build --remove-orphans --no-recreate --wait --scale backend=<old + 3> backend` starts 3 new replicas next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
+6. **Backend, gradually**: `up -d --no-deps --no-build --remove-orphans --no-recreate --wait --scale backend=<old + 2> backend` starts 2 new replicas (`DEPLOY_BACKEND_REPLICAS`, equal to `deploy.replicas` in `docker-compose.prod.yml`) next to the old ones and waits until they are healthy. nginx resolves `backend` by itself (`server backend:8000 resolve`, `resolver 127.0.0.11 valid=5s`), so after `DEPLOY_DNS_SETTLE` (6 s) the old replicas are stopped (`docker stop -t 35`, graceful) and removed. If the new replicas do not become healthy within 180 s they are removed and the old ones keep serving: the deploy fails without a rollback because nothing else changed. Verified with Compose v5.5: `--no-recreate --scale` creates the missing replicas with the new configuration and leaves the existing ones alone. Requires the backend service without `container_name` (F0-04, `docker-compose.yml`). `DEPLOY_ROLLING=0` falls back to a plain `up -d --no-deps backend`, with about 5-10 s of 502 while the replicas are recreated.
 7. The rest of the app: `up -d --no-deps --no-build --remove-orphans celery_worker celery_worker_interactive celery_beat frontend`. Compose only recreates what changed. The frontend container is recreated when its image changes (every release): the SPA answers 502 for a moment while it restarts. Accepted: the API keeps serving and the browser retries.
 8. `nginx -t && nginx -s reload`. On a normal deploy the edge is only **reloaded**, never recreated or restarted; it re-resolves `backend` by itself.
 9. Write `.deploy/current`.
@@ -180,16 +243,20 @@ SELECT count(*) FROM store_media WHERE kind NOT IN ('logo', 'cover', 'service');
 
 Run them as the migration role (or any role that bypasses RLS): as `shifty_app` without a tenant context, RLS hides every row and the counts are a false 0.
 
-## 6. Staging: a second compose project on the same VPS
+## 6. Staging: NOT on the production VPS
 
-Until launch (plan §7, decision 29) staging is another clone, for example `/opt/shifty-staging`, with its own `.env`:
+The production VPS has 8 GB (section 1): production's limits already take about 5.7 GiB steady and 6.7 GiB during a deploy, so a second full stack does not fit next to it. Running staging there would push the host into swap and the OOM killer, and the victim could be production's database. **Staging runs on another host** (a second, separate VPS, possibly a smaller or temporary one) **or locally** on a developer machine with the production view (`COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml`). Never on the production host, not even "just for a test".
+
+The plan (plan §7, decision 29) described staging as a second compose project on the production VPS; that assumed a 16 GB host and no longer applies. Everything below still holds for a staging host of its own: there it is the only project, so it can keep the default ports and does not need the extra port override.
+
+Staging is a clone, for example `/opt/shifty-staging`, with its own `.env`:
 
 - `COMPOSE_PROJECT_NAME=shifty-staging`: containers, networks and volumes (the database included) are separate from production. Container names are `${COMPOSE_PROJECT_NAME:-shifty}_<service>` in the compose files, so the two projects do not collide (a fixed `container_name` would stop the second project from starting). The guard watches only its own project (`COMPOSE_PROJECT_NAME`).
 - Its own secrets, `DOMAIN` and `BACKUP_DIR=/var/backups/shifty-staging` with `BACKUP_ALLOW_LOCAL_ONLY=1`, in its own ops file; point its scripts at it with `SHIFTY_OPS_ENV=/etc/shifty/ops-staging.env`.
-- Production nginx publishes 80 and 443, so staging nginx needs other host ports (for example `127.0.0.1:8443:443`) through an extra override listed in its `COMPOSE_FILE`. That override does not exist yet.
+- Only if staging ever shares a host with another project that publishes 80 and 443 does its nginx need other host ports (for example `127.0.0.1:8443:443`) through an extra override listed in its `COMPOSE_FILE`. That override does not exist; on a host of its own it is not needed.
 - `docker-compose.prod.yml` fixes `ENV: production`, so without changes staging boots as production and needs the production-only requirements of section 1: Sentry, and Mercado Pago OAuth and webhook credentials from a non-`TEST-` app. A staging without real MP credentials needs `ENV: staging` in that same extra override (staging keeps the secret and MP API base checks, not the production ones). Its `.env` still has to define the MP and Sentry variables with some non-empty value: compose interpolates the `:?` of `docker-compose.prod.yml` before it applies any override.
 - Deploy it with the same script: `APP_VERSION=<sha> DEPLOY_SKIP_BACKUP_CHECK=1 bash scripts/deploy.sh deploy` from its clone.
-- It shares 16 GB with production: bring it up for a test and take it down afterwards (`docker compose down`, the volumes stay).
+- The staging host needs the same 8 GB as production to run the production limits unchanged; on a smaller host, lower them in a staging-only override, never in `docker-compose.prod.yml`. Bring it up for a test and take it down afterwards (`docker compose down`, the volumes stay).
 
 The monthly backup drill can restore into staging (`docs/BACKUP_RESTORE_RUNBOOK.md`).
 
@@ -210,7 +277,7 @@ The edge also caches, and only what the backend marks cacheable (plan F1-29): `/
 | What | When | Script | Alerts when |
 | --- | --- | --- | --- |
 | Restart `unhealthy` containers | every minute (cron) | `scripts/guard.sh` | every restart. Never restarts `db` or `rabbitmq` (alert only), one-off containers (`compose run`) or anything while `db` or `redis_state` is unhealthy (the rest fails because of them). Caps: 3 restarts per container and 6 in total per hour |
-| NTP, TLS certificate, disk, per-container memory, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit |
+| NTP, TLS certificate, disk, per-container memory, host memory and swap, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit, host `MemAvailable` under 10 % of RAM, no swap, or swap more than 50 % used |
 | Backup freshness | hourly (cron) | `scripts/backup-check.sh` | last successful backup > 26 h (critical > 48 h) |
 | Latency and 5xx per route | every 5 min (cron) | `scripts/latency-check.sh` + `backend/scripts/latency_report.py` | a route with >= 20 requests over p95 500 ms or 5xx 0.1 %, or global 5xx over 0.1 % with >= 200 requests in the window |
 | Top 20 queries of `pg_stat_statements` | Mondays 06:23 host time (cron; cron.d uses the host timezone) | `backend/scripts/pg_top_queries.py` inside the backend container | never: it is a report, read `/var/log/shifty/pg-top.log` |

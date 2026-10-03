@@ -241,7 +241,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Sin container_name (F0-04): en produccion corren tres replicas de un
+    # Sin container_name (F0-04): en produccion corren varias replicas de un
     # proceso (docker-compose.prod.yml) y un nombre fijo impide mas de una.
     # Sin bind mount del codigo (2026-09-24): el contenedor corre lo que trae
     # la imagen. Un cambio en backend/ exige `docker compose build` (construye
@@ -333,7 +333,10 @@ services:
         limits:
           # F0-18/F0-19: dos hijos de hasta 150 MB, el padre y margen.
           memory: 768M
-          cpus: "1.5"
+          # Produccion tiene 2 vCPU (2026-10-02): un lote desbocado se queda
+          # con uno y el otro sigue libre para la API y la base, que no
+          # llevan tope (el throttling de CFS mete picos en el p95, plan §8).
+          cpus: "1.0"
 
   # F0-18 (decision 7): worker aparte para la cola `interactive` (el mail del
   # OTP). Un solo hijo: su latencia no depende de que termine un lote del
@@ -373,6 +376,8 @@ services:
       resources:
         limits:
           memory: 256M
+          # Un hijo que manda un mail: medio vCPU sobra (ver celery_worker).
+          cpus: "0.5"
 
   celery_beat:
     # Misma imagen que backend, sin `build` propio (F0-02).
@@ -420,6 +425,8 @@ services:
       resources:
         limits:
           memory: 256M
+          # Solo agenda: no corre tareas (ver celery_worker).
+          cpus: "0.25"
 
   frontend:
     image: ghcr.io/enriquemartinez26/shifty-frontend:${APP_VERSION:-dev}
