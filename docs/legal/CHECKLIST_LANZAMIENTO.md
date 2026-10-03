@@ -173,7 +173,7 @@ Ordenado por impacto: primero la reserva pública, después el panel y al final 
 
 | ID | Ítem y ubicación | Arreglo | Fuente |
 |---|---|---|---|
-| A11Y-18 | Autocompletado en login y recuperación: `pages/Login.tsx:95,115`, `ForgotPassword.tsx:93`, `ResetPassword.tsx:118,144`. | `email`, `current-password` y `new-password`; `minLength={12}` y una ayuda visible. | L2 §1.3.5 |
+| A11Y-18 | Autocompletado en login y recuperación: `pages/Login.tsx:95,115`, `ForgotPassword.tsx:93`, `ResetPassword.tsx:118,144`. | `username` (email de login), `email`, `current-password` y `new-password`; `minLength={PASSWORD_MIN_LENGTH}` (6) y validación de 64 caracteres y 72 bytes al fijar una clave, 128 caracteres en login (D-20261001-01); los topes HTML son el doble porque cuentan unidades UTF-16, y una ayuda visible. | L2 §1.3.5 |
 | A11Y-19 | Autocompletado en el panel: `NewAppointmentModal.tsx:357,373,393,473` (datos de un tercero: `autoComplete="off"`; OTP numérico); `Settings.tsx:1513,1530,1547` (contraseñas), `:549,590,605` (`tel`) y `:892,907,922` (`url`). | Agregar. | L2 §1.3.5 |
 | A11Y-20 | Campos de ~140 px a 360 px en el paso 3: `BookingWizardContainer.tsx:249` (`p-8`), `:268` (`p-6`), `PublicBooking.tsx:129`. | `p-4 sm:p-8` / `p-3 sm:p-6`, sin doble padding en mobile. | L2 §1.4.10 |
 | A11Y-21 | Fecha en ISO en la reserva y en el mensaje de WhatsApp: `BookingStepConfirmation.tsx:608,789,699`. | `Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })`. | L2 §1.4.10 |

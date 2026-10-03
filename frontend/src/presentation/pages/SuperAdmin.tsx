@@ -2,6 +2,8 @@ import React, { useRef, useState } from 'react'
 
 import { AlertTriangle } from 'lucide-react'
 
+import { validateNewPassword } from '@domain/value-objects/PasswordRules'
+
 import {
   type SuperAdminCoupon,
   type SuperAdminPlan,
@@ -344,6 +346,12 @@ const SuperAdminPage: React.FC = () => {
     if (!selectedStore) return
     setModalError(null)
 
+    const passwordError = validateNewPassword(adminForm.password)
+    if (passwordError) {
+      setModalError(passwordError)
+      return
+    }
+
     try {
       const created = await createAdminMutation.mutateAsync({
         storePublicId: selectedStore.public_id,
@@ -369,6 +377,14 @@ const SuperAdminPage: React.FC = () => {
     if (!editingUser) return
     setModalError(null)
 
+    // La clave es opcional: vacía no viaja, pero una escrita se valida y se
+    // manda tal cual, sin recortar (D-20261001-01).
+    const passwordError = userForm.password ? validateNewPassword(userForm.password) : null
+    if (passwordError) {
+      setModalError(passwordError)
+      return
+    }
+
     try {
       const updated = await updateUserMutation.mutateAsync({
         userPublicId: editingUser.public_id,
@@ -377,7 +393,7 @@ const SuperAdminPage: React.FC = () => {
           last_name: userForm.last_name.trim() || undefined,
           phone: userForm.phone.trim() || null,
           role: userForm.role,
-          password: userForm.password.trim() || undefined,
+          password: userForm.password || undefined,
           is_active: userForm.is_active
         }
       })

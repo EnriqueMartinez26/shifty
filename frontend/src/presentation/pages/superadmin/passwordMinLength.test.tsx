@@ -13,12 +13,16 @@ const passwordInput = (): HTMLInputElement => {
 }
 
 /**
- * L1: el superadmin pedia 8 caracteres y el backend exige 12
- * (`StoreAdminCreate`, `UserGlobalUpdate`); una clave de 8 a 11 pasaba el formulario y
- * volvia como 422.
+ * L1: el superadmin pedia 8 caracteres y el backend exige lo mismo que el resto
+ * (`StoreAdminCreate`, `UserGlobalUpdate`); una clave que el backend rechaza
+ * pasaba el formulario y volvia como 422.
+ *
+ * 2026-10-01, D-20261001-01: el piso era 12; ahora es 6, con tope de 64
+ * caracteres (el HTML cuenta unidades UTF-16: es solo una guarda, la regla
+ * completa la aplica `validateNewPassword`).
  */
 describe('contrasenas del superadmin', () => {
-  it('crear admin pide el mismo piso de 12 que el backend', () => {
+  it('crear admin pide el mismo piso de 6 y tope de 64 que el backend', () => {
     render(
       <StoreModals
         modal="create-admin"
@@ -37,10 +41,12 @@ describe('contrasenas del superadmin', () => {
       />
     )
 
-    expect(passwordInput()).toHaveAttribute('minlength', '12')
+    expect(passwordInput()).toHaveAttribute('minlength', '6')
+    expect(passwordInput()).toHaveAttribute('maxlength', '128')
+    expect(passwordInput()).toHaveAttribute('autocomplete', 'new-password')
   })
 
-  it('cambiar la clave de un usuario pide el mismo piso de 12 que el backend', () => {
+  it('cambiar la clave de un usuario pide el mismo piso de 6 y tope de 64 que el backend', () => {
     render(
       <UserModals
         modal="edit-user"
@@ -53,6 +59,8 @@ describe('contrasenas del superadmin', () => {
       />
     )
 
-    expect(passwordInput()).toHaveAttribute('minlength', '12')
+    expect(passwordInput()).toHaveAttribute('minlength', '6')
+    expect(passwordInput()).toHaveAttribute('maxlength', '128')
+    expect(passwordInput()).toHaveAttribute('autocomplete', 'new-password')
   })
 })

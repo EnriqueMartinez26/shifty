@@ -1,5 +1,7 @@
 import React from 'react'
 
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@domain/value-objects/PasswordRules'
+
 import type { SuperAdminStoreRow } from '@application/services/SuperAdminService'
 
 import { SuperAdminFormModal } from '../../components/organisms/SuperAdminFormModal'
@@ -244,7 +246,9 @@ export const StoreModals: React.FC<StoreModalsProps> = ({
           onChange={(event) =>
             setAdminForm((current) => ({ ...current, password: event.target.value }))
           }
-          minLength={12}
+          autoComplete="new-password"
+          minLength={PASSWORD_MIN_LENGTH}
+          maxLength={PASSWORD_MAX_LENGTH * 2}
           required
         />
       </div>
