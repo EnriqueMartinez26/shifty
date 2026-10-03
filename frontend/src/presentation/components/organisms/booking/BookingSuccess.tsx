@@ -4,13 +4,38 @@ import { Calendar, Check, Clock, ExternalLink } from 'lucide-react'
 
 import type { BookingConfirmation } from '@application/services/PublicBookingService'
 
-import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
+import {
+  formatArgentinaDateDisplay,
+  formatArgentinaDayHeading,
+  formatArgentinaTime
+} from '@shared/utils/argentinaTime'
 import { formatCurrency } from '@shared/utils/currency'
 import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import type { BookingWizardState } from './types'
 import { colors2000s } from '../../../../theme/colors'
+
+// Estado del cobro en castellano: el cliente leia "Estado: pending".
+const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  pending: 'pendiente',
+  approved: 'aprobado',
+  rejected: 'rechazado',
+  expired: 'vencido',
+  manual_confirmed: 'confirmado',
+  refunded: 'devuelto'
+}
+
+const paymentStatusLabel = (status: string | null | undefined): string =>
+  status ? (PAYMENT_STATUS_LABELS[status] ?? status) : 'pendiente'
+
+/** "sábado 12/10 a las 15:00" en hora argentina, o null si no hay plazo. */
+const deadlineLabel = (deadline: string | null | undefined): string | null => {
+  if (!deadline) return null
+  const day = formatArgentinaDayHeading(deadline)
+  const time = formatArgentinaTime(deadline)
+  return day && time ? `${day} a las ${time}` : null
+}
 
 interface BookingSuccessProps {
   confirmation: BookingConfirmation
@@ -30,9 +55,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   whatsappNumber
 }) => {
   // Seña obligatoria que se paga por WhatsApp (decision de Mateo, 2026-10-03):
-  // hay pago requerido pero no link de Mercado Pago. La tienda la confirma a
-  // mano cuando le pagan.
-  const isWhatsappDeposit = Boolean(confirmation.payment_required && !confirmation.payment_link)
+  // el canal viene explicito en la respuesta (antes se inferia de la falta de
+  // link). La tienda la confirma a mano cuando le pagan, hasta el plazo.
+  const isWhatsappDeposit = confirmation.deposit_channel === 'whatsapp'
+  const whatsappDeadline = isWhatsappDeposit ? deadlineLabel(confirmation.deposit_deadline) : null
   const depositLabel = confirmation.payment_amount
     ? formatCurrency(Number(confirmation.payment_amount))
     : null
@@ -60,7 +86,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
         ? 'Tu solicitud ya fue enviada y queda pendiente de confirmación.'
         : bookingState.client.email
           ? `Te enviamos los detalles a ${bookingState.client.email}`
-          : 'Tu reserva ya quedo registrada.'
+          : 'Tu reserva ya quedó registrada.'
 
   return (
     <div className="flex flex-col items-center py-10 text-center duration-500">
@@ -180,8 +206,14 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               <p className="text-sm font-black text-amber-900">
                 {depositLabel ?? 'Importe a confirmar'}
               </p>
+              {whatsappDeadline && (
+                <p className="text-sm font-bold text-amber-900 mt-2">
+                  Tenés hasta el {whatsappDeadline} para pagar la seña por WhatsApp. Si no, el turno
+                  se libera.
+                </p>
+              )}
               <p className="text-xs font-bold text-amber-800 mt-2">
-                Estado: {confirmation.payment_status || 'pendiente'}
+                Estado: {paymentStatusLabel(confirmation.payment_status)}
               </p>
             </div>
           )}

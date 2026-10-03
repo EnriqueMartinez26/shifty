@@ -25,7 +25,7 @@ import {
   usePublicServices
 } from '@presentation/hooks/usePublic'
 
-import { getErrorMessage } from '@shared/errors/getErrorMessage'
+import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatArgentinaDateDisplay } from '@shared/utils/argentinaTime'
 import { CLIENT_PHONE_HINT, isValidClientPhone } from '@shared/utils/clientPhone'
 import { formatCurrency } from '@shared/utils/currency'
@@ -90,10 +90,12 @@ type SubmissionState =
   | { phase: 'idle' }
   | { phase: 'submitting' }
   | { phase: 'success'; confirmation: BookingConfirmation }
-  | { phase: 'error' }
+  | { phase: 'error'; slotMayBeTaken: boolean }
 
 type SubmissionAction =
-  { type: 'submit' } | { type: 'succeed'; confirmation: BookingConfirmation } | { type: 'fail' }
+  | { type: 'submit' }
+  | { type: 'succeed'; confirmation: BookingConfirmation }
+  | { type: 'fail'; slotMayBeTaken: boolean }
 
 function submissionReducer(_state: SubmissionState, action: SubmissionAction): SubmissionState {
   switch (action.type) {
@@ -102,7 +104,7 @@ function submissionReducer(_state: SubmissionState, action: SubmissionAction): S
     case 'succeed':
       return { phase: 'success', confirmation: action.confirmation }
     case 'fail':
-      return { phase: 'error' }
+      return { phase: 'error', slotMayBeTaken: action.slotMayBeTaken }
   }
 }
 
@@ -248,7 +250,12 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
       }
       dispatchSubmission({ type: 'succeed', confirmation: result })
     } catch (error: unknown) {
-      dispatchSubmission({ type: 'fail' })
+      // Sin canal para cobrar la seña (409 DEPOSIT_CHANNEL_UNAVAILABLE) el
+      // horario no tiene nada que ver: no se sugiere elegir otro.
+      dispatchSubmission({
+        type: 'fail',
+        slotMayBeTaken: getErrorCode(error) !== 'DEPOSIT_CHANNEL_UNAVAILABLE'
+      })
       setErrorMessage(
         getErrorMessage(
           error,
@@ -723,7 +730,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
         )}
       </div>
 
-      {submission.phase === 'error' && (
+      {submission.phase === 'error' && submission.slotMayBeTaken && (
         <div
           role="alert"
           aria-live="polite"

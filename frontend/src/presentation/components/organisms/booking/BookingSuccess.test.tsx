@@ -158,6 +158,8 @@ describe('BookingSuccess', () => {
             confirmation: confirmacion({
               status: 'pending_payment',
               payment_required: true,
+              deposit_channel: 'whatsapp',
+              deposit_deadline: '2026-10-10T18:00:00+00:00',
               payment_link: null,
               payment_amount: 3000,
               payment_status: 'pending'
@@ -174,6 +176,14 @@ describe('BookingSuccess', () => {
       ).toBeInTheDocument()
       expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
       expect(screen.getByText('$ 3.000')).toBeInTheDocument()
+      // Decision de Mateo (2026-10-03): el cliente ve el plazo exacto, en hora
+      // argentina (18:00 UTC son las 15:00).
+      expect(
+        screen.getByText(
+          'Tenés hasta el sábado 10/10 a las 15:00 para pagar la seña por WhatsApp. Si no, el turno se libera.'
+        )
+      ).toBeInTheDocument()
+      expect(screen.getByText('Estado: pendiente')).toBeInTheDocument()
       const boton = screen.getByRole('link', { name: COORDINAR })
       const href = boton.getAttribute('href') ?? ''
       expect(href).toMatch(/^https:\/\/wa\.me\/5491155550303\?text=/)
@@ -192,6 +202,7 @@ describe('BookingSuccess', () => {
             confirmation: confirmacion({
               status: 'pending_payment',
               payment_required: true,
+              deposit_channel: 'whatsapp',
               payment_amount: 3000
             })
           })}
@@ -259,6 +270,7 @@ describe('BookingSuccess', () => {
             confirmation: confirmacion({
               status: 'pending_payment',
               payment_required: true,
+              deposit_channel: 'whatsapp',
               payment_amount: 3150,
               payment_status: 'pending'
             })
@@ -268,7 +280,10 @@ describe('BookingSuccess', () => {
 
       expect(screen.getByText('Seña a pagar por WhatsApp')).toBeInTheDocument()
       expect(screen.getByText('$ 3.150')).toBeInTheDocument()
-      expect(screen.getByText('Estado: pending')).toBeInTheDocument()
+      // El estado en castellano: antes decia "Estado: pending".
+      expect(screen.getByText('Estado: pendiente')).toBeInTheDocument()
+      // Sin plazo en la respuesta no se inventa uno.
+      expect(screen.queryByText(/Tenés hasta/)).not.toBeInTheDocument()
     })
 
     it('con link de pago muestra el pago requerido de Mercado Pago', () => {
@@ -278,8 +293,34 @@ describe('BookingSuccess', () => {
             confirmation: confirmacion({
               status: 'pending_payment',
               payment_required: true,
+              deposit_channel: 'mercadopago',
+              deposit_deadline: '2026-10-10T18:00:00+00:00',
               payment_amount: 3150,
+              payment_status: 'approved',
               payment_link: 'https://www.mercadopago.com.ar/checkout/v1/redirect?pref_id=1'
+            })
+          })}
+        />
+      )
+
+      expect(screen.getByText('Pago requerido')).toBeInTheDocument()
+      expect(screen.queryByText('Seña a pagar por WhatsApp')).not.toBeInTheDocument()
+      // El plazo de WhatsApp no aplica al checkout de MP.
+      expect(screen.queryByText(/Tenés hasta/)).not.toBeInTheDocument()
+      expect(screen.getByText('Estado: aprobado')).toBeInTheDocument()
+    })
+
+    it('el canal sale de la respuesta: sin link y sin canal no es una sena por WhatsApp', () => {
+      // Revision 4R de la PR #108 (R2): antes "pago requerido sin link" se
+      // leia como sena por WhatsApp.
+      render(
+        <BookingSuccess
+          {...props({
+            confirmation: confirmacion({
+              status: 'pending_payment',
+              payment_required: true,
+              deposit_channel: null,
+              payment_amount: 3150
             })
           })}
         />
