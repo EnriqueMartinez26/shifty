@@ -3195,7 +3195,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | field | type | required | constraints |
 |---|---|---|---|
 | `current_password` | string | yes | minLength=1, maxLength=128 |
-| `new_password` | string | yes | minLength=12, maxLength=128 |
+| `new_password` | string | yes | minLength=6, maxLength=64 |
 
 ### ClientAppointmentItem
 
@@ -4070,7 +4070,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | field | type | required | constraints |
 |---|---|---|---|
 | `token` | string | yes | minLength=20, maxLength=256 |
-| `new_password` | string | yes | minLength=12, maxLength=128 |
+| `new_password` | string | yes | minLength=6, maxLength=64 |
 
 ### ResetPasswordResponse
 
@@ -4218,7 +4218,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | field | type | required | constraints |
 |---|---|---|---|
 | `email` | string | yes | format="email" |
-| `password` | string | yes | minLength=12, maxLength=128 |
+| `password` | string | yes | minLength=6, maxLength=64 |
 | `first_name` | string | yes | minLength=1, maxLength=100 |
 | `last_name` | string | yes | minLength=1, maxLength=100 |
 | `phone` | string \| null | no | maxLength=50 |
@@ -4564,7 +4564,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `last_name` | string \| null | no | minLength=1, maxLength=100 |
 | `phone` | string \| null | no | maxLength=50 |
 | `role` | UserRole | no | default="staff" |
-| `password` | string | yes | minLength=12, maxLength=128 |
+| `password` | string | yes | minLength=6, maxLength=64 |
 
 ### UserGlobalResponse
 
@@ -4590,7 +4590,7 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `last_name` | string \| null | no | minLength=1, maxLength=100 |
 | `phone` | string \| null | no | maxLength=50 |
 | `role` | UserRole \| null | no |  |
-| `password` | string \| null | no | minLength=12, maxLength=128 |
+| `password` | string \| null | no | minLength=6, maxLength=64 |
 | `is_active` | boolean \| null | no |  |
 
 ### UserResponse
@@ -4620,7 +4620,7 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `last_name` | string \| null | no | minLength=1, maxLength=100 |
 | `phone` | string \| null | no | maxLength=50 |
 | `role` | UserRole \| null | no |  |
-| `password` | string \| null | no | minLength=12, maxLength=128 |
+| `password` | string \| null | no | minLength=6, maxLength=64 |
 | `is_active` | boolean \| null | no |  |
 
 ### ValidationError
@@ -4686,4 +4686,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-03, commit 4c9b662b
+Generado desde app.openapi() el 2026-10-03, commit d76e673b

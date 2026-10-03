@@ -1,6 +1,10 @@
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from core.validation import validate_password_strength
+from core.validation import (
+    PASSWORD_MAX_LENGTH,
+    PASSWORD_MIN_LENGTH,
+    validate_password_strength,
+)
 
 
 class TokenResponse(BaseModel):
@@ -25,7 +29,9 @@ class ForgotPasswordResponse(BaseModel):
 
 class ResetPasswordRequest(BaseModel):
     token: str = Field(..., min_length=20, max_length=256)
-    new_password: str = Field(..., min_length=12, max_length=128)
+    new_password: str = Field(
+        ..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
 
     _validar_password = field_validator("new_password")(validate_password_strength)
 
@@ -37,7 +43,9 @@ class ResetPasswordResponse(BaseModel):
 class ChangePasswordRequest(BaseModel):
     # La actual sin minimo: puede ser legacy mas corta que la politica vigente.
     current_password: str = Field(..., min_length=1, max_length=128)
-    new_password: str = Field(..., min_length=12, max_length=128)
+    new_password: str = Field(
+        ..., min_length=PASSWORD_MIN_LENGTH, max_length=PASSWORD_MAX_LENGTH
+    )
 
     _validar_password = field_validator("new_password")(validate_password_strength)
 

@@ -69,15 +69,20 @@ def validate_superadmin_email(raw: str) -> str:
         ) from exc
 
 
-async def bootstrap() -> None:
-    email = validate_superadmin_email(_required_env("SUPERADMIN_EMAIL"))
-    password = _required_env("SUPERADMIN_PASSWORD")
-    # La cuenta mas privilegiada del sistema pasa por la MISMA politica que el
-    # resto (min 12 + denylist), no un piso mas debil.
+def validate_superadmin_password(raw: str) -> str:
+    """La cuenta mas privilegiada del sistema pasa por la MISMA politica que el
+    resto (6 a 64 caracteres, 72 bytes, letra y numero, denylist; D-20261001-01),
+    no un piso mas debil. Este script no pasa por un schema de Pydantic: el
+    validador lleva tambien el techo de caracteres."""
     try:
-        validate_password_strength(password)
+        return validate_password_strength(raw)
     except ValueError as exc:
         raise RuntimeError(f"SUPERADMIN_PASSWORD invalida: {exc}") from exc
+
+
+async def bootstrap() -> None:
+    email = validate_superadmin_email(_required_env("SUPERADMIN_EMAIL"))
+    password = validate_superadmin_password(_required_env("SUPERADMIN_PASSWORD"))
 
     first_name = os.getenv("SUPERADMIN_FIRST_NAME", "Shifty").strip() or "Shifty"
     last_name = os.getenv("SUPERADMIN_LAST_NAME", "SuperAdmin").strip() or "SuperAdmin"
