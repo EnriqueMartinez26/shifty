@@ -315,8 +315,22 @@ Una instrucción en lenguaje natural no es una garantía.
    avisarse tarde (webhook demorado, reentregado o perdido; con `binary_mode`
    no hay cupones pendientes) y la conciliacion lo busca 7 días: un `approved`
    de uno de ellos, por su importe, lo adopta un cobro no acreditado (el
-   vigente se vence) y cualquier otro pago en un link reemplazado avisa una
-   vez por pago de MP; los no aprobados se cierran como no-op. `processed_at` solo si se aplicó de verdad; el inbox
+   vigente se vence) y cualquier otro pago aprobado en un link reemplazado
+   avisa una vez por pago de MP. Sobre un cobro asentado (acreditado o
+   devuelto), un evento de OTRO pago de MP (un id distinto de
+   `external_payment_id`, cualquier pago de MP sobre un `manual_confirmed`,
+   un `approved` sobre un cobro devuelto sin id, o un pago que ya recibió el
+   aviso de duplicado) no se aplica, por el link vigente o por uno retirado:
+   un `approved` avisa "pago duplicado" una vez por pago de MP (`pago:<id>`),
+   y un `charged_back`, `in_mediation` o `refunded` avisa una vez por (pago
+   de MP, estado) (`reverso:<id>:<estado>`; el `refunded` de un duplicado ya
+   avisado no avisa); en los dos casos el webhook queda procesado
+   (`processing._evento_de_otro_pago`, `_es_evento_de_otro_pago`,
+   `_avisar_reverso_de_otro_pago`, `test_reversa_de_otro_pago_avisa.py`).
+   Los demás no aprobados se cierran como no-op. `processed_at` solo si se
+   aplicó de verdad o si quedó resuelto con su aviso (duplicado o reversa de
+   otro pago); un aprobado sobre un cobro abierto por un link desconocido o
+   con otro importe queda sin aplicar; el inbox
    reintenta hasta `WEBHOOK_INBOX_MAX_ATTEMPTS = 10`
    (`modules/payments/model.py`). Orden único de locks turno → pago: el
    webhook busca el cobro sin lock y lockea turno y después pago, como
