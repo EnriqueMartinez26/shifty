@@ -29,10 +29,21 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   storeName,
   whatsappNumber
 }) => {
+  // Seña obligatoria que se paga por WhatsApp (decision de Mateo, 2026-10-03):
+  // hay pago requerido pero no link de Mercado Pago. La tienda la confirma a
+  // mano cuando le pagan.
+  const isWhatsappDeposit = Boolean(confirmation.payment_required && !confirmation.payment_link)
+  const depositLabel = confirmation.payment_amount
+    ? formatCurrency(Number(confirmation.payment_amount))
+    : null
+  const paymentRequest =
+    isWhatsappDeposit && depositLabel
+      ? `Quiero pagar la seña de ${depositLabel}.`
+      : 'Quiero coordinar el pago.'
   // null si el WhatsApp de la tienda no se puede leer como numero: sin boton.
   const whatsappHref = buildWaMeUrl(
     whatsappNumber,
-    `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${formatArgentinaDateDisplay(bookingState.date ?? '')} a las ${bookingState.startTime}. Quiero coordinar el pago.`
+    `Hola ${storeName}, reservé el turno ${confirmation.public_id ?? ''} para el ${formatArgentinaDateDisplay(bookingState.date ?? '')} a las ${bookingState.startTime}. ${paymentRequest}`
   )
   const isPendingPayment = confirmation.status === 'pending_payment'
   const isPendingReview = confirmation.status === 'pending'
@@ -41,13 +52,15 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
     : isPendingReview
       ? 'Reserva Registrada'
       : 'Reserva Confirmada'
-  const subtitle = confirmation.payment_required
-    ? 'Tu turno se confirma cuando el cobro quede aprobado.'
-    : isPendingReview
-      ? 'Tu solicitud ya fue enviada y queda pendiente de confirmación.'
-      : bookingState.client.email
-        ? `Te enviamos los detalles a ${bookingState.client.email}`
-        : 'Tu reserva ya quedo registrada.'
+  const subtitle = isWhatsappDeposit
+    ? `Pagá la seña por WhatsApp: tu turno se confirma cuando ${storeName} reciba el pago.`
+    : confirmation.payment_required
+      ? 'Tu turno se confirma cuando el cobro quede aprobado.'
+      : isPendingReview
+        ? 'Tu solicitud ya fue enviada y queda pendiente de confirmación.'
+        : bookingState.client.email
+          ? `Te enviamos los detalles a ${bookingState.client.email}`
+          : 'Tu reserva ya quedo registrada.'
 
   return (
     <div className="flex flex-col items-center py-10 text-center duration-500">
@@ -162,12 +175,10 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               style={{ background: '#fff7ed', borderColor: '#fed7aa' }}
             >
               <p className="text-[10px] font-black uppercase tracking-widest text-amber-700 mb-1">
-                Pago requerido
+                {isWhatsappDeposit ? 'Seña a pagar por WhatsApp' : 'Pago requerido'}
               </p>
               <p className="text-sm font-black text-amber-900">
-                {confirmation.payment_amount
-                  ? formatCurrency(Number(confirmation.payment_amount))
-                  : 'Importe a confirmar'}
+                {depositLabel ?? 'Importe a confirmar'}
               </p>
               <p className="text-xs font-bold text-amber-800 mt-2">
                 Estado: {confirmation.payment_status || 'pendiente'}
@@ -210,6 +221,12 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           Coordinar el pago por WhatsApp
           <ExternalLink className="w-4 h-4" />
         </a>
+      )}
+
+      {isWhatsappDeposit && !whatsappHref && (
+        <p className="w-full mt-6 text-sm font-bold text-amber-800">
+          Comunicate con {storeName} para pagar la seña.
+        </p>
       )}
 
       {storeSlug && (

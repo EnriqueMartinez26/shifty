@@ -162,6 +162,21 @@ def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def set_store_whatsapp(
+    client: AsyncClient, token: str, number: str = "11 5555 0303"
+) -> None:
+    """WhatsApp de la tienda: un canal para cobrar la sena obligatoria.
+
+    Desde 2026-10-03 (decision de Mateo, ``payments.deposit_channels``) una
+    sena obligatoria se configura solo con un canal: Mercado Pago conectado
+    con los cobros prendidos, o este WhatsApp.
+    """
+    res = await client.patch(
+        "/stores/me", headers=auth_headers(token), json={"whatsapp_number": number}
+    )
+    assert res.status_code == 200, res.text
+
+
 def webhook_signature_headers(
     *, secret: str, data_id: str, request_id: str, ts: str
 ) -> dict[str, str]:
@@ -1065,6 +1080,9 @@ async def test_public_booking_can_apply_store_promotion_and_reduce_payment_amoun
     )
     assert promo.status_code == 201, promo.text
 
+    # Sin cuenta de MP: la sena se paga por WhatsApp y su importe sale con la
+    # promo aplicada igual.
+    await set_store_whatsapp(client, token)
     service_public_id = await create_service(
         client,
         token,
@@ -1271,6 +1289,7 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
     )
     assert flags.status_code == 200, flags.text
 
+    await set_store_whatsapp(client, token)
     service_public_id = await create_service(
         client,
         token,
@@ -1298,7 +1317,10 @@ async def test_manual_confirm_sets_appointment_confirmed_when_payment_exists(
         },
     )
     assert booking.status_code == 201, booking.text
-    assert booking.json()["status"] == "pending"
+    # Sin MP conectado la sena obligatoria se paga por WhatsApp: el turno
+    # queda retenido esperando la confirmacion manual (decision de Mateo,
+    # 2026-10-03). Antes nacia "pending" sin cobro.
+    assert booking.json()["status"] == "pending_payment"
 
     manual_confirm = await client.post(
         f"/payments/{booking.json()['public_id']}/manual-confirm",

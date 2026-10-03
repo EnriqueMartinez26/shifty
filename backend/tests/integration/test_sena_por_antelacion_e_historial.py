@@ -23,6 +23,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
     create_staff,
     register_and_login,
+    set_store_whatsapp,
 )
 from tests.integration.test_mails_al_cliente import Buzon
 
@@ -68,6 +69,9 @@ async def _tienda_con_sena(client: AsyncClient, slug: str) -> tuple[str, str, st
     reglas = await client.patch("/stores/me", headers=auth_headers(token), json=REGLAS)
     assert reglas.status_code == 200, reglas.text
     assert reglas.json()["deposit_far_notice_extra_percent"] == 20
+    # Con WhatsApp la sena tambien se puede pagar por fuera (decision de
+    # Mateo, 2026-10-03): ni el preview la obliga online ni "manual" rebota.
+    await set_store_whatsapp(client, token)
     service = await create_service(
         client,
         token,

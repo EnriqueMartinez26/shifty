@@ -67,6 +67,13 @@ from modules.notifications.tasks import (
 )
 from modules.legal.versions import AcceptedVersions, check_accepted_versions
 from modules.otp.service import OtpService, mask_phone
+from modules.payments.deposit_channels import (
+    MANUAL_PAYMENT_PROVIDER,
+    DepositChannel,
+    DepositChannels,
+    deposit_channels_of,
+    resolve_deposit_channel,
+)
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
     ClientHistory,
@@ -101,6 +108,9 @@ from modules.waitlist.events import publish_slot_released
 from modules.waitlist.offers import mark_booked
 
 logger = structlog.get_logger()
+
+# Sena no obligatoria: los canales no se consultan (``_resolve_request``).
+_SIN_CANALES = DepositChannels(mercadopago=False, whatsapp=False)
 
 
 # ---------------------------------------------------------------------------
@@ -179,41 +189,6 @@ def validate_custom_fields(
         )
 
     return {key: value for key, value in normalized.items() if value}
-
-
-def resolve_payment_requirement(
-    payment_method: str,
-    payments_enabled: bool,
-    deposit_amount: Decimal,
-    deposit_mode: str,
-    allow_manual_coordination: bool,
-) -> bool:
-    # Responde una sola vez "con el metodo pedido y estos datos de tienda/
-    # servicio, hace falta pagar la sena para reservar" en vez de repetir la
-    # misma combinacion de 5 variables en tres ifs distintos. Puede levantar
-    # ValidationException si el payment_method pedido no es viable.
-    viable = payments_enabled and deposit_amount > 0
-    mandatory_online = (
-        viable and deposit_mode == "required" and not allow_manual_coordination
-    )
-
-    if payment_method == "mercadopago":
-        if deposit_amount <= 0:
-            raise ValidationException(
-                "Este servicio no tiene una seña configurada para Mercado Pago"
-            )
-        if not payments_enabled:
-            raise ValidationException(
-                "La tienda no tiene habilitados los cobros con Mercado Pago"
-            )
-        return True
-    if payment_method == "manual":
-        if mandatory_online:
-            raise ValidationException(
-                "Este servicio requiere pagar la seña con Mercado Pago para reservar"
-            )
-        return False
-    return viable  # "auto"
 
 
 # Horizonte de la disponibilidad publica (F1-11, decision 14 del dueno).
@@ -490,7 +465,14 @@ class _BookingRequest:
     discounted_price: Decimal
     history: ClientHistory
     deposit: DepositDecision
-    payment_required: bool
+    # Por donde se cobra la sena (``deposit_channels``); None: no se cobra.
+    deposit_channel: DepositChannel | None
+
+    @property
+    def payment_required(self) -> bool:
+        """El turno nace ``pending_payment`` con un cobro vivo: por MP o por
+        WhatsApp, la misma retencion."""
+        return self.deposit_channel is not None
 
 
 @dataclass
@@ -610,10 +592,18 @@ class PublicBookingService:
         discounted_price = await self._discounted_price(
             data, service, store, base_price
         )
+        # Los canales de la sena solo importan si es obligatoria: la consulta
+        # de MP no se paga en cada reserva.
+        channels = (
+            await deposit_channels_of(self.db, store)
+            if (getattr(service, "deposit_mode", "none") or "none") == "required"
+            else _SIN_CANALES
+        )
         return self._decide_deposit(
             data,
             store=store,
             service=service,
+            channels=channels,
             starts_at_utc=starts_at_utc,
             contact_verified=contact_verified,
             custom_fields=custom_fields,
@@ -678,6 +668,7 @@ class PublicBookingService:
         *,
         store: Store,
         service: Service,
+        channels: DepositChannels,
         starts_at_utc: datetime,
         contact_verified: bool,
         custom_fields: dict[str, str],
@@ -695,9 +686,10 @@ class PublicBookingService:
             starts_at=starts_at_utc,
             history=history,
         )
-        payment_required = resolve_payment_requirement(
-            payment_method=data.payment_method,
+        deposit_channel = resolve_deposit_channel(
+            data.payment_method,
             payments_enabled=is_store_feature_enabled(store.feature_flags, "payments"),
+            channels=channels,
             deposit_amount=deposit.amount,
             deposit_mode=getattr(service, "deposit_mode", "none") or "none",
             allow_manual_coordination=store.allow_manual_coordination,
@@ -713,7 +705,7 @@ class PublicBookingService:
             discounted_price=discounted_price,
             history=history,
             deposit=deposit,
-            payment_required=payment_required,
+            deposit_channel=deposit_channel,
         )
 
     async def _persist(
@@ -793,8 +785,11 @@ class PublicBookingService:
         booking = _Booking(appointment, service, staff, None, promotion_quote)
         if request.payment_required:
             booking.payment = await self._create_pending_payment(request, booking)
-        else:
-            self._publish_pending_confirmation(data, store_id, booking)
+        # A MP lo acredita el webhook; por WhatsApp o sin sena, la tienda.
+        if request.deposit_channel != "mercadopago":
+            self._publish_pending_confirmation(
+                data, store_id, booking, request.deposit_channel
+            )
         return booking
 
     async def _redeem_promotion_code(
@@ -822,19 +817,32 @@ class PublicBookingService:
             raise ValidationException(str(exc))
 
     def _publish_pending_confirmation(
-        self, data: PublicBookingCreate, store_id: str, booking: _Booking
+        self,
+        data: PublicBookingCreate,
+        store_id: str,
+        booking: _Booking,
+        channel: DepositChannel | None,
     ) -> None:
         """El pago se coordina por fuera, asi que la tienda tiene que
-        confirmar el turno a mano cuando reciba la transferencia."""
+        confirmar el turno a mano. Con sena por WhatsApp el aviso lleva el
+        importe y hasta cuando se retiene el turno (``jobs``)."""
+        payload: dict[str, JsonValue] = {
+            "appointment_id": booking.appointment.id,
+            "client_name": data.client_name,
+            "service_name": booking.service.name,
+        }
+        if channel == "whatsapp" and booking.payment is not None:
+            expires_at = booking.appointment.expires_at
+            payload |= {
+                "channel": "whatsapp",
+                "amount": str(booking.payment.amount),
+                "expires_at": expires_at.isoformat() if expires_at else None,
+            }
         self.db.add(
             OutboxMessage(
                 store_id=store_id,
                 event_type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
-                payload={
-                    "appointment_id": booking.appointment.id,
-                    "client_name": data.client_name,
-                    "service_name": booking.service.name,
-                },
+                payload=payload,
             )
         )
 
@@ -880,6 +888,11 @@ class PublicBookingService:
             promotion_code=quote.code if quote else None,
             create_provider_link=False,
             deposit_rule=final_decision.snapshot(),
+            provider=(
+                MANUAL_PAYMENT_PROVIDER
+                if request.deposit_channel == "whatsapp"
+                else "mercadopago"
+            ),
         )
 
     async def _attach_payment_link(
@@ -893,7 +906,8 @@ class PublicBookingService:
         manda a vencer despues de la compensacion, como en el panel.
         """
         payment = booking.payment
-        if not request.payment_required or payment is None:
+        # Una sena por WhatsApp no tiene link: la confirma la tienda a mano.
+        if request.deposit_channel != "mercadopago" or payment is None:
             return
         # Leidos antes: la compensacion borra el turno y el cobro.
         payment_id, appointment_id = payment.id, booking.appointment.id
@@ -1303,7 +1317,12 @@ def _booking_response(
         custom_fields=appointment.intake_answers or request.custom_fields,
         payment_required=request.payment_required,
         payment_status=payment.status if payment else None,
-        payment_link=payment.payment_link if payment else None,
+        # Por WhatsApp el cobro tiene un link placeholder que no existe.
+        payment_link=(
+            payment.payment_link
+            if payment and request.deposit_channel == "mercadopago"
+            else None
+        ),
         payment_public_id=payment.id if payment else None,
         # Sin pago online se informa la misma decision que se evaluo arriba
         # (el precio final ya trae la promo cuando la hubo).

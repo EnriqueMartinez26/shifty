@@ -71,6 +71,15 @@ def _mp_que_responde_500(monkeypatch: pytest.MonkeyPatch) -> None:
 async def _reserva_sin_pasarela(client: AsyncClient, slug: str) -> dict[str, Any]:
     store, token = await register_and_login(client, slug=slug, email=f"{slug}@t.com")
     await _enable_payments(client, token)
+    # Sin cuenta de MP, la sena obligatoria necesita otro canal para poder
+    # configurarse (decision de Mateo, 2026-10-03): el WhatsApp de la tienda.
+    # La reserva pide Mercado Pago explicito, asi que sigue yendo por MP.
+    canal = await client.patch(
+        "/stores/me",
+        headers=auth_headers(token),
+        json={"whatsapp_number": "11 5555 0303"},
+    )
+    assert canal.status_code == 200, canal.text
     servicio = await create_service(
         client,
         token,

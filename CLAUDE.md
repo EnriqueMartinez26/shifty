@@ -567,6 +567,19 @@ Una instrucción en lenguaje natural no es una garantía.
 - **Un cobro con `deposit_rule` conserva su importe.** Regenerar el link
   desde el panel no re-tarifa: hacerlo dejaba el snapshot mintiendo y rompía
   para siempre la validación de importe del webhook.
+- **Una seña obligatoria se cobra por Mercado Pago o por WhatsApp**
+  (decisión de Mateo, 2026-10-03; `payments/deposit_channels.py`).
+  Configurarla exige un canal: MP conectado con el flag `payments`, o un
+  WhatsApp de la tienda que `core/whatsapp_phone.py` lea igual que el front
+  (`whatsAppPhone.ts`); sin canal es 422 `DEPOSIT_CHANNEL_REQUIRED`, y reservar
+  sin canal es 409 `DEPOSIT_CHANNEL_UNAVAILABLE` antes de escribir nada. Por
+  WhatsApp el turno nace `pending_payment` con la misma retención que MP y un
+  `Payment` `pending` de `provider = "manual"` con link placeholder: el job de
+  retenciones lo vence por el grafo sin consultar a MP, la conciliación no lo
+  toca y un link del panel lo pasa a `mercadopago`. `manual-confirm` no pide el
+  flag `payments` (no es de MP) y publica `appointment.confirmed` en su
+  transacción si confirma el turno. (`test_sena_por_mp_o_whatsapp.py`,
+  `test_pg_sena_por_whatsapp.py`)
 - **Los recordatorios tienen etapas separadas de verdad**: el piso del de 24
   horas está por encima del lead del de 2 horas, y ningún aviso al cliente
   sale sin pasar por `is_deliverable_email`. El lote reutiliza una sesión

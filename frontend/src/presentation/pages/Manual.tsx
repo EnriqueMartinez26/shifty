@@ -112,7 +112,7 @@ const SECTIONS: ManualSection[] = [
       },
       {
         title: '4. Qué pasa cuando alguien reserva',
-        body: 'Si paga la seña, el turno se confirma solo y te llega el aviso. Si elige coordinar por WhatsApp, el turno queda pendiente y lo confirmás vos cuando recibís la transferencia.'
+        body: 'Si paga la seña con Mercado Pago, el turno se confirma solo y te llega el aviso. Si elige pagarla por WhatsApp, el turno queda retenido esperando la seña: cuando te paguen, confirmalo desde Cobros con "Confirmar pago".'
       },
       {
         title: 'Si no pagan a tiempo',

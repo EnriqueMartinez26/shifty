@@ -75,6 +75,8 @@ describe('CollectionsPage', () => {
 // 2026-10-02, QA en navegador: con los cobros apagados "Crear link" y
 // "Confirmar manual" estaban habilitados, fallaban con 403 y el aviso salia
 // dos veces, fuera de la vista. Con la tienda suspendida tambien (402).
+// 2026-10-03 (decision de Mateo): la sena por WhatsApp se confirma a mano y
+// el backend ya no pide el flag de cobros para eso; solo "Crear link" (MP).
 describe('CollectionsPage: cuando no se puede cobrar', () => {
   const turno = {
     public_id: 'appt-1',
@@ -93,22 +95,28 @@ describe('CollectionsPage: cuando no se puede cobrar', () => {
     mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
   })
 
-  const botones = () => [
-    screen.getByRole('button', { name: /Crear link/ }),
-    screen.getByRole('button', { name: /Confirmar manual/ })
-  ]
+  const crearLink = () => screen.getByRole('button', { name: /Crear link/ })
+  const confirmarPago = () => screen.getByRole('button', { name: /Confirmar pago/ })
+  const botones = () => [crearLink(), confirmarPago()]
 
-  it('con los cobros apagados los deshabilita, lo dice una vez y no pide la conciliacion', () => {
+  it('con los cobros apagados deshabilita el link, lo dice una vez y no pide la conciliacion', () => {
     mockFlags = { payments: false }
     render(<CollectionsPage />)
 
-    for (const boton of botones()) {
-      expect(boton).toBeDisabled()
-      expect(boton.getAttribute('title')).toMatch(/cobros online están apagados/)
-    }
+    expect(crearLink()).toBeDisabled()
+    expect(crearLink().getAttribute('title')).toMatch(/cobros online están apagados/)
     expect(screen.getAllByText(/cobros online están apagados/)).toHaveLength(1)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(mockUseReconciliationSummary).not.toHaveBeenCalledWith(true)
+  })
+
+  it('con los cobros apagados igual deja confirmar a mano una sena por WhatsApp', () => {
+    mockFlags = { payments: false }
+    mockAppointments = [{ ...turno, status: 'pending_payment' }]
+    render(<CollectionsPage />)
+
+    expect(confirmarPago()).not.toBeDisabled()
+    expect(confirmarPago()).not.toHaveAttribute('title')
   })
 
   it('con la tienda suspendida los deshabilita con el motivo', () => {
