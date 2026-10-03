@@ -947,13 +947,14 @@ def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
     amount_label = f" de {format_ars(amount)}" if amount else ""
     appointment_id = payload.get("appointment_id")
     if payload.get("link_vigente"):
-        # El cobro ya se habia registrado a mano y despues entro el pago del
-        # link de MP (revision 4R de la PR #108, R1 W1).
+        # Por el link vigente entro otro pago de un cobro ya asentado: se
+        # registro a mano (la sena por WhatsApp) u otro pago de MP lo acredito
+        # (revision 4R y re-revision de la PR #108).
         titulo = "Pago duplicado"
         cuerpo = (
             f"Entró un pago{amount_label} por Mercado Pago de un turno cuya seña "
-            "ya habías registrado a mano: no se aplicó. Revisalo en Mercado "
-            "Pago y devolvé el que corresponda."
+            "ya estaba registrada: no se aplicó. Revisalo en Mercado Pago y "
+            "devolvé el que corresponda."
         )
     elif payload.get("duplicado"):
         titulo = "Pago duplicado"

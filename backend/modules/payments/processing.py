@@ -892,8 +892,9 @@ async def _pago_en_link_reemplazado(
     el cobro ya estaba acreditado (o devuelto): el aviso pide devolver el pago.
 
     ``link_vigente``: el pago es del link VIGENTE de un cobro que ya se
-    registro a mano (``_pago_doble_sobre_confirmacion_manual``); la clave de
-    deduplicacion es la misma (``pago:<id de MP>``) y el aviso dice que paso.
+    registro a mano o acredito otro pago (``_evento_de_otro_pago``); la clave
+    de deduplicacion es la misma (``pago:<id de MP>``) y el aviso dice que
+    paso. Ese camino da el webhook por procesado.
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -961,37 +962,84 @@ async def _aviso_publicado(
     return fila.first() is not None
 
 
-async def _pago_doble_sobre_confirmacion_manual(
+def _id_del_pago_de_mp(payload: dict[str, Any]) -> str:
+    """El id del pago de MP del evento ("" si no vino)."""
+    raw_data = payload.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    return str(data.get("id") or payload.get("payment_id") or "").strip()
+
+
+def _es_de_otro_pago(payment: Payment, mp_payment_id: str) -> bool:
+    """El evento es de un pago de MP que NO es el que asento este cobro.
+
+    Un cobro asentado (acreditado o devuelto) solo acepta eventos del pago de
+    MP que lo acredito: el que quedo en ``external_payment_id`` por una
+    transicion APLICADA (``_stamp_payment`` no anota el id de una descartada
+    sobre un cobro asentado). Un ``manual_confirmed`` nunca lo acredito MP,
+    asi que todo pago de MP sobre el es otro pago: el duplicado que el dueno
+    tiene que devolver, no la sena que se quedo (re-revision de la PR #108,
+    CRITICO 1). Sin id de MP en el evento no se puede decidir y sigue el
+    camino de siempre.
+    """
+    if not mp_payment_id:
+        return False
+    if payment.status == PaymentStatus.MANUAL_CONFIRMED.value:
+        return True
+    asentado = payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
+    return (
+        asentado
+        and bool(payment.external_payment_id)
+        and mp_payment_id != payment.external_payment_id
+    )
+
+
+async def _evento_de_otro_pago(
     db: AsyncSession,
     *,
     store_id: str,
     payment: Payment,
     payload: dict[str, Any],
-    status: str,
-) -> None:
-    """Un ``approved`` del link vigente sobre un cobro ya confirmado a mano.
+    payment_status: str,
+) -> bool:
+    """Un evento de OTRO pago de MP sobre un cobro ya asentado: no lo toca.
 
-    Revision 4R de la PR #108 (R1 W1): una sena por WhatsApp a la que el
-    panel le mando despues un link de MP, que se confirmo a mano (el cliente
-    pago por fuera) y despues entro el pago de MP: dos pagos por la misma
-    sena. ``manual_confirmed -> approved`` es ilegal, asi que el estado no
-    cambia, y ``_avisar_al_dueno`` solo avisa lo que no estaba asentado: el
-    pago quedaba en silencio. Se avisa como un pago duplicado, una vez por
-    pago de MP (``_pago_en_link_reemplazado``, misma deduplicacion).
+    Re-revision de la PR #108 (CRITICO 1). Una sena por WhatsApp confirmada a
+    mano a la que despues entro un ``approved`` de MP por el link vigente: el
+    aviso de pago duplicado le pide al dueno devolverlo en MP, y el
+    ``refunded`` de ESE pago llegaba al cobro manual (``manual_confirmed ->
+    refunded`` es legal) y lo dejaba devuelto: la sena que la tienda SI se
+    quedo salia de los ingresos y el dueno recibia "reembolso registrado".
+
+    - ``approved``: es un pago duplicado. Aviso al dueno una vez por pago de MP
+      (``_pago_en_link_reemplazado``), ANTES de la validacion de importe: con
+      un importe confirmado a mano distinto del link, la validacion rechazaba
+      y el aviso no salia (sugerencia 4).
+    - cualquier otro estado (``refunded``, ``charged_back``, ``in_mediation``,
+      ``rejected``): es de ese pago duplicado; se registra y no se aplica.
+
+    Devuelve si el evento quedo resuelto (el webhook lo da por procesado).
     """
-    if (
-        status != PaymentStatus.APPROVED.value
-        or payment.status != PaymentStatus.MANUAL_CONFIRMED.value
-    ):
-        return
-    await _pago_en_link_reemplazado(
-        db,
+    mp_payment_id = _id_del_pago_de_mp(payload)
+    if not _es_de_otro_pago(payment, mp_payment_id):
+        return False
+    if payment_status == PaymentStatus.APPROVED.value:
+        await _pago_en_link_reemplazado(
+            db,
+            store_id=store_id,
+            payment=payment,
+            payload=payload,
+            duplicado=True,
+            link_vigente=True,
+        )
+        return True
+    logger.info(
+        "payment_event_of_other_mp_payment_ignored",
         store_id=store_id,
-        payment=payment,
-        payload=payload,
-        duplicado=True,
-        link_vigente=True,
+        payment_id=payment.id,
+        mp_payment_id=mp_payment_id,
+        status=payment_status,
     )
+    return True
 
 
 async def _lock_turno_y_pago(
@@ -1027,10 +1075,7 @@ async def _lock_turno_y_pago(
 
 
 def _stamp_payment(
-    payment: Payment,
-    payment_status: str,
-    payload: dict[str, Any],
-    data: dict[str, Any],
+    payment: Payment, payment_status: str, payload: dict[str, Any]
 ) -> None:
     """Aplica el estado remoto por el grafo y anota el id del pago de MP.
 
@@ -1039,15 +1084,20 @@ def _stamp_payment(
     cliente (pago A aprobado, pago B rechazado sobre la misma preferencia) el
     webhook de B se descartaba por el grafo pero ya habia dejado el id de B,
     contra un raw_payload que seguia siendo el de A. Un cobro sin id lo toma
-    igual: es la unica trazabilidad que hay.
+    igual, salvo que ya este asentado: el id de un cobro acreditado o devuelto
+    es el del pago que lo asento, y ``_es_de_otro_pago`` decide con el. Anotar
+    ahi el id de un evento descartado dejaba que el ``refunded`` de un pago
+    duplicado devolviera la sena (re-revision de la PR #108, CRITICO 1).
     """
-    external_payment_id = str(data.get("id") or payload.get("payment_id") or "").strip()
+    external_payment_id = _id_del_pago_de_mp(payload)
+    asentado = payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
     # Se persiste la lista blanca, no el recurso de MP (L3-01): la
     # conciliacion trae email, identificacion y tarjeta del pagador.
     aplicada = stamp_payment_from_status(
         payment, payment_status, payload=minimize_payment_payload(payload)
     )
-    if external_payment_id and (aplicada or not payment.external_payment_id):
+    sin_id = not payment.external_payment_id and not asentado
+    if external_payment_id and (aplicada or sin_id):
         payment.external_payment_id = external_payment_id
 
 
@@ -1084,6 +1134,16 @@ async def apply_mercadopago_webhook_payload(
     )
     if resuelto is not None:
         return resuelto
+    # Antes de la validacion de importe: un evento de OTRO pago de MP sobre un
+    # cobro asentado no se aplica (CRITICO 1 de la re-revision de la PR #108).
+    if await _evento_de_otro_pago(
+        db,
+        store_id=store_id,
+        payment=payment,
+        payload=payload,
+        payment_status=payment_status,
+    ):
+        return True
 
     _validate_payment_link(
         payment,
@@ -1094,7 +1154,7 @@ async def apply_mercadopago_webhook_payload(
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     was_settled = payment.is_accredited
-    _stamp_payment(payment, payment_status, payload, data)
+    _stamp_payment(payment, payment_status, payload)
     if appointment:
         _sync_appointment(db, appointment, payment, payment_status)
     await _avisar_al_dueno(
@@ -1104,8 +1164,5 @@ async def apply_mercadopago_webhook_payload(
         appointment=appointment,
         was_settled=was_settled,
         data=data,
-    )
-    await _pago_doble_sobre_confirmacion_manual(
-        db, store_id=store_id, payment=payment, payload=payload, status=payment_status
     )
     return True

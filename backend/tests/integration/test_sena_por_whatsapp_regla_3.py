@@ -40,7 +40,7 @@ from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
 from modules.payments.jobs import process_outbox_batch
-from modules.payments.model import OutboxMessage, Payment, PaymentStatus
+from modules.payments.model import OutboxMessage, Payment, PaymentStatus, WebhookInbox
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from modules.services.model import Service
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -498,7 +498,7 @@ async def test_un_pago_de_mp_sobre_una_sena_registrada_a_mano_avisa_una_vez(
         )
     ).scalar_one()
     assert aviso.title == "Pago duplicado"
-    assert "ya habías registrado a mano" in (aviso.body or "")
+    assert "ya estaba registrada" in (aviso.body or "")
     assert "$ 3.000" in (aviso.body or "")
 
 
@@ -539,3 +539,164 @@ async def test_la_reentrega_de_un_pago_ya_acreditado_por_mp_no_avisa_doble(
     )
     pagos = (await test_session.execute(select(Payment))).scalars().all()
     assert len(list(pagos)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Un evento de OTRO pago de MP no toca un cobro asentado (re-revision, CRITICO 1)
+# ---------------------------------------------------------------------------
+
+
+def _remoto(turno: str, cobro: Payment, mp_id: str, estado: str, monto: Any) -> Any:
+    return {
+        "id": mp_id,
+        "status": estado,
+        "external_reference": cobro.current_external_reference,
+        "preference_id": cobro.preference_id,
+        "transaction_amount": float(monto),
+        "currency_id": cobro.currency,
+        "metadata": {"appointment_id": turno},
+    }
+
+
+async def _sena_registrada_a_mano_con_link(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    slug: str,
+    **confirmacion: Any,
+) -> tuple[_Tienda, str, Payment, Decimal]:
+    """Sena por WhatsApp a la que la tienda le mando el link de MP y despues
+    registro a mano. Devuelve tambien el importe del LINK de MP."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mp_con_pago(monkeypatch, {})
+    t = await _tienda(client, slug, mercadopago=True)
+    reserva = await _reservar(client, t, metodo="manual")
+    turno = reserva.json()["public_id"]
+    link = await client.post(
+        f"/payments/preferences/{turno}", headers=auth_headers(t.token)
+    )
+    assert link.status_code == 200, link.text
+    cobro = await _cobro(test_session, turno)
+    assert cobro is not None
+    importe_del_link = cobro.amount
+    confirmado = await client.post(
+        f"/payments/{turno}/manual-confirm",
+        headers=auth_headers(t.token),
+        json=confirmacion,
+    )
+    assert confirmado.status_code == 200, confirmado.text
+    cobro = await _cobro(test_session, turno)
+    assert cobro is not None and cobro.status == PaymentStatus.MANUAL_CONFIRMED.value
+    return t, turno, cobro, importe_del_link
+
+
+async def _eventos_de_reversa(session: AsyncSession) -> list[OutboxMessage]:
+    return [
+        *await _eventos(session, NotificationType.PAYMENT_REFUNDED.value),
+        *await _eventos(session, NotificationType.PAYMENT_CHARGED_BACK.value),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reversa", ["refunded", "charged_back"])
+async def test_devolver_el_pago_duplicado_en_mp_no_devuelve_la_sena_registrada_a_mano(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    reversa: str,
+) -> None:
+    """El dueno sigue el aviso y devuelve el duplicado en MP: el ``refunded``
+    de ESE pago no puede dejar devuelta la sena que la tienda se quedo
+    (``manual_confirmed -> refunded`` es legal en el grafo)."""
+    t, turno, cobro, importe = await _sena_registrada_a_mano_con_link(
+        client, test_session, monkeypatch, f"r3-dup-{reversa}"
+    )
+    _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-dup", "approved", importe))
+    await _webhook(client, t.store, f"evt-dup-ok-{reversa}", "mp-dup")
+    _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-dup", reversa, importe))
+    await _webhook(client, t.store, f"evt-dup-rev-{reversa}", "mp-dup")
+
+    final = await _cobro(test_session, turno)
+    assert final is not None
+    assert final.status == PaymentStatus.MANUAL_CONFIRMED.value
+    # El id del duplicado nunca quedo anotado en la sena manual.
+    assert final.external_payment_id is None
+    assert await _eventos_de_reversa(test_session) == []
+    avisos = await _eventos(
+        test_session, NotificationType.PAYMENT_ON_REPLACED_LINK.value
+    )
+    assert len(avisos) == 1, [a.payload for a in avisos]
+    inbox = (await test_session.execute(select(WebhookInbox))).scalars().all()
+    assert all(e.processed_at is not None for e in inbox), [e.error for e in inbox]
+
+
+@pytest.mark.asyncio
+async def test_el_duplicado_por_otro_importe_que_el_registrado_igual_avisa(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sugerencia 4: la tienda registro a mano otro importe (cobro todo el
+    servicio en efectivo) y MP aprueba el link por la sena. Antes la
+    validacion de importe rechazaba el webhook y el aviso no salia."""
+    t, turno, cobro, importe = await _sena_registrada_a_mano_con_link(
+        client, test_session, monkeypatch, "r3-dup-importe", amount=10000
+    )
+    assert cobro.amount == Decimal("10000.00") != importe
+    _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-dup-imp", "approved", importe))
+
+    await _webhook(client, t.store, "evt-dup-imp", "mp-dup-imp")
+
+    avisos = await _eventos(
+        test_session, NotificationType.PAYMENT_ON_REPLACED_LINK.value
+    )
+    assert len(avisos) == 1, [a.payload for a in avisos]
+    assert avisos[0].payload["link_vigente"] is True
+    evento = (await test_session.execute(select(WebhookInbox))).scalar_one()
+    assert evento.processed_at is not None and evento.attempts == 0, evento.error
+    final = await _cobro(test_session, turno)
+    assert final is not None and final.status == PaymentStatus.MANUAL_CONFIRMED.value
+
+
+@pytest.mark.asyncio
+async def test_un_segundo_pago_de_mp_por_el_mismo_link_no_se_lleva_el_reembolso(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un cobro acreditado por el pago A acepta reversas solo de A: el
+    ``refunded`` de un pago B (duplicado) no lo devuelve; el de A si."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _mp_con_pago(monkeypatch, {})
+    t = await _tienda(client, "r3-dos-pagos", mercadopago=True)
+    reserva = await _reservar(client, t, metodo="mercadopago")
+    turno = reserva.json()["public_id"]
+    cobro = await _cobro(test_session, turno)
+    assert cobro is not None
+    importe = cobro.amount
+    # Los datos del link, leidos antes: cada webhook commitea y expira el cobro.
+    test_session.expunge(cobro)
+
+    for mp_id, estado in (
+        ("mp-a", "approved"),
+        ("mp-b", "approved"),
+        ("mp-b", "refunded"),
+    ):
+        _mp_con_pago(monkeypatch, _remoto(turno, cobro, mp_id, estado, importe))
+        await _webhook(client, t.store, f"evt-{mp_id}-{estado}", mp_id)
+
+    final = await _cobro(test_session, turno)
+    assert final is not None
+    assert (final.status, final.external_payment_id) == ("approved", "mp-a")
+    assert await _eventos_de_reversa(test_session) == []
+    assert (
+        len(
+            await _eventos(
+                test_session, NotificationType.PAYMENT_ON_REPLACED_LINK.value
+            )
+        )
+        == 1
+    )
+
+    # La devolucion del pago que SI acredito el cobro se aplica como siempre.
+    _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-a", "refunded", importe))
+    await _webhook(client, t.store, "evt-mp-a-refunded", "mp-a")
+    final = await _cobro(test_session, turno)
+    assert final is not None and final.status == PaymentStatus.REFUNDED.value
+    assert len(await _eventos_de_reversa(test_session)) == 1
