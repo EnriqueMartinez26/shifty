@@ -27,6 +27,10 @@ from core.redis import get_availability_cache
 from core.roles import STORE_MANAGERS, has_any_role
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_staff
+from modules.payments.deposit_channels import (
+    deposit_channels_of,
+    warn_if_deposit_channel_lost,
+)
 from modules.stores.mappers import to_store_response
 from modules.stores.media import (
     ALLOWED_KINDS,
@@ -187,6 +191,24 @@ async def get_my_store(
     return to_store_response(store)
 
 
+def _normalize_deposit_policy(store: Store, update_data: dict[str, Any]) -> None:
+    """Contracara de la validacion en feature-flags: si los cobros ya estan
+    activos, vaciar la politica dejaria al cliente aceptando un texto que ya
+    no existe. Extraida de ``update_my_store`` (regla 29)."""
+    if "deposit_policy" not in update_data:
+        return
+    policy = (update_data.get("deposit_policy") or "").strip()
+    payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+    if not policy and payments_enabled:
+        raise AppException(
+            "No podes dejar vacia la politica de sena mientras los cobros "
+            "online esten activos",
+            http_status=422,
+            error_code="DEPOSIT_POLICY_REQUIRED",
+        )
+    update_data["deposit_policy"] = policy or None
+
+
 @router.patch("/me", response_model=StoreResponse)
 async def update_my_store(
     data: StoreUpdate,
@@ -209,20 +231,13 @@ async def update_my_store(
     # (AUD2-B3-15): bajo RLS ese chequeo nunca veia la otra tienda. El porque
     # completo vive en tests/integration/test_slug_duplicado_de_tienda.py.
 
-    # Contracara de la validacion en feature-flags: si los cobros ya estan
-    # activos, vaciar la politica dejaria al cliente aceptando un texto que ya
-    # no existe.
-    if "deposit_policy" in update_data:
-        policy = (update_data.get("deposit_policy") or "").strip()
-        payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
-        if not policy and payments_enabled:
-            raise AppException(
-                "No podes dejar vacia la politica de sena mientras los cobros "
-                "online esten activos",
-                http_status=422,
-                error_code="DEPOSIT_POLICY_REQUIRED",
-            )
-        update_data["deposit_policy"] = policy or None
+    _normalize_deposit_policy(store, update_data)
+    # Sacar o romper el WhatsApp puede dejar a la tienda sin canal de sena.
+    canales_antes = (
+        await deposit_channels_of(db, store)
+        if "whatsapp_number" in update_data
+        else None
+    )
 
     unlinked_media = _unlinked_media_ids(store, update_data)
 
@@ -250,6 +265,8 @@ async def update_my_store(
         setattr(store, key, value)
 
     _replace_business_hours(store, business_hours)
+    if canales_antes is not None:
+        await warn_if_deposit_channel_lost(db, store, canales_antes)
     if unlinked_media:
         await db.execute(
             delete(StoreMedia).where(
@@ -328,10 +345,13 @@ async def update_my_store_feature_flags(
             http_status=422,
             error_code="DEPOSIT_POLICY_REQUIRED",
         )
+    canales_antes = await deposit_channels_of(db, store)
     store.feature_flags = merge_store_feature_flags(
         store.feature_flags,
         updates,
     )
+    # Apagar los cobros online puede dejar a la tienda sin canal de sena.
+    await warn_if_deposit_channel_lost(db, store, canales_antes)
     await db.commit()
     await db.refresh(store)
     return StoreFeatureFlagsResponse(

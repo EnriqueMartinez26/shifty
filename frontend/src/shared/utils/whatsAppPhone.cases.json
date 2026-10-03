@@ -1,0 +1,44 @@
+{
+  "_doc": "Casos compartidos de normalizePhoneForWhatsApp (whatsAppPhone.ts) y de su port normalize_phone_for_whatsapp (backend/core/whatsapp_phone.py). Los leen whatsAppPhone.test.ts y backend/tests/unit/test_whatsapp_phone.py: un caso nuevo se agrega aca y lo prueban los dos lados.",
+  "normalizes": [
+    { "raw": "11 5555 0000", "expected": "5491155550000" },
+    { "raw": "011 15-5555-0000", "expected": "5491155550000" },
+    { "raw": "+54 9 11 5555 0000", "expected": "5491155550000" },
+    { "raw": "5491155550000", "expected": "5491155550000" },
+    { "raw": "351 555-1234", "expected": "5493515551234" },
+    { "raw": "0351 15 555 1234", "expected": "5493515551234" },
+    { "raw": "(011) 5555-0000", "expected": "5491155550000" },
+    { "raw": "+54 9 11 15 5555 0000", "expected": "5491155550000" },
+    { "raw": "+54 11 15 5555 0000", "expected": "5491155550000" },
+    { "raw": "00 54 9 351 555 1234", "expected": "5493515551234" },
+    { "raw": "2964 15 401234", "expected": "5492964401234" },
+    { "raw": "02964 401234", "expected": "5492964401234" },
+    { "raw": "+54 11 4555 0000", "expected": "541145550000" },
+    { "raw": "541145550000", "expected": "541145550000" },
+    { "raw": "+54 011 4555 0000", "expected": "541145550000" },
+    { "raw": "+1 (202) 555-0123", "expected": "12025550123" },
+    { "raw": "0034 612 345 678", "expected": "34612345678" },
+    { "raw": "11\u00a05555\u00a00000", "expected": "5491155550000" },
+    { "raw": "11\u20095555\u20090000", "expected": "5491155550000" },
+    { "raw": "\ufeff11 5555 0000", "expected": "5491155550000" },
+    { "raw": "+54\u202f9\u202f11\u202f5555\u202f0000", "expected": "5491155550000" },
+    { "raw": " 11 5555 0000\u00a0", "expected": "5491155550000" }
+  ],
+  "rejects": [
+    { "case": "vacio", "raw": "" },
+    { "case": "solo espacios", "raw": "   " },
+    { "case": "solo un NBSP", "raw": "\u00a0" },
+    { "case": "basura", "raw": "llamame al local" },
+    { "case": "corto", "raw": "123" },
+    { "case": "sin codigo de area", "raw": "4555-1234" },
+    { "case": "largo de mas", "raw": "011 5555 0000 1234 5678" },
+    { "case": "numero local con 9 adelante", "raw": "9 11 5555 0000" },
+    { "case": "internacional demasiado corto", "raw": "+12 345" },
+    { "case": "\"+\" en el medio", "raw": "11 +5555 0000" },
+    {
+      "case": "digitos arabigo-indicos",
+      "raw": "\u0661\u0661 \u0665\u0665\u0665\u0665 \u0660\u0660\u0660\u0660"
+    },
+    { "case": "separador de control", "raw": "11\u00855555 0000" }
+  ]
+}

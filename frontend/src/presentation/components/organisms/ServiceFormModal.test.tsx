@@ -239,6 +239,33 @@ describe('ServiceFormModal — motivo del rechazo (D-20260930-09)', () => {
     expect(alerta).not.toHaveTextContent('Value error')
   })
 
+  // Decision de Mateo (2026-10-03): una seña obligatoria necesita con que
+  // cobrarse. El 422 DEPOSIT_CHANNEL_REQUIRED dice que configurar, y el
+  // formulario lo muestra tal cual (no es un error de un campo).
+  it('un 422 DEPOSIT_CHANNEL_REQUIRED dice como habilitar un canal de cobro', async () => {
+    const aviso =
+      'Para pedir una seña obligatoria, conectá Mercado Pago (con los cobros online activos) o cargá en Configuración un WhatsApp válido del negocio (con código de área). Sin uno de los dos, el cliente no tiene cómo pagarla.'
+    const onSubmit = jest
+      .fn()
+      .mockRejectedValue(
+        new ValidationError(aviso, { errorCode: 'DEPOSIT_CHANNEL_REQUIRED', statusCode: 422 })
+      )
+    render(
+      <ServiceFormModal
+        isOpen
+        onClose={jest.fn()}
+        onSubmit={onSubmit}
+        editingService={servicioConSena()}
+        {...sinImagen()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /Guardar/i }))
+
+    const alerta = await screen.findByRole('alert')
+    expect(alerta).toHaveTextContent(aviso)
+  })
+
   it('al editar con datos validos guarda igual', async () => {
     const repo = repositorio()
     const service = new ServiceService(repo)

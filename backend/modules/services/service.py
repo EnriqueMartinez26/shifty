@@ -23,17 +23,13 @@ from core.availability_cache import (
     AvailabilityCacheClient,
     invalidate_store_availability,
 )
-from core.exceptions import (
-    ServiceNotFoundException,
-    StoreNotFoundException,
-    ValidationException,
-)
+from core.exceptions import ServiceNotFoundException, ValidationException
 from modules.payments.deposit_channels import require_deposit_channel
 from modules.services.model import Service
 from modules.services.repository import ServiceRepository
 from modules.services.schemas import DEPOSIT_FIELDS, deposit_policy_error
 from modules.stores.media import media_url, resolve_image_link
-from modules.stores.model import Store, StoreMedia
+from modules.stores.model import StoreMedia
 
 logger = structlog.get_logger()
 
@@ -92,23 +88,19 @@ class ServiceCatalogService:
                 error_type=type(exc).__name__,
             )
 
-    async def _require_channel_for(self, store_id: str, deposit_mode: object) -> None:
+    async def _require_channel_for(self, store_id: str, deposit_mode: str) -> None:
         """Una sena obligatoria necesita con que cobrarse: Mercado Pago
         conectado con los cobros prendidos, o el WhatsApp de la tienda
         (``payments.deposit_channels``, decision de Mateo 2026-10-03). Sin
         canal es 422 ``DEPOSIT_CHANNEL_REQUIRED``: el cliente no podria pagarla
         y la reserva rebotaria (o, antes, quedaba sin cobro)."""
-        if deposit_mode != "required":
-            return
-        store = (
-            await self.db.execute(select(Store).where(Store.id == store_id))
-        ).scalar_one_or_none()
-        if store is None:
-            raise StoreNotFoundException()
-        await require_deposit_channel(self.db, store)
+        if deposit_mode == "required":
+            await require_deposit_channel(self.db, store_id)
 
     async def create(self, service_data: dict[str, Any], store_id: str) -> Service:
-        await self._require_channel_for(store_id, service_data.get("deposit_mode"))
+        await self._require_channel_for(
+            store_id, str(service_data.get("deposit_mode") or "none")
+        )
         service = await self.repo.create(service_data, store_id)
         await self.db.commit()
         return service
@@ -124,7 +116,7 @@ class ServiceCatalogService:
         # porque la tienda haya perdido el canal (la reserva lo frena igual).
         if any(field in changes for field in DEPOSIT_FIELDS):
             await self._require_channel_for(
-                store_id, changes.get("deposit_mode", service.deposit_mode)
+                store_id, str(changes.get("deposit_mode", service.deposit_mode))
             )
         await self.images.apply_image_url_change(service, changes)
         updated = await self.repo.update(service, changes)

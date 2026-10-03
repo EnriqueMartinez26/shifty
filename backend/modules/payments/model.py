@@ -46,16 +46,27 @@ ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
 # Cobro VIVO: el cobro del turno sigue abierto y su link se puede pagar (o
 # el panel lo puede volver a generar sin tocar el turno). Decision de Mateo
 # (2026-09-25, D1): un turno con cobro vivo no lo cancela ni lo reprograma el
-# cliente, y cancelarlo desde el panel vence el cobro en la misma transaccion.
-# Unica fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
-# (``payments.repository.live_charge_of``). ``rejected`` SI es vivo: tras un
-# rechazo Mercado Pago deja reintentar sobre la misma preferencia (revision de
-# perf/f4-pay, 2026-09-25); el panel lo vence por ``rejected -> expired``, que
-# ya esta en el grafo. ``expired`` no es vivo (lo vencio Shifty y el outbox
+# cliente (salvo una sena por WhatsApp, ``client_cancel_denial``), y
+# cancelarlo desde el panel vence el cobro en la misma transaccion. Unica
+# fuente: la leen ``Payment.is_live_charge`` y las consultas en SQL
+# (``payments.repository.live_charge_provider_of``). ``rejected`` SI es vivo:
+# tras un rechazo Mercado Pago deja reintentar sobre la misma preferencia
+# (revision de perf/f4-pay, 2026-09-25); el panel lo vence por
+# ``rejected -> expired``, que ya esta en el grafo. ``expired`` no es vivo (lo vencio Shifty y el outbox
 # vence el link en MP), ni los acreditados ni ``refunded``.
 LIVE_CHARGE_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.PENDING.value, PaymentStatus.REJECTED.value}
 )
+
+
+# Proveedor de un cobro (``Payment.provider``). ``mercadopago`` es el default
+# de la columna: el cobro tiene (o va a tener) un link de MP y el job de
+# retenciones y la conciliacion le preguntan a MP por el. ``manual`` es la
+# sena que se paga por WhatsApp (decision de Mateo, 2026-10-03): sin link ni
+# consulta a MP, la confirma a mano el personal y, si nadie la confirma, vence
+# directo por el grafo (``payments.deposit_channels``).
+PAYMENT_PROVIDER_MERCADOPAGO = "mercadopago"
+PAYMENT_PROVIDER_MANUAL = "manual"
 
 
 # Unica fuente de verdad del grafo de la region de facturacion.
@@ -151,7 +162,9 @@ class Payment(BaseEntity):
     appointment_id: Mapped[str] = mapped_column(
         ForeignKey("appointments.id"), index=True
     )
-    provider: Mapped[str] = mapped_column(String(50), default="mercadopago")
+    provider: Mapped[str] = mapped_column(
+        String(50), default=PAYMENT_PROVIDER_MERCADOPAGO
+    )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     original_amount: Mapped[Decimal | None] = mapped_column(
         Numeric(12, 2), nullable=True
@@ -411,6 +424,8 @@ __all__ = [
     "EVENT_PREFERENCE_EXPIRE",
     "PaymentLinkHistory",
     "LIVE_CHARGE_PAYMENT_STATUSES",
+    "PAYMENT_PROVIDER_MANUAL",
+    "PAYMENT_PROVIDER_MERCADOPAGO",
     "WEBHOOK_INBOX_MAX_ATTEMPTS",
     "can_apply_payment_status",
     "is_placeholder_preference_id",

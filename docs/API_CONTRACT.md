@@ -3816,6 +3816,8 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `notes` | string \| null | no |  |
 | `custom_fields` | object<string, string> | no |  |
 | `payment_required` | boolean | no | default=false |
+| `deposit_channel` | enum("mercadopago", "whatsapp") \| null | no |  |
+| `deposit_deadline` | string \| null | no | format="date-time" |
 | `payment_status` | string \| null | no |  |
 | `payment_link` | string \| null | no |  |
 | `payment_public_id` | string \| null | no |  |
@@ -4684,4 +4686,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-02, commit e165a9a7
+Generado desde app.openapi() el 2026-10-03, commit 4c9b662b

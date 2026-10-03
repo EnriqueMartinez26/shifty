@@ -15,20 +15,21 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from core.exceptions import ValidationException
+from core.exceptions import AppException, ValidationException
 from core.uow import AbstractUnitOfWork
+from core.utils import ensure_utc_aware, now_utc
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
-from modules.payments.deposit_channels import MANUAL_PAYMENT_PROVIDER
-from modules.payments.model import Payment, PaymentStatus
+from modules.payments.model import PAYMENT_PROVIDER_MANUAL, Payment, PaymentStatus
 from modules.payments.service import (
     EVENT_PREFERENCE_EXPIRE,
+    RELEASED_APPOINTMENT_STATUSES,
     AppointmentNotPayableError,
     _is_placeholder_preference,
     calculate_service_payment_amount,
     ensure_payment_preference,
-    lock_payable_appointment,
+    lock_appointment_status,
     sync_appointment_with_payment,
 )
 from modules.services.model import Service
@@ -47,6 +48,34 @@ def _manual_amount(
     if appointment.price_amount is not None:
         return appointment.price_amount
     return calculate_service_payment_amount(service) or Decimal(str(service.price))
+
+
+class AppointmentHoldExpiredError(AppException):
+    """409 al confirmar a mano un turno que ya vencio (revision 4R de la PR
+    #108): el personal tiene que saber por que no se puede y como seguir. El
+    caso tipico es la sena por WhatsApp que entro despues del plazo: el job
+    libero el horario y otra persona pudo tomarlo, asi que el turno no revive
+    (regla 3); se agenda uno nuevo desde el panel y el pago se registra ahi.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            message=(
+                "Este turno ya se liberó: venció el plazo para pagar la seña "
+                "(o se liberó desde el panel) y el horario quedó libre. Si el "
+                "cliente ya pagó, agendale un turno nuevo desde la agenda y "
+                "registrá el pago en ese turno."
+            ),
+            http_status=409,
+            error_code="APPOINTMENT_HOLD_EXPIRED",
+        )
+
+
+def _not_payable(estado: str | None) -> AppException:
+    """El 409 de un turno soltado: el vencido dice como recuperarlo."""
+    if estado == AppointmentStatus.EXPIRED.value:
+        return AppointmentHoldExpiredError()
+    return AppointmentNotPayableError()
 
 
 class PaymentService:
@@ -82,23 +111,16 @@ class PaymentService:
 
         Revision de perf/f4-pay (2026-09-25): lockea el turno PRIMERO (orden
         turno -> pago, regla 7), lo relee bajo el lock y rechaza un turno
-        soltado (``cancelled``/``expired``, p. ej. recien cancelado por el
-        personal) con 409 ``APPOINTMENT_NOT_PAYABLE`` sin tocar el cobro. Un
+        soltado sin tocar el cobro (``_lock_for_manual_confirm``). Un
         ``completed`` o ``absent`` se sigue cobrando a mano (el efectivo se
         registra despues de atender).
 
         Cierra la sena por WhatsApp sin MP ni flag ``payments`` (decision de
-        Mateo, 2026-10-03): ver ``_publish_confirmed_mail``.
+        Mateo, 2026-10-03): un cobro que nace aca (el turno no tenia uno) es
+        de proveedor ``manual``, y si esta confirmacion confirma el turno, el
+        cliente recibe "turno confirmado" (``_publish_confirmed_mail``).
         """
-        if not await lock_payable_appointment(
-            self.uow.session, appointment_id=appointment.id, store_id=actor.store_id
-        ):
-            raise AppointmentNotPayableError()
-        # El router lo leyo sin lock: se relee con la fila ya lockeada.
-        await self.uow.session.refresh(appointment)
-        actual = await self.uow.payments.get_by_appointment_locked(
-            appointment.id, actor.store_id
-        )
+        actual = await self._lock_for_manual_confirm(appointment, actor)
         if actual is not None and actual.is_accredited:
             # Ya entro la plata: no-op 200 con el cobro tal como se acredito,
             # sin re-tarifar aunque el pedido traiga importe (decision del
@@ -114,7 +136,7 @@ class PaymentService:
             amount_override=_manual_amount(appointment, service, amount),
             create_provider_link=False,
             keep_existing_amount=amount is None,
-            provider=MANUAL_PAYMENT_PROVIDER,
+            provider=PAYMENT_PROVIDER_MANUAL,
         )
         ya_confirmado = payment.status == PaymentStatus.MANUAL_CONFIRMED.value
         aplicada = payment.apply_status(
@@ -132,20 +154,42 @@ class PaymentService:
         await self.uow.commit()
         return payment
 
+    async def _lock_for_manual_confirm(
+        self, appointment: Appointment, actor: User
+    ) -> Payment | None:
+        """Turno lockeado y releido, y despues su cobro lockeado (regla 7).
+
+        Un turno soltado no se cobra: ``cancelled`` es 409
+        ``APPOINTMENT_NOT_PAYABLE`` y ``expired`` es 409
+        ``APPOINTMENT_HOLD_EXPIRED``, que le dice al personal como seguir
+        (``AppointmentHoldExpiredError``).
+        """
+        estado = await lock_appointment_status(
+            self.uow.session, appointment_id=appointment.id, store_id=actor.store_id
+        )
+        if estado is None or estado in RELEASED_APPOINTMENT_STATUSES:
+            raise _not_payable(estado)
+        # El router lo leyo sin lock: se relee con la fila ya lockeada.
+        await self.uow.session.refresh(appointment)
+        return await self.uow.payments.get_by_appointment_locked(
+            appointment.id, actor.store_id
+        )
+
     def _publish_confirmed_mail(
         self, appointment: Appointment, estado_previo: str
     ) -> None:
-        """Mail de turno confirmado al cliente, solo si ESTA confirmacion lo
-        confirmo: un doble clic o el efectivo de un turno ya confirmado no lo
-        repiten.
+        """Mail "turno confirmado" al cliente por el outbox, en la transaccion
+        de la confirmacion (F2-02), como ``AppointmentService.confirm``.
 
-        Va al outbox en la transaccion de la confirmacion (F2-02), como desde
-        ``AppointmentService.confirm``: es el cierre de la sena por WhatsApp
-        (``deposit_channels``), que no depende de Mercado Pago ni del flag
-        ``payments``. Un cobro que nace aca (no habia uno) es ``manual``.
+        Solo si ESTA confirmacion confirmo el turno (un doble clic o el
+        efectivo de un turno ya confirmado no lo repiten) y si el turno no
+        empezo: un turno pasado lo registra la tienda (un walk-in, D-20260925-01)
+        y no lleva aviso al cliente, que ya estuvo.
         """
         confirmado = AppointmentStatus.CONFIRMED.value
         if estado_previo == confirmado or appointment.status != confirmado:
+            return
+        if ensure_utc_aware(appointment.starts_at) < now_utc():
             return
         self.uow.outbox.publish(
             store_id=appointment.store_id,

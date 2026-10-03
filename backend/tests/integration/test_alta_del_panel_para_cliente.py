@@ -69,6 +69,14 @@ async def _agenda(client: AsyncClient, slug: str, **servicio: Any) -> Agenda:
         )
         assert canal.status_code == 200, canal.text
     service = await create_service(client, token, **servicio)
+    if servicio.get("deposit_mode") == "required":
+        # Y despues la tienda se queda sin canal: el panel igual agenda sin
+        # pedir la sena (el caso "nunca se fuerza" sigue cubierto aunque la
+        # tienda no tenga con que cobrarla; revision 4R de la PR #108).
+        sin_canal = await client.patch(
+            "/stores/me", headers=auth_headers(token), json={"whatsapp_number": None}
+        )
+        assert sin_canal.status_code == 200, sin_canal.text
     staff = await create_staff(client, token, service, email=f"pro-{slug}@t.com")
     dia = datetime.now(timezone.utc) + timedelta(days=6)
     await add_staff_schedule(client, token, staff, target_date=dia)

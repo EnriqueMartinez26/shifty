@@ -1,12 +1,11 @@
 import csv
 import unicodedata
 from collections.abc import Iterator
-from decimal import Decimal
 from io import BytesIO, StringIO
 from datetime import date, datetime
 from typing import Any
 
-from core.utils import ARGENTINA_TZ, ensure_utc_aware
+from core.utils import ARGENTINA_TZ, ensure_utc_aware, format_ars
 from modules.reports.schemas import ReportAppointmentItem, ReportSummaryResponse
 
 # Caracteres con los que Excel/Sheets arrancan una FORMULA. client_name lo
@@ -57,13 +56,8 @@ def _pdf_local_datetime(value: datetime) -> str:
 
 
 def _pdf_money(value: object) -> str:
-    """``$ 48.500,50`` (es-AR); sin centavos si el importe es entero, como el
-    panel. Un negativo lleva el signo adelante: ``-$ 1.500``."""
-    monto = Decimal(str(value)).quantize(Decimal("0.01"))
-    decimales = 0 if monto == monto.to_integral_value() else 2
-    numero = f"{abs(monto):,.{decimales}f}"
-    numero = numero.replace(",", "_").replace(".", ",").replace("_", ".")
-    return f"{'-' if monto < 0 else ''}$ {numero}"
+    """``$ 48.500,50`` (es-AR): el formateador compartido (``format_ars``)."""
+    return format_ars(value)
 
 
 def _safe_text(value: object) -> str:

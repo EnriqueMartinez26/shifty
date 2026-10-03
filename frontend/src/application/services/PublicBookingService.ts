@@ -103,6 +103,10 @@ export interface BookingConfirmation {
   notes?: string | null
   custom_fields?: Record<string, string>
   payment_required: boolean
+  /** Por donde se paga la seña obligatoria (null: no hay seña que pagar). */
+  deposit_channel?: 'mercadopago' | 'whatsapp' | null
+  /** Hasta cuándo se puede pagar la seña (ISO UTC); después el turno se libera. */
+  deposit_deadline?: string | null
   payment_status?: string | null
   payment_link?: string | null
   payment_public_id?: string | null

@@ -629,9 +629,13 @@ describe('BookingStepConfirmation', () => {
     // link de Mercado Pago: se paga por WhatsApp (decision de Mateo, 2026-10-03).
     it('una reserva con pago pendiente se anuncia como pendiente de pago', async () => {
       const base = completo()
-      base.onConfirm = jest
-        .fn()
-        .mockResolvedValue(confirmacion({ status: 'pending_payment', payment_required: true }))
+      base.onConfirm = jest.fn().mockResolvedValue(
+        confirmacion({
+          status: 'pending_payment',
+          payment_required: true,
+          deposit_channel: 'whatsapp'
+        })
+      )
       render(<BookingStepConfirmation {...base} />)
       aceptarTerminos()
       fireEvent.click(botonReservar())
@@ -657,6 +661,27 @@ describe('BookingStepConfirmation', () => {
       expect(
         screen.getByText(/El horario podria haberse ocupado mientras completabas el formulario/)
       ).toBeInTheDocument()
+    })
+
+    it('un 409 DEPOSIT_CHANNEL_UNAVAILABLE muestra el aviso neutro y no culpa al horario', async () => {
+      // Revision 4R de la PR #108: la seña es obligatoria y el negocio no
+      // tiene con que cobrarla. Sugerir "elegí otro horario" mandaba al
+      // cliente a probar horarios que iban a rebotar igual.
+      const aviso =
+        'Este negocio no puede cobrar la seña de este servicio en este momento. Comunicate con el negocio para reservar.'
+      const base = completo()
+      base.onConfirm = jest.fn().mockRejectedValue(
+        new ConflictError(aviso, {
+          errorCode: 'DEPOSIT_CHANNEL_UNAVAILABLE',
+          statusCode: 409
+        })
+      )
+      render(<BookingStepConfirmation {...base} />)
+      aceptarTerminos()
+      fireEvent.click(botonReservar())
+
+      await waitFor(() => expect(screen.getByText(aviso)).toBeInTheDocument())
+      expect(screen.queryByText(/El horario podria haberse ocupado/)).not.toBeInTheDocument()
     })
 
     it('un 400 BOOKING_NOTICE_REQUIRED muestra el texto del servidor con las horas de anticipacion', async () => {

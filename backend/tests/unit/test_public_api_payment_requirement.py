@@ -12,6 +12,7 @@ hay sena que cobrar (``None``). Una sena obligatoria sin ningun canal no se
 reserva (409 ``DEPOSIT_CHANNEL_UNAVAILABLE``): el turno nunca se podria pagar.
 """
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -23,10 +24,14 @@ from modules.payments.deposit_channels import (
     resolve_deposit_channel,
 )
 
-SIN_CANALES = DepositChannels(mercadopago=False, whatsapp=False)
-SOLO_MP = DepositChannels(mercadopago=True, whatsapp=False)
-SOLO_WHATSAPP = DepositChannels(mercadopago=False, whatsapp=True)
-AMBOS = DepositChannels(mercadopago=True, whatsapp=True)
+# El flag de cobros viaja con los canales (``DepositChannels``); MP como canal
+# lo implica. Cada caso lo fija explicito con ``replace`` cuando importa.
+SIN_CANALES = DepositChannels(mercadopago=False, whatsapp=False, payments_enabled=False)
+SOLO_MP = DepositChannels(mercadopago=True, whatsapp=False, payments_enabled=True)
+SOLO_WHATSAPP = DepositChannels(
+    mercadopago=False, whatsapp=True, payments_enabled=False
+)
+AMBOS = DepositChannels(mercadopago=True, whatsapp=True, payments_enabled=True)
 
 
 class TestMercadopago:
@@ -34,8 +39,7 @@ class TestMercadopago:
         with pytest.raises(ValidationException) as exc:
             resolve_deposit_channel(
                 "mercadopago",
-                payments_enabled=True,
-                channels=SOLO_MP,
+                channels=replace(SOLO_MP, payments_enabled=True),
                 deposit_amount=Decimal("0"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -46,8 +50,7 @@ class TestMercadopago:
         with pytest.raises(ValidationException) as exc:
             resolve_deposit_channel(
                 "mercadopago",
-                payments_enabled=False,
-                channels=SOLO_WHATSAPP,
+                channels=replace(SOLO_WHATSAPP, payments_enabled=False),
                 deposit_amount=Decimal("100"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -59,8 +62,7 @@ class TestMercadopago:
         with pytest.raises(ValidationException) as exc:
             resolve_deposit_channel(
                 "mercadopago",
-                payments_enabled=False,
-                channels=SIN_CANALES,
+                channels=replace(SIN_CANALES, payments_enabled=False),
                 deposit_amount=Decimal("0"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -71,8 +73,7 @@ class TestMercadopago:
         assert (
             resolve_deposit_channel(
                 "mercadopago",
-                payments_enabled=True,
-                channels=SOLO_MP,
+                channels=replace(SOLO_MP, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -87,8 +88,7 @@ class TestMercadopago:
         assert (
             resolve_deposit_channel(
                 "mercadopago",
-                payments_enabled=True,
-                channels=SOLO_WHATSAPP,
+                channels=replace(SOLO_WHATSAPP, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=True,
@@ -102,8 +102,7 @@ class TestManual:
         with pytest.raises(ValidationException) as exc:
             resolve_deposit_channel(
                 "manual",
-                payments_enabled=True,
-                channels=AMBOS,
+                channels=replace(AMBOS, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=False,
@@ -116,8 +115,7 @@ class TestManual:
         assert (
             resolve_deposit_channel(
                 "manual",
-                payments_enabled=True,
-                channels=AMBOS,
+                channels=replace(AMBOS, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=True,
@@ -131,8 +129,7 @@ class TestManual:
         assert (
             resolve_deposit_channel(
                 "manual",
-                payments_enabled=False,
-                channels=SOLO_WHATSAPP,
+                channels=replace(SOLO_WHATSAPP, payments_enabled=False),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=False,
@@ -144,8 +141,7 @@ class TestManual:
         with pytest.raises(ValidationException) as exc:
             resolve_deposit_channel(
                 "manual",
-                payments_enabled=True,
-                channels=SOLO_MP,
+                channels=replace(SOLO_MP, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=True,
@@ -156,8 +152,7 @@ class TestManual:
         assert (
             resolve_deposit_channel(
                 "manual",
-                payments_enabled=True,
-                channels=AMBOS,
+                channels=replace(AMBOS, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -169,8 +164,7 @@ class TestManual:
         assert (
             resolve_deposit_channel(
                 "manual",
-                payments_enabled=True,
-                channels=SIN_CANALES,
+                channels=replace(SIN_CANALES, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="none",
                 allow_manual_coordination=False,
@@ -184,8 +178,7 @@ class TestAuto:
         assert (
             resolve_deposit_channel(
                 "auto",
-                payments_enabled=True,
-                channels=SOLO_MP,
+                channels=replace(SOLO_MP, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -197,8 +190,7 @@ class TestAuto:
         assert (
             resolve_deposit_channel(
                 "auto",
-                payments_enabled=False,
-                channels=SIN_CANALES,
+                channels=replace(SIN_CANALES, payments_enabled=False),
                 deposit_amount=Decimal("100"),
                 deposit_mode="optional",
                 allow_manual_coordination=False,
@@ -210,8 +202,7 @@ class TestAuto:
         assert (
             resolve_deposit_channel(
                 "auto",
-                payments_enabled=True,
-                channels=AMBOS,
+                channels=replace(AMBOS, payments_enabled=True),
                 deposit_amount=Decimal("0"),
                 deposit_mode="required",
                 allow_manual_coordination=False,
@@ -223,8 +214,7 @@ class TestAuto:
         assert (
             resolve_deposit_channel(
                 "auto",
-                payments_enabled=True,
-                channels=AMBOS,
+                channels=replace(AMBOS, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=True,
@@ -236,8 +226,7 @@ class TestAuto:
         assert (
             resolve_deposit_channel(
                 "auto",
-                payments_enabled=True,
-                channels=SOLO_WHATSAPP,
+                channels=replace(SOLO_WHATSAPP, payments_enabled=True),
                 deposit_amount=Decimal("100"),
                 deposit_mode="required",
                 allow_manual_coordination=True,
@@ -256,8 +245,7 @@ class TestSinCanal:
         with pytest.raises(AppException) as exc:
             resolve_deposit_channel(
                 metodo,
-                payments_enabled=False,
-                channels=SIN_CANALES,
+                channels=replace(SIN_CANALES, payments_enabled=False),
                 deposit_amount=Decimal("3000"),
                 deposit_mode="required",
                 allow_manual_coordination=True,

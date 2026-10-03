@@ -5,7 +5,7 @@ commit (eso lo maneja el service via el Unit of Work). Existe para que los
 casos de uso de pago dejen de hablar con AsyncSession directo desde el router.
 """
 
-from sqlalchemy import ColumnElement, Exists, exists, select
+from sqlalchemy import ColumnElement, ScalarSelect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -20,28 +20,39 @@ from modules.payments.model import (
 _StrColumn = ColumnElement[str] | InstrumentedAttribute[str]
 
 
-def live_charge_of(
+def live_charge_provider_of(
     appointment_id: _StrColumn | str, store_id: _StrColumn | str
-) -> Exists:
-    """``EXISTS`` de un cobro vivo del turno (decision D1, 2026-09-25).
+) -> ScalarSelect[str]:
+    """``Payment.provider`` del cobro vivo del turno, o NULL si no tiene (D1).
 
     Unica traduccion a SQL de ``LIVE_CHARGE_PAYMENT_STATUSES``. Recibe valores
-    (un turno: ``PaymentRepository.has_live_charge``) o columnas del turno
-    (correlacionado: el historial del cliente lo pone en su mismo SELECT, sin
-    una consulta por turno ni una mas por request, regla 12). Filtra por
-    ``store_id`` y cae en ``uq_payments_store_appointment``.
+    (un turno: ``PaymentRepository.live_charge_provider``) o columnas del
+    turno (correlacionado: el historial del cliente lo pone en su mismo
+    SELECT, sin una consulta por turno ni una mas por request, regla 12).
+    Filtra por ``store_id`` y cae en ``uq_payments_store_appointment`` (un
+    cobro por turno).
+
+    Devuelve el proveedor y no solo si existe: la autogestion del cliente
+    distingue la sena por WhatsApp (``manual``, que puede cancelar y
+    reprogramar) del cobro de Mercado Pago (que no;
+    ``public_api.service.client_cancel_denial``).
     """
-    return exists().where(
-        Payment.store_id == store_id,
-        Payment.appointment_id == appointment_id,
-        Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)),
+    return (
+        select(Payment.provider)
+        .where(
+            Payment.store_id == store_id,
+            Payment.appointment_id == appointment_id,
+            Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)),
+        )
+        .limit(1)
+        .scalar_subquery()
     )
 
 
 class PaymentRepository:
     """Los accesos a ``payments`` que pasan por el UoW, cada uno con llamador.
 
-    ``has_live_charge`` (D1, 2026-09-25) lo usa la autogestion del cliente.
+    ``live_charge_provider`` (D1, 2026-09-25) lo usa la autogestion del cliente.
     Tenia tres mas (``get_by_appointment``, ``get_by_public_id``, ``add``) sin
     ningun llamador, ni en produccion ni en tests: aparentaban una API que
     nadie ejercia (AUD2-B2-13, 2026-09-20). El resto de los caminos de pago
@@ -66,11 +77,16 @@ class PaymentRepository:
         )
         return res.scalar_one_or_none()
 
-    async def has_live_charge(self, appointment_id: str, store_id: str) -> bool:
-        """Si el turno tiene un cobro vivo (sin lock: lo lee la guarda del
-        cliente, que ya tiene el turno lockeado)."""
-        res = await self.db.execute(select(live_charge_of(appointment_id, store_id)))
-        return bool(res.scalar())
+    async def live_charge_provider(
+        self, appointment_id: str, store_id: str
+    ) -> str | None:
+        """Proveedor del cobro vivo del turno, o None (sin lock: lo lee la
+        guarda del cliente, que ya tiene el turno lockeado)."""
+        res = await self.db.execute(
+            select(live_charge_provider_of(appointment_id, store_id))
+        )
+        provider = res.scalar()
+        return None if provider is None else str(provider)
 
 
 class OutboxRepository:

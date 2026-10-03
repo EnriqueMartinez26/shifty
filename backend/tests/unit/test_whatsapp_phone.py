@@ -7,62 +7,64 @@ sirve con el mismo criterio que arma el link de wa.me en el front
 (``frontend/src/shared/utils/whatsAppPhone.ts``): un numero que el front no
 puede convertir en link no es un canal, porque el cliente no veria el boton.
 
-Los casos son los de ``whatsAppPhone.test.ts``; si cambia uno, cambia el otro.
+Revision 4R de la PR #108 (R3 W4): los casos estaban copiados en los dos
+tests y el NBSP los separaba (el front lo aceptaba, el back no). Ahora viven
+en UN archivo, ``whatsAppPhone.cases.json``, que lee este test y
+``whatsAppPhone.test.ts``, con casos de NBSP, espacio fino y BOM.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.whatsapp_phone import normalize_phone_for_whatsapp
 
+_CASOS_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "frontend"
+    / "src"
+    / "shared"
+    / "utils"
+    / "whatsAppPhone.cases.json"
+)
+
+
+def _casos() -> dict[str, Any]:
+    if not _CASOS_PATH.exists():  # pragma: no cover - el repo completo lo trae
+        pytest.fail(f"falta el archivo de casos compartido: {_CASOS_PATH}")
+    return dict(json.loads(_CASOS_PATH.read_text(encoding="utf-8")))
+
+
+CASOS = _casos()
+
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [
-        ("11 5555 0000", "5491155550000"),
-        ("011 15-5555-0000", "5491155550000"),
-        ("+54 9 11 5555 0000", "5491155550000"),
-        ("5491155550000", "5491155550000"),
-        ("351 555-1234", "5493515551234"),
-        ("0351 15 555 1234", "5493515551234"),
-        ("(011) 5555-0000", "5491155550000"),
-        ("+54 9 11 15 5555 0000", "5491155550000"),
-        ("+54 11 15 5555 0000", "5491155550000"),
-        ("00 54 9 351 555 1234", "5493515551234"),
-        ("2964 15 401234", "5492964401234"),
-        ("02964 401234", "5492964401234"),
-    ],
+    [(caso["raw"], caso["expected"]) for caso in CASOS["normalizes"]],
 )
-def test_normaliza_telefonos_argentinos(raw: str, expected: str) -> None:
+def test_normaliza_como_el_front(raw: str, expected: str) -> None:
     assert normalize_phone_for_whatsapp(raw) == expected
-
-
-def test_con_54_escrito_y_sin_9_ni_15_lo_respeta_tal_cual() -> None:
-    assert normalize_phone_for_whatsapp("+54 11 4555 0000") == "541145550000"
-    assert normalize_phone_for_whatsapp("541145550000") == "541145550000"
-    assert normalize_phone_for_whatsapp("+54 011 4555 0000") == "541145550000"
-
-
-def test_respeta_un_numero_que_ya_trae_otro_codigo_de_pais() -> None:
-    assert normalize_phone_for_whatsapp("+1 (202) 555-0123") == "12025550123"
-    assert normalize_phone_for_whatsapp("0034 612 345 678") == "34612345678"
 
 
 @pytest.mark.parametrize(
     "raw",
-    [
-        "",
-        "   ",
-        "llamame al local",
-        "123",
-        "4555-1234",
-        "011 5555 0000 1234 5678",
-        "9 11 5555 0000",
-        "+12 345",
-        "11 +5555 0000",
-        None,
-    ],
+    [caso["raw"] for caso in CASOS["rejects"]],
+    ids=[caso["case"] for caso in CASOS["rejects"]],
 )
-def test_sin_confianza_devuelve_none(raw: str | None) -> None:
+def test_sin_confianza_devuelve_none_como_el_front(raw: str) -> None:
     assert normalize_phone_for_whatsapp(raw) is None
+
+
+def test_none_no_rompe() -> None:
+    assert normalize_phone_for_whatsapp(None) is None
+
+
+def test_los_casos_de_espacios_unicode_estan_en_el_archivo_compartido() -> None:
+    """El hueco que encontro la revision no puede volver a quedar sin caso."""
+    crudos = "".join(caso["raw"] for caso in CASOS["normalizes"])
+    for espacio in ("\u00a0", "\u2009", "\ufeff"):
+        assert espacio in crudos, f"falta un caso con {espacio!r}"

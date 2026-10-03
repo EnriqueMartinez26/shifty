@@ -18,10 +18,11 @@ Ahora:
 - una sena obligatoria sin ningun canal (MP conectado con los cobros
   prendidos, o un WhatsApp valido de la tienda) no se reserva: 409
   ``DEPOSIT_CHANNEL_UNAVAILABLE`` antes de escribir nada;
-- por WhatsApp el turno nace ``pending_payment`` con la misma retencion que
-  MP y un cobro ``pending`` de proveedor ``manual`` (sin link): el panel lo
-  confirma a mano sin MP ni flag, y si nadie lo confirma, el job de
-  retenciones lo vence por el grafo sin preguntarle nada a MP;
+- por WhatsApp el turno nace ``pending_payment`` retenido hasta 2 h antes
+  del turno (revision 4R de la PR #108; MP sigue en 30 minutos) y un cobro
+  ``pending`` de proveedor ``manual`` (sin link): el panel lo confirma a mano
+  sin MP ni flag, y si nadie lo confirma, el job de retenciones lo vence por
+  el grafo sin preguntarle nada a MP y le avisa al dueno;
 - el camino de MP no cambia.
 """
 
@@ -34,19 +35,29 @@ from typing import Any, cast
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
 import modules.payments.service as payments_service
 from core.config import settings
+from core.utils import ensure_utc_aware
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
-from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
+from modules.notifications.tasks import (
+    EVENT_APPOINTMENT_CONFIRMED,
+    format_local_deadline,
+)
 from modules.payments.jobs import expire_unpaid_appointments, process_outbox_batch
-from modules.payments.model import OutboxMessage, Payment, PaymentStatus
+from modules.payments.model import (
+    OutboxMessage,
+    Payment,
+    PaymentGatewayConfig,
+    PaymentStatus,
+)
 from modules.payments.service import EVENT_PREFERENCE_EXPIRE
 from modules.services.model import Service
+from modules.stores.model import Store
 from modules.waitlist.events import EVENT_SLOT_RELEASED
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     add_staff_schedule,
@@ -55,7 +66,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
 )
-from tests.integration.test_mails_al_cliente import Buzon
+from tests.integration.test_mails_al_cliente import Buzon, usar_cola_de_reservas
 from tests.integration.test_payments_hardening_and_legal import (
     _configure_gateway,
     _enable_payments,
@@ -158,6 +169,13 @@ async def _eventos(session: AsyncSession, tipo: str) -> list[OutboxMessage]:
     )
 
 
+async def _sin_flag_de_cobros(client: AsyncClient, token: str) -> None:
+    """Fija que el caso "sin flag" corre con los cobros online APAGADOS."""
+    flags = await client.get("/stores/me/feature-flags", headers=auth_headers(token))
+    assert flags.status_code == 200, flags.text
+    assert flags.json()["flags"]["payments"] is False
+
+
 def _mp_prohibido(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Cualquier llamada a la API de MP queda anotada (y falla)."""
     llamadas: list[str] = []
@@ -212,12 +230,14 @@ async def test_una_sena_obligatoria_sin_canal_no_crea_un_turno_impagable(
 
 
 @pytest.mark.asyncio
-async def test_la_sena_por_whatsapp_retiene_el_turno_como_la_de_mercado_pago(
+async def test_la_sena_por_whatsapp_retiene_el_turno_hasta_dos_horas_antes(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Decision de Mateo (2026-10-03): por WhatsApp hay una persona del otro
+    lado; 30 minutos (la retencion de MP) dejaba afuera a quien reservaba de
+    noche. El turno se retiene hasta 2 h antes y el cliente ve el plazo."""
     llamadas = _mp_prohibido(monkeypatch)
     t = await _tienda(client, "sena-whatsapp-retiene")
-    antes = datetime.now(timezone.utc)
 
     res = await _reservar(client, t)
 
@@ -228,13 +248,15 @@ async def test_la_sena_por_whatsapp_retiene_el_turno_como_la_de_mercado_pago(
     assert cuerpo["payment_link"] is None
     assert cuerpo["payment_status"] == PaymentStatus.PENDING.value
     assert Decimal(str(cuerpo["payment_amount"])) == SENA
+    assert cuerpo["deposit_channel"] == "whatsapp"
     turno = await _turno(test_session, cuerpo["public_id"])
-    # La misma retencion corta que MP: el cupo vuelve si nadie confirma.
     vence = turno.expires_at
     assert vence is not None
-    if vence.tzinfo is None:
-        vence = vence.replace(tzinfo=timezone.utc)
-    assert vence <= antes + timedelta(minutes=settings.PAYMENT_HOLD_MINUTES + 1)
+    assert ensure_utc_aware(vence) == ensure_utc_aware(turno.starts_at) - timedelta(
+        hours=2
+    )
+    # La respuesta lleva el mismo plazo, en UTC, para la pantalla de exito.
+    assert datetime.fromisoformat(cuerpo["deposit_deadline"]) == ensure_utc_aware(vence)
     cobro = await _cobro(test_session, turno.id)
     assert cobro is not None
     assert cobro.provider == "manual"
@@ -250,6 +272,7 @@ async def test_el_personal_confirma_la_sena_de_whatsapp_sin_mp_ni_flag(
 ) -> None:
     llamadas = _mp_prohibido(monkeypatch)
     t = await _tienda(client, "sena-whatsapp-confirma")
+    await _sin_flag_de_cobros(client, t.token)
     reserva = await _reservar(client, t)
     assert reserva.status_code == 201, reserva.text
     turno = reserva.json()["public_id"]
@@ -314,8 +337,13 @@ async def test_el_aviso_al_dueno_le_dice_que_confirme_cuando_le_paguen_por_whats
     assert aviso.appointment_id == reserva.json()["public_id"]
     cuerpo = aviso.body or ""
     assert "Confirmalo cuando te paguen por WhatsApp" in cuerpo, cuerpo
-    assert "3000" in cuerpo, cuerpo
+    # El importe con el formateador compartido, no "$3000.00".
+    assert "la seña de $ 3.000 por WhatsApp" in cuerpo, cuerpo
     assert "transferencia" not in cuerpo, cuerpo
+    # El plazo es el mismo que ve el cliente: dia, fecha y hora argentina.
+    turno = await _turno(test_session, reserva.json()["public_id"])
+    plazo = format_local_deadline(turno.expires_at)
+    assert f"Si no, el turno se libera el {plazo}." in cuerpo, cuerpo
 
 
 @pytest.mark.asyncio
@@ -343,12 +371,19 @@ async def test_la_retencion_vencida_de_whatsapp_libera_el_turno_sin_consultar_a_
     assert cobro is not None and cobro.status == PaymentStatus.EXPIRED.value
     liberados = await _eventos(test_session, EVENT_SLOT_RELEASED)
     assert [e.payload["appointment_id"] for e in liberados] == [turno]
-    # Y una confirmacion tardia ya no revive el turno (regla 3).
+    # El dueno se entera de que se libero (outbox; aviso y mail despues).
+    vencidas = await _eventos(
+        test_session, NotificationType.APPOINTMENT_DEPOSIT_LAPSED.value
+    )
+    assert [e.payload["appointment_id"] for e in vencidas] == [turno]
+    # Y una confirmacion tardia ya no revive el turno (regla 3): el 409 dice
+    # que vencio y como seguir.
     tarde = await client.post(
         f"/payments/{turno}/manual-confirm", headers=auth_headers(t.token), json={}
     )
     assert tarde.status_code == 409, tarde.text
-    assert tarde.json()["error_code"] == "APPOINTMENT_NOT_PAYABLE"
+    assert tarde.json()["error_code"] == "APPOINTMENT_HOLD_EXPIRED"
+    assert "agendale un turno nuevo" in tarde.json()["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +410,12 @@ async def test_con_mp_conectado_la_sena_sigue_por_mercado_pago(
     assert cuerpo["payment_required"] is True
     assert cuerpo["payment_link"] == (
         "https://www.mercadopago.com/checkout/v1/redirect?pref=hardening"
+    )
+    assert cuerpo["deposit_channel"] == "mercadopago"
+    # La retencion de MP no cambio: 30 minutos.
+    plazo = datetime.fromisoformat(cuerpo["deposit_deadline"])
+    assert plazo <= datetime.now(timezone.utc) + timedelta(
+        minutes=settings.PAYMENT_HOLD_MINUTES
     )
     cobro = await _cobro(test_session, cuerpo["public_id"])
     assert cobro is not None
@@ -534,3 +575,299 @@ async def test_no_se_edita_un_servicio_a_sena_obligatoria_sin_canal(
         f"/services/{servicio}", headers=auth_headers(token), json={"name": "Otro"}
     )
     assert nombre.status_code == 200, nombre.text
+
+
+# ---------------------------------------------------------------------------
+# El plazo en el mail y el aviso de la sena vencida (revision 4R de la PR #108)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_el_mail_de_reserva_registrada_dice_hasta_cuando_pagar_la_sena(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
+    t = await _tienda(client, "sena-whatsapp-mail")
+
+    reserva = await _reservar(client, t)
+    assert reserva.status_code == 201, reserva.text
+    assert await cola.entregar() == [{"status": "sent"}]
+
+    (destino, asunto, cuerpo) = buzon.enviados[0]
+    assert destino == "cliente-sena@example.com"
+    assert asunto.startswith("Reserva registrada")
+    turno = await _turno(test_session, reserva.json()["public_id"])
+    plazo = format_local_deadline(turno.expires_at)
+    assert (
+        f"Tenés hasta el {plazo} para pagar la seña de $ 3.000 por WhatsApp. "
+        "Si no, el turno se libera."
+    ) in cuerpo, cuerpo
+
+
+@pytest.mark.asyncio
+async def test_sin_sena_el_mail_de_reserva_registrada_no_habla_de_plazos(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    cola = usar_cola_de_reservas(monkeypatch, test_session)
+    t = await _tienda(client, "sena-whatsapp-mail-sin")
+    await _sin_sena(test_session, t)
+
+    reserva = await _reservar(client, t)
+    assert reserva.status_code == 201, reserva.text
+    assert reserva.json()["deposit_channel"] is None
+    assert reserva.json()["deposit_deadline"] is None
+    await cola.entregar()
+
+    cuerpo = buzon.enviados[0][2]
+    assert "Tenés hasta" not in cuerpo, cuerpo
+    assert "Te vamos a avisar cuando esté confirmada." in cuerpo, cuerpo
+
+
+async def _sin_sena(session: AsyncSession, t: _Tienda) -> None:
+    await session.execute(
+        update(Service)
+        .where(Service.public_id == t.servicio)
+        .values(deposit_mode="none", deposit_type="full", deposit_amount=None)
+    )
+    await session.commit()
+
+
+async def _vencer(session: AsyncSession, turno: str) -> None:
+    await session.execute(
+        update(Appointment)
+        .where(Appointment.id == turno)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(minutes=1))
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_la_sena_vencida_avisa_al_dueno_como_reagendar(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    t = await _tienda(client, "sena-whatsapp-aviso-vencida")
+    reserva = await _reservar(client, t)
+    turno = reserva.json()["public_id"]
+    await process_outbox_batch(test_session)  # el aviso de la reserva
+    await _vencer(test_session, turno)
+    _mp_prohibido(monkeypatch)
+    await expire_unpaid_appointments(test_session)
+    buzon.enviados.clear()
+
+    await process_outbox_batch(test_session)
+
+    aviso = (
+        await test_session.execute(
+            select(Notification).where(
+                Notification.type == NotificationType.APPOINTMENT_DEPOSIT_LAPSED.value
+            )
+        )
+    ).scalar_one()
+    assert aviso.appointment_id == turno
+    cuerpo = aviso.body or ""
+    assert "Se liberó el turno de Cliente Sena" in cuerpo, cuerpo
+    assert "la seña de $ 3.000 por WhatsApp no se confirmó a tiempo" in cuerpo
+    assert "agendale un turno nuevo" in cuerpo
+    # Y por mail al admin de la tienda, despues del commit del lote.
+    assert [(d, a) for d, a, _ in buzon.enviados] == [
+        ("sena-whatsapp-aviso-vencida@t.com", f"Shifty - {aviso.title}")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_una_retencion_vencida_sin_sena_no_avisa_como_sena(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """El aviso es de la sena por WhatsApp: un turno ``pending`` sin cobro que
+    vence a su hora no lo dispara."""
+    t = await _tienda(client, "sena-whatsapp-vence-sin-sena")
+    await _sin_sena(test_session, t)
+    reserva = await _reservar(client, t)
+    await _vencer(test_session, reserva.json()["public_id"])
+
+    assert (await expire_unpaid_appointments(test_session))["expired"] == 1
+    assert (
+        await _eventos(test_session, NotificationType.APPOINTMENT_DEPOSIT_LAPSED.value)
+        == []
+    )
+
+
+# ---------------------------------------------------------------------------
+# Preview y alta dicen lo mismo (revision 4R de la PR #108, R3 W2)
+# ---------------------------------------------------------------------------
+
+
+async def _preview(client: AsyncClient, t: _Tienda) -> dict[str, Any]:
+    res = await client.get(
+        "/public/deposit/preview",
+        params={
+            "store_public_id": t.store,
+            "service_id": t.servicio,
+            "starts_at": t.dia.replace(
+                hour=11, minute=0, second=0, microsecond=0
+            ).isoformat(),
+        },
+    )
+    assert res.status_code == 200, res.text
+    return dict(res.json())
+
+
+async def _borrar_gateway(session: AsyncSession, store_public_id: str) -> None:
+    """MP desconectado sin pasar por el endpoint (que avisa al dueno)."""
+    store_id = (
+        await session.execute(
+            select(Store.id).where(Store.public_id == store_public_id)
+        )
+    ).scalar_one()
+    await session.execute(
+        delete(PaymentGatewayConfig).where(PaymentGatewayConfig.store_id == store_id)
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caso", "obligatorio", "alta"),
+    [
+        # MP conectado y sin WhatsApp: solo se paga online.
+        ("mp-sin-whatsapp", True, 201),
+        # Sin ningun canal: el preview no obliga a nada y el alta rebota.
+        ("sin-canal", False, 409),
+        # Flag prendido pero MP sin conectar: no es un canal.
+        ("flag-sin-conexion", False, 409),
+    ],
+)
+async def test_el_preview_de_pago_online_obligatorio_coincide_con_el_alta(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    caso: str,
+    obligatorio: bool,
+    alta: int,
+) -> None:
+    _stub_preference(monkeypatch)
+    t = await _tienda(client, f"sena-preview-{caso}", mercadopago=True)
+    await _whatsapp(client, t.token, None)
+    if caso == "sin-canal":
+        apagar = await client.put(
+            "/stores/me/feature-flags",
+            headers=auth_headers(t.token),
+            json={"payments": False},
+        )
+        assert apagar.status_code == 200, apagar.text
+    if caso == "flag-sin-conexion":
+        await _borrar_gateway(test_session, t.store)
+
+    preview = await _preview(client, t)
+    assert preview["online_payment_mandatory"] is obligatorio
+    reserva = await _reservar(client, t, metodo="auto")
+    assert reserva.status_code == alta, reserva.text
+    if alta == 409:
+        assert reserva.json()["error_code"] == "DEPOSIT_CHANNEL_UNAVAILABLE"
+    else:
+        assert reserva.json()["deposit_channel"] == "mercadopago"
+        # Lo que el preview obliga, el alta lo cumple: "manual" rebota.
+        manual = await _reservar(client, t, hora=12, metodo="manual")
+        assert manual.status_code == 422, manual.text
+
+
+@pytest.mark.asyncio
+async def test_flag_prendido_sin_mp_ni_whatsapp_rebota_auto_sin_escribir(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    llamadas = _mp_prohibido(monkeypatch)
+    t = await _tienda(client, "sena-flag-sin-mp", mercadopago=True)
+    await _whatsapp(client, t.token, None)
+    await _borrar_gateway(test_session, t.store)
+
+    res = await _reservar(client, t, metodo="auto")
+
+    assert res.status_code == 409, res.text
+    assert res.json()["error_code"] == "DEPOSIT_CHANNEL_UNAVAILABLE"
+    test_session.expire_all()
+    assert list((await test_session.execute(select(Appointment))).scalars()) == []
+    assert llamadas == []
+
+
+# ---------------------------------------------------------------------------
+# La tienda se queda sin canal: aviso al panel (revision 4R, R4 W2)
+# ---------------------------------------------------------------------------
+
+
+async def _avisos_de_canal(session: AsyncSession) -> list[OutboxMessage]:
+    return await _eventos(session, NotificationType.DEPOSIT_CHANNEL_LOST.value)
+
+
+@pytest.mark.asyncio
+async def test_borrar_el_ultimo_canal_avisa_al_dueno_sin_bloquear_el_cambio(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    buzon = Buzon()
+    monkeypatch.setattr(tasks, "_send_email", buzon)
+    t = await _tienda(client, "sena-canal-perdido")
+
+    # El cambio se guarda igual (aviso, no bloqueo): ``_whatsapp`` exige 200.
+    await _whatsapp(client, t.token, None)
+
+    assert len(await _avisos_de_canal(test_session)) == 1
+    await process_outbox_batch(test_session)
+    aviso = (
+        await test_session.execute(
+            select(Notification).where(
+                Notification.type == NotificationType.DEPOSIT_CHANNEL_LOST.value
+            )
+        )
+    ).scalar_one()
+    assert "no se pueden reservar" in (aviso.body or "")
+    assert "código de área" in (aviso.body or "")
+    assert [d for d, _a, _c in buzon.enviados] == ["sena-canal-perdido@t.com"]
+
+    # Volver a guardar sin canal no repite el aviso: ya no habia canal.
+    await _whatsapp(client, t.token, "llamame al local")
+    assert len(await _avisos_de_canal(test_session)) == 1
+
+
+@pytest.mark.asyncio
+async def test_apagar_los_cobros_o_desconectar_mp_avisa_si_era_el_ultimo_canal(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    t = await _tienda(client, "sena-canal-mp", mercadopago=True)
+    await _whatsapp(client, t.token, None)  # queda MP: sin aviso
+    assert await _avisos_de_canal(test_session) == []
+
+    desconectar = await client.delete(
+        "/payments/mercadopago/oauth/connection", headers=auth_headers(t.token)
+    )
+    assert desconectar.status_code == 200, desconectar.text
+    assert len(await _avisos_de_canal(test_session)) == 1
+
+    otra = await _tienda(client, "sena-canal-flag", mercadopago=True)
+    await _whatsapp(client, otra.token, None)
+    apagar = await client.put(
+        "/stores/me/feature-flags",
+        headers=auth_headers(otra.token),
+        json={"payments": False},
+    )
+    assert apagar.status_code == 200, apagar.text
+    assert len(await _avisos_de_canal(test_session)) == 2
+
+
+@pytest.mark.asyncio
+async def test_sin_servicios_con_sena_obligatoria_perder_el_canal_no_avisa(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    t = await _tienda(client, "sena-canal-sin-servicios")
+    await test_session.execute(
+        update(Service).where(Service.public_id == t.servicio).values(is_active=False)
+    )
+    await test_session.commit()
+
+    await _whatsapp(client, t.token, None)
+
+    assert await _avisos_de_canal(test_session) == []

@@ -4,9 +4,9 @@ Port de ``frontend/src/shared/utils/whatsAppPhone.ts``
 (``normalizePhoneForWhatsApp``): el backend decide si el WhatsApp de la tienda
 es un canal para cobrar una sena (decision de Mateo, 2026-10-03) y tiene que
 coincidir con el front, que con un numero que no puede leer no muestra el
-boton de "Coordinar el pago por WhatsApp". Los casos de
-``tests/unit/test_whatsapp_phone.py`` son los de ``whatsAppPhone.test.ts``:
-si cambia uno, cambia el otro.
+boton de "Coordinar el pago por WhatsApp". Los casos viven en UN archivo,
+``frontend/src/shared/utils/whatsAppPhone.cases.json``, que leen
+``tests/unit/test_whatsapp_phone.py`` y ``whatsAppPhone.test.ts``.
 
 wa.me exige el numero internacional, solo digitos y sin "+". Un celular
 argentino es 54 + 9 + codigo de area + abonado (10 digitos, sin el 0 de larga
@@ -26,10 +26,20 @@ _NATIONAL_WITH_15_LENGTH = 12
 _MIN_INTERNATIONAL_LENGTH = 8
 _MAX_INTERNATIONAL_LENGTH = 15
 
-# Lo unico que se acepta alrededor de los digitos: separadores y un "+" al
-# principio.
-_ALLOWED_SHAPE = re.compile(r"\+?[\d\s\-().]+", re.ASCII)
-_NON_DIGITS = re.compile(r"\D", re.ASCII)
+# Espacios que se leen como separadores: los mismos en los dos lados (los de
+# la clase ``\s`` de JavaScript). Revision 4R de la PR #108: el front aceptaba
+# un numero con NBSP, espacio fino o BOM (``\s`` y ``trim`` de JS los
+# incluyen) y el back, con ``re.ASCII``, no: un WhatsApp pegado desde
+# WhatsApp Web mostraba el boton pero no contaba como canal. Se pasan a un
+# espacio comun antes de leer el numero; cualquier otro caracter sigue siendo
+# texto que no se sabe leer.
+_SEPARATOR_SPACES = re.compile(
+    "[\t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]"
+)
+# Lo unico que se acepta alrededor de los digitos (ASCII, como ``\d`` de JS):
+# espacios y separadores, y un "+" al principio.
+_ALLOWED_SHAPE = re.compile(r"\+?[0-9 \-().]+")
+_NON_DIGITS = re.compile(r"[^0-9]")
 # 11 (AMBA) es el unico codigo de area de dos digitos; el resto empieza con 2
 # o 3.
 _AREA_START = re.compile(r"^(11|[23])")
@@ -78,7 +88,7 @@ def normalize_phone_for_whatsapp(raw: str | None) -> str | None:
     """Telefono de texto libre -> numero para wa.me, o ``None`` si no se puede
     leer con confianza. Sin "+" ni "00" se asume Argentina, salvo que ya
     empiece con 54 y tenga el largo de un numero internacional."""
-    trimmed = (raw or "").strip()
+    trimmed = _SEPARATOR_SPACES.sub(" ", raw or "").strip(" ")
     if not trimmed or not _ALLOWED_SHAPE.fullmatch(trimmed):
         return None
     digits = _NON_DIGITS.sub("", trimmed)

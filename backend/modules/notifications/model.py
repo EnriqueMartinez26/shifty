@@ -29,6 +29,13 @@ class NotificationType(str, enum.Enum):
     WAITLIST_SLOT_RELEASED = "waitlist.slot_released"
     SUBSCRIPTION_EXPIRING = "subscription.expiring"
     APPOINTMENT_CANCELLED_BY_CLIENT = "appointment.cancelled_by_client"
+    # La sena por WhatsApp no se confirmo a tiempo y el job libero el turno
+    # (decision de Mateo, 2026-10-03): el dueno se entera, por si el cliente
+    # pago tarde y hay que reagendarlo.
+    APPOINTMENT_DEPOSIT_LAPSED = "appointment.deposit_lapsed"
+    # La tienda perdio su ultimo canal para cobrar una sena obligatoria
+    # (``payments.deposit_channels.warn_if_deposit_channel_lost``).
+    DEPOSIT_CHANNEL_LOST = "store.deposit_channel_lost"
 
 
 class Notification(BaseEntity):

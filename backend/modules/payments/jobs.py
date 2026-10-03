@@ -25,7 +25,7 @@ from core.availability_cache import invalidate_availability
 from core.config import settings
 from core.database import _apply_tenant_context
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
-from core.utils import ensure_utc_aware
+from core.utils import ensure_utc_aware, format_ars
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import Notification, NotificationType
 from modules.notifications.tasks import (
@@ -36,6 +36,7 @@ from modules.notifications.tasks import (
     build_client_details,
     send_waitlist_offer_email,
     format_local_datetime,
+    format_local_deadline,
     send_cancellation_email,
     send_confirmation_email,
     send_rebook_email,
@@ -48,6 +49,8 @@ from modules.legal.unsubscribe import unsubscribe_url
 from modules.payments.links import RETIRED_LINK_SEARCH_MAX, retired_link_references
 from modules.payments.model import (
     LIVE_CHARGE_PAYMENT_STATUSES,
+    PAYMENT_PROVIDER_MANUAL,
+    PAYMENT_PROVIDER_MERCADOPAGO,
     JsonValue,
     OutboxMessage,
     Payment,
@@ -498,8 +501,10 @@ async def _plan_outbox_message(
     if message.event_type in _MAILS_DEL_PANEL:
         return await _panel_client_mail(db, message, contexto_del_lote)
 
-    notification = _replaced_link_notification(message) or _build_store_notification(
-        message
+    notification = (
+        _replaced_link_notification(message)
+        or _deposit_notification(message)
+        or _build_store_notification(message)
     )
     if notification is None:
         return []
@@ -939,9 +944,19 @@ def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
         return None
     payload = dict(message.payload or {})
     amount = payload.get("amount")
-    amount_label = f" de ${amount}" if amount else ""
+    amount_label = f" de {format_ars(amount)}" if amount else ""
     appointment_id = payload.get("appointment_id")
-    if payload.get("duplicado"):
+    if payload.get("link_vigente"):
+        # Por el link vigente entro otro pago de un cobro ya asentado: se
+        # registro a mano (la sena por WhatsApp) u otro pago de MP lo acredito
+        # (revision 4R y re-revision de la PR #108).
+        titulo = "Pago duplicado"
+        cuerpo = (
+            f"Entró un pago{amount_label} por Mercado Pago de un turno cuya seña "
+            "ya estaba registrada: no se aplicó. Revisalo en Mercado Pago y "
+            "devolvé el que corresponda."
+        )
+    elif payload.get("duplicado"):
         titulo = "Pago duplicado"
         # "Duplicado" incluye un cobro devuelto o con contracargo: no se dice
         # "ya estaba pagado" (revision de e5579b6..3b977a9, #6).
@@ -982,19 +997,19 @@ def _pending_confirmation_notification(
     service_name = str(payload.get("service_name") or "un servicio")
     title = "Turno pendiente de confirmar"
     body = (
-        f"{client_name} reservo {service_name} y va a coordinar el pago. "
+        f"{client_name} reservó {service_name} y va a coordinar el pago. "
         "Confirmalo cuando recibas la transferencia."
     )
     if payload.get("channel") == "whatsapp":
         amount = payload.get("amount")
-        amount_label = f" de ${amount}" if amount else ""
-        fecha, hora = format_local_datetime(payload.get("expires_at") or "")
-        plazo = f" Si no, el turno se libera el {fecha} a las {hora}." if hora else ""
+        amount_label = f" de {format_ars(amount)}" if amount else ""
+        plazo = format_local_deadline(payload.get("expires_at") or "")
+        cuando = f" Si no, el turno se libera el {plazo}." if plazo else ""
         title = "Seña pendiente por WhatsApp"
         body = (
             f"{client_name} reservó {service_name} y va a pagar la seña"
             f"{amount_label} por WhatsApp. Confirmalo cuando te paguen por "
-            f"WhatsApp, desde Cobros.{plazo}"
+            f"WhatsApp, desde Cobros.{cuando}"
         )
     return Notification(
         store_id=store_id,
@@ -1003,6 +1018,57 @@ def _pending_confirmation_notification(
         body=body,
         appointment_id=str(appointment_id) if appointment_id else None,
     )
+
+
+def _deposit_notification(message: OutboxMessage) -> Notification | None:
+    """Avisos de la sena obligatoria (decision de Mateo, 2026-10-03).
+
+    - ``appointment.deposit_lapsed``: el job libero un turno porque la sena
+      por WhatsApp no se confirmo a tiempo (``_vencer_o_rescatar``). Si el
+      cliente pago tarde, la confirmacion manual ya no lo revive (409
+      ``APPOINTMENT_HOLD_EXPIRED``): el aviso dice como seguir.
+    - ``store.deposit_channel_lost``: la tienda perdio su ultimo canal de
+      cobro con servicios de sena obligatoria
+      (``deposit_channels.warn_if_deposit_channel_lost``).
+
+    Aparte de ``_build_store_notification`` (deuda de la regla 29).
+    """
+    if not message.store_id:
+        return None
+    payload = message.payload if isinstance(message.payload, dict) else {}
+    if message.event_type == NotificationType.APPOINTMENT_DEPOSIT_LAPSED.value:
+        client_name = str(payload.get("client_name") or "un cliente")
+        fecha, hora = format_local_datetime(payload.get("starts_at") or "")
+        cuando = f" del {fecha} a las {hora}" if hora else ""
+        amount = payload.get("amount")
+        amount_label = f" de {format_ars(amount)}" if amount else ""
+        appointment_id = payload.get("appointment_id")
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Se liberó un turno por la seña",
+            body=(
+                f"Se liberó el turno de {client_name}{cuando} porque la seña"
+                f"{amount_label} por WhatsApp no se confirmó a tiempo. Si el "
+                "cliente ya pagó, agendale un turno nuevo desde la agenda y "
+                "registrá el pago en ese turno."
+            ),
+            appointment_id=str(appointment_id) if appointment_id else None,
+        )
+    if message.event_type == NotificationType.DEPOSIT_CHANNEL_LOST.value:
+        return Notification(
+            store_id=message.store_id,
+            type=message.event_type,
+            title="Nadie puede pagar tus señas obligatorias",
+            body=(
+                "Te quedaste sin canal para cobrar la seña obligatoria: no hay "
+                "Mercado Pago conectado con los cobros online activos ni un "
+                "WhatsApp válido del negocio. Mientras tanto, los servicios con "
+                "seña obligatoria no se pueden reservar. Conectá Mercado Pago o "
+                "cargá en Configuración un WhatsApp con código de área."
+            ),
+        )
+    return None
 
 
 def _build_store_notification(message: OutboxMessage) -> Notification | None:
@@ -1437,7 +1503,7 @@ def _reconcilable_payments() -> Select[tuple[Payment]]:
         )
         .where(
             Payment.status == PaymentStatus.PENDING.value,
-            Payment.provider == "mercadopago",
+            Payment.provider == PAYMENT_PROVIDER_MERCADOPAGO,
             Payment.is_active.is_(True),
             PaymentGatewayConfig.provider == "mercadopago",
         )
@@ -2068,7 +2134,7 @@ async def _vencer_o_rescatar(
     for appointment, payment in rows:
         if (
             payment is not None
-            and payment.provider == "mercadopago"
+            and payment.provider == PAYMENT_PROVIDER_MERCADOPAGO
             and payment.id not in consultados
         ):
             continue
@@ -2089,6 +2155,7 @@ async def _vencer_o_rescatar(
             # Por el grafo (pending/rejected -> expired); sin vencer el link:
             # ver ``_expired_holds_query``.
             stamp_payment_from_status(payment, PaymentStatus.EXPIRED.value)
+            _avisar_sena_vencida(db, appointment, payment)
         publish_slot_released(
             db,
             store_id=appointment.store_id,
@@ -2102,6 +2169,34 @@ async def _vencer_o_rescatar(
         resultado.expired += 1
         resultado.liberados.append((appointment.store_id, appointment.starts_at))
     return resultado
+
+
+def _avisar_sena_vencida(
+    db: AsyncSession, appointment: Appointment, payment: Payment
+) -> None:
+    """Aviso al dueno de una sena por WhatsApp que vencio sin confirmar.
+
+    Decision de Mateo (2026-10-03): si el cliente pago tarde, el turno ya no
+    revive (la confirmacion manual responde 409 ``APPOINTMENT_HOLD_EXPIRED``)
+    y el dueno tiene que enterarse para reagendarlo. Va al outbox en la
+    transaccion del vencimiento; el lote lo vuelve aviso del panel y mail
+    despues de su commit (``_deposit_notification``). Solo la sena manual: la
+    de MP vence con su link y el pago tardio lo avisa el webhook (S-16).
+    """
+    if payment.provider != PAYMENT_PROVIDER_MANUAL:
+        return
+    db.add(
+        OutboxMessage(
+            store_id=appointment.store_id,
+            event_type=NotificationType.APPOINTMENT_DEPOSIT_LAPSED.value,
+            payload={
+                "appointment_id": appointment.id,
+                "client_name": appointment.client_name,
+                "starts_at": ensure_utc_aware(appointment.starts_at).isoformat(),
+                "amount": str(payment.amount),
+            },
+        )
+    )
 
 
 _Decision = Literal["rescatado", "retenido", "vencer"]
@@ -2232,7 +2327,7 @@ async def _fetch_remote_payments(
     """
     remotos: dict[str, dict[str, Any]] = {}
     consultados: set[str] = set()
-    de_mp = [p for p in payments if p.provider == "mercadopago"]
+    de_mp = [p for p in payments if p.provider == PAYMENT_PROVIDER_MERCADOPAGO]
     if limite is None:
         limite = _reloj() + MP_PHASE_A_BUDGET_SECONDS
     for indice, payment in enumerate(de_mp):
