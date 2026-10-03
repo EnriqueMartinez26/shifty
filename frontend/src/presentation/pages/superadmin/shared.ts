@@ -1,7 +1,8 @@
+import { PASSWORD_REJECTED_MESSAGE } from '@domain/value-objects/PasswordRules'
+
 import type { SuperAdminCoupon } from '@application/services/SuperAdminService'
 
 import { formatArgentinaDate } from '@shared/utils/argentinaTime'
-import { PASSWORD_POLICY_TEXT } from '@shared/utils/passwordPolicy'
 
 import { colors2000s } from '../../../theme/colors'
 import { userRoleLabel } from '../../lib/enumLabels'
@@ -265,7 +266,7 @@ export const SUPERADMIN_FIELD_ERRORS: Partial<Record<string, string>> = {
   logo_url: 'El logo tiene que ser una URL https válida.',
   primary_color: 'El color tiene que ser un hexadecimal, por ejemplo #ff8c42.',
   email: 'Revisá el email: no parece válido.',
-  password: PASSWORD_POLICY_TEXT,
+  password: PASSWORD_REJECTED_MESSAGE,
   phone: 'Revisá el teléfono: solo números, espacios, guiones, paréntesis o +.',
   first_name: 'Revisá el nombre: es demasiado largo o tiene caracteres no permitidos.',
   last_name: 'Revisá el apellido: es demasiado largo o tiene caracteres no permitidos.',

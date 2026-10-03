@@ -460,6 +460,72 @@ describe('SuperAdminPage', () => {
     })
   })
 
+  // 2026-10-01, D-20261001-01: una clave viaja exactamente como se tipeó (antes
+  // la edición la recortaba con `trim()`) y se valida con las reglas del backend.
+  const passwordField = (): HTMLInputElement => {
+    const input = document.querySelector<HTMLInputElement>('input[type="password"]')
+    if (!input) throw new Error('El modal no tiene campo de contraseña')
+    return input
+  }
+
+  it('edita la clave de un usuario sin recortarla', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(
+      first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Editar' }))
+    )
+    fireEvent.change(passwordField(), { target: { value: ' abc123 ' } })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.updateUser).toHaveBeenCalledTimes(1)
+    })
+    expect(mockMutations.updateUser.mock.calls[0][0].payload.password).toBe(' abc123 ')
+  })
+
+  it('edita un usuario con la clave de más de 72 bytes: avisa y no llama al servidor', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(
+      first(sectionOf('Detalle de la tienda').getAllByRole('button', { name: 'Editar' }))
+    )
+    fireEvent.change(passwordField(), { target: { value: `${'é'.repeat(36)}12` } })
+    fireEvent.submit(openModalForm())
+
+    expect(
+      await screen.findByText(
+        'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+      )
+    ).toBeInTheDocument()
+    expect(mockMutations.updateUser).not.toHaveBeenCalled()
+  })
+
+  it('crea un admin mandando la clave tal cual, sin recortar', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear admin' }))
+    fireEvent.change(passwordField(), { target: { value: ' abc123 ' } })
+    fireEvent.submit(openModalForm())
+
+    await waitFor(() => {
+      expect(mockMutations.createAdmin).toHaveBeenCalledTimes(1)
+    })
+    expect(mockMutations.createAdmin.mock.calls[0][0].payload.password).toBe(' abc123 ')
+  })
+
+  it('crea un admin con la clave sin número: avisa y no llama al servidor', async () => {
+    render(<SuperAdminPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crear admin' }))
+    fireEvent.change(passwordField(), { target: { value: 'abcdefgh' } })
+    fireEvent.submit(openModalForm())
+
+    expect(
+      await screen.findByText('La contraseña debe incluir al menos un número')
+    ).toBeInTheDocument()
+    expect(mockMutations.createAdmin).not.toHaveBeenCalled()
+  })
+
   it('asigna un plan a la tienda seleccionada', async () => {
     render(<SuperAdminPage />)
 
