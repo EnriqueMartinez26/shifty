@@ -10,6 +10,12 @@
  *
  * Cuando el numero no se puede leer con confianza devuelve null: la pantalla
  * no muestra el link antes que mandar el mensaje a otra persona.
+ *
+ * El backend tiene un port: `backend/core/whatsapp_phone.py`
+ * (`normalize_phone_for_whatsapp`) decide si el WhatsApp de la tienda es un
+ * canal para cobrar una sena obligatoria, y tiene que coincidir con esto. Los
+ * casos de los dos viven en `whatsAppPhone.cases.json`: si cambia la regla,
+ * cambian los dos archivos y el caso nuevo va ahi.
  */
 
 const ARGENTINA_CODE = '54'
@@ -20,10 +26,17 @@ const NATIONAL_WITH_15_LENGTH = 12
 const MIN_INTERNATIONAL_LENGTH = 8
 const MAX_INTERNATIONAL_LENGTH = 15
 
-// Lo unico que se acepta alrededor de los digitos: separadores y un "+" al
-// principio. Cualquier otra cosa (letras, un "+" en el medio) es texto que no
-// se sabe leer.
-const ALLOWED_SHAPE = /^\+?[\d\s\-().]+$/
+// Espacios que se leen como separadores: la clase `\s` de JavaScript, escrita a
+// mano para que el port de Python (`_SEPARATOR_SPACES`) use EXACTAMENTE la
+// misma (revision 4R de la PR #108: el NBSP de un numero pegado desde WhatsApp
+// Web pasaba aca y no en el backend). Se pasan a un espacio comun antes de leer.
+const SEPARATOR_SPACES =
+  /[\t\n\v\f\r\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/g
+
+// Lo unico que se acepta alrededor de los digitos (ASCII): espacios y
+// separadores, y un "+" al principio. Cualquier otra cosa (letras, un "+" en el
+// medio) es texto que no se sabe leer.
+const ALLOWED_SHAPE = /^\+?[0-9 \-().]+$/
 
 /**
  * Codigo de area argentino valido como primer tramo: 11 (AMBA) es el unico de
@@ -84,7 +97,7 @@ const fromInternational = (digits: string): string | null => {
  * 54 y tenga el largo de un numero internacional.
  */
 export const normalizePhoneForWhatsApp = (raw: string | null | undefined): string | null => {
-  const trimmed = (raw ?? '').trim()
+  const trimmed = (raw ?? '').replace(SEPARATOR_SPACES, ' ').replace(/^ +| +$/g, '')
   if (!trimmed || !ALLOWED_SHAPE.test(trimmed)) return null
   const digits = trimmed.replace(/\D/g, '')
   if (trimmed.startsWith('+')) return fromInternational(digits)
