@@ -787,7 +787,9 @@ class PublicBookingService:
             booking.payment = await self._create_pending_payment(request, booking)
         # A MP lo acredita el webhook; por WhatsApp o sin sena, la tienda.
         if request.deposit_channel != "mercadopago":
-            self._publish_pending_confirmation(data, store_id, booking)
+            self._publish_pending_confirmation(
+                data, store_id, booking, request.deposit_channel
+            )
         return booking
 
     async def _redeem_promotion_code(
@@ -815,7 +817,11 @@ class PublicBookingService:
             raise ValidationException(str(exc))
 
     def _publish_pending_confirmation(
-        self, data: PublicBookingCreate, store_id: str, booking: _Booking
+        self,
+        data: PublicBookingCreate,
+        store_id: str,
+        booking: _Booking,
+        channel: DepositChannel | None,
     ) -> None:
         """El pago se coordina por fuera, asi que la tienda tiene que
         confirmar el turno a mano. Con sena por WhatsApp el aviso lleva el
@@ -825,7 +831,7 @@ class PublicBookingService:
             "client_name": data.client_name,
             "service_name": booking.service.name,
         }
-        if booking.payment is not None:
+        if channel == "whatsapp" and booking.payment is not None:
             expires_at = booking.appointment.expires_at
             payload |= {
                 "channel": "whatsapp",
