@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 
 import type { StoreSettings } from '@application/services/StoreSettingsService'
 
 import { ConflictError } from '@shared/errors/ConflictError'
+import { ValidationError } from '@shared/errors/ValidationError'
 
 import SettingsPage from './Settings'
 
@@ -397,5 +398,104 @@ describe('SettingsPage - dia legado con varios periodos', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Conservar 16:00 a 20:00 el Lunes' }))
     expect(screen.getByLabelText<HTMLInputElement>('Apertura Lunes').value).toBe('16:00')
     expect(screen.getByRole('button', { name: 'Guardar Cambios' })).not.toBeDisabled()
+  })
+})
+
+/**
+ * Cambio de clave: valida la nueva antes de enviar; la actual conserva su contrato.
+ * La NUEVA se valida con las reglas del backend antes de
+ * enviar; la ACTUAL no se valida (1 a 128, la verifica el servidor).
+ */
+describe('SettingsPage - cambio de contraseña', () => {
+  const abrirSeguridad = () => {
+    storeQuery = { data: store, isLoading: false, error: null }
+    idleMutation.mutateAsync.mockReset()
+    renderSettings()
+    fireEvent.click(screen.getByRole('button', { name: 'Seguridad' }))
+  }
+
+  const completar = (actual: string, nueva: string, confirmar: string) => {
+    fireEvent.change(screen.getByLabelText('Contraseña Actual'), { target: { value: actual } })
+    fireEvent.change(screen.getByLabelText('Nueva Contraseña'), { target: { value: nueva } })
+    fireEvent.change(screen.getByLabelText('Confirmar Nueva'), { target: { value: confirmar } })
+    fireEvent.submit(screen.getByRole('button', { name: 'Actualizar Acceso' }).closest('form')!)
+  }
+
+  it('asocia cada label con su input y fija autocomplete y topes', () => {
+    abrirSeguridad()
+
+    const actual = screen.getByLabelText('Contraseña Actual')
+    expect(actual).toHaveAttribute('type', 'password')
+    expect(actual).toHaveAttribute('autocomplete', 'current-password')
+    expect(actual).toHaveAttribute('maxlength', '256')
+    expect(actual).not.toHaveAttribute('minlength')
+
+    const nueva = screen.getByLabelText('Nueva Contraseña')
+    expect(nueva).toHaveAttribute('type', 'password')
+    expect(nueva).toHaveAttribute('autocomplete', 'new-password')
+    expect(nueva).toHaveAttribute('minlength', '6')
+    expect(nueva).toHaveAttribute('maxlength', '128')
+
+    const confirmar = screen.getByLabelText('Confirmar Nueva')
+    expect(confirmar).toHaveAttribute('type', 'password')
+    expect(confirmar).toHaveAttribute('autocomplete', 'new-password')
+    expect(confirmar).toHaveAttribute('maxlength', '128')
+  })
+
+  it('una clave nueva corta se rechaza en el cliente, sin llamar al servidor', async () => {
+    abrirSeguridad()
+
+    completar('vieja', 'ab12', 'ab12')
+
+    expect(
+      await screen.findByText('La contraseña debe tener al menos 6 caracteres')
+    ).toBeInTheDocument()
+    expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('una clave nueva de más de 72 bytes se rechaza antes de enviar', async () => {
+    abrirSeguridad()
+    const nueva = `${'é'.repeat(36)}12`
+
+    completar('vieja', nueva, nueva)
+
+    expect(
+      await screen.findByText(
+        'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+      )
+    ).toBeInTheDocument()
+    expect(idleMutation.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('la clave actual no se valida: una vieja de 3 caracteres llega al servidor, sin recortar', async () => {
+    abrirSeguridad()
+    idleMutation.mutateAsync.mockResolvedValue(undefined)
+
+    completar(' ab ', 'nueva123', 'nueva123')
+
+    await waitFor(() => {
+      expect(idleMutation.mutateAsync).toHaveBeenCalledWith({
+        current_password: ' ab ',
+        new_password: 'nueva123'
+      })
+    })
+  })
+
+  it('un 422 del servidor muestra un texto útil sobre la clave, no el genérico', async () => {
+    abrirSeguridad()
+    idleMutation.mutateAsync.mockRejectedValue(
+      new ValidationError('body -> new_password: value error', {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422
+      })
+    )
+
+    completar('vieja', 'password123', 'password123')
+
+    expect(
+      await screen.findByText(
+        'La contraseña no es aceptable: es demasiado común o no cumple las reglas. Elegí otra'
+      )
+    ).toBeInTheDocument()
   })
 })

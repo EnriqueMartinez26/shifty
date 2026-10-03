@@ -112,3 +112,71 @@ describe('LoginPage', () => {
     expect(await screen.findByText('inicio')).toBeInTheDocument()
   })
 })
+
+/**
+ * 2026-10-01, D-20261001-01: el login NO cambia de contrato (1 a 128
+ * caracteres, sin regla de composición) y una clave viaja exactamente como se
+ * tipeó. Un maxLength de 64 dejaría afuera a quien ya tiene una clave de 65 a
+ * 128 caracteres.
+ */
+describe('LoginPage: atributos y clave sin recortar', () => {
+  const renderLogin = () =>
+    render(
+      <MemoryRouter initialEntries={['/login']}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/dashboard" element={<p>inicio</p>} />
+        </Routes>
+      </MemoryRouter>
+    )
+
+  it('el email es username y la clave current-password con tope de 128, sin mínimo', () => {
+    renderLogin()
+
+    expect(screen.getByLabelText('Email')).toHaveAttribute('autocomplete', 'username')
+    const password = screen.getByLabelText('Contraseña')
+    expect(password).toHaveAttribute('type', 'password')
+    expect(password).toHaveAttribute('autocomplete', 'current-password')
+    expect(password).toHaveAttribute('maxlength', '256')
+    expect(password).not.toHaveAttribute('minlength')
+  })
+
+  it('rechaza 129 code points sin enviar el login', () => {
+    mockMutateAsync.mockClear()
+    renderLogin()
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@x.com' } })
+    fireEvent.change(screen.getByLabelText('Contraseña'), { target: { value: '😀'.repeat(129) } })
+    fireEvent.submit(screen.getByLabelText('Contraseña').closest('form')!)
+    expect(mockMutateAsync).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('más de 128 caracteres')
+  })
+
+  it('manda 128 code points astrales completos (256 unidades UTF-16)', async () => {
+    mockMutateAsync.mockClear()
+    mockMutateAsync.mockResolvedValue({ user: { role: 'store_admin', public_id: 'usr-a' } })
+    renderLogin()
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@x.com' } })
+    const password = '😀'.repeat(128)
+    fireEvent.change(screen.getByLabelText('Contraseña'), { target: { value: password } })
+    fireEvent.submit(screen.getByLabelText('Contraseña').closest('form')!)
+    expect(await screen.findByText('inicio')).toBeInTheDocument()
+    expect(mockMutateAsync).toHaveBeenCalledWith({ email: 'a@x.com', password })
+  })
+
+  it('manda la clave tal cual: con espacios en los extremos y sin recortar', async () => {
+    mockMutateAsync.mockClear()
+    mockMutateAsync.mockResolvedValue({
+      access_token: 't',
+      user: { email: 'a@x.com', role: 'store_admin', store_id: 's1', public_id: 'usr-a' }
+    })
+    renderLogin()
+
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@x.com' } })
+    fireEvent.change(screen.getByLabelText('Contraseña'), { target: { value: ' abc ' } })
+    fireEvent.click(screen.getByRole('button', { name: /Entrar al Panel/ }))
+
+    expect(await screen.findByText('inicio')).toBeInTheDocument()
+    expect(mockMutateAsync).toHaveBeenCalledTimes(1)
+    expect(mockMutateAsync).toHaveBeenCalledWith({ email: 'a@x.com', password: ' abc ' })
+  })
+})
