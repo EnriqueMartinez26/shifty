@@ -838,9 +838,10 @@ async def _resolver_link(
     aviso y True, como el mismo duplicado por el link vigente (re-revision de
     la PR #112, hallazgo 3: con False el inbox lo reintentaba 10 veces y lo
     dejaba como dead letter con la alerta critica, y el aviso ya se deduplica
-    por pago de MP). Si el importe no es el de ese link, o el link no es
-    conocido, va al camino de alerta y queda sin aplicar (False). La
-    identidad ya se valido: esto nunca corre con un payload ajeno.
+    por pago de MP). Con el cobro abierto, si el importe no es el de ese link
+    o el link no es conocido, va al camino de alerta y queda sin aplicar
+    (False). La identidad ya se valido: esto nunca corre con un payload
+    ajeno.
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -848,7 +849,13 @@ async def _resolver_link(
     if link.tipo == "vigente":
         return None
     if payment_status != PaymentStatus.APPROVED.value:
-        if _es_de_otro_pago(payment, _id_del_pago_de_mp(payload), payment_status):
+        if await _es_evento_de_otro_pago(
+            db,
+            store_id=store_id,
+            payment=payment,
+            payload=payload,
+            payment_status=payment_status,
+        ):
             await _avisar_reverso_de_otro_pago(
                 db, store_id=store_id, payment=payment, payload=payload
             )
@@ -1000,23 +1007,64 @@ def _es_de_otro_pago(payment: Payment, mp_payment_id: str, payment_status: str) 
     CRITICO 1). Sin id de MP en el evento no se puede decidir y sigue el
     camino de siempre.
 
-    Un cobro asentado SIN id de MP (una sena manual devuelta desde el panel)
+    Un cobro DEVUELTO sin id de MP (una sena manual devuelta desde el panel)
     no lo acredito ningun pago de MP: un ``approved`` es otro pago y recibe
     el aviso de duplicado (re-revision de la PR #112, hallazgo 2; antes
-    ``refunded -> approved`` se descartaba por el grafo sin rastro). Los
-    demas estados siguen el camino de siempre: sin id no hay contra que
-    compararlos.
+    ``refunded -> approved`` se descartaba por el grafo sin rastro). Solo
+    ``refunded``: un ``approved`` sin id seria una acreditacion real aplicada
+    sin anotar el id, y su reentrega no puede volverse "duplicado, devolvelo"
+    (re-revision de la PR #113, S1). Los demas estados de un cobro sin id
+    los resuelve ``_es_evento_de_otro_pago`` con el aviso ya publicado.
     """
     if not mp_payment_id:
         return False
     if payment.status == PaymentStatus.MANUAL_CONFIRMED.value:
         return True
-    asentado = payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
-    if not asentado:
+    if not _asentado(payment):
         return False
     if not payment.external_payment_id:
-        return payment_status == PaymentStatus.APPROVED.value
+        return (
+            payment.status == PaymentStatus.REFUNDED.value
+            and payment_status == PaymentStatus.APPROVED.value
+        )
     return mp_payment_id != payment.external_payment_id
+
+
+def _asentado(payment: Payment) -> bool:
+    """El cobro ya esta asentado: acreditado o devuelto."""
+    return payment.is_accredited or payment.status == PaymentStatus.REFUNDED.value
+
+
+async def _es_evento_de_otro_pago(
+    db: AsyncSession,
+    *,
+    store_id: str,
+    payment: Payment,
+    payload: dict[str, Any],
+    payment_status: str,
+) -> bool:
+    """``_es_de_otro_pago``, o un pago de MP que ya recibio el aviso de
+    duplicado sobre este cobro asentado.
+
+    Re-revision de la PR #113 (W1): una sena manual devuelta sin id de MP
+    recibe el ``approved`` de ``mp-tarde`` (aviso de duplicado) y despues su
+    ``charged_back``. Sin id no habia contra que comparar: el evento seguia a
+    ``_validate_payment_link`` y terminaba rechazado por importe (dead letter)
+    o descartado por el grafo (``refunded -> refunded``), sin aviso. Un pago
+    que ya se aviso como duplicado es, por definicion, otro pago. La consulta
+    solo corre sobre un cobro asentado y con un id distinto del anotado (en
+    la practica, sin id anotado): el camino caliente no la paga.
+    """
+    mp_payment_id = _id_del_pago_de_mp(payload)
+    if _es_de_otro_pago(payment, mp_payment_id, payment_status):
+        return True
+    if (
+        not mp_payment_id
+        or not _asentado(payment)
+        or mp_payment_id == payment.external_payment_id
+    ):
+        return False
+    return await _aviso_publicado(db, store_id, f"pago:{mp_payment_id}")
 
 
 class ReversalOfOtherPayment(RuntimeError):
@@ -1047,6 +1095,11 @@ async def _avisar_reverso_de_otro_pago(
     duplicado (``pago:<id>``): el dueno hizo lo que el aviso le pidio. Un
     contracargo o una disputa de ese mismo pago SI avisan: no los hizo el
     dueno, y si ademas lo devolvio, la tienda pierde dos veces.
+
+    La deduplicacion lee el outbox: pasada su retencion (las filas procesadas
+    se purgan a los ``RETENTION_OUTBOX_PROCESSED_DAYS``, 90 dias por defecto)
+    se pierde, y un evento reentregado despues avisa otra vez. Falla hacia avisar de mas, nunca hacia callar (re-revision de la
+    PR #113, S3).
     """
     raw_data = payload.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
@@ -1128,8 +1181,13 @@ async def _evento_de_otro_pago(
 
     Devuelve si el evento quedo resuelto (el webhook lo da por procesado).
     """
-    mp_payment_id = _id_del_pago_de_mp(payload)
-    if not _es_de_otro_pago(payment, mp_payment_id, payment_status):
+    if not await _es_evento_de_otro_pago(
+        db,
+        store_id=store_id,
+        payment=payment,
+        payload=payload,
+        payment_status=payment_status,
+    ):
         return False
     if payment_status == PaymentStatus.APPROVED.value:
         await _pago_en_link_reemplazado(

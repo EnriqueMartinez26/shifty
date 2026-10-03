@@ -31,6 +31,7 @@ FUNCIONES = {
         # Re-revision de la PR #112.
         "_resolver_link",
         "_es_de_otro_pago",
+        "_es_evento_de_otro_pago",
         "_evento_de_otro_pago",
         "_avisar_reverso_de_otro_pago",
     ],

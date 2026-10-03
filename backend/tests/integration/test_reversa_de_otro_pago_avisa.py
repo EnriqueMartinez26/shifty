@@ -35,7 +35,13 @@ from modules.payments.model import OutboxMessage, PaymentStatus, WebhookInbox
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
 )
-from tests.integration.test_sena_por_mp_o_whatsapp import SENA, _cobro, _eventos
+from tests.integration.test_sena_por_mp_o_whatsapp import (
+    SENA,
+    _cobro,
+    _eventos,
+    _reservar,
+    _tienda,
+)
 from tests.integration.test_sena_por_whatsapp_regla_3 import (
     _mp_con_pago,
     _remoto,
@@ -253,22 +259,10 @@ async def test_un_approved_sobre_una_sena_manual_ya_devuelta_avisa_duplicado(
     que antes se descartaba sin rastro. Es plata que entro: aviso de
     duplicado, una vez por pago de MP, y el cobro sigue devuelto."""
     reportes = _sentry(monkeypatch)
-    t, turno, cobro, importe = await _sena_registrada_a_mano_con_link(
+    t, turno, cobro, importe = await _sena_manual_devuelta(
         client, test_session, monkeypatch, "reversa-devuelta-sin-id"
     )
-    devuelto = await client.post(
-        f"/payments/{cobro.id}/refund",
-        headers=auth_headers(t.token),
-        json={"manual": True, "reason": "el cliente no pudo venir"},
-    )
-    assert devuelto.status_code == 200, devuelto.text
-    releido = await _cobro(test_session, turno)
-    assert releido is not None
-    assert (releido.status, releido.external_payment_id) == (
-        PaymentStatus.REFUNDED.value,
-        None,
-    )
-    _mp_con_pago(monkeypatch, _remoto(turno, releido, "mp-tarde", "approved", importe))
+    _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-tarde", "approved", importe))
 
     await _webhook(client, t.store, "evt-tarde-1", "mp-tarde")
     await _webhook(client, t.store, "evt-tarde-2", "mp-tarde")
@@ -285,3 +279,99 @@ async def test_un_approved_sobre_una_sena_manual_ya_devuelta_avisa_duplicado(
         None,
     )
     await _inbox_cerrado(test_session)
+
+
+async def _sena_manual_devuelta(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    slug: str,
+    **confirmacion: Any,
+) -> tuple[Any, str, Any, Any]:
+    """Sena registrada a mano y devuelta desde el panel: cobro ``refunded``
+    sin id de MP. Devuelve tienda, turno, cobro e importe del link de MP."""
+    t, turno, cobro, importe = await _sena_registrada_a_mano_con_link(
+        client, test_session, monkeypatch, slug, **confirmacion
+    )
+    devuelto = await client.post(
+        f"/payments/{cobro.id}/refund",
+        headers=auth_headers(t.token),
+        json={"manual": True, "reason": "el cliente no pudo venir"},
+    )
+    assert devuelto.status_code == 200, devuelto.text
+    releido = await _cobro(test_session, turno)
+    assert releido is not None
+    assert (releido.status, releido.external_payment_id) == (
+        PaymentStatus.REFUNDED.value,
+        None,
+    )
+    return t, turno, releido, importe
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "confirmacion",
+    [{}, {"amount": 10000}],
+    ids=["mismo-importe", "otro-importe"],
+)
+async def test_el_contracargo_de_un_duplicado_sobre_una_sena_devuelta_avisa(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    confirmacion: dict[str, Any],
+) -> None:
+    """Re-revision de la PR #113 (W1). Sena manual devuelta (sin id de MP),
+    ``approved`` de ``mp-tarde`` (aviso de duplicado) y despues su
+    ``charged_back``. Sin id no habia contra que comparar: con el mismo
+    importe el grafo lo descartaba (``refunded -> refunded``) y con otro la
+    integridad lo rechazaba hasta el dead letter. Nunca avisaba."""
+    reportes = _sentry(monkeypatch)
+    slug = f"reversa-devuelta-cb-{'otro' if confirmacion else 'mismo'}"
+    t, turno, cobro, importe = await _sena_manual_devuelta(
+        client, test_session, monkeypatch, slug, **confirmacion
+    )
+    for estado in ("approved", "charged_back"):
+        _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-tarde", estado, importe))
+        await _webhook(client, t.store, f"evt-tarde-{estado}", "mp-tarde")
+
+    avisos = await _eventos(test_session, EVENTO)
+    assert [a.payload["aviso"] for a in avisos] == ["reverso:mp-tarde:charged_back"]
+    assert len(await _avisos_de_duplicado(test_session)) == 1
+    assert len(reportes) == 2  # el duplicado y el contracargo
+    final = await _cobro(test_session, turno)
+    assert final is not None
+    assert (final.status, final.external_payment_id) == (
+        PaymentStatus.REFUNDED.value,
+        None,
+    )
+    await _inbox_cerrado(test_session)
+
+
+@pytest.mark.asyncio
+async def test_la_reentrega_de_un_approved_sin_id_anotado_no_es_duplicado(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-revision de la PR #113 (S1). Un cobro ``approved`` sin id de MP
+    anotado (una acreditacion real que no lo dejo) no trata la reentrega de
+    un ``approved`` como otro pago: el aviso "duplicado, devolvelo" le haria
+    devolver un pago legitimo. Solo un cobro DEVUELTO sin id lo hace."""
+    reportes = _sentry(monkeypatch)
+    _mp_con_pago(monkeypatch, {})
+    t = await _tienda(client, "reversa-aprobado-sin-id", mercadopago=True)
+    reserva = await _reservar(client, t, metodo="mercadopago")
+    turno = reserva.json()["public_id"]
+    cobro = await _cobro(test_session, turno)
+    assert cobro is not None
+    cobro.apply_status(PaymentStatus.APPROVED.value)
+    await test_session.commit()
+    cobro = await _cobro(test_session, turno)
+    assert cobro is not None and cobro.external_payment_id is None
+    importe = cobro.amount
+    _mp_con_pago(monkeypatch, _remoto(turno, cobro, "mp-real", "approved", importe))
+
+    await _webhook(client, t.store, "evt-real", "mp-real")
+
+    assert await _avisos_de_duplicado(test_session) == []
+    assert reportes == []
+    final = await _cobro(test_session, turno)
+    assert final is not None and final.status == PaymentStatus.APPROVED.value
