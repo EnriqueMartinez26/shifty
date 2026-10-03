@@ -54,4 +54,14 @@ describe('LedgerService', () => {
 
     expect(mockPost).toHaveBeenCalledWith('/ledger/customers/cli-a/movements', payload)
   })
+
+  // Decision de Mateo (2026-10-03): el fiado revierte movimientos desde el panel.
+  it('reverseMovement pide la reversa por POST, sin cuerpo, a la ruta exacta', async () => {
+    mockPost.mockResolvedValue({ data: { public_id: 'mov-r', reverses_id: 'mov-1' } })
+
+    const reversa = await ledgerService.reverseMovement('cli-a', 'mov-1')
+
+    expect(mockPost).toHaveBeenCalledWith('/ledger/customers/cli-a/movements/mov-1/reverse')
+    expect(reversa).toEqual({ public_id: 'mov-r', reverses_id: 'mov-1' })
+  })
 })

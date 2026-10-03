@@ -179,7 +179,9 @@ async def reverse_movement(
     No borra el original (rompe la trazabilidad del saldo): agrega un
     movimiento de ajuste que compensa su efecto y deja el saldo como si el
     movimiento erroneo nunca hubiera existido. Cada movimiento se puede
-    revertir una sola vez.
+    revertir una sola vez: lo ordena el lock por cliente (la segunda reversa
+    ve la primera y responde 422) y lo sostiene la base con
+    ``uq_customer_ledger_reverses_id`` (2026-10-03, decision de Mateo).
 
     NO llama a ``ensure_store_client`` a proposito (decision del coordinador,
     revision de perf/f4-pay 2026-09-25): los movimientos que quedaron

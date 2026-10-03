@@ -18,6 +18,7 @@ from tests.unit.host_falso import (
     _hay,
     _lineas_de_cron,
     crear_host,
+    escribir_meminfo,
 )
 
 
@@ -179,6 +180,48 @@ def test_checks_alerta_cada_problema(
     assert resultado.returncode != 0
     assert "ALERTA" in resultado.stderr
     assert motivo in resultado.stderr
+
+
+# 2026-10-02: con 8 GB los limites de los contenedores casi llenan la RAM y el
+# aviso por contenedor no ve que el HOST se queda sin memoria, ni que falta el
+# swap que pide docs/DEPLOY_RUNBOOK.md §1.
+@pytest.mark.parametrize(
+    ("meminfo", "motivo"),
+    [
+        ({"disponible_mib": 500}, "quedan 500 MiB disponibles"),
+        ({"swap_mib": 0, "swap_libre_mib": 0}, "no tiene swap"),
+        ({"swap_libre_mib": 900}, "usa el 56 % de su swap"),
+    ],
+    ids=["poca-memoria-disponible", "sin-swap", "swap-en-uso"],
+)
+def test_checks_alerta_la_memoria_del_host(
+    host: Host, meminfo: dict[str, int], motivo: str
+) -> None:
+    escribir_meminfo(host.fake / "meminfo", **meminfo)
+
+    resultado = host.correr(
+        "checks.sh",
+        DOMAIN="shifty.example.com",
+        FAKE_CERT_END=_fecha_en(60),
+        STATS_LOG=(host.raiz / "stats.log").as_posix(),
+    )
+
+    assert resultado.returncode != 0
+    assert "ALERTA" in resultado.stderr
+    assert motivo in resultado.stderr
+
+
+def test_checks_sin_meminfo_legible_avisa(host: Host) -> None:
+    resultado = host.correr(
+        "checks.sh",
+        DOMAIN="shifty.example.com",
+        FAKE_CERT_END=_fecha_en(60),
+        STATS_LOG=(host.raiz / "stats.log").as_posix(),
+        HOST_MEMINFO=(host.raiz / "no-existe").as_posix(),
+    )
+
+    assert resultado.returncode != 0
+    assert "no se pudo leer" in resultado.stderr
 
 
 # --- cron y logrotate --------------------------------------------------------

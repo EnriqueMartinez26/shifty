@@ -423,6 +423,28 @@ def _ejecutable(ruta: Path, contenido: str) -> None:
     ruta.chmod(0o755)
 
 
+def escribir_meminfo(
+    ruta: Path,
+    *,
+    total_mib: int = 7936,
+    disponible_mib: int = 2048,
+    swap_mib: int = 2048,
+    swap_libre_mib: int = 2048,
+) -> None:
+    """Un /proc/meminfo con los campos que lee checks.sh (en kB, como el
+    kernel). Por defecto, el VPS de 8 GB sano: 2 GiB disponibles y swap sin
+    usar."""
+    ruta.write_text(
+        f"MemTotal:       {total_mib * 1024} kB\n"
+        f"MemFree:        {disponible_mib * 512} kB\n"
+        f"MemAvailable:   {disponible_mib * 1024} kB\n"
+        f"SwapTotal:      {swap_mib * 1024} kB\n"
+        f"SwapFree:       {swap_libre_mib * 1024} kB\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
 def crear_host(tmp_path: Path) -> Host:
     """Arma el host falso; cada archivo de tests lo expone como fixture `host`."""
     if BASH is None:
@@ -447,6 +469,10 @@ def crear_host(tmp_path: Path) -> Host:
     _ejecutable(bin_dir / "df", _DF)
     _ejecutable(bin_dir / "timedatectl", _TIMEDATECTL)
     _ejecutable(bin_dir / "openssl", _OPENSSL)
+    # checks.sh lee la memoria del host de aca, no del /proc/meminfo de la
+    # maquina que corre los tests: un runner con poca memoria libre no puede
+    # volver rojo un test.
+    escribir_meminfo(fake / "meminfo")
     # Git Bash en Windows: /usr/bin (find, sort, sha256sum de GNU) antes que
     # System32, donde `find` es otro programa.
     herramientas = str(Path(BASH).parent)
@@ -461,6 +487,7 @@ def crear_host(tmp_path: Path) -> Host:
         "SHIFTY_STATE_DIR": state.as_posix(),
         "BACKUP_DIR": backups.as_posix(),
         "COMPOSE_PROJECT_NAME": "shifty",
+        "HOST_MEMINFO": (fake / "meminfo").as_posix(),
     }
     for variable in (
         "APP_VERSION",

@@ -34,8 +34,9 @@ def host(tmp_path: Path) -> Host:
 def _preparar_deploy(host: Host, actual: str = "v1") -> None:
     (host.repo / ".deploy").mkdir(exist_ok=True)
     (host.repo / ".deploy" / "current").write_text(f"{actual}\n", encoding="utf-8")
+    # Las dos replicas de produccion (docker-compose.prod.yml, VPS de 8 GB).
     (host.fake / "backend_ids").write_text(
-        "old1\nold2\nold3\n", encoding="utf-8", newline="\n"
+        "old1\nold2\n", encoding="utf-8", newline="\n"
     )
     _backup_fresco(host)
     # El .env del servidor: compose lo lee del directorio del proyecto.
@@ -131,7 +132,7 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
         r"compose run --rm --no-deps -T backend alembic upgrade head$",
     )
     backend = _indice(
-        llamadas, r"compose up -d --no-deps --no-build .*--scale backend=6 backend"
+        llamadas, r"compose up -d --no-deps --no-build .*--scale backend=4 backend"
     )
     # El borde NO se recrea en un deploy normal (solo `make deploy-edge`).
     resto = _indice(
@@ -144,7 +145,7 @@ def test_deploy_migra_con_el_codigo_viejo_sirviendo_y_despues_recrea(
     assert not _hay(llamadas, r"compose (pull|up) .*\bnginx\b")
     # Rolling: las viejas se bajan despues de que las nuevas estan sanas.
     assert _indice(llamadas, r"docker stop .*old1") > backend
-    assert _hay(llamadas, r"docker rm .*old1 old2 old3")
+    assert _hay(llamadas, r"docker rm old1 old2$")
     # La compuerta pego contra la ruta real de la API.
     assert _hay(llamadas, r"curl .*https://shifty.example.com/api/ops/health/ready")
     assert (host.repo / ".deploy" / "previous").read_text().strip() == "v1"
@@ -184,7 +185,7 @@ def test_backend_nuevo_que_no_queda_sano_se_descarta_y_quedan_los_viejos(
     assert not _hay(llamadas, r"docker stop .*old1")
     assert not _hay(llamadas, r"compose up -d --no-deps celery_worker ")
     ids = (host.fake / "backend_ids").read_text().split()
-    assert ids == ["old1", "old2", "old3"]
+    assert ids == ["old1", "old2"]
 
 
 def test_compuerta_fallida_vuelve_a_la_version_anterior_sin_migrar(
@@ -256,7 +257,7 @@ def test_rollback_usa_la_version_previa_y_nunca_migra(host: Host) -> None:
     assert resultado.returncode == 0, resultado.stderr
     llamadas = host.llamadas()
     assert not _hay(llamadas, r"alembic")
-    assert _hay(llamadas, r"compose up .*--scale backend=6 backend")
+    assert _hay(llamadas, r"compose up .*--scale backend=4 backend")
     assert _hay(llamadas, r"compose exec -T nginx nginx -s reload")
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
 

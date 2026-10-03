@@ -59,7 +59,9 @@ cd "$SHIFTY_DIR"
 # Sin nginx: el borde se recarga, no se recrea (ver `edge`).
 : "${DEPLOY_SERVICES:=backend celery_worker celery_worker_interactive celery_beat frontend}"
 : "${DEPLOY_BACKEND_SERVICE:=backend}"
-: "${DEPLOY_BACKEND_REPLICAS:=3}"
+# Las mismas que `deploy.replicas` de docker-compose.prod.yml (contrato en
+# test_compose_contract): en el pico corren el doble, viejas mas nuevas.
+: "${DEPLOY_BACKEND_REPLICAS:=2}"
 : "${DEPLOY_ROLLING:=1}"
 : "${DEPLOY_WAIT_TIMEOUT:=180}"
 # Lo que tarda nginx en re-resolver `backend` (resolver valid=5s, F0-01).

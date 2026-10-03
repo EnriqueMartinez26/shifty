@@ -10,3 +10,24 @@
  */
 
 export const isProduction = (): boolean => import.meta.env.PROD
+
+/**
+ * Contacto de Shifty, crudo, tal como llega del build (build args de
+ * frontend/Dockerfile, que CI llena con variables del repo en GitHub). Los
+ * valores reales no van al repo, que es publico. Lo valida y normaliza
+ * shared/utils/contactInfo.ts; ningun otro modulo lo lee.
+ */
+export interface ContactEnv {
+  /** VITE_SUPPORT_WHATSAPP: solo digitos, con codigo de pais (549...). */
+  supportWhatsApp?: string
+  /** VITE_CONTACT_EMAIL. */
+  contactEmail?: string
+  /** VITE_LEGAL_RESPONSABLES: texto libre, uno o mas nombres completos. */
+  legalResponsables?: string
+}
+
+export const getContactEnv = (): ContactEnv => ({
+  supportWhatsApp: import.meta.env.VITE_SUPPORT_WHATSAPP as string | undefined,
+  contactEmail: import.meta.env.VITE_CONTACT_EMAIL as string | undefined,
+  legalResponsables: import.meta.env.VITE_LEGAL_RESPONSABLES as string | undefined
+})

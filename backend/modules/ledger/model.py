@@ -1,7 +1,7 @@
 from decimal import Decimal
 import enum
 
-from sqlalchemy import ForeignKey, Numeric, String, Text
+from sqlalchemy import ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.models import BaseEntity
@@ -27,9 +27,16 @@ class CustomerLedger(BaseEntity):
     balance_after: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Si este movimiento anula a otro, apunta al id del movimiento original.
-    # Sirve de candado: un movimiento no puede revertirse dos veces.
+    # Sirve de candado: un movimiento no puede revertirse dos veces. Lo sostiene
+    # la base con uq_customer_ledger_reverses_id (migracion e8b0d2f4a6c1), no
+    # solo el lock por cliente del service.
     reverses_id: Mapped[str | None] = mapped_column(
-        ForeignKey("customer_ledger.id"), nullable=True, index=True
+        ForeignKey("customer_ledger.id"), nullable=True
+    )
+
+    __table_args__ = (
+        # Los NULL no chocan: solo una reversa por movimiento original.
+        Index("uq_customer_ledger_reverses_id", "reverses_id", unique=True),
     )
 
     @staticmethod

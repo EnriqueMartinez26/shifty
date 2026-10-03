@@ -742,11 +742,13 @@ def test_la_vista_fusionada_distingue_la_lista_vacia_del_reset() -> None:
 
 # --- La API escala por replicas de un proceso (F0-04, plan de rendimiento) ----
 #
-# Decision de Mateo (2026-09-24): tres replicas de UN proceso de uvicorn, no
-# `--workers 3`. Con varios workers dentro de un contenedor, uno que muere en
+# Decision de Mateo (2026-09-24): replicas de UN proceso de uvicorn, no
+# `--workers N`. Con varios workers dentro de un contenedor, uno que muere en
 # loop queda escondido detras de un contenedor "sano" (regla 21). Con replicas,
 # cada proceso tiene su healthcheck y su reinicio. `container_name` fija un
 # nombre unico por servicio, asi que compose no puede levantar mas de una.
+# Eran tres; con el VPS de 2 vCPU y 8 GB (decision de Mateo, 2026-10-02) son
+# dos: una por nucleo, y el deploy gradual duplica las replicas en el pico.
 
 
 def _dockerfile_cmd() -> list[str]:
@@ -775,8 +777,8 @@ def test_la_api_escala_por_replicas_de_un_proceso() -> None:
 
     deploy_prod = _servicios_de_produccion()["backend"].get("deploy") or {}
     assert isinstance(deploy_prod, dict)
-    assert deploy_prod.get("replicas") == 3, (
-        f"produccion no corre tres replicas de la API: {deploy_prod!r}"
+    assert deploy_prod.get("replicas") == 2, (
+        f"produccion no corre dos replicas de la API: {deploy_prod!r}"
     )
 
     cmd = _dockerfile_cmd()
@@ -932,12 +934,16 @@ def test_el_contrato_ve_una_imagen_con_solo_la_version_mayor() -> None:
 # override reemplaza entero al del base, por eso produccion repite
 # shared_preload_libraries y el umbral del slow log.
 
+# Para 2560M de limite en un VPS de 8 GB (2026-10-02; antes 4G de uno de 16 GB):
+# shared_buffers 25 % del limite, effective_cache_size 75 % (el cache de pagina
+# de la base se carga a su cgroup), work_mem y maintenance_work_mem a la
+# mitad, y max_connections con la cuenta del pico del deploy (abajo).
 POSTGRES_PRODUCCION = {
-    "shared_buffers": "1GB",
-    "effective_cache_size": "3GB",
-    "work_mem": "8MB",
-    "maintenance_work_mem": "256MB",
-    "max_connections": "150",
+    "shared_buffers": "640MB",
+    "effective_cache_size": "1920MB",
+    "work_mem": "4MB",
+    "maintenance_work_mem": "128MB",
+    "max_connections": "100",
     "max_wal_size": "2GB",
     "min_wal_size": "512MB",
     "checkpoint_timeout": "15min",
@@ -986,15 +992,18 @@ def test_postgres_de_desarrollo_mide_las_consultas_lentas() -> None:
 
 def test_postgres_de_produccion_usa_la_memoria_del_servidor() -> None:
     db = _servicios_prod()["db"]
-    assert parametros_de_postgres(db.get("command")) == POSTGRES_PRODUCCION
-    # shared_buffers de 1 GB necesita /dev/shm; el default de docker es 64 MB.
-    assert db.get("shm_size") == "512m", db.get("shm_size")
+    parametros = parametros_de_postgres(db.get("command"))
+    assert parametros == POSTGRES_PRODUCCION
+    # Las consultas paralelas necesitan /dev/shm; el default de docker es 64 MB.
+    assert db.get("shm_size") == "256m", db.get("shm_size")
     # Si el host se queda sin memoria, el OOM killer elige otro proceso antes
     # que la base.
     assert db.get("oom_score_adj") == -800, db.get("oom_score_adj")
-    limites = _servicios_de_produccion()["db"]["deploy"]
-    assert isinstance(limites, dict)
-    assert limites["resources"]["limits"]["memory"] == "4G", limites
+    limite = _mib(_limite(_servicios_de_produccion()["db"]))
+    assert limite == 2560, limite
+    # La memoria de Postgres sale del limite, no de la RAM del host.
+    assert _mib(parametros["shared_buffers"]) == limite // 4
+    assert _mib(parametros["effective_cache_size"]) == limite * 3 // 4
 
 
 # --- Pool de la base: 5 + 5 por proceso (F2-04, plan de rendimiento) ---------
@@ -1030,20 +1039,37 @@ def _default_de(valor: str) -> int:
     return int(encontrado.group(1))
 
 
+# Lo que no es la app y tambien ocupa una conexion: la migracion del deploy
+# (alembic, 1-2), el backup (pg_dumpall + pg_dump), el reporte semanal de
+# pg_stat_statements y una consola de operador, mas las 3 que Postgres reserva
+# al superusuario (superuser_reserved_connections, por default).
+CONEXIONES_FUERA_DE_LA_APP = {
+    "migracion": 2,
+    "backup": 2,
+    "pg_top_y_consola": 3,
+    "reservadas_al_superusuario": 3,
+}
+
+
 def test_los_pools_de_produccion_entran_en_max_connections() -> None:
+    """Cuenta del PICO, no del estado estable (2026-10-02): durante el deploy
+    gradual corren las replicas viejas y las nuevas a la vez, cada una con su
+    pool lleno en el peor caso."""
     entorno = _env_prod("backend")
     por_proceso = _default_de(entorno.get("DB_POOL_SIZE", "")) + _default_de(
         entorno.get("DB_MAX_OVERFLOW", "")
     )
-    deploy = _servicios_prod()["backend"]["deploy"]
-    assert isinstance(deploy, dict)
-    replicas = int(deploy["replicas"])
+    replicas = _replicas_de_produccion()
+    en_el_pico = replicas + _replicas_nuevas_del_deploy()
     hijos = _concurrencia("celery_worker") + _concurrencia("celery_worker_interactive")
-    de_la_app = (replicas + hijos) * por_proceso
-    tope = int(POSTGRES_PRODUCCION["max_connections"])
     # Beat no corre tareas y los padres de prefork desechan su pool antes del
-    # fork (core/celery_app.py): no suman. Margen: la mitad para el resto.
-    assert de_la_app <= tope // 2, (de_la_app, tope)
+    # fork (core/celery_app.py): no suman.
+    de_la_app = (en_el_pico + hijos) * por_proceso
+    necesarias = de_la_app + sum(CONEXIONES_FUERA_DE_LA_APP.values())
+    tope = int(POSTGRES_PRODUCCION["max_connections"])
+    assert necesarias <= tope, (de_la_app, necesarias, tope)
+    # Y no de mas: cada conexion cuesta memoria dentro del limite de la base.
+    assert tope <= 2 * necesarias, (necesarias, tope)
 
 
 # --- Dos Redis: cache y estado (F0-15, plan de rendimiento; decision 5) -------
@@ -1075,6 +1101,17 @@ def _megas(valor: str) -> int:
     match = re.fullmatch(r"(\d+)(mb|m|M)", valor)
     assert match, valor
     return int(match.group(1))
+
+
+def _mib(valor: str) -> int:
+    """Tamano de compose (`512M`, `2G`) o de Postgres (`640MB`, `3GB`) en MiB.
+
+    Compose y Postgres usan unidades binarias: 1G = 1024M.
+    """
+    match = re.fullmatch(r"(\d+)\s*([mMgG])[bB]?", valor.strip())
+    assert match, f"tamano no reconocido: {valor!r}"
+    numero = int(match.group(1))
+    return numero * 1024 if match.group(2) in "gG" else numero
 
 
 def _limite(servicio: dict[str, object]) -> str:
@@ -1141,7 +1178,7 @@ def test_cada_uso_de_redis_apunta_a_su_instancia() -> None:
 # --- RabbitMQ acotado (F0-16, plan de rendimiento; decision 6) ----------------
 #
 # Sin configuracion, RabbitMQ calcula su alarma de memoria como el 40% de la
-# RAM que VE, que en un contenedor es la del host (16 GB): el limite de 256 MB
+# RAM que VE, que en un contenedor es la del host (8 GB): el limite de 256 MB
 # del cgroup lo mataba por OOM mucho antes de que la alarma frenara a los
 # publicadores. Con el umbral absoluto por debajo del limite, la alarma llega
 # primero. Produccion corre la imagen sin management (el 15672 ya no se
@@ -1215,7 +1252,7 @@ def test_el_worker_general_consume_la_cola_celery_con_tope_de_memoria() -> None:
     assert _limite(worker) == "768M", _limite(worker)
     deploy = worker["deploy"]
     assert isinstance(deploy, dict)
-    assert str(deploy["resources"]["limits"].get("cpus")) == "1.5", deploy
+    assert str(deploy["resources"]["limits"].get("cpus")) == "1.0", deploy
 
 
 def test_el_otp_tiene_su_propio_worker() -> None:
@@ -1236,15 +1273,17 @@ def test_el_otp_tiene_su_propio_worker() -> None:
     assert celery_app.conf.task_routes["send_booking_email"]["queue"] == "interactive"
 
 
-# --- Limites de memoria para el VPS de 16 GB (F0-19, plan de rendimiento) -----
+# --- Limites para el VPS de 8 GB y 2 vCPU (F0-19; Hostinger KVM 2, 2026-10-02) -
 #
 # Sin limite, un contenedor que crece se come la memoria del host y el OOM
-# killer elige a cualquiera (la base incluida). La suma de la tabla deja
-# margen para el sistema y el cache de disco de Postgres. Sin `cpus` en la API
-# ni en la base: el throttling de CFS mete picos en el p95 (plan §8).
+# killer elige a cualquiera (la base incluida). Antes el stack estaba hecho
+# para 16 GB: en 8 GB sus limites sumaban ~7,7 GiB estables y ~9,2 GiB en el
+# deploy, sin lugar para el sistema. Sin `cpus` en la API ni en la base: el
+# throttling de CFS mete picos en el p95 (plan §8); los procesos de Celery si
+# lo llevan, para que uno desbocado no deje sin CPU a los otros dos.
 
 LIMITES_EN_PRODUCCION = {
-    "db": "4G",
+    "db": "2560M",
     "redis_cache": "192M",
     "redis_state": "96M",
     "rabbitmq": "384M",
@@ -1256,14 +1295,125 @@ LIMITES_EN_PRODUCCION = {
     "nginx": "256M",
 }
 
+# El host (Hostinger KVM 2) y lo que se le deja al sistema: kernel, dockerd y
+# containerd, sshd, journald, el backup con rclone y el cache de pagina que no
+# es de ningun contenedor. Los limites de los contenedores son topes, no uso:
+# su suma tiene que entrar en lo que queda, tambien en el pico del deploy.
+RAM_DEL_HOST_MIB = 8 * 1024
+RESERVA_DEL_SISTEMA_MIB = 1024
+# Objetivo en estado estable: el pico suma la tanda nueva del backend encima.
+TECHO_ESTABLE_MIB = 6656  # 6,5 GiB
+CPUS_DEL_HOST = 2.0
+
+DEPLOY_SH = COMPOSE.parent / "scripts" / "deploy.sh"
+
+
+def _replicas_de_produccion() -> int:
+    deploy = _servicios_de_produccion()["backend"].get("deploy")
+    assert isinstance(deploy, dict), deploy
+    return int(deploy.get("replicas", 1))
+
+
+def _replicas_nuevas_del_deploy() -> int:
+    """Las replicas que scripts/deploy.sh levanta AL LADO de las viejas."""
+    encontrado = re.search(
+        r'^: "\$\{DEPLOY_BACKEND_REPLICAS:=(\d+)\}"$',
+        DEPLOY_SH.read_text(encoding="utf-8"),
+        re.MULTILINE,
+    )
+    assert encontrado, "scripts/deploy.sh no fija DEPLOY_BACKEND_REPLICAS"
+    return int(encontrado.group(1))
+
+
+def memoria_de_produccion(
+    servicios: dict[str, dict[str, object]], nuevas_del_deploy: int
+) -> tuple[int, int]:
+    """(estable, pico del deploy) en MiB, sumando los limites de la vista dada.
+
+    Estable: cada limite por sus replicas. Pico: lo estable mas lo mas grande
+    que el deploy agrega encima, que es o la tanda nueva del backend (el
+    deploy gradual las levanta antes de bajar las viejas) o el contenedor de
+    la migracion (`compose run backend`, con el limite del backend; corre
+    antes, con las viejas sirviendo, y se borra al terminar). Los demas
+    servicios se recrean de a uno: el viejo se baja antes de crear el nuevo.
+    """
+    estable = 0
+    for nombre, servicio in servicios.items():
+        deploy = servicio.get("deploy")
+        assert isinstance(deploy, dict), f"{nombre} sin `deploy`: sin limite"
+        replicas = int(deploy.get("replicas", 1))
+        estable += _mib(_limite(servicio)) * replicas
+    backend = _mib(_limite(servicios["backend"]))
+    pico = estable + max(backend * nuevas_del_deploy, backend)
+    return estable, pico
+
 
 def test_cada_servicio_tiene_su_limite_de_memoria() -> None:
     produccion = _servicios_de_produccion()
     assert set(produccion) == set(LIMITES_EN_PRODUCCION), sorted(produccion)
     limites = {nombre: _limite(servicio) for nombre, servicio in produccion.items()}
     assert limites == LIMITES_EN_PRODUCCION, limites
-    replicas = produccion["backend"]["deploy"]["replicas"]  # type: ignore[index]
-    assert replicas == 3
+    assert _replicas_de_produccion() == 2
+
+
+def test_la_memoria_de_produccion_entra_en_el_vps() -> None:
+    """La suma sale de los compose y de deploy.sh, no de la tabla de arriba:
+    subir un limite, una replica o la tanda del deploy sin rehacer la cuenta
+    falla aca."""
+    estable, pico = memoria_de_produccion(
+        _servicios_de_produccion(), _replicas_nuevas_del_deploy()
+    )
+    disponible = RAM_DEL_HOST_MIB - RESERVA_DEL_SISTEMA_MIB
+    assert estable <= TECHO_ESTABLE_MIB, (
+        f"en estado estable los limites suman {estable} MiB; "
+        f"el objetivo es {TECHO_ESTABLE_MIB}"
+    )
+    assert pico <= disponible, (
+        f"en el pico del deploy los limites suman {pico} MiB y el host deja "
+        f"{disponible} ({RAM_DEL_HOST_MIB} - {RESERVA_DEL_SISTEMA_MIB} del sistema)"
+    )
+
+
+def test_la_cuenta_de_memoria_ve_replicas_y_la_tanda_del_deploy() -> None:
+    servicios: dict[str, dict[str, object]] = {
+        "db": {"deploy": {"resources": {"limits": {"memory": "2G"}}}},
+        "backend": {
+            "deploy": {"replicas": 3, "resources": {"limits": {"memory": "512M"}}}
+        },
+    }
+    assert memoria_de_produccion(servicios, 3) == (2048 + 1536, 2048 + 3072)
+    # Sin deploy gradual el pico es la migracion: una replica mas.
+    assert memoria_de_produccion(servicios, 0) == (2048 + 1536, 2048 + 2048)
+    with pytest.raises(AssertionError, match="sin limite"):
+        memoria_de_produccion({"x": {}, **servicios}, 1)
+
+
+def test_el_deploy_levanta_tantas_replicas_como_produccion() -> None:
+    """Si difieren, despues del primer deploy corre otro numero de replicas que
+    el que dice el compose, y la cuenta de memoria y de conexiones miente."""
+    assert _replicas_nuevas_del_deploy() == _replicas_de_produccion()
+
+
+def _tope_de_cpu(servicio: dict[str, object]) -> float | None:
+    deploy = servicio.get("deploy") or {}
+    assert isinstance(deploy, dict)
+    cpus = deploy.get("resources", {}).get("limits", {}).get("cpus")
+    return None if cpus is None else float(str(cpus))
+
+
+def test_ningun_proceso_de_celery_deja_sin_cpu_a_la_api() -> None:
+    """2 vCPU: cada proceso de Celery tiene tope y ninguno pasa de la mitad del
+    host, asi uno desbocado deja al menos un vCPU para la API y la base. Los
+    tres juntos tampoco llegan a todo el host."""
+    produccion = _servicios_de_produccion()
+    topes = {
+        nombre: _tope_de_cpu(produccion[nombre])
+        for nombre in ("celery_worker", "celery_worker_interactive", "celery_beat")
+    }
+    assert all(tope is not None for tope in topes.values()), topes
+    con_tope = {nombre: float(tope or 0) for nombre, tope in topes.items()}
+    assert all(0 < tope <= CPUS_DEL_HOST / 2 for tope in con_tope.values()), topes
+    assert sum(con_tope.values()) < CPUS_DEL_HOST, topes
 
 
 def test_la_api_y_la_base_no_tienen_tope_de_cpu() -> None:
