@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 
 import { WalletCards } from 'lucide-react'
 
-import type { LedgerClient } from '@application/services/LedgerService'
+import type { LedgerClient, LedgerMovement } from '@application/services/LedgerService'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 import { formatCurrency } from '@shared/utils/currency'
@@ -10,6 +10,7 @@ import { displayableEmail, withoutTechnicalEmail } from '@shared/utils/deliverab
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { FormFeedback, type FormFeedbackMessage } from '../components/molecules/FormFeedback'
+import { LedgerMovementItem, movementTypeLabels } from '../components/molecules/LedgerMovementItem'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { useConfirm } from '../hooks/useConfirm'
@@ -17,7 +18,8 @@ import {
   useAddLedgerMovement,
   useCustomerLedger,
   useLedgerClients,
-  useLedgerSummary
+  useLedgerSummary,
+  useReverseLedgerMovement
 } from '../hooks/useLedger'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { formatDateEsAr, formatDateTimeEsAr } from '../lib/formatters'
@@ -27,13 +29,14 @@ import {
   create2000sPanelStyle
 } from '../lib/surfaceStyles'
 
-type MovementType = 'charge' | 'payment' | 'adjustment' | 'refund'
+type MovementType = LedgerMovement['movement_type']
 
-const movementTypeLabels: Record<MovementType, string> = {
-  charge: 'Cargo',
-  payment: 'Pago',
-  adjustment: 'Ajuste',
-  refund: 'Devolución'
+// POST .../reverse: 422 si ya fue revertido o si es una reversion (la vista
+// quedo vieja y la cuenta se vuelve a pedir), 404 si no es de este cliente.
+// El texto del servidor no llega (regla 20).
+const REVERSE_ERROR_MESSAGES: Partial<Record<string, string>> = {
+  VALIDATION_ERROR: 'Ese movimiento ya fue revertido o es una reversión. La cuenta se actualizó.',
+  RESOURCE_NOT_FOUND: 'Ese movimiento ya no está en la cuenta de este cliente.'
 }
 
 // Mismo tope que LedgerMovementCreate.amount en el backend (ge=0,
@@ -77,6 +80,7 @@ const LedgerPage: React.FC = () => {
   const clientsQuery = useLedgerClients(submittedSearch)
   const summaryQuery = useLedgerSummary()
   const addMovement = useAddLedgerMovement()
+  const reverseMovement = useReverseLedgerMovement()
   // Tienda suspendida (FF-15): POST /ledger/customers/{id}/movements no esta en
   // SUSPENSION_ALLOWED_WRITES y responde 402.
   const writeAccess = useStoreWriteAccess()
@@ -106,6 +110,35 @@ const LedgerPage: React.FC = () => {
   const [feedback, setFeedback] = useState<FormFeedbackMessage | null>(null)
   const { confirm, confirmDialog } = useConfirm()
   const showError = (text: string) => setFeedback({ tone: 'error', text })
+  // El resultado de revertir va junto al estado de cuenta, no al formulario.
+  const [reverseFeedback, setReverseFeedback] = useState<FormFeedbackMessage | null>(null)
+  const movementsById = new Map(ledgerQuery.movements.map((m) => [m.public_id, m]))
+
+  // Decision de Mateo (2026-10-03): el fiado revierte un movimiento cargado
+  // por error. No lo borra: el servidor agrega el que lo compensa.
+  const handleReverse = async (movement: LedgerMovement) => {
+    if (!effectiveClientId) return
+    setReverseFeedback(null)
+    const confirmed = await confirm(
+      `¿Revertir el ${movementTypeLabels[movement.movement_type]} de ${formatCurrency(
+        Number(movement.amount)
+      )} del ${formatDateTimeEsAr(movement.created_at)}? Se agrega un movimiento que lo compensa y el original queda en el historial.`,
+      { confirmLabel: 'Sí, revertir', cancelLabel: 'Volver' }
+    )
+    if (!confirmed) return
+    try {
+      await reverseMovement.mutateAsync({
+        clientId: effectiveClientId,
+        movementId: movement.public_id
+      })
+      setReverseFeedback({ tone: 'success', text: 'Movimiento revertido' })
+    } catch (error: unknown) {
+      setReverseFeedback({
+        tone: 'error',
+        text: getErrorMessage(error, 'No se pudo revertir el movimiento', REVERSE_ERROR_MESSAGES)
+      })
+    }
+  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -357,39 +390,22 @@ const LedgerPage: React.FC = () => {
           </div>
 
           <div className="space-y-3">
+            <FormFeedback feedback={reverseFeedback} />
             {ledgerQuery.movements.map((movement) => (
-              <div
+              <LedgerMovementItem
                 key={movement.public_id}
-                className="rounded-2xl p-4 bg-white flex flex-col md:flex-row md:items-center md:justify-between gap-3"
-                style={create2000sListCardStyle()}
-              >
-                <div>
-                  <p
-                    className="text-sm font-black uppercase"
-                    style={{ color: colors2000s.text.primary }}
-                  >
-                    {movementTypeLabels[movement.movement_type]}
-                  </p>
-                  <p
-                    className="text-[11px] font-bold"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    {formatDateTimeEsAr(movement.created_at)}
-                    {movement.notes ? ` · ${movement.notes}` : ''}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-black" style={{ color: colors2000s.orange.accent }}>
-                    {formatCurrency(Number(movement.amount))}
-                  </p>
-                  <p
-                    className="text-[11px] font-bold"
-                    style={{ color: colors2000s.text.secondary }}
-                  >
-                    Saldo: {formatCurrency(Number(movement.balance_after))}
-                  </p>
-                </div>
-              </div>
+                movement={movement}
+                original={
+                  movement.reverses_id ? movementsById.get(movement.reverses_id) : undefined
+                }
+                onReverse={(target) => {
+                  void handleReverse(target)
+                }}
+                // Tienda suspendida (FF-15): .../reverse no esta en
+                // SUSPENSION_ALLOWED_WRITES y responde 402.
+                reverseDisabled={writeAccess.readOnly || reverseMovement.isPending}
+                reverseDisabledReason={writeAccess.readOnly ? writeAccess.reason : undefined}
+              />
             ))}
             {!ledgerQuery.movements.length && !ledgerQuery.isLoading && (
               <div
