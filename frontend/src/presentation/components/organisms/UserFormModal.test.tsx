@@ -25,11 +25,11 @@ describe('UserFormModal: errores de validacion', () => {
     const onSubmit = jest.fn()
     render(<UserFormModal onClose={jest.fn()} onSubmit={onSubmit} rules={rules} />)
 
-    fill('corta1')
+    fill('cort1')
     submit()
 
     expect(onSubmit).not.toHaveBeenCalled()
-    expect(screen.getByRole('alert')).toHaveTextContent(/al menos 12 caracteres/)
+    expect(screen.getByRole('alert')).toHaveTextContent(/al menos 6 caracteres/)
   })
 
   it('un 422 del servidor en password dice la politica, nunca el texto crudo', async () => {
