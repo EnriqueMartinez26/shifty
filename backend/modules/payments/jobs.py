@@ -966,6 +966,45 @@ def _replaced_link_notification(message: OutboxMessage) -> Notification | None:
     )
 
 
+def _pending_confirmation_notification(
+    store_id: str, payload: Mapping[str, Any]
+) -> Notification:
+    """Turno que la tienda confirma a mano, con el texto de SU canal.
+
+    Sena obligatoria por WhatsApp (``channel = whatsapp``, decision de Mateo,
+    2026-10-03): el turno esta retenido hasta ``expires_at`` y se confirma
+    desde Cobros cuando entra el pago. Sin canal en el payload (reserva sin
+    sena obligatoria, o un evento anterior a esta rama): el texto de siempre.
+    Aparte de ``_build_store_notification`` (deuda de la regla 29).
+    """
+    appointment_id = payload.get("appointment_id")
+    client_name = str(payload.get("client_name") or "Un cliente")
+    service_name = str(payload.get("service_name") or "un servicio")
+    title = "Turno pendiente de confirmar"
+    body = (
+        f"{client_name} reservo {service_name} y va a coordinar el pago. "
+        "Confirmalo cuando recibas la transferencia."
+    )
+    if payload.get("channel") == "whatsapp":
+        amount = payload.get("amount")
+        amount_label = f" de ${amount}" if amount else ""
+        fecha, hora = format_local_datetime(payload.get("expires_at") or "")
+        plazo = f" Si no, el turno se libera el {fecha} a las {hora}." if hora else ""
+        title = "Seña pendiente por WhatsApp"
+        body = (
+            f"{client_name} reservó {service_name} y va a pagar la seña"
+            f"{amount_label} por WhatsApp. Confirmalo cuando te paguen por "
+            f"WhatsApp, desde Cobros.{plazo}"
+        )
+    return Notification(
+        store_id=store_id,
+        type=NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value,
+        title=title,
+        body=body,
+        appointment_id=str(appointment_id) if appointment_id else None,
+    )
+
+
 def _build_store_notification(message: OutboxMessage) -> Notification | None:
     """Traduce un evento del outbox en una notificacion para el panel de la tienda.
 
@@ -983,16 +1022,7 @@ def _build_store_notification(message: OutboxMessage) -> Notification | None:
     service_name = str(payload.get("service_name") or "un servicio")
 
     if message.event_type == NotificationType.APPOINTMENT_PENDING_CONFIRMATION.value:
-        return Notification(
-            store_id=message.store_id,
-            type=message.event_type,
-            title="Turno pendiente de confirmar",
-            body=(
-                f"{client_name} reservo {service_name} y va a coordinar el pago. "
-                "Confirmalo cuando recibas la transferencia."
-            ),
-            appointment_id=str(appointment_id) if appointment_id else None,
-        )
+        return _pending_confirmation_notification(message.store_id, payload)
 
     if message.event_type == NotificationType.APPOINTMENT_CANCELLED_BY_CLIENT.value:
         cuando = payload.get("starts_at")

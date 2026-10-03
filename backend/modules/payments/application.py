@@ -17,8 +17,10 @@ from decimal import Decimal
 
 from core.exceptions import ValidationException
 from core.uow import AbstractUnitOfWork
-from modules.appointments.model import Appointment
+from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
+from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
+from modules.payments.deposit_channels import MANUAL_PAYMENT_PROVIDER
 from modules.payments.model import Payment, PaymentStatus
 from modules.payments.service import (
     EVENT_PREFERENCE_EXPIRE,
@@ -33,6 +35,18 @@ from modules.services.model import Service
 from modules.users.model import User
 
 _ACCREDITED = {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
+
+
+def _manual_amount(
+    appointment: Appointment, service: Service, amount: Decimal | None
+) -> Decimal:
+    """El importe pedido; si no, el precio congelado del turno; si no, el
+    calculo por servicio (turnos historicos)."""
+    if amount is not None:
+        return amount
+    if appointment.price_amount is not None:
+        return appointment.price_amount
+    return calculate_service_payment_amount(service) or Decimal(str(service.price))
 
 
 class PaymentService:
@@ -72,6 +86,9 @@ class PaymentService:
         personal) con 409 ``APPOINTMENT_NOT_PAYABLE`` sin tocar el cobro. Un
         ``completed`` o ``absent`` se sigue cobrando a mano (el efectivo se
         registra despues de atender).
+
+        Cierra la sena por WhatsApp sin MP ni flag ``payments`` (decision de
+        Mateo, 2026-10-03): ver ``_publish_confirmed_mail``.
         """
         if not await lock_payable_appointment(
             self.uow.session, appointment_id=appointment.id, store_id=actor.store_id
@@ -89,29 +106,24 @@ class PaymentService:
             # solo suelta los locks: no hay nada escrito.
             await self.uow.commit()
             return actual
-        resolved = amount
-        if resolved is None and appointment.price_amount is not None:
-            resolved = appointment.price_amount
-        if resolved is None:
-            resolved = calculate_service_payment_amount(service) or Decimal(
-                str(service.price)
-            )
-
         payment = await ensure_payment_preference(
             self.uow.session,
             appointment=appointment,
             service=service,
             store_id=actor.store_id,
-            amount_override=resolved,
+            amount_override=_manual_amount(appointment, service, amount),
             create_provider_link=False,
             keep_existing_amount=amount is None,
+            provider=MANUAL_PAYMENT_PROVIDER,
         )
         ya_confirmado = payment.status == PaymentStatus.MANUAL_CONFIRMED.value
         aplicada = payment.apply_status(
             PaymentStatus.MANUAL_CONFIRMED.value,
             payload={"notes": notes} if notes else None,
         )
+        estado_previo = appointment.status
         sync_appointment_with_payment(appointment, payment.status)
+        self._publish_confirmed_mail(appointment, estado_previo)
         # Sin evento payment.manual_confirmed: no tenia consumidor y se
         # republicaba en cada doble clic (B2-17, 2026-09-19). El vencimiento
         # del link sale una sola vez, con la primera confirmacion real.
@@ -119,6 +131,27 @@ class PaymentService:
             self._expire_live_checkout(payment)
         await self.uow.commit()
         return payment
+
+    def _publish_confirmed_mail(
+        self, appointment: Appointment, estado_previo: str
+    ) -> None:
+        """Mail de turno confirmado al cliente, solo si ESTA confirmacion lo
+        confirmo: un doble clic o el efectivo de un turno ya confirmado no lo
+        repiten.
+
+        Va al outbox en la transaccion de la confirmacion (F2-02), como desde
+        ``AppointmentService.confirm``: es el cierre de la sena por WhatsApp
+        (``deposit_channels``), que no depende de Mercado Pago ni del flag
+        ``payments``. Un cobro que nace aca (no habia uno) es ``manual``.
+        """
+        confirmado = AppointmentStatus.CONFIRMED.value
+        if estado_previo == confirmado or appointment.status != confirmado:
+            return
+        self.uow.outbox.publish(
+            store_id=appointment.store_id,
+            event_type=EVENT_APPOINTMENT_CONFIRMED,
+            payload={"appointment_id": appointment.id},
+        )
 
     def _expire_live_checkout(self, payment: Payment) -> None:
         """Manda a vencer en MP el link real del cobro recien confirmado a mano.

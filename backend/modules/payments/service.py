@@ -1177,6 +1177,10 @@ async def _attach_provider_link(
     payment.preference_id = preference_id
     payment.payment_link = payment_link
     payment.link_ref = link_ref
+    # Con un link real el cobro es de MP aunque haya nacido como sena por
+    # WhatsApp (``provider = manual``): el job de retenciones y la
+    # conciliacion vuelven a consultarlo (``deposit_channels``).
+    payment.provider = "mercadopago"
     # Solo el id y los links (PV-14, L3-01): la respuesta repite ``payer`` e
     # ``items`` (nombre y email del pagador, nombre del servicio).
     payment.raw_payload = minimize_preference_payload(preference_payload)
@@ -1191,8 +1195,13 @@ def _nuevo_cobro_pendiente(
     discount_amount: Decimal,
     promotion_code: str | None,
     deposit_rule: dict[str, JsonValue] | None,
+    provider: str,
 ) -> Payment:
-    """Cobro PENDING con link placeholder: el real lo sella _attach_provider_link."""
+    """Cobro PENDING con link placeholder: el real lo sella _attach_provider_link.
+
+    ``provider``: ``mercadopago``, o ``manual`` para una sena que se cobra por
+    WhatsApp y confirma a mano el personal (``deposit_channels``).
+    """
     preference_id, payment_link = _placeholder_link(appointment.id)
     return Payment(
         store_id=store_id,
@@ -1206,6 +1215,7 @@ def _nuevo_cobro_pendiente(
         payment_link=payment_link,
         promotion_code=promotion_code,
         deposit_rule=deposit_rule,
+        provider=provider,
     )
 
 
@@ -1222,6 +1232,7 @@ async def ensure_payment_preference(
     create_provider_link: bool = True,
     deposit_rule: dict[str, JsonValue] | None = None,
     keep_existing_amount: bool = False,
+    provider: str = "mercadopago",
 ) -> Payment:
     payment, _creado = await _upsert_payment_preference(
         db,
@@ -1235,6 +1246,7 @@ async def ensure_payment_preference(
         create_provider_link=create_provider_link,
         deposit_rule=deposit_rule,
         keep_existing_amount=keep_existing_amount,
+        provider=provider,
     )
     return payment
 
@@ -1310,10 +1322,12 @@ async def _upsert_payment_preference(
     deposit_rule: dict[str, JsonValue] | None,
     keep_existing_amount: bool,
     renew_expired_link: bool = False,
+    provider: str = "mercadopago",
 ) -> tuple[Payment, bool]:
     """ensure_payment_preference + si ESTA llamada inserto el cobro (S-17).
 
-    ``renew_expired_link``: ver ``_refresh_existing_payment``.
+    ``renew_expired_link``: ver ``_refresh_existing_payment``. ``provider``
+    solo cuenta al insertar (``_nuevo_cobro_pendiente``).
     """
     amount, original_amount, discount_amount = _resolve_amounts(
         service,
@@ -1352,6 +1366,7 @@ async def _upsert_payment_preference(
             discount_amount=discount_amount,
             promotion_code=promotion_code,
             deposit_rule=deposit_rule,
+            provider=provider,
         )
         db.add(payment)
         await db.flush()

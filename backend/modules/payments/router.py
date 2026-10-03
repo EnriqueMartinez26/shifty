@@ -729,7 +729,11 @@ async def manual_confirm_payment(
 ) -> PaymentResponse:
     _require_payment_manager(user)
     db = svc.uow.session
-    await _ensure_payments_feature_enabled(db, user)
+    # Sin el flag ``payments``: confirmar a mano registra plata que entro por
+    # fuera (la sena por WhatsApp, decision de Mateo 2026-10-03), no es una
+    # funcion de Mercado Pago. Con los cobros apagados respondia 403 y una
+    # sena por WhatsApp no tenia quien la confirmara (QA 2026-10-02). El flag
+    # sigue gateando lo de MP: link, pasarela, conciliacion.
     appointment, service = await _get_appointment_with_service(
         db, appointment_id, user.store_id
     )

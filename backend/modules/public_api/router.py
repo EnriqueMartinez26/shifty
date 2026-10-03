@@ -36,6 +36,10 @@ from modules.appointments.model import Appointment
 from modules.billing.service import store_is_suspended
 from modules.notifications.tasks import enqueue_otp_email
 from modules.otp.service import OtpService
+from modules.payments.deposit_channels import (
+    deposit_channels_of,
+    online_payment_mandatory,
+)
 from modules.payments.deposit_rules import (
     UNKNOWN_HISTORY,
 )
@@ -395,19 +399,22 @@ async def preview_public_deposit(
         decision = decide(
             service, store, price=price, starts_at=starts_at_utc, history=history
         )
-        payments_enabled = is_store_feature_enabled(store.feature_flags, "payments")
+        deposit_mode = getattr(service, "deposit_mode", "none") or "none"
         return PublicDepositPreviewResponse(
             amount=float(decision.amount),
             base_amount=float(decision.base_amount),
             extra_percent=decision.extra_percent,
             reasons=list(decision.reasons),
             price=float(price),
-            payments_enabled=payments_enabled,
-            online_payment_mandatory=bool(
-                payments_enabled
-                and decision.amount > 0
-                and (getattr(service, "deposit_mode", "none") or "none") == "required"
-                and not store.allow_manual_coordination
+            payments_enabled=is_store_feature_enabled(store.feature_flags, "payments"),
+            # La misma regla que el alta (``deposit_channels``): sin WhatsApp
+            # usable, la sena obligatoria solo se paga por MP.
+            online_payment_mandatory=deposit_mode == "required"
+            and online_payment_mandatory(
+                channels=await deposit_channels_of(db, store),
+                deposit_amount=decision.amount,
+                deposit_mode=deposit_mode,
+                allow_manual_coordination=store.allow_manual_coordination,
             ),
         )
 

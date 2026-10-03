@@ -36,6 +36,7 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_staff,
     register_and_login,
     seed_store_and_admin,
+    set_store_whatsapp,
     webhook_signature_headers,
 )
 
@@ -401,13 +402,20 @@ async def test_required_deposit_blocks_manual_when_store_disallows_coordination(
 async def test_required_deposit_allows_manual_when_store_opts_in(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Si la tienda acepta coordinar por fuera, la reserva manual sigue siendo valida."""
+    """Si la tienda acepta coordinar por fuera, la reserva manual sigue siendo valida.
+
+    Desde 2026-10-03 (decision de Mateo, ``payments.deposit_channels``)
+    "coordinar por fuera" una sena obligatoria es pagarla por WhatsApp: el
+    turno queda retenido (``pending_payment``) como con MP, sin link, hasta que
+    la tienda confirma el pago a mano. Antes nacia ``pending`` sin cobro.
+    """
     _stub_preference(monkeypatch)
     store_public_id, token = await register_and_login(
         client, slug="tienda-flexible", email="flexible@test.com"
     )
     await _enable_payments(client, token)
     await _configure_gateway(client, token)
+    await set_store_whatsapp(client, token)
 
     service_public_id = await create_service(
         client,
@@ -436,7 +444,8 @@ async def test_required_deposit_allows_manual_when_store_opts_in(
         },
     )
     assert booking.status_code == 201, booking.text
-    assert booking.json()["status"] == "pending"
+    assert booking.json()["status"] == "pending_payment"
+    assert booking.json()["payment_link"] is None
 
 
 @pytest.mark.asyncio
