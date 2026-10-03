@@ -24,7 +24,7 @@ from core.config import Environment, settings
 from core.crypto import decrypt_secret, encrypt_secret
 from core.database import _apply_tenant_context
 from core.exceptions import AppException
-from core.observability import report_exception
+from core.observability import OncePer, report_exception
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.model import (
     PAYMENT_PROVIDER_MERCADOPAGO,
@@ -439,12 +439,45 @@ async def _get_store(db: AsyncSession, store_id: str) -> Store | None:
     return result.scalar_one_or_none()
 
 
+# Valor que deja el alta de OAuth mientras espera el token
+# (``payments/router.py``): no es un token roto, es uno que todavia no llego.
+OAUTH_PENDING_ACCESS_TOKEN = "pending"
+
+# Un token guardado que no se descifra (``FIELD_ENCRYPTION_KEY`` rotada o
+# rota, una fila corrupta) se ve como "MP no conectado" y una sena
+# obligatoria pasa en silencio a WhatsApp (re-revision de la PR #108, W2):
+# warning con ids y un evento a Sentry, una vez por tienda cada hora.
+_tokens_ilegibles = OncePer(3600.0)
+
+
+class GatewayTokenUnreadable(RuntimeError):
+    """Para Sentry: el token de MP guardado de una tienda no se descifra."""
+
+
+def _report_unreadable_token(config: PaymentGatewayConfig, exc: Exception) -> None:
+    if config.encrypted_access_token == OAUTH_PENDING_ACCESS_TOKEN:
+        return
+    if not _tokens_ilegibles.allow(str(config.store_id)):
+        return
+    # Solo ids y el tipo: ni el token cifrado ni el texto de la excepcion.
+    contexto = {
+        "store_id": config.store_id,
+        "gateway_config_id": config.id,
+        "error_type": type(exc).__name__,
+    }
+    logger.warning("mercadopago_access_token_unreadable", **contexto)
+    report_exception(
+        GatewayTokenUnreadable("token de Mercado Pago ilegible"), **contexto
+    )
+
+
 def _resolve_access_token(config: PaymentGatewayConfig | None) -> str | None:
     if not config or not config.encrypted_access_token:
         return None
     try:
         return decrypt_secret(config.encrypted_access_token)
-    except Exception:
+    except Exception as exc:
+        _report_unreadable_token(config, exc)
         return None
 
 

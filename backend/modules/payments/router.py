@@ -68,6 +68,7 @@ from modules.payments.oauth_state import (
     parse_mercadopago_oauth_state,
 )
 from modules.payments.service import (
+    OAUTH_PENDING_ACCESS_TOKEN,
     GatewayConfigs,
     apply_mercadopago_oauth_payload,
     build_mercadopago_oauth_authorization_url,
@@ -585,7 +586,7 @@ async def mercadopago_oauth_callback(
             config = PaymentGatewayConfig(
                 store_id=str(state_payload["store_id"]),
                 provider="mercadopago",
-                encrypted_access_token="pending",
+                encrypted_access_token=OAUTH_PENDING_ACCESS_TOKEN,
                 connection_mode="oauth",
             )
             db.add(config)

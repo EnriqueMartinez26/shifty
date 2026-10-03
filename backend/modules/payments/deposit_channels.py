@@ -29,7 +29,6 @@ directo por el grafo. Su retencion es otra (``whatsapp_hold_deadline``).
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -42,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.exceptions import AppException, StoreNotFoundException, ValidationException
 from core.feature_flags import is_store_feature_enabled
-from core.observability import report_exception
+from core.observability import OncePer, report_exception
 from core.utils import ensure_utc_aware, now_utc
 from core.whatsapp_phone import normalize_phone_for_whatsapp
 from modules.notifications.model import NotificationType
@@ -295,12 +294,13 @@ def resolve_deposit_channel(
 # ---------------------------------------------------------------------------
 
 # Un cliente que rebota con 409 ``DEPOSIT_CHANNEL_UNAVAILABLE`` deja un
-# warning con ids, a lo sumo uno por tienda cada ``_LOG_EVERY_SECONDS`` y
-# proceso (una rafaga de reintentos no inunda el log), y UN evento a Sentry por
-# tienda y proceso: el 409 es silencioso para el dueno y el log se rota.
-_LOG_EVERY_SECONDS = 3600.0
-_last_logged: dict[str, float] = {}
-_reported_to_sentry: set[str] = set()
+# warning con ids y un evento a Sentry, a lo sumo uno por tienda cada
+# ``_ALERT_EVERY_SECONDS`` y proceso: una rafaga de reintentos no inunda el log
+# y el 409, que el dueno no ve, no queda en silencio. La misma ventana para los
+# dos (re-revision de la PR #108: el "una vez por tienda" de Sentry era un set
+# que solo crecia y avisaba una sola vez en la vida del proceso).
+_ALERT_EVERY_SECONDS = 3600.0
+_alertas = OncePer(_ALERT_EVERY_SECONDS)
 
 
 class DepositChannelUnavailableAlert(RuntimeError):
@@ -312,17 +312,11 @@ def report_deposit_channel_unavailable(
     *, store_id: str, service_id: str, clock: float | None = None
 ) -> None:
     """Deja rastro de una reserva rechazada por falta de canal de cobro."""
-    ahora = time.monotonic() if clock is None else clock
-    ultimo = _last_logged.get(store_id)
-    if ultimo is not None and ahora - ultimo < _LOG_EVERY_SECONDS:
+    if not _alertas.allow(store_id, now=clock):
         return
-    _last_logged[store_id] = ahora
     logger.warning(
         "deposit_channel_unavailable", store_id=store_id, service_id=service_id
     )
-    if store_id in _reported_to_sentry:
-        return
-    _reported_to_sentry.add(store_id)
     report_exception(
         DepositChannelUnavailableAlert("sena obligatoria sin canal de cobro"),
         store_id=store_id,
