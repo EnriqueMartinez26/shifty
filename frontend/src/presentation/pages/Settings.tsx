@@ -15,6 +15,12 @@ import {
 } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 
+import {
+  LOGIN_PASSWORD_MAX_LENGTH,
+  PASSWORD_REJECTED_MESSAGE,
+  validateNewPassword
+} from '@domain/value-objects/PasswordRules'
+
 import { getErrorCode, getErrorMessage } from '@shared/errors/getErrorMessage'
 import { navigateExternal } from '@shared/utils/safeUrl'
 
@@ -213,6 +219,15 @@ const SettingsPage: React.FC = () => {
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
     setErrorMessage('')
+    if (Array.from(passwordForm.current).length > LOGIN_PASSWORD_MAX_LENGTH) {
+      setErrorMessage('La contraseña actual no puede tener más de 128 caracteres')
+      return
+    }
+    const passwordError = validateNewPassword(passwordForm.new)
+    if (passwordError) {
+      setErrorMessage(passwordError)
+      return
+    }
     if (passwordForm.new !== passwordForm.confirm) {
       setErrorMessage('Las contraseñas no coinciden')
       return
@@ -228,7 +243,14 @@ const SettingsPage: React.FC = () => {
       setTimeout(() => setSaveStatus('idle'), 3000)
     } catch (error: unknown) {
       setSaveStatus('error')
-      setErrorMessage(getErrorMessage(error, 'Error al cambiar contraseña'))
+      setErrorMessage(
+        getErrorMessage(
+          error,
+          'Error al cambiar contraseña',
+          {},
+          { new_password: PASSWORD_REJECTED_MESSAGE }
+        )
+      )
     }
   }
 

@@ -2,6 +2,12 @@ import React from 'react'
 
 import { Loader2 } from 'lucide-react'
 
+import {
+  LOGIN_PASSWORD_MAX_LENGTH,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH
+} from '@domain/value-objects/PasswordRules'
+
 import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
 import { createSettingsInputStyle } from '../../../lib/surfaceStyles'
 
@@ -40,13 +46,17 @@ export const SettingsSecurityTab: React.FC<SettingsSecurityTabProps> = ({
     <div className="space-y-4">
       <div className="space-y-2">
         <label
+          htmlFor="settings-current-password"
           className="text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
           Contraseña Actual
         </label>
         <input
+          id="settings-current-password"
           type="password"
+          autoComplete="current-password"
+          maxLength={LOGIN_PASSWORD_MAX_LENGTH * 2}
           required
           value={form.current}
           onChange={(e) => onFormChange({ ...form, current: e.target.value })}
@@ -57,13 +67,18 @@ export const SettingsSecurityTab: React.FC<SettingsSecurityTabProps> = ({
 
       <div className="space-y-2">
         <label
+          htmlFor="settings-new-password"
           className="text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
           Nueva Contraseña
         </label>
         <input
+          id="settings-new-password"
           type="password"
+          autoComplete="new-password"
+          minLength={PASSWORD_MIN_LENGTH}
+          maxLength={PASSWORD_MAX_LENGTH * 2}
           required
           value={form.new}
           onChange={(e) => onFormChange({ ...form, new: e.target.value })}
@@ -74,13 +89,17 @@ export const SettingsSecurityTab: React.FC<SettingsSecurityTabProps> = ({
 
       <div className="space-y-2">
         <label
+          htmlFor="settings-confirm-password"
           className="text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
           Confirmar Nueva
         </label>
         <input
+          id="settings-confirm-password"
           type="password"
+          autoComplete="new-password"
+          maxLength={PASSWORD_MAX_LENGTH * 2}
           required
           value={form.confirm}
           onChange={(e) => onFormChange({ ...form, confirm: e.target.value })}

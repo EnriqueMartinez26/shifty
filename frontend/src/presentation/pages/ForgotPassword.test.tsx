@@ -133,6 +133,17 @@ describe('ForgotPasswordPage', () => {
     expect(column.lastElementChild?.textContent).toBe('Términos y condiciones·Privacidad')
   })
 
+  // 2026-10-01, D-20261001-01: WHATWG autofill token for an email field.
+  it('marks the email input as autocomplete="email"', () => {
+    render(
+      <MemoryRouter>
+        <ForgotPasswordPage />
+      </MemoryRouter>
+    )
+
+    expect(screen.getByLabelText('Email')).toHaveAttribute('autocomplete', 'email')
+  })
+
   it('renders the pending state as disabled and busy', () => {
     mockIsPending = true
 

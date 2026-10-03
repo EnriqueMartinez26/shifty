@@ -4,6 +4,8 @@ import { mdiShieldAlert } from '@mdi/js'
 import { ArrowRight } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router'
 
+import { LOGIN_PASSWORD_MAX_LENGTH } from '@domain/value-objects/PasswordRules'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -31,6 +33,10 @@ const LoginPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    if (Array.from(password).length > LOGIN_PASSWORD_MAX_LENGTH) {
+      setError('La contraseña no puede tener más de 128 caracteres')
+      return
+    }
     const normalizedEmail = email.trim().toLowerCase()
 
     try {
@@ -68,6 +74,7 @@ const LoginPage: React.FC = () => {
           <input
             id="login-email"
             type="email"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="w-full rounded-xl px-4 py-3 outline-none transition-all"
@@ -88,6 +95,8 @@ const LoginPage: React.FC = () => {
           <input
             id="login-password"
             type="password"
+            autoComplete="current-password"
+            maxLength={LOGIN_PASSWORD_MAX_LENGTH * 2}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full rounded-xl px-4 py-3 outline-none transition-all"

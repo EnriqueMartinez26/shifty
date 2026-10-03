@@ -4,6 +4,13 @@ import { mdiShieldAlert } from '@mdi/js'
 import { KeyRound } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router'
 
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+  PASSWORD_REJECTED_MESSAGE,
+  validateNewPassword
+} from '@domain/value-objects/PasswordRules'
+
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
@@ -35,9 +42,10 @@ const ResetPasswordPage: React.FC = () => {
       return
     }
 
-    // Mismo piso que `ResetPasswordRequest` en el backend (min_length=12).
-    if (newPassword.length < 12) {
-      setError('La contraseña debe tener al menos 12 caracteres.')
+    // Mismas reglas que `ResetPasswordRequest` en el backend (D-20261001-01).
+    const passwordError = validateNewPassword(newPassword)
+    if (passwordError) {
+      setError(passwordError)
       return
     }
 
@@ -54,7 +62,18 @@ const ResetPasswordPage: React.FC = () => {
       setMessage(response.message || 'Contraseña actualizada correctamente.')
       setTimeout(() => navigate('/login'), 1200)
     } catch (error: unknown) {
-      setError(getErrorMessage(error, 'No se pudo restablecer la contraseña'))
+      // Si el 422 señala la clave, se avisa con texto propio; el token
+      // rechazado conserva su mensaje específico.
+      setError(
+        getErrorMessage(
+          error,
+          'No se pudo restablecer la contraseña',
+          {},
+          {
+            new_password: PASSWORD_REJECTED_MESSAGE
+          }
+        )
+      )
     }
   }
 
@@ -86,11 +105,14 @@ const ResetPasswordPage: React.FC = () => {
             <input
               id="reset-new-password"
               type="password"
+              autoComplete="new-password"
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={PASSWORD_MAX_LENGTH * 2}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
               style={inputStyle}
-              placeholder="Mínimo 12 caracteres"
+              placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres, con letra y número`}
               required
             />
           </div>
@@ -112,6 +134,8 @@ const ResetPasswordPage: React.FC = () => {
             <input
               id="reset-confirm-password"
               type="password"
+              autoComplete="new-password"
+              maxLength={PASSWORD_MAX_LENGTH * 2}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"

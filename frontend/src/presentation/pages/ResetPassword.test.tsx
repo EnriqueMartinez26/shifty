@@ -1,6 +1,8 @@
 import { mdiStore } from '@mdi/js'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
+
+import { ValidationError } from '@shared/errors'
 
 import ResetPasswordPage from './ResetPassword'
 import { cssValue } from '../../test/cssValue'
@@ -83,24 +85,99 @@ describe('ResetPasswordPage', () => {
     expect(column.lastElementChild?.textContent).toBe('Términos y condiciones·Privacidad')
   })
 
-  it('rechaza una clave de menos de 12 caracteres sin llamar al backend (L1)', async () => {
-    // El backend exige 12 (`ResetPasswordRequest`); con el piso viejo de 8,
-    // una clave de 10 pasaba el formulario y volvia como 422.
+  const renderReset = () =>
     render(
       <MemoryRouter initialEntries={['/reset-password?token=abc']}>
         <ResetPasswordPage />
       </MemoryRouter>
     )
 
-    fireEvent.change(screen.getByLabelText('Nueva contraseña'), {
-      target: { value: 'corta12345' }
-    })
-    fireEvent.change(screen.getByLabelText('Confirmar contraseña'), {
-      target: { value: 'corta12345' }
-    })
+  const submitWith = (clave: string) => {
+    fireEvent.change(screen.getByLabelText('Nueva contraseña'), { target: { value: clave } })
+    fireEvent.change(screen.getByLabelText('Confirmar contraseña'), { target: { value: clave } })
     fireEvent.submit(screen.getByRole('button', { name: 'Actualizar contraseña' }).closest('form')!)
+  }
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('al menos 12 caracteres')
+  beforeEach(() => {
+    mockMutateAsync.mockReset()
+  })
+
+  it('rechaza una clave de menos de 6 caracteres sin llamar al backend (L1)', async () => {
+    // 2026-10-01, D-20261001-01: el piso era 12 (L1, 2026-09); la decisión del
+    // dueño lo bajó a 6, con tope de 64 caracteres y 72 bytes.
+    renderReset()
+
+    submitWith('ab12')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La contraseña debe tener al menos 6 caracteres'
+    )
     expect(mockMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('avisa antes de enviar que la clave supera los 72 bytes (36 letras con tilde y un número)', async () => {
+    renderReset()
+
+    // 36 x 'é' (72 bytes) + '1' = 73 bytes: son 37 caracteres, pero el backend
+    // responde 422 porque bcrypt solo toma 72 bytes.
+    submitWith(`${'é'.repeat(36)}1`)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La contraseña ocupa más de 72 bytes (los acentos, la ñ, los símbolos y los emojis ocupan más de uno)'
+    )
+    expect(mockMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('pide letra y número como el backend', async () => {
+    renderReset()
+
+    submitWith('abcdefgh')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La contraseña debe incluir al menos un número'
+    )
+    expect(mockMutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('manda la clave tal cual, sin recortar, cuando cumple las reglas', async () => {
+    mockMutateAsync.mockResolvedValue({ message: 'ok' })
+    renderReset()
+
+    submitWith(' abc123 ')
+
+    await waitFor(() => {
+      expect(mockMutateAsync).toHaveBeenCalledWith({ token: 'abc', new_password: ' abc123 ' })
+    })
+  })
+
+  it('las dos claves son new-password y la nueva lleva los topes 6 y 64', () => {
+    renderReset()
+
+    const nueva = screen.getByLabelText('Nueva contraseña')
+    expect(nueva).toHaveAttribute('type', 'password')
+    expect(nueva).toHaveAttribute('autocomplete', 'new-password')
+    expect(nueva).toHaveAttribute('minlength', '6')
+    expect(nueva).toHaveAttribute('maxlength', '128')
+
+    const confirmar = screen.getByLabelText('Confirmar contraseña')
+    expect(confirmar).toHaveAttribute('type', 'password')
+    expect(confirmar).toHaveAttribute('autocomplete', 'new-password')
+    expect(confirmar).toHaveAttribute('maxlength', '128')
+  })
+
+  it('un 422 del servidor (clave común) muestra un texto útil, no el genérico', async () => {
+    mockMutateAsync.mockRejectedValue(
+      new ValidationError('body -> new_password: value error', {
+        errorCode: 'VALIDATION_ERROR',
+        statusCode: 422
+      })
+    )
+    renderReset()
+
+    submitWith('password123')
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La contraseña no es aceptable: es demasiado común o no cumple las reglas. Elegí otra'
+    )
   })
 })

@@ -60,6 +60,7 @@ const ForgotPasswordPage: React.FC = () => {
             <input
               id="forgot-email"
               type="email"
+              autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full rounded-xl pl-10 pr-4 py-3 outline-none transition-all"
