@@ -34,6 +34,7 @@ import modules.notifications.tasks as tasks
 import modules.payments.jobs as jobs
 from core.config import Environment, settings
 from core.observability import OncePer
+from core.utils import ensure_utc_aware
 from modules.appointments.model import AppointmentStatus
 from modules.payments.jobs import expire_unpaid_appointments
 from modules.payments.model import Payment, PaymentStatus
@@ -255,3 +256,93 @@ async def test_sin_atraso_no_avisa(
 
     assert resultado["expired"] == 1, resultado
     assert avisos == []
+
+
+@pytest.mark.asyncio
+async def test_la_reconsulta_vuelve_a_estacionar_y_no_repite_la_alerta(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision W1 (2026-10-03): la reconsulta de la hora vuelve a sellar el
+    cobro (la corrida siguiente ni lo toma ni le pregunta a MP) y la alerta
+    de integridad no se repite para el mismo pago de MP."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    retenida = await _retencion_vencida(
+        client, test_session, "venc-resello", vencio_hace=timedelta(hours=2)
+    )
+    consultas = _mp_por_turno(
+        monkeypatch, {retenida.turno: _aprobado_de_prueba(retenida)}
+    )
+    avisos = _sentry(monkeypatch)
+    monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
+    assert (await expire_unpaid_appointments(test_session))["held"] == 1
+    atrasado = (
+        datetime.now(timezone.utc)
+        - jobs.EXPIRE_HELD_RECHECK_INTERVAL
+        - timedelta(minutes=1)
+    )
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.id == retenida.cobro)
+        .values(integrity_held_at=atrasado)
+    )
+    await test_session.commit()
+
+    def de_la_retenida() -> int:
+        return sum(retenida.turno in path for path in consultas)
+
+    reconsulta = await expire_unpaid_appointments(test_session)
+    tras_la_reconsulta = de_la_retenida()
+    siguiente = await expire_unpaid_appointments(test_session)
+
+    assert reconsulta["held"] == 1, reconsulta
+    sello = await _sellado(test_session, retenida.cobro)
+    assert sello is not None and ensure_utc_aware(sello) > atrasado, sello
+    assert (siguiente["held"], siguiente["inspected"]) == (0, 0), siguiente
+    assert de_la_retenida() == tras_la_reconsulta
+    assert [a["mp_payment_id"] for a in avisos] == [f"mp-{retenida.turno}"], avisos
+
+
+@pytest.mark.asyncio
+async def test_los_estacionados_en_la_misma_corrida_se_desfasan(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision S1 (2026-10-03): dos cobros estacionados en la misma corrida
+    volvian juntos cada hora y seguian en fase. El sello lleva un desfase
+    sorteado (``_desfase_de_reconsulta``, fijado aca): pasada la hora del
+    primero, el segundo todavia no vuelve a la consulta."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    primera = await _retencion_vencida(
+        client, test_session, "venc-desfase-a", vencio_hace=timedelta(hours=3)
+    )
+    segunda = await _retencion_vencida(
+        client, test_session, "venc-desfase-b", vencio_hace=timedelta(hours=2)
+    )
+    _mp_por_turno(
+        monkeypatch,
+        {r.turno: _aprobado_de_prueba(r) for r in (primera, segunda)},
+    )
+    _sentry(monkeypatch)
+    maximo = timedelta(seconds=jobs.EXPIRE_HELD_RECHECK_JITTER_SECONDS)
+    desfases = iter([timedelta(0), maximo])
+    monkeypatch.setattr(jobs, "_desfase_de_reconsulta", lambda: next(desfases))
+    monkeypatch.setattr(settings, "ENV", Environment.PRODUCTION)
+
+    assert (await expire_unpaid_appointments(test_session))["held"] == 2
+
+    sello_a = await _sellado(test_session, primera.cobro)
+    sello_b = await _sellado(test_session, segunda.cobro)
+    assert sello_a is not None and sello_b is not None
+    separacion = ensure_utc_aware(sello_b) - ensure_utc_aware(sello_a)
+    # Los dos sellos se toman en la misma corrida, a milisegundos.
+    assert abs(separacion - maximo) < timedelta(seconds=30), separacion
+    momento = (
+        ensure_utc_aware(sello_a)
+        + jobs.EXPIRE_HELD_RECHECK_INTERVAL
+        + timedelta(minutes=1)
+    )
+    filas = (await test_session.execute(jobs._expired_holds_query(momento, 10))).all()
+    vuelven = {cobro.id for _, cobro in filas if cobro is not None}
+    assert primera.cobro in vuelven
+    assert segunda.cobro not in vuelven

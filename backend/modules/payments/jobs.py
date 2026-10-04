@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import time
 from collections.abc import (
     AsyncIterator,
@@ -1919,11 +1920,26 @@ def _es_aprobado(remoto: Mapping[str, Any]) -> bool:
 # no cambia nada.
 EXPIRE_HELD_RECHECK_INTERVAL = timedelta(hours=1)
 
+# Desfase aleatorio del sello, de 0 a 10 minutos (revision S1). Los cobros
+# estacionados en la misma corrida volvian JUNTOS cada hora y seguian en fase
+# para siempre: esa corrida gastaba el presupuesto de MP en ellos y demoraba a
+# las retenciones nuevas. Cada reconsulta sortea otro desfase, asi que se
+# separan solos. Se eligio desfasar y no ordenar los reconsultables despues de
+# los demas: ordenar por una columna del lado nullable del outer join rompe el
+# ``ORDER BY expires_at LIMIT`` sobre el indice parcial de turnos, y Postgres
+# tendria que leer y ordenar todas las retenciones vencidas en cada corrida.
+EXPIRE_HELD_RECHECK_JITTER_SECONDS = 600
+
+
+def _desfase_de_reconsulta() -> timedelta:
+    """El sorteo del desfase, aparte para que los tests lo fijen."""
+    return timedelta(seconds=secrets.randbelow(EXPIRE_HELD_RECHECK_JITTER_SECONDS + 1))
+
 
 def _retencion_vencida(now: datetime) -> list[ColumnElement[bool]]:
     """El turno sigue retenido (pendiente o con sena pendiente) y su
     retencion ya vencio. Lado del turno de ``_expired_holds_query`` y de
-    ``oldest_overdue_hold_at``."""
+    ``overdue_holds``."""
     return [
         Appointment.status.in_(
             [
@@ -2445,8 +2461,8 @@ async def _rescatar_o_retener(
 
 async def _estacionar(db: AsyncSession, store_id: str, payment_id: str) -> None:
     """Sella ``integrity_held_at``: la consulta del job no vuelve a tomar este
-    cobro hasta ``EXPIRE_HELD_RECHECK_INTERVAL`` (seguimiento W2 de la PR
-    #104). Solo para el rechazo de integridad de un APROBADO: un error
+    cobro hasta ``EXPIRE_HELD_RECHECK_INTERVAL`` mas un desfase de hasta
+    ``EXPIRE_HELD_RECHECK_JITTER_SECONDS`` (seguimiento W2 de la PR #104). Solo para el rechazo de integridad de un APROBADO: un error
     inesperado (deadlock, timeout) puede pasar solo y se vuelve a mirar en la
     corrida siguiente.
 
@@ -2462,7 +2478,10 @@ async def _estacionar(db: AsyncSession, store_id: str, payment_id: str) -> None:
             await db.execute(
                 update(Payment)
                 .where(Payment.id == payment_id, Payment.store_id == store_id)
-                .values(integrity_held_at=datetime.now(timezone.utc))
+                .values(
+                    integrity_held_at=datetime.now(timezone.utc)
+                    + _desfase_de_reconsulta()
+                )
                 .execution_options(synchronize_session=False)
             )
     except SoftTimeLimitExceeded:

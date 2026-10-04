@@ -149,15 +149,28 @@ async def test_los_cobros_de_prueba_quedan_retenidos_y_el_resto_vence(
 
     primera = await _con_bypass(app_sessions, vencer)
     segunda = await _con_bypass(app_sessions, vencer)
+    # Pasada la hora las de A vuelven a la consulta y se vuelven a retener:
+    # la alerta no se repite (revision W1 del seguimiento W2 de la PR #104;
+    # sin la reconsulta, "una alerta por pago" no probaba nada).
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "update payments set integrity_held_at = :t "
+                "where integrity_held_at is not null"
+            ),
+            {"t": ahora - jobs.EXPIRE_HELD_RECHECK_INTERVAL - timedelta(minutes=1)},
+        )
+    reconsulta = await _con_bypass(app_sessions, vencer)
 
     assert (primera["held"], primera["expired"]) == (CUANTOS, CUANTOS), primera
     assert (segunda["held"], segunda["expired"]) == (0, 0), segunda
+    assert (reconsulta["held"], reconsulta["expired"]) == (CUANTOS, 0), reconsulta
     assert (
         await _estados(owner_engine, store_a)
         == [("pending_payment", "pending")] * CUANTOS
     )
     assert await _estados(owner_engine, store_b) == [("expired", "expired")] * CUANTOS
-    # Una alerta por pago de MP, no una por corrida.
+    # Una alerta por pago de MP, no una por corrida ni por reconsulta.
     assert sorted(a["mp_payment_id"] for a in avisos) == sorted(
         r["id"] for r in remotos.values()
     ), avisos

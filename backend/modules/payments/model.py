@@ -198,7 +198,8 @@ class Payment(BaseEntity):
     )
     # Ultima vez que el job de retenciones vencidas dejo este cobro retenido
     # porque MP lo da por APROBADO y no pasa la integridad
-    # (``jobs._rescatar_o_retener``). Mientras sea reciente
+    # (``jobs._rescatar_o_retener``), mas un desfase aleatorio de hasta 10
+    # minutos que separa a los estacionados juntos. Mientras sea reciente
     # (``jobs.EXPIRE_HELD_RECHECK_INTERVAL``), ``_expired_holds_query`` no lo
     # toma: preguntarle a MP cada minuto por un cobro que espera a una persona
     # gastaba el presupuesto de la fase A y llenaba las paginas de la corrida

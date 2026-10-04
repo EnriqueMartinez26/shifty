@@ -113,7 +113,10 @@ async def test_los_retenidos_se_estacionan_y_las_retenciones_nuevas_vencen(
         return {"results": []}
 
     monkeypatch.setattr(payments_service, "_mercadopago_api_request", mercadopago)
-    monkeypatch.setattr(processing, "report_exception", lambda exc, **c: None)
+    avisos: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        processing, "report_exception", lambda exc, **c: avisos.append(c)
+    )
     monkeypatch.setattr(jobs, "report_exception", lambda exc, **c: None)
     monkeypatch.setattr(jobs, "EXPIRE_MAX_PAGES", 1)
     ahora = datetime.now(timezone.utc)
@@ -166,15 +169,38 @@ async def test_los_retenidos_se_estacionan_y_las_retenciones_nuevas_vencen(
     assert sin_atraso is None
 
     # Pasada la hora, las de A vuelven a la consulta.
+    atrasado = ahora - jobs.EXPIRE_HELD_RECHECK_INTERVAL - timedelta(minutes=1)
     async with owner_engine.begin() as conn:
         await conn.execute(
             text(
                 "update payments set integrity_held_at = :t "
                 "where integrity_held_at is not null"
             ),
-            {"t": ahora - jobs.EXPIRE_HELD_RECHECK_INTERVAL - timedelta(minutes=1)},
+            {"t": atrasado},
         )
     tercera = await _con_bypass(app_sessions, vencer)
+    consultas_tercera = de_a()
+    cuarta = await _con_bypass(app_sessions, vencer)
 
     assert tercera["held"] == CUANTOS, tercera
-    assert de_a() > consultas_a
+    assert consultas_tercera > consultas_a
+    # Revision W1: la reconsulta vuelve a sellar (mas alla del valor
+    # atrasado), la corrida siguiente no las toma ni le pregunta a MP, y la
+    # alerta de integridad no se repite para ningun pago de MP.
+    async with owner_engine.connect() as conn:
+        resellados = (
+            await conn.execute(
+                text(
+                    "select count(*) from payments "
+                    "where integrity_held_at is not null "
+                    "and integrity_held_at > :t"
+                ),
+                {"t": atrasado},
+            )
+        ).scalar_one()
+    assert resellados == CUANTOS
+    assert (cuarta["held"], cuarta["inspected"]) == (0, 0), cuarta
+    assert de_a() == consultas_tercera
+    assert sorted(a["mp_payment_id"] for a in avisos) == sorted(
+        r["id"] for r in remotos.values()
+    ), avisos
