@@ -169,8 +169,9 @@ async def _recipients_within_cap(
 
     El tope es sobre el destino REAL de cada mail: el codigo puede ir al email
     de la ficha y no al tipeado (B4-01), y el aviso sin codigo (AUD2-B4-05)
-    tambien es un mail. Pasado el tope, ese mail no sale y nada mas cambia: ni
-    el status, ni la forma, ni el codigo guardado. Un 429 aca diria si el
+    tambien es un mail. Pasado el tope, ese mail no sale y la respuesta de
+    produccion conserva su forma; si se corta el codigo, request_code no reemplaza el
+    anterior por uno imposible de recibir. Un 429 aca diria si el
     telefono es cliente (solo entonces cuenta el email de la ficha) y, para el
     tipeado, si esa casilla recibio codigos por otros telefonos: pedir 5 veces
     el codigo de un telefono ajeno y despues tipear una casilla sospechada
@@ -478,6 +479,21 @@ class OtpService:
             if channel == "email"
             else (None, None)
         )
+
+        # Sin entrega del codigo no se guarda ni se invalida el anterior.
+        # En produccion la respuesta conserva su forma, sin revelar si el
+        # telefono tiene una ficha con otro email. En desarrollo no se expone
+        # un debug_code inexistente. El aviso tampoco debe afirmar que se
+        # envio un codigo que nadie puede recibir.
+        if channel == "email" and code_to is None:
+            response: dict[str, object] = {
+                "ok": True,
+                "expires_at": (
+                    datetime.now(timezone.utc)
+                    + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES)
+                ).isoformat(),
+            }
+            return response
 
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"

@@ -160,6 +160,7 @@ async def test_el_tope_corta_por_destino_aunque_roten_telefono_e_ip(
         client, slug="otp-tope-destino", email="otp-tope-destino@example.com"
     )
     _con_limites(monkeypatch)
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", False)
     tope = settings.OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR
 
     respuestas = [
@@ -174,6 +175,67 @@ async def test_el_tope_corta_por_destino_aunque_roten_telefono_e_ip(
     )
     # Neutro: el pedido que paso el tope responde lo mismo que el primero.
     assert {repr(_forma(c)) for _, c in respuestas} == {repr(_forma(respuestas[0][1]))}
+
+
+@pytest.mark.asyncio
+async def test_tope_no_invalida_codigo_ya_entregado(
+    client: AsyncClient,
+    test_session: AsyncSession,
+    redis_de_estado: _RedisContador,
+    cola: Cola,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tienda, _ = await register_and_login(
+        client, slug="otp-tope-codigo-vivo", email="otp-tope-codigo-vivo@example.com"
+    )
+    _con_limites(monkeypatch)
+    monkeypatch.setattr(settings, "OTP_DEBUG_EXPOSE_CODE", True)
+    tope = settings.OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR
+    telefono = "5491160000777"
+    store_id = await test_session.scalar(
+        select(Store.id).where(Store.public_id == tienda)
+    )
+    assert store_id is not None
+
+    status, primero = await _pedir(client, tienda, telefono, VICTIMA, "203.0.113.1")
+    assert status == 200
+    codigo = primero["data"]["debug_code"]
+    for n in range(2, tope + 1):
+        status, _ = await _pedir(
+            client, tienda, f"5491160000{n:03d}", VICTIMA, f"203.0.113.{n}"
+        )
+        assert status == 200
+
+    anteriores = await test_session.scalar(
+        select(func.count())
+        .select_from(OtpVerification)
+        .where(
+            OtpVerification.store_id == store_id,
+            OtpVerification.phone == f"+{telefono}",
+        )
+    )
+    status, bloqueado = await _pedir(client, tienda, telefono, VICTIMA, "203.0.113.200")
+    assert status == 200
+    assert bloqueado["data"]["ok"] is True
+    assert "expires_at" in bloqueado["data"]
+    assert "debug_code" not in bloqueado["data"], "no se guardo un codigo nuevo"
+    assert len(cola.enviados) == tope
+    posteriores = await test_session.scalar(
+        select(func.count())
+        .select_from(OtpVerification)
+        .where(
+            OtpVerification.store_id == store_id,
+            OtpVerification.phone == f"+{telefono}",
+        )
+    )
+    assert posteriores == anteriores
+
+    verificado = await client.post(
+        "/public/otp/verify",
+        headers={"X-Forwarded-For": "203.0.113.200"},
+        json={"store_public_id": tienda, "phone": f"+{telefono}", "code": codigo},
+    )
+    assert verificado.status_code == 200, verificado.text
 
 
 @pytest.mark.asyncio
@@ -211,8 +273,8 @@ async def test_el_tope_cuenta_el_destino_real_del_codigo(
 
     El presupuesto por telefono es por tienda, asi que el mismo cliente en dos
     tiendas junta mas pedidos que el tope; los mails al email de la ficha
-    tienen que cortar igual, y cada email tipeado (distinto en cada pedido)
-    sigue recibiendo su aviso sin codigo.
+    tienen que cortar igual. Tampoco sale un aviso que afirme que se envio
+    un codigo cuando no hubo entrega.
     """
     tiendas = [
         await _tienda_con_cliente(client, test_session, "otp-tope-ficha-a"),
@@ -235,7 +297,7 @@ async def test_el_tope_cuenta_el_destino_real_del_codigo(
     al_cliente = [d for d, _, _ in cola.enviados if d == EMAIL_CLIENTE]
     tipeados = [d for d, _, _ in cola.enviados if d.startswith("tipeado-")]
     assert len(al_cliente) == tope, "el email de la ficha paso el tope por destino"
-    assert len(tipeados) == pedidos, "el tope de un destino corto a otro"
+    assert len(tipeados) == tope, "se aviso de un codigo que no pudo enviarse"
 
 
 @pytest.mark.asyncio
