@@ -12,7 +12,9 @@ LOCKED``, RLS y savepoints): la tienda A tiene sus tres retenciones pagadas
 tres sin pagar. Una corrida retiene las de A (ni rescatadas ni liberadas),
 pide la pagina siguiente sin ellas y vence las de B. La segunda corrida no
 vuelve a avisar a Sentry: la marca de la alerta quedo commiteada aunque el
-savepoint del cobro se revirtio.
+savepoint del cobro se revirtio. Desde el seguimiento W2 de la PR #104 la
+segunda corrida ni siquiera las toma: quedaron estacionadas
+(``integrity_held_at``) hasta la reconsulta de la hora siguiente.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -149,7 +151,7 @@ async def test_los_cobros_de_prueba_quedan_retenidos_y_el_resto_vence(
     segunda = await _con_bypass(app_sessions, vencer)
 
     assert (primera["held"], primera["expired"]) == (CUANTOS, CUANTOS), primera
-    assert (segunda["held"], segunda["expired"]) == (CUANTOS, 0), segunda
+    assert (segunda["held"], segunda["expired"]) == (0, 0), segunda
     assert (
         await _estados(owner_engine, store_a)
         == [("pending_payment", "pending")] * CUANTOS
@@ -187,7 +189,9 @@ async def test_una_pagina_mezcla_retenidos_vencidos_y_un_error_inesperado(
     - un error inesperado al aplicar (no de integridad): retenido, una alerta
       por clase de error.
 
-    La segunda corrida no repite alertas ni vence nada mas.
+    La segunda corrida no repite alertas ni vence nada mas. Solo vuelve a
+    tomar el del error inesperado: el retenido por integridad quedo
+    estacionado (seguimiento W2 de la PR #104).
     """
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _stub_mercadopago(monkeypatch, remote_payment=None)
@@ -257,7 +261,7 @@ async def test_una_pagina_mezcla_retenidos_vencidos_y_un_error_inesperado(
     segunda = await _con_bypass(app_sessions, expire_unpaid_appointments)
 
     assert (primera["held"], primera["expired"]) == (2, 1), primera
-    assert (segunda["held"], segunda["expired"]) == (2, 0), segunda
+    assert (segunda["held"], segunda["expired"]) == (1, 0), segunda
     async with owner_engine.connect() as conn:
         filas = await conn.execute(
             text(

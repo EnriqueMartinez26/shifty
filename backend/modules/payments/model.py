@@ -196,6 +196,16 @@ class Payment(BaseEntity):
     reconciled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Ultima vez que el job de retenciones vencidas dejo este cobro retenido
+    # porque MP lo da por APROBADO y no pasa la integridad
+    # (``jobs._rescatar_o_retener``). Mientras sea reciente
+    # (``jobs.EXPIRE_HELD_RECHECK_INTERVAL``), ``_expired_holds_query`` no lo
+    # toma: preguntarle a MP cada minuto por un cobro que espera a una persona
+    # gastaba el presupuesto de la fase A y llenaba las paginas de la corrida
+    # (seguimiento W2 de la PR #104). Solo la escribe ese job.
+    integrity_held_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     external_payment_id: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )

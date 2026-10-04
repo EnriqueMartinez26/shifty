@@ -218,7 +218,10 @@ async def test_los_retenidos_no_tapan_a_los_que_siguen_en_la_cola(
 ) -> None:
     """Con ``limit`` = 1 el retenido ocupa toda la primera pagina: la corrida
     pide la siguiente sin el y vence la otra retencion. Y la corrida
-    siguiente no vuelve a avisar a Sentry por el mismo pago y motivo."""
+    siguiente no vuelve a avisar a Sentry por el mismo pago y motivo: desde
+    el seguimiento W2 de la PR #104 ni siquiera lo toma, queda estacionado
+    hasta la reconsulta de la hora siguiente
+    (``test_vencimiento_retenidos_sin_reconsultar.py``)."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _stub_mercadopago(monkeypatch, remote_payment=None)
     pagada = await _retencion_vencida(
@@ -235,7 +238,7 @@ async def test_los_retenidos_no_tapan_a_los_que_siguen_en_la_cola(
     segunda = await expire_unpaid_appointments(test_session, limit=1)
 
     assert (primera["held"], primera["expired"]) == (1, 1), primera
-    assert (segunda["held"], segunda["expired"]) == (1, 0), segunda
+    assert (segunda["held"], segunda["expired"]) == (0, 0), segunda
     turno, _cobro = await _estado(test_session, impaga)
     assert turno == AppointmentStatus.EXPIRED.value
     assert (await _estado(test_session, pagada))[0] == (

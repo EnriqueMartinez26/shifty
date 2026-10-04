@@ -353,6 +353,12 @@ class Settings(BaseSettings):
     SLO_MAX_OLDEST_PENDING_OUTBOX_SECONDS: int = 180
     SLO_MAX_OLDEST_PENDING_INBOX_SECONDS: int = 300
     SLO_MAX_OLDEST_PENDING_EMAIL_SEND_SECONDS: int = 180
+    # La retencion vencida mas vieja sin liberar (``oldest_overdue_hold_seconds``,
+    # seguimiento W2 de la PR #104). El job corre cada minuto con 60 s de
+    # presupuesto de MP: al dia, ninguna pasa de dos o tres minutos. Diez
+    # minutos es un job que no da abasto o no corre; pasado el umbral, el
+    # propio job avisa a Sentry (``jobs._avisar_si_hay_retenciones_atrasadas``).
+    SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS: int = 600
     # Edad minima de un cobro pendiente para que la conciliacion le pregunte a
     # Mercado Pago (F1-20, decision 20): antes de eso el cliente sigue en el
     # checkout y la consulta solo gasta la corrida.
