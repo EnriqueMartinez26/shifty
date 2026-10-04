@@ -202,7 +202,9 @@ class Payment(BaseEntity):
     # (``jobs.EXPIRE_HELD_RECHECK_INTERVAL``), ``_expired_holds_query`` no lo
     # toma: preguntarle a MP cada minuto por un cobro que espera a una persona
     # gastaba el presupuesto de la fase A y llenaba las paginas de la corrida
-    # (seguimiento W2 de la PR #104). Solo la escribe ese job.
+    # (seguimiento W2 de la PR #104). Lo sella solo ese job; lo borra
+    # ``reopen_for_panel_link``, porque un link nuevo invalida el veredicto de
+    # integridad del viejo.
     integrity_held_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -276,12 +278,17 @@ class Payment(BaseEntity):
 
         Devuelve False (sin tocar nada) si el cobro no esta ``expired`` o si
         no tiene un link real que cobrar.
+
+        Borra ``integrity_held_at`` (seguimiento W2 de la PR #104): el
+        veredicto de integridad era del pago del link viejo, y el sello dejaria
+        al job de vencimiento salteando el cobro reabierto hasta una hora.
         """
         if self.status != PaymentStatus.EXPIRED.value:
             return False
         if is_placeholder_preference_id(self.preference_id):
             return False
         self._status = PaymentStatus.PENDING.value
+        self.integrity_held_at = None
         return True
 
     def apply_status(

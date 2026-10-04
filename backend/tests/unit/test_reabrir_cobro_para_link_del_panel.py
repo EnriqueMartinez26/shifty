@@ -127,3 +127,27 @@ def test_el_unico_llamador_es_la_regeneracion_del_panel() -> None:
         # (extraida en la revision de 7abb9b4..e5579b6, #7).
         "modules/payments/service.py::_panel_link_phase_two"
     ], llamadores
+
+
+def test_reabrir_borra_el_veredicto_de_integridad_del_link_viejo() -> None:
+    """Seguimiento W2 de la PR #104 (revision S2, 2026-10-03): el link nuevo
+    invalida el veredicto de integridad del viejo. Si el sello quedara, el job
+    de vencimiento saltearia el cobro reabierto hasta una hora."""
+    from datetime import datetime, timezone
+
+    cobro = _cobro(PaymentStatus.EXPIRED)
+    cobro.integrity_held_at = datetime.now(timezone.utc)
+
+    assert cobro.reopen_for_panel_link() is True
+    assert cobro.integrity_held_at is None
+
+
+def test_un_reabrir_rechazado_no_toca_el_veredicto() -> None:
+    from datetime import datetime, timezone
+
+    sellado = datetime.now(timezone.utc)
+    cobro = _cobro(PaymentStatus.PENDING)
+    cobro.integrity_held_at = sellado
+
+    assert cobro.reopen_for_panel_link() is False
+    assert cobro.integrity_held_at == sellado
