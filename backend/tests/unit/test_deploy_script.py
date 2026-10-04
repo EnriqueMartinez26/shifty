@@ -608,7 +608,13 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 
 
 def _consultas_a_github(host: Host) -> list[str]:
-    return [ll for ll in host.llamadas() if "api.github.com" in ll]
+    # Llamadas de curl a la API de GitHub (el host esta anclado: CodeQL marca
+    # un `"api.github.com" in url` como saneamiento de URL incompleto).
+    return [
+        ll
+        for ll in host.llamadas()
+        if re.search(r"^curl .*https://api\.github\.com/", ll)
+    ]
 
 
 def test_deploy_pregunta_si_quality_paso_en_main_para_ese_sha(host: Host) -> None:
