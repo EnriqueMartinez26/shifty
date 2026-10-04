@@ -16,6 +16,12 @@
 #   swap pasa HOST_SWAP_MAX_PERCENT (50 %) de uso. En un VPS de 8 GB los
 #   limites de los contenedores casi llenan la RAM (docs/DEPLOY_RUNBOOK.md
 #   §1): el aviso por contenedor no ve que el host entero se queda sin nada.
+# - redis_state (`INFO memory`): aviso si used_memory pasa
+#   REDIS_STATE_MEM_MAX_PERCENT (80 %) de su maxmemory. Con noeviction, lleno
+#   es 503 en auth, OTP y la reserva publica.
+# - Endurecimiento del host (scripts/host-hardening-check.sh): sshd solo con
+#   clave, ufw activo con 22/80/443, unattended-upgrades solo de seguridad y
+#   sin reinicio automatico, fail2ban y reinicio pendiente.
 #
 # Cada problema avisa (con silencio de unas horas para no repetir) y el script
 # sale con 1 si hubo alguno.
@@ -34,6 +40,8 @@ set -euo pipefail
 : "${HOST_MEMINFO:=/proc/meminfo}"
 : "${HOST_MEM_MIN_AVAILABLE_PERCENT:=10}"
 : "${HOST_SWAP_MAX_PERCENT:=50}"
+: "${REDIS_STATE_SERVICE:=redis_state}"
+: "${REDIS_STATE_MEM_MAX_PERCENT:=80}"
 
 problemas=0
 problema() {
@@ -149,11 +157,68 @@ chequear_memoria_host() {
   fi
 }
 
+# redis_state no desaloja (`noeviction`, maxmemory 48mb en docker-compose.yml):
+# lleno, cada escritura falla y auth, OTP y la reserva publica responden 503
+# (RATE_LIMIT_FAIL_CLOSED). El aviso de `docker stats` mira el limite del
+# cgroup (96M), al que un maxmemory de 48 MB nunca llega: hay que preguntarle a
+# Redis. redis_cache no se mira: un cache en su maxmemory es lo esperado
+# (volatile-ttl desaloja), no un problema.
+chequear_redis_state() {
+  local salida
+  # Compose toma el proyecto y COMPOSE_FILE del clon, y el compose de
+  # produccion exige APP_VERSION hasta para `exec` (.deploy/current). En un
+  # subshell: el cd y la version no se filtran al resto de los chequeos.
+  if ! salida="$(cd "$SHIFTY_DIR" && usar_version_en_curso &&
+    docker compose exec -T "$REDIS_STATE_SERVICE" redis-cli INFO memory 2>&1)"; then
+    problema "redis_state: no se pudo leer INFO memory" \
+      "docker compose exec -T $REDIS_STATE_SERVICE redis-cli INFO memory: ${salida:0:200}" \
+      redis-state-mem 60
+    return
+  fi
+  local usada maxima
+  # redis-cli termina cada linea de INFO con CRLF. Un campo que falta sale
+  # como `-`: no es lo mismo una respuesta ilegible que un maxmemory en 0.
+  read -r usada maxima < <(printf '%s\n' "$salida" | awk -F: '
+    { gsub("\r", "") }
+    $1 == "used_memory" { u = $2 } $1 == "maxmemory" { m = $2 }
+    END { print (u ~ /^[0-9]+$/ ? u : "-"), (m ~ /^[0-9]+$/ ? m : "-") }')
+  if [ "$usada" = - ] || [ "$maxima" = - ]; then
+    problema "redis_state: no se pudo leer INFO memory" \
+      "Sin used_memory o maxmemory en la respuesta: ${salida:0:200}" \
+      redis-state-mem 60
+    return
+  fi
+  if [ "$maxima" -le 0 ]; then
+    problema "redis_state: corre sin maxmemory" \
+      "docker-compose.yml lo fija en 48mb con noeviction; sin tope crece hasta que el OOM killer lo mata" \
+      redis-state-mem 360
+    return
+  fi
+  local porcentaje=$((usada * 100 / maxima))
+  if [ "$porcentaje" -ge "$REDIS_STATE_MEM_MAX_PERCENT" ]; then
+    problema "redis_state: usa el $porcentaje % de su maxmemory ($((usada / 1048576)) de $((maxima / 1048576)) MiB)" \
+      "Con noeviction, al 100 % auth, OTP y la reserva publica responden 503. Claves grandes: docker compose exec $REDIS_STATE_SERVICE redis-cli --bigkeys" \
+      redis-state-mem 60
+  else
+    log "checks: redis_state al $porcentaje % de su maxmemory"
+  fi
+}
+
+# Avisa por su cuenta (alertas con clave propia); aca solo cuenta si hubo
+# problemas.
+chequear_endurecimiento() {
+  if ! "$BASH" "$(dirname "${BASH_SOURCE[0]}")/host-hardening-check.sh"; then
+    problemas=$((problemas + 1))
+  fi
+}
+
 chequear_ntp
 chequear_certificado
 chequear_disco
 chequear_contenedores
 chequear_memoria_host
+chequear_redis_state
+chequear_endurecimiento
 
 if [ "$problemas" -gt 0 ]; then
   log "checks: $problemas problema(s)"

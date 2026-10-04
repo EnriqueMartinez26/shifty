@@ -16,6 +16,7 @@ make deploy-edge                   # only when nginx's image or nginx/nginx.prod
 
 | Prerequisite | How to check |
 | --- | --- |
+| Host hardened, **first, before anything else**: a non-root sudo user, SSH with keys only and no root login, `ufw` allowing only 22/80/443, `unattended-upgrades` with security updates only and no automatic reboot, `fail2ban` for sshd, timezone UTC with chrony (see "Host: hardening" below) | `sudo bash scripts/host-hardening-check.sh` exits 0 and prints `endurecimiento: todo en orden`; `timedatectl` shows `Etc/UTC` and `System clock synchronized: yes` |
 | Docker Compose >= 2.24 (`ports: !reset []` in `docker-compose.prod.yml`) | `docker compose version` |
 | Server `.env` sets `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml` and `COMPOSE_PROJECT_NAME=shifty` | `docker compose config --services` lists the prod services without `-f` |
 | Server `.env` does **not** set `APP_VERSION`. `docker-compose.prod.yml` requires it for every compose command (`${APP_VERSION:?}`); the deploy passes it and records it in `.deploy/current`, and the host scripts (backup, latency) read it from there. A value pinned in `.env` goes stale after the first deploy, and a bare `docker compose up -d` would bring that old version back | `grep -c APP_VERSION .env` is 0 |
@@ -31,6 +32,153 @@ make deploy-edge                   # only when nginx's image or nginx/nginx.prod
 | Sending domain verified with the SMTP provider, with SPF, DKIM and DMARC published and the provider sandbox lifted (see "Mail deliverability" below) | a test OTP to a Gmail account shows `SPF: PASS`, `DKIM: PASS`, `DMARC: PASS` |
 | 2 GB swapfile with `vm.swappiness=10`, and Docker started at boot (see "Host: memory budget, swap and boot" below) | `swapon --show`, `sysctl vm.swappiness`, `systemctl is-enabled docker containerd` |
 | The reboot test passed once (see below) | after `sudo reboot`, `APP_VERSION=$(cat .deploy/current) docker compose ps` shows every service `healthy` without anyone running `up` |
+
+### Host: hardening
+
+Once, on the fresh VPS, before installing Docker or cloning the repo. The steps assume **Ubuntu 24.04 LTS** (pick it as the OS template when the VPS is created); check with `cat /etc/os-release` and adapt them if the image is another release. Run them in order: the SSH step must be tested in a second session before the first one is closed, and the firewall must allow SSH before it is enabled.
+
+**0. Update the base image**, as root (the password or key set in hPanel when the VPS was created):
+
+```bash
+apt update && apt full-upgrade -y
+[ -f /var/run/reboot-required ] && reboot    # then log in again as root
+```
+
+**1. A non-root sudo user.** The steps use `deploy`, the user that later runs `make deploy` (it joins the `docker` group once Docker is installed). Every person who operates the server puts their own public key in its `authorized_keys`, one per line.
+
+```bash
+adduser --gecos "" deploy            # a long password, for sudo only: after step 2 SSH never accepts it
+usermod -aG sudo deploy
+install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh
+# Reuse root's key if you added one in hPanel:
+[ -s /root/.ssh/authorized_keys ] && cp /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+# Add every other person's PUBLIC key (ssh-ed25519 AAAA... name@laptop), one per line:
+nano /home/deploy/.ssh/authorized_keys
+chown deploy:deploy /home/deploy/.ssh/authorized_keys
+chmod 0600 /home/deploy/.ssh/authorized_keys
+```
+
+From your machine, in a new terminal: `ssh deploy@<ip>`, then `sudo -v` (asks for the sudo password). Do not continue until both work. From here on, everything runs as `deploy` with `sudo`.
+
+**2. SSH with keys only, no root.** A drop-in named `00-...` wins: sshd keeps the **first** value it reads for each option, and Ubuntu's `sshd_config` includes `/etc/ssh/sshd_config.d/*.conf` (in name order) before its own lines, so this file also beats a `50-cloud-init.conf` that some images ship with `PasswordAuthentication yes`.
+
+```bash
+sudo tee /etc/ssh/sshd_config.d/00-shifty-hardening.conf >/dev/null <<'EOF'
+# Shifty: SSH with keys only, no root login (docs/DEPLOY_RUNBOOK.md section 1).
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+sudo sshd -t     # no output means valid; never reload a config that fails here
+sudo sshd -T | grep -E '^(pubkeyauthentication|passwordauthentication|kbdinteractiveauthentication|permitrootlogin) '
+# pubkeyauthentication yes, passwordauthentication no, kbdinteractiveauthentication no, permitrootlogin no
+sudo systemctl reload ssh     # the unit is `ssh` on Ubuntu; a reload keeps the open sessions
+```
+
+**Keep this session open.** In a second terminal, from your machine:
+
+```bash
+ssh deploy@<ip>                       # must log in
+ssh root@<ip>                         # must fail: Permission denied (publickey)
+ssh -o PubkeyAuthentication=no -o PreferredAuthentications=password,keyboard-interactive deploy@<ip>
+                                      # must fail: Permission denied (publickey)
+```
+
+Only when the first command logs in and the other two are refused, close the first session. If the second session cannot log in, undo it from the first one (`sudo rm /etc/ssh/sshd_config.d/00-shifty-hardening.conf && sudo systemctl reload ssh`), find the problem (usually the key or the permissions of `~/.ssh`) and repeat. If both sessions are lost, use the provider's web console in hPanel (browser terminal or recovery mode): it does not go through sshd. If `sshd -t` complains about a missing `/run/sshd`, run `sudo mkdir -p /run/sshd` and repeat.
+
+**3. Firewall: only 22, 80 and 443.** Allow SSH before enabling, or the enable cuts the session.
+
+```bash
+sudo apt install -y ufw
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow 22/tcp
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable              # answers "may disrupt existing ssh connections": 22 is already allowed
+sudo ufw status verbose      # Status: active; Default: deny (incoming); only 22, 80, 443 (and their v6)
+```
+
+**Docker publishes ports around ufw.** For a published port Docker writes its own iptables rules (its chains in `FORWARD`, `DOCKER-USER` first), which run before ufw's: a container port published on the host is reachable from the internet even if ufw does not allow it. That is safe here only because **in production nothing publishes a port except nginx, on 80 and 443**, which ufw allows anyway: every other service has `ports: !reset []` in `docker-compose.prod.yml` (their development ports in `docker-compose.yml` are bound to `127.0.0.1`, and production removes them anyway), and `test_en_produccion_solo_nginx_publica_puertos` (`backend/tests/unit/test_compose_contract.py`) fails if that changes. Consequences:
+
+- Never publish another port in production, not even "for a minute" to debug: use `docker compose exec`, or an SSH tunnel (`ssh -L`) to a port bound to `127.0.0.1`.
+- Never set `"iptables": false` in Docker's `daemon.json` to "make ufw work": it breaks container networking.
+- After the first deploy, check what listens publicly:
+
+  ```bash
+  cd /opt/shifty
+  APP_VERSION=$(cat .deploy/current) docker compose ps --format '{{.Service}}: {{.Ports}}'   # only nginx shows 0.0.0.0:80 and :443
+  sudo ss -tlnp     # on public addresses only sshd (22) and docker-proxy (80, 443); the rest on 127.0.0.x or ::1
+  ```
+
+**4. Automatic security updates, without automatic reboot.**
+
+```bash
+sudo apt install -y unattended-upgrades
+sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+sudo tee /etc/apt/apt.conf.d/52shifty-unattended-upgrades >/dev/null <<'EOF'
+// Shifty: never reboot by itself; reboots are manual (docs/DEPLOY_RUNBOOK.md section 1).
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+# needrestart (installed on Ubuntu) runs after every apt run, unattended ones
+# included, and may restart services that use an upgraded library. List only:
+# a libc or openssl update must not restart containerd/docker at a random hour.
+echo "\$nrconf{restart} = 'l';" | sudo tee /etc/needrestart/conf.d/50-shifty.conf
+```
+
+Security only: Ubuntu's `/etc/apt/apt.conf.d/50unattended-upgrades` allows the release pocket and the `-security` pockets by default, with the `-updates` line commented out. Leave it like that (an origin list cannot be shortened from another file, only extended). Check:
+
+```bash
+apt-config dump | grep -E '^APT::Periodic::|^Unattended-Upgrade::(Allowed-Origins|Origins-Pattern)::|Automatic-Reboot'
+# Unattended-Upgrade "1", Automatic-Reboot "false", no origin ending in -updates, -proposed or -backports
+sudo unattended-upgrade --dry-run --debug 2>&1 | grep -i 'allowed origins'
+```
+
+Docker Engine comes from `download.docker.com`, which is not an allowed origin: unattended-upgrades never upgrades it. Upgrade Docker by hand, in a maintenance window (it restarts every container).
+
+**When to reboot by hand.** Some updates (kernel, libc, systemd, openssl) only take effect after a reboot; apt then creates `/var/run/reboot-required` and lists the packages in `/var/run/reboot-required.pkgs`. `scripts/host-hardening-check.sh` (hourly, from `checks.sh`) alerts once a day while that file exists. Reboot within a week for a kernel security fix, sooner if the advisory is critical: in a low-traffic window, never during a deploy (`ls .deploy/lock` must fail), with a fresh backup (`cat /var/backups/shifty/last-success`), then `sudo reboot` and the checks of the reboot test in "Host: memory budget, swap and boot" below.
+
+**5. fail2ban for sshd.** With keys only nobody guesses a password; fail2ban cuts the scanners' noise in the logs and their load.
+
+```bash
+sudo apt install -y fail2ban python3-systemd
+sudo tee /etc/fail2ban/jail.d/shifty-sshd.local >/dev/null <<'EOF'
+[sshd]
+enabled  = true
+backend  = systemd
+maxretry = 5
+findtime = 10m
+bantime  = 1h
+EOF
+sudo systemctl enable fail2ban
+sudo systemctl restart fail2ban
+sudo fail2ban-client status sshd     # Status for the jail: sshd
+```
+
+A person banned by mistake (several failed keys from the same IP) waits an hour, or someone else unbans them: `sudo fail2ban-client set sshd unbanip <ip>`.
+
+**6. Timezone UTC and NTP.** The host stays on UTC: the application stores and computes in UTC and formats Argentine time itself (CLAUDE.md rule 24), the backup timer is pinned to UTC (`deploy/systemd/shifty-backup.timer`) and the scripts log in UTC. A wrong clock breaks tokens, the Mercado Pago webhook age window and the expirations; `scripts/checks.sh` alerts when `timedatectl` says the clock is not synchronized.
+
+```bash
+sudo timedatectl set-timezone Etc/UTC
+sudo apt install -y chrony            # replaces systemd-timesyncd
+sudo systemctl enable --now chrony
+timedatectl                           # Time zone: Etc/UTC (UTC, +0000); System clock synchronized: yes; NTP service: active
+chronyc tracking                      # Leap status: Normal
+```
+
+**7. Verify.** Once the repo is cloned at `/opt/shifty` (and from then on every hour, from `checks.sh`):
+
+```bash
+cd /opt/shifty
+sudo bash scripts/host-hardening-check.sh     # endurecimiento: todo en orden (exit 0)
+```
+
+It needs root (`sshd -T`, `ufw status` and `fail2ban-client` do). It checks the EFFECTIVE sshd config (`sshd -T`, so a drop-in that re-enables passwords is caught), that ufw is active, denies incoming by default and opens nothing but `HARDENING_UFW_ALLOWED` (`22/tcp 80/tcp 443/tcp`), that unattended-upgrades is on with security origins only and no automatic reboot, that the fail2ban `sshd` jail is up, and whether a reboot is pending. Every finding alerts like the other host scripts.
 
 ### Host: memory budget, swap and boot
 
@@ -140,9 +288,11 @@ In the records below, `<domain>` is the domain of `EMAILS_FROM_EMAIL` and everyt
 
 ## 2. Images (CI)
 
-`.github/workflows/build-images.yml` runs on every push to `main` (and by hand). It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`. The backend image serves the API, the workers and beat. The VPS never builds: every `up` in `scripts/deploy.sh` carries `--no-build` and `--remove-orphans` (so a renamed service does not leave its old container behind), and the migration `run` cannot build because the production view has no `build` section, and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
+`.github/workflows/build-images.yml` runs when the `Quality` workflow (`quality.yml`) **finishes green on a push to `main`** (`workflow_run`), and by hand (`workflow_dispatch`). It checks out and tags the sha that Quality tested (`github.event.workflow_run.head_sha`; in a `workflow_run`, `github.sha` is the newest commit of `main`, which may be another one). A red Quality, a Quality of a pull request (even one from a fork whose branch is called `main`) or a cancelled run publishes nothing. It builds `backend`, `frontend` and `nginx` and pushes `ghcr.io/enriquemartinez26/shifty-<service>:<git sha>` plus `:latest`.
 
-**Front build variables (GitHub repository variables).** The frontend bundle is static, so these are read at build time, not when the container starts: changing one means a new build (push to `main` or a manual run of `build-images.yml`) and a deploy of that sha. Set them in GitHub under Settings → Secrets and variables → Actions → **Variables** (not Secrets: they end up in the public bundle anyway). `build-images.yml` passes them to `frontend/Dockerfile` as build args. The repository is public, so the real values never go into code, docs, `*.example` files, commits or PRs.
+`workflow_run` gotchas: the run uses the workflow file of the default branch with the base repository's `GITHUB_TOKEN` (the job's `permissions`, `packages: write` included) and its `vars`, the same as the old `push` trigger; it only exists once merged to `main`, so a pull request cannot exercise it (after merging a change to this workflow, check in Actions that `Build images` started after `Quality` and tagged Quality's sha). The manual run skips the Quality gate (it builds whatever branch it is pointed at), which is why `scripts/deploy.sh` asks GitHub again before deploying (section 3). The backend image serves the API, the workers and beat. The VPS never builds: every `up` in `scripts/deploy.sh` carries `--no-build` and `--remove-orphans` (so a renamed service does not leave its old container behind), and the migration `run` cannot build because the production view has no `build` section, and after the pull the script checks with `docker image inspect` that every `image:tag` of `docker compose config --images` is present. The `retention` job deletes untagged versions and keeps the 5 newest per package; it never fails the build.
+
+**Front build variables (GitHub repository variables).** The frontend bundle is static, so these are read at build time, not when the container starts: changing one means a new build (a merge to `main` once Quality passes, or a manual run of `build-images.yml`) and a deploy of that sha. Set them in GitHub under Settings → Secrets and variables → Actions → **Variables** (not Secrets: they end up in the public bundle anyway). `build-images.yml` passes them to `frontend/Dockerfile` as build args. The repository is public, so the real values never go into code, docs, `*.example` files, commits or PRs.
 
 | Variable | Format | Used by | Empty or invalid |
 |---|---|---|---|
@@ -166,6 +316,7 @@ If all three contact variables are empty, the legal pages show no "Responsables 
    - The `db` service is running (the deploy uses `--no-deps` and never starts or recreates db, redis or rabbitmq).
    - Disk under 80 %.
    - `/var/backups/shifty/last-success` is younger than 24 h (`DEPLOY_SKIP_BACKUP_CHECK=1` only on staging).
+   - `Quality` passed on a push to `main` for `APP_VERSION`: the script asks GitHub's public API (`/repos/EnriqueMartinez26/shifty/actions/workflows/quality.yml/runs?head_sha=<APP_VERSION>&branch=main&event=push&status=success`; no token, the repository is public, 60 requests per hour per IP). `APP_VERSION` must be the full 40-character sha. If GitHub does not answer, the deploy stops (fail closed): retry, or, after checking the run in Actions by hand, `DEPLOY_SKIP_QUALITY_CHECK=1`, which deploys with an alert (meant for staging with a branch image).
 3. Save the running version to `.deploy/previous` (from `.deploy/current`, or the tag of the running backend image on the first run).
 4. `docker compose pull` of the app services, then `docker image inspect` of every expected `image:tag`. A failed pull or a missing image stops the deploy here, before migrating.
 5. **Migrate before recreating**, with the old code still serving: `docker compose run --rm --no-deps -T backend alembic upgrade head`. If it fails, nothing was recreated. `run` takes no `--no-build` in any Compose version (only `up` and `create` do; Compose 5.5.1 rejects it as an unknown flag) and `run --pull never` needs Compose 2.33, above the 2.24 minimum. It still cannot build or pull: the production view has no `build` section (`build: !reset null`) and the previous step checked that the image is local.
@@ -184,7 +335,7 @@ Every step logs to stderr with a UTC timestamp. Failures send an alert through `
 
 ## 4. Rollback (`scripts/deploy.sh rollback`)
 
-`APP_VERSION=$(cat .deploy/previous)`, then steps 4 and 6-10 **without migrating**. It does not rewrite `.deploy/previous`, so running it twice does not bounce between versions. Preflight skips the disk and backup checks: it is the emergency path.
+`APP_VERSION=$(cat .deploy/previous)`, then steps 4 and 6-10 **without migrating**. It does not rewrite `.deploy/previous`, so running it twice does not bounce between versions. Preflight skips the disk, backup and Quality checks: it is the emergency path, and it must work with GitHub down.
 
 If the pull fails (GHCR down, token expired), the rollback continues with the local images, but only if every previous `image:tag` is still on the host. If one is missing it alerts and exits 2 without touching anything: there is nothing to roll back to, and a person decides.
 
@@ -266,7 +417,7 @@ Staging is a clone, for example `/opt/shifty-staging`, with its own `.env`:
 - Its own secrets, `DOMAIN` and `BACKUP_DIR=/var/backups/shifty-staging` with `BACKUP_ALLOW_LOCAL_ONLY=1`, in its own ops file; point its scripts at it with `SHIFTY_OPS_ENV=/etc/shifty/ops-staging.env`.
 - Only if staging ever shares a host with another project that publishes 80 and 443 does its nginx need other host ports (for example `127.0.0.1:8443:443`) through an extra override listed in its `COMPOSE_FILE`. That override does not exist; on a host of its own it is not needed.
 - `docker-compose.prod.yml` fixes `ENV: production`, so without changes staging boots as production and needs the production-only requirements of section 1: Sentry, and Mercado Pago OAuth and webhook credentials from a non-`TEST-` app. A staging without real MP credentials needs `ENV: staging` in that same extra override (staging keeps the secret and MP API base checks, not the production ones). Its `.env` still has to define the MP and Sentry variables with some non-empty value: compose interpolates the `:?` of `docker-compose.prod.yml` before it applies any override.
-- Deploy it with the same script: `APP_VERSION=<sha> DEPLOY_SKIP_BACKUP_CHECK=1 bash scripts/deploy.sh deploy` from its clone.
+- Deploy it with the same script: `APP_VERSION=<sha> DEPLOY_SKIP_BACKUP_CHECK=1 bash scripts/deploy.sh deploy` from its clone. An image built by hand from a branch (`workflow_dispatch`) has no green Quality on `main`; add `DEPLOY_SKIP_QUALITY_CHECK=1` for it (the deploy alerts that it skipped the check).
 - The staging host needs the same 8 GB as production to run the production limits unchanged; on a smaller host, lower them in a staging-only override, never in `docker-compose.prod.yml`. Bring it up for a test and take it down afterwards (`docker compose down`, the volumes stay).
 
 The monthly backup drill can restore into staging (`docs/BACKUP_RESTORE_RUNBOOK.md`).
@@ -288,7 +439,7 @@ The edge also caches, and only what the backend marks cacheable (plan F1-29): `/
 | What | When | Script | Alerts when |
 | --- | --- | --- | --- |
 | Restart `unhealthy` containers | every minute (cron) | `scripts/guard.sh` | every restart. Never restarts `db` or `rabbitmq` (alert only), one-off containers (`compose run`) or anything while `db` or `redis_state` is unhealthy (the rest fails because of them). Caps: 3 restarts per container and 6 in total per hour |
-| NTP, TLS certificate, disk, per-container memory, host memory and swap, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit, host `MemAvailable` under 10 % of RAM, no swap, or swap more than 50 % used |
+| NTP, TLS certificate, disk, per-container memory, host memory and swap, `redis_state` memory, host hardening, `docker stats` to `/var/log/shifty/stats.log` | hourly (cron) | `scripts/checks.sh` (runs `scripts/host-hardening-check.sh`) | NTP not synchronized, certificate < 20 days, disk > 80 % (critical > 90 %), container > 90 % of its memory limit, host `MemAvailable` under 10 % of RAM, no swap, or swap more than 50 % used; `redis_state` over 80 % of its `maxmemory` (`REDIS_STATE_MEM_MAX_PERCENT`), unreadable, or without `maxmemory`; any hardening step undone (section 1) or a reboot pending |
 | Backup freshness | hourly (cron) | `scripts/backup-check.sh` | last successful backup > 26 h (critical > 48 h) |
 | Latency and 5xx per route | every 5 min (cron) | `scripts/latency-check.sh` + `backend/scripts/latency_report.py` | a route with >= 20 requests over p95 500 ms or 5xx 0.1 %, or global 5xx over 0.1 % with >= 200 requests in the window |
 | Top 20 queries of `pg_stat_statements` | Mondays 06:23 host time (cron; cron.d uses the host timezone) | `backend/scripts/pg_top_queries.py` inside the backend container | never: it is a report, read `/var/log/shifty/pg-top.log` |
@@ -327,6 +478,9 @@ It deletes in batches of `RETENTION_BATCH_SIZE` (5000) with a commit per batch. 
 - **"hay otro deploy en curso"**: another deploy is running, or one was killed. If none is running, `rmdir .deploy/lock`.
 - **"COMPOSE_FILE ... no incluye docker-compose.prod.yml"**: the server `.env` lacks `COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml`.
 - **"faltan imagenes locales"**: the sha was not published (check the `Build images` run for that commit) or `docker login ghcr.io` expired.
+- **"Quality no paso en main para <sha>"**: that commit's `Quality` run on `main` failed or is still running, the sha is short (it must be the full 40 characters), or the image was built by hand from a branch. Deploy a sha whose Quality is green; there is no `Build images` run without one.
+- **"no pude preguntarle a GitHub"**: api.github.com did not answer or the unauthenticated rate limit (60 per hour per IP) ran out. Retry later; if it is urgent, check the commit's Quality run in Actions by hand and deploy with `DEPLOY_SKIP_QUALITY_CHECK=1` (it alerts).
+- **"redis_state: usa el N % de su maxmemory"**: `redis_state` holds rate limits, idempotency keys, OTP codes, lockouts, OAuth state and Celery results with `noeviction`; at 100 % every write fails and auth, OTP and the public booking answer 503. Find what grew: `APP_VERSION=$(cat .deploy/current) docker compose exec redis_state redis-cli --bigkeys` and `... redis-cli INFO keyspace` (database 1 is the Celery result backend). Never switch it to an evicting policy or flush it to "fix" it: an eviction silently drops protections (CLAUDE.md, "Dos Redis con papeles distintos"). Raising `--maxmemory` in `docker-compose.yml` means raising its 96M container limit too and redoing the memory budget of section 1.
 - **Manual compose commands** need the version (the prod compose file refuses to interpolate without it): `APP_VERSION=$(cat .deploy/current) docker compose ps`.
 - **First deploy with this script**: `.deploy/previous` comes from the tag of the running backend image. If that is `latest` or a local build, there is nothing to roll back to; say so in the release notes.
 - **The gate failed but the release is fine** (for example the domain's DNS or certificate): fix the cause and deploy the same sha again; migrations are idempotent at head.

@@ -9,7 +9,9 @@
 #   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
 #      2.24 (`!reset`), `docker compose config` valido, los servicios de
 #      DEPLOY_SERVICES existen, la base corre, disco < 80 %, backup exitoso de
-#      menos de 24 h.
+#      menos de 24 h, y Quality paso en main para APP_VERSION (API publica de
+#      GitHub; `workflow_dispatch` de build-images.yml publica sin esa
+#      compuerta). El rollback no pregunta: es el camino de emergencia.
 #   2. Guarda la version que corre hoy en .deploy/previous.
 #   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
@@ -71,6 +73,11 @@ cd "$SHIFTY_DIR"
 : "${DEPLOY_DISK_MAX_PERCENT:=80}"
 : "${DEPLOY_BACKUP_MAX_AGE_HOURS:=24}"
 : "${DEPLOY_SKIP_BACKUP_CHECK:=0}"
+# Quality verde en main para el sha (preflight). Saltearlo (staging con una
+# imagen de rama) deja una alerta.
+: "${DEPLOY_SKIP_QUALITY_CHECK:=0}"
+: "${DEPLOY_GITHUB_REPO:=EnriqueMartinez26/shifty}"
+: "${DEPLOY_QUALITY_WORKFLOW:=quality.yml}"
 : "${DOMAIN:=}"
 : "${DEPLOY_HEALTH_URL:=${DOMAIN:+https://$DOMAIN/api/ops/health/ready}}"
 : "${DEPLOY_SMOKE_URLS:=${DOMAIN:+https://$DOMAIN/}}"
@@ -128,6 +135,38 @@ compose_file_efectivo() {
   fi
   sed -n 's/^[[:space:]]*COMPOSE_FILE[[:space:]]*=[[:space:]]*//p' .env 2>/dev/null |
     tail -n 1 | tr -d '"'"'"'\r'
+}
+
+# Quality (quality.yml) tiene que haber pasado en un push a main para ESTE sha.
+# build-images.yml solo publica despues de eso, salvo a mano
+# (`workflow_dispatch`), que construye cualquier rama: sin esta pregunta, una
+# imagen de un commit en rojo o de una rama sin mergear se podia desplegar. El
+# repo es publico: la API contesta sin token (60 consultas por hora por IP).
+# Falla cerrada: si GitHub no contesta, el deploy espera o se saltea a
+# conciencia con DEPLOY_SKIP_QUALITY_CHECK=1.
+quality_verde() {
+  local version="${APP_VERSION:-}"
+  # Va a una URL: solo lo que admite un tag de imagen.
+  case "$version" in
+    '' | *[!A-Za-z0-9_.-]*) die "preflight: APP_VERSION invalida (${version:-vacia}): tiene que ser el sha del commit" ;;
+  esac
+  if [ "$DEPLOY_SKIP_QUALITY_CHECK" = 1 ]; then
+    alert "deploy: $version se despliega SIN verificar Quality (DEPLOY_SKIP_QUALITY_CHECK=1)" \
+      "Solo para staging con una imagen de rama. En produccion, desplegar un sha de main con Quality verde."
+    return 0
+  fi
+  local url respuesta total
+  url="https://api.github.com/repos/$DEPLOY_GITHUB_REPO/actions/workflows/$DEPLOY_QUALITY_WORKFLOW/runs?head_sha=$version&branch=main&event=push&status=success&per_page=1"
+  if ! respuesta="$(curl -fsS -m 15 -H 'Accept: application/vnd.github+json' "$url")"; then
+    die "preflight: no pude preguntarle a GitHub si Quality paso para $version; reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
+  fi
+  total="$(printf '%s\n' "$respuesta" |
+    sed -n 's/.*"total_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"
+  [ -n "$total" ] || die "preflight: respuesta inesperada de GitHub al buscar Quality para $version: ${respuesta:0:200}"
+  if [ "$total" -lt 1 ]; then
+    die "preflight: Quality no paso en main para $version (o no es el sha completo de 40 caracteres de un commit de main); ver Actions > Quality"
+  fi
+  log "preflight: Quality verde en main para $version"
 }
 
 preflight() {
@@ -190,6 +229,7 @@ preflight() {
       die "preflight: el ultimo backup exitoso tiene mas de ${DEPLOY_BACKUP_MAX_AGE_HOURS} h; correr scripts/backup.sh antes de migrar"
     fi
   fi
+  quality_verde
   log "preflight: ok (compose $version, disco ${uso} %)"
 }
 

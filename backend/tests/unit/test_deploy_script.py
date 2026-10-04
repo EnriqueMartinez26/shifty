@@ -22,6 +22,7 @@ from tests.unit.host_falso import (
     _indice,
     _ultimo_indice,
     crear_host,
+    escribir_corridas_de_quality,
     flags_rechazados_por_compose,
 )
 
@@ -594,3 +595,122 @@ def test_la_migracion_no_pasa_flags_que_compose_run_rechaza(host: Host) -> None:
     assert migra == [
         "docker compose run --rm --no-deps -T backend alembic upgrade head"
     ], migra
+
+
+# --- Quality verde para la version (2026-10-03) ------------------------------
+#
+# build-images.yml publica solo despues de un Quality verde en main, pero
+# `workflow_dispatch` reconstruye a mano cualquier rama sin esa compuerta. El
+# preflight le vuelve a preguntar a GitHub si Quality paso en main para ESE sha
+# antes de migrar.
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _consultas_a_github(host: Host) -> list[str]:
+    return [ll for ll in host.llamadas() if "api.github.com" in ll]
+
+
+def test_deploy_pregunta_si_quality_paso_en_main_para_ese_sha(host: Host) -> None:
+    _preparar_deploy(host)
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    consultas = _consultas_a_github(host)
+    assert len(consultas) == 1, consultas
+    url = consultas[0]
+    assert (
+        "https://api.github.com/repos/EnriqueMartinez26/shifty/actions/workflows/quality.yml/runs?"
+        in url
+    )
+    for parametro in (
+        f"head_sha={SHA}",
+        "branch=main",
+        "event=push",
+        "status=success",
+    ):
+        assert parametro in url, parametro
+    llamadas = host.llamadas()
+    assert _indice(llamadas, r"api\.github\.com") < _indice(llamadas, r"compose pull")
+
+
+@pytest.mark.parametrize(
+    ("extra", "verdes", "motivo"),
+    [
+        ({}, 0, "Quality no paso en main"),
+        ({"FAKE_GH_EXIT": "22"}, 1, "no pude preguntarle a GitHub"),
+    ],
+    ids=["sin-quality-verde", "github-no-responde"],
+)
+def test_deploy_frena_sin_un_quality_verde_antes_de_tocar_nada(
+    host: Host, extra: dict[str, str], verdes: int, motivo: str
+) -> None:
+    _preparar_deploy(host)
+    escribir_corridas_de_quality(host.fake / "gh_runs", verdes=verdes)
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY, **extra
+    )
+
+    assert resultado.returncode != 0
+    assert motivo in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_una_respuesta_de_github_ilegible_frena(host: Host) -> None:
+    _preparar_deploy(host)
+    (host.fake / "gh_runs").write_text('{"message": "API rate limit exceeded"}\n')
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode != 0
+    assert "respuesta inesperada de GitHub" in resultado.stderr
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+def test_una_version_con_caracteres_raros_no_llega_a_la_url(host: Host) -> None:
+    _preparar_deploy(host)
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION=f"{SHA}&branch=x", **_BASE_DEPLOY
+    )
+
+    assert resultado.returncode != 0
+    assert "APP_VERSION" in resultado.stderr
+    assert not _consultas_a_github(host)
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+def test_saltear_la_verificacion_de_quality_avisa(host: Host) -> None:
+    """Para staging con una imagen de rama (workflow_dispatch): se puede, pero
+    queda una alerta."""
+    _preparar_deploy(host)
+    escribir_corridas_de_quality(host.fake / "gh_runs", verdes=0)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION=SHA,
+        DEPLOY_SKIP_QUALITY_CHECK="1",
+        ALERT_WEBHOOK_URL="https://hook",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert not _consultas_a_github(host)
+    assert "ALERTA: deploy: " in resultado.stderr
+    assert "SIN verificar Quality" in resultado.stderr
+
+
+def test_rollback_no_le_pregunta_a_github(host: Host) -> None:
+    """El rollback es el camino de emergencia: con GitHub caido tiene que
+    poder volver a la version anterior."""
+    _preparar_deploy(host, actual="v2")
+    (host.repo / ".deploy" / "previous").write_text("v1\n", encoding="utf-8")
+
+    resultado = host.correr("deploy.sh", "rollback", FAKE_GH_EXIT="22", **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert not _consultas_a_github(host)

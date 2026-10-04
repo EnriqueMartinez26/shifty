@@ -724,7 +724,7 @@ Una instrucción en lenguaje natural no es una garantía.
   del sha (todo `up` y `run` lleva `--no-build`). `make deploy
   APP_VERSION=<sha>` corre `scripts/deploy.sh`: preflight (`COMPOSE_FILE` con
   `docker-compose.prod.yml`, Compose >= 2.24, disco, backup de menos de
-  24 h), imágenes verificadas con `docker image inspect`, migración con el
+  24 h, Quality verde en `main` para el sha), imágenes verificadas con `docker image inspect`, migración con el
   código viejo sirviendo, backend nuevo al lado del viejo, `up -d --no-deps
   --remove-orphans` con lista explícita (nunca recrea db, redis, rabbitmq ni el borde),
   compuerta de 60 s y rollback automático sin migrar. En un deploy normal el
@@ -745,8 +745,12 @@ Una instrucción en lenguaje natural no es una garantía.
   `unhealthy` con tope de 3 por contenedor y 6 en total por hora, sin tocar
   db ni rabbitmq ni reiniciar nada con db o redis_state caídos (sin
   `autoheal` ni `docker.sock`),
-  chequeos horarios de NTP, certificado, disco y memoria, y latencia por
-  ruta cada 5 minutos. Se prueban con binarios falsos
+  chequeos horarios de NTP, certificado, disco, memoria, `redis_state` (aviso
+  sobre el 80 % de su `maxmemory`: con `noeviction`, lleno es 503) y el
+  endurecimiento del host (`scripts/host-hardening-check.sh`: SSH solo con
+  clave y sin root, ufw con 22/80/443, actualizaciones de seguridad sin
+  reinicio automático, fail2ban; pasos en `docs/DEPLOY_RUNBOOK.md` §1), y
+  latencia por ruta cada 5 minutos. Se prueban con binarios falsos
   (`tests/unit/host_falso.py`).
 
 ### Tiempo
@@ -901,8 +905,13 @@ Una instrucción en lenguaje natural no es una garantía.
   integración, `backend-postgres` y los dos jobs de front; `dead-code`
   espera solo a `standards` y `secret-scan` (gitleaks) corre suelto. El
   front corre con cobertura; el backend no la mide (ver §5).
-  `build-images.yml` publica las imágenes en cada push a `main`; no gatea
-  PRs.
+  `build-images.yml` publica las imágenes cuando Quality termina verde en un
+  push a `main` (`workflow_run`, con el sha que Quality probó; 2026-10-03:
+  antes publicaba en cada push y un commit en rojo quedaba desplegable); no
+  gatea PRs. La corrida a mano (`workflow_dispatch`) no pasa por esa
+  compuerta: el preflight de `scripts/deploy.sh` vuelve a pedirle a GitHub un
+  Quality verde en `main` para el sha (`test_build_images_espera_a_que_quality_pase_en_main`,
+  `test_deploy_frena_sin_un_quality_verde_antes_de_tocar_nada`).
 - **Todo cambio de endpoint regenera `docs/API_CONTRACT.md` en el mismo
   commit.** El contrato sale de `app.openapi()` con
   `backend/scripts/gen_api_contract.py`, nunca a mano;

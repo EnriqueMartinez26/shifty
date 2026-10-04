@@ -153,11 +153,89 @@ def test_el_drill_puede_correr_en_un_runner_propio() -> None:
 # --- imagenes ---------------------------------------------------------------
 
 
-def test_build_images_corre_en_main_y_a_mano() -> None:
+def test_build_images_espera_a_que_quality_pase_en_main() -> None:
+    """2026-10-03: build-images corria en cada push a main sin esperar a
+    quality.yml, y un commit en rojo quedaba como imagen desplegable. Ahora lo
+    dispara el fin de Quality y solo construye si paso."""
     disparadores = _disparadores(_yaml(BUILD))
-    assert disparadores["push"]["branches"] == ["main"]
-    assert "workflow_dispatch" in disparadores
+    assert "push" not in disparadores, "un push publicaria sin esperar a Quality"
     assert "pull_request" not in disparadores, "un PR no publica imagenes"
+    assert "pull_request_target" not in disparadores
+    assert "workflow_dispatch" in disparadores
+
+    corrida = disparadores["workflow_run"]
+    assert corrida["workflows"] == [_yaml(QUALITY)["name"]], (
+        "workflow_run tiene que nombrar a Quality tal como se llama"
+    )
+    assert corrida["types"] == ["completed"]
+    assert corrida["branches"] == ["main"]
+
+    condicion = " ".join(_yaml(BUILD)["jobs"]["build"]["if"].split())
+    assert condicion.startswith("github.event_name == 'workflow_dispatch' || (")
+    for requisito in (
+        "github.event.workflow_run.conclusion == 'success'",
+        "github.event.workflow_run.head_branch == 'main'",
+        # Un PR desde un fork con una rama `main` tambien trae head_branch ==
+        # main: sin estos dos, construiria codigo ajeno con packages: write.
+        "github.event.workflow_run.event == 'push'",
+        "github.event.workflow_run.head_repository.full_name == github.repository",
+    ):
+        assert requisito in condicion, requisito
+    # Todos los requisitos del workflow_run van juntos (AND): un `||` entre
+    # ellos dejaria pasar un Quality rojo.
+    assert condicion.count("||") == 1
+
+
+def test_build_images_construye_y_etiqueta_el_sha_que_quality_probo() -> None:
+    """En un workflow_run, `github.sha` es el ultimo commit de main, no el que
+    Quality probo: la imagen con ese tag podria traer codigo sin probar."""
+    workflow = _yaml(BUILD)
+    assert workflow["env"]["IMAGE_SHA"] == (
+        "${{ github.event.workflow_run.head_sha || github.sha }}"
+    )
+    job = workflow["jobs"]["build"]
+    checkout = next(
+        p
+        for p in job["steps"]
+        if str(p.get("uses", "")).startswith("actions/checkout@")
+    )
+    assert checkout["with"]["ref"] == "${{ env.IMAGE_SHA }}"
+    paso = next(
+        p
+        for p in job["steps"]
+        if str(p.get("uses", "")).startswith("docker/build-push-action@")
+    )
+    assert "github.sha" not in paso["with"]["tags"]
+    assert (
+        "org.opencontainers.image.revision=${{ env.IMAGE_SHA }}"
+        in paso["with"]["labels"]
+    )
+
+
+def test_build_images_conserva_los_build_args_y_la_retencion() -> None:
+    """Lo que el cambio a workflow_run no podia perder: las variables del
+    front (vars del repo), el sello que invalida la capa de upgrades
+    (D-20260930-23) y la limpieza de versiones, que nunca gatea."""
+    workflow = _yaml(BUILD)
+    paso = next(
+        p
+        for p in workflow["jobs"]["build"]["steps"]
+        if str(p.get("uses", "")).startswith("docker/build-push-action@")
+    )
+    argumentos = paso["with"]["build-args"].splitlines()
+    for variable in (
+        "VITE_SENTRY_DSN",
+        "VITE_SUPPORT_WHATSAPP",
+        "VITE_CONTACT_EMAIL",
+        "VITE_LEGAL_RESPONSABLES",
+    ):
+        assert f"{variable}=${{{{ vars.{variable} }}}}" in argumentos, variable
+    assert "SECURITY_UPGRADE_STAMP=${{ github.run_id }}" in argumentos
+
+    retencion = workflow["jobs"]["retention"]
+    assert retencion["needs"] == "build"
+    assert retencion["permissions"] == {"packages": "write"}
+    assert all(p.get("continue-on-error") is True for p in retencion["steps"])
 
 
 def test_build_images_publica_los_tres_servicios_por_sha() -> None:
@@ -177,7 +255,7 @@ def test_build_images_publica_los_tres_servicios_por_sha() -> None:
     resuelto = tags.replace("${{ env.REGISTRY }}", env["REGISTRY"]).replace(
         "${{ env.OWNER }}", env["OWNER"]
     )
-    assert f"{base}:${{{{ github.sha }}}}" in resuelto
+    assert f"{base}:${{{{ env.IMAGE_SHA }}}}" in resuelto
     assert f"{base}:latest" in resuelto
     assert paso["with"]["push"] is True
     # Un manifiesto de attestation sin tag lo borraria la limpieza.

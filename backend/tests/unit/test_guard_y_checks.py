@@ -7,6 +7,7 @@ scripts REALES con binarios falsos (tests/unit/host_falso.py).
 
 from __future__ import annotations
 
+import subprocess
 import time
 from pathlib import Path
 
@@ -14,11 +15,13 @@ import pytest
 
 from tests.unit.host_falso import (
     DEPLOY,
+    SSHD_SANO,
     Host,
     _hay,
     _lineas_de_cron,
     crear_host,
     escribir_meminfo,
+    escribir_redis_info,
 )
 
 
@@ -222,6 +225,118 @@ def test_checks_sin_meminfo_legible_avisa(host: Host) -> None:
 
     assert resultado.returncode != 0
     assert "no se pudo leer" in resultado.stderr
+
+
+# --- redis_state ---------------------------------------------------------------
+#
+# 2026-10-03: redis_state corre con `maxmemory 48mb` y `noeviction`; lleno,
+# cada escritura falla y auth, OTP y la reserva publica responden 503. El aviso
+# por contenedor mira el limite del cgroup (96M), que un maxmemory de 48 MB
+# nunca alcanza: hay que preguntarle a Redis.
+
+MIB = 1048576
+
+
+def _correr_checks(host: Host, **extra: str) -> subprocess.CompletedProcess[str]:
+    return host.correr(
+        "checks.sh",
+        DOMAIN="shifty.example.com",
+        FAKE_CERT_END=_fecha_en(60),
+        STATS_LOG=(host.raiz / "stats.log").as_posix(),
+        **extra,
+    )
+
+
+@pytest.mark.parametrize(
+    ("usada_mib", "avisa"),
+    [(38, False), (39, True), (48, True)],
+    ids=["79-por-ciento", "81-por-ciento", "llena"],
+)
+def test_checks_avisa_cuando_redis_state_pasa_el_80_por_ciento(
+    host: Host, usada_mib: int, avisa: bool
+) -> None:
+    escribir_redis_info(host.fake / "redis_info", usada=usada_mib * MIB)
+
+    resultado = _correr_checks(host)
+
+    assert _hay(
+        host.llamadas(), r"docker compose exec -T redis_state redis-cli INFO memory"
+    )
+    if avisa:
+        assert resultado.returncode != 0
+        assert "ALERTA: redis_state: usa el" in resultado.stderr
+        assert f"({usada_mib} de 48 MiB)" in resultado.stderr
+    else:
+        assert resultado.returncode == 0, resultado.stderr
+        assert "ALERTA" not in resultado.stderr
+        assert "redis_state al 79 %" in resultado.stderr
+
+
+def test_checks_avisa_si_no_puede_leer_redis_state(host: Host) -> None:
+    resultado = _correr_checks(host, FAKE_REDIS_EXIT="1")
+
+    assert resultado.returncode != 0
+    assert "redis_state: no se pudo leer INFO memory" in resultado.stderr
+
+
+def test_una_respuesta_ilegible_de_redis_no_pasa_por_maxmemory_en_cero(
+    host: Host,
+) -> None:
+    (host.fake / "redis_info").write_text(
+        "NOAUTH Authentication required.\n", encoding="utf-8"
+    )
+
+    resultado = _correr_checks(host)
+
+    assert resultado.returncode != 0
+    assert "redis_state: no se pudo leer INFO memory" in resultado.stderr
+    assert "sin maxmemory" not in resultado.stderr
+
+
+def test_checks_avisa_si_redis_state_corre_sin_maxmemory(host: Host) -> None:
+    escribir_redis_info(host.fake / "redis_info", usada=10 * MIB, maxima=0)
+
+    resultado = _correr_checks(host)
+
+    assert resultado.returncode != 0
+    assert "redis_state: corre sin maxmemory" in resultado.stderr
+
+
+def test_checks_le_pregunta_a_redis_desde_el_clon_con_la_version_en_curso(
+    host: Host, tmp_path: Path
+) -> None:
+    """El compose de produccion exige APP_VERSION hasta para `exec`, y el
+    proyecto sale del directorio: cron no da ninguna de las dos."""
+    (host.repo / ".deploy").mkdir()
+    (host.repo / ".deploy" / "current").write_text("v7\n", encoding="utf-8")
+    otro = tmp_path / "otro"
+    otro.mkdir()
+
+    resultado = host.correr_desde(
+        otro,
+        "checks.sh",
+        DOMAIN="shifty.example.com",
+        FAKE_CERT_END=_fecha_en(60),
+        STATS_LOG=(host.raiz / "stats.log").as_posix(),
+        FAKE_EXIGE_VERSION="1",
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    cwd = (host.fake / "cwd").read_text(encoding="utf-8").strip()
+    assert Path(cwd).resolve() == host.repo.resolve()
+
+
+def test_checks_corre_el_chequeo_de_endurecimiento(host: Host) -> None:
+    (host.fake / "sshd_T").write_text(
+        SSHD_SANO.replace("passwordauthentication no", "passwordauthentication yes"),
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    resultado = _correr_checks(host)
+
+    assert resultado.returncode != 0
+    assert "ssh: passwordauthentication es yes" in resultado.stderr
 
 
 # --- cron y logrotate --------------------------------------------------------
