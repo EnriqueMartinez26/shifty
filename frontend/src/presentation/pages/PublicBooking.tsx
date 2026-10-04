@@ -16,6 +16,7 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
 import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   usePublicPaymentStatus,
   usePublicServices,
@@ -48,6 +49,7 @@ const PublicBooking: React.FC = () => {
   const paymentId = searchParams.get('payment_id') || undefined
   const storeQuery = usePublicStore(slug)
   const { data: store, isLoading, isError } = storeQuery
+  useDocumentTitle(store ? `${store.name} · Reservá tu turno` : null)
   const paymentStatus = usePublicPaymentStatus(store?.public_id, paymentId)
   // Deep-link "reserva de nuevo" (?service=&staff=): se validan los ids contra
   // las listas publicas antes de montar el wizard. Sin parametros no se

@@ -5,6 +5,7 @@ import { Link, useLocation } from 'react-router'
 
 import { AuthShell } from './AuthShell'
 import { buttonStyles2000s } from '../../../theme/colors'
+import { useDocumentTitle } from '../../hooks/useDocumentTitle'
 
 /** `/b/<slug>/...` o `/booking/<slug>/...`: la ruta de la tienda, con el prefijo que se uso. */
 const STORE_PATH = /^\/(b|booking)\/([^/]+)/
@@ -38,6 +39,7 @@ export const NotFoundScreen: React.FC<NotFoundScreenProps> = ({
 }) => {
   const { pathname } = useLocation()
   const storePath = storePathOf(pathname)
+  useDocumentTitle(`${title} · Shifty`)
 
   return (
     <AuthShell title={title} subtitle={subtitle}>

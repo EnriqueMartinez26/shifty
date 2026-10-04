@@ -13,6 +13,7 @@ import { buttonStyles2000s, colors2000s } from '../../theme/colors'
 import { ReportAppointmentsTable } from '../components/organisms/ReportAppointmentsTable'
 import { useAuth } from '../context/AuthContext'
 import { hasAnyRole, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import type { ReportExportFormat } from '../hooks/useReports'
 import { useExportReport, useProfessionalReports, useReportSummary } from '../hooks/useReports'
 import {
@@ -105,6 +106,7 @@ const ReportRangeHeader: React.FC<ReportRangeHeaderProps> = ({
 )
 
 const ReportsPage: React.FC = () => {
+  useDocumentTitle('Reportes · Shifty')
   const [fromDate, setFromDate] = useState(toInputDate(subDays(new Date(), 7)))
   const [toDate, setToDate] = useState(toInputDate(new Date()))
   const [offset, setOffset] = useState(0)

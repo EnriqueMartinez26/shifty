@@ -13,6 +13,7 @@ import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import { ToggleSwitch } from '../components/molecules/ToggleSwitch'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useCreatePromotion, usePromotions, useUpdatePromotion } from '../hooks/usePayments'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { formatDateTimeEsAr } from '../lib/formatters'
@@ -36,6 +37,7 @@ const createEmptyPromotionForm = () => ({
 })
 
 const PromotionsPage: React.FC = () => {
+  useDocumentTitle('Promociones · Shifty')
   const promotionsQuery = usePromotions(true, true)
   const createPromotion = useCreatePromotion()
   const updatePromotion = useUpdatePromotion()

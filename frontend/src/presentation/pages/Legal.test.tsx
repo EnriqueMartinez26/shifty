@@ -86,6 +86,16 @@ describe('LegalPage', () => {
       screen.getByRole('heading', { level: 1, name: 'Página no encontrada' })
     ).toBeInTheDocument()
     expect(screen.queryByText('Términos y Condiciones')).toBeNull()
+    expect(document.title).toBe('Página no encontrada · Shifty')
+  })
+
+  it.each([
+    ['/legal/terminos', 'Términos y Condiciones · Shifty'],
+    ['/legal/privacidad', 'Política de Privacidad · Shifty']
+  ])('%s titles the browser tab with the document name', (path, title) => {
+    renderAt([path])
+
+    expect(document.title).toBe(title)
   })
 })
 

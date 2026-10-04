@@ -14,6 +14,7 @@ import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
 import { useAuth } from '../context/AuthContext'
 import { ROLES_ADMIN_SUPER, hasAnyRole } from '../context/roles'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useCreatePaymentPreference,
   useManualConfirmPayment,
@@ -31,6 +32,7 @@ const PAYMENTS_OFF_REASON =
 const PAYMENTS_OFF_NOTICE = `${PAYMENTS_OFF_REASON} Las señas que te pagan por WhatsApp las confirmás igual con "Confirmar pago".`
 
 const CollectionsPage: React.FC = () => {
+  useDocumentTitle('Cobros · Shifty')
   const appointmentsQuery = usePaymentsAppointments()
   const { user } = useAuth()
   // La conciliacion es solo de admins (el backend le responde 403 al

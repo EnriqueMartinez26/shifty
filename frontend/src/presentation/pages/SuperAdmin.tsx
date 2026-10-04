@@ -75,10 +75,12 @@ import { SubscriptionSection } from './superadmin/SubscriptionSection'
 import { SuperAdminHeader } from './superadmin/SuperAdminHeader'
 import { TenantUsersSection } from './superadmin/TenantUsersSection'
 import { UserModals } from './superadmin/UserModals'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 const SEARCH_DEBOUNCE_MS = 300
 
 const SuperAdminPage: React.FC = () => {
+  useDocumentTitle('Control global · Shifty')
   const { user } = useAuth()
   const { confirm, confirmDialog } = useConfirm()
 
