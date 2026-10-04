@@ -109,7 +109,7 @@ export const ReportAppointmentsTable: React.FC<ReportAppointmentsTableProps> = (
                 <td
                   colSpan={6}
                   className="px-6 py-12 text-center font-bold italic"
-                  style={{ color: colors2000s.text.disabled }}
+                  style={{ color: colors2000s.text.secondary }}
                 >
                   No hay turnos en el rango seleccionado.
                 </td>

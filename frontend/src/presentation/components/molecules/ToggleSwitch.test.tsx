@@ -37,7 +37,7 @@ describe('ToggleSwitch', () => {
 
   it('prendido conserva el relleno de marca y suma un anillo acento contra el blanco', () => {
     // Solo el naranja de marca contra la tarjeta blanca da 2.31:1 (N4); el
-    // anillo #c85a0f lleva el borde a 4.26:1.
+    // anillo orange.accent lleva el borde a 6.50:1.
     render(<ToggleSwitch label="Seña" checked onToggle={jest.fn()} />)
 
     const interruptor = screen.getByRole('switch', { name: 'Seña' })

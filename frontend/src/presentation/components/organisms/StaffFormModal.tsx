@@ -8,7 +8,7 @@ import { useManagedServices } from '@presentation/hooks/useManagedServices'
 
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
-import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { StaffFormValues } from '../../types/forms'
 
@@ -188,9 +188,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
                             ? colors2000s.orange.accent
                             : colors2000s.border.default,
                         background:
-                          formData.kind === kind
-                            ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-                            : colors2000s.bg.button,
+                          formData.kind === kind ? orangeCtaGradient : colors2000s.bg.button,
                         color: formData.kind === kind ? '#ffffff' : colors2000s.text.primary
                       }}
                     >
@@ -339,7 +337,7 @@ export const StaffFormModal: React.FC<StaffFormModalProps> = ({
               </div>
               <p
                 className="text-[10px] font-bold italic"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Seleccioná los servicios que este profesional puede realizar.
               </p>

@@ -159,7 +159,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Por revisar
               </p>
@@ -170,7 +170,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Con error
               </p>
@@ -184,7 +184,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Actualizados
               </p>

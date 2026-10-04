@@ -16,7 +16,7 @@ import { usePublicAvailability, usePublicStaff } from '@presentation/hooks/usePu
 import { formatArgentinaTime } from '@shared/utils/argentinaTime'
 
 import { WaitlistJoinForm } from './WaitlistJoinForm'
-import { colors2000s } from '../../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import { slotStatusLabel } from '../../../lib/enumLabels'
 import { createBookingBackButtonStyle, createBookingSurfaceStyle } from '../../../lib/surfaceStyles'
 
@@ -173,9 +173,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                     className="flex items-center gap-1.5 px-3 py-2 text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all active:scale-95"
                     style={{
                       borderRadius: 6,
-                      background: isSelected
-                        ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
-                        : '#ffffff',
+                      background: isSelected ? orangeCtaGradient : '#ffffff',
                       borderColor: isSelected
                         ? colors2000s.orange.accent
                         : colors2000s.border.default,
@@ -218,7 +216,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                 className="flex flex-col items-center justify-center min-w-[72px] py-3 rounded-md border transition-all snap-center active:scale-95"
                 style={{
                   background: isSelected
-                    ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                    ? orangeCtaGradient
                     : `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
                   borderColor: isSelected ? colors2000s.orange.accent : colors2000s.border.default,
                   boxShadow: isSelected
@@ -316,7 +314,7 @@ export const BookingStepDateTime: React.FC<BookingStepDateTimeProps> = ({
                   className="py-3 rounded-md font-black text-lg transition-all active:scale-95 border disabled:cursor-not-allowed disabled:opacity-70"
                   style={{
                     background: isSelected
-                      ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                      ? orangeCtaGradient
                       : isAvailable
                         ? `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`
                         : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,

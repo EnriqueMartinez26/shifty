@@ -6,7 +6,7 @@ import { User } from '@domain/entities/User'
 
 import { displayableEmail } from '@shared/utils/deliverableEmail'
 
-import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
 import { userRoleLabel } from '../../lib/enumLabels'
 
 interface UserCardProps {
@@ -46,7 +46,7 @@ export const UserCard: React.FC<UserCardProps> = ({
   const accentBorderColor = isAdmin ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isAdmin
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
-    : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+    : orangeCtaGradient
 
   return (
     <div
@@ -67,7 +67,7 @@ export const UserCard: React.FC<UserCardProps> = ({
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
-            color: user.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
+            color: user.isActive ? colors2000s.status.success.text : colors2000s.text.secondary
           }}
         >
           {user.isActive ? (
@@ -100,7 +100,7 @@ export const UserCard: React.FC<UserCardProps> = ({
             </h3>
             <p
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
-              style={{ color: colors2000s.text.disabled }}
+              style={{ color: colors2000s.text.secondary }}
             >
               {email ?? 'Sin email'}
             </p>

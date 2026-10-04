@@ -61,7 +61,7 @@ export const AgendaRangeGrid: React.FC<AgendaRangeGridProps> = ({
               {dayEvents.length === 0 && (
                 <div
                   className="text-[10px] font-bold uppercase tracking-widest"
-                  style={{ color: colors2000s.text.disabled }}
+                  style={{ color: colors2000s.text.secondary }}
                 >
                   Sin eventos
                 </div>

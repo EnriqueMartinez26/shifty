@@ -38,9 +38,9 @@ describe('RankedList', () => {
     const row = screen.getByRole('listitem')
     const badge = row.querySelector('span') as HTMLElement
     expect(badge.textContent).toBe('1')
-    expect(badge.style.color).toBe('rgb(200, 90, 15)')
+    expect(badge.style.color).toBe('rgb(154, 69, 7)')
     expect(badge.style.background).toBe('rgba(255, 140, 66, 0.12)')
-    expect(screen.getByText('30').style.color).toBe('rgb(200, 90, 15)')
+    expect(screen.getByText('30').style.color).toBe('rgb(154, 69, 7)')
   })
 
   it('omite el detalle cuando no viene', () => {

@@ -621,7 +621,7 @@ const ReportsPage: React.FC = () => {
                     <td
                       colSpan={6}
                       className="px-6 py-10 text-center font-bold italic"
-                      style={{ color: colors2000s.text.disabled }}
+                      style={{ color: colors2000s.text.secondary }}
                     >
                       Sin datos de profesionales para el rango.
                     </td>

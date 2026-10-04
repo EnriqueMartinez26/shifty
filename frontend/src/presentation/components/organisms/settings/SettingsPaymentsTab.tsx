@@ -6,7 +6,7 @@ import type { GatewayConfig } from '@application/services/PaymentsService'
 
 import { getErrorCode } from '@shared/errors/getErrorMessage'
 
-import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
+import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import type { SettingsFormData } from '../../../lib/settingsDraft'
 import { createSettingsInputStyle } from '../../../lib/surfaceStyles'
 import { QueryErrorNotice } from '../../molecules/QueryErrorNotice'
@@ -193,7 +193,7 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
           />
           <span style={{ color: colors2000s.text.secondary }}>
             Permitir coordinar el pago por fuera (WhatsApp).
-            <span className="block font-medium mt-1" style={{ color: colors2000s.text.disabled }}>
+            <span className="block font-medium mt-1" style={{ color: colors2000s.text.secondary }}>
               Si lo desactivás, los servicios con seña obligatoria solo se van a poder reservar
               pagando con Mercado Pago.
             </span>
@@ -216,7 +216,7 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
             className="w-full rounded-2xl px-5 py-3.5 font-bold outline-none"
             style={createSettingsInputStyle()}
           />
-          <p className="text-[11px] font-medium" style={{ color: colors2000s.text.disabled }}>
+          <p className="text-[11px] font-medium" style={{ color: colors2000s.text.secondary }}>
             Se le muestra al cliente antes de reservar y queda registrada su aceptación. Es tu
             respaldo ante un reclamo, así que conviene ser concreto.
           </p>
@@ -229,7 +229,7 @@ export const SettingsPaymentsTab: React.FC<SettingsPaymentsTabProps> = ({
           title={readOnlyReason ?? undefined}
           className="rounded-2xl px-5 py-3 font-black uppercase tracking-widest text-xs inline-flex items-center gap-2 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           style={{
-            background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+            background: orangeCtaGradient,
             border: `1px solid ${colors2000s.orange.accent}`,
             color: colors2000s.text.onOrange,
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`

@@ -2,7 +2,7 @@ import React from 'react'
 
 import { Bell, CheckCheck } from 'lucide-react'
 
-import { colors2000s } from '../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../theme/colors'
 import {
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
@@ -78,7 +78,7 @@ const NotificationsBell: React.FC = () => {
           <span
             className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center"
             style={{
-              background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+              background: orangeCtaGradient,
               color: colors2000s.text.onOrange,
               boxShadow: colors2000s.shadows.outerOrange
             }}
@@ -125,7 +125,7 @@ const NotificationsBell: React.FC = () => {
             {items.length === 0 && (
               <p
                 className="px-4 py-6 text-xs text-center"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 No tenés novedades por ahora.
               </p>
@@ -154,7 +154,7 @@ const NotificationsBell: React.FC = () => {
                     {item.body}
                   </p>
                 )}
-                <span className="text-[10px]" style={{ color: colors2000s.text.disabled }}>
+                <span className="text-[10px]" style={{ color: colors2000s.text.secondary }}>
                   {formatRelative(item.created_at)}
                 </span>
               </button>

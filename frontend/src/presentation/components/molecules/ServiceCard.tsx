@@ -50,7 +50,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
-            color: service.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
+            color: service.isActive ? colors2000s.status.success.text : colors2000s.text.secondary
           }}
         >
           {service.isActive ? (
@@ -95,7 +95,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             </h3>
             <p
               className="text-[10px] font-bold mt-1 truncate max-w-[200px] leading-tight"
-              style={{ color: colors2000s.text.disabled }}
+              style={{ color: colors2000s.text.secondary }}
             >
               {service.description || 'Sin descripción'}
             </p>
@@ -116,7 +116,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             <div>
               <p
                 className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Duración
               </p>
@@ -141,7 +141,7 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             <div>
               <p
                 className="text-[8px] font-black uppercase tracking-widest leading-none mb-1"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Precio
               </p>
