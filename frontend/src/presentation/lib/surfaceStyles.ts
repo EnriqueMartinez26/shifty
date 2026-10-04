@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-import { colors2000s } from '../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../theme/colors'
 
 // Superficies 2000s: fondo + borde + sombra + radio, un solo lugar.
 //
@@ -21,7 +21,7 @@ import { colors2000s } from '../../theme/colors'
 
 const SURFACE_BACKGROUNDS = {
   brand: `linear-gradient(180deg, ${colors2000s.bg.button} 0%, ${colors2000s.bg.buttonBottom} 100%)`,
-  orange: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+  orange: orangeCtaGradient,
   plain: '#ffffff'
 } as const
 

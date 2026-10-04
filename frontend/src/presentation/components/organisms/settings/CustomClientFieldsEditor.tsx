@@ -43,7 +43,7 @@ export const CustomClientFieldsEditor: React.FC<CustomClientFieldsEditorProps> =
         >
           Campos extra de la reserva
         </label>
-        <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.disabled }}>
+        <p className="text-[11px] font-bold mt-1" style={{ color: colors2000s.text.secondary }}>
           Definí preguntas opcionales o requeridas para el portal público.
         </p>
       </div>
@@ -92,7 +92,7 @@ export const CustomClientFieldsEditor: React.FC<CustomClientFieldsEditorProps> =
                 >
                   Campo #{index + 1}
                 </p>
-                <p className="text-xs font-bold mt-1" style={{ color: colors2000s.text.disabled }}>
+                <p className="text-xs font-bold mt-1" style={{ color: colors2000s.text.secondary }}>
                   La clave se usa internamente y conviene mantenerla corta, en minusculas y con
                   guiones bajos.
                 </p>

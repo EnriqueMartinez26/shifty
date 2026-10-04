@@ -85,7 +85,7 @@ const BusinessHoursDayRow: React.FC<{
               className={TIME_INPUT_CLASS}
               style={createSettingsInputStyle()}
             />
-            <span className="text-[10px] font-bold" style={{ color: colors2000s.text.disabled }}>
+            <span className="text-[10px] font-bold" style={{ color: colors2000s.text.secondary }}>
               A
             </span>
             <input
@@ -138,7 +138,7 @@ const BusinessHoursDayRow: React.FC<{
         <>
           <span
             className="flex-1 text-[10px] font-black uppercase italic"
-            style={{ color: colors2000s.text.disabled }}
+            style={{ color: colors2000s.text.secondary }}
           >
             Cerrado
           </span>

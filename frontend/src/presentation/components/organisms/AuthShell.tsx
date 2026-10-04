@@ -84,7 +84,7 @@ export const AuthShell: React.FC<AuthShellProps> = ({
         )}
       </div>
 
-      <p className="mt-8 text-center text-xs" style={{ color: colors2000s.text.disabled }}>
+      <p className="mt-8 text-center text-xs" style={{ color: colors2000s.text.secondary }}>
         Copyright 2026 Shifty SaaS. Todos los derechos reservados.
       </p>
       {/* Mismos enlaces legales que el portal y el panel: el login es la

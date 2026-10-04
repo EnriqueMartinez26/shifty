@@ -4,7 +4,7 @@ import { Mail, Edit3, Trash2, Check, X, LayoutGrid } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
-import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
+import { colors2000s, buttonStyles2000s, orangeCtaGradient } from '../../../theme/colors'
 
 interface StaffCardProps {
   staff: Staff
@@ -42,7 +42,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
   const accentBorderColor = isResource ? colors2000s.status.info.dark : colors2000s.orange.light
   const avatarGradient = isResource
     ? `linear-gradient(180deg, ${colors2000s.status.info.light} 0%, ${colors2000s.status.info.dark} 100%)`
-    : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+    : orangeCtaGradient
 
   return (
     <div
@@ -63,7 +63,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
           style={{
             background: 'white',
             boxShadow: colors2000s.shadows.insetDark,
-            color: staff.isActive ? colors2000s.status.success.text : colors2000s.text.disabled
+            color: staff.isActive ? colors2000s.status.success.text : colors2000s.text.secondary
           }}
         >
           {staff.isActive ? (
@@ -96,7 +96,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
             </h3>
             <p
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
-              style={{ color: colors2000s.text.disabled }}
+              style={{ color: colors2000s.text.secondary }}
             >
               {isResource ? 'Recurso' : staff.fullName}
             </p>
@@ -125,7 +125,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
         <div className="flex items-center gap-2 pt-3">
           <span
             className="text-[9px] font-black uppercase tracking-widest"
-            style={{ color: colors2000s.text.disabled }}
+            style={{ color: colors2000s.text.secondary }}
           >
             Servicios:
           </span>
@@ -133,7 +133,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
             {(staff.serviceIds || []).length === 0 ? (
               <span
                 className="text-[9px] font-bold italic"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Sin servicios
               </span>

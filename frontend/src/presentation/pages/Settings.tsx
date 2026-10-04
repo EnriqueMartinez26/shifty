@@ -34,6 +34,7 @@ import { SettingsPoliciesTab } from '../components/organisms/settings/SettingsPo
 import { SettingsScheduleTab } from '../components/organisms/settings/SettingsScheduleTab'
 import { SettingsSecurityTab } from '../components/organisms/settings/SettingsSecurityTab'
 import { useChangePassword } from '../hooks/useChangePassword'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useDisconnectMercadoPagoOAuth,
   useGatewayConfig,
@@ -83,6 +84,7 @@ type SaveHalf = {
 const SLUG_TAKEN_MESSAGE = 'Ese enlace ya lo usa otro negocio. Elegí otro.'
 
 const SettingsPage: React.FC = () => {
+  useDocumentTitle('Configuración · Shifty')
   const [searchParams] = useSearchParams()
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'identity')
   const { data: store, isLoading, error: storeError } = useStoreSettings()

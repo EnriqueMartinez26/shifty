@@ -43,7 +43,7 @@ describe('OpportunityList', () => {
     )
 
     const button = screen.getByRole('button', { name: 'Ver agenda' })
-    expect(button.style.color).toBe('rgb(200, 90, 15)')
+    expect(button.style.color).toBe('rgb(154, 69, 7)')
     fireEvent.click(button)
     expect(onSelect).toHaveBeenCalledTimes(1)
   })

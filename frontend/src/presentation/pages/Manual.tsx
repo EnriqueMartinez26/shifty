@@ -13,6 +13,7 @@ import {
 import { Link } from 'react-router'
 
 import { buttonStyles2000s, colors2000s } from '../../theme/colors'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { create2000sPanelStyle } from '../lib/surfaceStyles'
 
 interface ManualStep {
@@ -184,6 +185,7 @@ const SECTIONS: ManualSection[] = [
 ]
 
 const Manual: React.FC = () => {
+  useDocumentTitle('Manual de uso · Shifty')
   const [openSection, setOpenSection] = useState<string>(SECTIONS[0]?.id ?? '')
 
   return (

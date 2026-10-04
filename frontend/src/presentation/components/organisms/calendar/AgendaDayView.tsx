@@ -2,7 +2,7 @@ import React from 'react'
 
 import { Clock, Loader2 } from 'lucide-react'
 
-import { colors2000s } from '../../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import type { UnifiedCalendarEvent } from '../../../lib/calendarEvents'
 import { SLOT_HEIGHT_PX, type DayGrid, type TimeRange } from '../../../lib/calendarGrid'
 import { canvasStyle, panelStyle } from '../../../lib/calendarStyles'
@@ -78,7 +78,7 @@ export const AgendaDayView: React.FC<AgendaDayViewProps> = ({
                     background:
                       idx % 2 === 0
                         ? 'linear-gradient(180deg, #3b82f6 0%, #2563eb 100%)'
-                        : `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                        : orangeCtaGradient,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outer}`
                   }}
                 >

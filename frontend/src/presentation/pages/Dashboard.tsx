@@ -30,6 +30,7 @@ import type {
 import { useAuth } from '../context/AuthContext'
 import { ROLE_PROFESSIONAL, ROLE_STORE_ADMIN, ROLE_SUPER_ADMIN } from '../context/roles'
 import { useDashboardSummary } from '../hooks/useDashboard'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { useLedgerSummary } from '../hooks/useLedger'
 import { useOutboxStats, useReconciliationSummary } from '../hooks/usePayments'
 import { useProfessionalReports, useReportSummary, useReportTrend } from '../hooks/useReports'
@@ -45,6 +46,7 @@ const canViewFinancialAdmin = (role: string | undefined, isGlobalAdmin: boolean)
   isGlobalAdmin || role === ROLE_STORE_ADMIN || role === ROLE_SUPER_ADMIN
 
 const Dashboard = () => {
+  useDocumentTitle('Dashboard · Shifty')
   const navigate = useNavigate()
   const { token, user } = useAuth()
   const isGlobalAdmin = Boolean(user?.is_global_admin)

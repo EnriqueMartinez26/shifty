@@ -7,6 +7,7 @@ import { ClientAppointmentsContainer } from '@presentation/containers/ClientAppo
 import { colors2000s } from '../../theme/colors'
 import LegalFooterLinks from '../components/navigation/LegalFooterLinks'
 import { isStoreMissing, StoreLoadError } from '../components/organisms/StoreLoadError'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { usePublicStore, usePublicStoreRef } from '../hooks/usePublic'
 
 const ClientAppointmentsPage: React.FC = () => {
@@ -21,6 +22,7 @@ const ClientAppointmentsPage: React.FC = () => {
   // La politica de sena del pie solo la trae la vitrina: se pide cuando no va
   // a dar 404.
   const { data: vitrina } = usePublicStore(slug, acceptsNewBookings)
+  useDocumentTitle(ref ? `Mis turnos · ${ref.name}` : 'Mis turnos · Shifty')
 
   if (isLoading) {
     return (

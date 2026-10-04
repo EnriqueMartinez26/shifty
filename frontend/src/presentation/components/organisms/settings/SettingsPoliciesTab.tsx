@@ -53,7 +53,7 @@ export const SettingsPoliciesTab: React.FC<SettingsPoliciesTabProps> = ({ value,
           style={createSettingsInputStyle()}
           placeholder="24"
         />
-        <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.disabled }}>
+        <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.secondary }}>
           Antelación mínima permitida para cancelar.
         </p>
       </div>
@@ -82,7 +82,7 @@ export const SettingsPoliciesTab: React.FC<SettingsPoliciesTabProps> = ({ value,
           style={createSettingsInputStyle()}
           placeholder="0"
         />
-        <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.disabled }}>
+        <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.secondary }}>
           Tiempo de limpieza/descanso automático.
         </p>
       </div>
@@ -107,7 +107,7 @@ export const SettingsPoliciesTab: React.FC<SettingsPoliciesTabProps> = ({ value,
           style={createSettingsInputStyle()}
           placeholder="2"
         />
-        <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.disabled }}>
+        <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.secondary }}>
           Un cliente no puede reservar por la página con menos antelación que esta. Vos, desde el
           panel, sí.
         </p>
@@ -192,7 +192,7 @@ const DepositRuleInput: React.FC<{
         style={createSettingsInputStyle()}
       />
     </label>
-    <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.disabled }}>
+    <p className="text-[10px] font-bold italic" style={{ color: colors2000s.text.secondary }}>
       {hint}
     </p>
   </div>

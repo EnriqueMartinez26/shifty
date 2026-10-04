@@ -292,9 +292,9 @@ const cardOf = (scope: ReturnType<typeof within>, label: string) => {
 
 // El estilo en linea de jsdom devuelve el color ya como rgb(). Son los tres
 // acentos de `toneTokens`: #b76a00, #0f9f6e y #d13b3b, mas el neutral
-// (`colors2000s.text.secondary`, #7a7a7a).
+// (`colors2000s.text.secondary`, #5c5c5c).
 const TONE = {
-  neutral: 'rgb(122, 122, 122)',
+  neutral: 'rgb(92, 92, 92)',
   warning: 'rgb(183, 106, 0)',
   success: 'rgb(15, 159, 110)',
   danger: 'rgb(209, 59, 59)'

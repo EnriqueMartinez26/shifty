@@ -14,6 +14,7 @@ import { LedgerMovementItem, movementTypeLabels } from '../components/molecules/
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { useConfirm } from '../hooks/useConfirm'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useAddLedgerMovement,
   useCustomerLedger,
@@ -72,6 +73,7 @@ const inputStyle = create2000sInputStyle()
 const cardStyle = create2000sPanelStyle()
 
 const LedgerPage: React.FC = () => {
+  useDocumentTitle('Cuentas pendientes · Shifty')
   // /ledger/clients y no /users/: este sirve tambien al profesional (403 en
   // /users/) y solo trae clientes, filtrados en el backend (FF-20).
   // La busqueda viaja al enviarla (Enter o "Buscar"), no por tecla.

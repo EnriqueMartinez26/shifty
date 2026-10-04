@@ -36,7 +36,7 @@ import { BookingOtpSection } from './BookingOtpSection'
 import { BookingSuccess } from './BookingSuccess'
 import { depositBreakdownText } from './depositReasons'
 import type { BookingClientData, BookingOtpState, BookingWizardState } from './types'
-import { buttonStyles2000s, colors2000s } from '../../../../theme/colors'
+import { buttonStyles2000s, colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import { revealOnMount } from '../../../lib/revealOnMount'
 import {
   createBookingBackButtonStyle,
@@ -695,7 +695,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={
               canSubmit
                 ? {
-                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    background: orangeCtaGradient,
                     borderColor: colors2000s.orange.accent,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }
@@ -717,7 +717,7 @@ export const BookingStepConfirmation: React.FC<BookingStepConfirmationProps> = (
             style={
               canSubmit
                 ? {
-                    background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+                    background: orangeCtaGradient,
                     borderColor: colors2000s.orange.accent,
                     boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
                   }

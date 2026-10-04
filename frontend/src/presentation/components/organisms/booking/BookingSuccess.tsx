@@ -14,7 +14,7 @@ import { asSafeHttpsUrl } from '@shared/utils/safeUrl'
 import { buildWaMeUrl } from '@shared/utils/whatsAppPhone'
 
 import type { BookingWizardState } from './types'
-import { colors2000s } from '../../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 
 // Estado del cobro en castellano: el cliente leia "Estado: pending".
 const PAYMENT_STATUS_LABELS: Record<string, string> = {
@@ -227,7 +227,7 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
           rel="noreferrer"
           className="w-full mt-6 text-white font-black py-4 rounded-xl transition-all uppercase tracking-widest text-xs border cursor-pointer select-none inline-flex items-center justify-center gap-2"
           style={{
-            background: `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`,
+            background: orangeCtaGradient,
             borderColor: colors2000s.orange.accent,
             boxShadow: `${colors2000s.shadows.insetLight}, ${colors2000s.shadows.outerOrange}`
           }}

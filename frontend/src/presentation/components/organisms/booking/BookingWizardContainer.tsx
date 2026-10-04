@@ -12,7 +12,7 @@ import { BookingStepService } from './BookingStepService'
 import { EMPTY_PRESELECT, type BookingPreselect } from './deepLink'
 import { clampStep, resolveBackJump, resolveStepJump } from './stepFlow'
 import type { BookingOtpState, BookingStepChange, BookingWizardState } from './types'
-import { colors2000s } from '../../../../theme/colors'
+import { colors2000s, orangeCtaGradient } from '../../../../theme/colors'
 import {
   type PublicStore,
   useCreatePublicBooking,
@@ -241,7 +241,7 @@ export const BookingWizardContainer: React.FC<BookingWizardContainerProps> = ({
                   background: isCompleted
                     ? `linear-gradient(180deg, ${colors2000s.status.success.light} 0%, ${colors2000s.status.success.dark} 100%)`
                     : isActive
-                      ? `linear-gradient(180deg, ${colors2000s.orange.light} 0%, ${colors2000s.orange.dark} 100%)`
+                      ? orangeCtaGradient
                       : `linear-gradient(180deg, ${colors2000s.bg.disabled} 0%, ${colors2000s.bg.disabledBottom} 100%)`,
                   boxShadow: isCompleted
                     ? `${colors2000s.shadows.insetLight}, 0 2px 4px rgba(16,185,129,0.3)`

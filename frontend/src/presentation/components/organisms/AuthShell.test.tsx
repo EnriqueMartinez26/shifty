@@ -45,7 +45,7 @@ describe('AuthShell', () => {
 
     const copyright = screen.getByText('Copyright 2026 Shifty SaaS. Todos los derechos reservados.')
     expect(copyright.className).toBe('mt-8 text-center text-xs')
-    expect(copyright.style.color).toBe(cssValue('color', colors2000s.text.disabled))
+    expect(copyright.style.color).toBe(cssValue('color', colors2000s.text.secondary))
   })
 
   it('links the legal pages under the copyright, like the portal and the panel', () => {

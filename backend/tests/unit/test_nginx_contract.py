@@ -891,9 +891,9 @@ def test_la_spa_emite_un_solo_cache_control() -> None:
 
 
 def test_solo_los_assets_con_hash_son_inmutables() -> None:
-    # Vite pone hash en el nombre solo bajo /assets/. favicon.svg o icons.svg
-    # (de public/) no cambian de nombre: con immutable, un cambio no llegaba
-    # nunca a quien ya los tenia.
+    # Vite pone hash en el nombre solo bajo /assets/. favicon-32.png o
+    # apple-touch-icon.png (de public/) no cambian de nombre: con immutable, un
+    # cambio no llegaba nunca a quien ya los tenia.
     server = _server_spa()
     assets = location(server, "^~", "/assets/")
     assert _cache_control(assets) == ["public, max-age=31536000, immutable"]
@@ -914,6 +914,25 @@ def test_toda_ruta_desconocida_de_la_spa_cae_en_index_html() -> None:
     # refresh o un link directo devuelve 404.
     raiz = location(_server_spa(), "/")
     assert una(raiz, "try_files").args == ("$uri", "$uri/", "/index.html")
+
+
+def test_el_manifest_de_la_spa_sale_con_su_tipo_y_sus_iconos_existen() -> None:
+    # 2026-10-03: el mime.types de nginx 1.30.5 no mapea .webmanifest; sin el
+    # tipo explicito salia application/octet-stream y, con nosniff, el
+    # navegador descartaba el manifest.
+    manifest = location(_server_spa(), "=", "/manifest.webmanifest")
+    tipos = bloque_con(manifest, "types")
+    assert [(d.nombre, d.args) for d in tipos] == [
+        ("application/manifest+json", ("webmanifest",))
+    ]
+    assert una(manifest, "try_files").args == ("$uri", "=404")
+    publico = RAIZ / "frontend" / "public"
+    datos = json.loads((publico / "manifest.webmanifest").read_text(encoding="utf-8"))
+    for icono in datos["icons"]:
+        assert (publico / icono["src"].lstrip("/")).is_file(), icono["src"]
+    assert 'rel="manifest" href="/manifest.webmanifest"' in (
+        RAIZ / "frontend" / "index.html"
+    ).read_text(encoding="utf-8")
 
 
 def test_toda_location_de_la_spa_con_headers_propios_incluye_los_de_seguridad() -> None:

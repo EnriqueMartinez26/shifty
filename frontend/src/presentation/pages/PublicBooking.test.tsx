@@ -226,3 +226,31 @@ describe('PublicBooking cuando la tienda no se pudo consultar', () => {
     expect(screen.getByRole('button', { name: 'Reintentando...' })).toBeDisabled()
   })
 })
+
+// 2026-10-03: ninguna pagina fijaba document.title; la pestaña (y el link
+// guardado) decia "Shifty" en cualquier tienda.
+describe('PublicBooking: titulo de la pestaña', () => {
+  beforeEach(() => {
+    document.title = 'Shifty'
+  })
+
+  afterEach(() => {
+    mockTienda = TIENDA_SOL
+  })
+
+  it('lleva el nombre de la tienda y lo devuelve al salir', () => {
+    const { unmount } = renderEn('/booking/sol')
+
+    expect(document.title).toBe('Peluqueria Sol · Reservá tu turno')
+
+    unmount()
+    expect(document.title).toBe('Shifty')
+  })
+
+  it('una tienda que no existe titula la pestaña como el 404', () => {
+    sinTienda(new NotFoundError('Tienda no encontrada', { statusCode: 404 }))
+    renderEn('/booking/no-existe')
+
+    expect(document.title).toBe('Negocio no encontrado · Shifty')
+  })
+})

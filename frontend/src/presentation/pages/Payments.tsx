@@ -11,6 +11,7 @@ import { MessageBanner } from '../components/molecules/MessageBanner'
 import { PageHeader } from '../components/molecules/PageHeader'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { SummaryCards } from '../components/molecules/SummaryCards'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import {
   useGatewayConfig,
   useOutboxStats,
@@ -25,6 +26,7 @@ import {
 } from '../lib/surfaceStyles'
 
 const PaymentsPage: React.FC = () => {
+  useDocumentTitle('Cobros online · Shifty')
   // Navegacion dentro de la SPA: `window.location.assign` recargaba todo y
   // perdia el token en memoria camino a Configuracion (F11b-20).
   const navigate = useNavigate()
@@ -159,7 +161,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Por revisar
               </p>
@@ -170,7 +172,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Con error
               </p>
@@ -184,7 +186,7 @@ const PaymentsPage: React.FC = () => {
             <div className="rounded-2xl p-4 bg-white" style={create2000sListCardStyle()}>
               <p
                 className="text-[10px] font-black uppercase tracking-widest"
-                style={{ color: colors2000s.text.disabled }}
+                style={{ color: colors2000s.text.secondary }}
               >
                 Actualizados
               </p>

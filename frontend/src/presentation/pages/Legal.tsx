@@ -7,6 +7,7 @@ import { getContactInfo, type ContactInfo } from '@shared/utils/contactInfo'
 import { colors2000s } from '../../theme/colors'
 import { LegalLayout } from '../components/organisms/LegalLayout'
 import { NotFoundScreen } from '../components/organisms/NotFoundScreen'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 
 type LegalDocument = 'terminos' | 'privacidad'
 
@@ -200,6 +201,10 @@ const isLegalDocument = (value: string | undefined): value is LegalDocument =>
 
 const LegalPage: React.FC = () => {
   const { document: documentParam } = useParams<{ document: string }>()
+  // Un documento invalido no fija titulo: lo pone el 404 de abajo.
+  useDocumentTitle(
+    isLegalDocument(documentParam) ? `${DOCUMENTS[documentParam].title} · Shifty` : null
+  )
   // Un documento que no existe (p. ej. /legal/cookies) es un 404, no los
   // terminos con otra direccion.
   if (!isLegalDocument(documentParam)) return <NotFoundScreen />

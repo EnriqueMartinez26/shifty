@@ -86,7 +86,7 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
           top: segment.topPx,
           height: segment.heightPx,
           background: colors2000s.bg.disabled,
-          color: colors2000s.text.disabled
+          color: colors2000s.text.secondary
         }}
       >
         Fuera de horario
