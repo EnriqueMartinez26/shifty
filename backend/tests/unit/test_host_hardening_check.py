@@ -39,6 +39,7 @@ def test_un_host_endurecido_no_avisa(host: Host) -> None:
     # La configuracion EFECTIVA de sshd, no el archivo: un drop-in de
     # /etc/ssh/sshd_config.d gana sobre sshd_config.
     assert "sshd -T" in llamadas
+    assert "sshd -T -C user=deploy,host=localhost,addr=127.0.0.1" in llamadas
     assert "ufw status verbose" in llamadas
     assert "fail2ban-client status sshd" in llamadas
 
@@ -64,6 +65,18 @@ def test_un_host_endurecido_no_avisa(host: Host) -> None:
             "",
             "ssh: kbdinteractiveauthentication es ?",
         ),
+        (
+            "sshd_T",
+            "pubkeyauthentication yes",
+            "pubkeyauthentication no",
+            "ssh: pubkeyauthentication es no",
+        ),
+        (
+            "sshd_T_deploy",
+            "passwordauthentication no",
+            "passwordauthentication yes",
+            "ssh: passwordauthentication es yes, tiene que ser no (deploy)",
+        ),
         ("ufw_status", "Status: active", "Status: inactive", "ufw no esta activo"),
         (
             "ufw_status",
@@ -76,6 +89,30 @@ def test_un_host_endurecido_no_avisa(host: Host) -> None:
             "443/tcp (v6)",
             "5432/tcp                   ALLOW IN    Anywhere\n443/tcp (v6)",
             "ufw abre mas que 22/tcp 80/tcp 443/tcp: 5432/tcp",
+        ),
+        (
+            "ufw_status",
+            "22/tcp                     ALLOW IN    Anywhere\n",
+            "",
+            "falta permitir 22/tcp desde Anywhere",
+        ),
+        (
+            "ufw_status",
+            "80/tcp                     ALLOW IN    Anywhere\n",
+            "",
+            "falta permitir 80/tcp desde Anywhere",
+        ),
+        (
+            "ufw_status",
+            "443/tcp                    ALLOW IN    Anywhere\n",
+            "",
+            "falta permitir 443/tcp desde Anywhere",
+        ),
+        (
+            "ufw_status",
+            "22/tcp                     ALLOW IN    Anywhere",
+            "22/tcp                     ALLOW IN    192.0.2.1",
+            "falta permitir 22/tcp desde Anywhere",
         ),
         (
             "apt_config",
@@ -96,25 +133,41 @@ def test_un_host_endurecido_no_avisa(host: Host) -> None:
             'Unattended-Upgrade::Automatic-Reboot "false";',
             "instala mas que parches de seguridad",
         ),
+        (
+            "apt_config",
+            'Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security";\n',
+            "",
+            "no se pudo verificar origen de seguridad de Ubuntu",
+        ),
     ],
     ids=[
         "ssh-con-clave",
         "ssh-root-con-clave",
         "ssh-kbdinteractive-sin-valor",
+        "ssh-sin-clave-publica",
+        "ssh-match-deploy-con-password",
         "ufw-inactivo",
         "ufw-entrante-permitido",
         "ufw-puerto-de-mas",
+        "ufw-sin-ssh",
+        "ufw-sin-http",
+        "ufw-sin-https",
+        "ufw-ssh-no-publico",
         "sin-unattended-upgrades",
         "reinicio-automatico",
         "origen-updates",
+        "sin-origen-security",
     ],
 )
 def test_avisa_cada_paso_deshecho(
     host: Host, archivo: str, antes: str, despues: str, motivo: str
 ) -> None:
-    sano = {"sshd_T": SSHD_SANO, "ufw_status": UFW_SANO, "apt_config": APT_SANO}[
-        archivo
-    ]
+    sano = {
+        "sshd_T": SSHD_SANO,
+        "sshd_T_deploy": SSHD_SANO,
+        "ufw_status": UFW_SANO,
+        "apt_config": APT_SANO,
+    }[archivo]
     assert antes in sano
     _escribir(host, archivo, sano.replace(antes, despues))
 
@@ -138,6 +191,35 @@ def test_un_puerto_limitado_permitido_no_avisa(host: Host) -> None:
     resultado = host.correr(SCRIPT)
 
     assert resultado.returncode == 0, resultado.stderr
+
+
+def test_acepta_origen_ubuntu_explicito_de_esta_version(host: Host) -> None:
+    _escribir(
+        host,
+        "apt_config",
+        APT_SANO.replace(
+            '"${distro_id}:${distro_codename}-security"', '"Ubuntu:noble-security"'
+        ),
+    )
+
+    resultado = host.correr(SCRIPT)
+
+    assert resultado.returncode == 0, resultado.stderr
+
+
+def test_origen_explicito_de_otra_version_no_cubre_este_host(host: Host) -> None:
+    _escribir(
+        host,
+        "apt_config",
+        APT_SANO.replace(
+            '"${distro_id}:${distro_codename}-security"', '"Ubuntu:jammy-security"'
+        ),
+    )
+
+    resultado = host.correr(SCRIPT)
+
+    assert resultado.returncode != 0
+    assert "no se pudo verificar origen de seguridad de Ubuntu" in resultado.stderr
 
 
 @pytest.mark.parametrize(

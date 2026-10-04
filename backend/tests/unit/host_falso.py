@@ -198,6 +198,15 @@ cat "$FAKE_DIR/{archivo}" 2>/dev/null
 exit "${{{variable}:-0}}"
 """
 
+_SSHD = r"""#!/bin/sh
+printf '%s\n' "sshd $*" >> "$FAKE_DIR/calls"
+case "$*" in
+  *"-C user=deploy,"*) cat "$FAKE_DIR/sshd_T_deploy" ;;
+  *) cat "$FAKE_DIR/sshd_T" ;;
+esac
+exit "${FAKE_SSHD_EXIT:-0}"
+"""
+
 # `sshd -T` (minusculas, como lo imprime OpenSSH) del host endurecido.
 SSHD_SANO = (
     "port 22\n"
@@ -566,8 +575,10 @@ def crear_host(tmp_path: Path) -> Host:
     # maquina que corre los tests: un runner con poca memoria libre no puede
     # volver rojo un test.
     escribir_meminfo(fake / "meminfo")
+    (fake / "os-release").write_text(
+        "ID=ubuntu\nVERSION_CODENAME=noble\n", encoding="utf-8", newline="\n"
+    )
     for nombre, archivo, variable, contenido in (
-        ("sshd", "sshd_T", "FAKE_SSHD_EXIT", SSHD_SANO),
         ("ufw", "ufw_status", "FAKE_UFW_EXIT", UFW_SANO),
         ("apt-config", "apt_config", "FAKE_APT_EXIT", APT_SANO),
         ("fail2ban-client", "fail2ban", "FAKE_FAIL2BAN_EXIT", ""),
@@ -577,6 +588,9 @@ def crear_host(tmp_path: Path) -> Host:
             _DESDE_ARCHIVO.format(nombre=nombre, archivo=archivo, variable=variable),
         )
         (fake / archivo).write_text(contenido, encoding="utf-8", newline="\n")
+    _ejecutable(bin_dir / "sshd", _SSHD)
+    for nombre in ("sshd_T", "sshd_T_deploy"):
+        (fake / nombre).write_text(SSHD_SANO, encoding="utf-8", newline="\n")
     # redis_state al 20 % de sus 48 MB.
     escribir_redis_info(fake / "redis_info", usada=10 * 1048576)
     # El sha que se despliega paso Quality en main.
@@ -598,6 +612,7 @@ def crear_host(tmp_path: Path) -> Host:
         "HOST_MEMINFO": (fake / "meminfo").as_posix(),
         # El runner puede tener su propio /var/run/reboot-required.
         "HARDENING_REBOOT_FLAG": (fake / "reboot-required").as_posix(),
+        "HARDENING_OS_RELEASE": (fake / "os-release").as_posix(),
     }
     for variable in (
         "APP_VERSION",

@@ -5,8 +5,9 @@
 # scripts/host-hardening-check.sh`: `sshd -T`, `ufw status` y
 # `fail2ban-client` necesitan root).
 #
-# - sshd EFECTIVO (`sshd -T`, no el archivo): passwordauthentication,
-#   permitrootlogin y kbdinteractiveauthentication en `no`. Se mira la
+# - sshd EFECTIVO (`sshd -T`, tambien con `-C user=deploy` para Match):
+#   passwordauthentication, permitrootlogin y kbdinteractiveauthentication
+#   en `no`; pubkeyauthentication en `yes`. Se mira la
 #   configuracion efectiva porque un drop-in de /etc/ssh/sshd_config.d (el
 #   50-cloud-init.conf de algunas imagenes trae `PasswordAuthentication yes`)
 #   gana sobre lo que diga sshd_config.
@@ -29,6 +30,7 @@ set -euo pipefail
 
 : "${HARDENING_UFW_ALLOWED:=22/tcp 80/tcp 443/tcp}"
 : "${HARDENING_REBOOT_FLAG:=/var/run/reboot-required}"
+: "${HARDENING_OS_RELEASE:=/etc/os-release}"
 
 problemas=0
 problema() {
@@ -41,19 +43,27 @@ chequear_sshd() {
     problema "ssh: no se puede verificar (el host no tiene sshd en el PATH)" "" ssh-sin-sshd 360
     return
   fi
-  local efectiva
-  if ! efectiva="$(sshd -T 2>&1)"; then
-    problema "ssh: sshd -T fallo (configuracion invalida o sin root)" "${efectiva:0:200}" ssh-config 360
-    return
-  fi
-  local opcion actual
-  for opcion in passwordauthentication permitrootlogin kbdinteractiveauthentication; do
-    actual="$(printf '%s\n' "$efectiva" | awk -v k="$opcion" '$1 == k { print $2; exit }')"
-    if [ "$actual" != no ]; then
-      problema "ssh: $opcion es ${actual:-?}, tiene que ser no" \
-        "Revisar /etc/ssh/sshd_config.d/*.conf y /etc/ssh/sshd_config (gana el primero que la fija); docs/DEPLOY_RUNBOOK.md §1" \
-        "ssh-$opcion" 360
+  local efectiva contexto opcion actual esperado
+  for contexto in general deploy; do
+    if [ "$contexto" = deploy ]; then
+      if ! efectiva="$(sshd -T -C user=deploy,host=localhost,addr=127.0.0.1 2>&1)"; then
+        problema "ssh: sshd -T para deploy fallo (configuracion invalida o sin root)" "${efectiva:0:200}" ssh-config-deploy 360
+        continue
+      fi
+    elif ! efectiva="$(sshd -T 2>&1)"; then
+      problema "ssh: sshd -T fallo (configuracion invalida o sin root)" "${efectiva:0:200}" ssh-config 360
+      continue
     fi
+    for opcion in passwordauthentication permitrootlogin kbdinteractiveauthentication pubkeyauthentication; do
+      esperado=no
+      [ "$opcion" = pubkeyauthentication ] && esperado=yes
+      actual="$(printf '%s\n' "$efectiva" | awk -v k="$opcion" '$1 == k { print $2; exit }')"
+      if [ "$actual" != "$esperado" ]; then
+        problema "ssh: $opcion es ${actual:-?}, tiene que ser $esperado ($contexto)" \
+          "Revisar /etc/ssh/sshd_config.d/*.conf y /etc/ssh/sshd_config (gana el primero que la fija); docs/DEPLOY_RUNBOOK.md §1" \
+          "ssh-$contexto-$opcion" 360
+      fi
+    done
   done
 }
 
@@ -87,6 +97,17 @@ chequear_ufw() {
     problema "firewall: ufw abre mas que $HARDENING_UFW_ALLOWED: ${extra% }" \
       "ufw status numbered; ufw delete <n>" ufw-reglas 360
   fi
+  # Una politica deny sin estas aperturas tambien puede cortar SSH o la web.
+  # Se exige la regla IPv4 publica; IPv6 puede estar deshabilitado en el VPS.
+  local puerto
+  for puerto in $HARDENING_UFW_ALLOWED; do
+    if ! printf '%s\n' "$estado" | awk -v p="$puerto" '
+      $1 == p && ($2 == "ALLOW" || $2 == "LIMIT") && $3 == "IN" && $4 == "Anywhere" { found = 1 }
+      END { exit !found }'; then
+      problema "firewall: falta permitir $puerto desde Anywhere" \
+        "ufw allow $puerto; docs/DEPLOY_RUNBOOK.md §1" "ufw-falta-$puerto" 360
+    fi
+  done
 }
 
 chequear_actualizaciones() {
@@ -113,6 +134,22 @@ chequear_actualizaciones() {
   if [ -n "$origenes" ]; then
     problema "actualizaciones: unattended-upgrades instala mas que parches de seguridad" \
       "$origenes" apt-origenes 360
+  fi
+  # El bolsillo ESMApps no reemplaza el de seguridad del sistema operativo.
+  # apt acepta variables o el nombre explicito de la version instalada.
+  # Esta comprobacion cubre el Allowed-Origins del runbook. Si se configura
+  # Origins-Pattern personalizado, verificarlo a mano con
+  # `unattended-upgrade --dry-run --debug` antes de aceptar esta alerta.
+  local codename="" origen_variable origen_explicito=""
+  origen_variable='Unattended-Upgrade::Allowed-Origins:: "${distro_id}:${distro_codename}-security";'
+  if [ -r "$HARDENING_OS_RELEASE" ]; then
+    codename="$(. "$HARDENING_OS_RELEASE"; printf '%s' "${VERSION_CODENAME:-}")"
+    [ -z "$codename" ] || origen_explicito="Unattended-Upgrade::Allowed-Origins:: \"Ubuntu:${codename}-security\";"
+  fi
+  if ! grep -Fxq "$origen_variable" <<< "$config" &&
+    { [ -z "$origen_explicito" ] || ! grep -Fxq "$origen_explicito" <<< "$config"; }; then
+    problema "actualizaciones: no se pudo verificar origen de seguridad de Ubuntu en unattended-upgrades" \
+      "Revisar /etc/apt/apt.conf.d/50unattended-upgrades y, si usa Origins-Pattern, correr unattended-upgrade --dry-run --debug (docs/DEPLOY_RUNBOOK.md §1)" apt-security 360
   fi
 }
 
