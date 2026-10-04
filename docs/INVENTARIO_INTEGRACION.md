@@ -459,7 +459,7 @@ Resultado del gate sobre `integration/aud2` @ 6786cef (2026-09-24, un comando po
 | Mails | SMTP dentro del request | La reserva pública y las transiciones del panel responden sin esperar al mail; el mail sale por Celery/outbox con hasta ~20 s de demora. | No (solo expectativa de tiempos). |
 | "Pagué y sigue pendiente" | hasta 5-6 min | conciliación a demanda al consultar el estado pendiente > 20 s; el sondeo del front debería usar backoff (R12-05). | Recomendado: backoff 2 → 5 → 15 s. |
 | Errores de MP al cliente | texto crudo del proveedor | 503 `PAYMENT_PROVIDER_UNAVAILABLE`, 502 `PAYMENT_LINK_CREATION_FAILED`, 409 `PAYMENT_GATEWAY_NOT_CONNECTED`, mensajes fijos. | Mostrar `message`. |
-| `/ops/slo` | — | métricas de atraso (`oldest_pending_*`, `oldest_pending_email_send_seconds`, `oldest_overdue_hold_seconds`). | No. |
+| `/ops/slo` | — | métricas de atraso (`oldest_pending_*`, `oldest_pending_email_send_seconds`, `oldest_overdue_hold_seconds`) y `integrity_held_holds` (sin umbral). | No. |
 
 ## Cambios posteriores al inventario (Fase 3 y 5, 2026-09-24, `integration/aud2` @ 9214b37)
 
