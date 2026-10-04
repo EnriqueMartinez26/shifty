@@ -118,6 +118,18 @@ _MINIMOS_OPERATIVOS: tuple[tuple[str, float, str], ...] = (
         "RETENTION_INBOX_PROCESSED_DAYS debe ser >= 1",
     ),
     ("RETENTION_OTP_EXPIRED_DAYS", 1, "RETENTION_OTP_EXPIRED_DAYS debe ser >= 1"),
+    # Un tope en 0 por destino apagaria el OTP por email en silencio: el
+    # pedido responde 200 y el mail no sale nunca.
+    (
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR",
+        1,
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR debe ser >= 1",
+    ),
+    (
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_DAY",
+        1,
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_DAY debe ser >= 1",
+    ),
     (
         "RETENTION_NOTIFICATIONS_READ_DAYS",
         1,
@@ -264,6 +276,14 @@ class Settings(BaseSettings):
         ),
     )
     OTP_MAX_REQUESTS_PER_HOUR: int = 5
+    # Tope de mails del OTP por DESTINO: el buzon al que sale cada mail (el
+    # codigo o el aviso sin codigo), no el telefono ni la IP. Sin el, rotando
+    # telefonos e IPs se llenaba de mails una casilla ajena desde el dominio de
+    # envio. La hora iguala el presupuesto de UN telefono
+    # (OTP_MAX_REQUESTS_PER_HOUR): quien pide para un solo telefono nunca lo
+    # toca antes que ese presupuesto. El dia admite dos horas asi.
+    OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR: int = 5
+    OTP_MAX_MAILS_PER_DESTINATION_PER_DAY: int = 10
     OTP_PROVIDER: str = "console"
     # Nunca exponer el codigo en la respuesta salvo opt-in explicito (tests).
     OTP_DEBUG_EXPOSE_CODE: bool = False

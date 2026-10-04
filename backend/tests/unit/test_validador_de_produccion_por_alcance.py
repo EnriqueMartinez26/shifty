@@ -326,6 +326,18 @@ INVENTARIO: list[tuple[str, dict[str, Any], str]] = [
         {"RETENTION_OTP_EXPIRED_DAYS": 0},
         "RETENTION_OTP_EXPIRED_DAYS debe ser >= 1",
     ),
+    # Tope de mails del OTP por buzon (2026-10-03): en 0 el OTP por email se
+    # apaga en silencio.
+    (
+        "development",
+        {"OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR": 0},
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR debe ser >= 1",
+    ),
+    (
+        "development",
+        {"OTP_MAX_MAILS_PER_DESTINATION_PER_DAY": 0},
+        "OTP_MAX_MAILS_PER_DESTINATION_PER_DAY debe ser >= 1",
+    ),
     (
         "development",
         {"RETENTION_NOTIFICATIONS_READ_DAYS": 0},
@@ -356,7 +368,7 @@ N_SUELTOS = 21
 # nuevos no llegaron aca y el inventario, que solo detectaba borrados, no dijo
 # nada. Bajar este numero es borrar una proteccion; subirlo sin agregar la
 # fila correspondiente, olvidarse de probarla.
-FILAS_ESPERADAS = 51
+FILAS_ESPERADAS = 53
 MAX_LINEAS_DEL_VALIDADOR = 30
 
 
