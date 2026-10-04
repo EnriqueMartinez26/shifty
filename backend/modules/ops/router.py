@@ -26,7 +26,7 @@ from core.roles import (
 )
 from core.utils import ensure_utc_aware
 from modules.auth.dependencies import get_current_user
-from modules.payments.jobs import EVENT_EMAIL_SEND, oldest_overdue_hold_at
+from modules.payments.jobs import EVENT_EMAIL_SEND, overdue_holds
 from modules.payments.model import (
     WEBHOOK_INBOX_MAX_ATTEMPTS,
     OutboxMessage,
@@ -175,7 +175,7 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
             *store_filter,
         )
     )
-    retencion_mas_vieja = await oldest_overdue_hold_at(db, ahora, store_id=store_id)
+    retenciones = await overdue_holds(db, ahora, store_id=store_id)
     return {
         "dead_letter_webhooks_24h": int(dead_letters or 0),
         "pending_webhooks": int(inbox[0] or 0),
@@ -184,7 +184,11 @@ async def _slo_metrics(db: AsyncSession, store_id: str | None) -> dict[str, int]
         "oldest_pending_outbox_seconds": _segundos_desde(ahora, outbox[1]),
         "oldest_pending_inbox_seconds": _segundos_desde(ahora, inbox[2]),
         "oldest_pending_email_send_seconds": _segundos_desde(ahora, outbox[2]),
-        "oldest_overdue_hold_seconds": _segundos_desde(ahora, retencion_mas_vieja),
+        "oldest_overdue_hold_seconds": _segundos_desde(ahora, retenciones.oldest_at),
+        # Sin umbral ni alerta (revision S3 del seguimiento W2 de la PR #104):
+        # cada uno ya aviso a Sentry una vez por pago; esto los deja visibles
+        # despues de resolver ese issue.
+        "integrity_held_holds": retenciones.parked,
     }
 
 

@@ -120,3 +120,55 @@ async def test_una_retencion_que_todavia_no_vencio_no_es_atraso(
     res = await client.get("/ops/slo", headers=auth_headers(token))
 
     assert res.json()["metrics"]["oldest_overdue_hold_seconds"] == 0
+
+
+async def _estacionar_cobro(session: AsyncSession, cobro: str) -> None:
+    await session.execute(
+        update(Payment)
+        .where(Payment.id == cobro)
+        .values(integrity_held_at=datetime.now(timezone.utc))
+    )
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_el_slo_cuenta_los_cobros_estacionados_sin_alertar(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Revision S3 (2026-10-03): ``oldest_overdue_hold_seconds`` no cuenta
+    los cobros estacionados por integridad, asi que un turno pagado trabado en
+    ``pending_payment`` dejaba de verse en cuanto se resolvia el issue de
+    Sentry. ``integrity_held_holds`` los cuenta, sin umbral ni alerta, con el
+    mismo alcance por tienda."""
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    mia = await _retencion_vencida(
+        client, test_session, "slo-est-mia", vencio_hace=timedelta(hours=3)
+    )
+    otra = await _retencion_vencida(
+        client, test_session, "slo-est-otra", vencio_hace=timedelta(hours=2)
+    )
+    # Vencida sin estacionar: atraso, no estacionada.
+    await _retencion_vencida(
+        client, test_session, "slo-est-libre", vencio_hace=timedelta(minutes=1)
+    )
+    for retencion in (mia, otra):
+        await _estacionar_cobro(test_session, retencion.cobro)
+    login = await client.post(
+        "/auth/login",
+        json={"email": "slo-est-mia@test.com", "password": "Password123!"},
+    )
+    assert login.status_code == 200, login.text
+    token_admin = login.json()["access_token"]
+    token_sa = await _token_de_superadmin(client, test_session, "slo-est-sa")
+
+    global_ = (await client.get("/ops/slo", headers=auth_headers(token_sa))).json()
+    tienda = (await client.get("/ops/slo", headers=auth_headers(token_admin))).json()
+
+    assert global_["metrics"]["integrity_held_holds"] == 2, global_["metrics"]
+    assert tienda["metrics"]["integrity_held_holds"] == 1, tienda["metrics"]
+    # Sin umbral ni alerta: ya avisaron a Sentry una vez por pago.
+    assert "integrity_held_holds" not in global_["thresholds"]
+    assert all("held" not in a["code"] for a in global_["alerts"]), global_
+    # La de la tienda del admin esta estacionada: no es atraso.
+    assert tienda["metrics"]["oldest_overdue_hold_seconds"] == 0

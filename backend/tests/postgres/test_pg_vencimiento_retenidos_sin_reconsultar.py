@@ -11,7 +11,7 @@ sin pagar; con una sola pagina por corrida (``EXPIRE_MAX_PAGES = 1``) y
 ``limit = 3``, antes las de A ocupaban todas las corridas y las de B no
 vencian nunca. Ahora la primera corrida estaciona las de A, la segunda vence
 las de B sin preguntarle a MP por las de A, y pasada la hora las de A vuelven
-a la consulta. ``oldest_overdue_hold_at`` no cuenta las estacionadas.
+a la consulta. ``overdue_holds`` no cuenta las estacionadas como atraso.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -27,7 +27,7 @@ import modules.payments.jobs as jobs
 import modules.payments.processing as processing
 import modules.payments.service as payments_service
 from core.config import Environment, settings
-from modules.payments.jobs import expire_unpaid_appointments, oldest_overdue_hold_at
+from modules.payments.jobs import expire_unpaid_appointments, overdue_holds
 from modules.payments.model import external_reference_for
 from tests.integration.test_mails_al_cliente import Buzon
 from tests.integration.test_payments_hardening_and_legal import _stub_mercadopago
@@ -146,7 +146,7 @@ async def test_los_retenidos_se_estacionan_y_las_retenciones_nuevas_vencen(
     consultas_a = de_a()
 
     async def mas_vieja(db: AsyncSession) -> Any:
-        return {"t": await oldest_overdue_hold_at(db, ahora, store_id=None)}
+        return {"t": (await overdue_holds(db, ahora, store_id=None)).oldest_at}
 
     # Las de A estacionadas no cuentan: la mas vieja es una de B (hace 5 min).
     vieja: Any = (await _con_bypass(app_sessions, mas_vieja))["t"]

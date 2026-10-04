@@ -17,7 +17,18 @@ from typing import Any, Literal
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import Row, Select, and_, func, or_, select, text, update
+from sqlalchemy import (
+    Row,
+    Select,
+    and_,
+    case,
+    func,
+    or_,
+    select,
+    text,
+    true,
+    update,
+)
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
@@ -1973,31 +1984,48 @@ def _expired_holds_query(
     return consulta
 
 
-async def oldest_overdue_hold_at(
-    db: AsyncSession, now: datetime, *, store_id: str | None
-) -> datetime | None:
-    """``expires_at`` de la retencion vencida mas vieja que sigue sin
-    liberarse; ``None`` si no hay. ``store_id`` ``None`` = todas las tiendas.
+@dataclass(frozen=True)
+class OverdueHolds:
+    """Foto de las retenciones vencidas sin liberar (``overdue_holds``)."""
 
-    Misma condicion que ``_expired_holds_query``, SIN los cobros que el job
-    retuvo por integridad alguna vez: esos ya avisaron a Sentry una vez por
-    pago y esperan a una persona; contarlos dejaria la metrica en rojo
-    mientras existan y taparia justo lo que mide (un job que no da abasto o
-    no corre). Una sola sentencia agregada (regla 11). Fuente de
-    ``oldest_overdue_hold_seconds`` en ``/ops/slo`` y del aviso del job.
+    # ``expires_at`` de la mas vieja SIN estacionar; ``None`` si no hay.
+    oldest_at: datetime | None
+    # Cuantas tienen el cobro estacionado por integridad (``integrity_held_at``).
+    parked: int
+
+
+async def overdue_holds(
+    db: AsyncSession, now: datetime, *, store_id: str | None
+) -> OverdueHolds:
+    """Retenciones vencidas que siguen sin liberarse, con la misma condicion
+    que ``_expired_holds_query``. ``store_id`` ``None`` = todas las tiendas.
+
+    - ``oldest_at`` deja afuera los cobros que el job estaciono por
+      integridad: ya avisaron a Sentry una vez por pago y esperan a una
+      persona; contarlos dejaria la metrica en rojo mientras existan y taparia
+      justo lo que mide (un job que no da abasto o no corre).
+    - ``parked`` los cuenta aparte (revision S3): sin eso, un turno pagado
+      trabado en ``pending_payment`` dejaba de verse en cuanto se resolvia el
+      issue de Sentry.
+
+    Una sola sentencia agregada (regla 11). Fuente de
+    ``oldest_overdue_hold_seconds`` e ``integrity_held_holds`` en
+    ``/ops/slo`` y del aviso del job.
     """
+    estacionado = Payment.integrity_held_at.is_not(None)
     consulta = (
-        select(func.min(Appointment.expires_at))
+        select(
+            func.min(case((~estacionado, Appointment.expires_at))),
+            func.count(case((estacionado, 1))),
+        )
         .select_from(Appointment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
-        .where(
-            *_retencion_vencida(now),
-            _sin_cobro_o_vivo(y=Payment.integrity_held_at.is_(None)),
-        )
+        .where(*_retencion_vencida(now), _sin_cobro_o_vivo(y=true()))
     )
     if store_id is not None:
         consulta = consulta.where(Appointment.store_id == store_id)
-    return await db.scalar(consulta)
+    oldest_at, parked = (await db.execute(consulta)).one()
+    return OverdueHolds(oldest_at=oldest_at, parked=int(parked or 0))
 
 
 class OverdueHoldsLagging(RuntimeError):
@@ -2023,7 +2051,7 @@ async def _avisar_si_hay_retenciones_atrasadas(db: AsyncSession) -> None:
     """
     ahora = datetime.now(timezone.utc)
     try:
-        mas_vieja = await oldest_overdue_hold_at(db, ahora, store_id=None)
+        mas_vieja = (await overdue_holds(db, ahora, store_id=None)).oldest_at
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
