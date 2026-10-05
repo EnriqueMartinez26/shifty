@@ -10,7 +10,8 @@ MAILTO=""
 
 # Cada minuto: reinicia los contenedores unhealthy (tope 3 por hora y aviso).
 * * * * * root /bin/bash /opt/shifty/scripts/guard.sh >> /var/log/shifty/guard.log 2>&1
-# Cada hora: NTP, certificado, disco, memoria de contenedores y docker stats.
+# Cada hora: NTP, certificado, disco, memoria de contenedores y del host,
+# redis_state, endurecimiento del host y docker stats.
 7 * * * * root /bin/bash /opt/shifty/scripts/checks.sh >> /var/log/shifty/checks.log 2>&1
 # Cada hora: el ultimo backup exitoso no puede tener mas de 26 h.
 17 * * * * root /bin/bash /opt/shifty/scripts/backup-check.sh >> /var/log/shifty/backup-check.log 2>&1
