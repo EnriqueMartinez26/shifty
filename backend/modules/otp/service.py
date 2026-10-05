@@ -518,12 +518,15 @@ class OtpService:
                 .with_for_update()
             )
         ).all()
-        if replaced:
-            await self.db.execute(
-                update(OtpVerification)
-                .where(OtpVerification.id.in_(replaced))
-                .values(consumed_at=now)
-            )
+        # El UPDATE corre siempre, aunque no haya nada que invalidar: saltarlo
+        # cambiaba las sentencias del pedido segun hubiera o no un codigo vivo
+        # para ese buzon, un oraculo de tiempo sobre la casilla de la ficha
+        # (``test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico``).
+        await self.db.execute(
+            update(OtpVerification)
+            .where(OtpVerification.id.in_(replaced))
+            .values(consumed_at=now)
+        )
         otp = OtpVerification(
             store_id=store_id,
             phone=normalized_phone,
