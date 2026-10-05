@@ -566,8 +566,12 @@ Una instrucción en lenguaje natural no es una garantía.
   compara contra todos los vivos del teléfono (a lo sumo
   `OTP_MAX_REQUESTS_PER_HOUR`, los más nuevos), consume solo el que
   coincide y cada intento cuenta contra todos: ningún código ve más de
-  `OTP_MAX_ATTEMPTS` intentos. La respuesta tiene la misma forma en todos
-  los caminos. El front respeta la ventana de 30 minutos.
+  `OTP_MAX_ATTEMPTS` intentos. Sigue abierto, desde antes, el bloqueo por
+  verificaciones: cinco intentos anónimos errados agotan el código de la
+  víctima y diez, el presupuesto de verificación del teléfono
+  (`OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR`), sin necesitar ninguna casilla. La
+  respuesta tiene la misma forma en todos los caminos. El front respeta la
+  ventana de 30 minutos.
   (`test_otp_por_email.py`, `test_otp_email_del_cliente.py`,
   `test_otp_por_la_cola.py`, `test_otp_tope_por_mail_destino.py`,
   `test_otp_no_pisa_codigo_sin_mail.py`,
