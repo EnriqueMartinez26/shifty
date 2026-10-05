@@ -49,8 +49,9 @@ def _sentencias(engine: AsyncEngine) -> Iterator[list[str]]:
         event.remove(engine.sync_engine, "before_cursor_execute", registrar)
 
 
-def _sin_despacho(*_args: str) -> None:
-    return None
+def _cola_que_acepta(*_args: str) -> bool:
+    """El envio no importa aca; la cola lo acepta y el codigo se guarda."""
+    return True
 
 
 @pytest.mark.asyncio
@@ -88,7 +89,7 @@ async def test_el_predicado_se_resuelve_una_vez_y_se_olvida_al_verificar(
         store_id=store_id,
         phone=TELEFONO,
         channel="whatsapp",
-        schedule_dispatch=_sin_despacho,
+        schedule_dispatch=_cola_que_acepta,
     )
     await otp.verify_code(
         store_id=store_id, phone=TELEFONO, code=str(pedido["debug_code"])
