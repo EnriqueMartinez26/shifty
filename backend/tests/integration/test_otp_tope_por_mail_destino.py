@@ -379,13 +379,17 @@ async def test_sin_redis_en_produccion_el_tope_falla_cerrado(
     monkeypatch.setattr(rate_limit, "_hit_rate_limit", caido)
     encolados: list[tuple[str, str, str]] = []
 
+    def encolar(to: str, subject: str, body: str) -> bool:
+        encolados.append((to, subject, body))
+        return True
+
     with pytest.raises(AppException) as exc_info:
         await OtpService(test_session).request_code(
             store_id="tienda-tope-sin-redis",
             phone="+5491160000123",
             channel="email",
             email=VICTIMA,
-            schedule_dispatch=lambda *mail: encolados.append(mail),
+            schedule_dispatch=encolar,
         )
 
     assert exc_info.value.http_status == 503

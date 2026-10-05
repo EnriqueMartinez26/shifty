@@ -102,8 +102,8 @@ async def test_verificaciones_exitosas_o_no_consumen_el_presupuesto_y_frenan(
             phone=TELEFONO,
             channel="email",
             email="c@example.com",
-            # El envio (post-respuesta desde B4-01) no importa aca.
-            schedule_dispatch=lambda *args: None,
+            # El envio no importa aca; la cola lo acepta y el codigo se guarda.
+            schedule_dispatch=lambda *args: True,
         )
         return str(respuesta["debug_code"])
 

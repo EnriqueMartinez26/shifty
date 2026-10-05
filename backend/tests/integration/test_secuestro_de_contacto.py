@@ -223,8 +223,8 @@ async def test_ni_con_el_telefono_verificado_por_otp_se_pisa_el_contacto_ajeno(
         channel="email",
         email="real@example.com",
         store_name="Demo",
-        # El envio (post-respuesta desde B4-01) no importa aca.
-        schedule_dispatch=lambda *args: None,
+        # El envio no importa aca; la cola lo acepta y el codigo se guarda.
+        schedule_dispatch=lambda *args: True,
     )
     verificado = await servicio_otp.verify_code(
         store_id=store_id,
