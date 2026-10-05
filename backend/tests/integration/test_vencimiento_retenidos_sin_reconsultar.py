@@ -346,3 +346,64 @@ async def test_los_estacionados_en_la_misma_corrida_se_desfasan(
     vuelven = {cobro.id for _, cobro in filas if cobro is not None}
     assert primera.cobro in vuelven
     assert segunda.cobro not in vuelven
+
+
+@pytest.mark.asyncio
+async def test_reconsulta_atrasada_avisa_una_vez_y_reestacionar_rearma_el_plazo(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    retenida = await _retencion_vencida(
+        client, test_session, "venc-alerta-recheck", vencio_hace=timedelta(hours=4)
+    )
+    avisos: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        jobs,
+        "report_exception",
+        lambda exc, **contexto: avisos.append(
+            {"error": type(exc).__name__, **contexto}
+        ),
+    )
+    monkeypatch.setattr(jobs, "_AVISO_DE_RECONSULTA_ATRASADA", OncePer(3600))
+    umbral = settings.SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS
+    held_at = (
+        datetime.now(timezone.utc)
+        - jobs.EXPIRE_HELD_RECHECK_INTERVAL
+        - timedelta(seconds=umbral + 300)
+    )
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.id == retenida.cobro)
+        .values(integrity_held_at=held_at)
+    )
+    await test_session.commit()
+
+    await jobs._avisar_si_hay_retenciones_atrasadas(test_session)
+    await jobs._avisar_si_hay_retenciones_atrasadas(test_session)
+
+    assert len(avisos) == 1, avisos
+    assert avisos[0]["error"] == "HeldRecheckLagging"
+    assert avisos[0]["oldest_due_held_recheck_seconds"] > umbral
+    assert avisos[0]["threshold"] == umbral
+    assert (
+        await jobs.overdue_holds(
+            test_session, datetime.now(timezone.utc), store_id=None
+        )
+    ).oldest_at is None
+
+    store_id = (
+        await test_session.execute(
+            select(Payment.store_id).where(Payment.id == retenida.cobro)
+        )
+    ).scalar_one()
+    await jobs._estacionar(test_session, store_id, retenida.cobro)
+    await test_session.commit()
+
+    estado = await jobs.overdue_holds(
+        test_session, datetime.now(timezone.utc), store_id=None
+    )
+    assert estado.recheck_due_at is None
+    monkeypatch.setattr(jobs, "_AVISO_DE_RECONSULTA_ATRASADA", OncePer(3600))
+    await jobs._avisar_si_hay_retenciones_atrasadas(test_session)
+    assert len(avisos) == 1, avisos

@@ -71,6 +71,7 @@ async def test_el_admin_ve_su_tienda_y_nunca_el_id_interno(
         # Seguimiento W2 de la PR #104
         # (tests/integration/test_ops_slo_retenciones_atrasadas.py).
         "oldest_overdue_hold_seconds",
+        "oldest_due_held_recheck_seconds",
         "integrity_held_holds",
     }
     assert cuerpo["status"] == "ok"

@@ -22,6 +22,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import modules.notifications.tasks as tasks
+import modules.payments.jobs as jobs
 from core.config import settings
 from modules.payments.model import Payment
 from modules.users.model import User
@@ -172,3 +173,79 @@ async def test_el_slo_cuenta_los_cobros_estacionados_sin_alertar(
     assert all("held" not in a["code"] for a in global_["alerts"]), global_
     # La de la tienda del admin esta estacionada: no es atraso.
     assert tienda["metrics"]["oldest_overdue_hold_seconds"] == 0
+    assert global_["metrics"]["oldest_due_held_recheck_seconds"] == 0
+
+
+@pytest.mark.asyncio
+async def test_reconsulta_exigible_atrasada_alerta_aparte_y_respeta_tienda(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    umbral = settings.SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS
+    mia = await _retencion_vencida(
+        client, test_session, "slo-recheck-mia", vencio_hace=timedelta(hours=4)
+    )
+    otra = await _retencion_vencida(
+        client, test_session, "slo-recheck-otra", vencio_hace=timedelta(hours=4)
+    )
+    # La reconsulta de la primera esta atrasada. La segunda aun espera su hora.
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.id == mia.cobro)
+        .values(
+            integrity_held_at=datetime.now(timezone.utc)
+            - jobs.EXPIRE_HELD_RECHECK_INTERVAL
+            - timedelta(seconds=umbral + 300)
+        )
+    )
+    await _estacionar_cobro(test_session, otra.cobro)
+    await test_session.commit()
+    # El admin de la tienda "otra" es el que creo la retencion.
+    login = await client.post(
+        "/auth/login",
+        json={"email": "slo-recheck-otra@test.com", "password": "Password123!"},
+    )
+    assert login.status_code == 200, login.text
+    token_otra = login.json()["access_token"]
+    token_sa = await _token_de_superadmin(client, test_session, "slo-recheck-sa")
+
+    global_ = (await client.get("/ops/slo", headers=auth_headers(token_sa))).json()
+    tienda = (await client.get("/ops/slo", headers=auth_headers(token_otra))).json()
+
+    segundos = global_["metrics"]["oldest_due_held_recheck_seconds"]
+    assert umbral + 300 <= segundos < umbral + 360
+    assert global_["metrics"]["oldest_overdue_hold_seconds"] == 0
+    assert global_["thresholds"]["oldest_due_held_recheck_seconds"] == umbral
+    assert any(a["code"] == "held_recheck_lag_high" for a in global_["alerts"])
+    assert global_["status"] == "degraded"
+    assert tienda["metrics"]["oldest_due_held_recheck_seconds"] == 0
+    assert tienda["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_reconsulta_recien_exigible_no_alerta(
+    client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tasks, "_send_email", Buzon())
+    _stub_mercadopago(monkeypatch, remote_payment=None)
+    retenida = await _retencion_vencida(
+        client, test_session, "slo-recheck-reciente", vencio_hace=timedelta(hours=2)
+    )
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.id == retenida.cobro)
+        .values(
+            integrity_held_at=datetime.now(timezone.utc)
+            - jobs.EXPIRE_HELD_RECHECK_INTERVAL
+            - timedelta(minutes=2)
+        )
+    )
+    await test_session.commit()
+    token = await _token_de_superadmin(client, test_session, "slo-recheck-reciente-sa")
+
+    cuerpo = (await client.get("/ops/slo", headers=auth_headers(token))).json()
+
+    assert 120 <= cuerpo["metrics"]["oldest_due_held_recheck_seconds"] < 180
+    assert cuerpo["metrics"]["oldest_overdue_hold_seconds"] == 0
+    assert all(a["code"] != "held_recheck_lag_high" for a in cuerpo["alerts"])

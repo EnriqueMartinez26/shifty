@@ -359,6 +359,10 @@ class Settings(BaseSettings):
     # minutos es un job que no da abasto o no corre; pasado el umbral, el
     # propio job avisa a Sentry (``jobs._avisar_si_hay_retenciones_atrasadas``).
     SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS: int = 600
+    # Atraso desde que una retencion estacionada por integridad debio volver
+    # a consultarse a MP. Separado del SLO de turnos nuevos; el job avisa a
+    # Sentry si la reconsulta sigue pendiente 15 minutos despues de su hora.
+    SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS: int = Field(default=900, ge=60, le=3600)
     # Edad minima de un cobro pendiente para que la conciliacion le pregunte a
     # Mercado Pago (F1-20, decision 20): antes de eso el cliente sigue en el
     # checkout y la consulta solo gasta la corrida.

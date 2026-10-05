@@ -2008,6 +2008,8 @@ class OverdueHolds:
     oldest_at: datetime | None
     # Cuantas tienen el cobro estacionado por integridad (``integrity_held_at``).
     parked: int
+    # Primera reconsulta ya exigible, separada del atraso de retenciones nuevas.
+    recheck_due_at: datetime | None
 
 
 async def overdue_holds(
@@ -2024,15 +2026,18 @@ async def overdue_holds(
       trabado en ``pending_payment`` dejaba de verse en cuanto se resolvia el
       issue de Sentry.
 
-    Una sola sentencia agregada (regla 11). Fuente de
-    ``oldest_overdue_hold_seconds`` e ``integrity_held_holds`` en
-    ``/ops/slo`` y del aviso del job.
+    Una sola sentencia agregada (regla 11). Fuente de las metricas de
+    retenciones y reconsultas en ``/ops/slo`` y de los avisos del job.
     """
     estacionado = Payment.integrity_held_at.is_not(None)
+    reconsulta_exigible = Payment.integrity_held_at <= (
+        now - EXPIRE_HELD_RECHECK_INTERVAL
+    )
     consulta = (
         select(
             func.min(case((~estacionado, Appointment.expires_at))),
             func.count(case((estacionado, 1))),
+            func.min(case((reconsulta_exigible, Payment.integrity_held_at))),
         )
         .select_from(Appointment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
@@ -2040,8 +2045,16 @@ async def overdue_holds(
     )
     if store_id is not None:
         consulta = consulta.where(Appointment.store_id == store_id)
-    oldest_at, parked = (await db.execute(consulta)).one()
-    return OverdueHolds(oldest_at=oldest_at, parked=int(parked or 0))
+    oldest_at, parked, oldest_due_held_at = (await db.execute(consulta)).one()
+    return OverdueHolds(
+        oldest_at=oldest_at,
+        parked=int(parked or 0),
+        recheck_due_at=(
+            ensure_utc_aware(oldest_due_held_at) + EXPIRE_HELD_RECHECK_INTERVAL
+            if oldest_due_held_at is not None
+            else None
+        ),
+    )
 
 
 class OverdueHoldsLagging(RuntimeError):
@@ -2049,10 +2062,15 @@ class OverdueHoldsLagging(RuntimeError):
     ``SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS``."""
 
 
+class HeldRecheckLagging(RuntimeError):
+    """Evento de Sentry: una reconsulta de integridad exigible se atraso."""
+
+
 # Un aviso por proceso y por intervalo mientras dure el atraso: el job corre
 # cada minuto y Sentry no necesita 60 eventos por hora del mismo problema.
 EXPIRE_LAG_REPORT_INTERVAL_SECONDS = 1800.0
 _AVISO_DE_ATRASO = OncePer(EXPIRE_LAG_REPORT_INTERVAL_SECONDS)
+_AVISO_DE_RECONSULTA_ATRASADA = OncePer(EXPIRE_LAG_REPORT_INTERVAL_SECONDS)
 
 
 async def _avisar_si_hay_retenciones_atrasadas(db: AsyncSession) -> None:
@@ -2067,27 +2085,46 @@ async def _avisar_si_hay_retenciones_atrasadas(db: AsyncSession) -> None:
     """
     ahora = datetime.now(timezone.utc)
     try:
-        mas_vieja = (await overdue_holds(db, ahora, store_id=None)).oldest_at
+        retenciones = await overdue_holds(db, ahora, store_id=None)
     except SoftTimeLimitExceeded:
         raise
     except Exception as exc:
         logger.warning("overdue_hold_check_failed", error_type=type(exc).__name__)
         return
-    if mas_vieja is None:
-        return
-    umbral = settings.SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS
-    segundos = int((ahora - ensure_utc_aware(mas_vieja)).total_seconds())
-    if segundos <= umbral:
-        return
-    logger.warning(
-        "overdue_hold_lag_high", oldest_overdue_hold_seconds=segundos, threshold=umbral
-    )
-    if _AVISO_DE_ATRASO.allow("overdue_holds"):
-        report_exception(
-            OverdueHoldsLagging("retenciones vencidas sin liberar"),
-            oldest_overdue_hold_seconds=segundos,
-            threshold=umbral,
+    if retenciones.oldest_at is not None:
+        umbral = settings.SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS
+        segundos = max(
+            0, int((ahora - ensure_utc_aware(retenciones.oldest_at)).total_seconds())
         )
+        if segundos > umbral:
+            logger.warning(
+                "overdue_hold_lag_high",
+                oldest_overdue_hold_seconds=segundos,
+                threshold=umbral,
+            )
+            if _AVISO_DE_ATRASO.allow("overdue_holds"):
+                report_exception(
+                    OverdueHoldsLagging("retenciones vencidas sin liberar"),
+                    oldest_overdue_hold_seconds=segundos,
+                    threshold=umbral,
+                )
+    if retenciones.recheck_due_at is not None:
+        umbral_reconsulta = settings.SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS
+        segundos_reconsulta = max(
+            0, int((ahora - retenciones.recheck_due_at).total_seconds())
+        )
+        if segundos_reconsulta > umbral_reconsulta:
+            logger.warning(
+                "held_recheck_lag_high",
+                oldest_due_held_recheck_seconds=segundos_reconsulta,
+                threshold=umbral_reconsulta,
+            )
+            if _AVISO_DE_RECONSULTA_ATRASADA.allow("held_recheck"):
+                report_exception(
+                    HeldRecheckLagging("reconsulta de retencion estacionada atrasada"),
+                    oldest_due_held_recheck_seconds=segundos_reconsulta,
+                    threshold=umbral_reconsulta,
+                )
 
 
 # Advisory locks de jobs: forma de DOS int4 (namespace, id). Postgres guarda
