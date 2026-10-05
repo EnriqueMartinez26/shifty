@@ -10,7 +10,9 @@
 #   en `no`; pubkeyauthentication en `yes`. Se mira la
 #   configuracion efectiva porque un drop-in de /etc/ssh/sshd_config.d (el
 #   50-cloud-init.conf de algunas imagenes trae `PasswordAuthentication yes`)
-#   gana sobre lo que diga sshd_config.
+#   gana sobre lo que diga sshd_config. Ademas, ningun bloque Match del
+#   archivo (o de lo que incluye) reabre password, kbd-interactive ni root:
+#   `sshd -T` no ve un Match de otro usuario, grupo o red.
 # - ufw activo, entrante denegado por defecto y sin otra regla de entrada que
 #   HARDENING_UFW_ALLOWED (22/tcp 80/tcp 443/tcp). Docker publica por fuera de
 #   ufw (cadena DOCKER-USER); eso lo cubre que en produccion solo nginx
@@ -31,6 +33,7 @@ set -euo pipefail
 : "${HARDENING_UFW_ALLOWED:=22/tcp 80/tcp 443/tcp}"
 : "${HARDENING_REBOOT_FLAG:=/var/run/reboot-required}"
 : "${HARDENING_OS_RELEASE:=/etc/os-release}"
+: "${HARDENING_SSHD_CONFIG:=/etc/ssh/sshd_config}"
 
 problemas=0
 problema() {
@@ -65,6 +68,53 @@ chequear_sshd() {
       fi
     done
   done
+  chequear_sshd_match
+}
+
+# `sshd -T` evalua un solo contexto (con -C, el de deploy desde 127.0.0.1) y
+# un Match que aplica pisa al valor global aunque el drop-in 00 lo fije antes.
+# Un grupo, una red u otro usuario no se pueden enumerar con -C, asi que se
+# leen los Match del archivo y de lo que incluye (un nivel, como Ubuntu):
+# ninguno puede dejar password, kbd-interactive ni root en otro valor que no.
+chequear_sshd_match() {
+  if [ ! -r "$HARDENING_SSHD_CONFIG" ]; then
+    problema "ssh: no se puede leer $HARDENING_SSHD_CONFIG para revisar sus Match" "" ssh-match-config 360
+    return
+  fi
+  local dir patron archivo hallazgos
+  local -a archivos=("$HARDENING_SSHD_CONFIG")
+  dir="$(dirname "$HARDENING_SSHD_CONFIG")"
+  while read -r patron; do
+    case "$patron" in /*) ;; *) patron="$dir/$patron" ;; esac
+    # Sin comillas a proposito: Include es un glob (sshd_config.d/*.conf).
+    # shellcheck disable=SC2086
+    for archivo in $patron; do
+      [ -f "$archivo" ] && archivos+=("$archivo")
+    done
+  done < <(awk '{ sub(/^[ \t]+/, ""); sub(/[ \t]*=[ \t]*/, " ") }
+    tolower($1) == "include" { for (i = 2; i <= NF; i++) print $i }' "$HARDENING_SSHD_CONFIG")
+  # Un awk que falla no corta el script (set -e): el resto de los chequeos
+  # tiene que correr igual.
+  if ! hallazgos="$(awk '
+    FNR == 1 { bloque = "" }
+    {
+      linea = $0
+      sub(/^[ \t]+/, "", linea)
+      sub(/^#.*/, "", linea)
+      sub(/[ \t]#.*/, "", linea)
+      sub(/[ \t]*=[ \t]*/, " ", linea)
+      if (split(linea, f, /[ \t]+/) == 0) next
+      clave = tolower(f[1])
+    }
+    clave == "match" { bloque = linea; next }
+    bloque != "" && clave ~ /^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|permitrootlogin)$/ && tolower(f[2]) != "no" {
+      printf "%s: %s: %s %s\n", FILENAME, bloque, clave, tolower(f[2])
+    }' "${archivos[@]}" 2>&1)"; then
+    problema "ssh: no se pudieron leer los archivos de sshd para revisar sus Match" "${hallazgos:0:200}" ssh-match-config 360
+  elif [ -n "$hallazgos" ]; then
+    problema "ssh: un bloque Match reabre el acceso" \
+      "$hallazgos; sacar esas lineas del Match (docs/DEPLOY_RUNBOOK.md §1)" ssh-match 360
+  fi
 }
 
 chequear_ufw() {

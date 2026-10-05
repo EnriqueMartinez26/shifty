@@ -11,6 +11,7 @@ que devuelven la salida real de `sshd -T`, `ufw status verbose` y
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -176,6 +177,95 @@ def test_avisa_cada_paso_deshecho(
     assert resultado.returncode != 0
     assert "ALERTA" in resultado.stderr
     assert motivo in resultado.stderr
+
+
+@pytest.mark.parametrize(
+    ("archivo", "bloque", "motivo"),
+    [
+        (
+            "sshd_config.d/60-sftp.conf",
+            "Match Group sftponly\n"
+            "    ChrootDirectory %h\n"
+            "    ForceCommand internal-sftp\n"
+            "    PasswordAuthentication yes\n",
+            "Match Group sftponly: passwordauthentication yes",
+        ),
+        (
+            "sshd_config",
+            "Match Address 203.0.113.0/24\n\tPermitRootLogin yes\n",
+            "Match Address 203.0.113.0/24: permitrootlogin yes",
+        ),
+        (
+            "sshd_config.d/70-backup.conf",
+            "Match User backup\n  KbdInteractiveAuthentication=Yes\n",
+            "Match User backup: kbdinteractiveauthentication yes",
+        ),
+    ],
+    ids=["grupo-sftp-con-password", "root-desde-una-red", "otro-usuario-kbd"],
+)
+def test_un_match_que_reabre_el_acceso_avisa(
+    host: Host, archivo: str, bloque: str, motivo: str
+) -> None:
+    """2026-10-05. Sintoma: el chequeo decia "todo en orden" con un bloque
+    Match que vuelve a abrir el acceso para un grupo, una red u otro usuario.
+    `sshd -T` sin `-C` no evalua los Match y `-C user=deploy,...addr=127.0.0.1`
+    evalua un solo contexto: los dos imprimen `passwordauthentication no` y
+    `permitrootlogin no` (los archivos sshd_T quedan sanos, como en el host
+    real), pero el valor de un Match que aplica pisa al global aunque el
+    drop-in 00 lo haya fijado antes."""
+    destino = host.fake / archivo
+    previo = destino.read_text(encoding="utf-8") if destino.exists() else ""
+    destino.write_text(previo + bloque, encoding="utf-8", newline="\n")
+
+    resultado = host.correr(SCRIPT)
+
+    assert resultado.returncode != 0
+    assert "ALERTA: ssh: un bloque Match reabre el acceso" in resultado.stderr
+    assert motivo in resultado.stderr
+
+
+def test_un_match_en_un_include_absoluto_avisa(host: Host) -> None:
+    """Ubuntu escribe `Include /etc/ssh/sshd_config.d/*.conf`: ruta absoluta.
+    En Git Bash la ruta absoluta de `C:/x` es `/c/x`."""
+    incluidos = (host.fake / "sshd_config.d").as_posix()
+    if re.match(r"^[A-Za-z]:/", incluidos):
+        incluidos = f"/{incluidos[0].lower()}{incluidos[2:]}"
+    _escribir(host, "sshd_config", f"Include {incluidos}/*.conf\n")
+    _escribir(
+        host,
+        "sshd_config.d/60-sftp.conf",
+        "Match Group sftponly\n    PasswordAuthentication yes\n",
+    )
+
+    resultado = host.correr(SCRIPT)
+
+    assert resultado.returncode != 0
+    assert "Match Group sftponly: passwordauthentication yes" in resultado.stderr
+
+
+def test_un_match_que_no_toca_el_acceso_no_avisa(host: Host) -> None:
+    """Un Match que restringe, o que repite `no`, es parte de un host sano."""
+    _escribir(
+        host,
+        "sshd_config.d/60-deploy.conf",
+        "Match User deploy\n"
+        "    AllowTcpForwarding no\n"
+        "    PasswordAuthentication no  # repetido\n"
+        "    PermitRootLogin no\n",
+    )
+
+    resultado = host.correr(SCRIPT)
+
+    assert resultado.returncode == 0, resultado.stderr
+
+
+def test_sin_sshd_config_legible_es_un_problema(host: Host) -> None:
+    resultado = host.correr(
+        SCRIPT, HARDENING_SSHD_CONFIG=(host.fake / "no-existe").as_posix()
+    )
+
+    assert resultado.returncode != 0
+    assert "ssh: no se puede leer" in resultado.stderr
 
 
 def test_un_puerto_limitado_permitido_no_avisa(host: Host) -> None:

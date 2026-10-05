@@ -215,6 +215,30 @@ SSHD_SANO = (
     "passwordauthentication no\n"
     "kbdinteractiveauthentication no\n"
 )
+# /etc/ssh/sshd_config de Ubuntu 24.04 (lo relevante): incluye los drop-ins
+# antes de sus propias lineas y trae el ejemplo de Match comentado. Ubuntu
+# escribe la ruta absoluta; aca va relativa (sshd la resuelve contra el
+# directorio del archivo) porque en Windows la ruta del test es `C:/...`.
+SSHD_CONFIG_SANO = (
+    "Include sshd_config.d/*.conf\n"
+    "KbdInteractiveAuthentication no\n"
+    "UsePAM yes\n"
+    "Subsystem sftp /usr/lib/openssh/sftp-server\n"
+    "# Example of overriding settings on a per-user basis\n"
+    "#Match User anoncvs\n"
+    "#\tX11Forwarding no\n"
+    "#\tPasswordAuthentication yes\n"
+)
+# Los drop-ins del runbook (00) y el de cloud-init (50, gana el 00).
+SSHD_DROPINS_SANOS = {
+    "00-shifty-hardening.conf": (
+        "PubkeyAuthentication yes\n"
+        "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PermitRootLogin no\n"
+    ),
+    "50-cloud-init.conf": "PasswordAuthentication yes\n",
+}
 # `ufw status verbose` con solo 22, 80 y 443 abiertos.
 UFW_SANO = (
     "Status: active\n"
@@ -591,6 +615,11 @@ def crear_host(tmp_path: Path) -> Host:
     _ejecutable(bin_dir / "sshd", _SSHD)
     for nombre in ("sshd_T", "sshd_T_deploy"):
         (fake / nombre).write_text(SSHD_SANO, encoding="utf-8", newline="\n")
+    dropins = fake / "sshd_config.d"
+    dropins.mkdir()
+    for nombre, contenido in SSHD_DROPINS_SANOS.items():
+        (dropins / nombre).write_text(contenido, encoding="utf-8", newline="\n")
+    (fake / "sshd_config").write_text(SSHD_CONFIG_SANO, encoding="utf-8", newline="\n")
     # redis_state al 20 % de sus 48 MB.
     escribir_redis_info(fake / "redis_info", usada=10 * 1048576)
     # El sha que se despliega paso Quality en main.
@@ -613,6 +642,7 @@ def crear_host(tmp_path: Path) -> Host:
         # El runner puede tener su propio /var/run/reboot-required.
         "HARDENING_REBOOT_FLAG": (fake / "reboot-required").as_posix(),
         "HARDENING_OS_RELEASE": (fake / "os-release").as_posix(),
+        "HARDENING_SSHD_CONFIG": (fake / "sshd_config").as_posix(),
     }
     for variable in (
         "APP_VERSION",
