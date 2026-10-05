@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import time
 from collections.abc import (
     AsyncIterator,
@@ -17,13 +18,25 @@ from typing import Any, Literal
 
 import structlog
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy import Row, Select, or_, select, text, update
+from sqlalchemy import (
+    Row,
+    Select,
+    and_,
+    case,
+    func,
+    or_,
+    select,
+    text,
+    true,
+    update,
+)
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from core.availability_cache import invalidate_availability
 from core.config import settings
 from core.database import _apply_tenant_context
+from core.observability import OncePer, report_exception
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_availability_cache
 from core.utils import ensure_utc_aware, format_ars
 from modules.appointments.model import Appointment, AppointmentStatus
@@ -1896,6 +1909,58 @@ def _es_aprobado(remoto: Mapping[str, Any]) -> bool:
     return str(remoto.get("status") or "").lower() == "approved"
 
 
+# Cada cuanto se le vuelve a preguntar a MP por un cobro que el job retuvo por
+# integridad (``Payment.integrity_held_at``; seguimiento W2 de la PR #104).
+# Antes, en CADA corrida: con decenas de retenidos se gastaba el presupuesto de
+# la fase A y se llenaban las paginas, y las retenciones nuevas no vencian. No
+# se excluye para siempre: la consulta de la hora siguiente toma sola el
+# arreglo de una persona (vincular la cuenta, cambiar las credenciales de
+# prueba) sin un paso manual para "des-estacionar". La alerta ya salio una vez
+# por pago; una hora de demora en rescatar un turno que espera a una persona
+# no cambia nada.
+EXPIRE_HELD_RECHECK_INTERVAL = timedelta(hours=1)
+
+# Desfase aleatorio del sello, de 0 a 10 minutos (revision S1). Los cobros
+# estacionados en la misma corrida volvian JUNTOS cada hora y seguian en fase
+# para siempre: esa corrida gastaba el presupuesto de MP en ellos y demoraba a
+# las retenciones nuevas. Cada reconsulta sortea otro desfase, asi que se
+# separan solos. Se eligio desfasar y no ordenar los reconsultables despues de
+# los demas: ordenar por una columna del lado nullable del outer join rompe el
+# ``ORDER BY expires_at LIMIT`` sobre el indice parcial de turnos, y Postgres
+# tendria que leer y ordenar todas las retenciones vencidas en cada corrida.
+EXPIRE_HELD_RECHECK_JITTER_SECONDS = 600
+
+
+def _desfase_de_reconsulta() -> timedelta:
+    """El sorteo del desfase, aparte para que los tests lo fijen."""
+    return timedelta(seconds=secrets.randbelow(EXPIRE_HELD_RECHECK_JITTER_SECONDS + 1))
+
+
+def _retencion_vencida(now: datetime) -> list[ColumnElement[bool]]:
+    """El turno sigue retenido (pendiente o con sena pendiente) y su
+    retencion ya vencio. Lado del turno de ``_expired_holds_query`` y de
+    ``overdue_holds``."""
+    return [
+        Appointment.status.in_(
+            [
+                AppointmentStatus.PENDING.value,
+                AppointmentStatus.PENDING_PAYMENT.value,
+            ]
+        ),
+        Appointment.expires_at.is_not(None),
+        Appointment.expires_at <= now,
+    ]
+
+
+def _sin_cobro_o_vivo(*, y: ColumnElement[bool]) -> ColumnElement[bool]:
+    """Sin cobro, o con un cobro VIVO (``LIVE_CHARGE_PAYMENT_STATUSES``, unica
+    fuente) que ademas cumple ``y``."""
+    return or_(
+        Payment.id.is_(None),
+        and_(Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)), y),
+    )
+
+
 def _expired_holds_query(
     now: datetime, limit: int, *, excluir: Collection[str] = ()
 ) -> Select[tuple[Appointment, Payment]]:
@@ -1914,30 +1979,152 @@ def _expired_holds_query(
 
     ``excluir``: turnos que una pagina anterior de la misma corrida ya vio
     (``EXPIRE_MAX_PAGES``).
+
+    Un cobro retenido por integridad en la ultima hora
+    (``integrity_held_at``, ``EXPIRE_HELD_RECHECK_INTERVAL``) no entra: ni
+    ocupa la pagina ni gasta el presupuesto de MP de la fase A.
     """
+    no_estacionado = or_(
+        Payment.integrity_held_at.is_(None),
+        Payment.integrity_held_at <= now - EXPIRE_HELD_RECHECK_INTERVAL,
+    )
     consulta = (
         select(Appointment, Payment)
         .outerjoin(Payment, Payment.appointment_id == Appointment.id)
-        .where(
-            Appointment.status.in_(
-                [
-                    AppointmentStatus.PENDING.value,
-                    AppointmentStatus.PENDING_PAYMENT.value,
-                ]
-            ),
-            Appointment.expires_at.is_not(None),
-            Appointment.expires_at <= now,
-            or_(
-                Payment.id.is_(None),
-                Payment.status.in_(sorted(LIVE_CHARGE_PAYMENT_STATUSES)),
-            ),
-        )
+        .where(*_retencion_vencida(now), _sin_cobro_o_vivo(y=no_estacionado))
         .order_by(Appointment.expires_at.asc())
         .limit(limit)
     )
     if excluir:
         consulta = consulta.where(Appointment.id.not_in(sorted(excluir)))
     return consulta
+
+
+@dataclass(frozen=True)
+class OverdueHolds:
+    """Foto de las retenciones vencidas sin liberar (``overdue_holds``)."""
+
+    # ``expires_at`` de la mas vieja SIN estacionar; ``None`` si no hay.
+    oldest_at: datetime | None
+    # Cuantas tienen el cobro estacionado por integridad (``integrity_held_at``).
+    parked: int
+    # Primera reconsulta ya exigible, separada del atraso de retenciones nuevas.
+    recheck_due_at: datetime | None
+
+
+async def overdue_holds(
+    db: AsyncSession, now: datetime, *, store_id: str | None
+) -> OverdueHolds:
+    """Retenciones vencidas que siguen sin liberarse, con la misma condicion
+    que ``_expired_holds_query``. ``store_id`` ``None`` = todas las tiendas.
+
+    - ``oldest_at`` deja afuera los cobros que el job estaciono por
+      integridad: ya avisaron a Sentry una vez por pago y esperan a una
+      persona; contarlos dejaria la metrica en rojo mientras existan y taparia
+      justo lo que mide (un job que no da abasto o no corre).
+    - ``parked`` los cuenta aparte (revision S3): sin eso, un turno pagado
+      trabado en ``pending_payment`` dejaba de verse en cuanto se resolvia el
+      issue de Sentry.
+
+    Una sola sentencia agregada (regla 11). Fuente de las metricas de
+    retenciones y reconsultas en ``/ops/slo`` y de los avisos del job.
+    """
+    estacionado = Payment.integrity_held_at.is_not(None)
+    reconsulta_exigible = Payment.integrity_held_at <= (
+        now - EXPIRE_HELD_RECHECK_INTERVAL
+    )
+    consulta = (
+        select(
+            func.min(case((~estacionado, Appointment.expires_at))),
+            func.count(case((estacionado, 1))),
+            func.min(case((reconsulta_exigible, Payment.integrity_held_at))),
+        )
+        .select_from(Appointment)
+        .outerjoin(Payment, Payment.appointment_id == Appointment.id)
+        .where(*_retencion_vencida(now), _sin_cobro_o_vivo(y=true()))
+    )
+    if store_id is not None:
+        consulta = consulta.where(Appointment.store_id == store_id)
+    oldest_at, parked, oldest_due_held_at = (await db.execute(consulta)).one()
+    return OverdueHolds(
+        oldest_at=oldest_at,
+        parked=int(parked or 0),
+        recheck_due_at=(
+            ensure_utc_aware(oldest_due_held_at) + EXPIRE_HELD_RECHECK_INTERVAL
+            if oldest_due_held_at is not None
+            else None
+        ),
+    )
+
+
+class OverdueHoldsLagging(RuntimeError):
+    """Evento de Sentry: la retencion vencida mas vieja sin liberar paso
+    ``SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS``."""
+
+
+class HeldRecheckLagging(RuntimeError):
+    """Evento de Sentry: una reconsulta de integridad exigible se atraso."""
+
+
+# Un aviso por proceso y por intervalo mientras dure el atraso: el job corre
+# cada minuto y Sentry no necesita 60 eventos por hora del mismo problema.
+EXPIRE_LAG_REPORT_INTERVAL_SECONDS = 1800.0
+_AVISO_DE_ATRASO = OncePer(EXPIRE_LAG_REPORT_INTERVAL_SECONDS)
+_AVISO_DE_RECONSULTA_ATRASADA = OncePer(EXPIRE_LAG_REPORT_INTERVAL_SECONDS)
+
+
+async def _avisar_si_hay_retenciones_atrasadas(db: AsyncSession) -> None:
+    """Al final de cada corrida: si la retencion vencida mas vieja sin liberar
+    pasa el umbral del SLO, avisa a Sentry (seguimiento W2 de la PR #104).
+
+    Es el mismo numero que ``oldest_overdue_hold_seconds`` de ``/ops/slo``,
+    pero nadie mira ese endpoint a las 3 de la manana: antes, con los
+    retenidos llenando cada corrida, las retenciones nuevas dejaban de vencer
+    y nada avisaba. Un job que directamente no corre lo cubre el monitor de
+    la tarea en Sentry. Nunca rompe la corrida: lo vencido ya se commiteo.
+    """
+    ahora = datetime.now(timezone.utc)
+    try:
+        retenciones = await overdue_holds(db, ahora, store_id=None)
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        logger.warning("overdue_hold_check_failed", error_type=type(exc).__name__)
+        return
+    if retenciones.oldest_at is not None:
+        umbral = settings.SLO_MAX_OLDEST_OVERDUE_HOLD_SECONDS
+        segundos = max(
+            0, int((ahora - ensure_utc_aware(retenciones.oldest_at)).total_seconds())
+        )
+        if segundos > umbral:
+            logger.warning(
+                "overdue_hold_lag_high",
+                oldest_overdue_hold_seconds=segundos,
+                threshold=umbral,
+            )
+            if _AVISO_DE_ATRASO.allow("overdue_holds"):
+                report_exception(
+                    OverdueHoldsLagging("retenciones vencidas sin liberar"),
+                    oldest_overdue_hold_seconds=segundos,
+                    threshold=umbral,
+                )
+    if retenciones.recheck_due_at is not None:
+        umbral_reconsulta = settings.SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS
+        segundos_reconsulta = max(
+            0, int((ahora - retenciones.recheck_due_at).total_seconds())
+        )
+        if segundos_reconsulta > umbral_reconsulta:
+            logger.warning(
+                "held_recheck_lag_high",
+                oldest_due_held_recheck_seconds=segundos_reconsulta,
+                threshold=umbral_reconsulta,
+            )
+            if _AVISO_DE_RECONSULTA_ATRASADA.allow("held_recheck"):
+                report_exception(
+                    HeldRecheckLagging("reconsulta de retencion estacionada atrasada"),
+                    oldest_due_held_recheck_seconds=segundos_reconsulta,
+                    threshold=umbral_reconsulta,
+                )
 
 
 # Advisory locks de jobs: forma de DOS int4 (namespace, id). Postgres guarda
@@ -2080,6 +2267,7 @@ async def _expire_unpaid_appointments(
         total.sumar(pagina)
         if not pagina.held:
             break
+    await _avisar_si_hay_retenciones_atrasadas(db)
     return {
         "expired": total.expired,
         "rescued": total.rescued,
@@ -2287,6 +2475,7 @@ async def _rescatar_o_retener(
         if exc.contexto.aprobado:
             _log_retenido(store_id, appointment_id, payment_id, exc)
             await alert_integrity_rejection(db, exc)
+            await _estacionar(db, store_id, payment_id)
             return "retenido"
         # El savepoint revertido dejo las dos instancias expiradas: se releen
         # (bajo el lock del turno, que es de la transaccion externa) antes de
@@ -2305,6 +2494,42 @@ async def _rescatar_o_retener(
         )
         return "retenido"
     return "rescatado" if rescatado else "vencer"
+
+
+async def _estacionar(db: AsyncSession, store_id: str, payment_id: str) -> None:
+    """Sella ``integrity_held_at``: la consulta del job no vuelve a tomar este
+    cobro hasta ``EXPIRE_HELD_RECHECK_INTERVAL`` mas un desfase de hasta
+    ``EXPIRE_HELD_RECHECK_JITTER_SECONDS`` (seguimiento W2 de la PR #104). Solo para el rechazo de integridad de un APROBADO: un error
+    inesperado (deadlock, timeout) puede pasar solo y se vuelve a mirar en la
+    corrida siguiente.
+
+    Corre con el turno bloqueado por la fase B (orden turno -> pago, regla 7)
+    y en su propio savepoint: si falla, el cobro se reconsulta la corrida
+    siguiente, como antes, y el resto de la pagina sigue. UPDATE sin
+    sincronizar la sesion (las instancias quedaron expiradas por el savepoint
+    revertido) y sin subir ``version``: como ``reconciled_at``, no es dato de
+    negocio.
+    """
+    try:
+        async with db.begin_nested():
+            await db.execute(
+                update(Payment)
+                .where(Payment.id == payment_id, Payment.store_id == store_id)
+                .values(
+                    integrity_held_at=datetime.now(timezone.utc)
+                    + _desfase_de_reconsulta()
+                )
+                .execution_options(synchronize_session=False)
+            )
+    except SoftTimeLimitExceeded:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "expire_hold_park_failed",
+            store_id=store_id,
+            payment_id=payment_id,
+            error_type=type(exc).__name__,
+        )
 
 
 def _log_retenido(

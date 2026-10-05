@@ -12,7 +12,9 @@ LOCKED``, RLS y savepoints): la tienda A tiene sus tres retenciones pagadas
 tres sin pagar. Una corrida retiene las de A (ni rescatadas ni liberadas),
 pide la pagina siguiente sin ellas y vence las de B. La segunda corrida no
 vuelve a avisar a Sentry: la marca de la alerta quedo commiteada aunque el
-savepoint del cobro se revirtio.
+savepoint del cobro se revirtio. Desde el seguimiento W2 de la PR #104 la
+segunda corrida ni siquiera las toma: quedaron estacionadas
+(``integrity_held_at``) hasta la reconsulta de la hora siguiente.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -147,15 +149,28 @@ async def test_los_cobros_de_prueba_quedan_retenidos_y_el_resto_vence(
 
     primera = await _con_bypass(app_sessions, vencer)
     segunda = await _con_bypass(app_sessions, vencer)
+    # Pasada la hora las de A vuelven a la consulta y se vuelven a retener:
+    # la alerta no se repite (revision W1 del seguimiento W2 de la PR #104;
+    # sin la reconsulta, "una alerta por pago" no probaba nada).
+    async with owner_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "update payments set integrity_held_at = :t "
+                "where integrity_held_at is not null"
+            ),
+            {"t": ahora - jobs.EXPIRE_HELD_RECHECK_INTERVAL - timedelta(minutes=1)},
+        )
+    reconsulta = await _con_bypass(app_sessions, vencer)
 
     assert (primera["held"], primera["expired"]) == (CUANTOS, CUANTOS), primera
-    assert (segunda["held"], segunda["expired"]) == (CUANTOS, 0), segunda
+    assert (segunda["held"], segunda["expired"]) == (0, 0), segunda
+    assert (reconsulta["held"], reconsulta["expired"]) == (CUANTOS, 0), reconsulta
     assert (
         await _estados(owner_engine, store_a)
         == [("pending_payment", "pending")] * CUANTOS
     )
     assert await _estados(owner_engine, store_b) == [("expired", "expired")] * CUANTOS
-    # Una alerta por pago de MP, no una por corrida.
+    # Una alerta por pago de MP, no una por corrida ni por reconsulta.
     assert sorted(a["mp_payment_id"] for a in avisos) == sorted(
         r["id"] for r in remotos.values()
     ), avisos
@@ -187,7 +202,9 @@ async def test_una_pagina_mezcla_retenidos_vencidos_y_un_error_inesperado(
     - un error inesperado al aplicar (no de integridad): retenido, una alerta
       por clase de error.
 
-    La segunda corrida no repite alertas ni vence nada mas.
+    La segunda corrida no repite alertas ni vence nada mas. Solo vuelve a
+    tomar el del error inesperado: el retenido por integridad quedo
+    estacionado (seguimiento W2 de la PR #104).
     """
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _stub_mercadopago(monkeypatch, remote_payment=None)
@@ -257,7 +274,7 @@ async def test_una_pagina_mezcla_retenidos_vencidos_y_un_error_inesperado(
     segunda = await _con_bypass(app_sessions, expire_unpaid_appointments)
 
     assert (primera["held"], primera["expired"]) == (2, 1), primera
-    assert (segunda["held"], segunda["expired"]) == (2, 0), segunda
+    assert (segunda["held"], segunda["expired"]) == (1, 0), segunda
     async with owner_engine.connect() as conn:
         filas = await conn.execute(
             text(

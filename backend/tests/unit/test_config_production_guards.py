@@ -56,6 +56,14 @@ def test_una_configuracion_de_produccion_valida_arranca() -> None:
     assert settings.ENV == Environment.PRODUCTION
 
 
+@pytest.mark.parametrize("segundos", [59, 3601])
+def test_umbral_de_reconsulta_atrasada_tiene_limites_en_produccion(
+    segundos: int,
+) -> None:
+    with pytest.raises(ValueError, match="SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS"):
+        _build(SLO_MAX_OLDEST_DUE_HELD_RECHECK_SECONDS=segundos)
+
+
 @pytest.mark.parametrize(
     ("override", "esperado"),
     [

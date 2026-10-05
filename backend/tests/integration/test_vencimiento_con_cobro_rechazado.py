@@ -217,8 +217,13 @@ async def test_los_retenidos_no_tapan_a_los_que_siguen_en_la_cola(
     client: AsyncClient, test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Con ``limit`` = 1 el retenido ocupa toda la primera pagina: la corrida
-    pide la siguiente sin el y vence la otra retencion. Y la corrida
-    siguiente no vuelve a avisar a Sentry por el mismo pago y motivo."""
+    pide la siguiente sin el y vence la otra retencion. Desde el seguimiento
+    W2 de la PR #104 la corrida siguiente ni siquiera lo toma: queda
+    estacionado hasta la reconsulta de la hora siguiente
+    (``test_vencimiento_retenidos_sin_reconsultar.py``). Esa reconsulta lo
+    vuelve a retener y NO vuelve a avisar a Sentry por el mismo pago y
+    motivo (revision W1: sin la reconsulta, la asercion de una alerta no
+    probaba nada)."""
     monkeypatch.setattr(tasks, "_send_email", Buzon())
     _stub_mercadopago(monkeypatch, remote_payment=None)
     pagada = await _retencion_vencida(
@@ -233,15 +238,30 @@ async def test_los_retenidos_no_tapan_a_los_que_siguen_en_la_cola(
 
     primera = await expire_unpaid_appointments(test_session, limit=1)
     segunda = await expire_unpaid_appointments(test_session, limit=1)
+    # Pasada la hora: el cobro vuelve a la consulta.
+    await test_session.execute(
+        update(Payment)
+        .where(Payment.id == pagada.cobro)
+        .values(
+            integrity_held_at=datetime.now(timezone.utc)
+            - jobs.EXPIRE_HELD_RECHECK_INTERVAL
+            - timedelta(minutes=1)
+        )
+    )
+    await test_session.commit()
+    reconsulta = await expire_unpaid_appointments(test_session, limit=1)
 
     assert (primera["held"], primera["expired"]) == (1, 1), primera
-    assert (segunda["held"], segunda["expired"]) == (1, 0), segunda
+    assert (segunda["held"], segunda["expired"]) == (0, 0), segunda
+    assert reconsulta["held"] == 1, reconsulta
     turno, _cobro = await _estado(test_session, impaga)
     assert turno == AppointmentStatus.EXPIRED.value
     assert (await _estado(test_session, pagada))[0] == (
         AppointmentStatus.PENDING_PAYMENT.value
     )
-    assert len(avisos) == 1, "una alerta por (pago de MP, motivo), no una por corrida"
+    assert [a["mp_payment_id"] for a in avisos] == [f"mp-{pagada.turno}"], (
+        "una alerta por (pago de MP, motivo), no una por reconsulta"
+    )
 
 
 @pytest.mark.asyncio
