@@ -7,7 +7,9 @@ codigo para el telefono de otra persona con su PROPIA casilla: el mail salia
 de verdad (la regla de #126, "solo invalidar si el mail se encolo", no lo
 frena) y el codigo A que la victima tenia en su casilla X dejaba de
 verificar. Un pedido por cada codigo de la victima alcanzaba para trabarle la
-reserva y "Mis turnos" sin que nada lo delate.
+reserva con OTP sin que nada lo delate. ("Mis turnos" exige ficha de
+cliente, y con ficha el codigo va solo al email guardado: ese camino no
+cambia.)
 
 Regla nueva: guardar un codigo invalida solo los vivos enviados al mismo
 buzon (``otp_verifications.email``). Los de otras casillas siguen hasta
@@ -16,6 +18,12 @@ intento cuenta contra TODOS los codigos vivos con los que se compara, asi que
 ningun codigo enfrenta mas de ``OTP_MAX_ATTEMPTS`` intentos en su vida (igual
 que antes), y la verificacion mira a lo sumo ``OTP_MAX_REQUESTS_PER_HOUR``
 codigos vivos por telefono. La respuesta HTTP no dice si hay otros codigos.
+
+Residuo anterior a este arreglo, que sigue abierto: el bloqueo por
+verificaciones. Cinco verificaciones anonimas erradas agotan el codigo de la
+victima (``OTP_MAX_ATTEMPTS``), y diez agotan el presupuesto de verificacion
+del telefono (``OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR``, compartido por todos).
+Ninguna de las dos necesita una casilla.
 """
 
 from __future__ import annotations
@@ -25,13 +33,16 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient, Response
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 import modules.notifications.tasks as tasks
 from core.config import settings
+from core.exceptions import OTPException
 from modules.otp.model import OtpVerification
+from modules.otp.service import OTP_GATE_EMAIL_MISMATCH, OtpService
 from modules.stores.model import Store
+from modules.users.model import User, UserRole
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     register_and_login,
 )
@@ -47,6 +58,11 @@ VICTIMA = "victima@example.com"
 ATACANTE = "atacante@example.com"
 OTRA = "otra@example.com"
 _CODIGO = re.compile(r"\b\d{6}\b")
+
+# Lo que corre un intento errado con uno y con dos codigos vivos:
+# (sentencia, executemany).
+UN_CODIGO_VIVO = [("SELECT", False), ("UPDATE", False)]
+DOS_CODIGOS_VIVOS = [("SELECT", False), ("UPDATE", True)]
 
 
 @pytest.fixture
@@ -341,3 +357,109 @@ async def test_la_respuesta_no_dice_si_hay_otros_codigos(
     )
     assert _error(sin_codigos)[0] == 400
     assert _error(sin_codigos) == _error(errado_uno) == _error(errado_dos)
+
+
+async def _store_directo(session: AsyncSession, slug: str) -> str:
+    store = Store(name=f"Tienda {slug}", slug=slug)
+    store.public_id = store.id
+    session.add(store)
+    await session.commit()
+    return str(store.id)
+
+
+def _encolado(_to: str, _subject: str, _body: str) -> bool:
+    return True
+
+
+@pytest.mark.asyncio
+async def test_verificar_con_uno_o_dos_codigos_vivos(
+    test_session: AsyncSession, test_engine: AsyncEngine
+) -> None:
+    """Senal de tiempo debil y acotada: un intento errado corre las mismas
+    sentencias con uno o con dos codigos vivos, pero con dos el UPDATE de
+    intentos va como executemany sobre las dos filas (y el SELECT lockea
+    dos). Se fija esa diferencia exacta para que ningun cambio la agrande
+    sin que este test lo diga."""
+    store_id = await _store_directo(test_session, "otp-destino-paridad")
+    servicio = OtpService(test_session)
+
+    async def pedir(email: str) -> str:
+        respuesta = await servicio.request_code(
+            store_id=store_id,
+            phone=f"+{TELEFONO}",
+            channel="email",
+            email=email,
+            store_name="Demo",
+            schedule_dispatch=_encolado,
+        )
+        return str(respuesta["debug_code"])
+
+    async def intento_errado(errado: str) -> list[tuple[str, bool]]:
+        sentencias: list[tuple[str, bool]] = []
+
+        def registrar(
+            _c: Any, _cur: Any, statement: str, _p: Any, _ctx: Any, many: bool
+        ) -> None:
+            sentencias.append((statement.split()[0].upper(), many))
+
+        event.listen(test_engine.sync_engine, "before_cursor_execute", registrar)
+        try:
+            with pytest.raises(OTPException):
+                await servicio.verify_code(
+                    store_id=store_id, phone=f"+{TELEFONO}", code=errado
+                )
+        finally:
+            event.remove(test_engine.sync_engine, "before_cursor_execute", registrar)
+        return sentencias
+
+    codigo_a = await pedir(VICTIMA)
+    uno = await intento_errado(_otro_codigo(codigo_a))
+    codigo_b = await pedir(ATACANTE)
+    dos = await intento_errado(_otro_codigo(codigo_a, codigo_b))
+
+    assert uno == UN_CODIGO_VIVO, uno
+    assert dos == DOS_CODIGOS_VIVOS, dos
+
+
+@pytest.mark.asyncio
+async def test_el_codigo_del_atacante_no_abre_la_ficha_creada_despues(
+    client: AsyncClient, test_session: AsyncSession, cola: Cola
+) -> None:
+    """Fija el caso borde de la regla: el atacante pide un codigo a SU casilla
+    para un telefono sin ficha; despues se crea la ficha con el email de la
+    victima y la victima pide el suyo. El codigo del atacante fue a otro
+    buzon, asi que sigue vivo y verifica, pero prueba SU casilla: "Mis
+    turnos" y la reserva con OTP siguen cerrados (OTP_GATE_EMAIL_MISMATCH)."""
+    tienda = await _tienda(client, "otp-destino-ficha-despues")
+    store_id = await test_session.scalar(
+        select(Store.id).where(Store.public_id == tienda)
+    )
+    assert store_id is not None
+    await _pedir(client, tienda, ATACANTE)
+    codigo_atacante = _ultimo_codigo(cola, ATACANTE)
+
+    test_session.add(
+        User(
+            email=VICTIMA,
+            hashed_password="!",
+            role=UserRole.CLIENT.value,
+            store_id=store_id,
+            phone=TELEFONO,
+            full_name="Victima",
+        )
+    )
+    await test_session.commit()
+    await _pedir(client, tienda, VICTIMA)
+    if _ultimo_codigo(cola, VICTIMA) == codigo_atacante:  # 1 en 10^6
+        return
+
+    assert await _verifica(client, tienda, codigo_atacante)
+
+    mis_turnos = await client.get(f"/public/client/{tienda}/{TELEFONO}/appointments")
+    assert mis_turnos.status_code == 403, mis_turnos.text
+    servicio = OtpService(test_session)
+    assert (
+        await servicio.booking_otp_reason(store_id=store_id, phone=f"+{TELEFONO}")
+        == OTP_GATE_EMAIL_MISMATCH
+    )
+    assert not await servicio.may_book_with_otp(store_id=store_id, phone=f"+{TELEFONO}")

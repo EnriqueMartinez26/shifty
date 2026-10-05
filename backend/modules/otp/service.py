@@ -499,6 +499,11 @@ class OtpService:
         todos y cada intento cuenta contra todos. Con ficha todo codigo va al
         email guardado: ahi "mismo buzon" son todos, como antes.
 
+        Residuo anterior, sin cambios: cinco verificaciones anonimas erradas
+        agotan el codigo de la victima (``OTP_MAX_ATTEMPTS``) y diez agotan el
+        presupuesto de verificacion del telefono, compartido
+        (``OTP_MAX_VERIFY_ATTEMPTS_PER_HOUR``). Ninguna necesita una casilla.
+
         Las filas se toman con ``FOR UPDATE`` en el orden de
         ``_lock_live_codes`` antes de invalidarlas: un ``UPDATE`` las tomaria
         en el orden fisico y podria cruzarse con una verificacion.
@@ -522,6 +527,11 @@ class OtpService:
         # cambiaba las sentencias del pedido segun hubiera o no un codigo vivo
         # para ese buzon, un oraculo de tiempo sobre la casilla de la ficha
         # (``test_los_tres_caminos_hacen_el_mismo_trabajo_sincronico``).
+        # La verificacion no tiene esa paridad: su trabajo crece con los N
+        # codigos vivos (locks, comparaciones, UPDATE de intentos), una senal
+        # de tiempo debil. Cada sondeo cuesta un intento contra cada codigo y
+        # una unidad del presupuesto de verificacion, asi que se frena sola;
+        # la diferencia la fija ``test_verificar_con_uno_o_dos_codigos_vivos``.
         await self.db.execute(
             update(OtpVerification)
             .where(OtpVerification.id.in_(replaced))
