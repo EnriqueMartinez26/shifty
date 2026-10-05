@@ -338,12 +338,15 @@ def _check_channel(channel: str, email: str | None) -> None:
         raise ValidationException("Falta el email para enviar el codigo")
 
 
-def _neutral_response() -> dict[str, object]:
-    """La respuesta de un pedido cuyo codigo no se guardo, con la forma de
-    produccion de uno que si (sin ``debug_code``, que produccion no lleva)."""
-    expires_at = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.OTP_CODE_EXPIRE_MINUTES
-    )
+def _otp_response(expires_at: datetime) -> dict[str, object]:
+    """El sobre del pedido, se haya guardado el codigo o no (sin
+    ``debug_code``, que produccion no lleva).
+
+    ``expires_at`` es el que calculo el request en Python, nunca el releido
+    de la base: SQLite lo devuelve sin zona y el texto de la respuesta
+    cambiaba entre "guardado" y "no guardado" (``+00:00`` de mas), un oraculo
+    de entrega (``test_un_fallo_de_envio_responde_byte_a_byte_igual...``).
+    """
     return {"ok": True, "expires_at": expires_at.isoformat()}
 
 
@@ -464,7 +467,8 @@ class OtpService:
         code: str,
         *,
         email: str | None,
-    ) -> OtpVerification:
+        expires_at: datetime,
+    ) -> None:
         """Invalida los codigos vivos de ese telefono y guarda el nuevo, con el
         buzon al que se despacho (``otp_verifications.email``)."""
         self._forget_verification()
@@ -486,14 +490,12 @@ class OtpService:
             # invierte con una tabla de 10^6 entradas ante cualquier lectura
             # de la tabla (backup, replica).
             code_hash=hash_otp_code(store_id, normalized_phone, code),
-            expires_at=now + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES),
+            expires_at=expires_at,
             email=email,
             provider_message_id="email" if channel == "email" else "console-dispatch",
         )
         self.db.add(otp)
         await self.db.commit()
-        await self.db.refresh(otp)
-        return otp
 
     async def request_code(
         self,
@@ -527,6 +529,9 @@ class OtpService:
         )
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.OTP_CODE_EXPIRE_MINUTES
+        )
 
         # 2026-10-05: guardar el codigo invalida el vivo, asi que se guarda
         # SOLO si su mail quedo encolado. Antes se guardaba primero y un
@@ -545,15 +550,17 @@ class OtpService:
             # Misma forma que con entrega: no dice si hubo tope, si el broker
             # cayo ni si el telefono tiene ficha. En desarrollo no se expone
             # un debug_code que no existe.
-            return _neutral_response()
+            return _otp_response(expires_at)
 
-        otp = await self._store_code(
-            store_id, normalized_phone, channel, code, email=destination
+        await self._store_code(
+            store_id,
+            normalized_phone,
+            channel,
+            code,
+            email=destination,
+            expires_at=expires_at,
         )
-        response: dict[str, object] = {
-            "ok": True,
-            "expires_at": otp.expires_at.isoformat(),
-        }
+        response = _otp_response(expires_at)
         if settings.OTP_DEBUG_EXPOSE_CODE:
             # Senuelo SIEMPRE que el codigo fue a un buzon distinto del que
             # tipeo quien pide, haya tipeado algo o no: la regla es sobre el
