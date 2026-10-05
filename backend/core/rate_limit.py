@@ -54,6 +54,10 @@ ACTION_POLICIES: dict[str, str] = {
     "auth:change-password": "auth",
     "public:otp:request": "otp",
     "public:otp:verify": "otp",
+    # Mails del OTP por buzon de destino (``subject_quota_allows`` desde
+    # ``otp/service.py``), una accion por ventana.
+    "public:otp:mail-destination:hour": "otp",
+    "public:otp:mail-destination:day": "otp",
     "public:booking:create": "public-write",
     "public:client:cancel": "public-write",
     "public:client:reschedule": "public-write",
@@ -196,23 +200,7 @@ async def enforce_rate_limit(
                 f"subject:{subject.lower()}", action, limit, window
             )
     except REDIS_UNAVAILABLE_ERRORS as exc:
-        # PV-22: solo el tipo; el texto de un error de redis-py puede repetir
-        # la URL de conexion con la clave.
-        logger.warning(
-            "rate_limit_redis_unavailable",
-            action=action,
-            error_type=type(exc).__name__,
-        )
-        # Accion sin politica declarada: falla cerrada (F1-09).
-        policy = ACTION_POLICIES.get(action, "undeclared")
-        if _fails_closed(policy):
-            raise AppException(
-                message=_MENSAJE_LIMITE_NO_DISPONIBLE,
-                http_status=503,
-                error_code=_ERROR_CODE_LIMITE_NO_DISPONIBLE,
-                headers={"Retry-After": str(RETRY_AFTER_SIN_RATE_LIMIT_SECONDS)},
-            ) from exc
-        _let_through_without_limit(policy)
+        _limiter_unavailable(action, exc)
         return
 
     if retry_after is not None:
@@ -220,6 +208,52 @@ async def enforce_rate_limit(
             retry_after=retry_after,
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def _limiter_unavailable(action: str, exc: Exception) -> None:
+    """Redis no respondio: 503 si la politica de ``action`` falla cerrada; si
+    no, deja pasar con aviso (F1-09). Una accion sin politica falla cerrada."""
+    # PV-22: solo el tipo; el texto de un error de redis-py puede repetir la
+    # URL de conexion con la clave.
+    logger.warning(
+        "rate_limit_redis_unavailable",
+        action=action,
+        error_type=type(exc).__name__,
+    )
+    policy = ACTION_POLICIES.get(action, "undeclared")
+    if _fails_closed(policy):
+        raise AppException(
+            message=_MENSAJE_LIMITE_NO_DISPONIBLE,
+            http_status=503,
+            error_code=_ERROR_CODE_LIMITE_NO_DISPONIBLE,
+            headers={"Retry-After": str(RETRY_AFTER_SIN_RATE_LIMIT_SECONDS)},
+        ) from exc
+    _let_through_without_limit(policy)
+
+
+async def subject_quota_allows(
+    action: str, subject: str, *, limit: int, window_seconds: int
+) -> bool:
+    """Consume una unidad de la cuota de ``subject`` y dice si sigue adentro.
+
+    A diferencia de ``enforce_rate_limit``: sin request ni cubeta por IP, y no
+    levanta 429. Es para un limite que quien llama decide DESPUES de leer la
+    base (el buzon del OTP puede salir de la ficha del cliente) y cuya
+    respuesta no puede cambiar al cortar. ``subject`` llega normalizado y va
+    hasheado a la clave, como el sujeto de ``enforce_rate_limit``. Redis
+    caido: misma politica por accion (503 si falla cerrada, ``True`` con aviso
+    si no).
+    """
+    if not settings.RATE_LIMIT_ENABLED:
+        return True
+    try:
+        retry_after = await _hit_rate_limit(
+            f"subject:{subject}", action, limit, window_seconds
+        )
+    except REDIS_UNAVAILABLE_ERRORS as exc:
+        _limiter_unavailable(action, exc)
+        return True
+    return retry_after is None
 
 
 def _policy_for_request(method: str, path: str) -> tuple[str, int]:

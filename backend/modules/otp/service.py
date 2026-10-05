@@ -16,8 +16,10 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from core.config import settings
 from core.exceptions import OTPException, OTPRateLimitedException, ValidationException
+from core.rate_limit import subject_quota_allows
 from core.redis import REDIS_UNAVAILABLE_ERRORS, get_redis
 from core.security import hash_otp_code
+from modules.auth.service import normalize_email
 from modules.notifications.tasks import client_mail_footer, is_deliverable_email
 from modules.otp.model import OtpVerification
 from modules.users.model import User, UserRole
@@ -113,6 +115,82 @@ async def _consume_budget(kind: str, store_id: str, phone: str, limit: int) -> N
             raise OTPRateLimitedException() from exc
 
 
+# Acciones del limitador por buzon de destino (``core/rate_limit.py``,
+# politica ``otp``: falla cerrada en produccion), una por ventana.
+DESTINATION_HOUR_ACTION = "public:otp:mail-destination:hour"
+DESTINATION_DAY_ACTION = "public:otp:mail-destination:day"
+
+
+async def _all_or_raise(*pending: Awaitable[bool]) -> list[bool]:
+    """Espera todo en paralelo y, si algo fallo, levanta el primer error.
+
+    ``gather`` sin ``return_exceptions`` deja sin recuperar el error del
+    otro: con Redis caido los dos levantan 503 y el segundo terminaba en
+    "Task exception was never retrieved" en el log.
+    """
+    resultados = await asyncio.gather(*pending, return_exceptions=True)
+    for resultado in resultados:
+        if isinstance(resultado, BaseException):
+            raise resultado
+    return [bool(resultado) for resultado in resultados]
+
+
+async def _destination_allows_mail(destination: str) -> bool:
+    """Consume la cuota del buzon (hora y dia) y dice si el mail puede salir.
+
+    Hallazgo de auditoria (2026-10-03): las cubetas por IP y por telefono no
+    miraban A QUIEN se escribe, y rotando las dos se usaba Shifty para llenar
+    de mails una casilla ajena (las quejas queman el dominio de envio). La
+    clave lleva el buzon normalizado y hasheado (``_hit_rate_limit``), nunca
+    crudo. Las dos ventanas se consumen siempre y a la vez.
+    """
+    buzon = normalize_email(destination)
+    ventanas = await _all_or_raise(
+        subject_quota_allows(
+            DESTINATION_HOUR_ACTION,
+            buzon,
+            limit=settings.OTP_MAX_MAILS_PER_DESTINATION_PER_HOUR,
+            window_seconds=3600,
+        ),
+        subject_quota_allows(
+            DESTINATION_DAY_ACTION,
+            buzon,
+            limit=settings.OTP_MAX_MAILS_PER_DESTINATION_PER_DAY,
+            window_seconds=86400,
+        ),
+    )
+    return all(ventanas)
+
+
+async def _recipients_within_cap(
+    destination: str | None, notice_to: str | None
+) -> tuple[str | None, str | None]:
+    """(buzon del codigo, buzon del aviso) que SI reciben mail.
+
+    El tope es sobre el destino REAL de cada mail: el codigo puede ir al email
+    de la ficha y no al tipeado (B4-01), y el aviso sin codigo (AUD2-B4-05)
+    tambien es un mail. Pasado el tope, ese mail no sale y la respuesta de
+    produccion conserva su forma; si se corta el codigo, request_code no reemplaza el
+    anterior por uno imposible de recibir. Un 429 aca diria si el
+    telefono es cliente (solo entonces cuenta el email de la ficha) y, para el
+    tipeado, si esa casilla recibio codigos por otros telefonos: pedir 5 veces
+    el codigo de un telefono ajeno y despues tipear una casilla sospechada
+    confirmaria que ese telefono es de esa casilla. Queda en el log del
+    servidor, sin el buzon.
+    """
+    buzones = [b for b in (destination, notice_to) if b]
+    permitidos = dict(
+        zip(buzones, await _all_or_raise(*map(_destination_allows_mail, buzones)))
+    )
+    for tipo, buzon in (("code", destination), ("notice", notice_to)):
+        if buzon and not permitidos[buzon]:
+            logger.warning("otp_mail_destination_capped", mail=tipo)
+    return (
+        destination if destination and permitidos[destination] else None,
+        notice_to if notice_to and permitidos[notice_to] else None,
+    )
+
+
 # Mismo motivo en el codigo y en el aviso sin codigo: el cuerpo no puede
 # decir mas de lo que ya dice (AUD2-B4-05).
 _OTP_REASON = "se pidio un codigo de verificacion con esta direccion"
@@ -184,7 +262,8 @@ async def _schedule_otp_mail(
     codigo (AUD2-B4-05) al email tipeado cuando el codigo fue a otro lado.
 
     Los dos usan el mismo asunto y estan acotados por
-    ``OTP_MAX_REQUESTS_PER_HOUR``.
+    ``OTP_MAX_REQUESTS_PER_HOUR`` (por telefono) y por el tope de su buzon
+    (``_recipients_within_cap``): un destino ``None`` no se despacha.
 
     Revision de F1-03 (2026-09-24): los despachos se INICIAN en orden fijo
     (codigo y despues aviso) y se esperan juntos. En serie, con el broker
@@ -393,6 +472,28 @@ class OtpService:
         destination, notice_to = await self._resolve_destination(
             store_id, normalized_phone, typed
         )
+        # Tope por buzon ANTES de guardar: sin Redis en produccion es 503 y
+        # no invalida el codigo vivo de nadie. Solo el canal email manda.
+        code_to, notice_to = (
+            await _recipients_within_cap(destination, notice_to)
+            if channel == "email"
+            else (None, None)
+        )
+
+        # Sin entrega del codigo no se guarda ni se invalida el anterior.
+        # En produccion la respuesta conserva su forma, sin revelar si el
+        # telefono tiene una ficha con otro email. En desarrollo no se expone
+        # un debug_code inexistente. El aviso tampoco debe afirmar que se
+        # envio un codigo que nadie puede recibir.
+        if channel == "email" and code_to is None:
+            response: dict[str, object] = {
+                "ok": True,
+                "expires_at": (
+                    datetime.now(timezone.utc)
+                    + timedelta(minutes=settings.OTP_CODE_EXPIRE_MINUTES)
+                ).isoformat(),
+            }
+            return response
 
         # secrets, no random: un OTP con PRNG predecible se puede adivinar.
         code = f"{secrets.randbelow(1_000_000):06d}"
@@ -408,7 +509,7 @@ class OtpService:
             # dice a que buzon fue: eso delataria si el telefono es cliente.
             await _schedule_otp_mail(
                 schedule_dispatch,
-                destination=destination,
+                destination=code_to,
                 notice_to=notice_to,
                 code=code,
                 store_name=store_name,
