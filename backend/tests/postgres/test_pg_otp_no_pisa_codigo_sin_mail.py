@@ -150,6 +150,9 @@ async def test_entre_pedidos_sin_entrega_gana_el_que_si_encolo(
     assert list(estados) == [200] * 4
     assert await _filas(owner_engine, tienda) == 2
     codigo_b = broker.codigo_para(NUEVO)
-    if codigo_b != codigo_a:  # 1 en 10^6 de que coincidan
-        assert not await _verifica(client, tienda, codigo_a)
+    # 2026-10-05: el codigo nuevo fue a OTRA casilla, asi que el del titular
+    # sigue vivo (``test_otp_invalida_solo_mismo_destino.py``); verifican los
+    # dos, cada uno contra su buzon.
     assert await _verifica(client, tienda, codigo_b)
+    if codigo_b != codigo_a:  # 1 en 10^6 de que coincidan
+        assert await _verifica(client, tienda, codigo_a)
