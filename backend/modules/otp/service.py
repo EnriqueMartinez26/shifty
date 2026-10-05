@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import select, update
+from sqlalchemy import Select, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -375,6 +375,24 @@ def _debug_code(code: str, *, decoy: bool) -> str:
     return f"{senuelo:06d}"
 
 
+def _live_codes_query(
+    store_id: str, normalized_phone: str, now: datetime
+) -> Select[tuple[OtpVerification]]:
+    """Codigos vivos (sin consumir ni vencer) del telefono, el mas nuevo
+    primero. Es tambien el orden de los locks: quien toma varias de estas
+    filas las toma en este orden y dos transacciones no se cruzan."""
+    return (
+        select(OtpVerification)
+        .where(
+            OtpVerification.store_id == store_id,
+            OtpVerification.phone == normalized_phone,
+            OtpVerification.consumed_at.is_(None),
+            OtpVerification.expires_at > now,
+        )
+        .order_by(OtpVerification.created_at.desc(), OtpVerification.id.desc())
+    )
+
+
 class OtpService:
     """Se instancia por request.
 
@@ -469,19 +487,43 @@ class OtpService:
         email: str | None,
         expires_at: datetime,
     ) -> None:
-        """Invalida los codigos vivos de ese telefono y guarda el nuevo, con el
-        buzon al que se despacho (``otp_verifications.email``)."""
+        """Invalida los codigos vivos de ese telefono enviados al MISMO buzon y
+        guarda el nuevo, con el buzon al que se despacho
+        (``otp_verifications.email``).
+
+        2026-10-05 (revision de #126): invalidaba TODOS los vivos del
+        telefono. Sin ficha de cliente el codigo va al email tipeado, asi que
+        pedir uno para el telefono ajeno con la casilla propia (el mail sale
+        de verdad) mataba el codigo que la victima tenia en la suya. Los de
+        otras casillas siguen hasta vencer; ``verify_code`` los compara a
+        todos y cada intento cuenta contra todos. Con ficha todo codigo va al
+        email guardado: ahi "mismo buzon" son todos, como antes.
+
+        Las filas se toman con ``FOR UPDATE`` en el orden de
+        ``_lock_live_codes`` antes de invalidarlas: un ``UPDATE`` las tomaria
+        en el orden fisico y podria cruzarse con una verificacion.
+        """
         self._forget_verification()
         now = datetime.now(timezone.utc)
-        await self.db.execute(
-            update(OtpVerification)
-            .where(
-                OtpVerification.store_id == store_id,
-                OtpVerification.phone == normalized_phone,
-                OtpVerification.consumed_at.is_(None),
-            )
-            .values(consumed_at=now)
+        same_destination = (
+            OtpVerification.email.is_(None)
+            if email is None
+            else OtpVerification.email == email
         )
+        replaced = (
+            await self.db.scalars(
+                _live_codes_query(store_id, normalized_phone, now)
+                .where(same_destination)
+                .with_only_columns(OtpVerification.id)
+                .with_for_update()
+            )
+        ).all()
+        if replaced:
+            await self.db.execute(
+                update(OtpVerification)
+                .where(OtpVerification.id.in_(replaced))
+                .values(consumed_at=now)
+            )
         otp = OtpVerification(
             store_id=store_id,
             phone=normalized_phone,
@@ -533,10 +575,11 @@ class OtpService:
             minutes=settings.OTP_CODE_EXPIRE_MINUTES
         )
 
-        # 2026-10-05: guardar el codigo invalida el vivo, asi que se guarda
-        # SOLO si su mail quedo encolado. Antes se guardaba primero y un
-        # encolado fallido (broker caido o lento) o el tope del buzon dejaban
-        # al titular sin codigo valido: pedir codigos para un telefono ajeno
+        # 2026-10-05: guardar el codigo invalida el vivo de ese mismo buzon
+        # (``_store_code``), asi que se guarda SOLO si su mail quedo
+        # encolado. Antes se guardaba primero y un encolado fallido (broker
+        # caido o lento) o el tope del buzon dejaban al titular sin codigo
+        # valido: pedir codigos para un telefono ajeno
         # trababa su verificacion sin mandarle nada. Si el guardado falla
         # despues de encolar, sale un mail con un codigo que no existe y el
         # vivo sigue valido: es el orden que falla del lado seguro.
@@ -570,6 +613,29 @@ class OtpService:
             response["debug_code"] = _debug_code(code, decoy=decoy)
         return response
 
+    async def _lock_live_codes(
+        self, store_id: str, normalized_phone: str, now: datetime
+    ) -> list[OtpVerification]:
+        """Los codigos vivos del telefono contra los que se compara un
+        intento, lockeados (``FOR UPDATE``; no-op en SQLite).
+
+        Sin el lock, dos verificaciones concurrentes leen el mismo
+        ``attempts`` y las dos escriben N+1, y se pasaba OTP_MAX_ATTEMPTS.
+
+        Desde 2026-10-05 puede haber un codigo vivo por buzon de destino
+        (``_store_code``). El tope de cuantos se comparan es
+        ``OTP_MAX_REQUESTS_PER_HOUR``, los mas nuevos: con el presupuesto por
+        telefono de ``request_code`` nunca hay mas vivos que eso (vencen a
+        los OTP_CODE_EXPIRE_MINUTES), y el ``LIMIT`` lo sostiene aunque
+        Redis no lo cuente (desarrollo, tests).
+        """
+        result = await self.db.scalars(
+            _live_codes_query(store_id, normalized_phone, now)
+            .limit(settings.OTP_MAX_REQUESTS_PER_HOUR)
+            .with_for_update()
+        )
+        return list(result.all())
+
     async def verify_code(
         self, *, store_id: str, phone: str, code: str
     ) -> dict[str, object]:
@@ -584,31 +650,28 @@ class OtpService:
         )
 
         now = datetime.now(timezone.utc)
-        result = await self.db.execute(
-            select(OtpVerification)
-            .where(
-                OtpVerification.store_id == store_id,
-                OtpVerification.phone == normalized_phone,
-            )
-            .order_by(OtpVerification.created_at.desc())
-            .limit(1)
-            # Lock de fila: sin esto, dos verify concurrentes leen el mismo
-            # attempts y ambos incrementan a N+1 (read-modify-write), dejando
-            # exceder OTP_MAX_ATTEMPTS. No-op en SQLite (tests).
-            .with_for_update()
-        )
-        otp = result.scalar_one_or_none()
-        if not otp or otp.is_consumed or otp.is_expired:
+        live = await self._lock_live_codes(store_id, normalized_phone, now)
+        if not live:
             raise _OTP_INVALID()
-        if otp.attempts >= settings.OTP_MAX_ATTEMPTS:
+        usable = [c for c in live if c.attempts < settings.OTP_MAX_ATTEMPTS]
+        if not usable:
             raise OTPRateLimitedException()
 
-        otp.attempts += 1
         expected = hash_otp_code(store_id, normalized_phone, code)
-        if not hmac.compare_digest(otp.code_hash, expected):
+        # Se compara con todos sin cortar en el primero que coincide, y el
+        # intento cuenta contra TODOS los comparados (2026-10-05): ningun
+        # codigo ve mas de OTP_MAX_ATTEMPTS intentos en su vida, igual que
+        # cuando habia uno solo vivo por telefono.
+        matches = [c for c in usable if hmac.compare_digest(c.code_hash, expected)]
+        for candidate in usable:
+            candidate.attempts += 1
+        if not matches:
             await self.db.commit()
             raise _OTP_INVALID()
 
+        # Solo se consume el que coincidio: verificar el codigo de una casilla
+        # no mata el que otra persona tiene en la suya.
+        otp = matches[0]
         otp.consumed_at = now
         # Marca que alguien demostro posesion del EMAIL `otp.email`, NO del
         # telefono: el codigo viaja a una direccion, y el telefono solo es la
