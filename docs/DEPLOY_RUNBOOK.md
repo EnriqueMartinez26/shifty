@@ -178,7 +178,7 @@ cd /opt/shifty
 sudo bash scripts/host-hardening-check.sh     # endurecimiento: todo en orden (exit 0)
 ```
 
-It needs root (`sshd -T`, `ufw status` and `fail2ban-client` do). It checks the EFFECTIVE sshd config (`sshd -T`, so a drop-in that re-enables passwords is caught), that ufw is active, denies incoming by default and opens nothing but `HARDENING_UFW_ALLOWED` (`22/tcp 80/tcp 443/tcp`), that unattended-upgrades is on with security origins only and no automatic reboot, that the fail2ban `sshd` jail is up, and whether a reboot is pending. Every finding alerts like the other host scripts.
+It needs root (`sshd -T`, `ufw status` and `fail2ban-client` do). It checks the EFFECTIVE sshd config (`sshd -T`, so a drop-in that re-enables passwords is caught), that no `Match` block in `/etc/ssh/sshd_config` or the files it includes sets `PasswordAuthentication`, `KbdInteractiveAuthentication` or `PermitRootLogin` to anything but `no` (a `Match` that applies overrides the global value, and `sshd -T` cannot see one for another user, group or network), that ufw is active, denies incoming by default and opens nothing but `HARDENING_UFW_ALLOWED` (`22/tcp 80/tcp 443/tcp`), that unattended-upgrades is on with security origins only and no automatic reboot, that the fail2ban `sshd` jail is up, and whether a reboot is pending. Every finding alerts like the other host scripts.
 
 ### Host: memory budget, swap and boot
 
