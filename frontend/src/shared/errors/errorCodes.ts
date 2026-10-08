@@ -40,6 +40,9 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],
   ['OUT_OF_SCHEDULE', 'El profesional no atiende en ese horario. Elegí otro.'],
   ['NO_STAFF_AVAILABLE', 'No hay profesionales disponibles en ese horario. Elegí otro.'],
+  // Semana del profesional (PUT /staff/{id}/schedules). El editor nombra el
+  // dia con `detail.day_of_week`; esto es el respaldo sin el dia.
+  ['SCHEDULE_OVERLAP', 'Hay franjas que se superponen el mismo día. Corregilas y volvé a guardar.'],
   // POST /staff/me: la cuenta ya figura en la agenda (otra pestana la agrego).
   ['STAFF_SELF_ALREADY_EXISTS', 'Ya figurás como profesional. Actualizá la lista del personal.'],
   // PUT /staff/{id} sobre la propia ficha: el email de login no cambia sin la

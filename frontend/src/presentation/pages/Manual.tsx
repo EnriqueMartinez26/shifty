@@ -55,7 +55,7 @@ const SECTIONS: ManualSection[] = [
       },
       {
         title: '4. Definí los horarios',
-        body: 'A cada persona cargale sus días y horas de trabajo. Fuera de ese horario, nadie va a poder reservar.',
+        body: 'En Personal tocá "Horarios" en cada persona y cargale sus días y horas de trabajo. Si no le cargás nada, atiende en el horario de tu negocio. Fuera de su horario, nadie va a poder reservar.',
         tip: 'Podés cargar dos franjas el mismo día (por ejemplo 9 a 13 y 16 a 20). Si te equivocaste, editá o borrá la franja: el sistema no te deja pisar una con otra.'
       }
     ]

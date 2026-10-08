@@ -267,6 +267,23 @@ class ValidationException(AppException):
         )
 
 
+class ScheduleOverlapException(AppException):
+    """Dos franjas del profesional se pisan el mismo dia de la semana.
+
+    Codigo propio y no ``VALIDATION_ERROR``: el panel no muestra el texto de
+    ese codigo (regla 20) y el admin tiene que saber QUE dia corregir, asi
+    que el dia viaja en ``detail``.
+    """
+
+    def __init__(self, day_of_week: int) -> None:
+        super().__init__(
+            message="Hay franjas que se superponen el mismo día.",
+            http_status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            error_code="SCHEDULE_OVERLAP",
+            detail={"day_of_week": day_of_week},
+        )
+
+
 # ---------------------------------------------------------------------------
 # OTP
 # ---------------------------------------------------------------------------

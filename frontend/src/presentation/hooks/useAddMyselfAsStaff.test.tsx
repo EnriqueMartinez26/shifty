@@ -16,6 +16,12 @@ jest.mock('@application/services/StaffService', () => ({
   }
 }))
 
+// useManagedStaff tambien exporta el hook de la semana (#130), que importa el
+// cliente HTTP real (import.meta, que ts-jest no compila).
+jest.mock('@application/services/StaffSchedulesService', () => ({
+  staffSchedulesService: {}
+}))
+
 const envoltorio = ({ children }: { children: React.ReactNode }) => {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } }

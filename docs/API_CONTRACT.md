@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 117 — Operaciones: 146
+- Paths: 117 — Operaciones: 147
 
 ## /
 
@@ -1607,6 +1607,26 @@ Responses:
 - `200` Successful Response — `application/json`: `ApiSuccess_ScheduleResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
+### PUT /staff/{public_id}/schedules
+
+- Summary: Replace Staff Schedules
+- operationId: `replace_staff_schedules_staff__public_id__schedules_put`
+
+Parameters:
+
+| in | name | required | type | constraints |
+|---|---|---|---|---|
+| path | `public_id` | yes | string | minLength=1, maxLength=64, pattern="^[A-Za-z0-9_-]{1,64}$" |
+
+Request body (required):
+
+- `application/json`: `ScheduleWeekReplace`
+
+Responses:
+
+- `200` Successful Response — `application/json`: `ApiSuccess_list_ScheduleResponse__`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
 ### PATCH /staff/{public_id}/schedules/{schedule_id}
 
 - Summary: Update Staff Schedule
@@ -2593,6 +2613,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | array<PublicStaffResponse> | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_list_ScheduleResponse__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<ScheduleResponse> | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_list_ServiceResponse__
@@ -4123,6 +4151,12 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `start_time` | string \| null | no | format="time" |
 | `end_time` | string \| null | no | format="time" |
 
+### ScheduleWeekReplace
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `schedules` | array<ScheduleCreate> | yes | maxItems=42 |
+
 ### ServiceCreate
 
 | field | type | required | constraints |
@@ -4707,4 +4741,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-08, commit 841ccf44
+Generado desde app.openapi() el 2026-10-08, commit 9c2b0987

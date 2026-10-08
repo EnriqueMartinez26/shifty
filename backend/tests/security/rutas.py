@@ -333,6 +333,18 @@ async def _crear_horario(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _reemplazar_semana(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "PUT",
+        f"/staff/{await m.staff(t)}/schedules",
+        json={
+            "schedules": [
+                {"day_of_week": 1, "start_time": "08:00:00", "end_time": "12:00:00"}
+            ]
+        },
+    )
+
+
 async def _editar_horario(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     staff = await m.staff(t)
     horario = await m.horario(t, staff, 2)
@@ -1128,6 +1140,14 @@ TABLA: tuple[Ruta, ...] = (
         ADMINS,
         A.RECURSO,
         _crear_horario,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "PUT",
+        "/staff/{public_id}/schedules",
+        ADMINS,
+        A.RECURSO,
+        _reemplazar_semana,
         idor=IDOR_POR_ID,
     ),
     R(
