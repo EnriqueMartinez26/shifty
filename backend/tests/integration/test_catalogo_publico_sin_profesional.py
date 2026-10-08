@@ -10,7 +10,11 @@ avisa al dueno que no aparecen en su pagina.
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from modules.services.model import Service
+from modules.staff.model import Staff, StaffServiceModel
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     auth_headers,
     create_service,
@@ -74,8 +78,19 @@ async def test_un_profesional_inactivo_no_alcanza(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_un_profesional_de_otra_tienda_no_publica_el_servicio(
-    client: AsyncClient,
+    client: AsyncClient, test_session: AsyncSession
 ) -> None:
+    """Una fila cruzada de ``staff_services`` no publica el servicio.
+
+    La API no deja crear la fila (el alta del personal valida que el
+    servicio sea de su tienda), asi que se escribe directo por ORM: el
+    profesional ACTIVO de la tienda B queda asociado a un servicio de la
+    tienda A, que no tiene profesional propio. Sin ``Staff.store_id ==
+    store_id`` en el EXISTS de ``PublicRepository.get_services`` el servicio
+    salia en el portal de A. En Postgres RLS ya filtra el ``Staff`` de otra
+    tienda; esta suite corre en SQLite, sin RLS, y por eso este test es el
+    que fija la defensa en profundidad del filtro explicito.
+    """
     store_a, token_a = await register_and_login(
         client, slug="cat-tienda-a", email="cat-tienda-a@example.com"
     )
@@ -84,8 +99,20 @@ async def test_un_profesional_de_otra_tienda_no_publica_el_servicio(
     )
     servicio_a = await create_service(client, token_a)
     servicio_b = await create_service(client, token_b)
-    await create_staff(client, token_b, servicio_b, email="pro-tienda-b@example.com")
+    staff_b = await create_staff(
+        client, token_b, servicio_b, email="pro-tienda-b@example.com"
+    )
+
+    servicio_a_id = await test_session.scalar(
+        select(Service.id).where(Service.public_id == servicio_a)
+    )
+    staff_b_id = await test_session.scalar(
+        # El public_id del profesional es su id (propiedad, no columna).
+        select(Staff.id).where(Staff.id == staff_b, Staff.is_active == True)
+    )
+    assert servicio_a_id is not None and staff_b_id is not None
+    test_session.add(StaffServiceModel(staff_id=staff_b_id, service_id=servicio_a_id))
+    await test_session.commit()
 
     assert await _catalogo(client, store_a) == []
     assert await _catalogo(client, store_b) == [servicio_b]
-    assert servicio_a not in await _catalogo(client, store_b)

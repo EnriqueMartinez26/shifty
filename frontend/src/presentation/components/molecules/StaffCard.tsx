@@ -14,6 +14,8 @@ interface StaffCardProps {
   readOnlyReason?: string | null
   /** id -> nombre de los servicios de la tienda; sin el, el chip dice "Servicio". */
   serviceNames?: ReadonlyMap<string, string>
+  /** La ficha es de la cuenta que inicia sesion: quitarse no es dar de baja. */
+  isSelf?: boolean
 }
 
 export const StaffCard: React.FC<StaffCardProps> = ({
@@ -21,7 +23,8 @@ export const StaffCard: React.FC<StaffCardProps> = ({
   onEdit,
   onDelete,
   readOnlyReason = null,
-  serviceNames
+  serviceNames,
+  isSelf = false
 }) => {
   const blocked = readOnlyReason !== null
   const title = readOnlyReason ?? undefined
@@ -98,7 +101,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
               className="text-[10px] font-black uppercase tracking-widest mt-1 truncate"
               style={{ color: colors2000s.text.secondary }}
             >
-              {isResource ? 'Recurso' : staff.fullName}
+              {isResource ? 'Recurso' : isSelf ? `${staff.fullName} (vos)` : staff.fullName}
             </p>
           </div>
         </div>
@@ -184,7 +187,7 @@ export const StaffCard: React.FC<StaffCardProps> = ({
             className="flex items-center justify-center gap-2 py-2.5 px-3 font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 disabled:opacity-50"
             style={{ ...buttonStyles2000s.default, color: colors2000s.status.danger.light }}
           >
-            <Trash2 size={14} /> Eliminar
+            <Trash2 size={14} /> {isSelf ? 'Quitarme' : 'Eliminar'}
           </button>
         </div>
       </div>
