@@ -286,6 +286,42 @@ class StaffRepository:
         await self.db.delete(schedule)
         await self.db.flush()
 
+    async def lock_staff(self, staff: Staff) -> None:
+        """``SELECT ... FOR UPDATE`` de la fila del profesional.
+
+        Serializa dos reemplazos de la semana del mismo profesional: sin el
+        lock, dos PUT a la vez borraban las franjas viejas cada uno y la
+        semana terminaba con la union de los dos cuerpos (franjas que nadie
+        guardo juntas, y superpuestas). SQLite lo ignora; Postgres lo aplica.
+        """
+        await self.db.execute(
+            select(Staff.id)
+            .where(Staff.id == staff.id, Staff.store_id == staff.store_id)
+            .with_for_update()
+        )
+
+    async def replace_schedules(
+        self, staff: Staff, franjas: list[dict[str, Any]]
+    ) -> list[Schedule]:
+        """Borra TODAS las franjas del profesional y guarda ``franjas``.
+
+        Sin commit (lo hace StaffService). Las superposiciones ya se
+        validaron en el service sobre la lista completa: aca solo se escribe.
+        ``store_id`` sale del profesional, nunca del cuerpo.
+        """
+        await self.db.execute(
+            delete(Schedule).where(
+                Schedule.staff_id == staff.id, Schedule.store_id == staff.store_id
+            )
+        )
+        nuevas = [
+            Schedule(**franja, staff_id=staff.id, store_id=staff.store_id)
+            for franja in franjas
+        ]
+        self.db.add_all(nuevas)
+        await self.db.flush()
+        return nuevas
+
     async def _set_services(self, staff: Staff, services_list: list[Service]) -> None:
         """Deja al profesional con EXACTAMENTE los servicios de la lista.
 

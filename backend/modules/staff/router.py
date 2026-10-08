@@ -27,6 +27,7 @@ from modules.staff.schemas import (
     ScheduleCreate,
     ScheduleUpdate,
     ScheduleResponse,
+    ScheduleWeekReplace,
     StaffCreate,
     StaffResponse,
     StaffUpdate,
@@ -119,6 +120,33 @@ async def add_staff_schedule(
     except ValueError as exc:
         raise ValidationException(str(exc))
     return to_schedule_response(schedule)
+
+
+@router.put("/{public_id}/schedules", response_model=list[ScheduleResponse])
+async def replace_staff_schedules(
+    public_id: PublicIdPath,
+    data: ScheduleWeekReplace,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
+) -> list[ScheduleResponse]:
+    """Reemplaza la semana entera del profesional (lista vacia = horario del local).
+
+    Es lo que usa el editor de horarios del panel: una sola transaccion, sin
+    estados intermedios a la vista del portal. Superposiciones del mismo dia:
+    422 ``SCHEDULE_OVERLAP`` con el dia en ``detail``, sin tocar lo guardado.
+    """
+    repo = StaffRepository(db)
+    staff = await repo.get_by_id(
+        public_id, admin.store_id, include_global_admins=admin.is_global_admin
+    )
+    if not staff:
+        raise StaffNotFoundException(identifier=public_id)
+
+    guardadas = await StaffService(db, availability_cache).replace_schedules(
+        staff, [franja.model_dump() for franja in data.schedules]
+    )
+    return [to_schedule_response(franja) for franja in guardadas]
 
 
 @router.patch("/{public_id}/schedules/{schedule_id}", response_model=ScheduleResponse)

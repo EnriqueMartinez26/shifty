@@ -27,6 +27,24 @@ class ScheduleCreate(ScheduleBase):
     pass
 
 
+# Tope de franjas de la semana que acepta PUT /staff/{id}/schedules: seis por
+# dia. Un horario partido real usa dos o tres; el tope existe para que el
+# cuerpo no sea una lista sin limite (regla 9 aplicada al largo).
+MAX_SCHEDULES_PER_WEEK = 42
+
+
+class ScheduleWeekReplace(BaseModel):
+    """La semana ENTERA del profesional; reemplaza todas sus franjas.
+
+    ``schedules`` es obligatorio (sin default): un cuerpo vacio por error no
+    borra la semana. La lista vacia es explicita y vuelve al horario del local
+    (D-20260929-01). Las superposiciones del mismo dia se validan en el
+    service con su propio ``error_code`` (``SCHEDULE_OVERLAP``).
+    """
+
+    schedules: list[ScheduleCreate] = Field(..., max_length=MAX_SCHEDULES_PER_WEEK)
+
+
 # Columnas NOT NULL de schedules que el PATCH puede tocar.
 _SCHEDULE_NOT_NULL_FIELDS = ("day_of_week", "start_time", "end_time")
 
