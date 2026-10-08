@@ -143,6 +143,7 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     mockBusinessHours = { sun: [{ open: '09:00', close: '21:00' }] }
     mockUser.role = 'store_admin'
     mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+    window.localStorage.clear()
   })
 
   afterEach(() => {
@@ -202,6 +203,8 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     })
   })
 
+  // En el telefono el mes es una lista y muestra todos (QA movil 2026-10-08):
+  // el resto queda oculto solo desde md.
   it('mes muestra cuatro eventos por dia y "+N eventos" con el resto', () => {
     mockAppointments = [1, 2, 3, 4, 5, 6].map((n) =>
       appointmentOf(
@@ -216,9 +219,11 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
 
     const cell = within(dayCell('15/09'))
     for (const n of [1, 2, 3, 4]) expect(cell.getByText(`Cliente ${n}`)).toBeInTheDocument()
-    expect(cell.queryByText('Cliente 5')).not.toBeInTheDocument()
-    expect(cell.queryByText('Cliente 6')).not.toBeInTheDocument()
-    expect(cell.getByText('+2 eventos')).toBeInTheDocument()
+    const onlyOnPhone = (text: string) => cell.getByText(text).closest('[class~="md:hidden"]')
+    for (const n of [1, 2, 3, 4]) expect(onlyOnPhone(`Cliente ${n}`)).toBeNull()
+    expect(onlyOnPhone('Cliente 5')).not.toBeNull()
+    expect(onlyOnPhone('Cliente 6')).not.toBeNull()
+    expect(cell.getByText('+2 eventos')).toHaveClass('hidden', 'md:block')
   })
 
   it('semana muestra todos los eventos del dia, sin "+N eventos"', () => {
@@ -430,5 +435,90 @@ describe('CalendarContainer - vistas, orden y navegacion (F11c-08)', () => {
     chooseView('Lista')
 
     expect(screen.getByText('No hay eventos para el rango seleccionado.')).toBeInTheDocument()
+  })
+})
+
+// QA movil 2026-10-08 (390x844): la agenda arrancaba siempre en "Día", que en
+// un telefono es una grilla de 800 px, y volvia a "Día" en cada navegacion.
+describe('CalendarContainer - vista inicial y preferencia', () => {
+  const setPhone = (isPhone: boolean) => {
+    window.matchMedia = jest.fn((query: string) => ({
+      matches: isPhone && query.includes('max-width'),
+      media: query,
+      onchange: null,
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      dispatchEvent: jest.fn()
+    })) as unknown as typeof window.matchMedia
+  }
+
+  const pressedView = () =>
+    ['Día', 'Semana', 'Mes', 'Lista'].filter(
+      (label) => screen.getByRole('button', { name: label }).getAttribute('aria-pressed') === 'true'
+    )
+
+  beforeEach(() => {
+    window.localStorage.clear()
+    mockAppointments = []
+    mockBlocks = []
+    mockTotal = null
+    mockUser.public_id = 'adm-1'
+  })
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'matchMedia')
+  })
+
+  it('en un telefono arranca en Lista', () => {
+    setPhone(true)
+    render(<CalendarContainer />)
+    expect(pressedView()).toEqual(['Lista'])
+  })
+
+  it('en una pantalla grande arranca en Día', () => {
+    setPhone(false)
+    render(<CalendarContainer />)
+    expect(pressedView()).toEqual(['Día'])
+  })
+
+  it('recuerda la vista elegida al volver a la agenda', () => {
+    setPhone(false)
+    const { unmount } = render(<CalendarContainer />)
+    chooseView('Semana')
+    unmount()
+
+    render(<CalendarContainer />)
+    expect(pressedView()).toEqual(['Semana'])
+  })
+
+  it('la preferencia es de cada usuario', () => {
+    setPhone(true)
+    const { unmount } = render(<CalendarContainer />)
+    chooseView('Mes')
+    unmount()
+
+    mockUser.public_id = 'otro-usuario'
+    render(<CalendarContainer />)
+    expect(pressedView()).toEqual(['Lista'])
+  })
+
+  it('sin almacenamiento disponible, la agenda funciona igual', () => {
+    setPhone(false)
+    const getItem = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    const setItem = jest.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    try {
+      render(<CalendarContainer />)
+      chooseView('Lista')
+      expect(pressedView()).toEqual(['Lista'])
+    } finally {
+      getItem.mockRestore()
+      setItem.mockRestore()
+    }
   })
 })

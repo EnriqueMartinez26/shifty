@@ -78,6 +78,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
       <button
         type="button"
         onClick={onPrev}
+        aria-label="Anterior"
         className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
         style={buttonStyles2000s.default}
       >
@@ -100,6 +101,7 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
       <button
         type="button"
         onClick={onNext}
+        aria-label="Siguiente"
         className="w-10 h-10 flex items-center justify-center transition-all active:scale-90"
         style={buttonStyles2000s.default}
       >
@@ -113,7 +115,8 @@ export const AgendaToolbar: React.FC<AgendaToolbarProps> = ({
           key={viewKey}
           type="button"
           onClick={() => onViewChange(viewKey)}
-          className="px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
+          aria-pressed={view === viewKey}
+          className="min-h-10 px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest"
           style={view === viewKey ? buttonStyles2000s.selected : buttonStyles2000s.default}
         >
           {VIEW_LABELS[viewKey]}

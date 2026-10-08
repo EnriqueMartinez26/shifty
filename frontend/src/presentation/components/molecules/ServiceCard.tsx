@@ -1,6 +1,16 @@
 import React from 'react'
 
-import { Briefcase, Clock, DollarSign, Edit2, Trash2, Check, X, RotateCcw } from 'lucide-react'
+import {
+  Briefcase,
+  Clock,
+  DollarSign,
+  Edit2,
+  Trash2,
+  Check,
+  X,
+  RotateCcw,
+  TriangleAlert
+} from 'lucide-react'
 
 import { Service } from '@domain/entities/Service'
 
@@ -14,6 +24,11 @@ interface ServiceCardProps {
   isSelected?: boolean
   /** Tienda suspendida: editar, eliminar y reactivar responden 402 (FF-15). */
   readOnlyReason?: string | null
+  /**
+   * Activo pero ningun profesional activo lo hace: el portal no lo publica
+   * (QA movil 2026-10-08) y el dueno tiene que saber por que.
+   */
+  withoutStaff?: boolean
 }
 
 export const ServiceCard: React.FC<ServiceCardProps> = ({
@@ -22,7 +37,8 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
   onDelete,
   onReactivate,
   isSelected = false,
-  readOnlyReason = null
+  readOnlyReason = null,
+  withoutStaff = false
 }) => {
   const accentColor = service.color || colors2000s.orange.light
   const blocked = readOnlyReason !== null
@@ -101,6 +117,21 @@ export const ServiceCard: React.FC<ServiceCardProps> = ({
             </p>
           </div>
         </div>
+
+        {withoutStaff && (
+          <p
+            role="status"
+            className="flex items-start gap-2 rounded-md px-3 py-2 text-[11px] font-bold"
+            style={{
+              background: colors2000s.status.warning.bg,
+              border: `1px solid ${colors2000s.status.warning.border}`,
+              color: colors2000s.status.warning.text
+            }}
+          >
+            <TriangleAlert size={14} className="flex-shrink-0 mt-px" aria-hidden="true" />
+            Sin profesionales asignados: no aparece en tu página.
+          </p>
+        )}
 
         {/* Specs metadata rows */}
         <div className="grid grid-cols-2 gap-4 pt-4">

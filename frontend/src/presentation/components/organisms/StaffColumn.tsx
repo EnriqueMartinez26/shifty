@@ -35,6 +35,8 @@ interface StaffColumnProps {
   cards: readonly StaffColumnCard[]
   canManageBlocks: boolean
   onEditBlock: (block: StaffColumnBlock) => void
+  /** En el telefono se ve un profesional por vez (QA movil 2026-10-08). */
+  hiddenOnPhone?: boolean
 }
 
 const closedBandStyle = {
@@ -54,9 +56,13 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
   blocks,
   cards,
   canManageBlocks,
-  onEditBlock
+  onEditBlock,
+  hiddenOnPhone = false
 }) => (
-  <div className="flex-1 min-w-[150px] relative border-r border-gray-50">
+  <div
+    data-staff-column
+    className={`${hiddenOnPhone ? 'hidden md:block' : ''} flex-1 min-w-[150px] relative border-r border-gray-50`}
+  >
     {grid.bands.map((band) =>
       band.kind === 'open' ? (
         band.labels.map((label) => (
@@ -126,7 +132,7 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
       return (
         <div
           key={card.id}
-          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between"
+          className="absolute left-2 right-2 rounded-[6px] p-3 border border-l-[5px] transition-all hover:scale-[1.02] active:scale-95 cursor-pointer flex flex-col justify-between gap-1 overflow-y-auto"
           style={{
             top: card.top,
             height: card.height,
@@ -136,8 +142,7 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.8), 0 3px 6px rgba(0,0,0,0.05)'
           }}
         >
-          <div className="absolute top-1 right-1 z-10 flex items-center gap-1">{card.controls}</div>
-          <div>
+          <div className="min-w-0">
             <p
               className="text-[8px] font-black uppercase tracking-widest mb-0.5"
               style={{ color: style.text }}
@@ -150,6 +155,8 @@ export const StaffColumn: React.FC<StaffColumnProps> = ({
             >
               {card.title}
             </h4>
+            {/* Debajo del nombre, no encima: tapaban el servicio (QA movil 2026-10-08). */}
+            <div className="flex flex-wrap items-start gap-1">{card.controls}</div>
           </div>
           <span
             className="self-start px-2 py-0.5 rounded-[4px] text-[8px] font-black tracking-widest uppercase"
