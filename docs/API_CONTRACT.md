@@ -3299,6 +3299,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `client` | ExportedClient | yes |  |
 | `appointments` | array<ExportedAppointment> | yes |  |
 | `payments` | array<ExportedPayment> | yes |  |
+| `balance_payments` | array<ExportedBalancePayment> | no | default=[] |
 | `ledger` | array<ExportedLedgerMovement> | yes |  |
 | `waitlist` | array<ExportedWaitlistEntry> | yes |  |
 | `marketing_opted_out_at` | string \| null | no | format="date-time" |
@@ -3434,6 +3435,17 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `privacy_version` | string \| null | no |  |
 | `cancelled_at` | string \| null | no | format="date-time" |
 | `completed_at` | string \| null | no | format="date-time" |
+
+### ExportedBalancePayment
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `public_id` | string | yes |  |
+| `appointment_id` | string | yes |  |
+| `amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `method` | string \| null | no |  |
+| `created_at` | string \| null | no | format="date-time" |
+| `reverted_at` | string \| null | no | format="date-time" |
 
 ### ExportedClient
 
@@ -3710,6 +3722,7 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `currency` | string | yes |  |
 | `status` | string | yes |  |
 | `paid_at` | string \| null | no | format="date-time" |
+| `live_remainder_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 
 ### PlanCreate
 
@@ -3989,6 +4002,8 @@ Type: `enum("efectivo", "transferencia", "mercadopago", "otro")`
 | `refunded_payments` | integer | yes |  |
 | `total_pending_amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 | `total_approved_amount` | string | yes | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `remainder_payments` | integer | no | default=0 |
+| `total_remainder_amount` | string | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$", default="0" |
 | `pending_webhooks` | integer | yes |  |
 | `failed_webhooks` | integer | yes |  |
 | `pending_outbox` | integer | yes |  |
@@ -4767,4 +4782,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-08, commit 30a53a6e
+Generado desde app.openapi() el 2026-10-08, commit fa002e1d

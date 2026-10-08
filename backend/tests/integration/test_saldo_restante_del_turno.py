@@ -457,3 +457,82 @@ async def test_el_resto_entra_en_la_misma_consulta_de_la_busqueda(
     (pagina,) = [s for s in turnos if "count(" not in s]
     assert "left outer join appointment_balance_payments" in pagina, pagina
     assert "appointment_balance_payments.store_id" in pagina, pagina
+
+
+async def _id_del_cobro(session: AsyncSession, turno: str) -> str:
+    fila = await session.execute(
+        text("select id from payments where appointment_id = :t"), {"t": turno}
+    )
+    return str(fila.scalar_one())
+
+
+@pytest.mark.asyncio
+async def test_devolver_la_sena_avisa_el_resto_vivo_sin_revertirlo(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Revision de la PR #137 (W1, 2026-10-08): devolver la sena dejaba el
+    resto vivo, contando como ingreso, sin que nadie se enterara. El reembolso
+    no lo revierte (la devolucion del resto es otra decision) pero lo dice."""
+    c = await _caso(client, test_session, "resto-reembolso")
+    turno = await c.turno()
+    await _registrar(client, c.token, turno, "resto-clave-0016")
+
+    res = await client.post(
+        f"/payments/{await _id_del_cobro(test_session, turno)}/refund",
+        headers=auth_headers(c.token),
+        json={"manual": True, "reason": "Devolucion de la sena"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "refunded"
+    assert Decimal(res.json()["live_remainder_amount"]) == RESTO
+    assert await _filas_vivas(test_session, turno) == [RESTO]
+
+
+@pytest.mark.asyncio
+async def test_devolver_sin_resto_no_avisa_nada(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    c = await _caso(client, test_session, "resto-reembolso-sin")
+    turno = await c.turno()
+
+    res = await client.post(
+        f"/payments/{await _id_del_cobro(test_session, turno)}/refund",
+        headers=auth_headers(c.token),
+        json={"manual": True},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["live_remainder_amount"] is None
+
+
+@pytest.mark.asyncio
+async def test_registrar_y_revertir_dejan_auditoria(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    """Revision de la PR #137 (S3): plata registrada a mano deja rastro de
+    quien la cargo y quien la revirtio, como los cambios de la agenda."""
+    c = await _caso(client, test_session, "resto-auditoria")
+    turno = await c.turno()
+    registrado = await _registrar(
+        client, c.token, turno, "resto-clave-0017", method="efectivo"
+    )
+    resto_id = registrado.json()["public_id"]
+    revertido = await client.post(
+        f"/payments/{turno}/remaining-payment/revert", headers=auth_headers(c.token)
+    )
+    assert revertido.status_code == 200, revertido.text
+
+    filas = await test_session.execute(
+        text(
+            "select action, store_id, actor_id, payload_after from audit_logs "
+            "where resource_type = 'AppointmentBalancePayment' "
+            "and resource_id = :r order by created_at"
+        ),
+        {"r": resto_id},
+    )
+    acciones = filas.all()
+    assert [a[0] for a in acciones] == ["create", "update"]
+    assert all(a[1] == c.store_id and a[2] is not None for a in acciones)
+    assert "2240" in str(acciones[0][3]) and turno in str(acciones[0][3])
+    assert "reverted_at" in str(acciones[1][3])

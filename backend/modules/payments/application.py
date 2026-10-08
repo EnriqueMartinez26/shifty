@@ -24,6 +24,7 @@ from core.exceptions import (
 from core.uow import AbstractUnitOfWork
 from core.utils import ensure_utc_aware, now_utc
 from modules.appointments.model import Appointment, AppointmentStatus
+from modules.audit.model import AuditAction
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
 from modules.payments.model import (
@@ -288,6 +289,16 @@ class PaymentService:
         restos.add(resto)
         await self.uow.session.flush()
         queda = await restos.remaining_balance(appointment.id, actor.store_id)
+        await self._audit_remainder(
+            resto,
+            actor,
+            AuditAction.CREATE,
+            after={
+                "appointment_id": appointment.id,
+                "amount": str(importe),
+                "method": resto.method,
+            },
+        )
         await self.uow.commit()
         return resto, queda
 
@@ -313,8 +324,37 @@ class PaymentService:
         resto.revert(actor_id=actor.id)
         await self.uow.session.flush()
         saldo = await restos.remaining_balance(appointment.id, actor.store_id)
+        revertido = resto.reverted_at.isoformat() if resto.reverted_at else None
+        await self._audit_remainder(
+            resto,
+            actor,
+            AuditAction.UPDATE,
+            before={"reverted_at": None},
+            after={"reverted_at": revertido, "amount": str(resto.amount)},
+        )
         await self.uow.commit()
         return resto, saldo
+
+    async def _audit_remainder(
+        self,
+        resto: AppointmentBalancePayment,
+        actor: User,
+        action: AuditAction,
+        *,
+        after: dict[str, str | None],
+        before: dict[str, str | None] | None = None,
+    ) -> None:
+        """Quien registro o revirtio el resto, en la misma transaccion
+        (revision de la PR #137, S3): plata cargada a mano deja rastro."""
+        await self.uow.audit.log(
+            action=action,
+            resource_type="AppointmentBalancePayment",
+            resource_id=resto.id,
+            store_id=resto.store_id,
+            actor=actor,
+            payload_before=before,
+            payload_after=after,
+        )
 
     async def _lock_for_manual_confirm(
         self, appointment: Appointment, actor: User

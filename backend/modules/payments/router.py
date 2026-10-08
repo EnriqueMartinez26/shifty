@@ -906,7 +906,14 @@ async def refund_payment(
         manual=data.manual,
     )
     await db.refresh(payment)
-    return _payment_response(payment)
+    # El reembolso no toca el resto del turno (D-20261008-01), pero lo dice:
+    # si tambien se devolvio, se revierte aparte (revision de la PR #137, W1).
+    resto = await svc.uow.balance_payments.get_live(
+        payment.appointment_id, user.store_id
+    )
+    respuesta = _payment_response(payment)
+    respuesta.live_remainder_amount = resto.amount if resto is not None else None
+    return respuesta
 
 
 def _settled_outside_mercadopago(payment: Payment) -> bool:
@@ -1149,14 +1156,20 @@ async def reconciliation_summary(
         OutboxMessage.store_id == user.store_id,
         OutboxMessage.processed_at.is_(None),
     )
-    # Lo acreditado incluye los restos vivos pagados aparte del cobro
-    # (D-20261008-01): son plata que entro, como un ``manual_confirmed``.
-    restos = await db.scalar(
-        select(func.coalesce(func.sum(AppointmentBalancePayment.amount), 0)).where(
-            AppointmentBalancePayment.store_id == user.store_id,
-            AppointmentBalancePayment.reverted_at.is_(None),
+    # Los restos vivos pagados aparte del cobro (D-20261008-01) van en campos
+    # propios: ``total_approved_amount`` sigue hablando de los mismos cobros
+    # que sus contadores (revision de la PR #137, S2).
+    restos, importe_restos = (
+        await db.execute(
+            select(
+                func.count(AppointmentBalancePayment.id),
+                func.coalesce(func.sum(AppointmentBalancePayment.amount), 0),
+            ).where(
+                AppointmentBalancePayment.store_id == user.store_id,
+                AppointmentBalancePayment.reverted_at.is_(None),
+            )
         )
-    )
+    ).one()
 
     return ReconciliationSummaryResponse(
         pending_payments=pending_count,
@@ -1165,9 +1178,9 @@ async def reconciliation_summary(
         manual_confirmed_payments=manual_count,
         refunded_payments=por_estado.get(PaymentStatus.REFUNDED.value, sin_filas)[0],
         total_pending_amount=pending_amount,
-        total_approved_amount=approved_amount
-        + manual_amount
-        + Decimal(str(restos or 0)),
+        total_approved_amount=approved_amount + manual_amount,
+        remainder_payments=int(restos or 0),
+        total_remainder_amount=Decimal(str(importe_restos or 0)),
         pending_webhooks=int(pending_webhooks or 0),
         failed_webhooks=int(failed_webhooks or 0),
         pending_outbox=pending_outbox,

@@ -115,7 +115,7 @@ async def test_el_panel_cuenta_el_resto_en_el_ingreso_de_la_semana(
 
 
 @pytest.mark.asyncio
-async def test_la_conciliacion_suma_el_resto_a_lo_acreditado(
+async def test_la_conciliacion_informa_los_restos_aparte_de_los_cobros(
     client: AsyncClient, test_session: AsyncSession
 ) -> None:
     token, _ = await _turno_con_sena_y_resto(client, test_session, "conc-resto")
@@ -131,7 +131,14 @@ async def test_la_conciliacion_suma_el_resto_a_lo_acreditado(
     )
 
     assert res.status_code == 200, res.text
-    assert Decimal(str(res.json()["total_approved_amount"])) == Decimal("3200")
+    resumen = res.json()
+    # Revision de la PR #137 (S2): ``total_approved_amount`` vuelve a ser la
+    # suma de los cobros que cuentan ``approved_payments`` y
+    # ``manual_confirmed_payments``; los restos van en campos propios.
+    assert resumen["approved_payments"] == 1
+    assert Decimal(str(resumen["total_approved_amount"])) == Decimal("960")
+    assert resumen["remainder_payments"] == 1
+    assert Decimal(str(resumen["total_remainder_amount"])) == Decimal("2240")
 
 
 @pytest.mark.asyncio
