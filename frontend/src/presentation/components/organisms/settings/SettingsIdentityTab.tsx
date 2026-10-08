@@ -56,8 +56,8 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
   readOnlyReason = null
 }) => (
   <div className="space-y-8">
-    <div className="grid md:grid-cols-2 gap-8">
-      <div className="space-y-3">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -81,7 +81,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
           ))}
         </select>
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -98,19 +98,20 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
       </div>
     </div>
 
-    <div className="grid md:grid-cols-2 gap-8">
-      <div className="space-y-3">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
         >
           Slug de la URL
         </label>
+        {/* `/b/`: el prefijo de los links que se comparten (QA movil 2026-10-08). */}
         <div
           className="flex items-center gap-2 rounded-2xl px-5 py-3.5"
           style={createSettingsInputStyle()}
         >
-          <span className="text-xs font-black opacity-30">/booking/</span>
+          <span className="text-xs font-black opacity-30 shrink-0">/b/</span>
           <input
             value={value.slug}
             onChange={(e) =>
@@ -118,7 +119,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
                 slug: normalizeSlugInput(e.target.value)
               })
             }
-            className="flex-1 bg-transparent font-black outline-none"
+            className="flex-1 min-w-0 bg-transparent font-black outline-none"
             placeholder={labels.slugPlaceholder}
             aria-label="Slug de la URL"
             aria-invalid={slugError !== undefined}
@@ -131,7 +132,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
         )}
         <ShareLinksPanel slug={value.slug} />
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -206,7 +207,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
           placeholder="…o pegá una URL https://"
         />
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -231,8 +232,8 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
       </div>
     </div>
 
-    <div className="grid md:grid-cols-2 gap-8">
-      <div className="space-y-3">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -247,7 +248,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
           placeholder="https://..."
         />
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -285,8 +286,8 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
       onChange={(custom_client_fields) => onChange({ custom_client_fields })}
     />
 
-    <div className="grid md:grid-cols-3 gap-8">
-      <div className="space-y-3">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -301,7 +302,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
           placeholder="https://instagram.com/..."
         />
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}
@@ -316,7 +317,7 @@ export const SettingsIdentityTab: React.FC<SettingsIdentityTabProps> = ({
           placeholder="https://facebook.com/..."
         />
       </div>
-      <div className="space-y-3">
+      <div className="min-w-0 space-y-3">
         <label
           className="block text-[10px] font-black uppercase tracking-widest"
           style={{ color: colors2000s.text.secondary }}

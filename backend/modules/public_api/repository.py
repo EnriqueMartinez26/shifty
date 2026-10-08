@@ -130,9 +130,24 @@ class PublicRepository:
         return result.scalar_one_or_none()
 
     async def get_services(self, store_id: str) -> list[Service]:
+        """Servicios activos que algun profesional activo de la tienda toma.
+
+        Uno sin profesional salia en el portal y todas sus fechas decian "No
+        hay turnos disponibles" (QA movil 2026-10-08). El panel los sigue
+        listando con su aviso. EXISTS en la misma sentencia: sin consulta
+        extra, y con ``store_id`` en el profesional (defensa en profundidad).
+        """
+        someone_does_it = exists().where(
+            StaffServiceModel.service_id == Service.id,
+            StaffServiceModel.staff_id == Staff.id,
+            Staff.store_id == store_id,
+            Staff.is_active == True,
+        )
         result = await self.db.execute(
             select(Service).where(
-                Service.store_id == store_id, Service.is_active == True
+                Service.store_id == store_id,
+                Service.is_active == True,
+                someone_does_it,
             )
         )
         return list(result.scalars().all())

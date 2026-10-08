@@ -388,7 +388,7 @@ describe('BookingWizardContainer', () => {
     const enviar = async () => {
       const antes = mockCreateBooking.mock.calls.length
       await act(async () => {
-        fireEvent.click(screen.getByText('Reservar y pagar por WhatsApp'))
+        fireEvent.click(screen.getByText('Confirmar reserva'))
       })
       await waitFor(() => expect(mockCreateBooking).toHaveBeenCalledTimes(antes + 1))
     }

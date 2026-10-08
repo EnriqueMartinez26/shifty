@@ -17,6 +17,7 @@ import {
   useUpdateManagedService,
   useUploadServiceImage
 } from '../hooks/useManagedServices'
+import { useManagedStaff } from '../hooks/useManagedStaff'
 import { useStoreWriteAccess } from '../hooks/useStoreWriteAccess'
 import { notifyError } from '../lib/notify'
 import type { ServiceFormValues } from '../types/forms'
@@ -30,6 +31,13 @@ export const ServiceManagementContainer: React.FC = () => {
   // El catalogo trae los inactivos: "Eliminar" es un soft delete y sin ellos un
   // servicio borrado desaparecia sin forma de reactivarlo (FF-22).
   const { data: services, isLoading, error } = useManagedServiceCatalog()
+  // Servicios que algun profesional activo hace: los demas no salen en el
+  // portal (public_api, QA movil 2026-10-08). Sin el personal cargado no se
+  // avisa nada, para no marcar todo por un instante.
+  const { data: staff } = useManagedStaff()
+  const staffedServiceIds = staff
+    ? new Set(staff.filter((member) => member.isActive).flatMap((member) => member.serviceIds))
+    : null
   const createMutation = useCreateManagedService()
   const updateMutation = useUpdateManagedService()
   const deleteMutation = useDeleteManagedService()
@@ -167,6 +175,9 @@ export const ServiceManagementContainer: React.FC = () => {
               onDelete={(id) => void handleDelete(id)}
               onReactivate={(id) => void handleReactivate(id)}
               readOnlyReason={readOnlyReason}
+              withoutStaff={
+                staffedServiceIds !== null && service.isActive && !staffedServiceIds.has(service.id)
+              }
             />
           ))}
         </div>
