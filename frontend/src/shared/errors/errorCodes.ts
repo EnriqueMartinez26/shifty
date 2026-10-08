@@ -40,6 +40,8 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['SCHEDULE_BLOCKED', 'Ese horario está bloqueado en la agenda. Elegí otro.'],
   ['OUT_OF_SCHEDULE', 'El profesional no atiende en ese horario. Elegí otro.'],
   ['NO_STAFF_AVAILABLE', 'No hay profesionales disponibles en ese horario. Elegí otro.'],
+  // POST /staff/me: la cuenta ya figura en la agenda (otra pestana la agrego).
+  ['STAFF_SELF_ALREADY_EXISTS', 'Ya figurás como profesional. Actualizá la lista del personal.'],
   // Solo lo emite la reprogramacion del cliente (public_api/service.py). Sin
   // BOOKING_NOTICE_REQUIRED ni CANCELLATION_WINDOW_EXPIRED a proposito: el
   // texto del servidor dice cuantas horas pide la tienda (FF-06).

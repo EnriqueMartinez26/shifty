@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-import { Plus, User, Loader2, Search } from 'lucide-react'
+import { Plus, User, UserCheck, Loader2, Search } from 'lucide-react'
 
 import { Staff } from '@domain/entities/Staff'
 
@@ -8,9 +8,12 @@ import { colors2000s, buttonStyles2000s } from '../../theme/colors'
 import { QueryErrorNotice } from '../components/molecules/QueryErrorNotice'
 import { StaffCard } from '../components/molecules/StaffCard'
 import { StaffFormModal } from '../components/organisms/StaffFormModal'
+import { useAuth } from '../context/AuthContext'
+import { ROLES_ADMIN_SUPER, hasAnyRole } from '../context/roles'
 import { useConfirm } from '../hooks/useConfirm'
 import { useManagedServices } from '../hooks/useManagedServices'
 import {
+  useAddMyselfAsStaff,
   useCreateManagedStaff,
   useDeleteManagedStaff,
   useManagedStaff,
@@ -23,6 +26,8 @@ export const StaffManagementContainer: React.FC = () => {
   const { confirm, confirmDialog } = useConfirm()
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null)
+  // "Agregarme como profesional": el modal en modo cuenta propia.
+  const [addingSelf, setAddingSelf] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
 
   const { data: staffList, isLoading, error } = useManagedStaff()
@@ -32,6 +37,17 @@ export const StaffManagementContainer: React.FC = () => {
   const createMutation = useCreateManagedStaff()
   const updateMutation = useUpdateManagedStaff()
   const deleteMutation = useDeleteManagedStaff()
+  const addMyselfMutation = useAddMyselfAsStaff()
+  // Decision de Mateo (2026-10-08): el dueno tambien atiende, con su nombre y
+  // su misma cuenta. Solo un admin se agrega (POST /staff/me) y solo a si mismo.
+  const { user } = useAuth()
+  const myId = user?.public_id ?? null
+  const canAddMyself =
+    myId !== null &&
+    hasAnyRole(user?.role, ROLES_ADMIN_SUPER, user?.is_global_admin) &&
+    staffList !== undefined &&
+    !staffList.some((member) => member.id === myId)
+  const myName = [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim()
   // Tienda suspendida (FF-15): POST, PUT y DELETE /staff/... (horarios y
   // servicios incluidos) no estan en SUSPENSION_ALLOWED_WRITES y responden 402.
   const writeAccess = useStoreWriteAccess()
@@ -44,7 +60,11 @@ export const StaffManagementContainer: React.FC = () => {
   )
 
   const handleDelete = async (id: string) => {
-    if (!(await confirm('¿Estás seguro de eliminar a este profesional?'))) return
+    const question =
+      id === myId
+        ? '¿Quitarte de la agenda? Tu cuenta y tu acceso no cambian.'
+        : '¿Estás seguro de eliminar a este profesional?'
+    if (!(await confirm(question))) return
     // Sin este catch un borrado rechazado no decia nada (FF-17).
     try {
       await deleteMutation.mutateAsync(id)
@@ -77,19 +97,38 @@ export const StaffManagementContainer: React.FC = () => {
           </p>
         </div>
 
-        <button
-          className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
-          style={buttonStyles2000s.selected}
-          disabled={readOnlyReason !== null}
-          title={readOnlyReason ?? undefined}
-          onClick={() => {
-            setEditingStaff(null)
-            setIsModalOpen(true)
-          }}
-        >
-          <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
-          NUEVO PROFESIONAL
-        </button>
+        <div className="flex flex-wrap gap-3">
+          {canAddMyself && (
+            <button
+              className="min-h-[44px] px-5 py-3 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 disabled:opacity-50"
+              style={buttonStyles2000s.default}
+              disabled={readOnlyReason !== null}
+              title={readOnlyReason ?? undefined}
+              onClick={() => {
+                setEditingStaff(null)
+                setAddingSelf(true)
+                setIsModalOpen(true)
+              }}
+            >
+              <UserCheck size={18} />
+              Agregarme como profesional
+            </button>
+          )}
+          <button
+            className="px-6 py-4 rounded-xl flex items-center gap-2 font-black uppercase tracking-widest text-xs transition-all active:scale-95 group disabled:opacity-50"
+            style={buttonStyles2000s.selected}
+            disabled={readOnlyReason !== null}
+            title={readOnlyReason ?? undefined}
+            onClick={() => {
+              setEditingStaff(null)
+              setAddingSelf(false)
+              setIsModalOpen(true)
+            }}
+          >
+            <Plus size={18} className="group-hover:rotate-90 transition-transform duration-300" />
+            NUEVO PROFESIONAL
+          </button>
+        </div>
       </div>
 
       {/* Unified Brand Styled Search Input */}
@@ -168,8 +207,10 @@ export const StaffManagementContainer: React.FC = () => {
               staff={staff}
               onEdit={(s) => {
                 setEditingStaff(s)
+                setAddingSelf(false)
                 setIsModalOpen(true)
               }}
+              isSelf={staff.id === myId}
               onDelete={(id) => void handleDelete(id)}
               readOnlyReason={readOnlyReason}
               serviceNames={serviceNames}
@@ -183,8 +224,16 @@ export const StaffManagementContainer: React.FC = () => {
         onClose={() => setIsModalOpen(false)}
         editingStaff={editingStaff}
         readOnlyReason={readOnlyReason}
+        selfName={addingSelf ? myName || (user?.email ?? '') : null}
+        selfEmail={addingSelf ? (user?.email ?? null) : null}
+        isOwnAccount={editingStaff !== null && editingStaff.id === myId}
         onSubmit={async (data) => {
-          if (editingStaff) {
+          if (addingSelf) {
+            await addMyselfMutation.mutateAsync({
+              displayName: data.display_name,
+              serviceIds: data.service_ids
+            })
+          } else if (editingStaff) {
             await updateMutation.mutateAsync({ id: editingStaff.id, data })
           } else {
             await createMutation.mutateAsync(data)
