@@ -218,7 +218,12 @@ Una instrucción en lenguaje natural no es una garantía.
      mueve el cliente (abajo). Tampoco se confirma con "Confirmar": `PATCH
      /appointments/{id}/confirm` sobre un `pending_payment` con cobro vivo es
      409 `DEPOSIT_PENDING_CONFIRM_DENIED` (ningún turno confirmado queda con
-     un cobro vivo; la seña se registra con `manual-confirm`);
+     un cobro vivo; la seña se registra con `manual-confirm`). Un turno con
+     un resto vivo (D-20261008-01) tampoco se reprograma: 409
+     `REMAINDER_RESCHEDULE_DENIED` bajo el lock del turno y antes de tocar
+     nada (`guards.reject_reschedule_with_remainder`); se revierte el resto o
+     se cancela, y para el cliente cuenta como pagado
+     (`payments/repository.py::paid_appointment_of`);
    - liberar (`release_pending`, solo admin);
    - cancelar por bloqueo (`AppointmentBlockService`: alta, cierre de la
      tienda y edición);
@@ -379,7 +384,9 @@ Una instrucción en lenguaje natural no es una garantía.
     a lo sumo uno por turno; D-20261008-01): toda suma de ingreso une los dos
     (`payments/repository.py::live_balance_payment_join`) y el saldo sale de
     `remaining_balance_of`, nunca del pedido
-    (`test_reportes_cuentan_el_saldo_restante.py`).
+    (`test_reportes_cuentan_el_saldo_restante.py`). Un resto vivo sobrevive a
+    la devolución de la seña y sigue contando como ingreso hasta que se
+    revierte.
 12. **Un `await db.execute` dentro de un `for` es N+1 hasta demostrar lo
     contrario**; se resuelve con `in_()` o join.
     `availability.get_available_slots` se auditó el 2026-09-16: carga
