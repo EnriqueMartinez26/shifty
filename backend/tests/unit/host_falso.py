@@ -127,8 +127,9 @@ if [ "$1" = compose ]; then
         exit "${FAKE_REDIS_EXIT:-0}"
       fi
       if [ "$3" = rabbitmq ]; then
+        # Sin `:`: FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
         printf '%s
-' "${FAKE_RABBIT_ALARMS:-[]}"
+' "${FAKE_RABBIT_ALARMS-[]}"
         exit "${FAKE_RABBIT_EXIT:-0}"
       fi
       exit "${FAKE_NGINX_EXIT:-0}" ;;

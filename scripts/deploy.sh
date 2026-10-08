@@ -36,7 +36,7 @@
 #      deploy normal; se recrea unicamente con `edge` (make deploy-edge),
 #      cuando cambio su imagen o su config.
 #   8. Compuerta de 60 s: /api/ops/health/ready y la home responden, ningun
-#      contenedor unhealthy, `rabbitmq-diagnostics alarms` vacio, 5xx < 0,5 %
+#      contenedor unhealthy, `rabbitmq-diagnostics alarms` sin alarmas, 5xx < 0,5 %
 #      en el log de nginx de los ultimos 2 minutos. Si falla: rollback
 #      automatico (sin migrar).
 #
@@ -324,6 +324,29 @@ imagenes_locales() {
 
 # --- compuerta --------------------------------------------------------------
 
+# Salida de `rabbitmq-diagnostics -q alarms --formatter json`, sin espacios.
+# Versiones viejas: vacio o `[]`. RabbitMQ 3.13.7 (primer deploy, 2026-10-08)
+# devuelve un objeto: `{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}`.
+# Sin python3 ni jq garantizados en el host, se compara texto estricto: un
+# objeto entero, con UNA sola clave `alarms` y vacia, y `result` (si viene)
+# `ok`. Cualquier otra cosa (una alarma, texto, basura) cuenta como alarma:
+# la compuerta falla cerrada.
+rabbitmq_sin_alarmas() {
+  local salida="$1" vacia='"alarms":[]'
+  case "$salida" in
+    '' | '[]') return 0 ;;
+    '{'*'}') ;;
+    *) return 1 ;;
+  esac
+  case "$salida" in *"$vacia"*) ;; *) return 1 ;; esac
+  # Ninguna otra clave `alarms` antes ni despues de la vacia.
+  case "${salida%%"$vacia"*}${salida#*"$vacia"}" in *'"alarms"'*) return 1 ;; esac
+  case "$salida" in
+    *'"result":'*) case "$salida" in *'"result":"ok"'*) ;; *) return 1 ;; esac ;;
+  esac
+  return 0
+}
+
 compuerta() {
   local fallos=0 i url
   for ((i = 1; i <= DEPLOY_GATE_CHECKS; i++)); do
@@ -360,8 +383,8 @@ compuerta() {
     return 1
   fi
   alarmas="$(printf '%s' "$alarmas" | tr -d '[:space:]')"
-  if [ -n "$alarmas" ] && [ "$alarmas" != "[]" ]; then
-    log "compuerta: rabbitmq tiene alarmas activas: $alarmas"
+  if ! rabbitmq_sin_alarmas "$alarmas"; then
+    log "compuerta: rabbitmq tiene alarmas activas (o una salida que no se entiende): $alarmas"
     return 1
   fi
 

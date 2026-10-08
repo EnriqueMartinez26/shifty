@@ -547,6 +547,82 @@ def test_una_alarma_de_rabbitmq_hace_fallar_la_compuerta(host: Host) -> None:
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
 
 
+# 2026-10-08, primer deploy real: RabbitMQ 3.13.7 contesta
+# `rabbitmq-diagnostics -q alarms --formatter json` con un OBJETO, no con una
+# lista. La compuerta solo aceptaba vacio o `[]` y fallo con
+# "rabbitmq tiene alarmas activas: {"alarms":[],"node":"rabbit@rabbitmq",
+# "result":"ok"}": todo deploy terminaba en rollback.
+_SIN_ALARMAS_3_13 = '{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
+_ALARMA_DE_MEMORIA_3_13 = (
+    '{"alarms":[{"node":"rabbit@rabbitmq","resource":"memory",'
+    '"type":"resource_alarm"}],"node":"rabbit@rabbitmq","result":"ok"}'
+)
+
+
+@pytest.mark.parametrize(
+    "salida",
+    [
+        "[]",
+        "",
+        _SIN_ALARMAS_3_13,
+        '{\n  "alarms": [ ],\n  "node": "rabbit@rabbitmq",\n  "result": "ok"\n}',
+    ],
+    ids=["lista-vacia", "vacio", "objeto-3.13", "objeto-indentado"],
+)
+def test_rabbitmq_sin_alarmas_pasa_la_compuerta(host: Host, salida: str) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_RABBIT_ALARMS=salida,
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "alarmas activas" not in resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v2"
+
+
+@pytest.mark.parametrize(
+    "salida",
+    [
+        _ALARMA_DE_MEMORIA_3_13,
+        '[{"type":"resource_alarm","resource":"disk"}]',
+        # Dos claves `alarms` (una vacia): no se adivina cual vale.
+        '{"alarms":[],"alarms":[{"resource":"memory"}],"result":"ok"}',
+        '{"alarms":[],"node":"rabbit@rabbitmq","result":"error"}',
+        "Error: unable to perform an operation on node 'rabbit@rabbitmq'",
+        'basura {"alarms":[]} basura',
+    ],
+    ids=[
+        "objeto-con-alarma",
+        "lista-con-alarma",
+        "alarms-duplicada",
+        "result-error",
+        "texto",
+        "basura-alrededor",
+    ],
+)
+def test_rabbitmq_con_alarmas_o_ilegible_hace_fallar_la_compuerta(
+    host: Host, salida: str
+) -> None:
+    _preparar_deploy(host, actual="v1")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION="v2",
+        FAKE_RABBIT_ALARMS=salida,
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "rabbitmq tiene alarmas activas" in resultado.stderr
+    assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
 # --- flags de compose (2026-10-02) ------------------------------------------
 #
 # `migrar` corria `compose run --rm --no-deps --no-build ...`: `run` no tiene
