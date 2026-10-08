@@ -52,13 +52,13 @@ const ChargeSummary: React.FC<{ charge: AppointmentCharge }> = ({ charge }) => {
       </div>
     )
   }
-  if (charge.kind === 'deposit') {
+  if (charge.kind === 'pending') {
     return (
       <span
         className={`${chipClass} inline-block mt-2`}
         style={{ background: colors2000s.status.info.bg, color: colors2000s.status.info.text }}
       >
-        Seña pendiente {formatCurrency(charge.amount)}
+        {charge.isDeposit ? 'Seña pendiente' : 'Pago pendiente'} {formatCurrency(charge.amount)}
       </span>
     )
   }
@@ -97,7 +97,7 @@ export const CollectionAppointmentCard: React.FC<CollectionAppointmentCardProps>
   onCreateLink,
   onConfirmPayment
 }) => {
-  const canCharge = charge.kind === 'unpaid' || charge.kind === 'deposit'
+  const canCharge = charge.kind === 'unpaid' || charge.kind === 'pending'
   return (
     <div
       className="rounded-2xl p-4 bg-white flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4"

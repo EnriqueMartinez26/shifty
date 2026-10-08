@@ -199,19 +199,83 @@ describe('CollectionsPage: confirmar un pago', () => {
     fireEvent.click(confirmarPago())
     expect(screen.getByRole('dialog', { name: /Confirmar pago/ })).toBeInTheDocument()
     expect(mockManualConfirm).not.toHaveBeenCalled()
-    expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('3200')
+    expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('3.200')
 
     await act(async () => {
       fireEvent.click(registrar())
     })
 
-    // Sin tocar la sugerencia el importe no viaja: el backend usa el mismo y no
-    // re-tarifa el cobro (una promo o el snapshot de la sena quedan intactos).
+    // Sin cobro vivo el importe que se mostro viaja siempre: el backend no
+    // tiene un cobro cuyo importe conservar (revision de la PR #131, C1).
     expect(mockManualConfirm).toHaveBeenCalledWith({
       appointmentId: turno.public_id,
-      amount: undefined
+      amount: 3200
     })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  // Revision de la PR #131 (C1, 2026-10-08): el importe del dialogo no
+  // siempre era el registrado. Sin `amount` el backend registra el importe
+  // del cobro VIVO; en cualquier otro caso el front manda el que mostro.
+  it.each(['pending', 'rejected'])(
+    'con un cobro vivo (%s) sin tocar el importe no lo manda: se registra el del cobro',
+    async (paymentStatus) => {
+      mockAppointments = [{ ...turno, payment_status: paymentStatus, payment_amount: '960.00' }]
+      render(<CollectionsPage />)
+
+      fireEvent.click(confirmarPago())
+      expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('960')
+      await act(async () => {
+        fireEvent.click(registrar())
+      })
+
+      expect(mockManualConfirm).toHaveBeenCalledWith({
+        appointmentId: turno.public_id,
+        amount: undefined
+      })
+    }
+  )
+
+  it('con el cobro vencido manda explicito el importe que mostro', async () => {
+    mockAppointments = [{ ...turno, payment_status: 'expired', payment_amount: '960.00' }]
+    render(<CollectionsPage />)
+
+    fireEvent.click(confirmarPago())
+    expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('3.200')
+    await act(async () => {
+      fireEvent.click(registrar())
+    })
+
+    expect(mockManualConfirm).toHaveBeenCalledWith({
+      appointmentId: turno.public_id,
+      amount: 3200
+    })
+  })
+
+  it('con un cobro vivo y el importe cambiado manda el nuevo', async () => {
+    mockAppointments = [{ ...turno, payment_status: 'pending', payment_amount: '960.00' }]
+    render(<CollectionsPage />)
+
+    fireEvent.click(confirmarPago())
+    fireEvent.change(screen.getByLabelText(/Importe/), { target: { value: '3.200' } })
+    await act(async () => {
+      fireEvent.click(registrar())
+    })
+
+    expect(mockManualConfirm).toHaveBeenCalledWith({
+      appointmentId: turno.public_id,
+      amount: 3200
+    })
+  })
+
+  // Revision de la PR #131 (S1): el link del panel por el precio completo no
+  // es una sena.
+  it('un cobro vivo por el precio completo dice "Pago pendiente", no "Seña"', () => {
+    mockAppointments = [{ ...turno, payment_status: 'pending', payment_amount: '3200.00' }]
+    render(<CollectionsPage />)
+
+    expect(screen.getByText(/Pago pendiente/)).toHaveTextContent('3.200')
+    expect(screen.queryByText(/Seña pendiente/)).not.toBeInTheDocument()
   })
 
   it('un importe cambiado viaja tal cual', async () => {

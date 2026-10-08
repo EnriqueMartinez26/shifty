@@ -26,7 +26,27 @@ describe('appointmentChargeOf', () => {
   it.each(['pending', 'rejected'])('con un cobro vivo (%s) sugiere la sena pendiente', (status) => {
     expect(
       appointmentChargeOf({ ...base, paymentStatus: status, paymentAmount: '960.00' })
-    ).toEqual({ kind: 'deposit', amount: 960 })
+    ).toEqual({ kind: 'pending', amount: 960, isDeposit: true })
+  })
+
+  // Revision de la PR #131 (S1, 2026-10-08): un link del panel por el precio
+  // completo se mostraba como "Seña pendiente". Es sena solo si cobra menos
+  // que el precio del turno.
+  it('un cobro vivo por el precio completo es un pago pendiente, no una sena', () => {
+    expect(
+      appointmentChargeOf({ ...base, paymentStatus: 'pending', paymentAmount: '3200.00' })
+    ).toEqual({ kind: 'pending', amount: 3200, isDeposit: false })
+  })
+
+  it('sin precio conocido un cobro vivo no se llama sena', () => {
+    expect(
+      appointmentChargeOf({
+        ...base,
+        priceAmount: null,
+        paymentStatus: 'pending',
+        paymentAmount: '960.00'
+      })
+    ).toEqual({ kind: 'pending', amount: 960, isDeposit: false })
   })
 
   it('un cobro vencido ya no es la sena: vuelve a sugerir el precio', () => {

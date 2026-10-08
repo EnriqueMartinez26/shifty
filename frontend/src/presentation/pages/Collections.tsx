@@ -45,12 +45,23 @@ const chargeOf = (appointment: AppointmentSearchItem): AppointmentCharge =>
     paymentAmount: appointment.payment_amount
   })
 
-/** Importe que el dialogo precarga: la seña pendiente o el precio del turno. */
+/** Importe que el dialogo precarga: el cobro pendiente o el precio del turno. */
 const suggestedAmountOf = (charge: AppointmentCharge): number | null => {
-  if (charge.kind === 'deposit') return charge.amount
+  if (charge.kind === 'pending') return charge.amount
   if (charge.kind === 'unpaid') return charge.suggested
   return null
 }
+
+/**
+ * Importe que viaja al confirmar. Sin `amount` el backend registra el importe
+ * del cobro VIVO, venga de donde venga, sin re-tarifarlo (promo y snapshot de
+ * la sena intactos). Sin cobro vivo no hay importe que conservar: se manda
+ * siempre el que se mostro, asi lo registrado es lo que se vio (revision de
+ * la PR #131, C1: el backend solo conservaba los cobros con sena y un link
+ * del panel se registraba por el precio del turno).
+ */
+const amountToSend = (charge: AppointmentCharge, amount: number): number | undefined =>
+  charge.kind === 'pending' && amount === charge.amount ? undefined : amount
 
 const CollectionsPage: React.FC = () => {
   useDocumentTitle('Cobros · Shifty')
@@ -125,13 +136,10 @@ const CollectionsPage: React.FC = () => {
 
   const handleManualConfirm = async (amount: number) => {
     if (!paying) return
-    // Sin tocar la sugerencia el importe no viaja: el backend usa el mismo sin
-    // re-tarifar el cobro (una promo o el snapshot de la seña quedan intactos).
-    const suggested = suggestedAmountOf(chargeOf(paying))
     try {
       const response = await manualConfirm.mutateAsync({
         appointmentId: paying.public_id,
-        amount: amount === suggested ? undefined : amount
+        amount: amountToSend(chargeOf(paying), amount)
       })
       setFeedback({
         tone: 'success',
@@ -230,7 +238,7 @@ const CollectionsPage: React.FC = () => {
           serviceName={paying.service_name}
           startsAt={paying.starts_at}
           suggestedAmount={suggestedAmountOf(payingCharge)}
-          isDeposit={payingCharge.kind === 'deposit'}
+          isDeposit={payingCharge.kind === 'pending' && payingCharge.isDeposit}
           busy={manualConfirm.isPending}
           error={payError}
           onSubmit={(amount) => {

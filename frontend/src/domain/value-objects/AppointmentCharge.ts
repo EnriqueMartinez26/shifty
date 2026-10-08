@@ -21,8 +21,12 @@ export type AppointmentCharge =
   /** La plata entro; `remaining` es lo que falta para el precio del turno. */
   | { kind: 'paid'; paid: number; remaining: number }
   | { kind: 'refunded' }
-  /** Cobro vivo: la sena que el turno tiene pendiente. */
-  | { kind: 'deposit'; amount: number }
+  /**
+   * Cobro vivo: lo que el turno tiene pendiente de pago. Es sena si cobra
+   * menos que el precio del turno; un link del panel por el precio completo
+   * no lo es (revision de la PR #131, S1).
+   */
+  | { kind: 'pending'; amount: number; isDeposit: boolean }
   /** Sin cobro (o vencido): se sugiere el precio, si se conoce. */
   | { kind: 'unpaid'; suggested: number | null }
 
@@ -56,7 +60,7 @@ export const appointmentChargeOf = ({
   }
   if (paymentStatus === 'refunded') return { kind: 'refunded' }
   if (paymentStatus && LIVE_CHARGE_PAYMENT_STATUSES.includes(paymentStatus) && amount !== null) {
-    return { kind: 'deposit', amount }
+    return { kind: 'pending', amount, isDeposit: price !== null && amount < price }
   }
   return { kind: 'unpaid', suggested: price }
 }
