@@ -12,15 +12,23 @@ import { StaffManagementContainer } from './StaffManagementContainer'
 jest.mock('sonner', () => ({ toast: { error: jest.fn(), warning: jest.fn(), info: jest.fn() } }))
 
 const mockDelete = jest.fn()
+const mockReplaceSchedules = jest.fn()
 jest.mock('../hooks/useManagedStaff', () => ({
   useManagedStaff: () => ({
-    data: [{ id: 'st-1', fullName: 'Ana Gomez', displayName: 'Ana' }],
+    data: [{ id: 'st-1', fullName: 'Ana Gomez', displayName: 'Ana', schedules: [] }],
     isLoading: false,
     error: null
   }),
+  useReplaceStaffSchedules: () => ({ mutateAsync: mockReplaceSchedules }),
   useCreateManagedStaff: () => ({ mutateAsync: jest.fn() }),
   useUpdateManagedStaff: () => ({ mutateAsync: jest.fn() }),
   useDeleteManagedStaff: () => ({ mutateAsync: mockDelete, isPending: false })
+}))
+
+jest.mock('../hooks/useStores', () => ({
+  useStoreSettings: () => ({
+    data: { business_hours: { mon: [{ open: '09:00', close: '18:00' }] } }
+  })
 }))
 
 jest.mock('../hooks/useManagedServices', () => ({
@@ -38,15 +46,22 @@ jest.mock('../hooks/useStoreWriteAccess', () => ({
 
 jest.mock('../components/molecules/StaffCard', () => ({
   StaffCard: ({
+    staff,
     onDelete,
+    onEditSchedule,
     readOnlyReason
   }: {
+    staff: unknown
     onDelete: (id: string) => void
+    onEditSchedule: (staff: unknown) => void
     readOnlyReason?: string | null
   }) => (
     <>
       <button type="button" onClick={() => onDelete('st-1')}>
         Borrar
+      </button>
+      <button type="button" onClick={() => onEditSchedule(staff)}>
+        Horarios
       </button>
       <span data-testid="card-reason">{readOnlyReason ?? 'editable'}</span>
     </>
@@ -104,5 +119,33 @@ describe('StaffManagementContainer: borrar', () => {
       expect(toast.error).toHaveBeenCalledWith('No se pudo eliminar al profesional.')
     )
     expect(mockDelete).toHaveBeenCalledWith('st-1')
+  })
+})
+
+// 2026-10-08: el manual pedia cargar dias y horas de cada persona y no habia
+// editor. Guardar manda la semana entera al profesional de la tarjeta.
+describe('StaffManagementContainer: horarios', () => {
+  it('Horarios abre el editor con el horario de la tienda y guarda para ese profesional', async () => {
+    mockReplaceSchedules.mockResolvedValue([])
+    const { getByRole, getByText, queryByRole } = render(<StaffManagementContainer />)
+
+    expect(queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(getByText('Horarios'))
+
+    expect(getByRole('dialog', { name: /horarios de ana/i })).toBeInTheDocument()
+    // Sin franjas propias: el modo tienda muestra el horario comercial.
+    expect(getByRole('list', { name: /horario de la tienda/i })).toHaveTextContent(
+      'Lunes09:00 a 18:00'
+    )
+    fireEvent.click(getByRole('radio', { name: /horario propio/i }))
+    fireEvent.click(getByRole('button', { name: /guardar horario/i }))
+
+    await waitFor(() =>
+      expect(mockReplaceSchedules).toHaveBeenCalledWith({
+        staffId: 'st-1',
+        schedules: [{ dayOfWeek: 0, startTime: '09:00:00', endTime: '18:00:00' }]
+      })
+    )
+    await waitFor(() => expect(queryByRole('dialog')).not.toBeInTheDocument())
   })
 })
