@@ -56,6 +56,9 @@ requiere_bash = pytest.mark.skipif(BASH is None, reason="hace falta bash")
 
 _DOCKER = r"""#!/bin/sh
 printf '%s\n' "docker $*" >> "$FAKE_DIR/calls"
+# El token de GitHub no tiene por que llegar a docker/compose: se anota si un
+# `docker` lo hereda en el entorno.
+[ -z "${DEPLOY_GITHUB_TOKEN:-}" ] || printf '%s\n' "docker $1 $2" >> "$FAKE_DIR/docker_ve_el_token"
 ids_backend="$FAKE_DIR/backend_ids"
 if [ "$1" = compose ]; then
   # docker-compose.prod.yml interpola ${APP_VERSION:?...}: sin la variable,

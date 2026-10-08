@@ -16,12 +16,23 @@ if [ -r "$SHIFTY_OPS_ENV" ]; then
   # shellcheck disable=SC1090
   . "$SHIFTY_OPS_ENV"
   set +a
-elif [ -e "$SHIFTY_OPS_ENV" ]; then
-  # deploy.sh corre como el usuario `deploy`: con ops.env root 0600 se
-  # salteaba en silencio y el deploy seguia sin DOMAIN, alertas ni token
-  # (primer deploy, 2026-10-08). `log` todavia no existe: mismo formato.
-  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    "AVISO: $SHIFTY_OPS_ENV existe pero no se puede leer (uid $(id -u)); sigo con los defaults. Permisos esperados: root:deploy 0640 (docs/DEPLOY_RUNBOOK.md §1)" >&2
+else
+  # deploy.sh corre como el usuario `deploy`: con ops.env root 0600 (o
+  # /etc/shifty root 0700, donde ni se ve si el archivo existe) se salteaba
+  # en silencio y el deploy seguia sin DOMAIN, alertas ni token (primer
+  # deploy, 2026-10-08). `log` todavia no existe: mismo formato.
+  _ops_env_dir="${SHIFTY_OPS_ENV%/*}"
+  _ops_env_aviso=""
+  if [ -e "$SHIFTY_OPS_ENV" ]; then
+    _ops_env_aviso="$SHIFTY_OPS_ENV existe pero no se puede leer"
+  elif [ "$_ops_env_dir" != "$SHIFTY_OPS_ENV" ] && [ -d "$_ops_env_dir" ] && [ ! -x "$_ops_env_dir" ]; then
+    _ops_env_aviso="no puedo entrar a $_ops_env_dir: no se sabe si $SHIFTY_OPS_ENV existe"
+  fi
+  if [ -n "$_ops_env_aviso" ]; then
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      "AVISO: $_ops_env_aviso (uid $(id -u)); sigo con los defaults. Permisos esperados: /etc/shifty root:deploy 0750, ops.env root:deploy 0640 (docs/DEPLOY_RUNBOOK.md §1)" >&2
+  fi
+  unset _ops_env_dir _ops_env_aviso
 fi
 
 # Clon del repo en el servidor: ahi estan el compose, el .env (con

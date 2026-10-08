@@ -79,6 +79,10 @@ cd "$SHIFTY_DIR"
 : "${DEPLOY_SKIP_QUALITY_CHECK:=0}"
 : "${DEPLOY_GITHUB_REPO:=EnriqueMartinez26/shifty}"
 : "${DEPLOY_QUALITY_WORKFLOW:=quality.yml}"
+# Solo lo usa quality_verde, por stdin de curl. common.sh carga ops.env con
+# `set -a`: sin esto, el token viajaria en el entorno de cada docker/compose.
+: "${DEPLOY_GITHUB_TOKEN:=}"
+export -n DEPLOY_GITHUB_TOKEN
 : "${DOMAIN:=}"
 : "${DEPLOY_HEALTH_URL:=${DOMAIN:+https://$DOMAIN/api/ops/health/ready}}"
 : "${DEPLOY_SMOKE_URLS:=${DOMAIN:+https://$DOMAIN/}}"
@@ -192,11 +196,12 @@ preflight() {
   # El volumen pg_backups es un bind (docker-compose.prod.yml): si el
   # directorio del host no existe, `db` no puede recrearse.
   # mkdir + chmod aparte: si el chmod no se puede (otro dueno), el directorio
-  # igual sirve y se avisa, en vez de frenar el deploy.
+  # igual sirve y se avisa, en vez de frenar el deploy. 0750: el deploy corre
+  # como `deploy` y lee last-success (docs/DEPLOY_RUNBOOK.md §1).
   if [ ! -d "$BACKUP_DIR" ]; then
     mkdir -p "$BACKUP_DIR" ||
-      die "preflight: no se pudo crear $BACKUP_DIR (crearlo como root: install -d -m 0700 $BACKUP_DIR)"
-    chmod 0700 "$BACKUP_DIR" 2>/dev/null || log "preflight: no pude dejar $BACKUP_DIR en 0700"
+      die "preflight: no se pudo crear $BACKUP_DIR (crearlo como root: install -d -o root -g deploy -m 0750 $BACKUP_DIR)"
+    chmod 0750 "$BACKUP_DIR" 2>/dev/null || log "preflight: no pude dejar $BACKUP_DIR en 0750"
     log "preflight: cree $BACKUP_DIR"
   fi
 

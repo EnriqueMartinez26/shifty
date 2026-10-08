@@ -514,7 +514,7 @@ def test_deploy_edge_recrea_si_cambio_la_imagen(host: Host) -> None:
 
 def test_el_preflight_crea_backup_dir_si_falta(host: Host) -> None:
     """El volumen pg_backups es un bind: si el directorio del host no existe,
-    `db` no arranca. El preflight lo crea (0700) antes de tocar nada."""
+    `db` no arranca. El preflight lo crea (0750) antes de tocar nada."""
     _preparar_deploy(host, actual="v1")
     faltante = host.raiz / "no-existe" / "backups"
 
@@ -974,3 +974,128 @@ def test_sin_ops_env_no_hay_aviso(host: Host) -> None:
 
     assert resultado.returncode == 0, resultado.stderr
     assert "no se puede leer" not in resultado.stderr
+
+
+# --- revision del PR #135 (2026-10-08) ---------------------------------------
+
+
+def test_github_que_rechaza_el_token_frena_sin_mostrarlo(host: Host) -> None:
+    """Token vencido o sin "Actions: read": curl -f sale con 22. Falla cerrada
+    con un mensaje que apunta al token, sin imprimirlo."""
+    _preparar_deploy(host)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION=SHA,
+        DEPLOY_GITHUB_TOKEN=TOKEN,
+        FAKE_GH_EXIT="22",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "no pude preguntarle a GitHub" in resultado.stderr
+    assert "DEPLOY_GITHUB_TOKEN" in resultado.stderr
+    assert TOKEN not in resultado.stderr
+    assert TOKEN not in resultado.stdout
+    assert TOKEN not in "\n".join(host.llamadas())
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+@pytest.mark.parametrize("origen", ["entorno", "ops.env"])
+def test_el_token_de_github_no_llega_a_docker(host: Host, origen: str) -> None:
+    """common.sh carga ops.env con `set -a`: sin `export -n`, el token viajaba
+    en el entorno de cada `docker compose` (y de lo que este lance)."""
+    _preparar_deploy(host)
+    extra = {"DEPLOY_GITHUB_TOKEN": TOKEN}
+    if origen == "ops.env":
+        ops_env = host.raiz / "ops.env"
+        ops_env.write_text(f"DEPLOY_GITHUB_TOKEN={TOKEN}\n", encoding="utf-8")
+        extra = {"SHIFTY_OPS_ENV": ops_env.as_posix()}
+
+    resultado = host.correr(
+        "deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY, **extra
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _hay(host.llamadas(), r"compose pull")
+    assert "Authorization: Bearer" in (host.fake / "curl_config").read_text(
+        encoding="utf-8"
+    )
+    assert not (host.fake / "docker_ve_el_token").exists(), (
+        host.fake / "docker_ve_el_token"
+    ).read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="Windows y root entran a un directorio en modo 000",
+)
+def test_un_directorio_de_ops_env_sin_permiso_avisa(host: Host) -> None:
+    """Con /etc/shifty root 0700 (el runbook viejo) el usuario deploy ni
+    siquiera ve si ops.env existe: `[ -e ]` da falso y el aviso del archivo
+    ilegible no salia."""
+    _preparar_deploy(host)
+    directorio = host.raiz / "etc-shifty"
+    directorio.mkdir()
+    ops_env = directorio / "ops.env"
+    ops_env.write_text("DOMAIN=shifty.example.com\n", encoding="utf-8")
+    directorio.chmod(0)
+    try:
+        resultado = host.correr(
+            "deploy.sh",
+            "preflight",
+            APP_VERSION=SHA,
+            SHIFTY_OPS_ENV=ops_env.as_posix(),
+            **_BASE_DEPLOY,
+        )
+    finally:
+        directorio.chmod(0o755)
+
+    assert f"no puedo entrar a {directorio.as_posix()}" in resultado.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows no tiene bits de grupo")
+def test_el_preflight_crea_backup_dir_legible_para_el_grupo(host: Host) -> None:
+    """deploy.sh corre como `deploy` y el runbook pide root:deploy 0750: el
+    directorio que crea el propio script queda igual (antes, 0700)."""
+    _preparar_deploy(host, actual="v1")
+    faltante = host.raiz / "no-existe" / "backups"
+
+    resultado = host.correr(
+        "deploy.sh",
+        "preflight",
+        APP_VERSION=SHA,
+        BACKUP_DIR=faltante.as_posix(),
+        DEPLOY_SKIP_BACKUP_CHECK="1",
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert faltante.stat().st_mode & 0o777 == 0o750
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="Windows y root escriben en un directorio de solo lectura",
+)
+def test_backup_dir_que_no_se_puede_crear_sugiere_root_deploy_0750(
+    host: Host,
+) -> None:
+    _preparar_deploy(host, actual="v1")
+    padre = host.raiz / "solo-lectura"
+    padre.mkdir()
+    padre.chmod(0o555)
+    try:
+        resultado = host.correr(
+            "deploy.sh",
+            "preflight",
+            APP_VERSION=SHA,
+            BACKUP_DIR=(padre / "backups").as_posix(),
+            **_BASE_DEPLOY,
+        )
+    finally:
+        padre.chmod(0o755)
+
+    assert resultado.returncode != 0
+    assert "install -d -o root -g deploy -m 0750" in resultado.stderr
