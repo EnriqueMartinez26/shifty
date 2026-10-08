@@ -37,6 +37,11 @@ jest.mock('../hooks/useManagedServices', () => ({
   useRemoveServiceImage: () => ({ mutateAsync: jest.fn() })
 }))
 
+let mockStaff: { data?: { isActive: boolean; serviceIds: string[] }[] } = { data: [] }
+jest.mock('../hooks/useManagedStaff', () => ({
+  useManagedStaff: () => mockStaff
+}))
+
 jest.mock('../hooks/useConfirm', () => ({
   useConfirm: () => ({ confirm: () => Promise.resolve(true), confirmDialog: null })
 }))
@@ -50,13 +55,16 @@ jest.mock('../components/molecules/ServiceCard', () => ({
   ServiceCard: ({
     onDelete,
     onReactivate,
-    readOnlyReason
+    readOnlyReason,
+    withoutStaff
   }: {
     onDelete: (id: string) => void
     onReactivate: (id: string) => void
     readOnlyReason?: string | null
+    withoutStaff?: boolean
   }) => (
     <>
+      <span data-testid="card-without-staff">{withoutStaff ? 'sin-profesional' : 'ok'}</span>
       <button type="button" onClick={() => onDelete('svc-1')}>
         Borrar
       </button>
@@ -160,5 +168,47 @@ describe('ServiceManagementContainer: catalogo y reactivar', () => {
     await waitFor(() =>
       expect(notifyError).toHaveBeenCalledWith(rechazo, 'No se pudo reactivar el servicio.')
     )
+  })
+})
+
+// QA movil 2026-10-08 (QA3): un servicio sin profesional se publicaba y el
+// portal decia "No hay turnos disponibles" para siempre. El backend ya no lo
+// publica; el panel le avisa al dueno por que no aparece.
+describe('ServiceManagementContainer: servicios sin profesional', () => {
+  afterEach(() => {
+    mockStaff = { data: [] }
+    mockListCatalog.mockImplementation(() => ({
+      data: [{ id: 'svc-1', name: 'Corte' }],
+      isLoading: false,
+      error: null
+    }))
+  })
+
+  const servicioActivo = () =>
+    mockListCatalog.mockImplementation(() => ({
+      data: [{ id: 'svc-1', name: 'Corte', isActive: true }],
+      isLoading: false,
+      error: null
+    }))
+
+  it('avisa el servicio activo que ningun profesional activo hace', () => {
+    servicioActivo()
+    mockStaff = { data: [{ isActive: false, serviceIds: ['svc-1'] }] }
+    const { getByTestId } = render(<ServiceManagementContainer />)
+    expect(getByTestId('card-without-staff')).toHaveTextContent('sin-profesional')
+  })
+
+  it('no avisa si un profesional activo lo hace', () => {
+    servicioActivo()
+    mockStaff = { data: [{ isActive: true, serviceIds: ['svc-1'] }] }
+    const { getByTestId } = render(<ServiceManagementContainer />)
+    expect(getByTestId('card-without-staff')).toHaveTextContent('ok')
+  })
+
+  it('mientras el personal no cargo, no avisa nada', () => {
+    servicioActivo()
+    mockStaff = {}
+    const { getByTestId } = render(<ServiceManagementContainer />)
+    expect(getByTestId('card-without-staff')).toHaveTextContent('ok')
   })
 })

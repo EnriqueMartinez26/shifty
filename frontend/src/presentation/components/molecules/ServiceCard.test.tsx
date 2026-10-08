@@ -111,4 +111,23 @@ describe('ServiceCard', () => {
     expect(getByRole('button', { name: /editar/i })).not.toBeDisabled()
     expect(getByRole('button', { name: /eliminar/i })).not.toBeDisabled()
   })
+
+  // QA movil 2026-10-08: el portal no publica un servicio sin profesional.
+  it('sin profesionales avisa que no aparece en la pagina', () => {
+    const { getByText } = render(
+      <ServiceCard
+        service={ServiceMapper.toDomain(dto)}
+        onEdit={jest.fn()}
+        onDelete={jest.fn()}
+        onReactivate={jest.fn()}
+        withoutStaff
+      />
+    )
+    expect(getByText('Sin profesionales asignados: no aparece en tu página.')).toBeInTheDocument()
+  })
+
+  it('con profesionales no muestra el aviso', () => {
+    const { queryByText } = renderCard(true)
+    expect(queryByText(/Sin profesionales asignados/)).not.toBeInTheDocument()
+  })
 })
