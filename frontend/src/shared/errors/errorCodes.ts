@@ -102,8 +102,10 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
  * traducen aca, por igualdad exacta: uno parecido sigue en el fallback.
  */
 export const VALIDATION_MESSAGES: ReadonlyMap<string, string> = new Map([
-  // staff/repository.py y superadmin/repository.py, alta o edicion con un
-  // email de login ya usado (QA movil 2026-10-08: el modal decia "No se pudo
-  // guardar" y el motivo solo llegaba a la consola).
+  // staff/repository.py (por /staff/ sale 422 VALIDATION_ERROR), alta o
+  // edicion con un email de login ya usado (QA movil 2026-10-08: el modal
+  // decia "No se pudo guardar" y el motivo solo llegaba a la consola). El
+  // mismo texto de superadmin/repository.py no pasa por aca: su router lo
+  // devuelve como AppException 400, que ya se muestra con serverMessageFor.
   ['Ya existe un usuario con ese email', 'Ese email ya lo usa otra cuenta. Usá otro email.']
 ])

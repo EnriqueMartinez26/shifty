@@ -45,9 +45,18 @@ const completarFormulario = (container: HTMLElement, fecha: string, hora: string
 const crear = () => fireEvent.click(screen.getByRole('button', { name: 'Crear Turno' }))
 
 describe('NewAppointmentModal', () => {
+  // jsdom no implementa scrollIntoView: el test que lo stubea no lo deja
+  // puesto para los siguientes (revisión de la PR #129).
+  const scrollIntoViewOriginal = Element.prototype.scrollIntoView
+
   beforeEach(() => {
     mockCrearTurno.mockReset()
     mockCrearTurno.mockResolvedValue('appt-1')
+  })
+
+  afterEach(() => {
+    if (scrollIntoViewOriginal) Element.prototype.scrollIntoView = scrollIntoViewOriginal
+    else delete (Element.prototype as Partial<Element>).scrollIntoView
   })
 
   it('crea un turno pasado en el instante UTC de la hora argentina tipeada', async () => {
