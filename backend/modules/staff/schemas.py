@@ -1,6 +1,13 @@
 from typing import Literal, Annotated, Self
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 from datetime import time
 from core.validation import PUBLIC_ID_PATTERN, reject_control_chars
 from modules.services.schemas import ServiceResponse
@@ -11,10 +18,24 @@ PublicId = Annotated[str, Field(min_length=1, max_length=64, pattern=PUBLIC_ID_P
 MAX_SERVICE_IDS = 100
 
 
+def _reject_time_with_offset(value: time) -> time:
+    # 2026-10-08 (revision de #130): Pydantic acepta "09:00:00Z" como un
+    # ``time`` con tzinfo. Una franja es hora local de pared (regla 24: la
+    # zona es la de la tienda), y mezclar horas con y sin offset hacia que
+    # ``sorted``/``<`` levantaran TypeError: un 500 alcanzable (regla 20).
+    if value.tzinfo is not None:
+        raise ValueError("la hora no lleva zona horaria")
+    return value
+
+
+# Hora de una franja: hora local, sin offset (422 si trae uno).
+LocalTime = Annotated[time, AfterValidator(_reject_time_with_offset)]
+
+
 class ScheduleBase(BaseModel):
     day_of_week: int = Field(..., ge=0, le=6)
-    start_time: time
-    end_time: time
+    start_time: LocalTime
+    end_time: LocalTime
 
     @model_validator(mode="after")
     def validate_time_order(self) -> "ScheduleBase":
@@ -56,8 +77,8 @@ class ScheduleUpdate(BaseModel):
     """
 
     day_of_week: int | None = Field(None, ge=0, le=6)
-    start_time: time | None = None
-    end_time: time | None = None
+    start_time: LocalTime | None = None
+    end_time: LocalTime | None = None
 
     @model_validator(mode="after")
     def reject_null_in_required_columns(self) -> Self:

@@ -285,3 +285,70 @@ async def test_un_profesional_nuevo_recibe_su_semana(client: AsyncClient) -> Non
 
     assert res.status_code == 200, res.text
     assert [f["day_of_week"] for f in res.json()] == [0, 1, 2, 3, 4]
+
+
+# 2026-10-08 (revision de #130): Pydantic acepta una hora con offset
+# ("09:00:00Z" da un ``time`` con tzinfo). Mezclar horas con y sin offset el
+# mismo dia hacia que ``sorted`` (``first_overlapping_day``) o la comparacion
+# de ``validate_time_order`` levantaran TypeError: un 500 alcanzable (regla
+# 20). Las franjas son hora local de pared: una hora con offset es 422.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "franjas",
+    [
+        [_franja(2, "09:00:00Z", "12:00:00Z"), _franja(2, "13:00:00", "15:00:00")],
+        [_franja(2, "09:00:00Z", "12:00:00")],
+        [_franja(2, "09:00:00-03:00", "12:00:00-03:00")],
+    ],
+    ids=["mezcla-en-el-dia", "mezcla-en-la-franja", "todas-con-offset"],
+)
+async def test_put_con_hora_con_offset_es_422_y_no_500(
+    client: AsyncClient, franjas: list[dict[str, Any]]
+) -> None:
+    agenda = await _agenda(client, "semana-offset")
+
+    res = await _guardar_semana(client, agenda, agenda.staff, franjas)
+
+    assert res.status_code == 422, res.text
+    ficha = await client.get(
+        f"/staff/{agenda.staff}", headers=auth_headers(agenda.token)
+    )
+    assert len(ficha.json()["schedules"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_post_de_una_franja_con_offset_es_422(client: AsyncClient) -> None:
+    agenda = await _agenda(client, "franja-offset-post")
+
+    res = await client.post(
+        f"/staff/{agenda.staff}/schedules",
+        headers=auth_headers(agenda.token),
+        json=_franja(3, "09:00:00Z", "12:00:00Z"),
+    )
+
+    assert res.status_code == 422, res.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cambios",
+    [{"start_time": "07:00:00Z"}, {"end_time": "20:00:00+00:00"}],
+    ids=["inicio", "fin"],
+)
+async def test_patch_de_una_franja_con_offset_es_422(
+    client: AsyncClient, cambios: dict[str, Any]
+) -> None:
+    agenda = await _agenda(client, "franja-offset-patch")
+    franja = (
+        await client.get(f"/staff/{agenda.staff}", headers=auth_headers(agenda.token))
+    ).json()["schedules"][0]
+
+    res = await client.patch(
+        f"/staff/{agenda.staff}/schedules/{franja['public_id']}",
+        headers=auth_headers(agenda.token),
+        json=cambios,
+    )
+
+    assert res.status_code == 422, res.text
