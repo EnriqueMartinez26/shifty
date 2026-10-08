@@ -341,26 +341,28 @@ imagenes_locales() {
 
 # --- compuerta --------------------------------------------------------------
 
-# Salida de `rabbitmq-diagnostics -q alarms --formatter json`, sin espacios.
-# Versiones viejas: vacio o `[]`. RabbitMQ 3.13.7 (primer deploy, 2026-10-08)
-# devuelve un objeto: `{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}`.
+# Salida de `rabbitmq-diagnostics -q alarms --formatter json`, sin espacios,
+# de la imagen fijada en compose (3.13.7; test_la_compuerta_conoce_la_version_
+# de_rabbitmq_que_corre). Segun alarms_command.ex del tag v3.13.7:
+#   sin alarmas: {"alarms":[],"node":"rabbit@...","result":"ok"}
+#   con alarmas: {"global":[...],"local":[...],"message":"...","result":"ok"}
+# (exit 0 en los dos; nunca imprime vacio ni `[]`). La compuerta exigia vacio
+# o `[]` y el primer deploy (2026-10-08) fallo con la primera forma.
 # Sin python3 ni jq garantizados en el host, se compara texto estricto: un
-# objeto entero, con UNA sola clave `alarms` y vacia, y `result` (si viene)
-# `ok`. Cualquier otra cosa (una alarma, texto, basura) cuenta como alarma:
-# la compuerta falla cerrada.
+# objeto cuyas claves son solo alarms, node y result, cada una una vez, con
+# `alarms` presente y vacia y `result` (si viene) "ok". Cualquier otra cosa
+# (una alarma, una clave desconocida, texto, vacio) cuenta como alarma: la
+# compuerta falla cerrada.
 rabbitmq_sin_alarmas() {
-  local salida="$1" vacia='"alarms":[]'
-  case "$salida" in
-    '' | '[]') return 0 ;;
-    '{'*'}') ;;
-    *) return 1 ;;
-  esac
-  case "$salida" in *"$vacia"*) ;; *) return 1 ;; esac
-  # Ninguna otra clave `alarms` antes ni despues de la vacia.
-  case "${salida%%"$vacia"*}${salida#*"$vacia"}" in *'"alarms"'*) return 1 ;; esac
-  case "$salida" in
-    *'"result":'*) case "$salida" in *'"result":"ok"'*) ;; *) return 1 ;; esac ;;
-  esac
+  local salida="$1" clave
+  local miembro='("alarms":\[\]|"node":"[^"\\]*"|"result":"ok")'
+  local objeto="^\{${miembro}(,${miembro})*\}$"
+  [[ "$salida" =~ $objeto ]] || return 1
+  case "$salida" in *'"alarms":[]'*) ;; *) return 1 ;; esac
+  # Cada clave a lo sumo una vez (un valor de node no puede tener comillas).
+  for clave in '"alarms":' '"node":' '"result":'; do
+    case "${salida#*"$clave"}" in *"$clave"*) return 1 ;; esac
+  done
   return 0
 }
 

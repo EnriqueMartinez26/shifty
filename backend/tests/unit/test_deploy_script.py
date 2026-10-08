@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from tests.unit.host_falso import (
+    REPO_ROOT,
     Host,
     _backup_fresco,
     _hay,
@@ -554,22 +555,28 @@ def test_una_alarma_de_rabbitmq_hace_fallar_la_compuerta(host: Host) -> None:
 # lista. La compuerta solo aceptaba vacio o `[]` y fallo con
 # "rabbitmq tiene alarmas activas: {"alarms":[],"node":"rabbit@rabbitmq",
 # "result":"ok"}": todo deploy terminaba en rollback.
+#
+# Las dos formas que imprime 3.13.7 salen de
+# deps/rabbitmq_cli/lib/rabbitmq/cli/diagnostics/commands/alarms_command.ex
+# (tag v3.13.7): sin alarmas, `{"alarms":[],"node":...,"result":"ok"}`; CON
+# alarmas, otro objeto SIN clave `alarms` (`local`, `global`, `message`) y
+# `result` igual a "ok", con exit 0. Nunca imprime vacio ni `[]` con
+# `--formatter json`: esas dos salidas ya no cuentan como "sin alarmas".
 _SIN_ALARMAS_3_13 = '{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
 _ALARMA_DE_MEMORIA_3_13 = (
-    '{"alarms":[{"node":"rabbit@rabbitmq","resource":"memory",'
-    '"type":"resource_alarm"}],"node":"rabbit@rabbitmq","result":"ok"}'
+    '{"global":[],"local":["Memory alarm on node rabbit@rabbitmq"],'
+    '"message":"Node rabbit@rabbitmq reported alarms","result":"ok"}'
 )
 
 
 @pytest.mark.parametrize(
     "salida",
     [
-        "[]",
-        "",
         _SIN_ALARMAS_3_13,
         '{\n  "alarms": [ ],\n  "node": "rabbit@rabbitmq",\n  "result": "ok"\n}',
+        '{"result":"ok","alarms":[],"node":"rabbit@rabbitmq"}',
     ],
-    ids=["lista-vacia", "vacio", "objeto-3.13", "objeto-indentado"],
+    ids=["objeto-3.13", "objeto-indentado", "otro-orden"],
 )
 def test_rabbitmq_sin_alarmas_pasa_la_compuerta(host: Host, salida: str) -> None:
     _preparar_deploy(host, actual="v1")
@@ -591,18 +598,39 @@ def test_rabbitmq_sin_alarmas_pasa_la_compuerta(host: Host, salida: str) -> None
     "salida",
     [
         _ALARMA_DE_MEMORIA_3_13,
+        (
+            '{"global":["Free disk space alarm on node rabbit@otro"],"local":[],'
+            '"message":"Node rabbit@rabbitmq reported alarms","result":"ok"}'
+        ),
+        # `alarms` vacia no alcanza: cualquier clave fuera de alarms, node y
+        # result (aca `global`) es una forma que la compuerta no conoce.
+        '{"alarms":[],"global":["Memory alarm on node rabbit@otro"],"result":"ok"}',
+        '{"alarms":[],"node":"rabbit@rabbitmq","result":"ok","local":[]}',
+        '{"alarms":[{"resource":"memory"}],"node":"rabbit@rabbitmq","result":"ok"}',
         '[{"type":"resource_alarm","resource":"disk"}]',
         # Dos claves `alarms` (una vacia): no se adivina cual vale.
         '{"alarms":[],"alarms":[{"resource":"memory"}],"result":"ok"}',
+        '{"alarms":[],"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}',
+        '{"node":"rabbit@rabbitmq","result":"ok"}',
         '{"alarms":[],"node":"rabbit@rabbitmq","result":"error"}',
+        "[]",
+        "",
         "Error: unable to perform an operation on node 'rabbit@rabbitmq'",
         'basura {"alarms":[]} basura',
     ],
     ids=[
-        "objeto-con-alarma",
+        "real-3.13-alarma-local",
+        "real-3.13-alarma-global",
+        "alarms-vacia-y-global",
+        "alarms-vacia-y-local",
+        "alarms-con-alarma",
         "lista-con-alarma",
         "alarms-duplicada",
+        "alarms-vacia-duplicada",
+        "sin-clave-alarms",
         "result-error",
+        "lista-vacia",
+        "vacio",
         "texto",
         "basura-alrededor",
     ],
@@ -623,6 +651,18 @@ def test_rabbitmq_con_alarmas_o_ilegible_hace_fallar_la_compuerta(
     assert resultado.returncode != 0
     assert "rabbitmq tiene alarmas activas" in resultado.stderr
     assert (host.repo / ".deploy" / "current").read_text().strip() == "v1"
+
+
+def test_la_compuerta_conoce_la_version_de_rabbitmq_que_corre() -> None:
+    """rabbitmq_sin_alarmas solo entiende el JSON de 3.13.7. Subir la imagen
+    obliga a releer alarms_command.ex del tag nuevo y ajustar la compuerta:
+    con otra forma, todo deploy fallaria (cerrado, pero fallaria)."""
+    for archivo in ("docker-compose.yml", "docker-compose.prod.yml"):
+        texto = (REPO_ROOT / archivo).read_text(encoding="utf-8")
+        tags = re.findall(r"^\s*image:\s*rabbitmq:(\S+)", texto, re.MULTILINE)
+        assert tags, archivo
+        for tag in tags:
+            assert tag.startswith("3.13.7-"), f"{archivo}: rabbitmq:{tag}"
 
 
 # --- flags de compose (2026-10-02) ------------------------------------------

@@ -127,9 +127,11 @@ if [ "$1" = compose ]; then
         exit "${FAKE_REDIS_EXIT:-0}"
       fi
       if [ "$3" = rabbitmq ]; then
-        # Sin `:`: FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
+        # Por defecto, lo que imprime RabbitMQ 3.13.7 sin alarmas. Sin `:`:
+        # FAKE_RABBIT_ALARMS='' es una salida vacia de verdad.
+        sin_alarmas='{"alarms":[],"node":"rabbit@rabbitmq","result":"ok"}'
         printf '%s
-' "${FAKE_RABBIT_ALARMS-[]}"
+' "${FAKE_RABBIT_ALARMS-$sin_alarmas}"
         exit "${FAKE_RABBIT_EXIT:-0}"
       fi
       exit "${FAKE_NGINX_EXIT:-0}" ;;
