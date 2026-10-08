@@ -17,6 +17,7 @@ from core.roles import assert_can_change_access
 from core.validation import PUBLIC_ID_PATTERN
 from modules.auth.dependencies import get_current_admin
 from modules.auth.dependencies import get_current_staff
+from modules.auth.service import normalize_email
 from modules.staff.mappers import to_schedule_response, to_staff_response
 from modules.staff.model import Staff
 from modules.staff.repository import StaffRepository
@@ -282,6 +283,22 @@ async def update_staff(
     )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
+    # Revision de #133: con su ficha de profesional, el admin cambiaba el email
+    # de LOGIN de su propia cuenta sin la contrasena (update_profile sincroniza
+    # user.email y assert_can_change_access deja pasar a uno mismo); con una
+    # sesion robada, el "olvide mi contrasena" le llegaba al atacante. Mismo
+    # criterio que SELF_PASSWORD_CHANGE_DENIED en /users/. Reenviar el mismo
+    # email (otra caja o espacios) sigue valiendo: el formulario lo manda.
+    if (
+        staff.id == admin.id
+        and data.email is not None
+        and normalize_email(data.email) != admin.email
+    ):
+        raise AppException(
+            message="Tu email de acceso no se cambia desde Personal",
+            http_status=400,
+            error_code="SELF_EMAIL_CHANGE_DENIED",
+        )
     await _guardar_cuenta_vinculada(
         repo, staff, admin, public_id, email=data.email, is_active=data.is_active
     )

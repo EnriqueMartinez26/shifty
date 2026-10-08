@@ -315,7 +315,9 @@ async def _crear_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
 
 async def _agregarme_como_staff(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     # La ficha es la de la cuenta que llama: la segunda vez del mismo actor
-    # responde 409 (ya figura), por eso la fila acepta 201 y 409.
+    # responde 409 (ya figura), por eso la fila acepta 201 y 409. El
+    # superadmin queda afuera: la cuenta global no atiende (403
+    # STAFF_SELF_GLOBAL_ADMIN_DENIED, revision de #133).
     return Llamada("POST", "/staff/me", json={"service_ids": [t.servicio]})
 
 
@@ -1114,7 +1116,7 @@ TABLA: tuple[Ruta, ...] = (
     R(
         "POST",
         "/staff/me",
-        ADMINS,
+        frozenset({ADMIN_TIENDA}),
         A.PROPIA,
         _agregarme_como_staff,
         ok=frozenset({201, 409}),

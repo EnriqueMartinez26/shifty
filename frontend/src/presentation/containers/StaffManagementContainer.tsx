@@ -42,8 +42,11 @@ export const StaffManagementContainer: React.FC = () => {
   // su misma cuenta. Solo un admin se agrega (POST /staff/me) y solo a si mismo.
   const { user } = useAuth()
   const myId = user?.public_id ?? null
+  // La cuenta global no atiende: POST /staff/me la rechaza
+  // (STAFF_SELF_GLOBAL_ADMIN_DENIED).
   const canAddMyself =
     myId !== null &&
+    user?.is_global_admin !== true &&
     hasAnyRole(user?.role, ROLES_ADMIN_SUPER, user?.is_global_admin) &&
     staffList !== undefined &&
     !staffList.some((member) => member.id === myId)

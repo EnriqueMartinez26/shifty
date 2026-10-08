@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.security import hash_password
 from core.utils import ARGENTINA_TZ
+from modules.staff.model import Staff
 from modules.stores.model import Store
 from modules.users.model import User, UserRole
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
@@ -334,3 +335,120 @@ async def test_un_admin_no_vuelve_reservable_a_otro_admin(
     assert cuenta_b.is_active is True
     assert cuenta_b.role == UserRole.ADMIN
     assert suya["public_id"] in await _staff_publico(client, tienda)
+
+
+# 2026-10-08 (revision de #133). Sintoma: con su ficha de profesional, el
+# admin cambiaba el email de LOGIN de su propia cuenta por
+# ``PUT /staff/{su id}`` sin la contrasena (``update_profile`` sincroniza
+# ``user.email`` y ``assert_can_change_access`` deja pasar a uno mismo).
+# Una sesion robada se quedaba con la cuenta: el "olvide mi contrasena" le
+# llegaba al atacante. ``/users/`` ya niega lo mismo con la contrasena
+# (``SELF_PASSWORD_CHANGE_DENIED``).
+
+
+@pytest.mark.asyncio
+async def test_el_admin_no_cambia_su_email_de_login_por_staff(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    tienda = await _tienda(client, "duenio-email-propio")
+    ficha = (await _agregarme(client, tienda.token)).json()
+
+    res = await client.put(
+        f"/staff/{ficha['public_id']}",
+        headers=auth_headers(tienda.token),
+        json={"email": "atacante-duenio@x.com"},
+    )
+
+    assert res.status_code == 400, res.text
+    assert res.json()["error_code"] == "SELF_EMAIL_CHANGE_DENIED"
+    cuenta = await _cuenta(test_session, tienda.email)
+    assert cuenta.email == tienda.email
+    assert (await _login(client, tienda.email)).status_code == 200
+    assert (await _login(client, "atacante-duenio@x.com")).status_code == 401
+    detalle = await client.get(
+        f"/staff/{ficha['public_id']}", headers=auth_headers(tienda.token)
+    )
+    assert detalle.json()["email"] == tienda.email
+
+
+@pytest.mark.asyncio
+async def test_el_admin_puede_reenviar_su_mismo_email_al_editarse(
+    client: AsyncClient,
+) -> None:
+    """El formulario manda el email tal cual: el mismo (otra caja o espacios) pasa."""
+    tienda = await _tienda(client, "duenio-email-igual")
+    ficha = (await _agregarme(client, tienda.token)).json()
+
+    for email in (tienda.email, f"  {tienda.email.upper()} "):
+        res = await client.put(
+            f"/staff/{ficha['public_id']}",
+            headers=auth_headers(tienda.token),
+            json={"email": email, "display_name": "Dueno que atiende"},
+        )
+        assert res.status_code == 200, (email, res.text)
+        assert res.json()["email"] == tienda.email
+    assert (await _login(client, tienda.email)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_el_admin_sigue_cambiando_el_email_de_un_profesional(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    tienda = await _tienda(client, "duenio-email-pro")
+    alta = await client.post(
+        "/staff/",
+        headers=auth_headers(tienda.token),
+        json={
+            "display_name": "Pro",
+            "first_name": "Pro",
+            "last_name": "Fesional",
+            "email": "pro-viejo-duenio@t.com",
+            "service_ids": [tienda.service],
+        },
+    )
+    assert alta.status_code == 201, alta.text
+
+    res = await client.put(
+        f"/staff/{alta.json()['public_id']}",
+        headers=auth_headers(tienda.token),
+        json={"email": "pro-nuevo-duenio@t.com"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["email"] == "pro-nuevo-duenio@t.com"
+    cuenta = (
+        await test_session.execute(
+            select(User)
+            .where(User.id == alta.json()["public_id"])
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    assert cuenta.email == "pro-nuevo-duenio@t.com"
+
+
+# 2026-10-08 (revision de #133). Sintoma: el superadmin se agregaba como
+# profesional; las lecturas del panel de la tienda lo esconden (S-15,
+# AUD2-B3-11) pero el portal publico lo ofrecia para reservar. La cuenta
+# global no atiende en ninguna tienda.
+
+
+@pytest.mark.asyncio
+async def test_el_superadmin_no_se_agrega_como_profesional(
+    client: AsyncClient, test_session: AsyncSession
+) -> None:
+    tienda = await _tienda(client, "duenio-global")
+    cuenta = await _cuenta(test_session, tienda.email)
+    cuenta.is_global_admin = True
+    await test_session.commit()
+
+    res = await _agregarme(client, tienda.token, service_ids=[tienda.service])
+
+    assert res.status_code == 403, res.text
+    assert res.json()["error_code"] == "STAFF_SELF_GLOBAL_ADMIN_DENIED"
+    fichas = (
+        await test_session.execute(
+            select(func.count()).select_from(Staff).where(Staff.id == cuenta.id)
+        )
+    ).scalar_one()
+    assert fichas == 0
+    assert await _staff_publico(client, tienda) == {}

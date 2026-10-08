@@ -191,6 +191,15 @@ describe('StaffManagementContainer: agregarme como profesional', () => {
     }
   })
 
+  // Revision de #133: el backend rechaza a la cuenta global (las lecturas del
+  // panel la esconden y el portal la ofreceria igual para reservar).
+  it('el SuperAdmin no ve el boton', () => {
+    mockUser = { ...mockUser, role: 'super_admin', is_global_admin: true }
+    const { queryByRole } = render(<StaffManagementContainer />)
+
+    expect(queryByRole('button', { name: /agregarme como profesional/i })).not.toBeInTheDocument()
+  })
+
   it('quitarse de la agenda pregunta distinto: la cuenta no cambia', async () => {
     mockUser = { ...mockUser, public_id: 'st-1' }
     mockDelete.mockResolvedValue(undefined)

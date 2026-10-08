@@ -169,6 +169,24 @@ class StaffRepository:
         await self.db.flush()
         return new_staff
 
+    async def lock_account(self, account: User) -> None:
+        """``SELECT ... FOR UPDATE`` sobre la fila ``users`` de ``account``.
+
+        Serializa ``POST /staff/me`` de la misma cuenta: sin esto, N pedidos
+        simultaneos leian "sin ficha" y el segundo ``INSERT`` chocaba con la
+        clave primaria (``IntegrityError`` -> 409 generico). La ficha puede no
+        existir todavia, asi que el lock va sobre la cuenta, que siempre
+        existe. Orden: cuenta -> ficha. Ningun otro camino del personal toma
+        la cuenta con ``FOR UPDATE``: ``lock_staff_row`` (agenda) lockea solo
+        la ficha, y ``update_profile`` / ``soft_delete`` no lockean (sus
+        ``UPDATE`` los ordena el flush). En
+        SQLite ``FOR UPDATE`` se ignora; la rafaga real vive en
+        ``tests/postgres/test_pg_duenio_como_profesional.py``.
+        """
+        await self.db.execute(
+            select(User.id).where(User.id == account.id).with_for_update()
+        )
+
     async def create_for_account(
         self, account: User, display_name: str, service_public_ids: list[str]
     ) -> Staff:

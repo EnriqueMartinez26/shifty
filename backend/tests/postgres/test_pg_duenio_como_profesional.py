@@ -4,10 +4,18 @@ Lo que SQLite no prueba de ``POST /staff/me``: la ficha se escribe como
 ``shifty_app`` bajo RLS con el ``store_id`` de la cuenta, y el portal publico
 (``tenant_bypass``) y la grilla la leen. Tambien que quitarse de la agenda no
 le desactiva la cuenta: su sesion sigue andando.
+
+Y la rafaga (regla de §4, revision de #133): ``add_self`` era "leer y despues
+insertar" sin lock; N pedidos simultaneos veian "sin ficha" y el segundo
+``INSERT`` chocaba con la clave primaria (409 generico de ``IntegrityError``,
+no ``STAFF_SELF_ALREADY_EXISTS``). Ahora la fila ``users`` de quien llama se
+toma con ``FOR UPDATE`` antes de leer.
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -22,6 +30,8 @@ from tests.integration.test_feature_flags_finance_and_public_privacy import (
 from tests.postgres.conftest import auth_headers, register_and_login
 
 pytestmark = pytest.mark.postgres
+
+RAFAGA = min(int(os.getenv("TEST_POSTGRES_RAFAGA", "25")), 10)
 
 DIAS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -84,3 +94,40 @@ async def test_el_duenio_agregado_tiene_turnos_bajo_rls_y_conserva_la_cuenta(
     assert baja.status_code == 204, baja.text
     sigue = await client.get("/staff/", headers=auth_headers(token))
     assert sigue.status_code == 200, sigue.text
+
+
+@pytest.mark.asyncio
+async def test_rafaga_de_agregarme_deja_una_sola_ficha(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    _store, token = await register_and_login(
+        client, app_sessions, slug="pg-duenio-rafaga", email="pg-duenio-rafaga@demo.com"
+    )
+
+    respuestas = await asyncio.gather(
+        *(
+            client.post("/staff/me", headers=auth_headers(token), json={})
+            for _ in range(RAFAGA)
+        )
+    )
+
+    codigos = sorted(r.status_code for r in respuestas)
+    assert codigos == [201] + [409] * (RAFAGA - 1), [r.text for r in respuestas]
+    assert all(
+        r.json()["error_code"] == "STAFF_SELF_ALREADY_EXISTS"
+        for r in respuestas
+        if r.status_code == 409
+    ), [r.text for r in respuestas]
+    async with owner_engine.connect() as conn:
+        fichas = (
+            await conn.execute(
+                text(
+                    "select count(*) from staff s join users u on u.id = s.id "
+                    "where u.email = :email"
+                ),
+                {"email": "pg-duenio-rafaga@demo.com"},
+            )
+        ).scalar_one()
+    assert fichas == 1

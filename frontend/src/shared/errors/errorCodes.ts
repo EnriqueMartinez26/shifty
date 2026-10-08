@@ -42,6 +42,10 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['NO_STAFF_AVAILABLE', 'No hay profesionales disponibles en ese horario. Elegí otro.'],
   // POST /staff/me: la cuenta ya figura en la agenda (otra pestana la agrego).
   ['STAFF_SELF_ALREADY_EXISTS', 'Ya figurás como profesional. Actualizá la lista del personal.'],
+  // PUT /staff/{id} sobre la propia ficha: el email de login no cambia sin la
+  // contrasena (mismo criterio que SELF_PASSWORD_CHANGE_DENIED en /users/).
+  ['SELF_EMAIL_CHANGE_DENIED', 'Tu email de acceso no se cambia desde Personal.'],
+  ['STAFF_SELF_GLOBAL_ADMIN_DENIED', 'La cuenta SuperAdmin no se agrega como profesional.'],
   // Solo lo emite la reprogramacion del cliente (public_api/service.py). Sin
   // BOOKING_NOTICE_REQUIRED ni CANCELLATION_WINDOW_EXPIRED a proposito: el
   // texto del servidor dice cuantas horas pide la tienda (FF-06).

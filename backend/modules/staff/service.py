@@ -94,7 +94,19 @@ class StaffService:
         nuevo ni email repetido (regla 16) y sin cambiar su rol. Si ya tuvo
         ficha y se quito de la agenda, se reactiva la misma. Solo sobre uno
         mismo: no hay forma de volver reservable a OTRA cuenta por aca.
+
+        La cuenta global no atiende: el panel de la tienda la esconde (S-15)
+        y el portal la ofreceria igual para reservar (revision de #133).
         """
+        if account.is_global_admin:
+            raise AppException(
+                message="La cuenta SuperAdmin no se agrega como profesional.",
+                http_status=403,
+                error_code="STAFF_SELF_GLOBAL_ADMIN_DENIED",
+            )
+        # Leer y despues insertar, serializado por la fila de la cuenta: una
+        # rafaga da un 201 y el resto STAFF_SELF_ALREADY_EXISTS (§4).
+        await self.repo.lock_account(account)
         existing = await self.repo.get_by_id(
             account.id, account.store_id, include_global_admins=True
         )

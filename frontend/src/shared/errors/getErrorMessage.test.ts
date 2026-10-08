@@ -31,6 +31,23 @@ describe('getErrorMessage', () => {
     )
   })
 
+  // Revision de #133 (2026-10-08): el email de acceso propio no se cambia por
+  // Personal y la cuenta SuperAdmin no se agrega como profesional.
+  it.each([
+    [
+      'SELF_EMAIL_CHANGE_DENIED',
+      new ValidationError('x', { errorCode: 'SELF_EMAIL_CHANGE_DENIED', statusCode: 400 }),
+      'Tu email de acceso no se cambia desde Personal.'
+    ],
+    [
+      'STAFF_SELF_GLOBAL_ADMIN_DENIED',
+      new ForbiddenError('x', { errorCode: 'STAFF_SELF_GLOBAL_ADMIN_DENIED', statusCode: 403 }),
+      'La cuenta SuperAdmin no se agrega como profesional.'
+    ]
+  ])('traduce %s', (_code, error, texto) => {
+    expect(getErrorMessage(error, FALLBACK)).toBe(texto)
+  })
+
   it('un VALIDATION_ERROR devuelve el fallback, nunca el texto de Pydantic', () => {
     const pydantic = 'body -> email: value is not a valid email address'
     const error = new ValidationError(pydantic, { errorCode: 'VALIDATION_ERROR', statusCode: 422 })
