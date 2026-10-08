@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 
 import CollectionsPage from './Collections'
 
@@ -12,6 +12,8 @@ let mockAuthUser: { role: string; is_global_admin: boolean }
 let mockAppointments: unknown[] = []
 let mockFlags: { payments: boolean } | undefined = { payments: true }
 let mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+const mockManualConfirm = jest.fn()
+const mockCreatePreference = jest.fn()
 
 jest.mock('../hooks/useStores', () => ({
   useStoreFeatureFlags: () => ({ data: mockFlags ? { flags: mockFlags } : undefined })
@@ -28,8 +30,8 @@ jest.mock('../context/AuthContext', () => ({
 jest.mock('../hooks/usePayments', () => ({
   usePaymentsAppointments: () => ({ data: mockAppointments, isLoading: false, error: null }),
   useReconciliationSummary: (enabled?: boolean) => mockUseReconciliationSummary(enabled),
-  useCreatePaymentPreference: () => ({ mutateAsync: jest.fn(), data: undefined }),
-  useManualConfirmPayment: () => ({ mutateAsync: jest.fn() })
+  useCreatePaymentPreference: () => ({ mutateAsync: mockCreatePreference, data: undefined }),
+  useManualConfirmPayment: () => ({ mutateAsync: mockManualConfirm, isPending: false })
 }))
 
 const valorDe = (label: string) => screen.getByText(label).nextElementSibling?.textContent
@@ -133,5 +135,159 @@ describe('CollectionsPage: cuando no se puede cobrar', () => {
     render(<CollectionsPage />)
 
     for (const boton of botones()) expect(boton).not.toBeDisabled()
+  })
+})
+
+// 2026-10-08, QA en el celular (decision de Mateo):
+// - un turno "Completado" desaparecia de Cobros, y el flujo natural es atender,
+//   completar y DESPUES cobrar (el backend lo cobra, regla 3);
+// - "Confirmar pago" registraba al instante, sin confirmar ni pedir importe;
+// - despues de pagar la tarjeta seguia igual (CONFIRMADO y el mismo boton);
+// - el aviso de exito mostraba un id crudo (ULID), y la regla 20 dice que
+//   los ids no salen a la persona.
+describe('CollectionsPage: confirmar un pago', () => {
+  const turno = {
+    public_id: '01JA8ZK3Q4R5S6T7V8W9X0Y1Z2',
+    status: 'confirmed',
+    client_name: 'Lucia',
+    service_name: 'Corte',
+    staff_name: 'Ana',
+    starts_at: '2026-10-08T13:00:00Z',
+    price_amount: '3200.00',
+    payment_status: null,
+    payment_amount: null
+  }
+  const PAYMENT_ID = '01JA8ZPAGO000000000000000'
+
+  beforeEach(() => {
+    mockAuthUser = { role: 'store_admin', is_global_admin: false }
+    mockFlags = { payments: true }
+    mockWriteAccess = { readOnly: false, reason: 'Tienda suspendida' }
+    mockAppointments = [turno]
+    mockManualConfirm.mockReset()
+    mockManualConfirm.mockResolvedValue({
+      public_id: PAYMENT_ID,
+      appointment_id: turno.public_id,
+      amount: '3200.00',
+      currency: 'ARS',
+      status: 'manual_confirmed'
+    })
+    mockCreatePreference.mockReset()
+  })
+
+  const confirmarPago = () => screen.getByRole('button', { name: /Confirmar pago/ })
+  const registrar = () => screen.getByRole('button', { name: /Registrar pago/ })
+
+  it.each(['completed', 'absent'])('un turno %s sigue en Cobros y se puede cobrar', (status) => {
+    mockAppointments = [{ ...turno, status }]
+    render(<CollectionsPage />)
+
+    expect(screen.getByText('Lucia')).toBeInTheDocument()
+    expect(confirmarPago()).not.toBeDisabled()
+  })
+
+  it.each(['cancelled', 'expired'])('un turno %s (soltado) no aparece', (status) => {
+    mockAppointments = [{ ...turno, status }]
+    render(<CollectionsPage />)
+
+    expect(screen.queryByText('Lucia')).not.toBeInTheDocument()
+  })
+
+  it('pide confirmacion con el importe antes de registrar', async () => {
+    render(<CollectionsPage />)
+
+    fireEvent.click(confirmarPago())
+    expect(screen.getByRole('dialog', { name: /Confirmar pago/ })).toBeInTheDocument()
+    expect(mockManualConfirm).not.toHaveBeenCalled()
+    expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('3200')
+
+    await act(async () => {
+      fireEvent.click(registrar())
+    })
+
+    // Sin tocar la sugerencia el importe no viaja: el backend usa el mismo y no
+    // re-tarifa el cobro (una promo o el snapshot de la sena quedan intactos).
+    expect(mockManualConfirm).toHaveBeenCalledWith({
+      appointmentId: turno.public_id,
+      amount: undefined
+    })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('un importe cambiado viaja tal cual', async () => {
+    render(<CollectionsPage />)
+
+    fireEvent.click(confirmarPago())
+    fireEvent.change(screen.getByLabelText(/Importe/), { target: { value: '2500' } })
+    await act(async () => {
+      fireEvent.click(registrar())
+    })
+
+    expect(mockManualConfirm).toHaveBeenCalledWith({
+      appointmentId: turno.public_id,
+      amount: 2500
+    })
+  })
+
+  it('con una sena pendiente precarga la sena', () => {
+    mockAppointments = [{ ...turno, payment_status: 'pending', payment_amount: '960.00' }]
+    render(<CollectionsPage />)
+
+    expect(screen.getByText(/Seña pendiente/)).toHaveTextContent('960')
+    fireEvent.click(confirmarPago())
+    expect((screen.getByLabelText(/Importe/) as HTMLInputElement).value).toBe('960')
+  })
+
+  it('el aviso de exito no muestra ids crudos', async () => {
+    render(<CollectionsPage />)
+
+    fireEvent.click(confirmarPago())
+    await act(async () => {
+      fireEvent.click(registrar())
+    })
+
+    expect(screen.getByText(/Pago registrado/)).toHaveTextContent('Lucia')
+    expect(document.body.textContent).not.toContain(PAYMENT_ID)
+    expect(document.body.textContent).not.toContain(turno.public_id)
+  })
+
+  it('si falla, el error se ve en el dialogo y no se cierra', async () => {
+    mockManualConfirm.mockRejectedValue(new Error('boom'))
+    render(<CollectionsPage />)
+
+    fireEvent.click(confirmarPago())
+    await act(async () => {
+      fireEvent.click(registrar())
+    })
+
+    expect(screen.getByRole('dialog')).toHaveTextContent('No se pudo registrar el pago')
+  })
+
+  it('el aviso del link creado no muestra ids crudos', async () => {
+    mockCreatePreference.mockResolvedValue({
+      payment_public_id: PAYMENT_ID,
+      appointment_id: turno.public_id,
+      amount: 3200,
+      currency: 'ARS',
+      status: 'pending'
+    })
+    render(<CollectionsPage />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Crear link/ }))
+    })
+
+    expect(screen.getByText(/Link de cobro creado/)).toHaveTextContent('Lucia')
+    expect(document.body.textContent).not.toContain(PAYMENT_ID)
+  })
+
+  it('un turno pagado muestra lo pagado y lo que resta, sin volver a ofrecer cobrar', () => {
+    mockAppointments = [{ ...turno, payment_status: 'approved', payment_amount: '960.00' }]
+    render(<CollectionsPage />)
+
+    expect(screen.getByText(/Pagado/)).toHaveTextContent('960')
+    expect(screen.getByText(/Resta/)).toHaveTextContent('2.240')
+    expect(screen.queryByRole('button', { name: /Confirmar pago/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Crear link/ })).not.toBeInTheDocument()
   })
 })

@@ -5,14 +5,18 @@ import {
   type BookingAction
 } from './BookingStatus'
 
+// 2026-10-08, QA en el celular: un turno "Completado" desaparecia de Cobros.
+// El flujo natural (llega sin turno, se atiende, se completa y DESPUES se
+// cobra) quedaba sin salida. El backend cobra un completado o un ausente
+// (regla 3: solo `cancelled` y `expired` estan soltados y no se cobran).
 describe('predicados de estado del turno', () => {
   it.each([
     ['pending', true, true],
     ['pending_payment', true, true],
     ['confirmed', true, true],
-    ['completed', true, false],
+    ['completed', true, true],
     ['cancelled', true, false],
-    ['absent', true, false],
+    ['absent', true, true],
     ['expired', true, false],
     ['on_hold', false, false],
     ['', false, false],
