@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -239,6 +240,12 @@ class AppointmentSearchResult(BaseModel):
     client_name: str
     client_id: str
     client_phone: Optional[str] = None
+    # Aditivo (2026-10-08, decision de Mateo): Cobros precarga el importe y
+    # muestra lo pagado. ``price_amount`` es el precio congelado del turno;
+    # ``payment_*`` es su cobro (``None`` si no tiene).
+    price_amount: Optional[Decimal] = None
+    payment_status: Optional[str] = None
+    payment_amount: Optional[Decimal] = None
 
 
 class AppointmentSearchResponse(BaseModel):

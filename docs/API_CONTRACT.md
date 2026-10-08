@@ -3106,6 +3106,9 @@ Responses:
 | `client_name` | string | yes |  |
 | `client_id` | string | yes |  |
 | `client_phone` | string \| null | no |  |
+| `price_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
+| `payment_status` | string \| null | no |  |
+| `payment_amount` | string \| null | no | pattern="^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$" |
 
 ### AppointmentStatus
 
@@ -4686,4 +4689,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-03, commit d76e673b
+Generado desde app.openapi() el 2026-10-08, commit 841ccf44
