@@ -148,3 +148,139 @@ async def test_cada_tienda_ve_solo_sus_restos_sin_filtro_en_la_query(
     assert await _contar_restos(app_engine, store_id=tienda_b) == 1
     assert await _contar_restos(app_engine, store_id=None) == 0
     assert await _contar_restos(app_engine, store_id=None, global_admin=True) == 2
+
+
+async def _vivos(owner_engine: AsyncEngine, turno: str) -> int:
+    async with owner_engine.connect() as conn:
+        return cast(
+            int,
+            (
+                await conn.execute(
+                    text(
+                        "select count(*) from appointment_balance_payments "
+                        "where appointment_id = :t and reverted_at is null"
+                    ),
+                    {"t": turno},
+                )
+            ).scalar_one(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_rafaga_identica_con_la_misma_clave_registra_un_solo_resto(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """CLAUDE.md §4, N identicas (revision de la PR #137, S1): el mismo pedido
+    repetido N veces a la vez (doble toque, reintentos de red) registra UN
+    resto y todas las respuestas exitosas son ese mismo resto."""
+    _store, token, turno = await _turno_con_sena(client, app_sessions, "pg-resto-id")
+
+    respuestas = await asyncio.gather(
+        *(
+            client.post(
+                f"/payments/{turno}/remaining-payment",
+                headers=auth_headers(token),
+                json={"idempotency_key": "pg-resto-id-clave-unica"},
+            )
+            for _ in range(RAFAGA)
+        )
+    )
+    codigos = [r.status_code for r in respuestas]
+
+    assert all(c < 500 for c in codigos), [r.text for r in respuestas]
+    assert set(codigos) <= {201, 409}, codigos
+    exitos = {r.json()["public_id"] for r in respuestas if r.status_code == 201}
+    assert len(exitos) == 1, exitos
+    assert await _vivos(owner_engine, turno) == 1
+
+
+@pytest.mark.asyncio
+async def test_registrar_y_revertir_a_la_vez_nunca_dejan_dos_restos(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """Revision de la PR #137 (S1): con un resto vivo, revertir y registrar
+    otro a la vez se serializan por el lock del turno. Si gana revertir, el
+    registro entra (un resto vivo, el nuevo); si gana registrar, es 409 y la
+    reversa deja el turno sin resto. Nunca dos vivos ni un 5xx."""
+    for vuelta in range(5):
+        slug = f"pg-resto-carrera-{vuelta}"
+        _store, token, turno = await _turno_con_sena(client, app_sessions, slug)
+        primero = await client.post(
+            f"/payments/{turno}/remaining-payment",
+            headers=auth_headers(token),
+            json={"idempotency_key": f"{slug}-clave-0001", "amount": "10.00"},
+        )
+        assert primero.status_code == 201, primero.text
+
+        revertir, registrar = await asyncio.gather(
+            client.post(
+                f"/payments/{turno}/remaining-payment/revert",
+                headers=auth_headers(token),
+            ),
+            client.post(
+                f"/payments/{turno}/remaining-payment",
+                headers=auth_headers(token),
+                json={"idempotency_key": f"{slug}-clave-0002", "amount": "20.00"},
+            ),
+        )
+
+        assert revertir.status_code == 200, revertir.text
+        assert registrar.status_code in (201, 409), registrar.text
+        esperado = 1 if registrar.status_code == 201 else 0
+        assert await _vivos(owner_engine, turno) == esperado
+
+
+@pytest.mark.asyncio
+async def test_registrar_el_resto_y_reprogramar_a_la_vez_no_salen_los_dos(
+    client: AsyncClient,
+    app_sessions: async_sessionmaker[AsyncSession],
+    owner_engine: AsyncEngine,
+) -> None:
+    """Revision de la PR #137 (W2): reprogramar un turno con resto vivo es
+    409 bajo el lock del turno. Corriendo a la vez con el registro del resto,
+    o se reprograma (y el resto llega a un turno cancelado: 409) o se registra
+    el resto (y reprogramar es 409). Nunca un resto vivo en un cancelado."""
+    for vuelta in range(5):
+        slug = f"pg-resto-repro-{vuelta}"
+        _store, token, turno = await _turno_con_sena(client, app_sessions, slug)
+        nuevo_inicio = (datetime.now(timezone.utc) + timedelta(days=6)).replace(
+            hour=13, minute=0, second=0, microsecond=0
+        )
+
+        registrar, reprogramar = await asyncio.gather(
+            client.post(
+                f"/payments/{turno}/remaining-payment",
+                headers=auth_headers(token),
+                json={"idempotency_key": f"{slug}-clave-0001"},
+            ),
+            client.patch(
+                f"/appointments/{turno}/reschedule",
+                headers=auth_headers(token),
+                json={
+                    "new_starts_at": nuevo_inicio.isoformat(),
+                    "idempotency_key": f"{slug}-repro-0001",
+                    "allow_outside_schedule": True,
+                },
+            ),
+        )
+
+        exitos = [
+            r.status_code for r in (registrar, reprogramar) if r.status_code < 300
+        ]
+        assert len(exitos) == 1, (registrar.text, reprogramar.text)
+        assert registrar.status_code < 500 and reprogramar.status_code < 500
+        async with owner_engine.connect() as conn:
+            colgados = (
+                await conn.execute(
+                    text(
+                        "select count(*) from appointment_balance_payments b "
+                        "join appointments a on a.id = b.appointment_id "
+                        "where b.reverted_at is null and a.status = 'cancelled'"
+                    )
+                )
+            ).scalar_one()
+        assert colgados == 0
