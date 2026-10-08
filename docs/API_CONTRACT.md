@@ -183,7 +183,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `array<any>`
+- `200` Successful Response — `application/json`: `ApiSuccess_list_object__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /appointments/search
@@ -344,7 +344,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `ResetPasswordResponse`
+- `200` Successful Response — `application/json`: `ApiSuccess_ResetPasswordResponse_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /auth/forgot-password
@@ -428,7 +428,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `RevokedSessionsResult`
+- `200` Successful Response — `application/json`: `ApiSuccess_RevokedSessionsResult_`
 
 ### POST /auth/sessions/revoke-store
 
@@ -437,7 +437,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `RevokedSessionsResult`
+- `200` Successful Response — `application/json`: `ApiSuccess_RevokedSessionsResult_`
 
 ### POST /auth/sessions/revoke-user/{user_public_id}
 
@@ -452,7 +452,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `RevokedSessionsResult`
+- `200` Successful Response — `application/json`: `ApiSuccess_RevokedSessionsResult_`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### DELETE /auth/sessions/{session_id}
@@ -653,7 +653,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object<string, string>`
+- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__str__`
 
 ### GET /ops/health/ready
 
@@ -671,7 +671,7 @@ Responses:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object`
+- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__Any__`
 
 ## Payments
 
@@ -807,7 +807,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object`
+- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__Any__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /payments/{appointment_id}/manual-confirm
@@ -1003,7 +1003,7 @@ Parameters:
 
 Responses:
 
-- `200` Successful Response — `application/json`: `array<any>`
+- `200` Successful Response — `application/json`: `ApiSuccess_list_object__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### PATCH /public/client/appointments/{public_id}/cancel
@@ -1095,7 +1095,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object`
+- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__object__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### POST /public/otp/verify
@@ -1109,7 +1109,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object`
+- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__object__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ### GET /public/payments/{payment_public_id}/status
@@ -1718,7 +1718,7 @@ Request body (required):
 
 Responses:
 
-- `200` Successful Response — `application/json`: `object<string, string>`
+- `200` Successful Response — `application/json`: `ApiSuccess_dict_str__str__`
 - `422` Validation Error — `application/json`: `HTTPValidationError`
 
 ## Store Terms
@@ -2483,6 +2483,30 @@ Responses:
 | `data` | DashboardSummaryResponse | yes |  |
 | `meta` | object \| null | no |  |
 
+### ApiSuccess_dict_str__Any__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | object | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_dict_str__object__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | object | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_dict_str__str__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | object<string, string> | yes |  |
+| `meta` | object \| null | no |  |
+
 ### ApiSuccess_ForgotPasswordResponse_
 
 | field | type | required | constraints |
@@ -2585,6 +2609,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | array<LedgerClientItem> | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_list_object__
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | array<any> | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_list_PlanResponse__
@@ -2857,6 +2889,14 @@ Responses:
 |---|---|---|---|
 | `success` | boolean | no | default=true |
 | `data` | ResetPasswordResponse | yes |  |
+| `meta` | object \| null | no |  |
+
+### ApiSuccess_RevokedSessionsResult_
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `success` | boolean | no | default=true |
+| `data` | RevokedSessionsResult | yes |  |
 | `meta` | object \| null | no |  |
 
 ### ApiSuccess_ScheduleResponse_
@@ -4797,4 +4837,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-08, commit 8130c648
+Generado desde app.openapi() el 2026-10-08, commit 248c97ee
