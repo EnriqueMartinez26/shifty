@@ -158,4 +158,23 @@ describe('AppointmentActions', () => {
     )
     expect(container.innerHTML).toBe('')
   })
+
+  // QA movil 2026-10-08: los botones median 30x22 (compactos) o 24 de alto.
+  it.each([false, true])('cada accion es un blanco tactil de 40x40 (compacto: %s)', (compact) => {
+    render(
+      <AppointmentActions
+        status="pending"
+        hasStarted={false}
+        canRelease
+        canManage
+        canCancelOrReschedule
+        busy={false}
+        compact={compact}
+        onAction={() => undefined}
+      />
+    )
+    for (const button of screen.getAllByRole('button')) {
+      expect(button).toHaveClass('min-h-10', 'min-w-10')
+    }
+  })
 })

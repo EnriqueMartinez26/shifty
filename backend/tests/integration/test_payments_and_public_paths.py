@@ -166,7 +166,9 @@ async def test_los_servicios_publicos_se_listan_por_tienda(
     store_public_id, token = await register_and_login(
         client, slug="publico-servicios", email="pub-servicios@test.com"
     )
-    await create_service(client, token)
+    servicio = await create_service(client, token)
+    # Sin profesional asignado no se publica (QA movil 2026-10-08).
+    await create_staff(client, token, servicio, email="pro-pub-servicios@test.com")
 
     res = await client.get(
         "/public/services", params={"store_public_id": store_public_id}

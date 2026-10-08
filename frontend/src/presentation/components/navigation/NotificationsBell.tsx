@@ -59,7 +59,11 @@ const NotificationsBell: React.FC = () => {
   }, [isOpen])
 
   return (
-    <div className="relative" ref={containerRef}>
+    // En el telefono la raiz NO posiciona: el panel se ancla al encabezado
+    // (AdminLayout lo marca `relative`) y ocupa su ancho. Anclado al borde
+    // derecho de la campana, que en 390 px queda a la izquierda, abria en
+    // left=-262px (QA movil 2026-10-08). Desde md la campana esta a la derecha.
+    <div className="md:relative" ref={containerRef}>
       <button
         type="button"
         onClick={() => setIsOpen((open) => !open)}
@@ -90,7 +94,9 @@ const NotificationsBell: React.FC = () => {
 
       {isOpen && (
         <div
-          className="absolute right-0 mt-2 w-80 rounded-lg overflow-hidden z-50"
+          role="region"
+          aria-label="Panel de notificaciones"
+          className="absolute inset-x-0 top-full mt-2 md:inset-x-auto md:right-0 md:w-80 rounded-lg overflow-hidden z-50"
           style={{
             background: 'white',
             border: `1px solid ${colors2000s.border.default}`,

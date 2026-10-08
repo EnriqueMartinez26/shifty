@@ -246,3 +246,40 @@ describe('getErrorMessage: errores de validacion por campo', () => {
     expect(getInvalidFields(alEditar)).toEqual(['deposit_amount'])
   })
 })
+
+// QA movil 2026-10-08: el alta de un profesional con un email ya usado
+// responde 422 VALIDATION_ERROR "Ya existe un usuario con ese email"
+// (staff/repository.py) y el modal decia solo "No se pudo guardar".
+describe('getErrorMessage - textos de validacion conocidos', () => {
+  const duplicado = new ValidationError('Ya existe un usuario con ese email', {
+    errorCode: 'VALIDATION_ERROR',
+    statusCode: 422,
+    detail: {}
+  })
+
+  it('el email duplicado sale con un texto propio, no con el fallback', () => {
+    expect(getErrorMessage(duplicado, FALLBACK)).toBe(
+      'Ese email ya lo usa otra cuenta. Usá otro email.'
+    )
+  })
+
+  it('tambien envuelto en originalError', () => {
+    expect(getErrorMessage(wrapped(duplicado), FALLBACK)).toBe(
+      'Ese email ya lo usa otra cuenta. Usá otro email.'
+    )
+  })
+
+  it('el override de la pantalla le sigue ganando', () => {
+    expect(getErrorMessage(duplicado, FALLBACK, { VALIDATION_ERROR: 'otro texto' })).toBe(
+      'otro texto'
+    )
+  })
+
+  it('un VALIDATION_ERROR con otro texto sigue en el fallback', () => {
+    const otro = new ValidationError('Ya existe un usuario con ese email y algo mas', {
+      errorCode: 'VALIDATION_ERROR',
+      statusCode: 422
+    })
+    expect(getErrorMessage(otro, FALLBACK)).toBe(FALLBACK)
+  })
+})

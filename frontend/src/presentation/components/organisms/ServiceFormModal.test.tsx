@@ -391,7 +391,7 @@ describe('ServiceFormModal — imagen del servicio', () => {
     elegir(new File(['<svg/>'], 'x.svg', { type: 'image/svg+xml' }))
 
     expect(
-      await screen.findByText(/PNG, JPEG o WebP/, { selector: '[role="alert"]' })
+      await screen.findByText(/PNG, JPEG o WebP/, { selector: '[role="alert"] span' })
     ).toBeInTheDocument()
     expect(props.onUploadImage).not.toHaveBeenCalled()
   })
@@ -402,7 +402,7 @@ describe('ServiceFormModal — imagen del servicio', () => {
     elegir(new File(['no soy un png'], 'x.png', { type: 'image/png' }))
 
     expect(
-      await screen.findByText(/no es una imagen/, { selector: '[role="alert"]' })
+      await screen.findByText(/no es una imagen/, { selector: '[role="alert"] span' })
     ).toBeInTheDocument()
     expect(props.onUploadImage).not.toHaveBeenCalled()
   })
