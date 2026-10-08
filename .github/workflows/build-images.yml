@@ -81,7 +81,7 @@ jobs:
             context: ./nginx
     steps:
       - name: Checkout
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@v7.0.1
         with:
           # Sin esto, en un workflow_run se construiria el ultimo commit de
           # main, que puede no ser el que Quality probo.
