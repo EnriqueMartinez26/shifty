@@ -29,6 +29,7 @@ from modules.staff.schemas import (
     ScheduleResponse,
     StaffCreate,
     StaffResponse,
+    StaffSelfCreate,
     StaffUpdate,
 )
 from modules.users.model import User
@@ -67,6 +68,42 @@ async def create_staff(
         return to_staff_response(loaded)
     except ValueError as exc:
         raise ValidationException(str(exc))
+
+
+@router.post("/me", response_model=StaffResponse, status_code=status.HTTP_201_CREATED)
+async def add_myself_as_staff(
+    data: StaffSelfCreate,
+    admin: User = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+    availability_cache: Redis = Depends(get_availability_cache),
+) -> StaffResponse:
+    """El admin que llama se agrega como profesional ("Agregarme como profesional").
+
+    Decision de Mateo (2026-10-08): el dueno tiene que poder figurar y recibir
+    reservas con SU nombre. Por ``POST /staff/`` no podia: crea un usuario de
+    login y su email ya es de su cuenta (unico global, regla 16). La ficha usa
+    el id de su cuenta; no cambia su rol ni crea otra cuenta, y solo sirve
+    para uno mismo (nunca vuelve reservable a otro admin). Ya activa: 409
+    ``STAFF_SELF_ALREADY_EXISTS``; dada de baja: se reactiva.
+    """
+    try:
+        staff = await StaffService(db, availability_cache).add_self(
+            admin,
+            display_name=data.display_name,
+            service_public_ids=data.service_ids,
+        )
+    except ValueError as exc:
+        raise ValidationException(str(exc))
+    loaded = await StaffRepository(db).get_by_id(
+        staff.public_id, admin.store_id, include_global_admins=True
+    )
+    if not loaded:
+        raise AppException(
+            message="No se pudo recargar el staff creado",
+            http_status=500,
+            error_code="STAFF_RELOAD_FAILED",
+        )
+    return to_staff_response(loaded)
 
 
 @router.get("/", response_model=list[StaffResponse])
@@ -252,6 +289,9 @@ async def update_staff(
     try:
         updated = await StaffService(db, availability_cache).update_profile(
             staff,
+            # Editarse a uno mismo (el dueno que atiende): pausar la ficha no
+            # le desactiva la cuenta, igual que /users/ niega la autobaja.
+            keep_login=staff.id == admin.id,
             first_name=data.first_name,
             last_name=data.last_name,
             email=data.email,
@@ -287,7 +327,11 @@ async def delete_staff(
     )
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
-    # La baja desactiva la cuenta de login vinculada.
+    # La baja desactiva la cuenta de login vinculada, salvo la propia: quitarse
+    # de la agenda no es darse de baja (/users/ responde SELF_DEACTIVATION_DENIED
+    # y por aca el dueno que tambien atiende se dejaba afuera del panel).
     await _guardar_cuenta_vinculada(repo, staff, admin, public_id, is_active=False)
-    await StaffService(db, availability_cache).soft_delete(staff)
+    await StaffService(db, availability_cache).soft_delete(
+        staff, keep_login=staff.id == admin.id
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
