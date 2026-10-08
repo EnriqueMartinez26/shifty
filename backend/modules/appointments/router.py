@@ -6,7 +6,8 @@ y serializar la respuesta. Sin lógica de negocio.
 """
 
 from datetime import datetime
-from typing import Annotated, AsyncGenerator, List, Optional, cast
+from decimal import Decimal
+from typing import Annotated, AsyncGenerator, List, Optional, TypedDict, cast
 
 from fastapi import Depends, Path, Query, status
 from redis.asyncio import Redis
@@ -34,12 +35,13 @@ from core.roles import (
 from core.validation import PUBLIC_ID_PATTERN, GridDay, LocalDay
 from modules.appointments.availability import AvailabilityService
 from modules.appointments.model import Appointment, AppointmentStatus
-from modules.appointments.repository import AppointmentSearchRow
+from modules.appointments.repository import AppointmentSearchRow, SearchCharge
 from modules.appointments.schemas import (
     AppointmentCreate,
     AppointmentFilterParams,
     AppointmentListItem,
     AppointmentNotesStaffUpdate,
+    AppointmentRemainderPayment,
     AppointmentReschedule,
     AppointmentResponse,
     AppointmentSearchResponse,
@@ -594,9 +596,7 @@ def _can_operate_charges(user: User) -> bool:
 def _to_search_result(
     row: AppointmentSearchRow, *, show_phone: bool, show_charge: bool
 ) -> AppointmentSearchResult:
-    appointment, service, staff_id, staff_name, client, cobro, importe = row
-    if not show_charge:
-        cobro, importe = None, None
+    appointment, service, staff_id, staff_name, client, cobro = row
     return AppointmentSearchResult(
         public_id=appointment.public_id,
         starts_at=appointment.starts_at,
@@ -614,7 +614,43 @@ def _to_search_result(
         client_name=client.full_name or client.email,
         client_id=client.public_id,
         client_phone=client.phone if show_phone else None,
-        price_amount=appointment.price_amount if show_charge else None,
-        payment_status=cobro,
-        payment_amount=importe,
+        **(_search_charge_fields(appointment, cobro) if show_charge else _SIN_COBRO),
+    )
+
+
+class _SearchChargeFields(TypedDict):
+    price_amount: Decimal | None
+    payment_status: str | None
+    payment_amount: Decimal | None
+    remaining_amount: Decimal | None
+    remainder_payment: AppointmentRemainderPayment | None
+
+
+# La recepcion busca turnos pero no opera cobros: no ve importes (2026-10-08).
+_SIN_COBRO = _SearchChargeFields(
+    price_amount=None,
+    payment_status=None,
+    payment_amount=None,
+    remaining_amount=None,
+    remainder_payment=None,
+)
+
+
+def _search_charge_fields(
+    appointment: Appointment, cobro: SearchCharge
+) -> _SearchChargeFields:
+    """Precio, cobro, saldo y resto del turno para quien opera cobros."""
+    resto = None
+    if cobro.remainder_amount is not None and cobro.remainder_created_at is not None:
+        resto = AppointmentRemainderPayment(
+            amount=cobro.remainder_amount,
+            method=cobro.remainder_method,
+            created_at=cobro.remainder_created_at,
+        )
+    return _SearchChargeFields(
+        price_amount=appointment.price_amount,
+        payment_status=cobro.payment_status,
+        payment_amount=cobro.payment_amount,
+        remaining_amount=cobro.remaining_amount,
+        remainder_payment=resto,
     )

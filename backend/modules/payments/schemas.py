@@ -3,6 +3,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from modules.payments.model import BalancePaymentMethod
+
 
 class GatewayConfigUpsert(BaseModel):
     provider: str = Field(default="mercadopago", pattern=r"^(mercadopago|stripe)$")
@@ -45,6 +47,33 @@ class ManualPaymentRequest(BaseModel):
         None, ge=0, le=10_000_000, max_digits=12, decimal_places=2
     )
     notes: str | None = Field(None, max_length=500)
+
+
+class RemainingPaymentRequest(BaseModel):
+    """El resto de un turno pagado aparte de su cobro (D-20261008-01).
+
+    Sin ``amount`` se registra el saldo entero; con ``amount``, mayor a cero y
+    hasta el saldo (el saldo lo calcula el backend bajo el lock del turno,
+    nunca se toma del pedido). Mismo techo que ``ManualPaymentRequest``
+    (regla 9). La clave de idempotencia es del panel, como reservar.
+    """
+
+    amount: Decimal | None = Field(
+        None, gt=0, le=10_000_000, max_digits=12, decimal_places=2
+    )
+    method: BalancePaymentMethod | None = None
+    idempotency_key: str = Field(..., min_length=10, max_length=128)
+
+
+class RemainingPaymentResponse(BaseModel):
+    public_id: str
+    appointment_id: str
+    amount: Decimal
+    method: BalancePaymentMethod | None = None
+    created_at: datetime
+    reverted_at: datetime | None = None
+    # Saldo del turno despues de esta operacion.
+    remaining_amount: Decimal
 
 
 class RefundRequest(BaseModel):

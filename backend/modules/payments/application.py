@@ -16,13 +16,23 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import NamedTuple
 
-from core.exceptions import AppException, ValidationException
+from core.exceptions import (
+    AppException,
+    AppointmentNotFoundException,
+    ValidationException,
+)
 from core.uow import AbstractUnitOfWork
 from core.utils import ensure_utc_aware, now_utc
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.notifications.model import NotificationType
 from modules.notifications.tasks import EVENT_APPOINTMENT_CONFIRMED
-from modules.payments.model import PAYMENT_PROVIDER_MANUAL, Payment, PaymentStatus
+from modules.payments.model import (
+    PAYMENT_PROVIDER_MANUAL,
+    AppointmentBalancePayment,
+    BalancePaymentMethod,
+    Payment,
+    PaymentStatus,
+)
 from modules.payments.service import (
     EVENT_PREFERENCE_EXPIRE,
     RELEASED_APPOINTMENT_STATUSES,
@@ -112,6 +122,50 @@ def _not_payable(estado: str | None) -> AppException:
     return AppointmentNotPayableError()
 
 
+class _ConflictoDelResto(AppException):
+    """409 del saldo restante (D-20261008-01): mensaje fijo, sin datos del
+    turno ni importes (regla 20)."""
+
+    def __init__(self, message: str, error_code: str) -> None:
+        super().__init__(message=message, http_status=409, error_code=error_code)
+
+
+def _sin_cobro_acreditado() -> AppException:
+    return _ConflictoDelResto(
+        "Este turno no tiene un pago acreditado: registrá el pago con "
+        '"Confirmar pago".',
+        "NO_ACCREDITED_PAYMENT",
+    )
+
+
+def _sin_saldo() -> AppException:
+    return _ConflictoDelResto(
+        "Este turno no tiene saldo pendiente.", "NO_REMAINING_BALANCE"
+    )
+
+
+def _resto_ya_registrado() -> AppException:
+    return _ConflictoDelResto(
+        "El resto de este turno ya está registrado. Si hubo un error, un "
+        "administrador puede revertirlo y volver a cargarlo.",
+        "REMAINING_PAYMENT_ALREADY_RECORDED",
+    )
+
+
+def _resto_excede_el_saldo() -> AppException:
+    return _ConflictoDelResto(
+        "El importe supera el saldo pendiente del turno.",
+        "REMAINING_PAYMENT_EXCEEDS_BALANCE",
+    )
+
+
+def _sin_resto() -> AppException:
+    return _ConflictoDelResto(
+        "Este turno no tiene un resto registrado para revertir.",
+        "NO_REMAINING_PAYMENT",
+    )
+
+
 class PaymentService:
     def __init__(self, uow: AbstractUnitOfWork) -> None:
         self.uow = uow
@@ -191,6 +245,76 @@ class PaymentService:
             self._expire_live_checkout(payment)
         await self.uow.commit()
         return payment
+
+    async def record_remaining_payment(
+        self,
+        *,
+        appointment: Appointment,
+        actor: User,
+        amount: Decimal | None,
+        method: BalancePaymentMethod | None,
+    ) -> tuple[AppointmentBalancePayment, Decimal]:
+        """Registra el resto del turno pagado aparte de su cobro.
+
+        Saldo restante por turno, opcion A (D-20261008-01): el cobro
+        acreditado (una sena de $960) puede ser menor que el precio congelado
+        ($3.200); el resto ($2.240) se paga en el local. Lockea el turno y
+        despues su cobro (regla 7, ``_lock_for_manual_confirm``: un turno
+        soltado es 409 como la confirmacion manual) y relee el saldo en SQL
+        bajo esos locks: dos registros a la vez se serializan y el segundo ve
+        el primero (409). Sin ``amount`` registra el saldo entero.
+
+        Devuelve el resto y el saldo que queda.
+        """
+        cobro = await self._lock_for_manual_confirm(appointment, actor)
+        if cobro is None or not cobro.is_accredited:
+            raise _sin_cobro_acreditado()
+        restos = self.uow.balance_payments
+        if await restos.get_live(appointment.id, actor.store_id) is not None:
+            raise _resto_ya_registrado()
+        saldo = await restos.remaining_balance(appointment.id, actor.store_id)
+        if saldo <= 0:
+            raise _sin_saldo()
+        importe = saldo if amount is None else amount
+        if importe > saldo:
+            raise _resto_excede_el_saldo()
+        resto = AppointmentBalancePayment(
+            store_id=actor.store_id,
+            appointment_id=appointment.id,
+            amount=importe,
+            method=method.value if method is not None else None,
+            recorded_by=actor.id,
+        )
+        restos.add(resto)
+        await self.uow.session.flush()
+        queda = await restos.remaining_balance(appointment.id, actor.store_id)
+        await self.uow.commit()
+        return resto, queda
+
+    async def revert_remaining_payment(
+        self, *, appointment: Appointment, actor: User
+    ) -> tuple[AppointmentBalancePayment, Decimal]:
+        """Marca revertido el resto vivo del turno (D-20261008-01).
+
+        La devolucion se hace fuera del sistema: aca solo se marca, la fila
+        queda como auditoria y el saldo vuelve. Vale en cualquier estado del
+        turno (corrige un registro equivocado). Lockea el turno y despues el
+        resto (regla 7); el cobro no se toca. Devuelve el resto y el saldo.
+        """
+        estado = await lock_appointment_status(
+            self.uow.session, appointment_id=appointment.id, store_id=actor.store_id
+        )
+        if estado is None:
+            raise AppointmentNotFoundException(public_id=appointment.public_id)
+        restos = self.uow.balance_payments
+        resto = await restos.get_live(appointment.id, actor.store_id, lock=True)
+        if resto is None:
+            raise _sin_resto()
+        resto.revert(actor_id=actor.id)
+        await self.uow.session.flush()
+        saldo = await restos.remaining_balance(appointment.id, actor.store_id)
+        await self.uow.commit()
+        return resto, saldo
 
     async def _lock_for_manual_confirm(
         self, appointment: Appointment, actor: User

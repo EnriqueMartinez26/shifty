@@ -22,6 +22,7 @@ from core.circuit_breaker import CircuitBreakerOpenError
 from core.config import Environment, settings
 from core.crypto import encrypt_secret
 from core.database import _apply_tenant_context, get_db, tenant_bypass
+from core.idempotency import idempotency_guard, idempotency_release, idempotency_save
 from core.redis import get_redis
 from core.exceptions import (
     AppException,
@@ -42,6 +43,7 @@ from modules.payments.jobs import persist_gateway_refresh, process_outbox_batch
 from modules.payments.on_demand import request_inbox_retry
 from modules.payments.model import (
     PAYMENT_PROVIDER_MANUAL,
+    AppointmentBalancePayment,
     OutboxMessage,
     Payment,
     PaymentGatewayConfig,
@@ -92,6 +94,8 @@ from modules.payments.schemas import (
     PaymentResponse,
     ReconciliationSummaryResponse,
     RefundRequest,
+    RemainingPaymentRequest,
+    RemainingPaymentResponse,
 )
 from modules.services.model import Service
 from modules.stores.model import Store
@@ -763,6 +767,110 @@ async def manual_confirm_payment(
     return _payment_response(payment)
 
 
+def _remaining_payment_response(
+    resto: AppointmentBalancePayment, saldo: Decimal
+) -> RemainingPaymentResponse:
+    return RemainingPaymentResponse.model_validate(
+        {
+            "public_id": resto.id,
+            "appointment_id": resto.appointment_id,
+            "amount": resto.amount,
+            "method": resto.method,
+            "created_at": resto.created_at,
+            "reverted_at": resto.reverted_at,
+            "remaining_amount": saldo,
+        }
+    )
+
+
+async def _appointment_for_remaining_payment(
+    svc: PaymentService, appointment_id: str, user: User, action: str
+) -> Appointment:
+    """El turno de la tienda (404 si no) y su duenio (D-20260930-13), antes de
+    cualquier lock o escritura."""
+    appointment = await svc.uow.appointments.get_by_public_id(
+        appointment_id, user.store_id
+    )
+    if appointment is None:
+        raise AppointmentNotFoundException(public_id=appointment_id)
+    require_can_manage_appointment(appointment, user, action)
+    return appointment
+
+
+@router.post(
+    "/{appointment_id}/remaining-payment",
+    response_model=RemainingPaymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Registro del resto de un turno pagado aparte de su cobro",
+    description=(
+        "Saldo restante por turno (D-20261008-01): registra lo que el cliente "
+        "pago en el local despues de la sena acreditada. Un resto por turno; "
+        "sin amount registra el saldo entero. 409 sin cobro acreditado, sin "
+        "saldo, con un resto ya registrado, con un importe mayor al saldo o "
+        "sobre un turno soltado. No llama a Mercado Pago."
+    ),
+)
+async def record_remaining_payment(
+    appointment_id: PublicIdPath,
+    data: RemainingPaymentRequest,
+    user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(get_payment_service),
+    redis: Redis = Depends(get_redis),
+) -> RemainingPaymentResponse:
+    # Mismos permisos que ``manual-confirm`` y, como ella, sin el flag
+    # ``payments``: es plata que entro por fuera de Mercado Pago.
+    _require_payment_manager(user)
+    appointment = await _appointment_for_remaining_payment(
+        svc, appointment_id, user, "registrar el resto de este turno"
+    )
+    # Por tienda y por turno: la misma clave en otra tienda u otro turno no
+    # devuelve esta respuesta (patron de ``_panel_cache_key``).
+    cache_key = (
+        f"remaining-payment:{user.store_id}:{appointment.id}:{data.idempotency_key}"
+    )
+    cached = await idempotency_guard(cache_key, redis)
+    if cached:
+        return RemainingPaymentResponse.model_validate(cached)
+    try:
+        resto, saldo = await svc.record_remaining_payment(
+            appointment=appointment,
+            actor=user,
+            amount=data.amount,
+            method=data.method,
+        )
+    except Exception:
+        await idempotency_release(cache_key, redis)
+        raise
+    payload = _remaining_payment_response(resto, saldo)
+    await idempotency_save(cache_key, payload.model_dump(mode="json"), redis)
+    return payload
+
+
+@router.post(
+    "/{appointment_id}/remaining-payment/revert",
+    response_model=RemainingPaymentResponse,
+    summary="Revierte el resto registrado de un turno",
+    description=(
+        "Solo administradores (D-20261008-01). La devolucion se hace fuera de "
+        "Shifty; esto marca el resto como revertido (la fila queda como "
+        "auditoria) y el saldo del turno vuelve. 409 si no hay un resto vivo."
+    ),
+)
+async def revert_remaining_payment(
+    appointment_id: PublicIdPath,
+    user: User = Depends(get_current_user),
+    svc: PaymentService = Depends(get_payment_service),
+) -> RemainingPaymentResponse:
+    _require_payment_admin(user)
+    appointment = await _appointment_for_remaining_payment(
+        svc, appointment_id, user, "revertir el resto de este turno"
+    )
+    resto, saldo = await svc.revert_remaining_payment(
+        appointment=appointment, actor=user
+    )
+    return _remaining_payment_response(resto, saldo)
+
+
 @router.post(
     "/{payment_id}/refund",
     response_model=PaymentResponse,
@@ -1041,6 +1149,14 @@ async def reconciliation_summary(
         OutboxMessage.store_id == user.store_id,
         OutboxMessage.processed_at.is_(None),
     )
+    # Lo acreditado incluye los restos vivos pagados aparte del cobro
+    # (D-20261008-01): son plata que entro, como un ``manual_confirmed``.
+    restos = await db.scalar(
+        select(func.coalesce(func.sum(AppointmentBalancePayment.amount), 0)).where(
+            AppointmentBalancePayment.store_id == user.store_id,
+            AppointmentBalancePayment.reverted_at.is_(None),
+        )
+    )
 
     return ReconciliationSummaryResponse(
         pending_payments=pending_count,
@@ -1049,7 +1165,9 @@ async def reconciliation_summary(
         manual_confirmed_payments=manual_count,
         refunded_payments=por_estado.get(PaymentStatus.REFUNDED.value, sin_filas)[0],
         total_pending_amount=pending_amount,
-        total_approved_amount=approved_amount + manual_amount,
+        total_approved_amount=approved_amount
+        + manual_amount
+        + Decimal(str(restos or 0)),
         pending_webhooks=int(pending_webhooks or 0),
         failed_webhooks=int(failed_webhooks or 0),
         pending_outbox=pending_outbox,

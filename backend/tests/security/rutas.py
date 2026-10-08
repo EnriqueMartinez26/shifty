@@ -600,6 +600,40 @@ async def _confirmar_pago(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     )
 
 
+async def _turno_con_sena(m: Mundo, t: Tienda) -> str:
+    """Turno con un cobro acreditado menor que su precio: tiene saldo
+    (D-20261008-01)."""
+    turno = await m.turno(t)
+    await m.ok(
+        "POST",
+        f"/payments/{turno}/manual-confirm",
+        t,
+        200,
+        json={"amount": "100.00"},
+    )
+    return turno
+
+
+async def _registrar_resto(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    return Llamada(
+        "POST",
+        f"/payments/{await _turno_con_sena(m, t)}/remaining-payment",
+        json={"amount": "1.00", "idempotency_key": m.unico("clave-resto")},
+    )
+
+
+async def _revertir_resto(m: Mundo, a: Actor, t: Tienda) -> Llamada:
+    turno = await _turno_con_sena(m, t)
+    await m.ok(
+        "POST",
+        f"/payments/{turno}/remaining-payment",
+        t,
+        201,
+        json={"amount": "1.00", "idempotency_key": m.unico("clave-resto")},
+    )
+    return Llamada("POST", f"/payments/{turno}/remaining-payment/revert")
+
+
 async def _reembolsar(m: Mundo, a: Actor, t: Tienda) -> Llamada:
     return Llamada(
         "POST",
@@ -1449,6 +1483,25 @@ TABLA: tuple[Ruta, ...] = (
         ADMINS,
         A.RECURSO,
         _confirmar_pago,
+        idor=IDOR_POR_ID,
+    ),
+    # Saldo restante por turno (D-20261008-01): registrar, con los permisos de
+    # ``manual-confirm`` (el profesional de la matriz no es duenio del turno:
+    # 403); revertir, ``_require_payment_admin``.
+    R(
+        "POST",
+        "/payments/{appointment_id}/remaining-payment",
+        ADMINS,
+        A.RECURSO,
+        _registrar_resto,
+        idor=IDOR_POR_ID,
+    ),
+    R(
+        "POST",
+        "/payments/{appointment_id}/remaining-payment/revert",
+        ADMINS,
+        A.RECURSO,
+        _revertir_resto,
         idor=IDOR_POR_ID,
     ),
     R(

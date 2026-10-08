@@ -24,7 +24,11 @@ from infrastructure.persistence.models.appointment import MAX_APPOINTMENT_SPAN
 from modules.appointments.model import Appointment, AppointmentStatus
 from modules.payments.service import ACTIVE_APPOINTMENT_STATUSES
 from modules.appointments.schemas import AppointmentFilterParams
-from modules.payments.model import Payment
+from modules.payments.model import AppointmentBalancePayment, Payment
+from modules.payments.repository import (
+    live_balance_payment_join,
+    remaining_balance_of,
+)
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock
 from modules.stores.model import Store
@@ -33,12 +37,32 @@ from modules.users.model import User
 AppointmentAgendaRow: TypeAlias = tuple[Appointment, Service, Staff, User]
 # Fila de la busqueda: del profesional solo ``id`` y ``display_name`` (F3-06),
 # para no disparar las relaciones de ``Staff`` en cada pagina.
-# Turno, servicio, id y nombre del profesional, cliente, y estado e importe del
-# cobro del turno (``None`` si no tiene; a lo sumo uno por
-# ``uq_payments_store_appointment``). El cobro lo lee Cobros para precargar el
-# importe y mostrar lo pagado (2026-10-08, decision de Mateo).
+# Turno, servicio, id y nombre del profesional, cliente, y el cobro del turno
+# (``SearchCharge``). El cobro lo lee Cobros para precargar el importe y
+# mostrar lo pagado (2026-10-08, decision de Mateo) y el saldo restante
+# (D-20261008-01).
+
+
+class SearchCharge(NamedTuple):
+    """El cobro de un turno de la busqueda, de la MISMA consulta (regla 12).
+
+    ``payment_*``: el cobro del turno (``None`` si no tiene; a lo sumo uno por
+    ``uq_payments_store_appointment``). ``remainder_*``: el resto vivo, pagado
+    aparte (``None`` si no hay; a lo sumo uno por
+    ``uq_appointment_balance_payments_live``). ``remaining_amount``: el saldo,
+    calculado en SQL (``payments.repository.remaining_balance_of``).
+    """
+
+    payment_status: str | None
+    payment_amount: Decimal | None
+    remaining_amount: Decimal
+    remainder_amount: Decimal | None
+    remainder_method: str | None
+    remainder_created_at: datetime | None
+
+
 AppointmentSearchRow: TypeAlias = tuple[
-    Appointment, Service, str, str, User, str | None, Decimal | None
+    Appointment, Service, str, str, User, SearchCharge
 ]
 
 
@@ -675,10 +699,12 @@ class AppointmentRepository:
     ) -> list[AppointmentSearchRow]:
         """Las entidades de las filas de UNA pagina de la busqueda.
 
-        El cobro del turno entra en la MISMA consulta (regla 12) por LEFT
-        JOIN: a lo sumo uno por turno (``uq_payments_store_appointment``), con
-        ``store_id`` por defensa en profundidad (CLAUDE.md §2). Lo lee Cobros
-        para precargar el importe y mostrar lo pagado (2026-10-08).
+        El cobro del turno y su resto vivo entran en la MISMA consulta (regla
+        12) por LEFT JOIN: a lo sumo uno de cada uno por turno
+        (``uq_payments_store_appointment``,
+        ``uq_appointment_balance_payments_live``), los dos con ``store_id`` por
+        defensa en profundidad (CLAUDE.md §2). Lo lee Cobros para precargar el
+        importe, mostrar lo pagado (2026-10-08) y el saldo (D-20261008-01).
         """
         result = await self.db.execute(
             select(
@@ -689,6 +715,10 @@ class AppointmentRepository:
                 User,
                 Payment.status,
                 Payment.amount,
+                remaining_balance_of(),
+                AppointmentBalancePayment.amount,
+                AppointmentBalancePayment.method,
+                AppointmentBalancePayment.created_at,
             )
             .join(pagina, Appointment.id == pagina.c.id)
             .join(Service, Appointment.service_id == Service.id)
@@ -701,19 +731,29 @@ class AppointmentRepository:
                     Payment.store_id == store_id,
                 ),
             )
+            .outerjoin(
+                AppointmentBalancePayment,
+                live_balance_payment_join(Appointment.id, store_id),
+            )
             .where(Appointment.store_id == store_id)
             .order_by(Appointment.starts_at.desc(), Appointment.id.desc())
         )
         return [
-            (appointment, service, staff_id, staff_name, client, estado, importe)
+            (
+                appointment,
+                service,
+                staff_id,
+                staff_name,
+                client,
+                SearchCharge(*cobro),
+            )
             for (
                 appointment,
                 service,
                 staff_id,
                 staff_name,
                 client,
-                estado,
-                importe,
+                *cobro,
             ) in result.all()
         ]
 

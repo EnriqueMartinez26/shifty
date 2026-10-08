@@ -219,4 +219,8 @@ async def test_busqueda_de_turnos_items_y_paginado(
         "price_amount": "10000.00",
         "payment_status": None,
         "payment_amount": None,
+        # Aditivo (D-20261008-01): saldo restante y resto pagado aparte
+        # (``test_saldo_restante_del_turno.py``). Sin cobro no hay saldo.
+        "remaining_amount": "0.00",
+        "remainder_payment": None,
     }
