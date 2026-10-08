@@ -39,6 +39,7 @@ from modules.appointments.guards import (
     reject_confirm_with_pending_deposit,
     reject_inactive,
     reject_reschedule_with_pending_deposit,
+    reject_reschedule_with_remainder,
     require_can_manage_appointment,
 )
 from modules.appointments.working_hours import staff_ids_working_range
@@ -795,6 +796,11 @@ class AppointmentService:
         # Antes de lockear el cobro y de cualquier mutacion, evento o
         # invalidacion (decision de Mateo 2026-09-25: opcion A).
         reject_reschedule_with_pending_deposit(original)
+        # Un resto vivo (D-20261008-01) quedaria colgado del cancelado y el
+        # turno nuevo pediria el precio entero (revision de la PR #137, W2).
+        reject_reschedule_with_remainder(
+            await self.uow.balance_payments.get_live(original.id, actor.store_id)
+        )
         payment = await self.uow.payments.get_by_appointment_locked(
             original.id, actor.store_id
         )

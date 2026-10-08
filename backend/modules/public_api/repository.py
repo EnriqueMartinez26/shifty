@@ -29,8 +29,7 @@ from modules.appointments.repository import (
 from modules.appointments.working_hours import staff_ids_working_range
 from modules.legal.versions import AcceptedVersions
 from modules.payments.deposit_rules import ClientHistory
-from modules.payments.model import ACCREDITED_PAYMENT_STATUSES, Payment
-from modules.payments.repository import live_charge_provider_of
+from modules.payments.repository import live_charge_provider_of, paid_appointment_of
 from modules.services.model import Service
 from modules.staff.model import Staff, StaffBlock, StaffServiceModel
 from modules.stores.model import Store
@@ -664,23 +663,20 @@ class PublicRepository:
             cancelled=conteo.get(AppointmentStatus.CANCELLED.value, 0),
         )
 
-    async def accredited_appointment_ids(self, appointment_ids: list[str]) -> set[str]:
-        """De estos turnos, los que tienen un pago acreditado. Una consulta.
+    async def paid_appointment_ids(self, appointment_ids: list[str]) -> set[str]:
+        """De estos turnos, los pagados (``paid_appointment_of``). Una consulta.
 
-        Acreditado es ``Payment.is_accredited`` (aprobado o confirmado a mano):
-        un turno asi no se reprograma desde el cliente
+        Un turno pagado no se reprograma desde el cliente
         (``client_reschedule_denial``). La usa la accion; el historial lo
         resuelve en su propio SELECT (``get_client_appointments``).
         """
         if not appointment_ids:
             return set()
         res = await self.db.execute(
-            select(Payment.appointment_id)
-            .where(
-                Payment.appointment_id.in_(appointment_ids),
-                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+            select(Appointment.id).where(
+                Appointment.id.in_(appointment_ids),
+                paid_appointment_of(Appointment.id, Appointment.store_id),
             )
-            .distinct()
         )
         return {str(appointment_id) for appointment_id in res.scalars().all()}
 
@@ -718,15 +714,7 @@ class PublicRepository:
         pueda tomar por una coleccion modificada (AUD2-B6-02), y un acceso
         accidental levanta en vez de volver a consultar.
         """
-        pagado = (
-            exists()
-            .where(
-                Payment.store_id == Appointment.store_id,
-                Payment.appointment_id == Appointment.id,
-                Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
-            )
-            .label("paid")
-        )
+        pagado = paid_appointment_of(Appointment.id, Appointment.store_id).label("paid")
         cobro_vivo = live_charge_provider_of(
             Appointment.id, Appointment.store_id
         ).label("live_charge_provider")

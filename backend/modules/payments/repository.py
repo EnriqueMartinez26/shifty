@@ -13,7 +13,9 @@ from sqlalchemy import (
     ScalarSelect,
     and_,
     case,
+    exists,
     func,
+    or_,
     literal,
     select,
 )
@@ -88,6 +90,26 @@ def live_balance_payment_join(
         AppointmentBalancePayment.appointment_id == appointment_id,
         AppointmentBalancePayment.reverted_at.is_(None),
         AppointmentBalancePayment.store_id == store_id,
+    )
+
+
+def paid_appointment_of(
+    appointment_id: _StrColumn | str, store_id: _StrColumn | str
+) -> ColumnElement[bool]:
+    """El turno esta pagado: cobro acreditado o resto vivo (D-20261008-01).
+
+    Lo usa la autogestion del cliente: un turno pagado no se reprograma desde
+    "Mis turnos". Con la sena devuelta y el resto vivo, la plata del resto
+    sigue en el turno (revision de la PR #137, W2). Correlacionable por
+    columnas del turno, como ``live_charge_provider_of``.
+    """
+    return or_(
+        exists().where(
+            Payment.store_id == store_id,
+            Payment.appointment_id == appointment_id,
+            Payment.status.in_(sorted(ACCREDITED_PAYMENT_STATUSES)),
+        ),
+        exists().where(live_balance_payment_join(appointment_id, store_id)),
     )
 
 

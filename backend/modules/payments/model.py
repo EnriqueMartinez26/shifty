@@ -39,7 +39,7 @@ class PaymentStatus(str, enum.Enum):
 
 # Estados en los que la plata efectivamente entro. Unica fuente: la leen
 # ``Payment.is_accredited`` y las consultas que filtran en SQL (la guarda de
-# reprogramacion del cliente, ``PublicRepository.accredited_appointment_ids``).
+# reprogramacion del cliente, ``payments.repository.paid_appointment_of``).
 ACCREDITED_PAYMENT_STATUSES: frozenset[str] = frozenset(
     {PaymentStatus.APPROVED.value, PaymentStatus.MANUAL_CONFIRMED.value}
 )
