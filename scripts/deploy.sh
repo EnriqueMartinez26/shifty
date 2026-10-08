@@ -9,9 +9,10 @@
 #   1. Preflight: COMPOSE_FILE incluye docker-compose.prod.yml, Compose >=
 #      2.24 (`!reset`), `docker compose config` valido, los servicios de
 #      DEPLOY_SERVICES existen, la base corre, disco < 80 %, backup exitoso de
-#      menos de 24 h, y Quality paso en main para APP_VERSION (API publica de
-#      GitHub; `workflow_dispatch` de build-images.yml publica sin esa
-#      compuerta). El rollback no pregunta: es el camino de emergencia.
+#      menos de 24 h, y Quality paso en main para APP_VERSION (API de GitHub,
+#      con DEPLOY_GITHUB_TOKEN si el repo es privado; `workflow_dispatch` de
+#      build-images.yml publica sin esa compuerta). El rollback no pregunta:
+#      es el camino de emergencia.
 #   2. Guarda la version que corre hoy en .deploy/previous.
 #   3. `pull` de las imagenes de APP_VERSION y verificacion de que cada
 #      `imagen:tag` quedo local (las construye CI:
@@ -140,8 +141,12 @@ compose_file_efectivo() {
 # Quality (quality.yml) tiene que haber pasado en un push a main para ESTE sha.
 # build-images.yml solo publica despues de eso, salvo a mano
 # (`workflow_dispatch`), que construye cualquier rama: sin esta pregunta, una
-# imagen de un commit en rojo o de una rama sin mergear se podia desplegar. El
-# repo es publico: la API contesta sin token (60 consultas por hora por IP).
+# imagen de un commit en rojo o de una rama sin mergear se podia desplegar.
+# Con el repo privado la API contesta 404 sin token: DEPLOY_GITHUB_TOKEN
+# (opcional, en /etc/shifty/ops.env; PAT fine-grained con solo "Actions: read"
+# sobre este repo) va como `Authorization: Bearer` POR STDIN (`curl -K -`),
+# nunca en argv, que cualquier usuario del host ve en `ps`. Sin token, la
+# consulta anonima de siempre (60 por hora por IP, solo con repo publico).
 # Falla cerrada: si GitHub no contesta, el deploy espera o se saltea a
 # conciencia con DEPLOY_SKIP_QUALITY_CHECK=1.
 quality_verde() {
@@ -155,10 +160,22 @@ quality_verde() {
       "Solo para staging con una imagen de rama. En produccion, desplegar un sha de main con Quality verde."
     return 0
   fi
+  local token="${DEPLOY_GITHUB_TOKEN:-}"
+  # Va entre comillas en una linea de configuracion de curl: un caracter
+  # fuera de los de un token de GitHub podria inyectar otra opcion. El
+  # mensaje no lo repite.
+  case "$token" in
+    *[!A-Za-z0-9_]*) die "preflight: DEPLOY_GITHUB_TOKEN tiene caracteres que un token de GitHub no tiene (solo letras, digitos y _)" ;;
+  esac
   local url respuesta total
   url="https://api.github.com/repos/$DEPLOY_GITHUB_REPO/actions/workflows/$DEPLOY_QUALITY_WORKFLOW/runs?head_sha=$version&branch=main&event=push&status=success&per_page=1"
-  if ! respuesta="$(curl -fsS -m 15 -H 'Accept: application/vnd.github+json' "$url")"; then
-    die "preflight: no pude preguntarle a GitHub si Quality paso para $version; reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
+  if [ -n "$token" ]; then
+    # printf es un builtin: el token no pasa por argv de ningun proceso.
+    respuesta="$(printf 'header = "Authorization: Bearer %s"\n' "$token" |
+      curl -fsS -m 15 -H 'Accept: application/vnd.github+json' -K - "$url")" ||
+      die "preflight: no pude preguntarle a GitHub si Quality paso para $version (con DEPLOY_GITHUB_TOKEN: vencido o sin \"Actions: read\" sobre $DEPLOY_GITHUB_REPO?); reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
+  elif ! respuesta="$(curl -fsS -m 15 -H 'Accept: application/vnd.github+json' "$url")"; then
+    die "preflight: no pude preguntarle a GitHub si Quality paso para $version (repo privado sin DEPLOY_GITHUB_TOKEN?); reintentar, o DEPLOY_SKIP_QUALITY_CHECK=1 si se verifico a mano en Actions"
   fi
   total="$(printf '%s\n' "$respuesta" |
     sed -n 's/.*"total_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1)"

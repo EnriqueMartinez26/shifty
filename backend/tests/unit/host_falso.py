@@ -180,9 +180,14 @@ exit "${{{variable}:-0}}"
 
 # curl: la API de GitHub (deploy.sh pregunta si Quality paso para el sha)
 # contesta lo que diga gh_runs, con su propio codigo de salida; el resto
-# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre.
+# (compuerta, alertas) sale con FAKE_CURL_EXIT, como siempre. Lo que curl lee
+# por stdin con `-K -` (cabeceras con secretos, fuera de argv) queda en
+# curl_config.
 _CURL = r"""#!/bin/sh
 printf '%s\n' "curl $*" >> "$FAKE_DIR/calls"
+case " $* " in
+  *" -K - "* | *" --config - "*) cat >> "$FAKE_DIR/curl_config" ;;
+esac
 case "$*" in
   *api.github.com/*/actions/workflows/*)
     cat "$FAKE_DIR/gh_runs" 2>/dev/null

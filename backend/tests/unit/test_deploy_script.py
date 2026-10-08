@@ -10,7 +10,9 @@ rollback sin migrar.
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -796,3 +798,139 @@ def test_rollback_no_le_pregunta_a_github(host: Host) -> None:
 
     assert resultado.returncode == 0, resultado.stderr
     assert not _consultas_a_github(host)
+
+
+# --- repo privado (2026-10-08) -----------------------------------------------
+#
+# El repo paso a privado y la API de GitHub contesta 404 sin token: el primer
+# deploy real solo salio con DEPLOY_SKIP_QUALITY_CHECK=1, que avisa "Solo para
+# staging". DEPLOY_GITHUB_TOKEN (opcional, en /etc/shifty/ops.env) viaja como
+# `Authorization: Bearer` por stdin (`curl -K -`): nunca en argv, que cualquier
+# usuario del host ve en `ps`.
+
+TOKEN = "github_pat_11ABCDEFG0123456789_abcdefXYZ"
+
+
+def test_con_token_la_consulta_a_github_va_autenticada_sin_token_en_argv(
+    host: Host,
+) -> None:
+    _preparar_deploy(host)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION=SHA,
+        DEPLOY_GITHUB_TOKEN=TOKEN,
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    consultas = _consultas_a_github(host)
+    assert len(consultas) == 1, consultas
+    configuracion = (host.fake / "curl_config").read_text(encoding="utf-8")
+    assert f'header = "Authorization: Bearer {TOKEN}"' in configuracion
+    assert TOKEN not in "\n".join(host.llamadas())
+    assert TOKEN not in resultado.stderr
+    assert TOKEN not in resultado.stdout
+
+
+def test_el_token_de_github_se_toma_de_ops_env(host: Host) -> None:
+    _preparar_deploy(host)
+    ops_env = host.raiz / "ops.env"
+    ops_env.write_text(f"DEPLOY_GITHUB_TOKEN={TOKEN}\n", encoding="utf-8")
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION=SHA,
+        SHIFTY_OPS_ENV=ops_env.as_posix(),
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode == 0, resultado.stderr
+    configuracion = (host.fake / "curl_config").read_text(encoding="utf-8")
+    assert f"Authorization: Bearer {TOKEN}" in configuracion
+    assert TOKEN not in "\n".join(host.llamadas())
+
+
+def test_sin_token_la_consulta_a_github_sigue_anonima(host: Host) -> None:
+    _preparar_deploy(host)
+
+    resultado = host.correr("deploy.sh", "deploy", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    consultas = _consultas_a_github(host)
+    assert len(consultas) == 1, consultas
+    assert " -K " not in consultas[0]
+    assert "Authorization" not in "\n".join(host.llamadas())
+    assert not (host.fake / "curl_config").exists()
+
+
+@pytest.mark.parametrize(
+    "token",
+    [f'{TOKEN}"\nurl = "https://evil.example', f"{TOKEN} x", f"{TOKEN}\\"],
+    ids=["comillas-y-salto", "espacio", "barra"],
+)
+def test_un_token_con_caracteres_raros_frena_sin_mostrarlo(
+    host: Host, token: str
+) -> None:
+    """El token va dentro de una linea de configuracion de curl: un caracter
+    fuera de [A-Za-z0-9_] podria inyectar otras opciones."""
+    _preparar_deploy(host)
+
+    resultado = host.correr(
+        "deploy.sh",
+        "deploy",
+        APP_VERSION=SHA,
+        DEPLOY_GITHUB_TOKEN=token,
+        **_BASE_DEPLOY,
+    )
+
+    assert resultado.returncode != 0
+    assert "DEPLOY_GITHUB_TOKEN" in resultado.stderr
+    assert TOKEN not in resultado.stderr
+    assert not _consultas_a_github(host)
+    assert not _hay(host.llamadas(), r"compose (pull|run|up)")
+
+
+# --- ops.env ilegible (2026-10-08) -------------------------------------------
+#
+# deploy.sh corre como `deploy`; el runbook decia /etc/shifty/ops.env root 600.
+# common.sh lo salteaba EN SILENCIO (`[ -r ]`) y el deploy seguia sin DOMAIN,
+# sin alertas y sin token. Un ops.env que existe y no se puede leer avisa.
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="Windows y root leen un archivo en modo 000",
+)
+def test_un_ops_env_ilegible_avisa_en_vez_de_saltearse_en_silencio(
+    host: Host,
+) -> None:
+    _preparar_deploy(host)
+    ops_env = host.raiz / "ops.env"
+    ops_env.write_text("DOMAIN=shifty.example.com\n", encoding="utf-8")
+    ops_env.chmod(0)
+    try:
+        resultado = host.correr(
+            "deploy.sh",
+            "preflight",
+            APP_VERSION=SHA,
+            SHIFTY_OPS_ENV=ops_env.as_posix(),
+            **_BASE_DEPLOY,
+        )
+    finally:
+        ops_env.chmod(0o600)
+
+    assert f"{ops_env.as_posix()} existe pero no se puede leer" in resultado.stderr
+
+
+def test_sin_ops_env_no_hay_aviso(host: Host) -> None:
+    """El aviso es para un archivo ilegible, no para uno que no existe (el
+    staging o un host sin ops.env siguen con sus defaults)."""
+    _preparar_deploy(host)
+
+    resultado = host.correr("deploy.sh", "preflight", APP_VERSION=SHA, **_BASE_DEPLOY)
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert "no se puede leer" not in resultado.stderr
