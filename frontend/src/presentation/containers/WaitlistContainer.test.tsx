@@ -194,3 +194,77 @@ describe('WaitlistContainer con la consulta en error', () => {
     expect(screen.getByText('Sin datos')).toBeInTheDocument()
   })
 })
+
+// QA movil 2026-10-08 (QA'): decia "Le mandamos la confirmación" aunque el
+// cliente no tuviera email, y el formulario medía 396 px en 390.
+describe('WaitlistContainer - reservar desde la lista', () => {
+  beforeEach(() => {
+    // 15/09, antes del cupo ofrecido del 20/09.
+    jest.useFakeTimers({ now: new Date('2026-09-15T12:00:00.000Z') })
+    mockBook.mockResolvedValue({ public_id: 'appt-1' })
+  })
+
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  const reservar = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Reservar/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirmar' }))
+    return screen.findByRole('status')
+  }
+
+  it('con email avisa que le llega la confirmacion por mail', async () => {
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    render(<WaitlistContainer />)
+
+    expect(await reservar()).toHaveTextContent(
+      'Turno reservado para Lucia. Le va a llegar la confirmación por mail.'
+    )
+  })
+
+  it('sin email no promete un mail: manda a avisar por WhatsApp', async () => {
+    mockWaitlist.mockReturnValue({ data: [{ ...entrada, client_email: null }], isLoading: false })
+    render(<WaitlistContainer />)
+
+    const aviso = await reservar()
+    expect(aviso).toHaveTextContent(
+      'Turno reservado para Lucia. No dejó email: avisale por WhatsApp.'
+    )
+    expect(aviso.textContent).not.toMatch(/Le mandamos|confirmación por mail/)
+  })
+
+  it('con el email tecnico .noreply tampoco promete un mail', async () => {
+    mockWaitlist.mockReturnValue({
+      data: [{ ...entrada, client_email: '5491155550101@store1.noreply' }],
+      isLoading: false
+    })
+    render(<WaitlistContainer />)
+
+    expect(await reservar()).toHaveTextContent('No dejó email: avisale por WhatsApp.')
+  })
+
+  it('un turno en el pasado queda registrado sin aviso al cliente', async () => {
+    jest.setSystemTime(new Date('2026-09-25T12:00:00.000Z'))
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    render(<WaitlistContainer />)
+
+    const aviso = await reservar()
+    expect(aviso).toHaveTextContent('Turno registrado para Lucia.')
+    expect(aviso.textContent).not.toMatch(/mail|WhatsApp/)
+  })
+
+  it('el formulario entra en un telefono: dos columnas y el boton abajo', () => {
+    mockWaitlist.mockReturnValue({ data: [entrada], isLoading: false })
+    render(<WaitlistContainer />)
+    fireEvent.click(screen.getByRole('button', { name: /Reservar/ }))
+
+    const form = screen.getByRole('button', { name: 'Confirmar' }).parentElement
+    if (!form) throw new Error('sin formulario')
+    expect(form.classList.contains('grid-cols-[1fr_auto_auto]')).toBe(false)
+    expect(form.classList.contains('grid-cols-2')).toBe(true)
+    expect(screen.getByRole('button', { name: 'Confirmar' }).classList.contains('col-span-2')).toBe(
+      true
+    )
+  })
+})

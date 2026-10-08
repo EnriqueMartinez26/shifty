@@ -13,10 +13,10 @@ import {
 import { getErrorMessage } from '@shared/errors/getErrorMessage'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
-import { revealOnMount } from '../../lib/revealOnMount'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { UserFormRules } from '../../lib/userAccessRules'
 import type { UserFormValues } from '../../types/forms'
+import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 interface UserFormModalProps {
   onClose: () => void
@@ -138,17 +138,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({
           }}
           className="space-y-5"
         >
-          {error && (
-            <div
-              key={error}
-              ref={revealOnMount}
-              role="alert"
-              className="rounded-2xl px-4 py-3 text-xs font-bold"
-              style={{ background: '#fff1f2', color: '#be123c' }}
-            >
-              {error}
-            </div>
-          )}
+          <FormErrorAlert message={error} />
           <div className="space-y-1.5">
             <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
               Email de Acceso

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 
-import { Calendar, Clock, Loader2, TriangleAlert, X } from 'lucide-react'
+import { Calendar, Clock, Loader2, X } from 'lucide-react'
 
 import {
   argentinaLocalToUtcIso,
@@ -10,6 +10,7 @@ import {
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
+import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 export interface RescheduleRequest {
   /** Nuevo inicio en UTC (ISO); el dueno tipea hora argentina. */
@@ -104,16 +105,7 @@ export const RescheduleAppointmentModal: React.FC<RescheduleAppointmentModalProp
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-          {error && (
-            <div
-              role="alert"
-              className="rounded-2xl px-4 py-3 text-xs font-bold flex items-center gap-2"
-              style={{ background: '#fff1f2', color: '#be123c' }}
-            >
-              <TriangleAlert size={14} className="flex-shrink-0" />
-              {error}
-            </div>
-          )}
+          <FormErrorAlert message={error} />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">

@@ -74,7 +74,10 @@ test.describe('reserva publica desde el celular', () => {
     await page.getByPlaceholder('juan@email.com').fill(`e2e-${sufijo}@example.com`)
     await page.getByPlaceholder('PREFIJO + NUM').fill(`+54911${sufijo}00`)
     await page.getByRole('checkbox').first().check()
-    await page.getByRole('button', { name: /reservar y pagar por whatsapp/i }).click()
+    // Sin seña confirma; con seña coordinada a mano, se paga por WhatsApp.
+    await page
+      .getByRole('button', { name: /^(confirmar reserva|reservar y pagar la seña por whatsapp)$/i })
+      .click()
 
     // Los tres finales validos del flujo: confirmada, registrada (pendiente de
     // revision de la tienda) o pendiente de pago.

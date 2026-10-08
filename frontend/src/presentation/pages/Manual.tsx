@@ -41,7 +41,7 @@ const SECTIONS: ManualSection[] = [
       {
         title: '1. Completá los datos de tu negocio',
         body: 'En Configuración cargá el nombre, el logo y tu número de WhatsApp. Ese número es el que van a usar tus clientes para coordinar con vos.',
-        tip: 'El "slug" es la dirección de tu página pública. Si tu slug es mibarberia, tus clientes reservan en /booking/mibarberia.'
+        tip: 'El "slug" es la dirección de tu página pública. Si tu slug es mibarberia, tus clientes reservan en /b/mibarberia.'
       },
       {
         title: '2. Cargá tus servicios',
