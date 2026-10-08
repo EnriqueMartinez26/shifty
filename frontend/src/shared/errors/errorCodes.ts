@@ -94,3 +94,16 @@ export const ERROR_CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ['INVALID_IMAGE', 'No pudimos leer la imagen. Probá exportarla de nuevo como PNG, JPEG o WebP.'],
   ['IMAGE_TOO_LARGE_DIMENSIONS', 'La imagen tiene demasiados píxeles. Achicala y volvé a subirla.']
 ])
+
+/**
+ * Textos exactos de un 422 VALIDATION_ERROR de negocio -> texto para el
+ * usuario. El texto del servidor de ese codigo no se muestra nunca (regla 20,
+ * SERVER_TEXT_DENYLIST); los que el usuario si necesita entender se
+ * traducen aca, por igualdad exacta: uno parecido sigue en el fallback.
+ */
+export const VALIDATION_MESSAGES: ReadonlyMap<string, string> = new Map([
+  // staff/repository.py y superadmin/repository.py, alta o edicion con un
+  // email de login ya usado (QA movil 2026-10-08: el modal decia "No se pudo
+  // guardar" y el motivo solo llegaba a la consola).
+  ['Ya existe un usuario con ese email', 'Ese email ya lo usa otra cuenta. Usá otro email.']
+])

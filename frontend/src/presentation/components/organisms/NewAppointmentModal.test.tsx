@@ -89,6 +89,25 @@ describe('NewAppointmentModal', () => {
     expect(payloadDe(2).idempotency_key).not.toBe(payloadDe(0).idempotency_key)
   })
 
+  it('el error del alta se lleva a la vista y toma el foco', async () => {
+    // QA movil 2026-10-08: el 409 "no atiende en ese horario" quedaba a
+    // top=-84px del formulario scrolleado y parecia que no pasaba nada.
+    const scrollIntoView = jest.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    mockCrearTurno.mockRejectedValue(
+      new ConflictError('texto del servidor', { errorCode: 'OUT_OF_SCHEDULE' })
+    )
+    const { container } = render(<NewAppointmentModal onClose={jest.fn()} />)
+
+    completarFormulario(container, '2026-10-01', '10:00')
+    crear()
+
+    const alerta = await screen.findByRole('alert')
+    expect(alerta).toHaveTextContent('El profesional no atiende en ese horario. Elegí otro.')
+    expect(scrollIntoView).toHaveBeenCalled()
+    expect(alerta).toHaveFocus()
+  })
+
   it('el profesional no elige profesional: el backend le asigna su agenda', () => {
     const { unmount } = render(<NewAppointmentModal onClose={jest.fn()} />)
     expect(screen.getByDisplayValue('Cualquiera')).toBeInTheDocument()
