@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from tests.integration.test_feature_flags_finance_and_public_privacy import (
     create_service,
+    create_staff,
 )
 from tests.postgres.conftest import (
     BACKEND_ROOT,
@@ -94,6 +95,8 @@ async def test_subir_reemplazar_servir_y_borrar_como_shifty_app(
         client, app_sessions, slug="pg-img-flujo", email="pg-img-flujo@example.com"
     )
     servicio = await create_service(client, token)
+    # Sin profesional asignado el servicio no sale en el catalogo publico.
+    await create_staff(client, token, servicio, email="pro-pg-img-flujo@example.com")
 
     primera = await client.post(
         f"/services/{servicio}/image",
