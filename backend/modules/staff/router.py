@@ -204,16 +204,14 @@ async def update_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.get_schedule(staff, schedule_id)
-    if not schedule:
-        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
-
     try:
         actualizado = await StaffService(db, availability_cache).update_schedule(
-            staff, schedule, data.model_dump(exclude_unset=True)
+            staff, schedule_id, data.model_dump(exclude_unset=True)
         )
     except ValueError as exc:
         raise ValidationException(str(exc))
+    if not actualizado:
+        raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
     return to_schedule_response(actualizado)
 
 
@@ -239,11 +237,11 @@ async def delete_staff_schedule(
     if not staff:
         raise StaffNotFoundException(identifier=public_id)
 
-    schedule = await repo.get_schedule(staff, schedule_id)
-    if not schedule:
+    eliminada = await StaffService(db, availability_cache).delete_schedule(
+        staff, schedule_id
+    )
+    if not eliminada:
         raise ResourceNotFoundException(resource="Horario", identifier=schedule_id)
-
-    await StaffService(db, availability_cache).delete_schedule(schedule)
 
 
 @router.patch("/{public_id}/services")
