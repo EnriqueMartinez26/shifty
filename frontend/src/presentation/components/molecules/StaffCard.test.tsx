@@ -188,5 +188,26 @@ describe('StaffCard', () => {
 
       expect(onEditSchedule).toHaveBeenCalledWith(lucas)
     })
+
+    // #130 + #133: la tarjeta propia del dueno conserva sus marcas y el editor.
+    it('la tarjeta propia muestra (vos), Quitarme y Horarios', () => {
+      const onEditSchedule = jest.fn()
+      const duenio = conFranjas([])
+
+      render(
+        <StaffCard
+          staff={duenio}
+          isSelf
+          onEdit={jest.fn()}
+          onDelete={jest.fn()}
+          onEditSchedule={onEditSchedule}
+        />
+      )
+
+      expect(screen.getByText('Lucas Diaz (vos)')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /quitarme/i })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /horarios/i }))
+      expect(onEditSchedule).toHaveBeenCalledWith(duenio)
+    })
   })
 })

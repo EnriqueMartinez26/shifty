@@ -148,6 +148,28 @@ class StaffCreate(StaffBase):
         return self
 
 
+class StaffSelfCreate(BaseModel):
+    """``POST /staff/me``: la cuenta que llama se agrega como profesional.
+
+    Sin nombre, apellido ni email: salen de su cuenta (la ficha usa su mismo
+    id, como todo el personal). ``display_name`` es opcional: sin el, figura
+    con el nombre de la cuenta.
+    """
+
+    display_name: str | None = Field(
+        None, min_length=2, max_length=DISPLAY_NAME_MAX_LENGTH
+    )
+    service_ids: list[PublicId] = Field(
+        default_factory=list, max_length=MAX_SERVICE_IDS
+    )
+
+    @field_validator("display_name")
+    @classmethod
+    def reject_control_chars_in_name(cls, value: str | None) -> str | None:
+        # Regla 19: el nombre visible sale al portal publico.
+        return reject_control_chars(value)
+
+
 # Campos de StaffUpdate donde un null explicito no es un cambio posible.
 _STAFF_NOT_NULL_FIELDS = (
     "first_name",

@@ -238,3 +238,21 @@ def test_backup_sin_version_en_curso_falla_con_alerta(host: Host) -> None:
 
     assert resultado.returncode != 0
     assert "ALERTA" in resultado.stderr
+
+
+def test_el_token_de_github_de_ops_env_no_llega_a_docker(host: Host) -> None:
+    """2026-10-08 (revision del PR #135): common.sh carga ops.env con
+    `set -a`, asi que DEPLOY_GITHUB_TOKEN quedaba exportado en TODO script
+    que lo carga (el backup corre como root, con docker y rclone de hijos).
+    Se des-exporta en common.sh, no en cada script."""
+    token = "github_pat_11ABCDEFG0123456789_abcdefXYZ"
+    ops_env = host.raiz / "ops.env"
+    ops_env.write_text(f"DEPLOY_GITHUB_TOKEN={token}\n", encoding="utf-8")
+
+    resultado = _correr_backup(host, SHIFTY_OPS_ENV=ops_env.as_posix())
+
+    assert resultado.returncode == 0, resultado.stderr
+    assert _hay(host.llamadas(), r"^docker compose exec")
+    assert not (host.fake / "docker_ve_el_token").exists(), (
+        host.fake / "docker_ve_el_token"
+    ).read_text(encoding="utf-8")

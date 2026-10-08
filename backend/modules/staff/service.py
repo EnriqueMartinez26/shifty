@@ -20,9 +20,10 @@ from core.availability_cache import (
     AvailabilityCacheClient,
     invalidate_store_availability,
 )
-from core.exceptions import ScheduleOverlapException
+from core.exceptions import AppException, ScheduleOverlapException
 from modules.staff.model import Schedule, Staff
 from modules.staff.repository import StaffRepository
+from modules.users.model import User
 
 logger = structlog.get_logger()
 
@@ -48,6 +49,14 @@ def first_overlapping_day(franjas: Sequence[dict[str, Any]]) -> int | None:
             if inicio < fin_anterior:
                 return dia
     return None
+
+
+def _account_display_name(account: User) -> str:
+    """Nombre con el que figura la cuenta si no eligio uno (minimo 2 letras)."""
+    nombre = (account.full_name or "").strip()
+    if len(nombre) >= 2:
+        return nombre[:100]
+    return account.email.split("@", 1)[0][:100].ljust(2, "_")
 
 
 class StaffService:
@@ -93,6 +102,54 @@ class StaffService:
         await self._invalidar_agenda(store_id)
         return staff
 
+    async def add_self(
+        self,
+        account: User,
+        *,
+        display_name: str | None,
+        service_public_ids: list[str],
+    ) -> Staff:
+        """La cuenta que llama se agrega como profesional (decision de Mateo).
+
+        El dueno tambien atiende, con su nombre y su misma cuenta: sin usuario
+        nuevo ni email repetido (regla 16) y sin cambiar su rol. Si ya tuvo
+        ficha y se quito de la agenda, se reactiva la misma. Solo sobre uno
+        mismo: no hay forma de volver reservable a OTRA cuenta por aca.
+
+        La cuenta global no atiende: el panel de la tienda la esconde (S-15)
+        y el portal la ofreceria igual para reservar (revision de #133).
+        """
+        if account.is_global_admin:
+            raise AppException(
+                message="La cuenta SuperAdmin no se agrega como profesional.",
+                http_status=403,
+                error_code="STAFF_SELF_GLOBAL_ADMIN_DENIED",
+            )
+        # Leer y despues insertar, serializado por la fila de la cuenta: una
+        # rafaga da un 201 y el resto STAFF_SELF_ALREADY_EXISTS (§4).
+        await self.repo.lock_account(account)
+        existing = await self.repo.get_by_id(
+            account.id, account.store_id, include_global_admins=True
+        )
+        if existing is not None and existing.is_active:
+            raise AppException(
+                message="Ya figurás como profesional.",
+                http_status=409,
+                error_code="STAFF_SELF_ALREADY_EXISTS",
+            )
+        nombre = (display_name or "").strip() or _account_display_name(account)
+        if existing is not None:
+            staff = await self.repo.reactivate(
+                existing, account, nombre, service_public_ids
+            )
+        else:
+            staff = await self.repo.create_for_account(
+                account, nombre, service_public_ids
+            )
+        await self.db.commit()
+        await self._invalidar_agenda(account.store_id)
+        return staff
+
     async def update_profile(self, staff: Staff, **changes: Any) -> Staff:
         store_id = staff.store_id
         updated = await self.repo.update_profile(staff, **changes)
@@ -101,9 +158,9 @@ class StaffService:
         await self._invalidar_agenda(store_id)
         return updated
 
-    async def soft_delete(self, staff: Staff) -> None:
+    async def soft_delete(self, staff: Staff, *, keep_login: bool = False) -> None:
         store_id = staff.store_id
-        await self.repo.soft_delete(staff)
+        await self.repo.soft_delete(staff, keep_login=keep_login)
         await self.db.commit()
         await self._invalidar_agenda(store_id)
 

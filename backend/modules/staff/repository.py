@@ -169,6 +169,75 @@ class StaffRepository:
         await self.db.flush()
         return new_staff
 
+    async def lock_account(self, account: User) -> None:
+        """``SELECT ... FOR UPDATE`` sobre la fila ``users`` de ``account``.
+
+        Serializa ``POST /staff/me`` de la misma cuenta: sin esto, N pedidos
+        simultaneos leian "sin ficha" y el segundo ``INSERT`` chocaba con la
+        clave primaria (``IntegrityError`` -> 409 generico). La ficha puede no
+        existir todavia, asi que el lock va sobre la cuenta, que siempre
+        existe. Orden: cuenta -> ficha. Ningun otro camino del personal toma
+        la cuenta con ``FOR UPDATE``: ``lock_staff_row`` (agenda) lockea solo
+        la ficha, y ``update_profile`` / ``soft_delete`` no lockean (sus
+        ``UPDATE`` los ordena el flush). En
+        SQLite ``FOR UPDATE`` se ignora; la rafaga real vive en
+        ``tests/postgres/test_pg_duenio_como_profesional.py``.
+        """
+        await self.db.execute(
+            select(User.id).where(User.id == account.id).with_for_update()
+        )
+
+    async def create_for_account(
+        self, account: User, display_name: str, service_public_ids: list[str]
+    ) -> Staff:
+        """Ficha de profesional de una cuenta que YA existe (sin commit).
+
+        Usa el id de la cuenta, como el alta de cualquier persona del
+        personal (``Staff.id == User.id``): no crea usuario de login ni
+        repite el email (regla 16). Nombre, apellido y email salen de la
+        cuenta; ``store_id`` tambien, nunca del cuerpo.
+        """
+        services = await self._get_services_for_store(
+            service_public_ids, account.store_id
+        )
+        staff = Staff(
+            id=account.id,
+            kind=STAFF_KIND_PERSON,
+            first_name=account.first_name or "",
+            last_name=account.last_name or "",
+            email=account.email,
+            display_name=display_name,
+            store_id=account.store_id,
+            service_ids=[service.public_id for service in services],
+        )
+        staff.services = services
+        self.db.add(staff)
+        await self.db.flush()
+        return staff
+
+    async def reactivate(
+        self,
+        staff: Staff,
+        account: User,
+        display_name: str,
+        service_public_ids: list[str],
+    ) -> Staff:
+        """Vuelve a poner en la agenda la ficha de ``account`` (sin commit).
+
+        Nombre y email se releen de la cuenta: pudieron cambiar por
+        ``/users/`` mientras la ficha estaba de baja.
+        """
+        staff.is_active = True
+        staff.first_name = account.first_name or ""
+        staff.last_name = account.last_name or ""
+        staff.email = account.email
+        staff.display_name = display_name
+        services = await self._get_services_for_store(
+            service_public_ids, staff.store_id
+        )
+        await self._set_services(staff, services)
+        return staff
+
     async def get_all(
         self, store_id: str, *, include_global_admins: bool = False
     ) -> list[Staff]:
@@ -376,7 +445,14 @@ class StaffRepository:
         display_name: str | None = None,
         service_public_ids: list[str] | None = None,
         is_active: bool | None = None,
+        keep_login: bool = False,
     ) -> Staff:
+        """Edicion del profesional; sincroniza su cuenta de login.
+
+        ``keep_login``: el ``is_active`` solo saca o vuelve a poner la ficha
+        en la agenda, sin tocar el estado de la cuenta ni sus sesiones. Es
+        el caso de quien se edita a si mismo (el dueno que tambien atiende).
+        """
         if email is not None:
             email = normalize_email(email)
         if email is not None and email != staff.email:
@@ -419,7 +495,7 @@ class StaffRepository:
             if staff.email:
                 user.email = staff.email
             user.full_name = f"{staff.first_name or ''} {staff.last_name or ''}".strip()
-            if is_active is not None:
+            if is_active is not None and not keep_login:
                 user.is_active = is_active
                 # Desactivar al profesional corta sus sesiones vivas, igual que
                 # en users/superadmin: sin esto, al reactivarlo sus refresh
@@ -437,9 +513,16 @@ class StaffRepository:
         result = await self.db.execute(select(User).where(User.id == staff.id))
         return result.scalar_one_or_none()
 
-    async def soft_delete(self, staff: Staff) -> None:
-        """Baja sin commit (lo hace StaffService)."""
+    async def soft_delete(self, staff: Staff, *, keep_login: bool = False) -> None:
+        """Baja sin commit (lo hace StaffService).
+
+        ``keep_login``: solo saca la ficha de la agenda; la cuenta y sus
+        sesiones quedan como estan (quien se quita a si mismo).
+        """
         staff.is_active = False
+        if keep_login:
+            await self.db.flush()
+            return
         # Por id, no por email: un recurso no tiene email y una persona podia
         # tener el email cambiado en users sin pasar por aca.
         user_res = await self.db.execute(select(User).where(User.id == staff.id))

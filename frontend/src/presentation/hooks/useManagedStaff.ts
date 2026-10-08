@@ -60,6 +60,18 @@ export const useReplaceStaffSchedules = () => {
   })
 }
 
+/** "Agregarme como profesional": la cuenta del dueno pasa a la agenda. */
+export const useAddMyselfAsStaff = () => {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (input: Parameters<StaffService['addMyself']>[0]) => staffService.addMyself(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['staff'] })
+    }
+  })
+}
+
 export const useDeleteManagedStaff = () => {
   const queryClient = useQueryClient()
 

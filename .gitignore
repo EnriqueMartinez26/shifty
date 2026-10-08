@@ -58,3 +58,10 @@ backups/
 # Restos de `make makemigrations` anterior a 2026-09-24 (copiaba por un
 # directorio temporal que una corrida fallida podia dejar en el arbol).
 .makemigrations-tmp/
+# Estado del clon del SERVIDOR (no de desarrollo): .deploy/ guarda la version
+# en curso, la previa y el lock de scripts/deploy.sh; nginx/certs/ la clave
+# privada de TLS; nginx/acme/ los desafios de certbot. Un `git stash -u` o un
+# `git clean` en el servidor los borraria (primer deploy, 2026-10-08).
+.deploy/
+nginx/certs/
+nginx/acme/

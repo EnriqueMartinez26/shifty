@@ -229,7 +229,48 @@ describe('BookingStepConfirmation', () => {
   })
 
   describe('vista previa de la seña', () => {
+    const servicioConSena = (deposit_mode: 'optional' | 'required') =>
+      mockServices.mockReturnValue({
+        data: [{ public_id: 'svc-1', deposit_mode, deposit_type: 'percent', deposit_amount: 30 }],
+        isLoading: false
+      })
+    const previewConSena = () =>
+      mockDepositPreview.mockReturnValue({
+        isLoading: false,
+        data: {
+          amount: 1500,
+          base_amount: 1500,
+          extra_percent: 0,
+          reasons: [],
+          price: 5000,
+          payments_enabled: true,
+          online_payment_mandatory: false
+        }
+      })
+
+    // Revision de la PR #129: una seña OPCIONAL reservada sin Mercado Pago no
+    // genera cobro (deposit_channels.resolve_deposit_channel devuelve None),
+    // y el boton igual decia "pagar la seña por WhatsApp".
+    it('con seña opcional el boton manual confirma la reserva, no pide pagar por WhatsApp', () => {
+      servicioConSena('optional')
+      previewConSena()
+      render(<BookingStepConfirmation {...props({ paymentsEnabled: true })} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: PAGAR_MP })).toBeInTheDocument()
+    })
+
+    it('con seña opcional inferida del servicio tampoco pide pagar por WhatsApp', () => {
+      servicioConSena('optional')
+      render(<BookingStepConfirmation {...props({ paymentsEnabled: false })} />)
+
+      expect(screen.getByRole('button', { name: RESERVAR })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: RESERVAR_CON_SENA })).not.toBeInTheDocument()
+    })
+
     it('muestra la seña que calcula el backend y ofrece pagarla online', () => {
+      servicioConSena('required')
       mockDepositPreview.mockReturnValue({
         isLoading: false,
         data: {

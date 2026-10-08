@@ -3,7 +3,7 @@
 Generado automaticamente desde `app.openapi()` del backend (FastAPI); no editar a mano. Regenerar con `backend/scripts/gen_api_contract.py` (el comando esta en su docstring).
 
 - OpenAPI: 3.1.0
-- Paths: 116 — Operaciones: 146
+- Paths: 117 — Operaciones: 147
 
 ## /
 
@@ -1495,6 +1495,20 @@ Responses:
 Request body (required):
 
 - `application/json`: `StaffCreate`
+
+Responses:
+
+- `201` Successful Response — `application/json`: `ApiSuccess_StaffResponse_`
+- `422` Validation Error — `application/json`: `HTTPValidationError`
+
+### POST /staff/me
+
+- Summary: Add Myself As Staff
+- operationId: `add_myself_as_staff_staff_me_post`
+
+Request body (required):
+
+- `application/json`: `StaffSelfCreate`
 
 Responses:
 
@@ -4236,6 +4250,13 @@ Type: `enum("pending", "pending_payment", "confirmed", "cancelled", "completed",
 | `services` | array<ServiceResponse> | no |  |
 | `schedules` | array<ScheduleResponse> | no |  |
 
+### StaffSelfCreate
+
+| field | type | required | constraints |
+|---|---|---|---|
+| `display_name` | string \| null | no | minLength=2, maxLength=100 |
+| `service_ids` | array<string> | no | maxItems=100 |
+
 ### StaffUpdate
 
 | field | type | required | constraints |
@@ -4720,4 +4741,4 @@ Type: `enum("admin", "staff", "receptionist", "client")`
 | `terms_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 | `privacy_version` | string \| null | no | minLength=1, maxLength=20, pattern="^[A-Za-z0-9._-]{1,20}$" |
 
-Generado desde app.openapi() el 2026-10-08, commit 841ccf44
+Generado desde app.openapi() el 2026-10-08, commit 9c2b0987
