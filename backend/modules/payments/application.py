@@ -14,6 +14,7 @@ orquesta el caso de uso.
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import NamedTuple
 
 from core.exceptions import AppException, ValidationException
 from core.uow import AbstractUnitOfWork
@@ -48,6 +49,39 @@ def _manual_amount(
     if appointment.price_amount is not None:
         return appointment.price_amount
     return calculate_service_payment_amount(service) or Decimal(str(service.price))
+
+
+class _ImportesARegistrar(NamedTuple):
+    """Los importes con los que ``manual_confirm`` registra el cobro."""
+
+    amount: Decimal
+    original_amount: Decimal | None
+    discount_amount: Decimal | None
+    promotion_code: str | None
+
+
+def _importes_a_registrar(
+    actual: Payment | None,
+    appointment: Appointment,
+    service: Service,
+    amount: Decimal | None,
+) -> _ImportesARegistrar:
+    """Sin importe, un cobro VIVO se registra por SU importe, venga de donde
+    venga (link del panel, sena por MP o por WhatsApp): es el que mostro la
+    pantalla. Antes solo se conservaba con ``deposit_rule`` y un link del
+    panel se re-tarifaba al precio del turno (PR #131, C1, 2026-10-08). Promo
+    y descuento se reescriben con los suyos, como la fase 2 del link del
+    panel. Si no, ``_manual_amount``."""
+    if amount is None and actual is not None and actual.is_live_charge:
+        return _ImportesARegistrar(
+            actual.amount,
+            actual.original_amount,
+            actual.discount_amount,
+            actual.promotion_code,
+        )
+    return _ImportesARegistrar(
+        _manual_amount(appointment, service, amount), None, None, None
+    )
 
 
 class AppointmentHoldExpiredError(AppException):
@@ -128,12 +162,16 @@ class PaymentService:
             # solo suelta los locks: no hay nada escrito.
             await self.uow.commit()
             return actual
+        importes = _importes_a_registrar(actual, appointment, service, amount)
         payment = await ensure_payment_preference(
             self.uow.session,
             appointment=appointment,
             service=service,
             store_id=actor.store_id,
-            amount_override=_manual_amount(appointment, service, amount),
+            amount_override=importes.amount,
+            original_amount=importes.original_amount,
+            discount_amount=importes.discount_amount,
+            promotion_code=importes.promotion_code,
             create_provider_link=False,
             keep_existing_amount=amount is None,
             provider=PAYMENT_PROVIDER_MANUAL,
