@@ -3,8 +3,8 @@ import React from 'react'
 import { Loader2, X } from 'lucide-react'
 
 import { buttonStyles2000s, colors2000s } from '../../../theme/colors'
-import { revealOnMount } from '../../lib/revealOnMount'
 import { create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
+import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 interface SuperAdminFormModalProps {
   isOpen: boolean
@@ -72,21 +72,7 @@ export const SuperAdminFormModal: React.FC<SuperAdminFormModalProps> = ({
           }}
           className="space-y-6"
         >
-          {error ? (
-            <div
-              key={error}
-              ref={revealOnMount}
-              role="alert"
-              className="rounded-2xl px-4 py-3 text-sm font-bold"
-              style={{
-                background: '#fff1f2',
-                border: '1px solid #fecdd3',
-                color: '#be123c'
-              }}
-            >
-              {error}
-            </div>
-          ) : null}
+          <FormErrorAlert message={error} />
 
           {children}
 

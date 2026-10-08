@@ -24,9 +24,9 @@ import { formatCurrency } from '@shared/utils/currency'
 import { validateServiceImage } from '@shared/utils/imageFile'
 
 import { colors2000s, buttonStyles2000s } from '../../../theme/colors'
-import { revealOnMount } from '../../lib/revealOnMount'
 import { create2000sModalInputStyle, create2000sModalSurfaceStyle } from '../../lib/surfaceStyles'
 import type { ServiceFormValues } from '../../types/forms'
+import { FormErrorAlert } from '../molecules/FormErrorAlert'
 
 interface ServiceFormModalProps {
   isOpen: boolean
@@ -248,20 +248,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
             }}
             className="space-y-6"
           >
-            {error && (
-              <div
-                key={error}
-                ref={revealOnMount}
-                role="alert"
-                className="rounded-2xl px-4 py-3 text-xs font-bold mb-4"
-                style={{
-                  background: colors2000s.status.danger.bg,
-                  color: colors2000s.status.danger.text
-                }}
-              >
-                {error}
-              </div>
-            )}
+            <FormErrorAlert message={error} className="mb-4" />
             <div className="space-y-1.5">
               <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">
                 Nombre del Servicio
@@ -489,18 +476,7 @@ export const ServiceFormModal: React.FC<ServiceFormModalProps> = ({
                   URL.
                 </p>
               )}
-              {imageError && (
-                <div
-                  role="alert"
-                  className="rounded-2xl px-4 py-2.5 text-xs font-bold"
-                  style={{
-                    background: colors2000s.status.danger.bg,
-                    color: colors2000s.status.danger.text
-                  }}
-                >
-                  {imageError}
-                </div>
-              )}
+              <FormErrorAlert message={imageError} />
               <input
                 value={formData.imageUrl}
                 onChange={(e) => setFormData({ ...formData, imageUrl: e.target.value })}
