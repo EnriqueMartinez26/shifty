@@ -82,7 +82,7 @@ export interface AppointmentSearchItem {
   remainder_payment?: RemainderPaymentSummary | null
 }
 
-export interface RemainderPaymentSummary {
+interface RemainderPaymentSummary {
   amount: string
   method?: string | null
   created_at: string
